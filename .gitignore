@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Ignore local scraped data and reviews (now using Supabase)
+/public/data
+/public/reviews

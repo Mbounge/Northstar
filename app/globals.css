@@ -1,26 +1,65 @@
+/* app/globals.css */
+
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* Force Dark Mode Colors (Zinc Palette) */
+  --color-background: #09090b;
+  --color-foreground: #fafafa;
+  
+  --color-card: #09090b;
+  --color-card-foreground: #fafafa;
+  
+  --color-popover: #09090b;
+  --color-popover-foreground: #fafafa;
+  
+  --color-primary: #fafafa;
+  --color-primary-foreground: #18181b;
+  
+  --color-secondary: #27272a;
+  --color-secondary-foreground: #fafafa;
+  
+  --color-muted: #27272a;
+  --color-muted-foreground: #a1a1aa;
+  
+  --color-accent: #27272a;
+  --color-accent-foreground: #fafafa;
+  
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafafa;
+  
+  --color-border: #27272a;
+  --color-input: #27272a;
+  --color-ring: #d4d4d8;
+  
+  --radius: 0.5rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Base Styles */
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    /* Force dark mode background explicitly */
+    background: #09090b; 
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Custom Scrollbar for the Terminal feel */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #09090b; 
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a; 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46; 
 }
