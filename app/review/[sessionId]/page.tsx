@@ -4,7 +4,8 @@ import { getSessionDetails } from "@/lib/review-data";
 import { SessionViewer } from "@/components/session-viewer";
 import { ExecutiveReport } from "@/components/executive-report";
 import Link from "next/link";
-import { ArrowLeft, Target, MousePointerClick } from "lucide-react";
+import { ArrowLeft, Target, MousePointerClick, Layers } from "lucide-react";
+import { FlowsViewer } from "@/components/flows-viewer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 
@@ -84,7 +85,14 @@ export default async function SessionReviewPage({
               className="data-[state=active]:bg-transparent data-[state=active]:text-blue-400 data-[state=active]:border-b-2 data-[state=active]:border-blue-400 rounded-none px-0 py-4 text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-2 uppercase tracking-widest text-xs font-bold"
             >
               <MousePointerClick className="w-4 h-4" />
-              Step-by-Step Flow Viewer
+              Agent Step Viewer
+            </TabsTrigger>
+            <TabsTrigger 
+              value="mobbin"
+              className="data-[state=active]:bg-transparent data-[state=active]:text-emerald-400 data-[state=active]:border-b-2 data-[state=active]:border-emerald-400 rounded-none px-0 py-4 text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-2 uppercase tracking-widest text-xs font-bold"
+            >
+              <Layers className="w-4 h-4" />
+              Flows
             </TabsTrigger>
           </TabsList>
         </div>
@@ -97,6 +105,11 @@ export default async function SessionReviewPage({
         {/* Tab 2: Flow Viewer (Locked height to allow internal split-screen layout to work) */}
         <TabsContent value="viewer" className="flex-1 overflow-hidden m-0 flex flex-col">
           <SessionViewer data={data} />
+        </TabsContent>
+
+        {/* Tab 3: Mobbin Flows Viewer */}
+        <TabsContent value="mobbin" className="flex-1 overflow-hidden m-0 flex flex-col">
+          <FlowsViewer flowsData={data.flowsData} sessionId={sessionId} />
         </TabsContent>
 
       </Tabs>

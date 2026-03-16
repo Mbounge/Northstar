@@ -73,15 +73,17 @@ export async function getReviewSessions(): Promise<ReviewSessionSummary[]> {
 export async function getSessionDetails(sessionId: string) {
   const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${sessionId}/enriched`;
 
-  const [manifestRes, intelRes] = await Promise.all([
+  const[manifestRes, intelRes, flowsRes] = await Promise.all([
     fetch(`${publicUrl}/enriched_manifest.json`, { cache: 'no-store' }),
-    fetch(`${publicUrl}/session_intelligence.json`, { cache: 'no-store' })
+    fetch(`${publicUrl}/session_intelligence.json`, { cache: 'no-store' }),
+    fetch(`${publicUrl}/flows.json`, { cache: 'no-store' })
   ]);
 
   if (!manifestRes.ok) return null;
 
   const manifest = await manifestRes.json();
   const sessionIntel = intelRes.ok ? await intelRes.json() : null;
+  const flowsData = flowsRes.ok ? await flowsRes.json() : null;
 
   // Fetch individual step JSONs
   const stepsPromises = manifest.enriched_screenshots.map(async (entry: any) => {
@@ -101,6 +103,7 @@ export async function getSessionDetails(sessionId: string) {
     sessionId,
     summary: manifest.processing_stats,
     sessionIntel,
+    flowsData, // <-- Added this
     steps: await Promise.all(stepsPromises)
   };
 }
