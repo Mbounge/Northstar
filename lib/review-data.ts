@@ -1,15 +1,19 @@
-import { supabase } from './supabase';
+// lib/review-data.ts
+import { createClient } from '@supabase/supabase-js';
 
-export interface ReviewSessionSummary {
-  sessionId: string;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+export const supabase = createClient(supabaseUrl, supabaseKey);
+
+export interface AppSummary {
   appName: string;
   category: string;
-  status: string;
-  totalSteps: number;
-  frictionGrade: string;
-  frictionScore: number;
-  timestamp: string;
-  screenSequence: string[];
+  hasOnboarding: boolean;
+  hasBrowsing: boolean;
+  onboardingGrade: string;
+  browsingGrade: string;
+  totalScreens: number;
 }
 
 function formatCategory(cat: string | undefined): string {
@@ -17,63 +21,63 @@ function formatCategory(cat: string | undefined): string {
   return cat.split('_').join(' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
 }
 
-export async function getReviewSessions(): Promise<ReviewSessionSummary[]> {
-  const { data: folders, error } = await supabase.storage.from('reviews').list('', { limit: 100 });
-  if (error || !folders) return[];
+export async function getReviewApps(): Promise<AppSummary[]> {
+  const { data: appFolders, error } = await supabase.storage.from('reviews').list('', { limit: 100 });
+  if (error || !appFolders) return[];
 
-  const sessionPromises = folders.filter(f => !f.id).map(async (folderObj) => {
-    const folder = folderObj.name;
-    const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${folder}`;
+  const appPromises = appFolders.filter(f => !f.id).map(async (appFolderObj) => {
+    const appName = appFolderObj.name;
+    const { data: sessionFolders } = await supabase.storage.from('reviews').list(appName, { limit: 10 });
     
-    let appName = folder, frictionGrade = "N/A", frictionScore = 0, status = "Unknown";
-    let totalSteps = 0, timestamp = "", category = "Unknown";
-    let screenSequence: string[] = [];
+    let hasOnboarding = false, hasBrowsing = false;
+    let onboardingGrade = "N/A", browsingGrade = "N/A";
+    let totalScreens = 0;
+    let category = "Unknown";
 
-    // Fetch manifests in parallel
-    const[manifestRes, intelRes, enrichedRes] = await Promise.all([
-      fetch(`${publicUrl}/onboarding_manifest.json`, { cache: 'no-store' }),
-      fetch(`${publicUrl}/enriched/session_intelligence.json`, { cache: 'no-store' }),
-      fetch(`${publicUrl}/enriched/enriched_manifest.json`, { cache: 'no-store' })
-    ]);
+    if (!sessionFolders) return null;
 
-    if (manifestRes.ok) {
-      const manifest = await manifestRes.json();
-      appName = manifest.metadata?.app || folder;
-      status = manifest.result?.status || "Unknown";
-      totalSteps = manifest.result?.total_steps || 0;
-      timestamp = manifest.metadata?.timestamp || "";
-      category = formatCategory(manifest.post_run_insights?.final_app_category || manifest.metadata?.app_category);
-      if (manifest.timeline) screenSequence = manifest.timeline.map((t: any) => t.state || "UNKNOWN");
+    for (const session of sessionFolders) {
+      if (session.id) continue;
+      const type = session.name; // 'onboarding' or 'browsing'
+      const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${type}`;
+      
+      const[manifestRes, intelRes] = await Promise.all([
+        fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'session_manifest.json'}`, { cache: 'no-store' }),
+        fetch(`${publicUrl}/enriched/session_intelligence.json`, { cache: 'no-store' })
+      ]);
+
+      if (manifestRes.ok) {
+        const manifest = await manifestRes.json();
+        if (type === 'onboarding') {
+          hasOnboarding = true;
+          category = formatCategory(manifest.metadata?.app_category || category);
+        } else {
+          hasBrowsing = true;
+          category = formatCategory(manifest.app_category || category);
+        }
+      }
+
+      if (intelRes.ok) {
+        const intel = await intelRes.json();
+        if (type === 'onboarding') onboardingGrade = intel.friction_report?.friction_grade || "N/A";
+        if (type === 'browsing') browsingGrade = intel.friction_report?.friction_grade || "N/A";
+        totalScreens += intel.funnel_summary?.total_screens || 0;
+      }
     }
 
-    if (intelRes.ok) {
-      const intel = await intelRes.json();
-      frictionGrade = intel.friction_report?.friction_grade || "N/A";
-      frictionScore = intel.friction_report?.overall_friction_score || 0;
-    }
+    if (!hasOnboarding && !hasBrowsing) return null;
 
-    if (enrichedRes.ok) {
-      const em = await enrichedRes.json();
-      if (em.enriched_screenshots) screenSequence = em.enriched_screenshots.map((s: any) => s.screen_type || "UNKNOWN");
-    }
-
-    const terminalStatus = status.toUpperCase();
-    const lastStep = screenSequence[screenSequence.length - 1]?.toUpperCase() || "";
-    if ((terminalStatus.includes("SETTLED") || terminalStatus.includes("HOME_FEED") || terminalStatus.includes("CONFIRMATION")) && 
-        (!lastStep.includes("HOME") && !lastStep.includes("FEED") && !lastStep.includes("SETTLED") && !lastStep.includes("WELCOME"))) {
-      screenSequence.push("HOME_FEED");
-    }
-
-    return { sessionId: folder, appName, category, status, totalSteps, frictionGrade, frictionScore, timestamp, screenSequence };
+    return { appName, category, hasOnboarding, hasBrowsing, onboardingGrade, browsingGrade, totalScreens };
   });
 
-  return await Promise.all(sessionPromises);
+  const results = await Promise.all(appPromises);
+  return results.filter(Boolean) as AppSummary[];
 }
 
-export async function getSessionDetails(sessionId: string) {
-  const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${sessionId}/enriched`;
+async function fetchSessionData(appName: string, sessionType: string) {
+  const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${sessionType}/enriched`;
 
-  const[manifestRes, intelRes, flowsRes] = await Promise.all([
+  const [manifestRes, intelRes, flowsRes] = await Promise.all([
     fetch(`${publicUrl}/enriched_manifest.json`, { cache: 'no-store' }),
     fetch(`${publicUrl}/session_intelligence.json`, { cache: 'no-store' }),
     fetch(`${publicUrl}/flows.json`, { cache: 'no-store' })
@@ -85,25 +89,32 @@ export async function getSessionDetails(sessionId: string) {
   const sessionIntel = intelRes.ok ? await intelRes.json() : null;
   const flowsData = flowsRes.ok ? await flowsRes.json() : null;
 
-  // Fetch individual step JSONs
   const stepsPromises = manifest.enriched_screenshots.map(async (entry: any) => {
     const stepRes = await fetch(`${publicUrl}/${entry.enriched_file}`, { cache: 'no-store' });
     const enrichedData = stepRes.ok ? await stepRes.json() : null;
 
     return {
-      step: entry.step,
+      step: entry.step || entry.timeline_step,
       phase: entry.phase,
       screen_type: entry.screen_type,
-      imagePath: `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${sessionId}/screenshots/${entry.screenshot}`,
+      imagePath: `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${sessionType}/screenshots/${entry.screenshot}`,
       enrichedData
     };
   });
 
   return {
-    sessionId,
     summary: manifest.processing_stats,
     sessionIntel,
-    flowsData, // <-- Added this
+    flowsData,
     steps: await Promise.all(stepsPromises)
   };
+}
+
+export async function getAppDetails(appName: string) {
+  const [onboarding, browsing] = await Promise.all([
+    fetchSessionData(appName, 'onboarding'),
+    fetchSessionData(appName, 'browsing')
+  ]);
+  
+  return { appName, onboarding, browsing };
 }

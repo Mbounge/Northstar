@@ -1,3 +1,5 @@
+//components/flows-viewer.tsx
+
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
@@ -40,7 +42,7 @@ interface FlowsData {
 
 // ─── HELPERS ────────────────────────────────────────────────────
 function collectAllFlows(nodes: FlowNode[]): FlowNode[] {
-  const result: FlowNode[] = [];
+  const result: FlowNode[] =[];
   const walk = (list: FlowNode[]) => {
     for (const n of list) {
       if (n.screens && n.screens.length > 0) result.push(n);
@@ -67,13 +69,15 @@ function ScreenDetailModal({
   screens,
   initialIndex,
   flowLabel,
-  sessionId,
+  appName,
+  mode,
   onClose,
 }: {
   screens: Screen[];
   initialIndex: number;
   flowLabel: string;
-  sessionId: string;
+  appName: string;
+  mode: string;
   onClose: () => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
@@ -94,13 +98,12 @@ function ScreenDetailModal({
           container.scrollTo({ left: scrollLeft, behavior });
         }
       }
-    },
-    []
+    },[]
   );
 
   useEffect(() => {
     requestAnimationFrame(() => scrollToIndex(initialIndex, "instant"));
-  }, [initialIndex, scrollToIndex]);
+  },[initialIndex, scrollToIndex]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -200,7 +203,7 @@ function ScreenDetailModal({
             className="flex items-end h-full overflow-x-auto overflow-y-hidden px-10 pb-6 pt-4 gap-3 scrollbar-none scroll-smooth"
           >
             {screens.map((screen, idx) => {
-              const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${sessionId}/screenshots/${screen.screenshot_file}`;
+              const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
               const isActive = idx === currentIndex;
               const isHovered = idx === hoveredIndex;
 
@@ -390,14 +393,16 @@ function SidebarNode({
 function FlowSection({
   flow,
   screens,
-  sessionId,
+  appName,
+  mode,
   isHighlighted,
   onScreenClick,
   sectionRef,
 }: {
   flow: FlowNode;
   screens: Screen[];
-  sessionId: string;
+  appName: string;
+  mode: string;
   isHighlighted: boolean;
   onScreenClick: (screens: Screen[], index: number, label: string) => void;
   sectionRef?: React.RefObject<HTMLDivElement | null>;
@@ -421,7 +426,7 @@ function FlowSection({
       <div className="overflow-x-auto overflow-y-hidden scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/[0.04] hover:scrollbar-thumb-white/[0.08] pb-4">
         <div className="flex gap-3 px-8 min-w-max">
           {screens.map((screen, idx) => {
-            const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${sessionId}/screenshots/${screen.screenshot_file}`;
+            const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
 
             return (
               <div
@@ -466,15 +471,17 @@ function FlowSection({
 // ─── MAIN COMPONENT ─────────────────────────────────────────────
 export function FlowsViewer({
   flowsData,
-  sessionId,
+  appName,
+  mode,
 }: {
   flowsData: FlowsData;
-  sessionId: string;
+  appName: string;
+  mode: string;
 }) {
   const [activeFlowId, setActiveFlowId] = useState<string | null>(
     flowsData?.taxonomy?.[0]?.id || null
   );
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
+  const[expandedNodes, setExpandedNodes] = useState<Set<string>>(
     new Set(flowsData?.taxonomy?.map((t) => t.id) || [])
   );
   const [detailModal, setDetailModal] = useState<{
@@ -512,7 +519,7 @@ export function FlowsViewer({
       else next.add(id);
       return next;
     });
-  }, []);
+  },[]);
 
   const handleSidebarSelect = useCallback((id: string) => {
     setActiveFlowId(id);
@@ -520,13 +527,12 @@ export function FlowsViewer({
     if (ref?.current) {
       ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, []);
+  },[]);
 
   const openDetail = useCallback(
     (screens: Screen[], index: number, label: string) => {
       setDetailModal({ screens, initialIndex: index, flowLabel: label });
-    },
-    []
+    },[]
   );
 
   if (!flowsData || !flowsData.taxonomy || flowsData.taxonomy.length === 0) {
@@ -591,7 +597,7 @@ export function FlowsViewer({
 
           <div className="flex flex-col divide-y divide-white/[0.04]">
             {allFlows.map((flow) => {
-              const screens = flowScreensMap.get(flow.id) || [];
+              const screens = flowScreensMap.get(flow.id) ||[];
               if (screens.length === 0) return null;
 
               return (
@@ -599,7 +605,8 @@ export function FlowsViewer({
                   key={flow.id}
                   flow={flow}
                   screens={screens}
-                  sessionId={sessionId}
+                  appName={appName}
+                  mode={mode}
                   isHighlighted={flow.id === activeFlowId}
                   onScreenClick={openDetail}
                   sectionRef={sectionRefs.current.get(flow.id)}
@@ -618,7 +625,8 @@ export function FlowsViewer({
           screens={detailModal.screens}
           initialIndex={detailModal.initialIndex}
           flowLabel={detailModal.flowLabel}
-          sessionId={sessionId}
+          appName={appName}
+          mode={mode}
           onClose={() => setDetailModal(null)}
         />
       )}
