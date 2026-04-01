@@ -1,4 +1,3 @@
-// lib/review-data.ts
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -17,13 +16,13 @@ export interface AppSummary {
 }
 
 function formatCategory(cat: string | undefined): string {
-  if (!cat || cat.toLowerCase() === "unknown") return "Unknown";
+  if (!cat || cat.toLowerCase() === "unknown") return "General Utilities";
   return cat.split('_').join(' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
 }
 
 export async function getReviewApps(): Promise<AppSummary[]> {
   const { data: appFolders, error } = await supabase.storage.from('reviews').list('', { limit: 100 });
-  if (error || !appFolders) return[];
+  if (error || !appFolders) return [];
 
   const appPromises = appFolders.filter(f => !f.id).map(async (appFolderObj) => {
     const appName = appFolderObj.name;
@@ -32,37 +31,60 @@ export async function getReviewApps(): Promise<AppSummary[]> {
     let hasOnboarding = false, hasBrowsing = false;
     let onboardingGrade = "N/A", browsingGrade = "N/A";
     let totalScreens = 0;
-    let category = "Unknown";
+    let category = "General";
 
     if (!sessionFolders) return null;
 
     for (const session of sessionFolders) {
       if (session.id) continue;
       const type = session.name; // 'onboarding' or 'browsing'
+      
+      // Only process expected folders
+      if (!['onboarding', 'browsing'].includes(type)) continue;
+
       const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${type}`;
       
-      const[manifestRes, intelRes] = await Promise.all([
-        fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'session_manifest.json'}`, { cache: 'no-store' }),
+      const [manifestRes, intelRes] = await Promise.all([
+        fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'enriched_manifest.json'}`, { cache: 'no-store' }),
         fetch(`${publicUrl}/enriched/session_intelligence.json`, { cache: 'no-store' })
       ]);
+
+      let screenCountForThisSession = 0;
 
       if (manifestRes.ok) {
         const manifest = await manifestRes.json();
         if (type === 'onboarding') {
           hasOnboarding = true;
           category = formatCategory(manifest.metadata?.app_category || category);
+          screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
         } else {
           hasBrowsing = true;
+          // In Teardown v3.0, category is in the manifest or session_intel
           category = formatCategory(manifest.app_category || category);
+          screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
         }
       }
 
       if (intelRes.ok) {
         const intel = await intelRes.json();
-        if (type === 'onboarding') onboardingGrade = intel.friction_report?.friction_grade || "N/A";
-        if (type === 'browsing') browsingGrade = intel.friction_report?.friction_grade || "N/A";
-        totalScreens += intel.funnel_summary?.total_screens || 0;
+        
+        if (type === 'onboarding') {
+          onboardingGrade = intel.friction_assessment?.friction_grade || intel.friction_report?.friction_grade || "N/A";
+          const intelCount = intel.friction_report?.actual_total_screens || intel.funnel_summary?.total_screens || 0;
+          screenCountForThisSession = Math.max(intelCount, screenCountForThisSession);
+        } else if (type === 'browsing') {
+          // Supports V3.0 Teardown schema
+          browsingGrade = intel.ux_quality_assessment?.ux_grade || intel.ux_quality_report?.ux_grade || "N/A";
+          // Update category from session intel if available
+          if (intel.competitive_profile?.app_category) {
+            category = formatCategory(intel.competitive_profile.app_category);
+          }
+          const intelCount = intel.exploration_summary?.total_screenshots || 0;
+          screenCountForThisSession = Math.max(intelCount, screenCountForThisSession);
+        }
       }
+      
+      totalScreens += screenCountForThisSession;
     }
 
     if (!hasOnboarding && !hasBrowsing) return null;

@@ -1,5 +1,3 @@
-//components/flows-viewer.tsx
-
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
@@ -127,7 +125,6 @@ function ScreenDetailModal({
     return () => window.removeEventListener("keydown", handler);
   }, [onClose, screens.length, scrollToIndex]);
 
-  // Click outside modal to close
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
       if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
@@ -138,58 +135,51 @@ function ScreenDetailModal({
   );
 
   return (
-    // Backdrop — dimmed, click to close
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-in fade-in duration-150"
       style={{ backgroundColor: "rgba(0, 0, 0, 0.75)" }}
       onClick={handleBackdropClick}
     >
-      {/* Modal container — ~90% of viewport, rounded, fully opaque */}
       <div
         ref={modalRef}
-        className="relative w-full h-full max-w-[96%] max-h-[92%] bg-[#1C1C1C] rounded-2xl flex flex-col overflow-hidden shadow-2xl animate-in zoom-in-[0.98] duration-200"
+        className="relative w-full h-full max-w-[96%] max-h-[92%] bg-zinc-50 dark:bg-[#1C1C1C] rounded-2xl flex flex-col overflow-hidden shadow-2xl animate-in zoom-in-[0.98] duration-200 transition-colors"
       >
         {/* ── Top bar ── */}
         <div className="flex items-center justify-between px-6 h-[60px] shrink-0">
-          {/* Left: Flow label with Figma icon */}
           <div className="flex items-center gap-3 min-w-0">
-            <span className="text-white text-[13px] font-medium truncate">
+            <span className="text-zinc-900 dark:text-white text-[13px] font-medium truncate">
               {flowLabel}
             </span>
           </div>
 
-          {/* Center: Screens toggle */}
-          <div className="absolute left-1/2 -translate-x-1/2 flex items-center bg-[#2A2A2A] rounded-full p-[3px]">
-            <button className="px-4 py-1.5 rounded-full text-[13px] font-medium text-white bg-[#3A3A3A]">
+          <div className="absolute left-1/2 -translate-x-1/2 flex items-center bg-zinc-200 dark:bg-[#2A2A2A] rounded-full p-[3px]">
+            <button className="px-4 py-1.5 rounded-full text-[13px] font-medium text-zinc-900 dark:text-white bg-white dark:bg-[#3A3A3A] shadow-sm dark:shadow-none">
               Screens
             </button>
           </div>
 
-          {/* Right: User avatar + actions + close */}
           <div className="flex items-center gap-1">
-            {/* Figma logo placeholder */}
-            <div className="w-7 h-7 rounded-full bg-[#2A2A2A] flex items-center justify-center mr-1">
-              <Figma className="w-3.5 h-3.5 text-white/80" />
+            <div className="w-7 h-7 rounded-full bg-zinc-200 dark:bg-[#2A2A2A] flex items-center justify-center mr-1">
+              <Figma className="w-3.5 h-3.5 text-zinc-600 dark:text-white/80" />
             </div>
-            {/* User avatar placeholder */}
             <div className="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-[11px] font-semibold text-white mr-2">
               U
             </div>
 
-            <div className="w-px h-5 bg-white/[0.08] mx-1" />
+            <div className="w-px h-5 bg-zinc-300 dark:bg-white/[0.08] mx-1" />
 
-            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/[0.06] transition-all">
+            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-500 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-white/[0.06] transition-all">
               <MessageSquare className="w-4 h-4" />
             </button>
-            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/[0.06] transition-all">
+            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-500 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-white/[0.06] transition-all">
               <Link2 className="w-4 h-4" />
             </button>
 
-            <div className="w-px h-5 bg-white/[0.08] mx-1" />
+            <div className="w-px h-5 bg-zinc-300 dark:bg-white/[0.08] mx-1" />
 
             <button
               onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/[0.06] transition-all"
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-500 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-white/[0.06] transition-all"
             >
               <X className="w-4 h-4" />
             </button>
@@ -197,10 +187,10 @@ function ScreenDetailModal({
         </div>
 
         {/* ── Screens strip ── */}
-        <div className="flex-1 relative overflow-hidden">
+        <div className="flex-1 relative overflow-hidden bg-zinc-100 dark:bg-transparent">
           <div
             ref={scrollRef}
-            className="flex items-end h-full overflow-x-auto overflow-y-hidden px-10 pb-6 pt-4 gap-3 scrollbar-none scroll-smooth"
+            className="flex items-end h-full overflow-x-auto overflow-y-hidden px-10 pb-6 pt-4 gap-4 scrollbar-none scroll-smooth"
           >
             {screens.map((screen, idx) => {
               const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
@@ -217,38 +207,38 @@ function ScreenDetailModal({
                   onMouseEnter={() => setHoveredIndex(idx)}
                   onMouseLeave={() => setHoveredIndex(null)}
                   className={cn(
-                    "shrink-0 cursor-pointer transition-all duration-300 ease-out relative",
+                    "shrink-0 cursor-pointer transition-all duration-300 ease-out relative flex items-end",
                     isActive ? "h-[97%]" : "h-[80%] hover:h-[84%]"
                   )}
                 >
+                  {/* --- THE DEVICE MOCKUP STYLE (FIXED RADIUS) --- */}
                   <div
                     className={cn(
-                      "relative h-full aspect-[9/19.5] rounded-2xl overflow-hidden transition-all duration-300",
-                      isActive
-                        ? "opacity-100"
-                        : "opacity-35 hover:opacity-55"
+                      "relative h-full aspect-[9/19.5] overflow-hidden bg-white transition-all duration-300 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)]",
+                      isActive ? "opacity-100" : "opacity-50 hover:opacity-80"
                     )}
+                    style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '1.8rem' }}
                   >
+                    {/* object-cover ensures it perfectly fills the bezel */}
                     <Image
                       src={imgUrl}
                       alt={screen.display_label}
                       fill
-                      className="object-contain bg-[#222]"
+                      className="object-cover"
                       unoptimized
                     />
 
-                    {/* Hover overlay with Save/Copy pill buttons */}
                     {(isHovered || isActive) && isHovered && (
-                      <div className="absolute inset-0 bg-black/30 flex items-end justify-center pb-5 gap-2 animate-in fade-in duration-150">
+                      <div className="absolute inset-0 bg-black/20 flex items-end justify-center pb-5 gap-2 animate-in fade-in duration-150" style={{ borderRadius: '1.8rem' }}>
                         <button
                           onClick={(e) => e.stopPropagation()}
-                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-white/90 transition-colors shadow-lg"
+                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg"
                         >
                           Save
                         </button>
                         <button
                           onClick={(e) => e.stopPropagation()}
-                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-white/90 transition-colors shadow-lg flex items-center gap-1.5"
+                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg flex items-center gap-1.5"
                         >
                           Copy
                         </button>
@@ -262,35 +252,32 @@ function ScreenDetailModal({
         </div>
 
         {/* ── Bottom bar ── */}
-        <div className="flex items-center justify-between px-6 h-[56px] shrink-0 border-t border-white/[0.06]">
-          {/* Left: Screen label */}
+        <div className="flex items-center justify-between px-6 h-[56px] shrink-0 border-t border-zinc-200 dark:border-white/[0.06] bg-white dark:bg-transparent transition-colors">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-white text-[13px] truncate">
+            <span className="text-zinc-900 dark:text-white text-[13px] truncate font-medium">
               {screens[currentIndex]?.display_label}
             </span>
           </div>
 
-          {/* Center: Action buttons — white pills */}
           <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
-            <button className="h-9 px-5 flex items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] text-[13px] font-medium text-white transition-all border border-white/[0.08]">
+            <button className="h-9 px-5 flex items-center gap-2 rounded-full bg-zinc-100 dark:bg-white/[0.08] hover:bg-zinc-200 dark:hover:bg-white/[0.14] text-[13px] font-medium text-zinc-700 dark:text-white transition-all border border-zinc-200 dark:border-white/[0.08]">
               <Bookmark className="w-3.5 h-3.5" />
               Save
             </button>
-            <button className="h-9 px-5 flex items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] text-[13px] font-medium text-white transition-all border border-white/[0.08]">
+            <button className="h-9 px-5 flex items-center gap-2 rounded-full bg-zinc-100 dark:bg-white/[0.08] hover:bg-zinc-200 dark:hover:bg-white/[0.14] text-[13px] font-medium text-zinc-700 dark:text-white transition-all border border-zinc-200 dark:border-white/[0.08]">
               <Figma className="w-3.5 h-3.5" />
               Copy
             </button>
-            <button className="h-9 w-9 flex items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] text-white transition-all border border-white/[0.08]">
+            <button className="h-9 w-9 flex items-center justify-center rounded-full bg-zinc-100 dark:bg-white/[0.08] hover:bg-zinc-200 dark:hover:bg-white/[0.14] text-zinc-700 dark:text-white transition-all border border-zinc-200 dark:border-white/[0.08]">
               <MoreHorizontal className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Right: More info */}
           <div className="flex items-center gap-4">
-            <span className="text-white/70 text-[12px] tabular-nums">
+            <span className="text-zinc-500 dark:text-white/70 text-[12px] tabular-nums font-mono">
               {currentIndex + 1} / {screens.length}
             </span>
-            <button className="text-white hover:text-white/80 text-[13px] transition-colors">
+            <button className="text-zinc-900 dark:text-white hover:text-zinc-600 dark:hover:text-white/80 text-[13px] transition-colors font-medium">
               More info
             </button>
           </div>
@@ -327,7 +314,7 @@ function SidebarNode({
         onClick={() => onSelect(node.id)}
         className={cn(
           "group flex items-center justify-between py-[7px] cursor-pointer select-none transition-colors duration-150",
-          isActive ? "text-white" : "text-white/70 hover:text-white",
+          isActive ? "text-zinc-900 dark:text-white bg-zinc-100 dark:bg-white/5" : "text-zinc-600 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-transparent",
           isTopLevel && "mt-0.5"
         )}
         style={{ paddingLeft: `${depth * 16 + 16}px`, paddingRight: "16px" }}
@@ -336,12 +323,12 @@ function SidebarNode({
           {hasChildren ? (
             <button
               onClick={(e) => onToggle(node.id, e)}
-              className="p-0.5 -ml-0.5 rounded hover:bg-white/[0.04] transition-colors shrink-0"
+              className="p-0.5 -ml-0.5 rounded hover:bg-zinc-200 dark:hover:bg-white/[0.04] transition-colors shrink-0"
             >
               {isExpanded ? (
-                <ChevronDown className="w-3.5 h-3.5 text-white/40" />
+                <ChevronDown className="w-3.5 h-3.5 text-zinc-400 dark:text-white/40" />
               ) : (
-                <ChevronRight className="w-3.5 h-3.5 text-white/40" />
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-400 dark:text-white/40" />
               )}
             </button>
           ) : (
@@ -362,7 +349,7 @@ function SidebarNode({
           <span
             className={cn(
               "text-[11px] tabular-nums shrink-0",
-              isActive ? "text-white/70" : "text-white/40 group-hover:text-white/60"
+              isActive ? "text-zinc-500 dark:text-white/70" : "text-zinc-400 dark:text-white/40 group-hover:text-zinc-500 dark:group-hover:text-white/60"
             )}
           >
             {node.screen_count}
@@ -413,18 +400,18 @@ function FlowSection({
         <h2
           className={cn(
             "text-[15px] font-semibold tracking-[-0.01em] transition-colors",
-            isHighlighted ? "text-white" : "text-white/80"
+            isHighlighted ? "text-zinc-900 dark:text-white" : "text-zinc-700 dark:text-white/80"
           )}
         >
           {flow.label}
         </h2>
-        <span className="text-white/60 text-[13px]">
+        <span className="text-zinc-500 dark:text-white/60 text-[13px]">
           {screens.length} screen{screens.length !== 1 ? "s" : ""}
         </span>
       </div>
 
-      <div className="overflow-x-auto overflow-y-hidden scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/[0.04] hover:scrollbar-thumb-white/[0.08] pb-4">
-        <div className="flex gap-3 px-8 min-w-max">
+      <div className="overflow-x-auto overflow-y-hidden scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-200 hover:scrollbar-thumb-zinc-300 dark:scrollbar-thumb-white/[0.04] dark:hover:scrollbar-thumb-white/[0.08] pb-6 pt-2">
+        <div className="flex gap-6 px-8 min-w-max">
           {screens.map((screen, idx) => {
             const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
 
@@ -438,24 +425,28 @@ function FlowSection({
                   animationFillMode: "both",
                 }}
               >
-                <div className="relative w-[232px] h-[502px] rounded-xl overflow-hidden bg-[#161616] ring-1 ring-white/[0.03] group-hover:ring-white/[0.06] transition-all duration-200 group-hover:shadow-lg group-hover:shadow-black/20">
+                {/* --- THE DEVICE MOCKUP STYLE --- */}
+                <div 
+                  className="relative w-[240px] h-[520px] overflow-hidden bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.2)] dark:shadow-none dark:group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.4)] transition-all duration-200"
+                  style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '1.8rem' }}
+                >
                   <Image
                     src={imgUrl}
                     alt={screen.display_label}
                     fill
-                    className="object-contain"
+                    className="object-cover"
                     unoptimized
                   />
                 </div>
 
-                <div className="pt-3 w-[232px] flex flex-col items-center text-center gap-1.5">
+                <div className="pt-4 w-[240px] flex flex-col items-center text-center gap-1.5">
                   <span
-                    className="text-white text-[12px] font-medium truncate w-full group-hover:text-white transition-colors duration-200"
+                    className="text-zinc-700 dark:text-white/80 text-[12px] font-medium truncate w-full group-hover:text-zinc-900 dark:group-hover:text-white transition-colors duration-200"
                     title={screen.display_label}
                   >
                     {screen.display_label}
                   </span>
-                  <span className="text-white text-[10px] font-semibold tabular-nums bg-white/[0.08] px-2.5 py-0.5 rounded-full">
+                  <span className="text-zinc-500 dark:text-white/60 text-[10px] font-semibold tabular-nums bg-zinc-100 dark:bg-white/[0.08] px-2.5 py-0.5 rounded-full">
                     {screen.timeline_step}
                   </span>
                 </div>
@@ -537,7 +528,7 @@ export function FlowsViewer({
 
   if (!flowsData || !flowsData.taxonomy || flowsData.taxonomy.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center text-white/60 bg-[#111]">
+      <div className="flex h-full items-center justify-center text-zinc-500 bg-zinc-50 dark:bg-[#111] transition-colors">
         <div className="flex flex-col items-center gap-3">
           <Layers className="w-7 h-7 opacity-40" />
           <p className="text-sm">No flow taxonomy generated yet.</p>
@@ -548,11 +539,11 @@ export function FlowsViewer({
 
   return (
     <>
-      <div className="flex h-full bg-[#111] overflow-hidden">
+      <div className="flex h-full bg-white dark:bg-[#111] overflow-hidden transition-colors duration-300">
         {/* ═══ LEFT SIDEBAR ═══ */}
-        <div className="w-[260px] bg-[#111] border-r border-white/[0.06] flex flex-col shrink-0">
+        <div className="w-[260px] bg-zinc-50 dark:bg-[#111] border-r border-zinc-200 dark:border-white/[0.06] flex flex-col shrink-0 transition-colors duration-300">
           <div className="px-4 pt-5 pb-3">
-            <h3 className="text-white text-xs font-semibold uppercase tracking-wider">
+            <h3 className="text-zinc-500 dark:text-white/60 text-xs font-semibold uppercase tracking-wider">
               Flows
             </h3>
           </div>
@@ -573,21 +564,21 @@ export function FlowsViewer({
         </div>
 
         {/* ═══ MAIN ═══ */}
-        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
+        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-white dark:bg-[#111] transition-colors duration-300">
           {activeFlowId &&
             (() => {
               const flow = findFlow(flowsData.taxonomy, activeFlowId);
               if (!flow) return null;
               return (
-                <div className="px-8 pt-8 pb-3 border-b border-white/[0.04]">
-                  <h1 className="text-xl font-semibold text-white tracking-[-0.01em] mb-1">
+                <div className="px-8 pt-8 pb-3 border-b border-zinc-200 dark:border-white/[0.04] transition-colors">
+                  <h1 className="text-xl font-semibold text-zinc-900 dark:text-white tracking-[-0.01em] mb-1">
                     {flow.label}
                   </h1>
-                  <span className="text-white/70 text-sm">
+                  <span className="text-zinc-500 dark:text-white/70 text-sm">
                     {flow.screen_count} screens
                   </span>
                   {flow.description && (
-                    <p className="text-white/70 text-sm mt-1.5 max-w-3xl leading-relaxed">
+                    <p className="text-zinc-600 dark:text-white/70 text-sm mt-1.5 max-w-3xl leading-relaxed">
                       {flow.description}
                     </p>
                   )}
@@ -595,9 +586,9 @@ export function FlowsViewer({
               );
             })()}
 
-          <div className="flex flex-col divide-y divide-white/[0.04]">
+          <div className="flex flex-col divide-y divide-zinc-100 dark:divide-white/[0.04]">
             {allFlows.map((flow) => {
-              const screens = flowScreensMap.get(flow.id) ||[];
+              const screens = flowScreensMap.get(flow.id) || [];
               if (screens.length === 0) return null;
 
               return (

@@ -2,6 +2,8 @@
 
 @import "tailwindcss";
 
+@variant dark (&:where(.dark, .dark *));
+
 @theme {
   /* Force Dark Mode Colors (Zinc Palette) */
   --color-background: #09090b;
