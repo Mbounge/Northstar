@@ -1,3 +1,4 @@
+// lib/review-data.ts
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -37,9 +38,7 @@ export async function getReviewApps(): Promise<AppSummary[]> {
 
     for (const session of sessionFolders) {
       if (session.id) continue;
-      const type = session.name; // 'onboarding' or 'browsing'
-      
-      // Only process expected folders
+      const type = session.name; 
       if (!['onboarding', 'browsing'].includes(type)) continue;
 
       const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${type}`;
@@ -59,7 +58,6 @@ export async function getReviewApps(): Promise<AppSummary[]> {
           screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
         } else {
           hasBrowsing = true;
-          // In Teardown v3.0, category is in the manifest or session_intel
           category = formatCategory(manifest.app_category || category);
           screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
         }
@@ -73,9 +71,7 @@ export async function getReviewApps(): Promise<AppSummary[]> {
           const intelCount = intel.friction_report?.actual_total_screens || intel.funnel_summary?.total_screens || 0;
           screenCountForThisSession = Math.max(intelCount, screenCountForThisSession);
         } else if (type === 'browsing') {
-          // Supports V3.0 Teardown schema
           browsingGrade = intel.ux_quality_assessment?.ux_grade || intel.ux_quality_report?.ux_grade || "N/A";
-          // Update category from session intel if available
           if (intel.competitive_profile?.app_category) {
             category = formatCategory(intel.competitive_profile.app_category);
           }
@@ -132,11 +128,29 @@ async function fetchSessionData(appName: string, sessionType: string) {
   };
 }
 
+async function fetchAppStoreData(appName: string) {
+  const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/app_store`;
+  const res = await fetch(`${publicUrl}/app_store_manifest.json`, { cache: 'no-store' });
+  if (!res.ok) return null;
+  
+  const data = await res.json();
+  
+  // Transform local screenshot paths to public Supabase URLs
+  if (data.screenshots) {
+    for (const key of Object.keys(data.screenshots)) {
+      const filename = data.screenshots[key].split('/').pop();
+      data.screenshots[key] = `${publicUrl}/screenshots/${filename}`;
+    }
+  }
+  return data;
+}
+
 export async function getAppDetails(appName: string) {
-  const [onboarding, browsing] = await Promise.all([
+  const [onboarding, browsing, appStore] = await Promise.all([
     fetchSessionData(appName, 'onboarding'),
-    fetchSessionData(appName, 'browsing')
+    fetchSessionData(appName, 'browsing'),
+    fetchAppStoreData(appName)
   ]);
   
-  return { appName, onboarding, browsing };
+  return { appName, onboarding, browsing, appStore };
 }

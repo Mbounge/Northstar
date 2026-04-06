@@ -1,3 +1,5 @@
+//components/executive-report.tsx
+
 "use client";
 
 import { useState, useEffect } from "react";
@@ -172,13 +174,26 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
   const rawDarkPatternsDetailed = funnelSum.dark_patterns_detailed || intel.dark_pattern_audit?.patterns_found || intel.dark_pattern_audit?.findings || [];
   let darkPatternsArray: any[] = [];
   if (Array.isArray(rawDarkPatternsDetailed)) {
-    darkPatternsArray = rawDarkPatternsDetailed.map(p => typeof p === "string" ? { pattern_type: p, description: "Observed.", severity: "medium", screens: extractScreens(p) } : { pattern_type: p.pattern_type || p.type || "Pattern", description: p.description, severity: p.severity || "medium", screens: extractScreens(p) });
+    darkPatternsArray = rawDarkPatternsDetailed.map(p => typeof p === "string" ? { pattern_type: p, description: "Observed.", severity: "medium", screens: extractScreens(p) } 
+    : { 
+        pattern_type: p.pattern_type || p.type || "Pattern", 
+        description: p.description, 
+        impact: p.user_impact, // <--- Added extraction
+        severity: p.severity || "medium", 
+        screens: extractScreens(p) 
+      });
   } else {
-    darkPatternsArray = Object.entries(rawDarkPatternsDetailed).map(([k, v]: any) => ({ pattern_type: formatComponent(k), description: v.description, severity: v.severity || "medium", screens: extractScreens(v) }));
+    darkPatternsArray = Object.entries(rawDarkPatternsDetailed).map(([k, v]: any) => ({ 
+        pattern_type: formatComponent(k), 
+        description: v.description, 
+        impact: v.user_impact, // <--- Added extraction
+        severity: v.severity || "medium", 
+        screens: extractScreens(v) 
+    }));
   }
 
   const uxPatternsArray = (intel.pattern_library || []).map((p: any) => 
-    typeof p === "string" ? { pattern_name: p, description: "Observed UX pattern.", screen_indices: extractScreens(p) } : { pattern_name: p.pattern_name || p.name || "Pattern", description: p.description || p.competitive_insight || "Observed.", screen_indices: extractScreens(p) }
+    typeof p === "string" ? { pattern_name: p, description: "Observed UX pattern.", screen_indices: extractScreens(p) } : { pattern_name: p.pattern_name || p.name || "Pattern", description: p.description || p.competitive_insight || "Observed.", insight: p.competitive_insight, screen_indices: extractScreens(p) }
   );
 
   const glossary = intel.glossary || {};
@@ -370,7 +385,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
                       {phase.screens && phase.screens.length > 0 && (
                         <div className="pt-3 border-t border-black/[0.05] dark:border-white/[0.04]">
                           <button onClick={() => handleViewScreens(phase.screens)} className="inline-flex items-center rounded-md px-2 py-0.5 text-[9px] uppercase tracking-wider bg-white text-zinc-600 border border-zinc-200 hover:text-zinc-900 dark:bg-zinc-950 dark:text-zinc-400 dark:border-zinc-700 dark:hover:text-white dark:hover:border-blue-500 transition-colors cursor-pointer w-full justify-center shadow-sm dark:shadow-none">
-                            <ImageIcon className="w-3 h-3 mr-1.5 text-blue-500 dark:text-blue-400" /> View Screens ({phase.screens.join(", ")})
+                            <ImageIcon className="w-3 h-3 mr-1.5 text-blue-500 dark:text-blue-400" /> View Screens ({Array.isArray(phase.screens) ? phase.screens.join(", ") : phase.screens})
                           </button>
                         </div>
                       )}
@@ -481,12 +496,18 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
           <div className="space-y-4">
             <SectionLabel icon={<Layers className="w-3 h-3 text-indigo-500 dark:text-indigo-400" />} color="text-indigo-600 dark:text-indigo-400/70">Notable UX Patterns</SectionLabel>
             {uxPatternsArray.length > 0 ? uxPatternsArray.map((pattern: any, i: number) => (
-              <div key={i} className="rounded-2xl bg-white dark:bg-white/[0.025] border border-black/[0.05] dark:border-white/[0.06] shadow-sm dark:shadow-none p-5 flex flex-col h-full justify-between transition-colors duration-300">
+              <div key={i} className="rounded-2xl bg-white dark:bg-white/[0.025] border border-black/[0.05] dark:border-white/[0.06] shadow-sm dark:shadow-none p-5 flex flex-col transition-colors duration-300">
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-3">
                     <span className="text-indigo-700 dark:text-indigo-300 font-semibold text-[13px] capitalize">{fmt(pattern.pattern_name)}</span>
                   </div>
                   <p className="text-zinc-600 dark:text-zinc-400 text-[12px] mb-4 leading-relaxed">{pattern.description}</p>
+                  {pattern.insight && (
+                    <div className="mb-4 bg-indigo-50/50 dark:bg-indigo-500/10 border-l-2 border-indigo-400 p-2.5 rounded-r-md">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block mb-1">Strategic Insight</span>
+                        <span className="text-[11.5px] text-indigo-900/80 dark:text-indigo-200/90 leading-snug block">{pattern.insight}</span>
+                    </div>
+                  )}
                 </div>
                 {pattern.screen_indices && pattern.screen_indices.length > 0 && (
                     <div className="pt-3 border-t border-black/[0.05] dark:border-indigo-500/10 flex justify-end">
@@ -500,7 +521,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
           <div className="space-y-4">
             <SectionLabel icon={<ShieldAlert className="w-3 h-3 text-rose-500 dark:text-rose-400" />} color="text-rose-600 dark:text-rose-400/70">Dark Pattern Audit</SectionLabel>
             {darkPatternsArray.length > 0 ? darkPatternsArray.map((pattern: any, i: number) => (
-                <div key={i} className="rounded-2xl bg-rose-50 dark:bg-rose-500/[0.03] border border-rose-100 dark:border-rose-500/15 p-5 flex flex-col h-full justify-between transition-colors duration-300">
+                <div key={i} className="rounded-2xl bg-rose-50 dark:bg-rose-500/[0.03] border border-rose-100 dark:border-rose-500/15 p-5 flex flex-col transition-colors duration-300">
                   <div>
                     <div className="flex items-start justify-between gap-2 mb-3">
                       <h4 className="text-rose-700 dark:text-rose-200 font-semibold text-[13px] capitalize">{fmt(pattern.pattern_type || "")}</h4>
@@ -511,6 +532,13 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
                       )}
                     </div>
                     <p className="text-zinc-600 dark:text-zinc-400 text-[12px] mb-4 leading-relaxed">{pattern.description}</p>
+                    {/* --- NEW USER IMPACT BOX --- */}
+                    {pattern.impact && (
+                      <div className="mb-4 bg-rose-50/50 dark:bg-rose-500/10 border-l-2 border-rose-400 p-2.5 rounded-r-md">
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400 block mb-1">User Friction & Risk</span>
+                          <span className="text-[11.5px] text-rose-900/80 dark:text-rose-200/90 leading-snug block">{pattern.impact}</span>
+                      </div>
+                    )}
                   </div>
                   {pattern.screens && pattern.screens.length > 0 && (
                     <div className="flex justify-end pt-3 border-t border-rose-200 dark:border-rose-500/10">

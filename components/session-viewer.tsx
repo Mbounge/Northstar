@@ -133,6 +133,7 @@ export function SessionViewer({ data }: { data: any }) {
 
   const fileName = currentStep.imagePath.split('/').pop() || "";
   const displayTitle = formatScreenshotTitle(fileName, currentStep.screen_type);
+  const isCurrentPanoramic = currentStep.imagePath.includes('panoramic') || currentStep.imagePath.includes('full_page');
   
   let displayPhase = currentStep.phase;
   if (!displayPhase || displayPhase === "null" || displayPhase === "UNKNOWN") {
@@ -180,6 +181,8 @@ export function SessionViewer({ data }: { data: any }) {
           >
             {steps.map((step: any, idx: number) => {
               const isActive = idx === currentIndex;
+              const isPanoramic = step.imagePath.includes('panoramic') || step.imagePath.includes('full_page');
+
               return (
                 <div 
                   key={idx}
@@ -191,10 +194,17 @@ export function SessionViewer({ data }: { data: any }) {
                   style={{ aspectRatio: '9/19.5' }}
                 >
                   <div 
-                    className="relative w-full h-full overflow-hidden bg-white shadow-2xl"
+                    className={cn(
+                      "relative w-full h-full bg-white shadow-2xl transition-all duration-300",
+                      isPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden"
+                    )}
                     style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: isActive ? '1.8rem' : '1.1rem' }}
                   >
-                    <Image src={step.imagePath} alt={`Step ${idx}`} fill className="object-cover" unoptimized />
+                    {isPanoramic ? (
+                      <img src={step.imagePath} alt={`Step ${idx}`} className="w-full h-auto block" />
+                    ) : (
+                      <Image src={step.imagePath} alt={`Step ${idx}`} fill className="object-cover" unoptimized />
+                    )}
                   </div>
                 </div>
               );
@@ -260,15 +270,21 @@ export function SessionViewer({ data }: { data: any }) {
             
             {/* EXACT FIGMA DEVICE SPECS (1.8rem fixed radius) */}
             <div 
-              className="relative h-full aspect-[9/19.5] overflow-hidden bg-white dark:bg-zinc-900 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)] shrink-0 transition-all duration-300 cursor-pointer group"
+              className={cn(
+                "relative h-full aspect-[9/19.5] bg-white dark:bg-zinc-900 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)] shrink-0 transition-all duration-300 cursor-pointer group",
+                isCurrentPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden"
+              )}
               style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '0.98rem' }}
               onClick={() => setIsModalOpen(true)}
             >
-              {/* object-cover ensures no background clipping or white borders */}
-              <Image src={currentStep.imagePath} alt={displayTitle} fill className="object-cover" unoptimized />
+              {isCurrentPanoramic ? (
+                <img src={currentStep.imagePath} alt={displayTitle} className="w-full h-auto block" />
+              ) : (
+                <Image src={currentStep.imagePath} alt={displayTitle} fill className="object-cover" unoptimized />
+              )}
               
-              {/* Hover Overlay for Zoom Indication */}
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 dark:group-hover:bg-black/30 transition-colors duration-200 flex items-center justify-center">
+              {/* Hover Overlay for Zoom Indication - pointer-events-none ensures we can still scroll a panoramic image */}
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 dark:group-hover:bg-black/30 pointer-events-none transition-colors duration-200 flex items-center justify-center">
                 <div className="bg-white/95 dark:bg-black/80 backdrop-blur-sm p-4 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-200 shadow-xl transform scale-90 group-hover:scale-100">
                   <Maximize2 className="w-6 h-6 text-zinc-900 dark:text-white" />
                 </div>
@@ -395,22 +411,33 @@ export function SessionViewer({ data }: { data: any }) {
 
       {/* BOTTOM CAROUSEL */}
       <div className="h-[140px] border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#0a0a0a] p-5 flex items-center gap-5 overflow-x-auto shrink-0 hide-scrollbar transition-colors duration-300">
-        {steps.map((step: any, idx: number) => (
-          <div key={idx} onClick={() => setCurrentIndex(idx)} 
-               className={cn(
-                 "relative h-full aspect-[9/19.5] shrink-0 overflow-hidden cursor-pointer transition-all duration-200",
-                 idx === currentIndex ? "scale-105 shadow-[0_0_15px_rgba(59,130,246,0.3)] dark:shadow-[0_0_15px_rgba(59,130,246,0.5)] z-10" : "opacity-60 hover:opacity-100 hover:scale-105 shadow-sm"
-               )}
-               style={{ 
-                 borderWidth: idx === currentIndex ? '2px' : '0.3px', 
-                 borderColor: idx === currentIndex ? '#3b82f6' : '#818A98',
-                 borderStyle: 'solid',
-                 borderRadius: '0.5rem' /* Small thumbnail radius */
-               }}>
-            <Image src={step.imagePath} alt={`Step ${idx}`} fill className="object-cover bg-white dark:bg-zinc-900" unoptimized />
-            <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white text-center py-1 font-mono backdrop-blur-sm">{idx + 1}</div>
-          </div>
-        ))}
+        {steps.map((step: any, idx: number) => {
+          // Keep thumbnails object-cover so the grid doesn't break, but align top for panoramas
+          const isThumbPanoramic = step.imagePath.includes('panoramic') || step.imagePath.includes('full_page');
+          
+          return (
+            <div key={idx} onClick={() => setCurrentIndex(idx)} 
+                 className={cn(
+                   "relative h-full aspect-[9/19.5] shrink-0 overflow-hidden cursor-pointer transition-all duration-200",
+                   idx === currentIndex ? "scale-105 shadow-[0_0_15px_rgba(59,130,246,0.3)] dark:shadow-[0_0_15px_rgba(59,130,246,0.5)] z-10" : "opacity-60 hover:opacity-100 hover:scale-105 shadow-sm"
+                 )}
+                 style={{ 
+                   borderWidth: idx === currentIndex ? '2px' : '0.3px', 
+                   borderColor: idx === currentIndex ? '#3b82f6' : '#818A98',
+                   borderStyle: 'solid',
+                   borderRadius: '0.5rem' /* Small thumbnail radius */
+                 }}>
+              <Image 
+                src={step.imagePath} 
+                alt={`Step ${idx}`} 
+                fill 
+                className={cn("bg-white dark:bg-zinc-900", isThumbPanoramic ? "object-cover object-top" : "object-cover")} 
+                unoptimized 
+              />
+              <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white text-center py-1 font-mono backdrop-blur-sm">{idx + 1}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

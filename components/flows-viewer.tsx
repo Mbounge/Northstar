@@ -1,3 +1,4 @@
+// components/flows-viewer.tsx
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
@@ -196,6 +197,7 @@ function ScreenDetailModal({
               const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
               const isActive = idx === currentIndex;
               const isHovered = idx === hoveredIndex;
+              const isPanoramic = imgUrl.includes('panoramic') || imgUrl.includes('full_page');
 
               return (
                 <div
@@ -214,31 +216,35 @@ function ScreenDetailModal({
                   {/* --- THE DEVICE MOCKUP STYLE (FIXED RADIUS) --- */}
                   <div
                     className={cn(
-                      "relative h-full aspect-[9/19.5] overflow-hidden bg-white transition-all duration-300 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)]",
+                      "relative h-full aspect-[9/19.5] bg-white transition-all duration-300 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)]",
+                      isPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden",
                       isActive ? "opacity-100" : "opacity-50 hover:opacity-80"
                     )}
                     style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '1.8rem' }}
                   >
-                    {/* object-cover ensures it perfectly fills the bezel */}
-                    <Image
-                      src={imgUrl}
-                      alt={screen.display_label}
-                      fill
-                      className="object-cover"
-                      unoptimized
-                    />
+                    {isPanoramic ? (
+                      <img src={imgUrl} alt={screen.display_label} className="w-full h-auto block" />
+                    ) : (
+                      <Image
+                        src={imgUrl}
+                        alt={screen.display_label}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                    )}
 
                     {(isHovered || isActive) && isHovered && (
-                      <div className="absolute inset-0 bg-black/20 flex items-end justify-center pb-5 gap-2 animate-in fade-in duration-150" style={{ borderRadius: '1.8rem' }}>
+                      <div className="absolute inset-0 bg-black/20 flex items-end justify-center pb-5 gap-2 pointer-events-none animate-in fade-in duration-150" style={{ borderRadius: '1.8rem' }}>
                         <button
                           onClick={(e) => e.stopPropagation()}
-                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg"
+                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg pointer-events-auto"
                         >
                           Save
                         </button>
                         <button
                           onClick={(e) => e.stopPropagation()}
-                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg flex items-center gap-1.5"
+                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg flex items-center gap-1.5 pointer-events-auto"
                         >
                           Copy
                         </button>
@@ -414,6 +420,7 @@ function FlowSection({
         <div className="flex gap-6 px-8 min-w-max">
           {screens.map((screen, idx) => {
             const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
+            const isPanoramic = imgUrl.includes('panoramic') || imgUrl.includes('full_page');
 
             return (
               <div
@@ -427,16 +434,17 @@ function FlowSection({
               >
                 {/* --- THE DEVICE MOCKUP STYLE --- */}
                 <div 
-                  className="relative w-[240px] h-[520px] overflow-hidden bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.2)] dark:shadow-none dark:group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.4)] transition-all duration-200"
+                  className={cn(
+                    "relative w-[240px] h-[520px] bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.2)] dark:shadow-none dark:group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.4)] transition-all duration-200",
+                    isPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden"
+                  )}
                   style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '1.8rem' }}
                 >
-                  <Image
-                    src={imgUrl}
-                    alt={screen.display_label}
-                    fill
-                    className="object-cover"
-                    unoptimized
-                  />
+                  {isPanoramic ? (
+                    <img src={imgUrl} alt={screen.display_label} className="w-full h-auto block" />
+                  ) : (
+                    <Image src={imgUrl} alt={screen.display_label} fill className="object-cover" unoptimized />
+                  )}
                 </div>
 
                 <div className="pt-4 w-[240px] flex flex-col items-center text-center gap-1.5">
@@ -469,11 +477,35 @@ export function FlowsViewer({
   appName: string;
   mode: string;
 }) {
+  // 1. Sanitize IDs to guarantee uniqueness for React keys
+  const sanitizedTaxonomy = useMemo(() => {
+    if (!flowsData?.taxonomy) return [];
+    const seenIds = new Set<string>();
+    
+    const sanitize = (nodes: FlowNode[]): FlowNode[] => {
+      return nodes.map((n) => {
+        let newId = n.id;
+        let counter = 1;
+        while (seenIds.has(newId)) {
+          newId = `${n.id}-${counter}`;
+          counter++;
+        }
+        seenIds.add(newId);
+        return {
+          ...n,
+          id: newId,
+          children: n.children ? sanitize(n.children) : undefined
+        };
+      });
+    };
+    return sanitize(flowsData.taxonomy);
+  }, [flowsData?.taxonomy]);
+
   const [activeFlowId, setActiveFlowId] = useState<string | null>(
-    flowsData?.taxonomy?.[0]?.id || null
+    sanitizedTaxonomy?.[0]?.id || null
   );
-  const[expandedNodes, setExpandedNodes] = useState<Set<string>>(
-    new Set(flowsData?.taxonomy?.map((t) => t.id) || [])
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
+    new Set(sanitizedTaxonomy?.map((t) => t.id) || [])
   );
   const [detailModal, setDetailModal] = useState<{
     screens: Screen[];
@@ -483,7 +515,7 @@ export function FlowsViewer({
 
   const sectionRefs = useRef<Map<string, React.RefObject<HTMLDivElement | null>>>(new Map());
 
-  const allFlows = useMemo(() => collectAllFlows(flowsData.taxonomy), [flowsData]);
+  const allFlows = useMemo(() => collectAllFlows(sanitizedTaxonomy), [sanitizedTaxonomy]);
 
   const flowScreensMap = useMemo(() => {
     const map = new Map<string, Screen[]>();
@@ -540,34 +572,37 @@ export function FlowsViewer({
   return (
     <>
       <div className="flex h-full bg-white dark:bg-[#111] overflow-hidden transition-colors duration-300">
-        {/* ═══ LEFT SIDEBAR ═══ */}
-        <div className="w-[260px] bg-zinc-50 dark:bg-[#111] border-r border-zinc-200 dark:border-white/[0.06] flex flex-col shrink-0 transition-colors duration-300">
-          <div className="px-4 pt-5 pb-3">
+        {/* ═══ LEFT SIDEBAR (FIXED HEIGHT/SCROLLING) ═══ */}
+        <div className="w-[260px] flex flex-col bg-zinc-50 dark:bg-[#111] border-r border-zinc-200 dark:border-white/[0.06] shrink-0 transition-colors duration-300 h-full">
+          <div className="px-4 pt-5 pb-3 shrink-0">
             <h3 className="text-zinc-500 dark:text-white/60 text-xs font-semibold uppercase tracking-wider">
               Flows
             </h3>
           </div>
-          <ScrollArea className="flex-1">
-            <div className="flex flex-col pb-4">
-              {flowsData.taxonomy.map((node) => (
-                <SidebarNode
-                  key={node.id}
-                  node={node}
-                  activeFlowId={activeFlowId}
-                  expandedNodes={expandedNodes}
-                  onSelect={handleSidebarSelect}
-                  onToggle={toggleExpand}
-                />
-              ))}
-            </div>
-          </ScrollArea>
+          {/* min-h-0 is crucial here. It allows the flex child to shrink, enabling the ScrollArea to work. */}
+          <div className="flex-1 min-h-0">
+            <ScrollArea className="h-full w-full">
+              <div className="flex flex-col pb-8">
+                {sanitizedTaxonomy.map((node) => (
+                  <SidebarNode
+                    key={node.id}
+                    node={node}
+                    activeFlowId={activeFlowId}
+                    expandedNodes={expandedNodes}
+                    onSelect={handleSidebarSelect}
+                    onToggle={toggleExpand}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
         </div>
 
         {/* ═══ MAIN ═══ */}
         <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-white dark:bg-[#111] transition-colors duration-300">
           {activeFlowId &&
             (() => {
-              const flow = findFlow(flowsData.taxonomy, activeFlowId);
+              const flow = findFlow(sanitizedTaxonomy, activeFlowId);
               if (!flow) return null;
               return (
                 <div className="px-8 pt-8 pb-3 border-b border-zinc-200 dark:border-white/[0.04] transition-colors">

@@ -1,13 +1,16 @@
+// components/unified-dashboard.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
-import { ArrowLeft, Target, MousePointerClick, Layers, GitMerge, LayoutGrid, Moon, Sun } from "lucide-react";
+import { ArrowLeft, Target, MousePointerClick, Layers, GitMerge, LayoutGrid, Moon, Sun, Palette, Store } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { SessionViewer } from "@/components/session-viewer";
 import { ExecutiveReport } from "@/components/executive-report";
 import { FlowsViewer } from "@/components/flows-viewer";
+import { BrandKitViewer } from "@/components/brand-kit-viewer";
+import { AppStoreViewer } from "@/components/app-store-viewer";
 import { useTheme } from "@/components/theme-provider";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +41,35 @@ export function UnifiedDashboard({ appData }: { appData: any }) {
     displayGrade === 'A' ? 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-400 dark:border-transparent' :
     'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-500/20 dark:text-amber-400 dark:border-transparent';
 
+  const hasBrandKit = !!appData.browsing?.sessionIntel?.brand_kit;
+  const brandKitData = appData.browsing?.sessionIntel?.brand_kit || activeData.sessionIntel?.brand_kit;
+
+  // --- EXTRACT FRAMEWORK & TECH STACK ---
+  // The APK Analyzer puts this into the glossary. Let's parse it out for CI.
+  const { framework, extractionMethods } = useMemo(() => {
+    let fw = "Native iOS / Android";
+    let methods = "Native XML Extraction";
+    
+    // Check both browsing and active data for the glossary
+    const glossary = appData.browsing?.sessionIntel?.session_memory?.glossary || activeData.sessionIntel?.session_memory?.glossary || {};
+    const appFramework = glossary["app_framework"];
+    
+    if (appFramework && appFramework.definition) {
+      const def = appFramework.definition.toLowerCase();
+      if (def.includes("react_native")) fw = "React Native";
+      else if (def.includes("flutter")) fw = "Flutter";
+      else if (def.includes("unity")) fw = "Unity";
+      else if (def.includes("cordova")) fw = "Cordova";
+      else if (def.includes("xamarin")) fw = "Xamarin";
+
+      const viaMatch = appFramework.definition.match(/via:\s*(.+)$/i);
+      if (viaMatch) {
+        methods = viaMatch[1].replace(/_/g, ' ').replace(/\./g, '');
+      }
+    }
+    return { framework: fw, extractionMethods: methods };
+  }, [appData, activeData]);
+
   return (
     <div className="h-screen flex flex-col bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors duration-300">
       
@@ -67,7 +99,7 @@ export function UnifiedDashboard({ appData }: { appData: any }) {
                 !appData.onboarding && "opacity-30 cursor-not-allowed"
               )}
             >
-              <GitMerge className="w-3.5 h-3.5" /> Onboarding Funnel
+              <GitMerge className="w-3.5 h-3.5" /> Onboarding
             </button>
             <button
               disabled={!appData.browsing}
@@ -107,7 +139,7 @@ export function UnifiedDashboard({ appData }: { appData: any }) {
 
       {/* ── TABS ── */}
       <Tabs defaultValue="overview" className="flex flex-col flex-1 overflow-hidden">
-        <div className="px-6 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shrink-0 transition-colors duration-300">
+        <div className="px-6 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shrink-0 transition-colors duration-300 flex overflow-x-auto hide-scrollbar">
           <TabsList className="bg-transparent h-auto p-0 gap-8">
             <TabsTrigger value="overview" className="data-[state=active]:bg-transparent data-[state=active]:text-zinc-900 dark:data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-zinc-900 dark:data-[state=active]:border-white rounded-none px-0 py-4 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors flex items-center gap-2 uppercase tracking-widest text-xs font-bold">
               <Target className="w-4 h-4" /> Overview
@@ -118,6 +150,16 @@ export function UnifiedDashboard({ appData }: { appData: any }) {
             <TabsTrigger value="mobbin" className="data-[state=active]:bg-transparent data-[state=active]:text-emerald-600 dark:data-[state=active]:text-emerald-400 data-[state=active]:border-b-2 data-[state=active]:border-emerald-600 dark:data-[state=active]:border-emerald-400 rounded-none px-0 py-4 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors flex items-center gap-2 uppercase tracking-widest text-xs font-bold">
               <Layers className="w-4 h-4" /> Flows
             </TabsTrigger>
+            {hasBrandKit && (
+              <TabsTrigger value="brand_kit" className="data-[state=active]:bg-transparent data-[state=active]:text-rose-600 dark:data-[state=active]:text-rose-400 data-[state=active]:border-b-2 data-[state=active]:border-rose-600 dark:data-[state=active]:border-rose-400 rounded-none px-0 py-4 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors flex items-center gap-2 uppercase tracking-widest text-xs font-bold">
+                <Palette className="w-4 h-4" /> Brand Kit & UI
+              </TabsTrigger>
+            )}
+            {appData.appStore && (
+              <TabsTrigger value="app_store" className="data-[state=active]:bg-transparent data-[state=active]:text-indigo-600 dark:data-[state=active]:text-indigo-400 data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 dark:data-[state=active]:border-indigo-400 rounded-none px-0 py-4 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors flex items-center gap-2 uppercase tracking-widest text-xs font-bold">
+                <Store className="w-4 h-4" /> App Store Intel
+              </TabsTrigger>
+            )}
           </TabsList>
         </div>
 
@@ -138,6 +180,18 @@ export function UnifiedDashboard({ appData }: { appData: any }) {
             </div>
           )}
         </TabsContent>
+
+        {hasBrandKit && (
+          <TabsContent value="brand_kit" className="flex-1 overflow-y-auto m-0">
+            <BrandKitViewer brandKit={brandKitData} framework={framework} extractionMethods={extractionMethods} />
+          </TabsContent>
+        )}
+
+        {appData.appStore && (
+          <TabsContent value="app_store" className="flex-1 overflow-hidden m-0 flex flex-col">
+            <AppStoreViewer appStoreData={appData.appStore} framework={framework} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
