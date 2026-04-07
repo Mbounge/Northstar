@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
-interface ColorEntry {
+export interface ColorEntry {
   hex: string;
   label: string;
   semantic_role: string;
@@ -13,7 +13,7 @@ interface ColorEntry {
   apk_token?: string;
 }
 
-interface BrandKit {
+export interface BrandKit {
   color_system?: {
     canonical_palette?: ColorEntry[];
     background_system?: Record<string, string>;
@@ -61,11 +61,31 @@ interface BrandKit {
   };
 }
 
-interface BrandKitViewerProps {
+export interface BrandKitViewerProps {
   brandKit: BrandKit;
   framework?: string;
   extractionMethods?: string;
 }
+
+// ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
+// Maps directly to the CSS variables defined in globals.css.
+// Light fallbacks are the zinc-light values so SSR renders correctly.
+// Dark mode works automatically — .dark on <html> swaps all vars.
+
+const T = {
+  bgCard:        "var(--color-card, #ffffff)",
+  bgMuted:       "var(--color-muted, #f4f4f5)",
+  border:        "var(--color-border, #e4e4e7)",
+  textPrimary:   "var(--color-card-foreground, #09090b)",
+  textSecondary: "var(--color-secondary-foreground, #18181b)",
+  textMuted:     "var(--color-muted-foreground, #71717a)",
+  textSuccess:   "#16a34a",
+  fontMono:      "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace",
+  fontSans:      "var(--font-sans, system-ui, sans-serif)",
+  radius:        "calc(var(--radius, 0.5rem) + 4px)",
+  radiusMd:      "var(--radius, 0.5rem)",
+  radiusSm:      "calc(var(--radius, 0.5rem) - 2px)",
+};
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
 
@@ -77,51 +97,40 @@ function getContrast(hex: string): string {
   return (r * 299 + g * 587 + b * 114) / 1000 > 128 ? "#111111" : "#ffffff";
 }
 
-function confidenceDot(confidence?: string): string {
-  if (confidence === "exact" || confidence === "high") return "#2ECC71";
-  if (confidence === "medium") return "#F39C12";
-  return "#888";
+function confidenceColor(c?: string): string {
+  if (c === "exact" || c === "high") return "#22c55e";
+  if (c === "medium") return "#f59e0b";
+  return "#71717a";
+}
+
+function isHex(v: unknown): v is string {
+  return typeof v === "string" && v.startsWith("#") && v.length >= 4;
 }
 
 // ─── COPY HOOK ────────────────────────────────────────────────────────────────
 
-function useCopy() {
+function useCopy(timeout = 1500) {
   const [copied, setCopied] = useState<string | null>(null);
-  const copy = (text: string, key: string) => {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copy = useCallback((text: string, key: string) => {
     navigator.clipboard.writeText(text).catch(() => {});
     setCopied(key);
-    setTimeout(() => setCopied(null), 1600);
-  };
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(null), timeout);
+  }, [timeout]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   return { copied, copy };
 }
 
-// ─── SECTION LABEL ────────────────────────────────────────────────────────────
-
-function SectionLabel({ children, icon }: { children: React.ReactNode; icon?: React.ReactNode }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 6, marginBottom: 14,
-    }}>
-      {icon && <span style={{ color: "var(--color-text-tertiary)", display: "flex", alignItems: "center", width: 14, height: 14 }}>{icon}</span>}
-      <span style={{
-        fontSize: "0.625rem", fontWeight: 600, letterSpacing: "0.1em",
-        textTransform: "uppercase", color: "var(--color-text-tertiary)",
-      }}>
-        {children}
-      </span>
-    </div>
-  );
-}
-
-// ─── CARD ─────────────────────────────────────────────────────────────────────
+// ─── PRIMITIVES ───────────────────────────────────────────────────────────────
 
 function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
     <div style={{
-      background: "var(--color-background-primary)",
-      border: "0.5px solid var(--color-border-tertiary)",
-      borderRadius: 16,
-      padding: "20px 22px",
+      background: T.bgCard,
+      border: `1px solid ${T.border}`,
+      borderRadius: T.radius,
+      padding: "18px 20px",
       ...style,
     }}>
       {children}
@@ -129,55 +138,103 @@ function Card({ children, style }: { children: React.ReactNode; style?: React.CS
   );
 }
 
-// ─── COLOR SWATCH (large) ─────────────────────────────────────────────────────
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 10, fontWeight: 600, letterSpacing: "0.1em",
+      textTransform: "uppercase" as const, color: T.textMuted, marginBottom: 12,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{
+      fontSize: 11, padding: "3px 10px", borderRadius: 999,
+      background: T.bgMuted, border: `1px solid ${T.border}`,
+      color: T.textMuted, display: "inline-flex", alignItems: "center",
+    }}>
+      {children}
+    </span>
+  );
+}
+
+function Tag({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{
+      display: "inline-flex", padding: "2px 8px", borderRadius: T.radiusSm,
+      fontSize: 10, fontWeight: 500, background: T.bgMuted,
+      color: T.textMuted, border: `1px solid ${T.border}`, margin: "2px",
+    }}>
+      {children}
+    </span>
+  );
+}
+
+function TokenColLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 9, fontWeight: 700, color: T.textMuted,
+      letterSpacing: "0.1em", textTransform: "uppercase" as const, marginBottom: 8,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// ─── SWATCH ───────────────────────────────────────────────────────────────────
 
 function Swatch({ color }: { color: ColorEntry }) {
   const { copied, copy } = useCopy();
-  const key = color.hex;
-  const isCopied = copied === key;
-  const text = getContrast(color.hex);
-
+  const isCopied = copied === color.hex;
+  const roleDisplay = (color.semantic_role || "").replace(/_/g, " ").toUpperCase();
   return (
     <div
-      onClick={() => copy(color.hex, key)}
+      onClick={() => copy(color.hex, color.hex)}
       title={color.used_for || color.label}
       style={{
-        borderRadius: 14, overflow: "hidden",
-        border: "0.5px solid var(--color-border-tertiary)",
-        cursor: "pointer",
+        borderRadius: 10, overflow: "hidden",
+        border: `1px solid ${T.border}`, cursor: "pointer",
+        transition: "transform 0.12s ease",
       }}
+      onMouseEnter={e => (e.currentTarget.style.transform = "translateY(-2px)")}
+      onMouseLeave={e => (e.currentTarget.style.transform = "translateY(0)")}
     >
-      {/* Color block */}
       <div style={{
-        height: 88, background: color.hex, padding: "10px 10px 0",
-        display: "flex", flexDirection: "column", justifyContent: "space-between",
+        height: 80, background: color.hex,
+        padding: "8px 8px 0", display: "flex",
+        flexDirection: "column", justifyContent: "flex-start",
       }}>
         <span style={{
-          fontSize: "9px", fontWeight: 600, letterSpacing: "0.08em",
-          textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
-          background: "rgba(255,255,255,0.18)", color: text, display: "inline-block",
+          fontSize: 8, fontWeight: 700, letterSpacing: "0.08em",
+          textTransform: "uppercase" as const, padding: "2px 6px", borderRadius: 3,
+          background: "rgba(255,255,255,0.18)", color: getContrast(color.hex),
+          display: "inline-block", lineHeight: 1.5,
         }}>
-          {color.semantic_role.replace(/_/g, " ")}
+          {roleDisplay}
         </span>
       </div>
-
-      {/* Info block */}
-      <div style={{
-        padding: "9px 10px 10px",
-        background: "var(--color-background-primary)",
-      }}>
+      <div style={{ padding: "8px 10px 10px", background: T.bgCard }}>
         <div style={{
-          fontFamily: "var(--font-mono)", fontSize: "11px", fontWeight: 500,
-          color: isCopied ? "var(--color-text-success)" : "var(--color-text-primary)",
+          fontFamily: T.fontMono, fontSize: 11, fontWeight: 500, marginBottom: 2,
+          color: isCopied ? T.textSuccess : T.textPrimary,
         }}>
           {isCopied ? "Copied!" : color.hex}
         </div>
-        <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <div style={{
+          fontSize: 9, color: T.textMuted,
+          whiteSpace: "nowrap" as const, overflow: "hidden", textOverflow: "ellipsis",
+        }}>
           {color.label}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 5 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: confidenceDot(color.confidence), flexShrink: 0 }} />
-          <span style={{ fontSize: "9px", color: "var(--color-text-tertiary)" }}>{color.confidence || "—"}</span>
+          <div style={{
+            width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+            background: confidenceColor(color.confidence),
+          }} />
+          <span style={{ fontSize: 9, color: T.textMuted }}>{color.confidence || "—"}</span>
         </div>
       </div>
     </div>
@@ -188,28 +245,27 @@ function Swatch({ color }: { color: ColorEntry }) {
 
 function MiniRow({ label, hex, round = false }: { label: string; hex: string; round?: boolean }) {
   const { copied, copy } = useCopy();
-  const isCopied = copied === hex + label;
-
+  const key = hex + label;
+  const isCopied = copied === key;
   return (
     <div
-      onClick={() => copy(hex, hex + label)}
+      onClick={() => copy(hex, key)}
       style={{
-        display: "flex", alignItems: "center", gap: 10, padding: "7px 10px",
-        borderRadius: 8, background: "var(--color-background-secondary)",
-        cursor: "pointer", marginBottom: 6,
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "6px 8px", borderRadius: T.radiusSm,
+        background: T.bgMuted, cursor: "pointer", marginBottom: 5,
       }}
     >
       <div style={{
-        width: 26, height: 26, flexShrink: 0,
-        background: hex, border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: round ? "50%" : 6,
+        width: 24, height: 24, flexShrink: 0, background: hex,
+        border: `1px solid ${T.border}`, borderRadius: round ? "50%" : 4,
       }} />
-      <span style={{ fontSize: "12px", color: "var(--color-text-secondary)", flex: 1 }}>
+      <span style={{ fontSize: 12, color: T.textSecondary, flex: 1 }}>
         {label.replace(/_/g, " ")}
       </span>
       <span style={{
-        fontFamily: "var(--font-mono)", fontSize: "11px",
-        color: isCopied ? "var(--color-text-success)" : "var(--color-text-tertiary)",
+        fontFamily: T.fontMono, fontSize: 11, flexShrink: 0,
+        color: isCopied ? T.textSuccess : T.textMuted,
       }}>
         {isCopied ? "copied" : hex}
       </span>
@@ -219,22 +275,19 @@ function MiniRow({ label, hex, round = false }: { label: string; hex: string; ro
 
 // ─── TYPE SCALE ROW ───────────────────────────────────────────────────────────
 
-function TypeRow({ level, spec, fontFamily }: { level: string; spec: string; fontFamily?: string }) {
-  const [size, weight] = spec.split(" / ");
+function TypeRow({ level, spec }: { level: string; spec: string }) {
+  const parts = spec.split(" / ");
+  const size = Math.min(parseInt(parts[0]) || 15, 26);
+  const weight = parseInt(parts[1]) || 400;
   return (
     <div style={{
       display: "flex", alignItems: "baseline", justifyContent: "space-between",
-      padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)",
+      padding: "6px 0", borderBottom: `1px solid ${T.border}`,
     }}>
-      <span style={{
-        fontSize: parseInt(size) > 24 ? 22 : parseInt(size),
-        fontWeight: parseInt(weight) || 400,
-        color: "var(--color-text-primary)", lineHeight: 1,
-        fontFamily: fontFamily || "inherit",
-      }}>
+      <span style={{ fontSize: size, fontWeight: weight, color: T.textPrimary, lineHeight: 1 }}>
         {level.charAt(0).toUpperCase() + level.slice(1)}
       </span>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--color-text-tertiary)" }}>
+      <span style={{ fontFamily: T.fontMono, fontSize: 10, color: T.textMuted, flexShrink: 0, marginLeft: 8 }}>
         {spec}
       </span>
     </div>
@@ -245,32 +298,34 @@ function TypeRow({ level, spec, fontFamily }: { level: string; spec: string; fon
 
 function TokenRow({ name, value, swatch }: { name: string; value: string; swatch?: boolean }) {
   const { copied, copy } = useCopy();
+  const isCopied = copied === name;
   return (
     <div
       onClick={() => copy(value, name)}
       style={{
         display: "flex", justifyContent: "space-between", alignItems: "center",
-        padding: "5px 0", borderBottom: "0.5px solid var(--color-border-tertiary)",
-        cursor: "pointer",
+        padding: "5px 0", borderBottom: `1px solid ${T.border}`, cursor: "pointer",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
         {swatch && (
           <div style={{
-            width: 11, height: 11, borderRadius: 3, background: value,
-            border: "0.5px solid var(--color-border-tertiary)", flexShrink: 0,
+            width: 10, height: 10, borderRadius: 3, background: value,
+            border: `1px solid ${T.border}`, flexShrink: 0,
           }} />
         )}
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--color-text-secondary)" }}>
+        <span style={{
+          fontFamily: T.fontMono, fontSize: 11, color: T.textSecondary,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const,
+        }}>
           {name}
         </span>
       </div>
       <span style={{
-        fontFamily: "var(--font-mono)", fontSize: "10px",
-        color: copied === name ? "var(--color-text-success)" : "var(--color-text-tertiary)",
-        textAlign: "right", maxWidth: "50%",
+        fontFamily: T.fontMono, fontSize: 10, flexShrink: 0, marginLeft: 8,
+        color: isCopied ? T.textSuccess : T.textMuted,
       }}>
-        {copied === name ? "copied!" : value}
+        {isCopied ? "copied!" : value}
       </span>
     </div>
   );
@@ -279,41 +334,39 @@ function TokenRow({ name, value, swatch }: { name: string; value: string; swatch
 // ─── MATURITY BAR ─────────────────────────────────────────────────────────────
 
 function MaturityBar({ score }: { score: number }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const fillRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const t = setTimeout(() => {
-      if (ref.current) ref.current.style.width = `${(score / 10) * 100}%`;
-    }, 200);
-    return () => clearTimeout(t);
+    const id = setTimeout(() => {
+      if (fillRef.current) fillRef.current.style.width = `${(score / 10) * 100}%`;
+    }, 300);
+    return () => clearTimeout(id);
   }, [score]);
-
   return (
-    <div style={{ height: 5, borderRadius: 3, background: "var(--color-border-tertiary)", overflow: "hidden", margin: "8px 0 4px" }}>
-      <div
-        ref={ref}
-        style={{
-          height: "100%", borderRadius: 3,
-          background: "var(--color-text-secondary)",
-          width: "0%", transition: "width 0.7s cubic-bezier(.4,0,.2,1)",
-        }}
-      />
+    <div style={{
+      height: 4, borderRadius: 2, background: T.border, overflow: "hidden",
+      margin: "8px 0 4px", position: "relative" as const,
+    }}>
+      <div ref={fillRef} style={{
+        position: "absolute" as const, top: 0, left: 0, height: "100%",
+        borderRadius: 2, background: T.textSecondary,
+        width: "0%", transition: "width 0.8s cubic-bezier(.4,0,.2,1)",
+      }} />
     </div>
   );
 }
 
-// ─── CORNER DEMOS ─────────────────────────────────────────────────────────────
+// ─── CORNER DEMO ─────────────────────────────────────────────────────────────
 
 function CornerDemo() {
   return (
-    <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 14, flexWrap: "wrap" }}>
-      {[0, 4, 8, 12, 999].map((r) => (
-        <div key={r} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-end", marginTop: 14, flexWrap: "wrap" as const }}>
+      {[0, 4, 8, 12, 999].map(r => (
+        <div key={r} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 5 }}>
           <div style={{
-            width: 36, height: 36, borderRadius: r,
-            background: "var(--color-background-secondary)",
-            border: "0.5px solid var(--color-border-secondary)",
+            width: 34, height: 34, borderRadius: r === 999 ? 999 : r,
+            background: T.bgMuted, border: `1px solid ${T.border}`,
           }} />
-          <span style={{ fontSize: "9px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 9, color: T.textMuted, fontFamily: T.fontMono }}>
             {r === 999 ? "pill" : `${r}px`}
           </span>
         </div>
@@ -322,286 +375,199 @@ function CornerDemo() {
   );
 }
 
-// ─── PILL TAG ─────────────────────────────────────────────────────────────────
+// ─── SHAPE ATTR ───────────────────────────────────────────────────────────────
 
-function Tag({ children }: { children: React.ReactNode }) {
+function ShapeAttr({ label, value }: { label: string; value: string }) {
   return (
-    <span style={{
-      display: "inline-flex", padding: "2px 8px", borderRadius: 4,
-      fontSize: "10px", fontWeight: 500,
-      background: "var(--color-background-secondary)",
-      color: "var(--color-text-secondary)",
-      border: "0.5px solid var(--color-border-tertiary)", margin: "2px",
-    }}>
-      {children}
-    </span>
+    <div style={{ background: T.bgMuted, borderRadius: T.radiusMd, padding: "8px 10px", marginBottom: 7 }}>
+      <div style={{
+        fontSize: 9, color: T.textMuted, letterSpacing: "0.08em",
+        textTransform: "uppercase" as const, marginBottom: 2,
+      }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.5 }}>{value}</div>
+    </div>
   );
 }
 
-// ─── INLINE ICONS ─────────────────────────────────────────────────────────────
-
-const Icons = {
-  Palette: () => <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><circle cx="5" cy="8" r="3"/><circle cx="11" cy="5" r="3"/><circle cx="11" cy="11" r="3"/></svg>,
-  Type: () => <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="4" width="12" height="3" rx="1"/><rect x="2" y="9" width="8" height="2" rx="1"/></svg>,
-  Shape: () => <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="12" height="12" rx="3"/></svg>,
-  Icon: () => <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="3"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2"/></svg>,
-  Token: () => <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M5 3v10M11 3v10M2 8h12"/></svg>,
-  Check: () => <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="3,8 6,11 13,4"/></svg>,
-};
-
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
-export function BrandKitViewer({ brandKit, framework = "Unknown", extractionMethods = "" }: BrandKitViewerProps) {
+export function BrandKitViewer({ brandKit, framework, extractionMethods }: BrandKitViewerProps) {
   if (!brandKit || Object.keys(brandKit).length === 0) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--color-text-tertiary)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 320, color: T.textMuted }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: "2rem", marginBottom: 8 }}>—</div>
-          <p style={{ fontSize: "0.875rem" }}>No brand kit data extracted for this session.</p>
+          <p style={{ fontSize: "0.875rem" }}>No brand kit data available.</p>
         </div>
       </div>
     );
   }
 
-  const {
-    color_system = {},
-    typography_system = {},
-    shape_system = {},
-    iconography_system = {},
-    design_language_summary,
-    design_system_maturity = {},
-    competitive_design_notes,
-    figma_token_export = {},
-  } = brandKit;
+  const cs  = brandKit.color_system          ?? {};
+  const ts  = brandKit.typography_system     ?? {};
+  const ss  = brandKit.shape_system          ?? {};
+  const ico = brandKit.iconography_system    ?? {};
+  const mat = brandKit.design_system_maturity ?? {};
+  const fe  = brandKit.figma_token_export    ?? {};
 
-  const palette = color_system.canonical_palette || [];
-  const bgSystem = color_system.background_system || {};
-  const textSystem = color_system.text_system || {};
-  const stateColors = color_system.state_colors || {};
-  const gamColors = color_system.gamification_colors || [];
-  const typeScale = typography_system.type_scale || {};
-  const maturityScore = design_system_maturity.score ?? 0;
+  const palette          = cs.canonical_palette ?? [];
+  const bgEntries        = Object.entries(cs.background_system ?? {}).filter(([, v]) => isHex(v));
+  const textEntries      = Object.entries(cs.text_system       ?? {}).filter(([, v]) => isHex(v));
+  const stateEntries     = Object.entries(cs.state_colors      ?? {}).filter(([, v]) => isHex(v));
+  const gamColors        = (cs.gamification_colors ?? []).filter(isHex);
+  const typeScaleEntries = Object.entries(ts.type_scale ?? {}).filter(([, v]) => v != null) as [string, string][];
+  const matScore         = mat.score ?? 0;
+  const inconsistencies  = mat.notable_inconsistencies ?? [];
+  const feColors         = fe.colors        && Object.keys(fe.colors).length        > 0 ? fe.colors        : null;
+  const feTypo           = fe.typography    && Object.keys(fe.typography).length    > 0 ? fe.typography    : null;
+  const feRadius         = fe.border_radius && Object.keys(fe.border_radius).length > 0 ? fe.border_radius : null;
+  const hasTokens        = !!(feColors || feTypo || feRadius);
+
+  const shapeAttrs: [string, string | undefined][] = [
+    ["Primary radius", ss.corner_radius_primary],
+    ["Button shape",   ss.button_shape_language],
+    ["Card elevation", ss.card_elevation_style],
+  ];
+  const iconRows: [string, string | undefined][] = [
+    ["Style",           ico.icon_style],
+    ["Library",         ico.icon_library_guess],
+    ["Size system",     ico.icon_size_system],
+    ["Color treatment", ico.icon_color_treatment],
+  ];
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "36px 28px 80px", fontFamily: "var(--font-sans)" }}>
+    <div style={{ maxWidth: 1080, margin: "0 auto", padding: "32px 24px 80px", fontFamily: T.fontSans, color: T.textPrimary }}>
 
       {/* ── HEADER ── */}
-      <div style={{ marginBottom: 36 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
-          <span style={{
-            display: "inline-flex", alignItems: "center", gap: 5,
-            padding: "3px 10px", borderRadius: 999, fontSize: "11px", fontWeight: 500,
-            background: "var(--color-background-secondary)",
-            border: "0.5px solid var(--color-border-tertiary)",
-            color: "var(--color-text-secondary)",
-          }}>
-            <Icons.Check /> {framework}
-          </span>
-          {extractionMethods && (
-            <span style={{
-              padding: "3px 10px", borderRadius: 999, fontSize: "11px",
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              color: "var(--color-text-secondary)",
-            }}>
-              {extractionMethods}
-            </span>
-          )}
-          {color_system.color_harmony && (
-            <span style={{
-              padding: "3px 10px", borderRadius: 999, fontSize: "11px",
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              color: "var(--color-text-secondary)",
-            }}>
-              {color_system.color_harmony}
-            </span>
-          )}
-          {color_system.color_temperature && (
-            <span style={{
-              padding: "3px 10px", borderRadius: 999, fontSize: "11px",
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              color: "var(--color-text-secondary)",
-            }}>
-              {color_system.color_temperature} temperature
-            </span>
-          )}
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6, marginBottom: 14 }}>
+          {framework            && <Pill>{framework}</Pill>}
+          {extractionMethods    && <Pill>{extractionMethods}</Pill>}
+          {cs.color_harmony     && <Pill>{cs.color_harmony}</Pill>}
+          {cs.color_temperature && <Pill>{cs.color_temperature} temperature</Pill>}
+          {palette.length > 0   && <Pill>{palette.length} semantic roles extracted</Pill>}
         </div>
-
         <h1 style={{
-          fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 600,
+          fontSize: "clamp(1.5rem, 3vw, 2rem)", fontWeight: 600,
           letterSpacing: "-0.02em", lineHeight: 1.15,
-          color: "var(--color-text-primary)", margin: "0 0 10px",
+          color: T.textPrimary, margin: "0 0 10px",
         }}>
           Brand kit
         </h1>
-
-        {design_language_summary && (
+        {brandKit.design_language_summary && (
           <p style={{
-            fontSize: "0.95rem", lineHeight: 1.75,
-            color: "var(--color-text-secondary)", maxWidth: 680, margin: 0,
-            borderLeft: "2px solid var(--color-border-secondary)", paddingLeft: 14,
+            fontSize: "0.9rem", lineHeight: 1.75, color: T.textMuted,
+            maxWidth: 640, margin: 0,
+            borderLeft: `2px solid ${T.border}`, paddingLeft: 14,
           }}>
-            {design_language_summary}
+            {brandKit.design_language_summary}
           </p>
         )}
       </div>
 
       {/* ── CANONICAL PALETTE ── */}
       {palette.length > 0 && (
-        <div style={{ marginBottom: 36 }}>
-          <SectionLabel icon={<Icons.Palette />}>Canonical color palette</SectionLabel>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-            gap: 10,
-          }}>
-            {palette.map((c, i) => <Swatch key={i} color={c} />)}
+        <div style={{ marginBottom: 28 }}>
+          <SectionLabel>Canonical color palette</SectionLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10 }}>
+            {palette.map((c, i) => <Swatch key={`${c.hex}-${i}`} color={c} />)}
           </div>
-          {color_system.brand_color_personality && (
-            <p style={{
-              marginTop: 14, fontSize: "0.8rem", lineHeight: 1.7,
-              color: "var(--color-text-tertiary)", maxWidth: 680,
-            }}>
-              {color_system.brand_color_personality}
+          {cs.brand_color_personality && (
+            <p style={{ marginTop: 12, fontSize: 12, lineHeight: 1.7, color: T.textMuted, maxWidth: 680 }}>
+              {cs.brand_color_personality}
             </p>
           )}
         </div>
       )}
 
-      {/* ── COLOR SYSTEMS GRID ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14, marginBottom: 36 }}>
+      {/* ── COLOR SYSTEM 3-COL ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14, marginBottom: 28 }}>
         <Card>
           <SectionLabel>Backgrounds</SectionLabel>
-          {Object.entries(bgSystem).filter(([, v]) => typeof v === "string" && v.startsWith("#")).map(([k, v]) => (
-            <MiniRow key={k} label={k} hex={v as string} />
-          ))}
+          {bgEntries.length > 0
+            ? bgEntries.map(([k, v]) => <MiniRow key={k} label={k} hex={v as string} />)
+            : <p style={{ fontSize: 12, color: T.textMuted }}>No data extracted.</p>}
         </Card>
         <Card>
           <SectionLabel>Text colors</SectionLabel>
-          {Object.entries(textSystem).filter(([, v]) => typeof v === "string" && v.startsWith("#")).map(([k, v]) => (
-            <MiniRow key={k} label={k} hex={v as string} />
-          ))}
+          {textEntries.length > 0
+            ? textEntries.map(([k, v]) => <MiniRow key={k} label={k} hex={v as string} />)
+            : <p style={{ fontSize: 12, color: T.textMuted }}>No data extracted.</p>}
           {gamColors.length > 0 && (
             <>
-              <div style={{ height: "0.5px", background: "var(--color-border-tertiary)", margin: "10px 0" }} />
-              <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)", marginBottom: 6, letterSpacing: "0.08em", textTransform: "uppercase" }}>Gamification</div>
-              {gamColors.map((hex, i) => <MiniRow key={i} label={`gamification ${i + 1}`} hex={hex} />)}
+              <div style={{ height: 1, background: T.border, margin: "8px 0" }} />
+              <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: "0.08em", textTransform: "uppercase" as const, marginBottom: 6 }}>
+                Gamification
+              </div>
+              {gamColors.map((hex, i) => <MiniRow key={`gam-${i}`} label={`gamification ${i + 1}`} hex={hex} />)}
             </>
           )}
         </Card>
         <Card>
           <SectionLabel>State colors</SectionLabel>
-          {Object.entries(stateColors).filter(([, v]) => typeof v === "string" && v.startsWith("#")).map(([k, v]) => (
-            <MiniRow key={k} label={k} hex={v as string} round />
-          ))}
+          {stateEntries.length > 0
+            ? stateEntries.map(([k, v]) => <MiniRow key={k} label={k} hex={v as string} round />)
+            : <p style={{ fontSize: 12, color: T.textMuted }}>No data extracted.</p>}
         </Card>
       </div>
 
-      {/* ── TYPOGRAPHY + SHAPE ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 14, marginBottom: 36 }}>
-
-        {/* Typography */}
+      {/* ── TYPOGRAPHY + SHAPE/ICONS ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 14, marginBottom: 28 }}>
         <Card>
-          <SectionLabel icon={<Icons.Type />}>Typography system</SectionLabel>
-
-          {/* Big Aa specimen */}
+          <SectionLabel>Typography system</SectionLabel>
           <div style={{
-            background: "var(--color-background-secondary)",
-            borderRadius: 12, padding: "20px 24px", marginBottom: 16,
-            border: "0.5px solid var(--color-border-tertiary)",
-            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
+            background: T.bgMuted, borderRadius: 10, padding: "18px 20px",
+            marginBottom: 14, border: `1px solid ${T.border}`,
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
           }}>
-            <div style={{
-              fontSize: 64, fontWeight: 700, lineHeight: 1,
-              color: "var(--color-text-primary)",
-              fontFamily: typography_system.primary_font || "inherit",
-            }}>
-              Aa
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: "16px", fontWeight: 500, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                {typography_system.primary_font || "System Default"}
+            <div style={{ fontSize: 56, fontWeight: 700, lineHeight: 1, color: T.textPrimary }}>Aa</div>
+            <div style={{ textAlign: "right" as const }}>
+              <div style={{ fontSize: 15, fontWeight: 500, color: T.textPrimary, marginBottom: 3 }}>
+                {ts.primary_font || "System Default"}
               </div>
-              {typography_system.secondary_font && (
-                <div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: 4 }}>
-                  + {typography_system.secondary_font}
-                </div>
+              {ts.secondary_font && (
+                <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 3 }}>+ {ts.secondary_font}</div>
               )}
-              <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                {typography_system.font_source}
-              </div>
+              {ts.font_source && (
+                <div style={{ fontFamily: T.fontMono, fontSize: 10, color: T.textMuted }}>{ts.font_source}</div>
+              )}
             </div>
           </div>
-
-          {/* Type scale */}
-          {Object.entries(typeScale).filter(([, v]) => v).map(([level, spec]) => (
-            <TypeRow
-              key={level}
-              level={level}
-              spec={spec as string}
-              fontFamily={typography_system.primary_font}
-            />
-          ))}
-
-          {/* Tags */}
-          <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap" }}>
-            {typography_system.weight_range && <Tag>{typography_system.weight_range}</Tag>}
-            {typography_system.font_source && <Tag>{typography_system.font_source}</Tag>}
-          </div>
-
-          {typography_system.type_personality && (
-            <p style={{ marginTop: 12, fontSize: "11px", lineHeight: 1.65, color: "var(--color-text-tertiary)" }}>
-              {typography_system.type_personality}
-            </p>
+          {typeScaleEntries.map(([level, spec]) => <TypeRow key={level} level={level} spec={spec} />)}
+          {(ts.weight_range || ts.font_source) && (
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 4, marginTop: 12 }}>
+              {ts.weight_range && <Tag>{ts.weight_range}</Tag>}
+              {ts.font_source  && <Tag>{ts.font_source}</Tag>}
+            </div>
+          )}
+          {ts.type_personality && (
+            <p style={{ marginTop: 12, fontSize: 11, lineHeight: 1.65, color: T.textMuted }}>{ts.type_personality}</p>
           )}
         </Card>
 
-        {/* Shape + Icons stacked */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", flexDirection: "column" as const, gap: 14 }}>
           <Card>
-            <SectionLabel icon={<Icons.Shape />}>Shape language</SectionLabel>
-
-            {[
-              { label: "Primary radius", val: shape_system.corner_radius_primary },
-              { label: "Button shape", val: shape_system.button_shape_language },
-              { label: "Card elevation", val: shape_system.card_elevation_style },
-            ].filter(({ val }) => val).map(({ label, val }) => (
-              <div key={label} style={{
-                display: "flex", flexDirection: "column", gap: 2,
-                padding: "8px 10px", borderRadius: 8,
-                background: "var(--color-background-secondary)", marginBottom: 8,
-              }}>
-                <span style={{ fontSize: "9px", color: "var(--color-text-tertiary)", letterSpacing: "0.08em", textTransform: "uppercase" }}>{label}</span>
-                <span style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>{val}</span>
-              </div>
+            <SectionLabel>Shape language</SectionLabel>
+            {shapeAttrs.filter(([, v]) => !!v).map(([label, val]) => (
+              <ShapeAttr key={label} label={label} value={val!} />
             ))}
-
             <CornerDemo />
-
-            {shape_system.shape_personality && (
-              <p style={{ marginTop: 12, fontSize: "11px", lineHeight: 1.65, color: "var(--color-text-tertiary)" }}>
-                {shape_system.shape_personality}
-              </p>
+            {ss.shape_personality && (
+              <p style={{ marginTop: 10, fontSize: 11, lineHeight: 1.65, color: T.textMuted }}>{ss.shape_personality}</p>
             )}
           </Card>
-
           <Card>
-            <SectionLabel icon={<Icons.Icon />}>Iconography</SectionLabel>
-            {[
-              { label: "Style", val: iconography_system.icon_style },
-              { label: "Library", val: iconography_system.icon_library_guess },
-              { label: "Size system", val: iconography_system.icon_size_system },
-              { label: "Color treatment", val: iconography_system.icon_color_treatment },
-            ].filter(({ val }) => val).map(({ label, val }) => (
+            <SectionLabel>Iconography</SectionLabel>
+            {iconRows.filter(([, v]) => !!v).map(([label, val], i, arr) => (
               <div key={label} style={{
                 display: "flex", justifyContent: "space-between", alignItems: "flex-start",
-                fontSize: "12px", padding: "5px 0",
-                borderBottom: "0.5px solid var(--color-border-tertiary)",
+                fontSize: 12, padding: "5px 0",
+                borderBottom: i < arr.length - 1 ? `1px solid ${T.border}` : "none",
               }}>
-                <span style={{ color: "var(--color-text-tertiary)" }}>{label}</span>
-                <span style={{ color: "var(--color-text-secondary)", textAlign: "right", maxWidth: "55%" }}>{val}</span>
+                <span style={{ color: T.textMuted, flexShrink: 0 }}>{label}</span>
+                <span style={{ color: T.textSecondary, textAlign: "right" as const, maxWidth: "55%", marginLeft: 8 }}>{val}</span>
               </div>
             ))}
           </Card>
@@ -609,112 +575,84 @@ export function BrandKitViewer({ brandKit, framework = "Unknown", extractionMeth
       </div>
 
       {/* ── MATURITY + COMPETITIVE ── */}
-      <Card style={{ marginBottom: 36 }}>
+      <Card style={{ marginBottom: 28 }}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 28 }}>
           <div>
             <SectionLabel>Design system maturity</SectionLabel>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: "28px", fontWeight: 500, color: "var(--color-text-primary)" }}>
-                {maturityScore}
-              </span>
-              <span style={{ fontSize: "14px", color: "var(--color-text-tertiary)" }}>/10</span>
-              {design_system_maturity.assessment && (
+              <span style={{ fontSize: 28, fontWeight: 600, color: T.textPrimary }}>{matScore}</span>
+              <span style={{ fontSize: 14, color: T.textMuted }}>/10</span>
+              {mat.assessment && (
                 <span style={{
-                  fontSize: "11px", padding: "2px 8px", borderRadius: 999,
-                  background: "var(--color-background-secondary)",
-                  border: "0.5px solid var(--color-border-tertiary)",
-                  color: "var(--color-text-secondary)", marginLeft: 4,
+                  fontSize: 11, padding: "2px 8px", borderRadius: 999,
+                  background: T.bgMuted, border: `1px solid ${T.border}`,
+                  color: T.textMuted, marginLeft: 4,
                 }}>
-                  {design_system_maturity.assessment}
+                  {mat.assessment}
                 </span>
               )}
             </div>
-
-            <MaturityBar score={maturityScore} />
-
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", color: "var(--color-text-tertiary)", marginBottom: 12 }}>
+            <MaturityBar score={matScore} />
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: T.textMuted, marginBottom: 10 }}>
               <span>Immature</span><span>Industry-leading</span>
             </div>
-
-            {design_system_maturity.evidence && (
-              <p style={{ fontSize: "12px", lineHeight: 1.65, color: "var(--color-text-secondary)" }}>
-                {design_system_maturity.evidence}
-              </p>
+            {mat.evidence && (
+              <p style={{ fontSize: 12, lineHeight: 1.65, color: T.textSecondary }}>{mat.evidence}</p>
             )}
-
-            {(design_system_maturity.notable_inconsistencies || []).length > 0 && (
+            {inconsistencies.length > 0 && (
               <div style={{ marginTop: 10 }}>
-                <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>Notable inconsistencies</div>
-                {design_system_maturity.notable_inconsistencies!.map((item, i) => (
+                <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: "0.08em", textTransform: "uppercase" as const, marginBottom: 6 }}>
+                  Notable inconsistencies
+                </div>
+                {inconsistencies.map((item, i) => (
                   <div key={i} style={{
-                    fontSize: "11px", color: "var(--color-text-secondary)",
-                    padding: "4px 0", borderBottom: "0.5px solid var(--color-border-tertiary)",
+                    fontSize: 11, color: T.textSecondary, padding: "4px 0",
+                    borderBottom: `1px solid ${T.border}`,
                     display: "flex", gap: 8, alignItems: "flex-start",
                   }}>
-                    <span style={{ color: "var(--color-text-tertiary)", marginTop: 1 }}>—</span>
+                    <span style={{ color: T.textMuted, marginTop: 1, flexShrink: 0 }}>—</span>
                     <span>{item}</span>
                   </div>
                 ))}
               </div>
             )}
           </div>
-
           <div>
             <SectionLabel>Competitive design read</SectionLabel>
-            {competitive_design_notes && (
-              <p style={{ fontSize: "13px", lineHeight: 1.75, color: "var(--color-text-secondary)" }}>
-                {competitive_design_notes}
-              </p>
+            {brandKit.competitive_design_notes && (
+              <p style={{ fontSize: 13, lineHeight: 1.75, color: T.textSecondary }}>{brandKit.competitive_design_notes}</p>
             )}
           </div>
         </div>
       </Card>
 
       {/* ── FIGMA TOKEN EXPORT ── */}
-      {(figma_token_export.colors || figma_token_export.typography || figma_token_export.border_radius) && (
+      {hasTokens && (
         <Card>
-          <SectionLabel icon={<Icons.Token />}>Figma token export</SectionLabel>
-          <p style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginBottom: 16 }}>
-            Click any token to copy its value
-          </p>
-
+          <SectionLabel>Figma token export</SectionLabel>
+          <p style={{ fontSize: 11, color: T.textMuted, marginBottom: 14 }}>Click any token to copy its value</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 24 }}>
-            {figma_token_export.colors && Object.keys(figma_token_export.colors).length > 0 && (
+            {feColors && (
               <div>
-                <div style={{ fontSize: "9px", fontWeight: 600, color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
-                  Colors
-                </div>
-                {Object.entries(figma_token_export.colors).map(([k, v]) => (
-                  <TokenRow key={k} name={k} value={v} swatch />
-                ))}
+                <TokenColLabel>Colors</TokenColLabel>
+                {Object.entries(feColors).map(([k, v]) => <TokenRow key={k} name={k} value={v} swatch />)}
               </div>
             )}
-
-            {figma_token_export.typography && Object.keys(figma_token_export.typography).length > 0 && (
+            {feTypo && (
               <div>
-                <div style={{ fontSize: "9px", fontWeight: 600, color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
-                  Typography
-                </div>
-                {Object.entries(figma_token_export.typography).map(([k, v]) => (
-                  <TokenRow key={k} name={k} value={v} />
-                ))}
+                <TokenColLabel>Typography</TokenColLabel>
+                {Object.entries(feTypo).map(([k, v]) => <TokenRow key={k} name={k} value={v} />)}
               </div>
             )}
-
-            {figma_token_export.border_radius && Object.keys(figma_token_export.border_radius).length > 0 && (
+            {feRadius && (
               <div>
-                <div style={{ fontSize: "9px", fontWeight: 600, color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
-                  Border radius
-                </div>
-                {Object.entries(figma_token_export.border_radius).map(([k, v]) => (
-                  <TokenRow key={k} name={k} value={v} />
-                ))}
+                <TokenColLabel>Spacing & radius</TokenColLabel>
+                {Object.entries(feRadius).map(([k, v]) => <TokenRow key={k} name={k} value={v} />)}
               </div>
             )}
           </div>
         </Card>
       )}
-
     </div>
   );
 }
