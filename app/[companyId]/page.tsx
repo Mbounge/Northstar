@@ -62,36 +62,29 @@ export default async function CompanyDashboardPage({
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-[#0a0a0a]">
-      {/* ── TOPBAR ── */}
-      <header className="h-12 border-b border-zinc-200 dark:border-zinc-800/80 px-5 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          {iconUrl ? (
-            <img
-              src={iconUrl}
-              alt={appName}
-              className="w-7 h-7 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800"
-            />
-          ) : (
-            <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-[11px] font-semibold text-zinc-500">
-              {appName.charAt(0).toUpperCase()}
-            </div>
-          )}
-          <p className="text-[13px] font-medium text-zinc-900 dark:text-white">
-            {appName.charAt(0).toUpperCase() + appName.slice(1)}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <SnapshotSelector snapshots={snapshots} currentSnapshot={activeSnapshotId} />
-          <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800" />
-          <ThemeToggle />
-        </div>
-      </header>
-
-      {/* ── TIER 1 TABS ── */}
+      {/* ── TOPBAR + TIER 1 TABS (unified row) ── */}
       <Tabs defaultValue="product" className="flex-1 flex flex-col overflow-hidden">
-        <div className="border-b border-zinc-200 dark:border-zinc-800/80 px-5 shrink-0">
-          <TabsList className="bg-transparent h-auto p-0 gap-0">
+        <header className="h-12 border-b border-zinc-200 dark:border-zinc-800/80 px-5 flex items-center justify-between shrink-0">
+          {/* Left: app identity */}
+          <div className="flex items-center gap-3 shrink-0">
+            {iconUrl ? (
+              <img
+                src={iconUrl}
+                alt={appName}
+                className="w-7 h-7 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800 shrink-0 block"
+              />
+            ) : (
+              <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-[11px] font-semibold text-zinc-500 shrink-0">
+                {appName.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <p className="text-[13px] font-medium text-zinc-900 dark:text-white whitespace-nowrap">
+              {appName.charAt(0).toUpperCase() + appName.slice(1)}
+            </p>
+          </div>
+
+          {/* Center: tabs */}
+          <TabsList className="bg-transparent h-12 p-0 gap-0 absolute left-1/2 -translate-x-1/2">
             {[
               { value: "product", icon: Layers, label: "Product" },
               { value: "marketing", icon: Megaphone, label: "Marketing" },
@@ -101,7 +94,7 @@ export default async function CompanyDashboardPage({
                 key={value}
                 value={value}
                 className="
-                  relative rounded-none bg-transparent px-4 py-3
+                  relative rounded-none bg-transparent px-4 h-12
                   text-[12px] font-medium
                   text-zinc-400 dark:text-zinc-500
                   hover:text-zinc-700 dark:hover:text-zinc-300
@@ -119,7 +112,14 @@ export default async function CompanyDashboardPage({
               </TabsTrigger>
             ))}
           </TabsList>
-        </div>
+
+          {/* Right: controls */}
+          <div className="flex items-center gap-2 shrink-0">
+            <SnapshotSelector snapshots={snapshots} currentSnapshot={activeSnapshotId} />
+            <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800" />
+            <ThemeToggle />
+          </div>
+        </header>
 
         <TabsContent value="product" className="flex-1 overflow-hidden m-0">
           {productData && (productData.browsing || productData.onboarding) ? (
