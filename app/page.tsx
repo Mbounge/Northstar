@@ -1,83 +1,137 @@
-//app/page.tsx
-
+// app/page.tsx
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Plus, Activity, ArrowRight, ShieldCheck } from "lucide-react";
-import { getTrackedCompanies } from "@/lib/data";
+import { getReviewApps } from "@/lib/review-data";
+import { Command, Plus, ArrowUpRight } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
+
+const gradeConfig: Record<string, { color: string; bg: string }> = {
+  A: { color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-500/10" },
+  B: { color: "text-blue-600 dark:text-blue-400",    bg: "bg-blue-50 dark:bg-blue-500/10" },
+  C: { color: "text-amber-600 dark:text-amber-400",  bg: "bg-amber-50 dark:bg-amber-500/10" },
+  D: { color: "text-orange-600 dark:text-orange-400",bg: "bg-orange-50 dark:bg-orange-500/10" },
+  F: { color: "text-rose-600 dark:text-rose-400",    bg: "bg-rose-50 dark:bg-rose-500/10" },
+};
+
+function gradeStyle(grade: string) {
+  const key = grade?.charAt(0).toUpperCase();
+  return gradeConfig[key] ?? { color: "text-zinc-400 dark:text-zinc-500", bg: "bg-zinc-100 dark:bg-zinc-800/50" };
+}
+
+function GradePip({ label, grade }: { label: string; grade: string }) {
+  if (!grade || grade === "N/A") return null;
+  const { color, bg } = gradeStyle(grade);
+  return (
+    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md ${bg}`}>
+      <span className="text-[10px] font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">{label}</span>
+      <span className={`text-[13px] font-semibold font-mono ${color}`}>{grade}</span>
+    </div>
+  );
+}
 
 export default async function PortfolioPage() {
-  const companies = await getTrackedCompanies();
+  const apps = await getReviewApps();
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-8">
-      
-      {/* Hero Header */}
-      <div className="text-center max-w-2xl mb-12">
-        <div className="flex items-center justify-center gap-2 mb-4">
-          <div className="h-1 w-12 bg-emerald-500 rounded-full" />
-          <span className="text-xs font-mono text-emerald-500 uppercase tracking-widest">System Online</span>
-          <div className="h-1 w-12 bg-emerald-500 rounded-full" />
-        </div>
-        <h1 className="text-5xl font-bold text-white tracking-tight mb-4">
-          {/* COMPETITOR<span className="text-zinc-600">OS</span> */}
-        </h1>
-        <p className="text-zinc-400 text-lg">
-          Select a target to initialize the intelligence terminal.
-        </p>
-      </div>
+    <div className="min-h-screen bg-white dark:bg-[#080808] flex flex-col font-sans">
 
-      {/* Company Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-5xl">
-        
-        {/* Existing Companies */}
-        {companies.map((company) => (
-          <Link key={company.id} href={`/dashboard/${company.id}`} className="group">
-            <Card className="bg-zinc-900/50 border-zinc-800 hover:border-blue-500/50 hover:bg-zinc-900 transition-all h-full">
-              <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div className="w-12 h-12 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 font-bold text-xl mb-4">
-                    {company.name[0]}
-                  </div>
-                  <Badge variant="outline" className="border-emerald-500/20 text-emerald-400 bg-emerald-500/5 text-[10px]">
-                    <Activity className="w-3 h-3 mr-1" /> Active
-                  </Badge>
-                </div>
-                <CardTitle className="text-white text-xl group-hover:text-blue-400 transition-colors">
-                  {company.name}
-                </CardTitle>
-                <CardDescription className="text-zinc-500 font-mono text-xs">
-                  ID: {company.id.toUpperCase()}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center text-xs text-zinc-400 mt-4 group-hover:translate-x-1 transition-transform">
-                  Initialize Terminal <ArrowRight className="w-3 h-3 ml-2" />
-                </div>
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
-
-        {/* Add New Target (Placeholder) */}
-        <Card className="bg-zinc-950 border-zinc-800 border-dashed hover:border-zinc-700 transition-all cursor-pointer group flex flex-col items-center justify-center text-center p-8 h-full min-h-[250px]">
-          <div className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center mb-4 group-hover:bg-zinc-800 transition-colors">
-            <Plus className="w-8 h-8 text-zinc-500 group-hover:text-white" />
+      {/* ── NAV ── */}
+      <header className="h-12 border-b border-zinc-200 dark:border-zinc-800/60 px-6 flex items-center justify-between sticky top-0 z-50 bg-white/80 dark:bg-[#080808]/80 backdrop-blur-md">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 bg-zinc-900 dark:bg-white rounded-md flex items-center justify-center">
+            <Command className="w-3 h-3 text-white dark:text-zinc-900" />
           </div>
-          <h3 className="text-lg font-medium text-zinc-300">Add New Target</h3>
-          <p className="text-sm text-zinc-500 mt-2 max-w-xs">
-            Deploy agents to scan a new competitor.
-          </p>
-        </Card>
+          <span className="text-[13px] font-medium text-zinc-900 dark:text-white tracking-tight">
+            Competitor<span className="text-zinc-400 dark:text-zinc-500">OS</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800" />
+          <Link
+            href="/login"
+            className="text-[12px] text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
+          >
+            Sign out
+          </Link>
+        </div>
+      </header>
 
-      </div>
+      <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-16">
 
-      {/* Footer */}
-      <div className="mt-16 text-zinc-600 text-xs font-mono flex items-center gap-2">
-        <ShieldCheck className="w-4 h-4" />
-        SECURE CONNECTION ESTABLISHED
-      </div>
+        {/* ── HEADING ── */}
+        <div className="flex items-end justify-between mb-12">
+          <div>
+            <p className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500 uppercase tracking-[0.15em] mb-2">
+              {apps.length} targets tracked
+            </p>
+            <h1 className="text-[28px] font-semibold text-zinc-900 dark:text-white tracking-tight leading-none">
+              Active targets
+            </h1>
+          </div>
+          <button className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-[12px] font-medium rounded-lg hover:opacity-80 transition-opacity">
+            <Plus className="w-3.5 h-3.5" />
+            Add target
+          </button>
+        </div>
+
+        {/* ── GRID ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-zinc-200 dark:bg-zinc-800/60 rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800/60">
+          {apps.map((app) => (
+            <Link key={app.appName} href={`/${app.appName}`} className="group relative bg-white dark:bg-[#0d0d0d] hover:bg-zinc-50 dark:hover:bg-[#111] transition-colors duration-150 p-6 flex flex-col gap-5 min-h-[200px]">
+
+              {/* Top row */}
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  {app.iconUrl ? (
+                    <img
+                      src={app.iconUrl}
+                      alt={app.appName}
+                      className="rounded-xl object-cover border border-zinc-200 dark:border-zinc-800 block"
+                      style={{ width: "40px", height: "40px", minWidth: "40px", minHeight: "40px" }}
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-[13px] font-semibold text-zinc-500 dark:text-zinc-400">
+                      {app.appName.charAt(0)}
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-[14px] font-semibold text-zinc-900 dark:text-white leading-tight">
+                      {app.appName}
+                    </p>
+                    <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-0.5 leading-tight">
+                      {app.appType}
+                    </p>
+                  </div>
+                </div>
+                <ArrowUpRight className="w-4 h-4 text-zinc-300 dark:text-zinc-700 group-hover:text-zinc-600 dark:group-hover:text-zinc-400 transition-colors shrink-0 mt-0.5" />
+              </div>
+
+              {/* Bottom row */}
+              <div className="mt-auto flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  {app.hasOnboarding && <GradePip label="Onb" grade={app.onboardingGrade} />}
+                  {app.hasBrowsing && <GradePip label="App" grade={app.browsingGrade} />}
+                </div>
+                <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-600 tabular-nums">
+                  {app.totalScreens} screens
+                </span>
+              </div>
+
+            </Link>
+          ))}
+
+          {/* Add card */}
+          <div className="bg-white dark:bg-[#0d0d0d] p-6 flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-zinc-50 dark:hover:bg-[#111] transition-colors group min-h-[200px]">
+            <div className="w-8 h-8 rounded-full border border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center group-hover:border-zinc-400 dark:group-hover:border-zinc-500 transition-colors">
+              <Plus className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500" />
+            </div>
+            <p className="text-[12px] font-medium text-zinc-400 dark:text-zinc-600 group-hover:text-zinc-600 dark:group-hover:text-zinc-400 transition-colors">
+              Track new target
+            </p>
+          </div>
+        </div>
+
+      </main>
     </div>
   );
 }

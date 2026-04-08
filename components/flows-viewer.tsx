@@ -18,6 +18,8 @@ import {
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+import { PanoramicMockup } from "./PanoramicMockup";
+
 // ─── TYPES ──────────────────────────────────────────────────────
 interface Screen {
   timeline_step: number;
@@ -41,7 +43,7 @@ interface FlowsData {
 
 // ─── HELPERS ────────────────────────────────────────────────────
 function collectAllFlows(nodes: FlowNode[]): FlowNode[] {
-  const result: FlowNode[] =[];
+  const result: FlowNode[] = [];
   const walk = (list: FlowNode[]) => {
     for (const n of list) {
       if (n.screens && n.screens.length > 0) result.push(n);
@@ -97,12 +99,13 @@ function ScreenDetailModal({
           container.scrollTo({ left: scrollLeft, behavior });
         }
       }
-    },[]
+    },
+    [],
   );
 
   useEffect(() => {
     requestAnimationFrame(() => scrollToIndex(initialIndex, "instant"));
-  },[initialIndex, scrollToIndex]);
+  }, [initialIndex, scrollToIndex]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -132,7 +135,7 @@ function ScreenDetailModal({
         onClose();
       }
     },
-    [onClose]
+    [onClose],
   );
 
   return (
@@ -197,7 +200,14 @@ function ScreenDetailModal({
               const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
               const isActive = idx === currentIndex;
               const isHovered = idx === hoveredIndex;
-              const isPanoramic = imgUrl.includes('panoramic') || imgUrl.includes('full_page');
+              const isPanoramic =
+              imgUrl.includes("panoramic") || imgUrl.includes("full_page");
+
+              // Check if the filename contains our new tag!
+              // (Fallback to true for older screenshots that don't have the tag yet, so they don't break)
+              const hasNav =
+                imgUrl.includes("withnav") ||
+                (!imgUrl.includes("nonav") && isPanoramic);
 
               return (
                 <div
@@ -210,32 +220,53 @@ function ScreenDetailModal({
                   onMouseLeave={() => setHoveredIndex(null)}
                   className={cn(
                     "shrink-0 cursor-pointer transition-all duration-300 ease-out relative flex items-end",
-                    isActive ? "h-[97%]" : "h-[80%] hover:h-[84%]"
+                    isActive ? "h-[97%]" : "h-[80%] hover:h-[84%]",
                   )}
                 >
                   {/* --- THE DEVICE MOCKUP STYLE (FIXED RADIUS) --- */}
                   <div
                     className={cn(
                       "relative h-full aspect-[9/19.5] bg-white transition-all duration-300 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)]",
-                      isPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden",
-                      isActive ? "opacity-100" : "opacity-50 hover:opacity-80"
+                      isPanoramic
+                        ? "overflow-y-auto hide-scrollbar"
+                        : "overflow-hidden",
+                      isActive ? "opacity-100" : "opacity-50 hover:opacity-80",
                     )}
-                    style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '1.8rem' }}
+                    style={{
+                      borderWidth: "0.3px",
+                      borderColor: "#818A98",
+                      borderStyle: "solid",
+                      borderRadius: "1.8rem",
+                    }}
                   >
                     {isPanoramic ? (
-                      <img src={imgUrl} alt={screen.display_label} className="w-full h-auto block" />
-                    ) : (
-                      <Image
-                        src={imgUrl}
+                      <PanoramicMockup
+                        imgUrl={imgUrl}
                         alt={screen.display_label}
-                        fill
-                        className="object-cover"
-                        unoptimized
+                        isActive={isActive}
+                        hasBottomNav={hasNav}
                       />
+                    ) : (
+                      // Your normal static image render here
+                      <div
+                        className="relative h-full aspect-[9/19.5] overflow-hidden..."
+                        style={{ borderRadius: "1.8rem" }}
+                      >
+                        <Image
+                          src={imgUrl}
+                          alt={screen.display_label}
+                          fill
+                          className="object-cover"
+                          unoptimized
+                        />
+                      </div>
                     )}
 
                     {(isHovered || isActive) && isHovered && (
-                      <div className="absolute inset-0 bg-black/20 flex items-end justify-center pb-5 gap-2 pointer-events-none animate-in fade-in duration-150" style={{ borderRadius: '1.8rem' }}>
+                      <div
+                        className="absolute inset-0 bg-black/20 flex items-end justify-center pb-5 gap-2 pointer-events-none animate-in fade-in duration-150"
+                        style={{ borderRadius: "1.8rem" }}
+                      >
                         <button
                           onClick={(e) => e.stopPropagation()}
                           className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg pointer-events-auto"
@@ -320,8 +351,10 @@ function SidebarNode({
         onClick={() => onSelect(node.id)}
         className={cn(
           "group flex items-center justify-between py-[7px] cursor-pointer select-none transition-colors duration-150",
-          isActive ? "text-zinc-900 dark:text-white bg-zinc-100 dark:bg-white/5" : "text-zinc-600 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-transparent",
-          isTopLevel && "mt-0.5"
+          isActive
+            ? "text-zinc-900 dark:text-white bg-zinc-100 dark:bg-white/5"
+            : "text-zinc-600 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-transparent",
+          isTopLevel && "mt-0.5",
         )}
         style={{ paddingLeft: `${depth * 16 + 16}px`, paddingRight: "16px" }}
       >
@@ -344,7 +377,7 @@ function SidebarNode({
             className={cn(
               "text-[13px] truncate leading-tight",
               isActive ? "font-medium" : "font-normal",
-              isTopLevel && "font-medium"
+              isTopLevel && "font-medium",
             )}
           >
             {node.label}
@@ -355,7 +388,9 @@ function SidebarNode({
           <span
             className={cn(
               "text-[11px] tabular-nums shrink-0",
-              isActive ? "text-zinc-500 dark:text-white/70" : "text-zinc-400 dark:text-white/40 group-hover:text-zinc-500 dark:group-hover:text-white/60"
+              isActive
+                ? "text-zinc-500 dark:text-white/70"
+                : "text-zinc-400 dark:text-white/40 group-hover:text-zinc-500 dark:group-hover:text-white/60",
             )}
           >
             {node.screen_count}
@@ -406,7 +441,9 @@ function FlowSection({
         <h2
           className={cn(
             "text-[15px] font-semibold tracking-[-0.01em] transition-colors",
-            isHighlighted ? "text-zinc-900 dark:text-white" : "text-zinc-700 dark:text-white/80"
+            isHighlighted
+              ? "text-zinc-900 dark:text-white"
+              : "text-zinc-700 dark:text-white/80",
           )}
         >
           {flow.label}
@@ -420,7 +457,8 @@ function FlowSection({
         <div className="flex gap-6 px-8 min-w-max">
           {screens.map((screen, idx) => {
             const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
-            const isPanoramic = imgUrl.includes('panoramic') || imgUrl.includes('full_page');
+            const isPanoramic =
+              imgUrl.includes("panoramic") || imgUrl.includes("full_page");
 
             return (
               <div
@@ -433,17 +471,34 @@ function FlowSection({
                 }}
               >
                 {/* --- THE DEVICE MOCKUP STYLE --- */}
-                <div 
+                <div
                   className={cn(
                     "relative w-[240px] h-[520px] bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.2)] dark:shadow-none dark:group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.4)] transition-all duration-200",
-                    isPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden"
+                    isPanoramic
+                      ? "overflow-y-auto hide-scrollbar"
+                      : "overflow-hidden",
                   )}
-                  style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '1.8rem' }}
+                  style={{
+                    borderWidth: "0.3px",
+                    borderColor: "#818A98",
+                    borderStyle: "solid",
+                    borderRadius: "1.8rem",
+                  }}
                 >
                   {isPanoramic ? (
-                    <img src={imgUrl} alt={screen.display_label} className="w-full h-auto block" />
+                    <img
+                      src={imgUrl}
+                      alt={screen.display_label}
+                      className="w-full h-auto block"
+                    />
                   ) : (
-                    <Image src={imgUrl} alt={screen.display_label} fill className="object-cover" unoptimized />
+                    <Image
+                      src={imgUrl}
+                      alt={screen.display_label}
+                      fill
+                      className="object-cover"
+                      unoptimized
+                    />
                   )}
                 </div>
 
@@ -481,7 +536,7 @@ export function FlowsViewer({
   const sanitizedTaxonomy = useMemo(() => {
     if (!flowsData?.taxonomy) return [];
     const seenIds = new Set<string>();
-    
+
     const sanitize = (nodes: FlowNode[]): FlowNode[] => {
       return nodes.map((n) => {
         let newId = n.id;
@@ -494,7 +549,7 @@ export function FlowsViewer({
         return {
           ...n,
           id: newId,
-          children: n.children ? sanitize(n.children) : undefined
+          children: n.children ? sanitize(n.children) : undefined,
         };
       });
     };
@@ -502,10 +557,10 @@ export function FlowsViewer({
   }, [flowsData?.taxonomy]);
 
   const [activeFlowId, setActiveFlowId] = useState<string | null>(
-    sanitizedTaxonomy?.[0]?.id || null
+    sanitizedTaxonomy?.[0]?.id || null,
   );
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
-    new Set(sanitizedTaxonomy?.map((t) => t.id) || [])
+    new Set(sanitizedTaxonomy?.map((t) => t.id) || []),
   );
   const [detailModal, setDetailModal] = useState<{
     screens: Screen[];
@@ -513,16 +568,21 @@ export function FlowsViewer({
     flowLabel: string;
   } | null>(null);
 
-  const sectionRefs = useRef<Map<string, React.RefObject<HTMLDivElement | null>>>(new Map());
+  const sectionRefs = useRef<
+    Map<string, React.RefObject<HTMLDivElement | null>>
+  >(new Map());
 
-  const allFlows = useMemo(() => collectAllFlows(sanitizedTaxonomy), [sanitizedTaxonomy]);
+  const allFlows = useMemo(
+    () => collectAllFlows(sanitizedTaxonomy),
+    [sanitizedTaxonomy],
+  );
 
   const flowScreensMap = useMemo(() => {
     const map = new Map<string, Screen[]>();
     for (const flow of allFlows) {
       const resolved = flow.screens
         .map((step) =>
-          flowsData.screen_catalog.find((s) => s.timeline_step === step)
+          flowsData.screen_catalog.find((s) => s.timeline_step === step),
         )
         .filter(Boolean) as Screen[];
       map.set(flow.id, resolved);
@@ -542,7 +602,7 @@ export function FlowsViewer({
       else next.add(id);
       return next;
     });
-  },[]);
+  }, []);
 
   const handleSidebarSelect = useCallback((id: string) => {
     setActiveFlowId(id);
@@ -550,12 +610,13 @@ export function FlowsViewer({
     if (ref?.current) {
       ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  },[]);
+  }, []);
 
   const openDetail = useCallback(
     (screens: Screen[], index: number, label: string) => {
       setDetailModal({ screens, initialIndex: index, flowLabel: label });
-    },[]
+    },
+    [],
   );
 
   if (!flowsData || !flowsData.taxonomy || flowsData.taxonomy.length === 0) {

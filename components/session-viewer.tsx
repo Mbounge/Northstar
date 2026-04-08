@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import { PanoramicMockup } from "@/components/PanoramicMockup"; // Adjust path if needed
+
 function formatScreenshotTitle(filename: string, fallback: string) {
   if (!filename) return formatFallback(fallback);
   if (filename.startsWith("FINAL_")) {
@@ -182,6 +184,8 @@ export function SessionViewer({ data }: { data: any }) {
             {steps.map((step: any, idx: number) => {
               const isActive = idx === currentIndex;
               const isPanoramic = step.imagePath.includes('panoramic') || step.imagePath.includes('full_page');
+              // Read the tag we added in Python. Default to true for backward compatibility.
+              const hasNav = step.imagePath.includes('withnav') || (!step.imagePath.includes('nonav') && isPanoramic);
 
               return (
                 <div 
@@ -194,14 +198,12 @@ export function SessionViewer({ data }: { data: any }) {
                   style={{ aspectRatio: '9/19.5' }}
                 >
                   <div 
-                    className={cn(
-                      "relative w-full h-full bg-white shadow-2xl transition-all duration-300",
-                      isPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden"
-                    )}
+                    // ALWAYS overflow-hidden so the border-radius stays perfectly rounded
+                    className="relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl transition-all duration-300 overflow-hidden"
                     style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: isActive ? '1.8rem' : '1.1rem' }}
                   >
                     {isPanoramic ? (
-                      <img src={step.imagePath} alt={`Step ${idx}`} className="w-full h-auto block" />
+                      <PanoramicMockup imgUrl={step.imagePath} alt={`Step ${idx}`} hasBottomNav={hasNav} />
                     ) : (
                       <Image src={step.imagePath} alt={`Step ${idx}`} fill className="object-cover" unoptimized />
                     )}
@@ -268,23 +270,25 @@ export function SessionViewer({ data }: { data: any }) {
               <ChevronLeft className="w-6 h-6" />
             </button>
             
-            {/* EXACT FIGMA DEVICE SPECS (1.8rem fixed radius) */}
+            {/* EXACT FIGMA DEVICE SPECS (0.98rem fixed radius) */}
             <div 
-              className={cn(
-                "relative h-full aspect-[9/19.5] bg-white dark:bg-zinc-900 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)] shrink-0 transition-all duration-300 cursor-pointer group",
-                isCurrentPanoramic ? "overflow-y-auto hide-scrollbar" : "overflow-hidden"
-              )}
+              // ALWAYS overflow-hidden here. The PanoramicMockup handles scrolling internally.
+              className="relative h-full aspect-[9/19.5] bg-white dark:bg-zinc-900 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)] shrink-0 transition-all duration-300 cursor-pointer group overflow-hidden"
               style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '0.98rem' }}
               onClick={() => setIsModalOpen(true)}
             >
               {isCurrentPanoramic ? (
-                <img src={currentStep.imagePath} alt={displayTitle} className="w-full h-auto block" />
+                <PanoramicMockup 
+                  imgUrl={currentStep.imagePath} 
+                  alt={displayTitle} 
+                  hasBottomNav={currentStep.imagePath.includes('withnav') || (!currentStep.imagePath.includes('nonav') && isCurrentPanoramic)} 
+                />
               ) : (
                 <Image src={currentStep.imagePath} alt={displayTitle} fill className="object-cover" unoptimized />
               )}
               
-              {/* Hover Overlay for Zoom Indication - pointer-events-none ensures we can still scroll a panoramic image */}
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 dark:group-hover:bg-black/30 pointer-events-none transition-colors duration-200 flex items-center justify-center">
+              {/* Hover Overlay for Zoom Indication (Added z-40 so it sits ABOVE the sticky headers) */}
+              <div className="absolute inset-0 z-40 bg-black/0 group-hover:bg-black/10 dark:group-hover:bg-black/30 pointer-events-none transition-colors duration-200 flex items-center justify-center rounded-[0.98rem]">
                 <div className="bg-white/95 dark:bg-black/80 backdrop-blur-sm p-4 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-200 shadow-xl transform scale-90 group-hover:scale-100">
                   <Maximize2 className="w-6 h-6 text-zinc-900 dark:text-white" />
                 </div>
