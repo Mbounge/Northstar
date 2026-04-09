@@ -37,7 +37,7 @@ export function UnifiedDashboard({ appData }: { appData: any }) {
   const apkIntelligence = appData.apkIntelligence ?? null;
 
   const subTabs = [
-    { value: "overview", icon: Target, label: "Strategy & score" },
+    { value: "overview", icon: Target, label: "Overview" },
     { value: "viewer", icon: MousePointerClick, label: "Screen viewer" },
     { value: "mobbin", icon: Layers, label: "Flows" },
     ...(hasBrandKit
