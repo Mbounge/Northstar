@@ -59,12 +59,12 @@ export default async function MarketingPage({
       </div>
 
       {/* Feed Component */}
-      <MarketingFeed 
+      {/* <MarketingFeed 
         posts={posts} 
         roster={roster} 
         companyId={companyId} 
         snapshotId={snapshotId} 
-      />
+      /> */}
     </div>
   );
 }

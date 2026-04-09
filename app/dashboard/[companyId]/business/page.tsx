@@ -60,13 +60,13 @@ export default async function BusinessPage({
       </div>
 
       {/* Main Viewer */}
-      <BusinessViewer 
+      {/* <BusinessViewer 
         jobs={jobs} 
         pages={pages} 
         roster={roster} 
         companyId={companyId} 
         snapshotId={snapshotId} 
-      />
+      /> */}
     </div>
   );
 }
