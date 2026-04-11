@@ -1,3 +1,4 @@
+// lib/strategic-context.ts
 import { getDashboardData, BusinessPage } from "./data";
 
 export interface AssetReference {
@@ -9,12 +10,12 @@ export interface AssetReference {
 }
 
 // Helper to find job screenshots with Snapshot Support
-const findJobScreenshotPath = (jobTitle: string, pages: BusinessPage[], companyId: string, snapshotId: string) => {
+const findJobScreenshotPath = (jobTitle: string, pages: BusinessPage[], companyId: string, snapshotId: string, tenantId: string) => {
   if (!pages || pages.length === 0) return undefined;
 
   const normalizedTitle = jobTitle.replace(/[\\/*?:"<>|]/g, '-').trim().replace(/ /g, '_'); 
   const targetPrefix = `Job_${normalizedTitle}`;
-  const matches: string[] =[];
+  const matches: string[] = [];
 
   pages.forEach(page => {
     if (page.name.startsWith(targetPrefix)) {
@@ -30,19 +31,19 @@ const findJobScreenshotPath = (jobTitle: string, pages: BusinessPage[], companyI
 
   if (matches.length > 0) {
     const filename = matches[0].split('/').pop();
-    return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${companyId}/snapshots/${snapshotId}/business/screenshots/${filename}`;
+    return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/business/screenshots/${filename}`;
   }
   
   return undefined;
 };
 
-export async function buildStrategicContext(companyId: string) {
-  const data = await getDashboardData(companyId);
+export async function buildStrategicContext(tenantId: string, companyId: string) {
+  const data = await getDashboardData(tenantId, companyId);
   
   if (!data || !data.mobile) return null;
 
   const { snapshotId } = data; 
-  const assets: AssetReference[] =[];
+  const assets: AssetReference[] = [];
   let contextText = `ANALYSIS TARGET: ${companyId}\n\n`;
 
   // --- 1. PRODUCT PILLAR ---
@@ -56,13 +57,13 @@ export async function buildStrategicContext(companyId: string) {
         id: assetId,
         type: 'screen',
         title: `Mobile: ${i.section}`,
-        imageUrl: i.screenshots[0] ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${companyId}/snapshots/${snapshotId}/product/mobile/screenshots/${i.screenshots[0].split('/').pop()}` : undefined
+        imageUrl: i.screenshots[0] ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/product/mobile/screenshots/${i.screenshots[0].split('/').pop()}` : undefined
       });
     });
   });
 
   // Web Summary
-  contextText += `\nWeb Platform Flows: ${data.web?.length} flows mapped.\n`;
+  contextText += `\nWeb Platform Flows: ${data.web?.length || 0} flows mapped.\n`;
   data.web?.forEach((flow: any) => {
     contextText += `- Flow: ${flow.flow_name} (${flow.screenshots.length} steps)\n`;
     const assetId = `web_${flow.flow_name}`.replace(/[^a-zA-Z0-9]/g, '_');
@@ -70,13 +71,13 @@ export async function buildStrategicContext(companyId: string) {
       id: assetId,
       type: 'screen',
       title: `Web Flow: ${flow.flow_name}`,
-      imageUrl: flow.screenshots[0] ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${companyId}/snapshots/${snapshotId}/product/web/screenshots/${flow.screenshots[0].split('/').pop()}` : undefined
+      imageUrl: flow.screenshots[0] ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/product/web/screenshots/${flow.screenshots[0].split('/').pop()}` : undefined
     });
   });
 
   // --- 2. MARKETING PILLAR ---
   contextText += "\n=== PILLAR 2: MARKETING (Social Signals) ===\n";
-  const recentPosts = data.marketing?.slice(0, 15) ||[]; 
+  const recentPosts = data.marketing?.slice(0, 15) || []; 
   
   recentPosts.forEach((post: any, idx: number) => {
     const assetId = `post_${idx}`;
@@ -89,21 +90,21 @@ export async function buildStrategicContext(companyId: string) {
       id: assetId,
       type: 'post',
       title: `${post.platform} Post`,
-      imageUrl: post.screenshot ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${companyId}/snapshots/${snapshotId}/marketing/screenshots/${post.screenshot.split('/').pop()}` : undefined,
+      imageUrl: post.screenshot ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/marketing/screenshots/${post.screenshot.split('/').pop()}` : undefined,
       metadata: safeText
     });
   });
 
   // --- 3. BUSINESS PILLAR ---
   contextText += "\n=== PILLAR 3: BUSINESS (Hiring & Org) ===\n";
-  const jobs = data.business?.jobs ||[];
-  const pages = data.business?.pages ||[];
+  const jobs = data.business?.jobs || [];
+  const pages = data.business?.pages || [];
 
   contextText += `Open Positions: ${jobs.length}\n`;
   jobs.forEach((job: any, idx: number) => {
     const assetId = `job_${idx}`;
     contextText += `[ID: ${assetId}] Role: ${job.title}\n`;
-    const imagePath = findJobScreenshotPath(job.title, pages, companyId, snapshotId);
+    const imagePath = findJobScreenshotPath(job.title, pages, companyId, snapshotId, tenantId);
 
     assets.push({
       id: assetId,

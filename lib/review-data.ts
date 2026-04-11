@@ -6,22 +6,10 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onboarding') {
-  const url = `${supabaseUrl}/storage/v1/object/public/reviews/${appName}/${sessionType}/agent_memory.json`;
-  const res = await fetch(url, { cache: 'no-store' });
-  //console.log('[agent_memory]', appName, sessionType, res.status, url);
-  if (!res.ok) return null;
-  const json = await res.json();
-  //console.log('[agent_memory] keys:', Object.keys(json).join(', '));
-  //console.log('[agent_memory] app_type:', json.app_type);
-  return json;
-}
-
-// Update the AppSummary interface to include appType
 export interface AppSummary {
   appName: string;
   category: string;
-  appType: string;           // ← add this
+  appType: string;
   hasOnboarding: boolean;
   hasBrowsing: boolean;
   onboardingGrade: string;
@@ -35,9 +23,17 @@ function formatCategory(cat: string | undefined): string {
   return cat.split('_').join(' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
 }
 
-// ─── APK INTELLIGENCE FETCH (Helper) ──────────────────────────────────────────
-async function fetchApkIntelligence(appName: string) {
-  const browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${appName}/browsing`;
+// ─── DATA FETCHING (ISOLATED BY TENANT ID) ─────────────────────────
+
+async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onboarding', tenantId: string) {
+  const url = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/agent_memory.json`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+async function fetchApkIntelligence(appName: string, tenantId: string) {
+  const browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/browsing`;
   const res = await fetch(`${browsingRoot}/apk_intelligence.json`, { cache: 'no-store' });
   if (!res.ok) return null;
 
@@ -48,13 +44,16 @@ async function fetchApkIntelligence(appName: string) {
   return data;
 }
 
-export async function getReviewApps(): Promise<AppSummary[]> {
-  const { data: appFolders, error } = await supabase.storage.from('reviews').list('', { limit: 100 });
+export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
+  if (!tenantId) return [];
+
+  // Look INSIDE the specific customer's folder
+  const { data: appFolders, error } = await supabase.storage.from('reviews').list(tenantId, { limit: 100 });
   if (error || !appFolders) return [];
 
   const appPromises = appFolders.filter(f => !f.id).map(async (appFolderObj) => {
     const appName = appFolderObj.name;
-    const { data: sessionFolders } = await supabase.storage.from('reviews').list(appName, { limit: 10 });
+    const { data: sessionFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}`, { limit: 10 });
     
     let hasOnboarding = false, hasBrowsing = false;
     let onboardingGrade = "N/A", browsingGrade = "N/A";
@@ -68,7 +67,7 @@ export async function getReviewApps(): Promise<AppSummary[]> {
       const type = session.name; 
       if (!['onboarding', 'browsing'].includes(type)) continue;
 
-      const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${type}`;
+      const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${type}`;
       
       const [manifestRes, intelRes] = await Promise.all([
         fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'enriched_manifest.json'}`, { cache: 'no-store' }),
@@ -89,7 +88,6 @@ export async function getReviewApps(): Promise<AppSummary[]> {
           screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
         }
       } else {
-        // manifest failed but intel may still exist — still mark session as present
         if (type === 'onboarding') hasOnboarding = true;
         else hasBrowsing = true;
       }
@@ -110,8 +108,8 @@ export async function getReviewApps(): Promise<AppSummary[]> {
     if (!hasOnboarding && !hasBrowsing) return null;
 
     const [apkIntel, browsingMemory] = await Promise.all([
-      fetchApkIntelligence(appName),
-      fetchAgentMemory(appName, 'browsing'),
+      fetchApkIntelligence(appName, tenantId),
+      fetchAgentMemory(appName, 'browsing', tenantId),
     ]);
 
     const iconUrl = apkIntel?.icons?.icon_url || null;
@@ -125,28 +123,31 @@ export async function getReviewApps(): Promise<AppSummary[]> {
   return results.filter(Boolean) as AppSummary[];
 }
 
-export async function getAppDetails(appName: string) {
-  // ... (Keep the rest of your getAppDetails and fetchSessionData functions unchanged at the bottom)
+export async function getAppDetails(appName: string, tenantId: string) {
+  if (!tenantId) return null;
+
   const [onboarding, browsing, appStore, apkIntelligence] = await Promise.all([
-    fetchSessionData(appName, 'onboarding'),
-    fetchSessionData(appName, 'browsing'),
-    fetchAppStoreData(appName),
-    fetchApkIntelligence(appName),   
+    fetchSessionData(appName, 'onboarding', tenantId),
+    fetchSessionData(appName, 'browsing', tenantId),
+    fetchAppStoreData(appName, tenantId),
+    fetchApkIntelligence(appName, tenantId),   
   ]);
   return { appName, onboarding, browsing, appStore, apkIntelligence };
 }
 
-async function fetchSessionData(appName: string, sessionType: string) {
-  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${appName}/${sessionType}/enriched`;
+async function fetchSessionData(appName: string, sessionType: string, tenantId: string) {
+  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/enriched`;
   const [manifestRes, intelRes, flowsRes] = await Promise.all([
     fetch(`${publicUrl}/enriched_manifest.json`, { cache: 'no-store' }),
     fetch(`${publicUrl}/session_intelligence.json`, { cache: 'no-store' }),
     fetch(`${publicUrl}/flows.json`, { cache: 'no-store' })
   ]);
   if (!manifestRes.ok) return null;
+
   const manifest = await manifestRes.json();
   const sessionIntel = intelRes.ok ? await intelRes.json() : null;
   const flowsData = flowsRes.ok ? await flowsRes.json() : null;
+  
   const stepsPromises = manifest.enriched_screenshots.map(async (entry: any) => {
     const stepRes = await fetch(`${publicUrl}/${entry.enriched_file}`, { cache: 'no-store' });
     const enrichedData = stepRes.ok ? await stepRes.json() : null;
@@ -154,15 +155,16 @@ async function fetchSessionData(appName: string, sessionType: string) {
       step: entry.step || entry.timeline_step,
       phase: entry.phase,
       screen_type: entry.screen_type,
-      imagePath: `${supabaseUrl}/storage/v1/object/public/reviews/${appName}/${sessionType}/screenshots/${entry.screenshot}`,
+      imagePath: `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/screenshots/${entry.screenshot}`,
       enrichedData
     };
   });
+
   return { summary: manifest.processing_stats, sessionIntel, flowsData, steps: await Promise.all(stepsPromises) };
 }
 
-async function fetchAppStoreData(appName: string) {
-  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${appName}/app_store`;
+async function fetchAppStoreData(appName: string, tenantId: string) {
+  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/app_store`;
   const res = await fetch(`${publicUrl}/app_store_manifest.json`, { cache: 'no-store' });
   if (!res.ok) return null;
   const data = await res.json();

@@ -3,21 +3,9 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
-import {
-  ChevronRight,
-  ChevronDown,
-  Layers,
-  X,
-  Copy,
-  Bookmark,
-  Link2,
-  MessageSquare,
-  MoreHorizontal,
-  Figma,
-} from "lucide-react";
+import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
-
 import { PanoramicMockup } from "./PanoramicMockup";
 
 // ─── TYPES ──────────────────────────────────────────────────────
@@ -26,7 +14,6 @@ interface Screen {
   screenshot_file: string;
   display_label: string;
 }
-
 interface FlowNode {
   id: string;
   label: string;
@@ -35,7 +22,6 @@ interface FlowNode {
   screens: number[];
   children?: FlowNode[];
 }
-
 interface FlowsData {
   taxonomy: FlowNode[];
   screen_catalog: Screen[];
@@ -65,43 +51,69 @@ function findFlow(nodes: FlowNode[], id: string): FlowNode | null {
   return null;
 }
 
+function buildImgUrl(tenantId: string, appName: string, mode: string, file: string): string {
+  return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${appName}/${mode}/screenshots/${file}`;
+}
+
+async function copyImageToClipboard(url: string, onSuccess?: () => void, onError?: () => void) {
+  try {
+    const res = await fetch(url, { mode: "cors" });
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+    const blob = await res.blob();
+    const pngBlob = blob.type === "image/png" ? blob : await convertToPng(blob);
+    if (!navigator.clipboard?.write) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
+    onSuccess?.();
+  } catch (err) {
+    console.warn("Copy failed:", err instanceof Error ? err.message : err);
+    onError?.();
+  }
+}
+
+async function convertToPng(blob: Blob): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d")!.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((b) => b ? resolve(b) : reject(new Error("toBlob failed")), "image/png");
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
 // ─── DETAIL MODAL ───────────────────────────────────────────────
 function ScreenDetailModal({
-  screens,
-  initialIndex,
-  flowLabel,
-  appName,
-  mode,
-  onClose,
+  screens, initialIndex, flowLabel, appName, tenantId, mode, onClose,
 }: {
-  screens: Screen[];
-  initialIndex: number;
-  flowLabel: string;
-  appName: string;
-  mode: string;
-  onClose: () => void;
+  screens: Screen[]; initialIndex: number; flowLabel: string;
+  appName: string; tenantId: string; mode: string; onClose: () => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  const scrollToIndex = useCallback(
-    (idx: number, behavior: ScrollBehavior = "smooth") => {
-      if (scrollRef.current) {
-        const child = scrollRef.current.children[idx] as HTMLElement;
-        if (child) {
-          const container = scrollRef.current;
-          const scrollLeft =
-            child.offsetLeft -
-            container.offsetWidth / 2 +
-            child.offsetWidth / 2;
-          container.scrollTo({ left: scrollLeft, behavior });
-        }
+  const currentScreen = screens[currentIndex];
+  const currentImgUrl = currentScreen ? buildImgUrl(tenantId, appName, mode, currentScreen.screenshot_file) : "";
+
+  const scrollToIndex = useCallback((idx: number, behavior: ScrollBehavior = "smooth") => {
+    if (scrollRef.current) {
+      const child = scrollRef.current.children[idx] as HTMLElement;
+      if (child) {
+        scrollRef.current.scrollTo({
+          left: child.offsetLeft - scrollRef.current.offsetWidth / 2 + child.offsetWidth / 2,
+          behavior,
+        });
       }
-    },
-    [],
-  );
+    }
+  }, []);
 
   useEffect(() => {
     requestAnimationFrame(() => scrollToIndex(initialIndex, "instant"));
@@ -110,134 +122,101 @@ function ScreenDetailModal({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-      if (e.key === "ArrowRight") {
-        setCurrentIndex((i) => {
-          const next = Math.min(i + 1, screens.length - 1);
-          requestAnimationFrame(() => scrollToIndex(next));
-          return next;
-        });
-      }
-      if (e.key === "ArrowLeft") {
-        setCurrentIndex((i) => {
-          const next = Math.max(i - 1, 0);
-          requestAnimationFrame(() => scrollToIndex(next));
-          return next;
-        });
-      }
+      if (e.key === "ArrowRight") setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); requestAnimationFrame(() => scrollToIndex(n)); return n; });
+      if (e.key === "ArrowLeft") setCurrentIndex((i) => { const n = Math.max(i - 1, 0); requestAnimationFrame(() => scrollToIndex(n)); return n; });
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose, screens.length, scrollToIndex]);
 
-  const handleBackdropClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    },
-    [onClose],
-  );
+  const handleBackdropClick = useCallback((e: React.MouseEvent) => {
+    if (modalRef.current && !modalRef.current.contains(e.target as Node)) onClose();
+  }, [onClose]);
+
+  const handleCopy = () => {
+    copyImageToClipboard(
+      currentImgUrl,
+      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
+      () => { setCopyError(true); setTimeout(() => setCopyError(false), 2000); }
+    );
+  };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-in fade-in duration-150"
-      style={{ backgroundColor: "rgba(0, 0, 0, 0.75)" }}
+      className="fixed inset-0 z-[100] backdrop-blur-2xl bg-black/50 animate-in fade-in duration-150"
       onClick={handleBackdropClick}
     >
-      <div
-        ref={modalRef}
-        className="relative w-full h-full max-w-[96%] max-h-[92%] bg-zinc-50 dark:bg-[#1C1C1C] rounded-2xl flex flex-col overflow-hidden shadow-2xl animate-in zoom-in-[0.98] duration-200 transition-colors"
-      >
-        {/* ── Top bar ── */}
-        <div className="flex items-center justify-between px-6 h-[60px] shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <span className="text-zinc-900 dark:text-white text-[13px] font-medium truncate">
-              {flowLabel}
-            </span>
+      <div ref={modalRef} className="w-full h-full flex flex-col">
+
+        {/* ── TOP BAR ── */}
+        <div className="h-[60px] shrink-0 flex items-center justify-between px-8 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <span className="text-white font-bold text-[15px]">{flowLabel}</span>
+            <span className="text-white/40 font-mono text-[13px]">{currentIndex + 1} / {screens.length}</span>
           </div>
-
-          <div className="absolute left-1/2 -translate-x-1/2 flex items-center bg-zinc-200 dark:bg-[#2A2A2A] rounded-full p-[3px]">
-            <button className="px-4 py-1.5 rounded-full text-[13px] font-medium text-zinc-900 dark:text-white bg-white dark:bg-[#3A3A3A] shadow-sm dark:shadow-none">
-              Screens
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleCopy}
+              className={cn(
+                "h-9 px-5 flex items-center gap-2 rounded-full text-[13px] font-bold transition-all border",
+                copied ? "bg-emerald-500 border-emerald-400 text-white"
+                  : copyError ? "bg-red-500 border-red-400 text-white"
+                  : "bg-white/10 border-white/20 text-white hover:bg-white/20"
+              )}
+            >
+              {copied ? <><Check className="w-3.5 h-3.5" />Copied!</>
+               : copyError ? "Failed"
+               : <><Copy className="w-3.5 h-3.5" />Copy</>}
             </button>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <div className="w-7 h-7 rounded-full bg-zinc-200 dark:bg-[#2A2A2A] flex items-center justify-center mr-1">
-              <Figma className="w-3.5 h-3.5 text-zinc-600 dark:text-white/80" />
-            </div>
-            <div className="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-[11px] font-semibold text-white mr-2">
-              U
-            </div>
-
-            <div className="w-px h-5 bg-zinc-300 dark:bg-white/[0.08] mx-1" />
-
-            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-500 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-white/[0.06] transition-all">
-              <MessageSquare className="w-4 h-4" />
-            </button>
-            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-500 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-white/[0.06] transition-all">
-              <Link2 className="w-4 h-4" />
-            </button>
-
-            <div className="w-px h-5 bg-zinc-300 dark:bg-white/[0.08] mx-1" />
-
             <button
               onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-500 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-white/[0.06] transition-all"
+              className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4 text-white" />
             </button>
           </div>
         </div>
 
-        {/* ── Screens strip ── */}
-        <div className="flex-1 relative overflow-hidden bg-zinc-100 dark:bg-transparent">
+        {/* ── CAROUSEL ── */}
+        <div className="flex-1 relative min-h-0">
+          {/* Prev arrow */}
+          <button
+            onClick={() => setCurrentIndex((i) => { const n = Math.max(i - 1, 0); requestAnimationFrame(() => scrollToIndex(n)); return n; })}
+            disabled={currentIndex === 0}
+            className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
+          >
+            <ChevronLeft className="w-6 h-6 text-white" />
+          </button>
+
+          {/* Scrollable screen strip */}
           <div
             ref={scrollRef}
-            className="flex items-end h-full overflow-x-auto overflow-y-hidden px-10 pb-6 pt-4 gap-4 scrollbar-none scroll-smooth"
+            className="flex items-end h-full overflow-x-auto overflow-y-hidden hide-scrollbar gap-6 px-20 pb-8 pt-6"
           >
             {screens.map((screen, idx) => {
-              const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
+              const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
               const isActive = idx === currentIndex;
-              const isHovered = idx === hoveredIndex;
-              const isPanoramic =
-              imgUrl.includes("panoramic") || imgUrl.includes("full_page");
-
-              // Check if the filename contains our new tag!
-              // (Fallback to true for older screenshots that don't have the tag yet, so they don't break)
-              const hasNav =
-                imgUrl.includes("withnav") ||
-                (!imgUrl.includes("nonav") && isPanoramic);
+              const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
+              const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
               return (
                 <div
                   key={idx}
-                  onClick={() => {
-                    setCurrentIndex(idx);
-                    requestAnimationFrame(() => scrollToIndex(idx));
-                  }}
-                  onMouseEnter={() => setHoveredIndex(idx)}
-                  onMouseLeave={() => setHoveredIndex(null)}
+                  onClick={() => { setCurrentIndex(idx); requestAnimationFrame(() => scrollToIndex(idx)); }}
                   className={cn(
-                    "shrink-0 cursor-pointer transition-all duration-300 ease-out relative flex items-end",
-                    isActive ? "h-[97%]" : "h-[80%] hover:h-[84%]",
+                    "shrink-0 cursor-pointer transition-all duration-300 ease-out flex items-end",
+                    isActive ? "h-[94%]" : "h-[75%] hover:h-[80%]"
                   )}
                 >
-                  {/* --- THE DEVICE MOCKUP STYLE (FIXED RADIUS) --- */}
                   <div
                     className={cn(
-                      "relative h-full aspect-[9/19.5] bg-white transition-all duration-300 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)]",
-                      isPanoramic
-                        ? "overflow-y-auto hide-scrollbar"
-                        : "overflow-hidden",
-                      isActive ? "opacity-100" : "opacity-50 hover:opacity-80",
+                      "relative h-full aspect-[9/19.5] bg-white transition-all duration-300",
+                      isPanoramic ? "overflow-hidden" : "overflow-hidden",
+                      isActive
+                        ? "opacity-100 shadow-2xl ring-4 ring-white/30 ring-offset-4 ring-offset-transparent"
+                        : "opacity-50 hover:opacity-80 shadow-lg"
                     )}
-                    style={{
-                      borderWidth: "0.3px",
-                      borderColor: "#818A98",
-                      borderStyle: "solid",
-                      borderRadius: "1.8rem",
-                    }}
+                    style={{ borderRadius: "2rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
                   >
                     {isPanoramic ? (
                       <PanoramicMockup
@@ -247,78 +226,29 @@ function ScreenDetailModal({
                         hasBottomNav={hasNav}
                       />
                     ) : (
-                      // Your normal static image render here
-                      <div
-                        className="relative h-full aspect-[9/19.5] overflow-hidden..."
-                        style={{ borderRadius: "1.8rem" }}
-                      >
-                        <Image
-                          src={imgUrl}
-                          alt={screen.display_label}
-                          fill
-                          className="object-cover"
-                          unoptimized
-                        />
-                      </div>
-                    )}
-
-                    {(isHovered || isActive) && isHovered && (
-                      <div
-                        className="absolute inset-0 bg-black/20 flex items-end justify-center pb-5 gap-2 pointer-events-none animate-in fade-in duration-150"
-                        style={{ borderRadius: "1.8rem" }}
-                      >
-                        <button
-                          onClick={(e) => e.stopPropagation()}
-                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg pointer-events-auto"
-                        >
-                          Save
-                        </button>
-                        <button
-                          onClick={(e) => e.stopPropagation()}
-                          className="h-9 px-5 rounded-full bg-white text-[13px] font-semibold text-[#1C1C1C] hover:bg-zinc-100 transition-colors shadow-lg flex items-center gap-1.5 pointer-events-auto"
-                        >
-                          Copy
-                        </button>
-                      </div>
+                      <Image src={imgUrl} alt={screen.display_label} fill className="object-cover" unoptimized />
                     )}
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {/* Next arrow */}
+          <button
+            onClick={() => setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); requestAnimationFrame(() => scrollToIndex(n)); return n; })}
+            disabled={currentIndex === screens.length - 1}
+            className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
+          >
+            <ChevronRight className="w-6 h-6 text-white" />
+          </button>
         </div>
 
-        {/* ── Bottom bar ── */}
-        <div className="flex items-center justify-between px-6 h-[56px] shrink-0 border-t border-zinc-200 dark:border-white/[0.06] bg-white dark:bg-transparent transition-colors">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-zinc-900 dark:text-white text-[13px] truncate font-medium">
-              {screens[currentIndex]?.display_label}
-            </span>
-          </div>
-
-          <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
-            <button className="h-9 px-5 flex items-center gap-2 rounded-full bg-zinc-100 dark:bg-white/[0.08] hover:bg-zinc-200 dark:hover:bg-white/[0.14] text-[13px] font-medium text-zinc-700 dark:text-white transition-all border border-zinc-200 dark:border-white/[0.08]">
-              <Bookmark className="w-3.5 h-3.5" />
-              Save
-            </button>
-            <button className="h-9 px-5 flex items-center gap-2 rounded-full bg-zinc-100 dark:bg-white/[0.08] hover:bg-zinc-200 dark:hover:bg-white/[0.14] text-[13px] font-medium text-zinc-700 dark:text-white transition-all border border-zinc-200 dark:border-white/[0.08]">
-              <Figma className="w-3.5 h-3.5" />
-              Copy
-            </button>
-            <button className="h-9 w-9 flex items-center justify-center rounded-full bg-zinc-100 dark:bg-white/[0.08] hover:bg-zinc-200 dark:hover:bg-white/[0.14] text-zinc-700 dark:text-white transition-all border border-zinc-200 dark:border-white/[0.08]">
-              <MoreHorizontal className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="text-zinc-500 dark:text-white/70 text-[12px] tabular-nums font-mono">
-              {currentIndex + 1} / {screens.length}
-            </span>
-            <button className="text-zinc-900 dark:text-white hover:text-zinc-600 dark:hover:text-white/80 text-[13px] transition-colors font-medium">
-              More info
-            </button>
-          </div>
+        {/* ── BOTTOM LABEL ── */}
+        <div className="h-[52px] shrink-0 flex items-center justify-center border-t border-white/10">
+          <span className="text-white/60 text-[13px] font-medium">{currentScreen?.display_label}</span>
         </div>
+
       </div>
     </div>
   );
@@ -326,89 +256,65 @@ function ScreenDetailModal({
 
 // ─── SIDEBAR NODE ───────────────────────────────────────────────
 function SidebarNode({
-  node,
-  depth = 0,
-  activeFlowId,
-  expandedNodes,
-  onSelect,
-  onToggle,
+  node, depth = 0, activeFlowId, expandedNodes, onSelect, onToggle,
 }: {
-  node: FlowNode;
-  depth?: number;
-  activeFlowId: string | null;
-  expandedNodes: Set<string>;
-  onSelect: (id: string) => void;
+  node: FlowNode; depth?: number; activeFlowId: string | null;
+  expandedNodes: Set<string>; onSelect: (id: string) => void;
   onToggle: (id: string, e: React.MouseEvent) => void;
 }) {
   const isExpanded = expandedNodes.has(node.id);
   const isActive = activeFlowId === node.id;
   const hasChildren = node.children && node.children.length > 0;
-  const isTopLevel = depth === 0;
 
   return (
     <div className="flex flex-col">
       <div
         onClick={() => onSelect(node.id)}
         className={cn(
-          "group flex items-center justify-between py-[7px] cursor-pointer select-none transition-colors duration-150",
+          "group flex items-center justify-between py-2 cursor-pointer select-none transition-all duration-200 rounded-lg mx-2 mb-0.5",
           isActive
-            ? "text-zinc-900 dark:text-white bg-zinc-100 dark:bg-white/5"
-            : "text-zinc-600 dark:text-white/70 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-transparent",
-          isTopLevel && "mt-0.5",
+            ? "text-zinc-900 dark:text-white bg-white/50 dark:bg-white/10 backdrop-blur-md border border-white/60 dark:border-white/20 shadow-sm"
+            : "text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-white/30 dark:hover:bg-white/5 border border-transparent",
+          depth === 0 && "mt-1",
         )}
-        style={{ paddingLeft: `${depth * 16 + 16}px`, paddingRight: "16px" }}
+        style={{ paddingLeft: `${depth * 16 + 12}px`, paddingRight: "12px" }}
       >
-        <div className="flex items-center gap-1.5 truncate pr-2 min-w-0">
+        <div className="flex items-center gap-2 truncate pr-2 min-w-0">
           {hasChildren ? (
-            <button
-              onClick={(e) => onToggle(node.id, e)}
-              className="p-0.5 -ml-0.5 rounded hover:bg-zinc-200 dark:hover:bg-white/[0.04] transition-colors shrink-0"
-            >
-              {isExpanded ? (
-                <ChevronDown className="w-3.5 h-3.5 text-zinc-400 dark:text-white/40" />
-              ) : (
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-400 dark:text-white/40" />
-              )}
+            <button onClick={(e) => onToggle(node.id, e)} className="p-1 -ml-1 rounded-md hover:bg-white/60 dark:hover:bg-white/10 transition-colors shrink-0">
+              {isExpanded
+                ? <ChevronDown className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />
+                : <ChevronRight className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
             </button>
           ) : (
-            <span className="w-[18px] shrink-0" />
+            <span className="w-5 shrink-0" />
           )}
-          <span
-            className={cn(
-              "text-[13px] truncate leading-tight",
-              isActive ? "font-medium" : "font-normal",
-              isTopLevel && "font-medium",
-            )}
-          >
+          <span className={cn(
+            "truncate leading-tight",
+            isActive ? "font-bold" : "font-medium",
+            depth === 0 ? "text-[14px] font-bold" : "text-[13px]"
+          )}>
             {node.label}
           </span>
         </div>
-
         {node.screen_count > 0 && (
-          <span
-            className={cn(
-              "text-[11px] tabular-nums shrink-0",
-              isActive
-                ? "text-zinc-500 dark:text-white/70"
-                : "text-zinc-400 dark:text-white/40 group-hover:text-zinc-500 dark:group-hover:text-white/60",
-            )}
-          >
+          <span className={cn(
+            "text-[11px] tabular-nums shrink-0 font-mono font-semibold px-2 py-0.5 rounded-full",
+            isActive
+              ? "bg-white/60 dark:bg-black/40 text-zinc-800 dark:text-zinc-200"
+              : "bg-white/30 dark:bg-white/5 text-zinc-500 dark:text-zinc-400"
+          )}>
             {node.screen_count}
           </span>
         )}
       </div>
-
       {hasChildren && isExpanded && (
-        <div className="flex flex-col">
+        <div className="flex flex-col mt-0.5">
           {node.children!.map((child) => (
             <SidebarNode
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              activeFlowId={activeFlowId}
-              expandedNodes={expandedNodes}
-              onSelect={onSelect}
-              onToggle={onToggle}
+              key={child.id} node={child} depth={depth + 1}
+              activeFlowId={activeFlowId} expandedNodes={expandedNodes}
+              onSelect={onSelect} onToggle={onToggle}
             />
           ))}
         </div>
@@ -419,97 +325,74 @@ function SidebarNode({
 
 // ─── FLOW SECTION ───────────────────────────────────────────────
 function FlowSection({
-  flow,
-  screens,
-  appName,
-  mode,
-  isHighlighted,
-  onScreenClick,
-  sectionRef,
+  flow, screens, appName, tenantId, mode, isHighlighted, onScreenClick, sectionRef,
 }: {
-  flow: FlowNode;
-  screens: Screen[];
-  appName: string;
-  mode: string;
-  isHighlighted: boolean;
-  onScreenClick: (screens: Screen[], index: number, label: string) => void;
+  flow: FlowNode; screens: Screen[]; appName: string; tenantId: string; mode: string;
+  isHighlighted: boolean; onScreenClick: (screens: Screen[], index: number, label: string) => void;
   sectionRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
     <div ref={sectionRef} className="flex flex-col">
-      <div className="px-8 pt-8 pb-3">
-        <h2
-          className={cn(
-            "text-[15px] font-semibold tracking-[-0.01em] transition-colors",
-            isHighlighted
-              ? "text-zinc-900 dark:text-white"
-              : "text-zinc-700 dark:text-white/80",
-          )}
-        >
+      <div className="px-10 pt-10 pb-4 flex items-baseline gap-4">
+        <h2 className={cn(
+          "text-2xl font-bold tracking-tight transition-colors",
+          isHighlighted ? "text-zinc-900 dark:text-white" : "text-zinc-700 dark:text-zinc-300"
+        )}>
           {flow.label}
         </h2>
-        <span className="text-zinc-500 dark:text-white/60 text-[13px]">
+        <span className="text-zinc-500 dark:text-zinc-400 text-sm font-semibold bg-white/40 dark:bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/50 dark:border-white/10">
           {screens.length} screen{screens.length !== 1 ? "s" : ""}
         </span>
       </div>
 
-      <div className="overflow-x-auto overflow-y-hidden scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-200 hover:scrollbar-thumb-zinc-300 dark:scrollbar-thumb-white/[0.04] dark:hover:scrollbar-thumb-white/[0.08] pb-6 pt-2">
-        <div className="flex gap-6 px-8 min-w-max">
+      {flow.description && (
+        <p className="mx-10 mb-2 text-[14px] text-zinc-600 dark:text-zinc-400 leading-relaxed bg-white/30 dark:bg-black/20 backdrop-blur-md px-5 py-3 rounded-xl border border-white/40 dark:border-white/10">
+          {flow.description}
+        </p>
+      )}
+
+      <div className="overflow-x-auto overflow-y-hidden pb-8 pt-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-300 dark:scrollbar-thumb-white/20">
+        <div className="flex gap-8 px-10 min-w-max items-end">
           {screens.map((screen, idx) => {
-            const imgUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${appName}/${mode}/screenshots/${screen.screenshot_file}`;
-            const isPanoramic =
-              imgUrl.includes("panoramic") || imgUrl.includes("full_page");
+            const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
+            const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
+            const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
             return (
               <div
                 key={idx}
                 onClick={() => onScreenClick(screens, idx, flow.label)}
-                className="group flex flex-col shrink-0 cursor-pointer animate-in fade-in duration-200"
-                style={{
-                  animationDelay: `${idx * 30}ms`,
-                  animationFillMode: "both",
-                }}
+                className="group flex flex-col shrink-0 cursor-pointer"
               >
-                {/* --- THE DEVICE MOCKUP STYLE --- */}
+                {/* Phone frame */}
                 <div
                   className={cn(
-                    "relative w-[240px] h-[520px] bg-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.2)] dark:shadow-none dark:group-hover:shadow-[0_8px_30px_rgb(0,0,0,0.4)] transition-all duration-200",
-                    isPanoramic
-                      ? "overflow-y-auto hide-scrollbar"
-                      : "overflow-hidden",
+                    "relative w-[200px] h-[433px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1",
+                    isPanoramic ? "overflow-hidden" : "overflow-hidden",
                   )}
-                  style={{
-                    borderWidth: "0.3px",
-                    borderColor: "#818A98",
-                    borderStyle: "solid",
-                    borderRadius: "1.8rem",
-                  }}
+                  style={{ borderRadius: "1.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
                 >
                   {isPanoramic ? (
-                    <img
-                      src={imgUrl}
+                    <PanoramicMockup
+                      imgUrl={imgUrl}
                       alt={screen.display_label}
-                      className="w-full h-auto block"
+                      isActive={false}
+                      hasBottomNav={hasNav}
                     />
                   ) : (
-                    <Image
-                      src={imgUrl}
-                      alt={screen.display_label}
-                      fill
-                      className="object-cover"
-                      unoptimized
-                    />
+                    <Image src={imgUrl} alt={screen.display_label} fill className="object-cover" unoptimized />
                   )}
                 </div>
 
-                <div className="pt-4 w-[240px] flex flex-col items-center text-center gap-1.5">
+                {/* Label */}
+                <div className="pt-3 w-[200px] flex flex-col items-center text-center gap-1.5">
                   <span
-                    className="text-zinc-700 dark:text-white/80 text-[12px] font-medium truncate w-full group-hover:text-zinc-900 dark:group-hover:text-white transition-colors duration-200"
+                    className="text-zinc-800 dark:text-zinc-200 text-[13px] font-semibold truncate w-full group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors"
                     title={screen.display_label}
                   >
                     {screen.display_label}
                   </span>
-                  <span className="text-zinc-500 dark:text-white/60 text-[10px] font-semibold tabular-nums bg-zinc-100 dark:bg-white/[0.08] px-2.5 py-0.5 rounded-full">
+                  <span className="text-zinc-500 dark:text-zinc-400 text-[10px] font-mono font-bold bg-white/50 dark:bg-white/10 border border-white/60 dark:border-white/20 px-2.5 py-0.5 rounded-full">
                     {screen.timeline_step}
                   </span>
                 </div>
@@ -524,72 +407,40 @@ function FlowSection({
 
 // ─── MAIN COMPONENT ─────────────────────────────────────────────
 export function FlowsViewer({
-  flowsData,
-  appName,
-  mode,
+  flowsData, appName, tenantId, mode,
 }: {
-  flowsData: FlowsData;
-  appName: string;
-  mode: string;
+  flowsData: FlowsData; appName: string; tenantId: string; mode: string;
 }) {
-  // 1. Sanitize IDs to guarantee uniqueness for React keys
   const sanitizedTaxonomy = useMemo(() => {
     if (!flowsData?.taxonomy) return [];
     const seenIds = new Set<string>();
-
-    const sanitize = (nodes: FlowNode[]): FlowNode[] => {
-      return nodes.map((n) => {
-        let newId = n.id;
-        let counter = 1;
-        while (seenIds.has(newId)) {
-          newId = `${n.id}-${counter}`;
-          counter++;
-        }
+    const sanitize = (nodes: FlowNode[]): FlowNode[] =>
+      nodes.map((n) => {
+        let newId = n.id; let counter = 1;
+        while (seenIds.has(newId)) { newId = `${n.id}-${counter}`; counter++; }
         seenIds.add(newId);
-        return {
-          ...n,
-          id: newId,
-          children: n.children ? sanitize(n.children) : undefined,
-        };
+        return { ...n, id: newId, children: n.children ? sanitize(n.children) : undefined };
       });
-    };
     return sanitize(flowsData.taxonomy);
   }, [flowsData?.taxonomy]);
 
-  const [activeFlowId, setActiveFlowId] = useState<string | null>(
-    sanitizedTaxonomy?.[0]?.id || null,
-  );
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
-    new Set(sanitizedTaxonomy?.map((t) => t.id) || []),
-  );
-  const [detailModal, setDetailModal] = useState<{
-    screens: Screen[];
-    initialIndex: number;
-    flowLabel: string;
-  } | null>(null);
+  const allFlows = useMemo(() => collectAllFlows(sanitizedTaxonomy), [sanitizedTaxonomy]);
 
-  const sectionRefs = useRef<
-    Map<string, React.RefObject<HTMLDivElement | null>>
-  >(new Map());
+  const [activeFlowId, setActiveFlowId] = useState<string | null>(allFlows[0]?.id || sanitizedTaxonomy[0]?.id || null);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(sanitizedTaxonomy.map((t) => t.id)));
+  const [detailModal, setDetailModal] = useState<{ screens: Screen[]; initialIndex: number; flowLabel: string } | null>(null);
 
-  const allFlows = useMemo(
-    () => collectAllFlows(sanitizedTaxonomy),
-    [sanitizedTaxonomy],
-  );
+  const sectionRefs = useRef<Map<string, React.RefObject<HTMLDivElement | null>>>(new Map());
+  const mainScrollRef = useRef<HTMLDivElement>(null);
 
   const flowScreensMap = useMemo(() => {
     const map = new Map<string, Screen[]>();
     for (const flow of allFlows) {
       const resolved = flow.screens
-        .map((step) =>
-          flowsData.screen_catalog.find((s) => s.timeline_step === step),
-        )
+        .map((step) => flowsData.screen_catalog.find((s) => s.timeline_step === step))
         .filter(Boolean) as Screen[];
       map.set(flow.id, resolved);
-
-      if (!sectionRefs.current.has(flow.id)) {
-        sectionRefs.current.set(flow.id, { current: null });
-      }
+      if (!sectionRefs.current.has(flow.id)) sectionRefs.current.set(flow.id, { current: null });
     }
     return map;
   }, [allFlows, flowsData.screen_catalog]);
@@ -598,8 +449,7 @@ export function FlowsViewer({
     e.stopPropagation();
     setExpandedNodes((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   }, []);
@@ -607,24 +457,21 @@ export function FlowsViewer({
   const handleSidebarSelect = useCallback((id: string) => {
     setActiveFlowId(id);
     const ref = sectionRefs.current.get(id);
-    if (ref?.current) {
-      ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (ref?.current && mainScrollRef.current) {
+      mainScrollRef.current.scrollTo({ top: ref.current.offsetTop, behavior: "smooth" });
     }
   }, []);
 
-  const openDetail = useCallback(
-    (screens: Screen[], index: number, label: string) => {
-      setDetailModal({ screens, initialIndex: index, flowLabel: label });
-    },
-    [],
-  );
+  const openDetail = useCallback((screens: Screen[], index: number, label: string) => {
+    setDetailModal({ screens, initialIndex: index, flowLabel: label });
+  }, []);
 
-  if (!flowsData || !flowsData.taxonomy || flowsData.taxonomy.length === 0) {
+  if (!flowsData?.taxonomy?.length) {
     return (
-      <div className="flex h-full items-center justify-center text-zinc-500 bg-zinc-50 dark:bg-[#111] transition-colors">
-        <div className="flex flex-col items-center gap-3">
-          <Layers className="w-7 h-7 opacity-40" />
-          <p className="text-sm">No flow taxonomy generated yet.</p>
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-4 bg-white/40 dark:bg-black/30 backdrop-blur-xl border border-white/50 dark:border-white/10 p-8 rounded-3xl shadow-xl">
+          <Layers className="w-8 h-8 opacity-50 text-zinc-500" />
+          <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">No flow taxonomy generated yet.</p>
         </div>
       </div>
     );
@@ -632,26 +479,23 @@ export function FlowsViewer({
 
   return (
     <>
-      <div className="flex h-full bg-white dark:bg-[#111] overflow-hidden transition-colors duration-300">
-        {/* ═══ LEFT SIDEBAR (FIXED HEIGHT/SCROLLING) ═══ */}
-        <div className="w-[260px] flex flex-col bg-zinc-50 dark:bg-[#111] border-r border-zinc-200 dark:border-white/[0.06] shrink-0 transition-colors duration-300 h-full">
-          <div className="px-4 pt-5 pb-3 shrink-0">
-            <h3 className="text-zinc-500 dark:text-white/60 text-xs font-semibold uppercase tracking-wider">
-              Flows
+      <div className="flex h-full overflow-hidden bg-transparent">
+
+        {/* ═══ LEFT SIDEBAR ═══ */}
+        <div className="w-[280px] flex flex-col bg-white/20 dark:bg-white/5 backdrop-blur-2xl border-r border-white/40 dark:border-white/10 shrink-0 h-full">
+          <div className="px-6 pt-6 pb-4 shrink-0 border-b border-black/5 dark:border-white/5">
+            <h3 className="text-zinc-500 dark:text-zinc-400 text-[11px] font-bold uppercase tracking-[0.15em]">
+              Flows Explorer
             </h3>
           </div>
-          {/* min-h-0 is crucial here. It allows the flex child to shrink, enabling the ScrollArea to work. */}
           <div className="flex-1 min-h-0">
             <ScrollArea className="h-full w-full">
-              <div className="flex flex-col pb-8">
+              <div className="flex flex-col pb-8 pt-2">
                 {sanitizedTaxonomy.map((node) => (
                   <SidebarNode
-                    key={node.id}
-                    node={node}
-                    activeFlowId={activeFlowId}
-                    expandedNodes={expandedNodes}
-                    onSelect={handleSidebarSelect}
-                    onToggle={toggleExpand}
+                    key={node.id} node={node}
+                    activeFlowId={activeFlowId} expandedNodes={expandedNodes}
+                    onSelect={handleSidebarSelect} onToggle={toggleExpand}
                   />
                 ))}
               </div>
@@ -659,41 +503,16 @@ export function FlowsViewer({
           </div>
         </div>
 
-        {/* ═══ MAIN ═══ */}
-        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-white dark:bg-[#111] transition-colors duration-300">
-          {activeFlowId &&
-            (() => {
-              const flow = findFlow(sanitizedTaxonomy, activeFlowId);
-              if (!flow) return null;
-              return (
-                <div className="px-8 pt-8 pb-3 border-b border-zinc-200 dark:border-white/[0.04] transition-colors">
-                  <h1 className="text-xl font-semibold text-zinc-900 dark:text-white tracking-[-0.01em] mb-1">
-                    {flow.label}
-                  </h1>
-                  <span className="text-zinc-500 dark:text-white/70 text-sm">
-                    {flow.screen_count} screens
-                  </span>
-                  {flow.description && (
-                    <p className="text-zinc-600 dark:text-white/70 text-sm mt-1.5 max-w-3xl leading-relaxed">
-                      {flow.description}
-                    </p>
-                  )}
-                </div>
-              );
-            })()}
-
-          <div className="flex flex-col divide-y divide-zinc-100 dark:divide-white/[0.04]">
+        {/* ═══ MAIN CONTENT ═══ */}
+        <div ref={mainScrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-transparent">
+          <div className="flex flex-col divide-y divide-black/5 dark:divide-white/5">
             {allFlows.map((flow) => {
               const screens = flowScreensMap.get(flow.id) || [];
               if (screens.length === 0) return null;
-
               return (
                 <FlowSection
-                  key={flow.id}
-                  flow={flow}
-                  screens={screens}
-                  appName={appName}
-                  mode={mode}
+                  key={flow.id} flow={flow} screens={screens}
+                  appName={appName} tenantId={tenantId} mode={mode}
                   isHighlighted={flow.id === activeFlowId}
                   onScreenClick={openDetail}
                   sectionRef={sectionRefs.current.get(flow.id)}
@@ -701,7 +520,6 @@ export function FlowsViewer({
               );
             })}
           </div>
-
           <div className="h-16" />
         </div>
       </div>
@@ -713,6 +531,7 @@ export function FlowsViewer({
           initialIndex={detailModal.initialIndex}
           flowLabel={detailModal.flowLabel}
           appName={appName}
+          tenantId={tenantId}
           mode={mode}
           onClose={() => setDetailModal(null)}
         />

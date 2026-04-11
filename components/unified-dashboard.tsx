@@ -1,166 +1,130 @@
 // components/unified-dashboard.tsx
-
 "use client";
 
-import { useState } from "react";
-import {
-  Target,
-  MousePointerClick,
-  Layers,
-  GitMerge,
-  LayoutGrid,
-  Palette,
-  Store,
-} from "lucide-react";
+import React, { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SessionViewer } from "@/components/session-viewer";
 import { ExecutiveReport } from "@/components/executive-report";
 import { FlowsViewer } from "@/components/flows-viewer";
 import { BrandKitViewer } from "@/components/brand-kit-viewer";
 import { AppStoreViewer } from "@/components/app-store-viewer";
-import { cn } from "@/lib/utils";
 
-export function UnifiedDashboard({ appData }: { appData: any }) {
-  const [mode, setMode] = useState<"browsing" | "onboarding">(
-    appData.browsing ? "browsing" : "onboarding",
-  );
-
+export function UnifiedDashboard({ 
+  appData, 
+  header,
+  tenantId,
+}: { 
+  appData: any; 
+  header: React.ReactNode;
+  tenantId: string;
+}) {
+  const [mode, setMode] = useState<"browsing" | "onboarding">(appData.browsing ? "browsing" : "onboarding");
   const activeData = appData[mode];
   if (!activeData) return null;
 
-  const hasBrandKit =
-    !!appData.browsing?.sessionIntel?.brand_kit || !!appData.apkIntelligence;
-  const brandKitData =
-    appData.browsing?.sessionIntel?.brand_kit ||
-    activeData.sessionIntel?.brand_kit ||
-    {};
+  const hasBrandKit = !!appData.browsing?.sessionIntel?.brand_kit || !!appData.apkIntelligence;
+  const brandKitData = appData.browsing?.sessionIntel?.brand_kit || activeData.sessionIntel?.brand_kit || {};
   const apkIntelligence = appData.apkIntelligence ?? null;
 
   const subTabs = [
-    { value: "overview", icon: Target, label: "Overview" },
-    { value: "viewer", icon: MousePointerClick, label: "Screen viewer" },
-    { value: "mobbin", icon: Layers, label: "Flows" },
-    ...(hasBrandKit
-      ? [{ value: "brand_kit", icon: Palette, label: "Brand kit" }]
-      : []),
-    ...(appData.appStore
-      ? [{ value: "app_store", icon: Store, label: "App store" }]
-      : []),
+    { value: "overview", label: "Overview" },
+    { value: "viewer", label: "Screen viewer" },
+    { value: "mobbin", label: "Flows" },
+    ...(hasBrandKit ? [{ value: "brand_kit", label: "Brand kit" }] : []),
+    ...(appData.appStore ? [{ value: "app_store", label: "App store" }] : []),
   ];
 
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-[#0a0a0a]">
-      <Tabs
-        defaultValue="overview"
-        className="flex flex-col flex-1 overflow-hidden"
-      >
-        {/* Sub-toolbar: tabs left, mode toggle right */}
-        <div className="px-5 border-b border-zinc-200 dark:border-zinc-800/80 bg-zinc-50/60 dark:bg-zinc-950/40 shrink-0 flex items-center justify-between">
-          <TabsList className="bg-transparent h-auto p-0 gap-0">
-            {subTabs.map(({ value, icon: Icon, label }) => (
-              <TabsTrigger
-                key={value}
-                value={value}
-                className="
-    relative rounded-none bg-transparent px-4 py-2.5
-    text-[11px] font-medium
-    text-zinc-400 dark:text-zinc-500
-    hover:text-zinc-700 dark:hover:text-zinc-300
-    data-[state=active]:text-zinc-900 dark:data-[state=active]:text-white
-    data-[state=active]:bg-transparent data-[state=active]:shadow-none
-    border-0 after:absolute after:bottom-0 after:left-0 after:right-0
-    after:h-[1.5px] after:bg-zinc-900 dark:after:bg-white
-    after:scale-x-0 data-[state=active]:after:scale-x-100
-    after:transition-transform after:duration-200 after:origin-center
-    flex items-center gap-1.5 transition-colors duration-150
-  "
-              >
-                <Icon className="w-3 h-3" />
-                {label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+    // No h-full, no overflow-hidden — sits in normal document flow
+    <div className="flex flex-col">
+      <Tabs defaultValue="overview" className="flex flex-col">
 
-          {/* Mode toggle — segmented control */}
-          <div className="flex items-center bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md p-0.5 gap-0.5">
-            <button
-              disabled={!appData.onboarding}
-              onClick={() => setMode("onboarding")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1 rounded text-[10px] font-medium transition-all",
-                mode === "onboarding"
-                  ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white"
-                  : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300",
-                !appData.onboarding && "opacity-30 cursor-not-allowed",
-              )}
-            >
-              <GitMerge className="w-3 h-3" />
-              Onboarding
-            </button>
-            <button
-              disabled={!appData.browsing}
-              onClick={() => setMode("browsing")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1 rounded text-[10px] font-medium transition-all",
-                mode === "browsing"
-                  ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white"
-                  : "text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300",
-                !appData.browsing && "opacity-30 cursor-not-allowed",
-              )}
-            >
-              <LayoutGrid className="w-3 h-3" />
-              App teardown
-            </button>
+        {/* ── IDENTITY + NAV HEADER ── */}
+        <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 shrink-0 mb-8">
+          {header}
+          <div className="relative flex items-center justify-center px-10 pb-6 pt-2">
+            <TabsList className="!bg-transparent h-auto p-0 gap-12 !border-none !shadow-none flex items-center">
+              {subTabs.map(({ value, label }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  className="
+                    !bg-transparent !border-none !shadow-none px-0 py-2 rounded-none
+                    text-[15px] font-medium text-zinc-500 dark:text-zinc-400
+                    hover:text-zinc-900 dark:hover:text-zinc-200
+                    data-[state=active]:text-zinc-900 dark:data-[state=active]:text-white
+                    data-[state=active]:!shadow-none transition-colors
+                  "
+                >
+                  {label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+
+            {appData.onboarding && appData.browsing && (
+              <div className="absolute right-10">
+                <button
+                  onClick={() => setMode(mode === 'browsing' ? 'onboarding' : 'browsing')}
+                  className="text-[12px] font-bold uppercase tracking-wider text-[#0066FF] dark:text-blue-500 bg-white/80 dark:bg-black/60 px-6 py-2.5 rounded-full hover:bg-white transition-all border border-white/60 dark:border-white/10"
+                >
+                  VIEW {mode === 'browsing' ? 'ONBOARDING' : 'TEARDOWN'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        <TabsContent
-          value="overview"
-          className="flex-1 overflow-y-auto m-0 p-6"
-        >
-          <ExecutiveReport
-            key={`exec-${mode}`}
-            intel={activeData.sessionIntel}
-            steps={activeData.steps}
-            mode={mode}
-          />
+        {/* ── OVERVIEW — scrolls with page ── */}
+        <TabsContent value="overview" className="m-0">
+          <div className="max-w-6xl mx-auto w-full pb-16">
+            <ExecutiveReport key={`exec-${mode}`} intel={activeData.sessionIntel} steps={activeData.steps} mode={mode} />
+          </div>
         </TabsContent>
-        <TabsContent
-          value="viewer"
-          className="flex-1 overflow-hidden m-0 flex flex-col"
-        >
-          <SessionViewer key={`view-${mode}`} data={activeData} />
+
+        {/* ── SCREEN VIEWER — fixed height, internal scroll ── */}
+        <TabsContent value="viewer" className="m-0">
+          <div className="relative bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden" style={{ height: 'calc(100vh - 280px)' }}>
+            <SessionViewer key={`view-${mode}`} data={activeData} />
+          </div>
         </TabsContent>
-        <TabsContent
-          value="mobbin"
-          className="flex-1 overflow-hidden m-0 flex flex-col"
-        >
-          {activeData.flowsData ? (
-            <FlowsViewer
-              flowsData={activeData.flowsData}
-              appName={appData.appName}
-              mode={mode}
-            />
-          ) : (
-            <div className="p-6 text-zinc-400 text-[12px]">No flows data.</div>
-          )}
+
+        {/* ── FLOWS — fixed height, internal scroll ── */}
+        <TabsContent value="mobbin" className="m-0">
+          <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden" style={{ height: 'calc(100vh - 280px)' }}>
+            {activeData.flowsData ? (
+              <FlowsViewer
+                key={`flows-${mode}`}
+                flowsData={activeData.flowsData}
+                appName={appData.appName}
+                tenantId={tenantId}
+                mode={mode}
+              />
+            ) : (
+              <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
+                No flows data available.
+              </div>
+            )}
+          </div>
         </TabsContent>
+
+        {/* ── BRAND KIT — scrolls with page ── */}
         {hasBrandKit && (
-          <TabsContent value="brand_kit" className="flex-1 overflow-y-auto m-0">
-            <BrandKitViewer
-              brandKit={brandKitData}
-              apkIntelligence={apkIntelligence}
-            />
+          <TabsContent value="brand_kit" className="m-0">
+            <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 p-8">
+              <BrandKitViewer brandKit={brandKitData} apkIntelligence={apkIntelligence} />
+            </div>
           </TabsContent>
         )}
+
+        {/* ── APP STORE — scrolls with page ── */}
         {appData.appStore && (
-          <TabsContent
-            value="app_store"
-            className="flex-1 overflow-hidden m-0 flex flex-col"
-          >
-            <AppStoreViewer appStoreData={appData.appStore} />
+          <TabsContent value="app_store" className="m-0">
+            <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16" style={{ minHeight: 600 }}>
+              <AppStoreViewer appStoreData={appData.appStore} />
+            </div>
           </TabsContent>
         )}
+
       </Tabs>
     </div>
   );
