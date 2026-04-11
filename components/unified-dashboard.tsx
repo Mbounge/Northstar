@@ -64,11 +64,14 @@ export function UnifiedDashboard({
             {appData.onboarding && appData.browsing && (
               <div className="absolute right-10">
                 <button
-                  onClick={() => setMode(mode === 'browsing' ? 'onboarding' : 'browsing')}
-                  className="text-[12px] font-bold uppercase tracking-wider text-[#0066FF] dark:text-blue-500 bg-white/80 dark:bg-black/60 px-6 py-2.5 rounded-full hover:bg-white transition-all border border-white/60 dark:border-white/10"
-                >
-                  VIEW {mode === 'browsing' ? 'ONBOARDING' : 'TEARDOWN'}
-                </button>
+  onClick={() => setMode(mode === 'browsing' ? 'onboarding' : 'browsing')}
+  className="h-9 px-5 flex items-center gap-2 rounded-full backdrop-blur-md bg-white/20 dark:bg-white/5 border border-white/60 dark:border-white/20 hover:bg-white/40 dark:hover:bg-white/10 transition-all duration-200 group"
+>
+
+  <span className="text-zinc-700 dark:text-zinc-300 text-[12px] font-semibold tracking-wide">
+    {mode === 'browsing' ? 'View Onboarding' : 'View Teardown'}
+  </span>
+</button>
               </div>
             )}
           </div>
