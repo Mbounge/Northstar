@@ -1,4 +1,4 @@
-//components/executive-report.tsx
+// components/executive-report.tsx
 
 "use client";
 
@@ -178,7 +178,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
     : { 
         pattern_type: p.pattern_type || p.type || "Pattern", 
         description: p.description, 
-        impact: p.user_impact, // <--- Added extraction
+        impact: p.user_impact,
         severity: p.severity || "medium", 
         screens: extractScreens(p) 
       });
@@ -186,7 +186,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
     darkPatternsArray = Object.entries(rawDarkPatternsDetailed).map(([k, v]: any) => ({ 
         pattern_type: formatComponent(k), 
         description: v.description, 
-        impact: v.user_impact, // <--- Added extraction
+        impact: v.user_impact,
         severity: v.severity || "medium", 
         screens: extractScreens(v) 
     }));
@@ -223,18 +223,16 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
               <h3 className="text-zinc-900 dark:text-zinc-200 font-bold flex items-center gap-2 text-lg"><ImageIcon className="w-5 h-5 text-blue-500 dark:text-blue-400" /> Referenced Screens</h3>
               <button onClick={() => setViewingScreens(null)} className="p-2.5 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-xl text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"><XCircle className="w-5 h-5" /></button>
             </div>
-            <div className="flex-1 overflow-x-auto p-6 md:p-8 flex gap-12 items-center justify-start hide-scrollbar bg-zinc-50/50 dark:bg-transparent">
+            <div className="flex-1 overflow-x-auto p-6 md:p-8 flex gap-12 items-center justify-start [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] bg-zinc-50/50 dark:bg-transparent">
               {viewingScreens.map(s => {
                 const stepData = steps.find(step => (step.step === s || step.enrichedData?.extraction_meta?.timeline_step === s));
                 if (!stepData) return null;
                 return (
                   <div key={s} className="h-full shrink-0 flex flex-col items-center justify-between pb-1">
-                    {/* --- THE DEVICE MOCKUP STYLE (FIXED RADIUS) --- */}
                     <div 
                       className="relative h-[calc(100%-3rem)] aspect-[9/19.5] overflow-hidden bg-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.15)] dark:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.7)] shrink-0"
                       style={{ borderWidth: '0.3px', borderColor: '#818A98', borderStyle: 'solid', borderRadius: '1.8rem' }}
                     >
-                      {/* object-cover ensures it fills the bezel completely */}
                       <Image src={stepData.imagePath} alt={`S ${s}`} fill className="object-cover" unoptimized />
                     </div>
                     <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 text-[11px] px-4 py-1.5 rounded-full font-mono mt-4 shadow-sm shrink-0">SCREEN {s}</div>
@@ -247,7 +245,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
       )}
 
       {/* NAVIGATION TABS */}
-      <nav className="flex gap-1 overflow-x-auto pb-1 shrink-0">
+      <nav className="flex gap-1 overflow-x-auto pb-1 shrink-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <Pill active={tab === "strategy"} onClick={() => setTab("strategy")} icon={<Target className="w-3.5 h-3.5 text-violet-500 dark:text-violet-400" />} label="Strategy & Architecture" />
         <Pill active={tab === "friction"} onClick={() => setTab("friction")} icon={<Activity className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />} label={isTeardown ? "UX Quality Score" : "UX & Grade"} />
         <Pill active={tab === "patterns"} onClick={() => setTab("patterns")} icon={<Layers className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" />} label="UX & Dark Patterns" />
@@ -371,7 +369,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
           {timelineItems.length > 0 && (
             <div className="rounded-2xl bg-white dark:bg-white/[0.025] border border-black/[0.05] dark:border-white/[0.06] shadow-sm dark:shadow-none p-5 transition-colors duration-300">
               <SectionLabel icon={<LayoutTemplate className="w-3 h-3 text-indigo-500 dark:text-indigo-400" />} color="text-indigo-600 dark:text-indigo-400/70">{mode === "onboarding" ? "Strategy Evolution" : "Core Feature Inventory"}</SectionLabel>
-              <div className="flex gap-3 overflow-x-auto pb-2 mt-3 snap-x">
+              <div className="flex gap-3 overflow-x-auto pb-2 mt-3 snap-x [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 {timelineItems.map((phase: any, i: number) => (
                   <div key={i} className="flex items-stretch gap-2 snap-start">
                     <div className="min-w-[260px] max-w-[300px] rounded-xl bg-zinc-50 border border-zinc-200 dark:bg-zinc-900/60 dark:border-zinc-800/60 p-4 flex flex-col justify-between transition-colors duration-300">
@@ -532,7 +530,6 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
                       )}
                     </div>
                     <p className="text-zinc-600 dark:text-zinc-400 text-[12px] mb-4 leading-relaxed">{pattern.description}</p>
-                    {/* --- NEW USER IMPACT BOX --- */}
                     {pattern.impact && (
                       <div className="mb-4 bg-rose-50/50 dark:bg-rose-500/10 border-l-2 border-rose-400 p-2.5 rounded-r-md">
                           <span className="text-[9px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400 block mb-1">User Friction & Risk</span>

@@ -2,8 +2,6 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
-import { Dialog, DialogContent, DialogTrigger, DialogTitle } from "@/components/ui/dialog";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 interface Review {
@@ -65,38 +63,25 @@ const Icon = {
   AlertCircle: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>,
   Globe: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>,
   Users: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>,
-  Maximize2: ({ className, size = 16 }: { className?: string, size?: number }) => <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" /></svg>,
 };
 
 // ─── SAFE RENDERER ────────────────────────────────────────────────────────
 function SafeRender({ data, className = "" }: { data: any, className?: string }) {
   if (!data) return null;
-  
-  if (typeof data === 'string') {
-    return <p className={className} style={{ margin: 0 }}>{data}</p>;
-  }
-  
-  if (Array.isArray(data)) {
-    return <p className={className} style={{ margin: 0 }}>{data.join(", ")}</p>;
-  }
-  
+  if (typeof data === 'string') return <p className={className} style={{ margin: 0 }}>{data}</p>;
+  if (Array.isArray(data)) return <p className={className} style={{ margin: 0 }}>{data.join(", ")}</p>;
   if (typeof data === 'object') {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }} className={className}>
         {Object.entries(data).map(([k, v]) => (
           <div key={k} style={{ fontSize: "14px", lineHeight: 1.6 }}>
-            <strong style={{ textTransform: "capitalize", color: "var(--color-foreground)" }}>
-              {k.replace(/_/g, " ")}:
-            </strong>{" "}
-            <span style={{ opacity: 0.8, color: "var(--color-foreground)" }}>
-              {typeof v === 'string' ? v : JSON.stringify(v)}
-            </span>
+            <strong style={{ textTransform: "capitalize", color: "var(--color-foreground)" }}>{k.replace(/_/g, " ")}:</strong>{" "}
+            <span style={{ opacity: 0.8, color: "var(--color-foreground)" }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
           </div>
         ))}
       </div>
     );
   }
-  
   return <p className={className} style={{ margin: 0 }}>{String(data)}</p>;
 }
 
@@ -106,117 +91,49 @@ function ExpandableText({ text, lines = 4 }: { text: string; lines?: number }) {
   if (!text) return null;
   return (
     <div>
-      <div
-        style={{
-          overflow: "hidden",
-          display: "-webkit-box",
-          WebkitBoxOrient: "vertical",
-          WebkitLineClamp: expanded ? "none" : lines,
-          fontSize: "14px",
-          lineHeight: "1.8",
-          color: "var(--color-foreground)",
-          opacity: 0.85,
-          whiteSpace: "pre-wrap",
-          margin: 0,
-        }}
-      >
+      <div style={{ overflow: "hidden", display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: expanded ? "none" : lines, fontSize: "14px", lineHeight: "1.8", color: "var(--color-foreground)", opacity: 0.85, whiteSpace: "pre-wrap", margin: 0 }}>
         <SafeRender data={text} />
       </div>
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        style={{
-          background: "none",
-          border: "none",
-          padding: "10px 0 0",
-          cursor: "pointer",
-          fontSize: "13px",
-          fontWeight: 700,
-          color: "#0066FF",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
+      <button onClick={() => setExpanded((e) => !e)} style={{ background: "none", border: "none", padding: "10px 0 0", cursor: "pointer", fontSize: "13px", fontWeight: 700, color: "#0066FF", display: "flex", alignItems: "center", gap: 6 }}>
         {expanded ? <><Icon.ChevronUp /> Less</> : <><Icon.ChevronDown /> Show more</>}
       </button>
     </div>
   );
 }
 
-// ─── SECTION LABEL ────────────────────────────────────────────────────────────
+// ─── UTILITY COMPONENTS ───────────────────────────────────────────────────────
 function Label({ icon, children, color = "var(--color-foreground)" }: { icon?: React.ReactNode; children: React.ReactNode; color?: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-      {icon && (
-        <span style={{ color, display: "flex", alignItems: "center" }}>{icon}</span>
-      )}
-      <span style={{
-        fontSize: "12px",
-        fontWeight: 800,
-        letterSpacing: "0.15em",
-        textTransform: "uppercase",
-        color,
-        opacity: 0.8,
-      }}>
-        {children}
-      </span>
+      {icon && <span style={{ color, display: "flex", alignItems: "center" }}>{icon}</span>}
+      <span style={{ fontSize: "12px", fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", color, opacity: 0.8 }}>{children}</span>
     </div>
   );
 }
 
-// ─── CARD WRAPPER ──────────────────────────────────────────────────────────────
 function Card({ children, style, className = "" }: { children: React.ReactNode; style?: React.CSSProperties; className?: string }) {
   return (
-    <div className={`bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl transition-all ${className}`} style={{
-      borderRadius: "24px",
-      padding: "24px 32px",
-      ...style,
-    }}>
+    <div className={`bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl transition-all ${className}`} style={{ borderRadius: "24px", padding: "24px 32px", ...style }}>
       {children}
     </div>
   );
 }
 
-// ─── PILL BADGE ───────────────────────────────────────────────────────────────
 function Pill({ children, highlight = false }: { children: React.ReactNode; highlight?: boolean }) {
   return (
-    <span className="backdrop-blur-md shadow-sm" style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 6,
-      padding: "6px 14px",
-      borderRadius: 999,
-      fontSize: "12px",
-      fontWeight: 700,
-      background: highlight ? "rgba(0, 102, 255, 0.1)" : "rgba(255, 255, 255, 0.5)",
-      color: highlight ? "#0066FF" : "var(--color-foreground)",
-      border: highlight ? "1px solid rgba(0, 102, 255, 0.2)" : "1px solid rgba(255, 255, 255, 0.6)",
-    }}>
+    <span className="backdrop-blur-md shadow-sm" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 999, fontSize: "12px", fontWeight: 700, background: highlight ? "rgba(0, 102, 255, 0.1)" : "rgba(255, 255, 255, 0.5)", color: highlight ? "#0066FF" : "var(--color-foreground)", border: highlight ? "1px solid rgba(0, 102, 255, 0.2)" : "1px solid rgba(255, 255, 255, 0.6)" }}>
       {children}
     </span>
   );
 }
 
-// ─── DIVIDER ─────────────────────────────────────────────────────────────────
-const Divider = () => (
-  <div style={{ height: "1px", background: "rgba(0,0,0,0.05)", margin: "24px 0" }} className="dark:bg-white/10" />
-);
+const Divider = () => <div style={{ height: "1px", background: "rgba(0,0,0,0.05)", margin: "24px 0" }} className="dark:bg-white/10" />;
 
-// ─── COMPETITOR AVATAR ───────────────────────────────────────────────────────
 function CompetitorAvatar({ url, name }: { url?: string; name: string }) {
   const [failed, setFailed] = useState(false);
-
   if (url && !failed) {
-    return (
-      <img 
-        src={url} 
-        alt={name} 
-        onError={() => setFailed(true)}
-        style={{ width: 56, height: 56, borderRadius: 14, border: "1px solid rgba(255,255,255,0.2)", boxShadow: "0 8px 16px rgba(0,0,0,0.1)", objectFit: "cover", flexShrink: 0 }} 
-      />
-    );
+    return <img src={url} alt={name} onError={() => setFailed(true)} style={{ width: 56, height: 56, borderRadius: 14, border: "1px solid rgba(255,255,255,0.2)", boxShadow: "0 8px 16px rgba(0,0,0,0.1)", objectFit: "cover", flexShrink: 0 }} />;
   }
-
   return (
     <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(255,255,255,0.3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", fontWeight: "bold", color: "var(--color-foreground)", opacity: 0.6, flexShrink: 0 }} className="dark:bg-white/10">
       {name ? String(name).charAt(0).toUpperCase() : "?"}
@@ -224,7 +141,6 @@ function CompetitorAvatar({ url, name }: { url?: string; name: string }) {
   );
 }
 
-// ─── SENTIMENT LIST ────────────────────────────────────────────────────────────
 function SentimentList({ items, positive }: { items: any[]; positive: boolean }) {
   const color = positive ? "#059669" : "#E11D48";
   const bg = positive ? "rgba(5, 150, 105, 0.1)" : "rgba(225, 29, 72, 0.1)";
@@ -232,19 +148,14 @@ function SentimentList({ items, positive }: { items: any[]; positive: boolean })
     <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
       {items?.map((item, i) => (
         <li key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-          <span style={{ flex: "0 0 auto", width: 24, height: 24, borderRadius: "50%", background: bg, color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, marginTop: 2, border: `1px solid ${color}30` }}>
-            {positive ? "+" : "−"}
-          </span>
-          <span style={{ fontSize: "14px", lineHeight: 1.6, color: "var(--color-foreground)", opacity: 0.9, fontWeight: 500 }}>
-            {typeof item === 'string' ? item : JSON.stringify(item)}
-          </span>
+          <span style={{ flex: "0 0 auto", width: 24, height: 24, borderRadius: "50%", background: bg, color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, marginTop: 2, border: `1px solid ${color}30` }}>{positive ? "+" : "−"}</span>
+          <span style={{ fontSize: "14px", lineHeight: 1.6, color: "var(--color-foreground)", opacity: 0.9, fontWeight: 500 }}>{typeof item === 'string' ? item : JSON.stringify(item)}</span>
         </li>
       ))}
     </ul>
   );
 }
 
-// ─── REVIEW CARD ──────────────────────────────────────────────────────────────
 function ReviewCard({ review }: { review: Review | string }) {
   const r = typeof review === "string" ? { title: "Review", body: review, username: "", date: "" } : review;
   return (
@@ -259,17 +170,13 @@ function ReviewCard({ review }: { review: Review | string }) {
   );
 }
 
-// ─── STAT CHIP ────────────────────────────────────────────────────────────────
 function StatChip({ label, value }: { label: string; value?: any }) {
   if (!value) return null;
   const displayValue = typeof value === 'string' ? value : Array.isArray(value) ? value.join(", ") : JSON.stringify(value);
-  
   return (
     <div style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.5)", borderRadius: 16, padding: "16px", display: "flex", flexDirection: "column", gap: 6, boxShadow: "inset 0 2px 4px rgba(255,255,255,0.5)" }} className="dark:bg-white/5 dark:border-white/10 dark:shadow-none">
       <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--color-foreground)", opacity: 0.6 }}>{label}</span>
-      <span style={{ fontSize: "14px", fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--color-foreground)", lineHeight: 1.4 }}>
-        {displayValue}
-      </span>
+      <span style={{ fontSize: "14px", fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--color-foreground)", lineHeight: 1.4 }}>{displayValue}</span>
     </div>
   );
 }
@@ -295,14 +202,7 @@ export function AppStoreViewer({ appStoreData, framework = "Unknown" }: AppStore
               <img
                 src={mainAppIcon}
                 alt="App Icon"
-                style={{
-                  width: 132,
-                  height: 132,
-                  borderRadius: 30, // iOS Style squircle approximation
-                  boxShadow: "0 24px 48px rgba(0,0,0,0.15), inset 0 1px 1px rgba(255,255,255,0.4)",
-                  border: "1px solid rgba(255,255,255,0.2)",
-                  objectFit: "cover"
-                }}
+                style={{ width: 132, height: 132, borderRadius: 30, boxShadow: "0 24px 48px rgba(0,0,0,0.15), inset 0 1px 1px rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.2)", objectFit: "cover" }}
               />
             </div>
           )}
@@ -325,46 +225,37 @@ export function AppStoreViewer({ appStoreData, framework = "Unknown" }: AppStore
           </div>
         </div>
 
-        {/* 2. ── APP STORE SCREENSHOTS (FLOWS-STYLE HORIZONTAL CAROUSEL) ── */}
+        {/* 2. ── APP STORE SCREENSHOTS (PURE NATIVE APPLE STYLE) ── */}
         {hasScreenshots && (
           <div style={{ marginBottom: 64 }}>
-            <Label icon={<Icon.Layers />} color="var(--color-foreground)">App Store Capture</Label>
-            <div className="flex gap-8 overflow-x-auto pb-8 pt-4 hide-scrollbar -mx-10 px-10">
+            <div 
+              className="flex gap-[16px] overflow-x-auto pb-4 pt-2 snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" 
+              style={{ scrollPaddingLeft: "40px" }}
+            >
               {actual_screenshots.map((url, idx) => (
-                <Dialog key={idx}>
-                  <DialogTrigger asChild>
-                    <div 
-                      className="group shrink-0 relative bg-white/50 dark:bg-white/5 shadow-xl transition-all duration-300 hover:shadow-2xl hover:-translate-y-2 cursor-zoom-in"
-                      style={{ 
-                        height: "460px", 
-                        borderRadius: "1.8rem", 
-                        borderWidth: "0.3px", 
-                        borderColor: "#818A98", 
-                        borderStyle: "solid", 
-                        overflow: "hidden" 
-                      }}
-                    >
-                      <img 
-                        src={url} 
-                        alt={`Screenshot ${idx + 1}`} 
-                        className="h-full w-auto object-cover" 
-                      />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors duration-300 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                        <div className="bg-white/90 backdrop-blur-md p-3.5 rounded-full shadow-2xl transform scale-90 group-hover:scale-100 transition-all duration-300">
-                          <Icon.Maximize2 size={24} className="text-zinc-900" />
-                        </div>
-                      </div>
-                    </div>
-                  </DialogTrigger>
-                  <DialogContent className="max-w-[95vw] max-h-[95vh] h-auto w-auto bg-transparent border-none p-0 overflow-hidden flex items-center justify-center shadow-none">
-                    <DialogTitle className="sr-only">Expanded Screenshot {idx + 1}</DialogTitle>
-                    <img 
-                      src={url} 
-                      alt={`Full Screenshot ${idx + 1}`} 
-                      className="w-auto h-auto max-w-[95vw] max-h-[95vh] object-contain rounded-2xl shadow-2xl" 
-                    />
-                  </DialogContent>
-                </Dialog>
+                <img 
+                  key={idx}
+                  src={url} 
+                  alt={`Screenshot ${idx + 1}`} 
+                  className="shrink-0 snap-center" 
+                  style={{ 
+                    // EXACT SIZING CONSTRAINTS
+                    height: "540px",
+                    width: "auto",
+                    maxWidth: "none",
+                    borderRadius: "24px",
+                    objectFit: "cover",
+                    
+                    // AGGRESSIVE OVERRIDES
+                    display: "block",
+                    padding: "0px !important",
+                    margin: "0px",
+                    backgroundColor: "transparent !important",
+                    border: "none !important",
+                    outline: "none !important",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.15)"
+                  }}
+                />
               ))}
             </div>
           </div>

@@ -192,7 +192,7 @@ function ScreenDetailModal({
           {/* Scrollable screen strip */}
           <div
             ref={scrollRef}
-            className="flex items-end h-full overflow-x-auto overflow-y-hidden hide-scrollbar gap-6 px-20 pb-8 pt-6"
+            className="flex items-end h-full overflow-x-auto overflow-y-hidden gap-6 px-20 pb-8 pt-6 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
           >
             {screens.map((screen, idx) => {
               const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
@@ -356,7 +356,7 @@ function FlowSection({
         </p>
       )}
 
-      <div className="overflow-x-auto overflow-y-hidden pb-8 pt-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-300 dark:scrollbar-thumb-white/20">
+      <div className="overflow-x-auto overflow-y-hidden pb-8 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex gap-8 px-10 min-w-max items-end">
           {screens.map((screen, idx) => {
             const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
@@ -509,7 +509,7 @@ export function FlowsViewer({
         </div>
 
         {/* ═══ MAIN CONTENT ═══ */}
-        <div ref={mainScrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-transparent">
+        <div ref={mainScrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-transparent [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           <div className="flex flex-col divide-y divide-black/5 dark:divide-white/5">
             {allFlows.map((flow) => {
               const screens = flowScreensMap.get(flow.id) || [];

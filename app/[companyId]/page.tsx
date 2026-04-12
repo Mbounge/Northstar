@@ -65,9 +65,8 @@ export default async function CompanyDashboardPage({
   ]);
 
   const appName = productData?.appName || decodedCompanyId;
-  const iconUrl = productData?.iconUrl; // Now reliably prefers App Store high-res icon
+  const iconUrl = productData?.iconUrl; 
   
-  // ── FIX: Robust extraction for the correct market name ──
   let marketName = "General Utilities";
   const bCat = productData?.browsing?.summary?.app_category;
   const oCat = productData?.onboarding?.summary?.metadata?.app_category;
@@ -171,7 +170,7 @@ export default async function CompanyDashboardPage({
           </div>
         </div>
         <div className="flex-1 overflow-hidden mt-6 relative z-10 px-10 pb-10">
-          <TabsContent value="product" className="h-full overflow-y-auto m-0 hide-scrollbar">
+          <TabsContent value="product" className="h-full overflow-y-auto m-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             {productData && (productData.browsing || productData.onboarding) ? (
               <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
             ) : (
@@ -182,7 +181,7 @@ export default async function CompanyDashboardPage({
               </div>
             )}
           </TabsContent>
-          <TabsContent value="marketing" className="h-full overflow-y-auto m-0 hide-scrollbar flex flex-col">
+          <TabsContent value="marketing" className="h-full overflow-y-auto m-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>
@@ -190,7 +189,7 @@ export default async function CompanyDashboardPage({
               <MarketingFeed key={`mkt-${activeSnapshotId}`} posts={marketingPosts} companyId={dataBucketId} snapshotId={activeSnapshotId} tenantId={tenantId} />
             </div>
           </TabsContent>
-          <TabsContent value="business" className="h-full overflow-y-auto m-0 hide-scrollbar flex flex-col">
+          <TabsContent value="business" className="h-full overflow-y-auto m-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>

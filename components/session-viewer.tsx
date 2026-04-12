@@ -56,7 +56,6 @@ function InnerTab({
   );
 }
 
-// Glass card wrapper
 function GlassCard({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <div className={cn("bg-white/40 dark:bg-white/5 backdrop-blur-md border border-white/60 dark:border-white/10 rounded-[20px] p-5 shadow-sm", className)}>
@@ -83,7 +82,6 @@ export function SessionViewer({ data }: { data: any }) {
   const steps = data.steps;
   const currentStep = steps[currentIndex];
 
-  // ── Same data paths as original ──
   const metadata = currentStep?.enrichedData || {};
   const agentMeta = metadata.extraction_meta || {};
   const intel = metadata.screen_intelligence || {};
@@ -95,7 +93,6 @@ export function SessionViewer({ data }: { data: any }) {
   const deterministicEventsThisScreen = allFrictionEvents.filter((e: any) => e.screen_index === actualStepNumber);
   const keyFindings: any[] = Array.isArray(intel.key_findings) ? intel.key_findings : [];
 
-  // Modal scroll helpers
   const scrollToIndex = useCallback((idx: number) => {
     if (scrollRef.current) {
       const child = scrollRef.current.children[idx] as HTMLElement;
@@ -121,7 +118,6 @@ export function SessionViewer({ data }: { data: any }) {
     if (closestIdx !== currentIndex) setCurrentIndex(closestIdx);
   }, [currentIndex]);
 
-  // Carousel thumb scroll
   const scrollCarouselToIndex = useCallback((idx: number) => {
     if (carouselRef.current) {
       const child = carouselRef.current.children[idx] as HTMLElement;
@@ -189,7 +185,7 @@ export function SessionViewer({ data }: { data: any }) {
           <button onClick={() => { const p = Math.max(currentIndex - 1, 0); setCurrentIndex(p); scrollToIndex(p); }} disabled={currentIndex === 0} className="absolute left-4 md:left-8 top-1/2 -translate-y-1/2 p-4 bg-white/80 dark:bg-black/60 backdrop-blur-md rounded-full border border-white/60 dark:border-white/20 shadow-xl z-20 disabled:opacity-30">
             <ChevronLeft className="w-8 h-8 text-zinc-900 dark:text-white" />
           </button>
-          <div ref={scrollRef} onScroll={handleModalScroll} className="flex-1 w-full flex items-center gap-12 overflow-x-auto hide-scrollbar snap-x snap-mandatory" style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}>
+          <div ref={scrollRef} onScroll={handleModalScroll} className="flex-1 w-full flex items-center gap-12 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}>
             {steps.map((step: any, idx: number) => {
               const isActive = idx === currentIndex;
               const isPanoramic = step.imagePath.includes("panoramic") || step.imagePath.includes("full_page");
@@ -269,7 +265,7 @@ export function SessionViewer({ data }: { data: any }) {
             </div>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto hide-scrollbar">
+            <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
 
               {/* INSIGHTS */}
               {activeTab === "insights" && (
@@ -331,7 +327,7 @@ export function SessionViewer({ data }: { data: any }) {
                 </div>
               )}
 
-              {/* ELEMENTS — original data paths: copy.primary_headline, elements.buttons */}
+              {/* ELEMENTS */}
               {activeTab === "elements" && (
                 <div className="p-8 space-y-8 max-w-2xl mx-auto pb-12">
                   {(copy.primary_headline || copy.primary_cta_text) && (
@@ -403,10 +399,9 @@ export function SessionViewer({ data }: { data: any }) {
                 </div>
               )}
 
-              {/* CONTEXT — original data paths: metadata.classification, agentMeta */}
+              {/* CONTEXT */}
               {activeTab === "context" && (
                 <div className="p-8 space-y-6 max-w-2xl mx-auto pb-12">
-                  {/* Stats grid */}
                   <div className="grid grid-cols-2 gap-4">
                     <GlassCard>
                       <span className="text-zinc-500 dark:text-zinc-400 text-[10px] uppercase font-bold block mb-1">Timeline Step</span>
@@ -425,14 +420,12 @@ export function SessionViewer({ data }: { data: any }) {
                       </GlassCard>
                     )}
                   </div>
-                  {/* Phase */}
                   {currentStep.phase && currentStep.phase !== "null" && currentStep.phase !== "UNKNOWN" && (
                     <GlassCard>
                       <span className="text-zinc-500 dark:text-zinc-400 text-[10px] uppercase font-bold block mb-1">Flow Phase</span>
                       <span className="text-[14px] text-zinc-800 dark:text-zinc-200 font-medium capitalize">{currentStep.phase.replace(/_/g, " ")}</span>
                     </GlassCard>
                   )}
-                  {/* Key findings in context too, same as original */}
                   {keyFindings.length > 0 && (
                     <div className="space-y-3">
                       <SectionLabel icon={<Search className="w-4 h-4 text-purple-500" />} color="text-purple-700 dark:text-purple-400">
@@ -461,7 +454,7 @@ export function SessionViewer({ data }: { data: any }) {
 
         {/* BOTTOM CAROUSEL */}
         <div className="h-[100px] shrink-0 bg-white/40 dark:bg-black/40 backdrop-blur-xl border-t border-white/60 dark:border-white/10 px-4 flex items-center">
-          <div ref={carouselRef} className="flex items-center gap-3 h-full py-3 overflow-x-auto hide-scrollbar w-full">
+          <div ref={carouselRef} className="flex items-center gap-3 h-full py-3 overflow-x-auto w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             {steps.map((step: any, idx: number) => (
               <div
                 key={idx}
