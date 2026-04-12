@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import { Loader2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -21,11 +21,29 @@ const GoogleIcon = () => (
 );
 
 export default function LoginPage() {
-  const [showAuthCard, setShowAuthCard] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [isChecking, setIsChecking] = useState(true); // Prevents text flashing during SSR/Hydration
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const supabase = createClient();
+
+  // Check screen width on load and handle resizes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const checkScreenSize = () => {
+        setIsDesktop(window.innerWidth > 1024);
+      };
+
+      // Initial check
+      checkScreenSize();
+      setIsChecking(false);
+
+      // Listen for window resizes just in case
+      window.addEventListener("resize", checkScreenSize);
+      return () => window.removeEventListener("resize", checkScreenSize);
+    }
+  }, []);
 
   const handleGoogleLogin = async () => {
     setIsLoading(true);
@@ -50,18 +68,19 @@ export default function LoginPage() {
     }
   };
 
+  // Render a pure black screen while checking to prevent layout shifts/flashes
+  if (isChecking) {
+    return <div className="w-full min-h-screen bg-black" />;
+  }
+
   return (
     <div className="relative w-full min-h-screen bg-black font-sans flex flex-col items-center justify-center overflow-hidden">
       
       {/* ── DYNAMIC BACKGROUND ── */}
-      {/* 
-        Physically translates the entire image container UP by 35% of the viewport height when on the cover screen.
-        This guarantees the bottom half of the screen is pure black for the text.
-      */}
       <div 
         className={cn(
           "absolute left-0 right-0 top-0 h-[100vh] z-0 transition-transform duration-[1200ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
-          showAuthCard ? "translate-y-0" : "-translate-y-[35vh]"
+          isDesktop ? "translate-y-0" : "-translate-y-[35vh]"
         )}
       >
         <Image 
@@ -76,23 +95,20 @@ export default function LoginPage() {
         <div className="absolute inset-x-0 bottom-0 h-[30vh] bg-gradient-to-t from-black via-black/80 to-transparent" />
       </div>
 
-      {/* ── PHASE 1: COVER SCREEN ── */}
-      {!showAuthCard && (
+      {/* ── MOBILE / IPAD VIEW (DEAD END) ── */}
+      {!isDesktop && (
         <div className="relative z-10 flex flex-col items-center justify-center flex-1 w-full mt-[25vh] animate-in fade-in duration-700">
           <h1 className={`${unbounded.className} text-[48px] md:text-[55px] tracking-[-0.02em] text-white leading-[100%] mb-2 text-center drop-shadow-lg`}>
             North Star
           </h1>
-          <button 
-            onClick={() => setShowAuthCard(true)}
-            className="text-[20px] md:text-[24px] text-[#828282] text-center font-normal hover:text-white transition-colors cursor-pointer bg-transparent border-none p-0 m-0"
-          >
+          <p className="text-[20px] md:text-[24px] text-[#828282] text-center font-normal m-0 p-0">
             log in on desktop
-          </button>
+          </p>
         </div>
       )}
 
-      {/* ── PHASE 2: LOGIN CARD ── */}
-      {showAuthCard && (
+      {/* ── DESKTOP VIEW (LOGIN CARD) ── */}
+      {isDesktop && (
         <div className="relative z-10 w-[90%] md:w-[599px] py-10 md:py-0 md:h-[535px] bg-black/60 backdrop-blur-2xl border border-white/10 rounded-none flex flex-col items-center justify-center p-8 shadow-2xl animate-in slide-in-from-bottom-12 fade-in duration-700">
           
           {error && (
