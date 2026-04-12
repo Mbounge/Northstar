@@ -5,6 +5,7 @@ import { getReviewApps } from "@/lib/review-data";
 import { Plus, ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { Unbounded } from "next/font/google";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const unbounded = Unbounded({ subsets: ["latin"], weight: ["600"] });
 
@@ -32,34 +33,14 @@ export default async function PortfolioPage({
   const userName = userEmail.split('@')[0];
 
   return (
-    <div
-      style={{
-        position: "relative",
-        minHeight: "100vh",
-        background: "#EEF0F8",
-        fontFamily: "var(--font-geist-sans, sans-serif)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
+    <div className="relative min-h-screen bg-[#EEF0F8] dark:bg-[#09090b] flex flex-col overflow-hidden font-sans">
+
       {/* ── AMBIENT BACKGROUND ── */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          zIndex: 0,
-          overflow: "hidden",
-          pointerEvents: "none",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <div style={{ position: "relative", width: "1372px", height: "676px" }}>
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
+        <div className="relative w-[1372px] h-[676px]">
           <div
+            className="absolute"
             style={{
-              position: "absolute",
               width: "1814px",
               height: "1814px",
               top: "-673.42px",
@@ -84,83 +65,28 @@ export default async function PortfolioPage({
       </div>
 
       {/* ── HEADER ── */}
-      <header
-        style={{
-          position: "relative",
-          zIndex: 10,
-          width: "100%",
-          padding: "36px 32px 0", 
-          boxSizing: "border-box",
-        }}
-      >
+      <header className="relative z-10 w-full px-8 pt-9 pb-0 flex items-start justify-between box-border">
         <h1
-          className={unbounded.className}
-          style={{
-            fontSize: "30px",
-            fontWeight: 600,
-            letterSpacing: "-0.02em",
-            lineHeight: 1,
-            color: "#0A0A0A",
-            margin: "0 0 20px",
-          }}
+          className={`${unbounded.className} text-[30px] font-semibold tracking-tight leading-none text-[#0A0A0A] dark:text-white mb-5`}
         >
           North Star
         </h1>
+        <ThemeToggle />
       </header>
 
       {/* ── WRAPPER FOR TABS & GRID ── */}
-      <div
-        style={{
-          width: '100%',
-          padding: '0 64px 0 200px', 
-          boxSizing: 'border-box',
-          position: 'relative',
-          zIndex: 10,
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
+      <div className="w-full pl-[200px] pr-16 box-border relative z-10 flex-1 flex flex-col">
+
         {/* Row 2: Tabs (left) + Add new company (right) */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: '24px', 
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "row", alignItems: "center" }}>
-            <button
-              style={{
-                padding: "10px 22px",
-                background: "rgba(255, 255, 255, 0.5)",
-                border: "none",
-                fontSize: "14px",
-                fontWeight: 700,
-                color: "#0A0A0A",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-                borderRadius: "0px",
-              }}
-            >
+        <div className="flex justify-between items-center mb-6">
+          <div className="flex flex-row items-center">
+            <button className="px-[22px] py-[10px] bg-white/50 dark:bg-white/10 border-none text-sm font-bold text-[#0A0A0A] dark:text-white cursor-pointer whitespace-nowrap rounded-none">
               Recently viewed
             </button>
-
             {["Direct", "Indirect", "Top Apps"].map((tab) => (
               <button
                 key={tab}
-                style={{
-                  padding: "10px 22px",
-                  background: "transparent",
-                  border: "none",
-                  fontSize: "14px",
-                  fontWeight: 500,
-                  color: "#3A3A3A",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  borderRadius: "0px",
-                }}
+                className="px-[22px] py-[10px] bg-transparent border-none text-sm font-medium text-[#3A3A3A] dark:text-zinc-400 cursor-pointer whitespace-nowrap rounded-none hover:text-[#0A0A0A] dark:hover:text-white transition-colors"
               >
                 {tab}
               </button>
@@ -169,228 +95,115 @@ export default async function PortfolioPage({
 
           <Link
             href="/?add=true"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "14px",
-              fontWeight: 500,
-              color: "#0A0A0A",
-              textDecoration: "none",
-              whiteSpace: "nowrap",
-            }}
+            className="flex items-center gap-1.5 text-sm font-medium text-[#0A0A0A] dark:text-white no-underline whitespace-nowrap"
           >
-            <Plus style={{ width: "16px", height: "16px" }} />
+            <Plus className="w-4 h-4" />
             Add new company
           </Link>
         </div>
 
         {/* ── MAIN GRID ── */}
-        <main
-          style={{
-            flex: 1,
-            width: "100%",
-            padding: "0 0 160px",
-            boxSizing: "border-box",
-          }}
-        >
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))", 
-              columnGap: "16px",
-              rowGap: "16px",
-            }}
-          >
+        <main className="flex-1 w-full pb-40 box-border">
+          <div className="grid grid-cols-4 gap-4">
             {apps.map((app) => {
-              // Deterministic check: alternate background styles based on name length
               const isDoubleBackground = app.appName.length % 2 === 0;
 
               return (
                 <Link
                   key={app.appName}
                   href={`/${app.appName}`}
-                  style={{
-                    position: "relative",
-                    width: "100%", 
-                    height: "210px", 
-                    borderRadius: "0px", 
-                    overflow: "hidden",
-                    display: "block",
-                    textDecoration: "none",
-                    border: "none",
-                    boxShadow: "none",
-                  }}
+                  className="relative w-full h-[210px] rounded-none overflow-hidden block no-underline border-none shadow-none"
                 >
                   {/* ── TOP: Full-bleed icon color background ── */}
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      height: "135px",
-                      overflow: "hidden",
-                      borderRadius: "0px", 
-                    }}
-                  >
+                  <div className="absolute top-0 left-0 right-0 h-[135px] overflow-hidden rounded-none">
                     {app.iconUrl ? (
                       <>
                         {isDoubleBackground ? (
-                          // ── DUOLINGO STYLE (Double Icon) ──
                           <>
                             <img
                               src={app.iconUrl}
                               alt=""
+                              className="absolute pointer-events-none"
                               style={{
-                                position: "absolute",
-                                top: "-40%",
-                                left: "-20%",
-                                width: "120%",
-                                height: "160%",
+                                top: "-40%", left: "-20%",
+                                width: "120%", height: "160%",
                                 objectFit: "cover",
                                 transform: "scale(1.2) rotate(-10deg)",
                                 filter: "blur(16px)",
                                 opacity: 0.8,
-                                pointerEvents: "none",
                               }}
                             />
                             <img
                               src={app.iconUrl}
                               alt=""
+                              className="absolute pointer-events-none"
                               style={{
-                                position: "absolute",
-                                bottom: "-40%",
-                                right: "-20%",
-                                width: "120%",
-                                height: "160%",
+                                bottom: "-40%", right: "-20%",
+                                width: "120%", height: "160%",
                                 objectFit: "cover",
                                 transform: "scale(1.2) rotate(10deg)",
                                 filter: "blur(16px)",
                                 opacity: 0.8,
-                                pointerEvents: "none",
                               }}
                             />
                           </>
                         ) : (
-                          // ── GRAET STYLE (Single Icon) ──
                           <img
                             src={app.iconUrl}
                             alt=""
+                            className="absolute pointer-events-none"
                             style={{
-                              position: "absolute",
-                              top: "-50%",
-                              left: "-50%",
-                              width: "200%",
-                              height: "200%",
+                              top: "-50%", left: "-50%",
+                              width: "200%", height: "200%",
                               objectFit: "cover",
                               transform: "scale(1.5)",
                               filter: "blur(20px)",
                               opacity: 0.9,
-                              pointerEvents: "none",
                             }}
                           />
                         )}
                       </>
                     ) : (
-                      <div
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          background: "linear-gradient(135deg, rgba(100,149,237,0.6), rgba(147,51,234,0.4))",
-                        }}
-                      />
+                      <div className="absolute inset-0 bg-gradient-to-br from-[rgba(100,149,237,0.6)] to-[rgba(147,51,234,0.4)]" />
                     )}
 
-                    {/* ── FROSTED GLASS & DARKENING OVERLAY ── */}
+                    {/* Frosted glass overlay */}
                     <div
+                      className="absolute inset-0"
                       style={{
-                        position: "absolute",
-                        inset: 0,
                         background: "linear-gradient(160deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.45) 100%)",
-                        backdropFilter: "blur(8px)", // Gives the true frosted sheen
+                        backdropFilter: "blur(8px)",
                         WebkitBackdropFilter: "blur(8px)",
                       }}
                     />
 
                     {/* Icon + text content */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        padding: "24px 20px",
-                        boxSizing: "border-box",
-                        display: "flex",
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: "16px", 
-                      }}
-                    >
+                    <div className="absolute inset-0 p-6 box-border flex flex-row items-center gap-4">
                       {app.iconUrl ? (
                         <img
                           src={app.iconUrl}
                           alt={app.appName}
-                          style={{
-                            width: "88px", 
-                            height: "88px",
-                            borderRadius: "22px", 
-                            objectFit: "cover",
-                            flexShrink: 0,
-                          }}
+                          className="w-[88px] h-[88px] rounded-[22px] object-cover shrink-0"
                         />
                       ) : (
-                        <div
-                          style={{
-                            width: "88px", 
-                            height: "88px",
-                            borderRadius: "22px",
-                            background: "rgba(255,255,255,0.25)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: "32px",
-                            fontWeight: 700,
-                            color: "#FFFFFF",
-                            flexShrink: 0,
-                          }}
-                        >
+                        <div className="w-[88px] h-[88px] rounded-[22px] bg-white/25 flex items-center justify-center text-[32px] font-bold text-white shrink-0">
                           {app.appName.charAt(0)}
                         </div>
                       )}
 
-                      <div style={{ minWidth: 0 }}>
+                      <div className="min-w-0">
                         <h3
-                          style={{
-                            fontWeight: 700,
-                            color: "#FFFFFF",
-                            fontSize: "18px", 
-                            lineHeight: 1.2,
-                            margin: "0 0 4px",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                            textShadow: "0 1px 4px rgba(0,0,0,0.25)",
-                          }}
+                          className="font-bold text-white text-[18px] leading-tight mb-1 overflow-hidden text-ellipsis whitespace-nowrap"
+                          style={{ textShadow: "0 1px 4px rgba(0,0,0,0.25)" }}
                         >
                           {app.appName}
                         </h3>
-                        <p
-                          style={{
-                            fontSize: "12px",
-                            color: "rgba(255,255,255,0.90)",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                            margin: "0 0 4px",
-                          }}
-                        >
+                        <p className="text-[12px] text-white/90 overflow-hidden text-ellipsis whitespace-nowrap mb-1">
                           {app.appType || "Market it operates in"}
                         </p>
-                        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-                          <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.70)" }}>
-                            Rank
-                          </span>
-                          <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.90)", fontWeight: 500 }}>
+                        <div className="flex gap-3 items-center">
+                          <span className="text-[10px] text-white/70">Rank</span>
+                          <span className="text-[10px] text-white/90 font-medium">
                             #{Math.floor(Math.random() * 10) + 1}
                           </span>
                         </div>
@@ -400,38 +213,16 @@ export default async function PortfolioPage({
 
                   {/* ── BOTTOM: Semi-transparent section ── */}
                   <div
-                    style={{
-                      position: "absolute",
-                      top: "135px", 
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      background: "rgba(255, 255, 255, 0.65)", 
-                      backdropFilter: "blur(4px)", 
-                      padding: "16px 20px",
-                      boxSizing: "border-box",
-                      borderRadius: "0px", 
-                    }}
+                    className="absolute left-0 right-0 bottom-0 bg-white/65 dark:bg-zinc-900/80 backdrop-blur-sm p-4 box-border rounded-none"
+                    style={{ top: "135px" }}
                   >
-                    <p
-                      style={{
-                        fontWeight: 500,
-                        fontSize: "14px", 
-                        color: "#4A4A4A", 
-                        lineHeight: 1,
-                        margin: "0 0 16px", 
-                      }}
-                    >
+                    <p className="font-medium text-sm text-[#4A4A4A] dark:text-zinc-300 leading-none mb-4">
                       Visited 13 hours ago
                     </p>
-                    <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: "12px", color: "#828282", whiteSpace: "nowrap" }}>
-                        $1B revenues
-                      </span>
-                      <span style={{ fontSize: "12px", color: "#828282", whiteSpace: "nowrap" }}>
-                        950 employees
-                      </span>
-                      <span style={{ fontSize: "12px", color: "#828282", whiteSpace: "nowrap" }}>
+                    <div className="flex gap-3 items-center flex-wrap">
+                      <span className="text-xs text-[#828282] dark:text-zinc-500 whitespace-nowrap">$1B revenues</span>
+                      <span className="text-xs text-[#828282] dark:text-zinc-500 whitespace-nowrap">950 employees</span>
+                      <span className="text-xs text-[#828282] dark:text-zinc-500 whitespace-nowrap">
                         {(app.totalScreens || 0) * 12 || '1,421'} insights
                       </span>
                     </div>
@@ -443,83 +234,29 @@ export default async function PortfolioPage({
             {/* Add new company placeholder */}
             <Link
               href="/?add=true"
-              style={{
-                width: "100%", // Let grid dictate width
-                height: "210px", 
-                background: "rgba(255,255,255,0.18)",
-                border: "1.5px dashed rgba(155,155,165,0.50)",
-                borderRadius: "0px", 
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                textDecoration: "none",
-                color: "#828282",
-                gap: "8px",
-              }}
+              className="w-full h-[210px] bg-white/[0.18] dark:bg-white/5 border border-dashed border-[rgba(155,155,165,0.5)] dark:border-white/10 rounded-none flex flex-col items-center justify-center no-underline text-[#828282] dark:text-zinc-500 gap-2"
             >
-              <Plus style={{ width: "20px", height: "20px", opacity: 0.40 }} />
-              <span style={{ fontSize: "13px", fontWeight: 500 }}>Add new company</span>
+              <Plus className="w-5 h-5 opacity-40" />
+              <span className="text-[13px] font-medium">Add new company</span>
             </Link>
           </div>
         </main>
       </div>
 
       {/* ── BOTTOM BAR ── */}
-      <div
-        style={{
-          position: "fixed",
-          bottom: "32px",
-          left: 0,
-          right: 0,
-          zIndex: 20,
-          pointerEvents: "none",
-        }}
-      >
-        <div
-          style={{
-            width: "100%",
-            padding: "0 32px", 
-            boxSizing: "border-box",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            pointerEvents: "auto",
-            position: "relative",
-          }}
-        >
-          {/* User card — aligned to the left padding edge */}
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "row",
-              alignItems: "center",
-              gap: "10px",
-              cursor: "pointer",
-            }}
-          >
-            <div
-              style={{
-                width: "40px",
-                height: "40px",
-                background: "rgba(215,213,207,0.85)",
-                borderRadius: "8px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontWeight: 700,
-                fontSize: "15px",
-                color: "#0A0A0A",
-                flexShrink: 0,
-              }}
-            >
+      <div className="fixed bottom-8 left-0 right-0 z-20 pointer-events-none">
+        <div className="w-full px-8 box-border flex justify-between items-center pointer-events-auto relative">
+
+          {/* User card */}
+          <div className="flex flex-row items-center gap-2.5 cursor-pointer">
+            <div className="w-10 h-10 bg-[rgba(215,213,207,0.85)] dark:bg-zinc-700 rounded-lg flex items-center justify-center font-bold text-[15px] text-[#0A0A0A] dark:text-white shrink-0">
               {userInitial}
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              <p style={{ fontWeight: 700, fontSize: "15px", color: "#0A0A0A", lineHeight: 1, margin: 0 }}>
+            <div className="flex flex-col gap-0.5">
+              <p className="font-bold text-[15px] text-[#0A0A0A] dark:text-white leading-none m-0">
                 {userName}
               </p>
-              <p style={{ fontWeight: 400, fontSize: "12px", color: "#828282", lineHeight: 1, margin: 0 }}>
+              <p className="font-normal text-[12px] text-[#828282] dark:text-zinc-500 leading-none m-0">
                 {userEmail}
               </p>
             </div>
@@ -527,48 +264,17 @@ export default async function PortfolioPage({
 
           {/* Centered ask bar */}
           <div
-            style={{
-              position: "absolute",
-              left: "50%",
-              transform: "translateX(-50%)",
-              display: "flex",
-              alignItems: "center",
-              background: "rgba(255,255,255,0.88)",
-              backdropFilter: "blur(24px)",
-              WebkitBackdropFilter: "blur(24px)",
-              border: "1px solid rgba(210,210,220,0.50)",
-              boxShadow: "0 8px 30px rgba(0,0,0,0.06)",
-              borderRadius: "100px",
-              padding: "8px",
-              width: "540px",
-            }}
+            className="absolute left-1/2 -translate-x-1/2 flex items-center bg-white/88 dark:bg-zinc-900/90 backdrop-blur-2xl border border-[rgba(210,210,220,0.5)] dark:border-white/10 rounded-full p-2 w-[540px]"
+            style={{ boxShadow: "0 8px 30px rgba(0,0,0,0.06)" }}
           >
             <input
               type="text"
               placeholder="Ask your market anything"
-              style={{
-                flex: 1,
-                background: "transparent",
-                border: "none",
-                outline: "none",
-                padding: "0 16px",
-                fontSize: "14px",
-                color: "#0A0A0A",
-              }}
+              className="flex-1 bg-transparent border-none outline-none px-4 text-sm text-[#0A0A0A] dark:text-white placeholder:text-zinc-400"
             />
             <button
-              style={{
-                background: "#1C4ED8",
-                color: "white",
-                padding: "10px 24px",
-                borderRadius: "100px",
-                fontSize: "13px",
-                fontWeight: 500,
-                border: "none",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-                boxShadow: "0 2px 8px rgba(28,78,216,0.25)",
-              }}
+              className="bg-[#1C4ED8] text-white px-6 py-2.5 rounded-full text-[13px] font-medium border-none cursor-pointer whitespace-nowrap"
+              style={{ boxShadow: "0 2px 8px rgba(28,78,216,0.25)" }}
             >
               Request answer
             </button>
@@ -578,107 +284,38 @@ export default async function PortfolioPage({
 
       {/* ── ADD COMPETITOR MODAL ── */}
       {isAddModalOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 50,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.60)",
-            backdropFilter: "blur(8px)",
-          }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-lg">
           <div
+            className="relative w-[599px] h-[535px] flex flex-col items-center justify-center p-8 border border-white/10"
             style={{
-              position: "relative",
-              width: "599px",
-              height: "535px",
               background: "rgba(0,0,0,0.60)",
               backdropFilter: "blur(24px)",
               WebkitBackdropFilter: "blur(24px)",
-              border: "1px solid rgba(255,255,255,0.10)",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "32px",
               boxShadow: "0 24px 80px rgba(0,0,0,0.40)",
             }}
           >
             <Link
               href="/"
-              style={{
-                position: "absolute",
-                top: "32px",
-                left: "32px",
-                padding: "8px",
-                color: "rgba(255,255,255,0.50)",
-                textDecoration: "none",
-                display: "flex",
-              }}
+              className="absolute top-8 left-8 p-2 text-white/50 no-underline flex"
             >
-              <ArrowLeft style={{ width: "20px", height: "20px" }} />
+              <ArrowLeft className="w-5 h-5" />
             </Link>
             <h2
-              className={unbounded.className}
-              style={{
-                fontSize: "36px",
-                letterSpacing: "-0.02em",
-                color: "white",
-                lineHeight: 1.15,
-                marginBottom: "32px",
-                textAlign: "center",
-                fontWeight: 600,
-              }}
+              className={`${unbounded.className} text-[36px] tracking-tight text-white leading-[1.15] mb-8 text-center font-semibold`}
             >
               Add a new<br />competitor
             </h2>
-            <p style={{ fontSize: "14px", color: "#828282", margin: "0 0 8px" }}>
-              We will notify you on:
-            </p>
-            <p style={{ fontSize: "16px", color: "white", fontWeight: 500, margin: "0 0 40px" }}>
-              {userEmail}
-            </p>
-            <form
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                width: "100%",
-                maxWidth: "320px",
-                gap: "16px",
-              }}
-              action="/"
-            >
+            <p className="text-sm text-[#828282] mb-2">We will notify you on:</p>
+            <p className="text-[16px] text-white font-medium mb-10">{userEmail}</p>
+            <form className="flex flex-col w-full max-w-[320px] gap-4" action="/">
               <input
                 type="text"
                 placeholder="Company website"
-                style={{
-                  width: "100%",
-                  background: "transparent",
-                  border: "1px solid #828282",
-                  padding: "12px 16px",
-                  fontSize: "14px",
-                  color: "white",
-                  outline: "none",
-                  borderRadius: 0,
-                  boxSizing: "border-box",
-                }}
+                className="w-full bg-transparent border border-[#828282] px-4 py-3 text-sm text-white outline-none rounded-none box-border placeholder:text-zinc-500"
               />
               <button
                 type="submit"
-                style={{
-                  width: "100%",
-                  background: "#2A2A2A",
-                  border: "1px solid #333333",
-                  color: "white",
-                  fontWeight: 500,
-                  padding: "12px",
-                  fontSize: "14px",
-                  cursor: "pointer",
-                  borderRadius: 0,
-                }}
+                className="w-full bg-[#2A2A2A] border border-[#333333] text-white font-medium py-3 text-sm cursor-pointer rounded-none"
               >
                 Submit
               </button>
