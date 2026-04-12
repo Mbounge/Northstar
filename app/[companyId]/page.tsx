@@ -65,7 +65,7 @@ export default async function CompanyDashboardPage({
   ]);
 
   const appName = productData?.appName || decodedCompanyId;
-  const iconUrl = productData?.apkIntelligence?.icons?.icon_url;
+  const iconUrl = productData?.iconUrl; // Now reliably prefers App Store high-res icon
   
   // ── FIX: Robust extraction for the correct market name ──
   let marketName = "General Utilities";
@@ -111,8 +111,8 @@ export default async function CompanyDashboardPage({
           <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
         </Link>
         <div className="flex items-center gap-5">
-          <div className="w-[72px] h-[72px] rounded-full p-[2.5px] bg-gradient-to-tr from-[#3b82f6] via-[#8b5cf6] to-[#d946ef] shrink-0">
-            <div className="w-full h-full bg-[#35272a] rounded-full flex items-center justify-center overflow-hidden border-[3px] border-white dark:border-[#050505] relative">
+          <div className="w-[72px] h-[72px] rounded-[18px] p-[2.5px] bg-gradient-to-tr from-[#3b82f6] via-[#8b5cf6] to-[#d946ef] shrink-0">
+            <div className="w-full h-full bg-[#35272a] rounded-[16px] flex items-center justify-center overflow-hidden border-[3px] border-white dark:border-[#050505] relative">
               {iconUrl ? (
                 <img src={iconUrl} alt={appName} className="w-full h-full object-cover" />
               ) : (

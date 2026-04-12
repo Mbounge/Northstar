@@ -178,6 +178,7 @@ export interface BrandKitViewerProps {
   apkIntelligence?: ApkIntelligence;
   framework?: string;
   extractionMethods?: string;
+  appIconUrl?: string; // Newly added to override APK icon
 }
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
@@ -497,7 +498,7 @@ function FontDownloadBtn({ font }: { font: ApkFontEntry }) {
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
-export function BrandKitViewer({ brandKit, apkIntelligence, framework }: BrandKitViewerProps) {
+export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUrl }: BrandKitViewerProps) {
   const [paletteExpanded,  setPaletteExpanded]  = useState(false);
   const [tokenMapExpanded, setTokenMapExpanded] = useState(false);
 
@@ -542,7 +543,10 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework }: BrandKi
     : framework;
 
   const appName  = apkMeta.app_label || apkMeta.package?.split(".").pop() || "";
-  const iconUrl  = apkIcons?.icon_url;
+  
+  // Prioritize the high-res appIconUrl over the APK extracted icon
+  const iconUrl  = appIconUrl || apkIcons?.icon_url;
+  
   const hasApk   = !!apkIntelligence;
 
   if (!brandKit && !apkIntelligence) {

@@ -3,7 +3,7 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
-import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy } from "lucide-react";
+import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy, Link } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PanoramicMockup } from "./PanoramicMockup";
@@ -21,6 +21,7 @@ interface FlowNode {
   screen_count: number;
   screens: number[];
   children?: FlowNode[];
+  is_reference?: boolean;
 }
 interface FlowsData {
   taxonomy: FlowNode[];
@@ -292,10 +293,14 @@ function SidebarNode({
           <span className={cn(
             "truncate leading-tight",
             isActive ? "font-bold" : "font-medium",
-            depth === 0 ? "text-[14px] font-bold" : "text-[13px]"
+            depth === 0 ? "text-[14px] font-bold" : "text-[13px]",
+            node.is_reference && "text-blue-600 dark:text-blue-400 italic"
           )}>
             {node.label}
           </span>
+          {node.is_reference && (
+            <Link className="w-3 h-3 shrink-0 text-blue-500 opacity-70" />
+          )}
         </div>
         {node.screen_count > 0 && (
           <span className={cn(

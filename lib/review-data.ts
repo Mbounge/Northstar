@@ -44,10 +44,99 @@ async function fetchApkIntelligence(appName: string, tenantId: string) {
   return data;
 }
 
+async function fetchAppStoreData(appName: string, tenantId: string) {
+  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/app_store`;
+  
+  // 1. Fetch JSON Manifest
+  let data: any = {};
+  const res = await fetch(`${publicUrl}/app_store_manifest.json`, { cache: 'no-store' });
+  if (res.ok) {
+    data = await res.json();
+  }
+
+  // 2. DIRECTLY READ SUPABASE BUCKET (Bypasses JSON inconsistencies)
+  const [screenshotsList, iconsList] = await Promise.all([
+    supabase.storage.from('reviews').list(`${tenantId}/${appName}/app_store/screenshots`, { limit: 100 }),
+    supabase.storage.from('reviews').list(`${tenantId}/${appName}/app_store/icons`, { limit: 100 })
+  ]);
+
+  // Filter out placeholders and grab actual images
+  const actualScreenshots = (screenshotsList.data || []).filter(f => f.name.match(/\.(jpg|jpeg|png|webp|gif)$/i));
+  const actualIcons = (iconsList.data || []).filter(f => f.name.match(/\.(jpg|jpeg|png|webp|gif)$/i));
+
+  // 3. OVERRIDE SCREENSHOTS
+  // Guarantee every file in the screenshots folder is rendered in the UI
+  data.actual_screenshots = actualScreenshots.map(f => `${publicUrl}/screenshots/${f.name}`);
+
+  // 4. FIND MAIN APP ICON
+  // Finds the app icon directly from the icons folder (e.g., app_icon_512x512.png)
+  const mainIconFile = actualIcons.find(f => f.name.toLowerCase().includes('app_icon') || f.name.toLowerCase().includes('main'));
+  if (mainIconFile) {
+    if (!data.icons) data.icons = {};
+    data.icons.main_computed = `${publicUrl}/icons/${mainIconFile.name}`;
+  }
+
+  // 5. FUZZY MATCH COMPETITOR ICONS
+  const resolveCompetitors = (compArray: any[]) => {
+    return compArray.map((c: any) => {
+      let finalIconUrl = null;
+      
+      if (c.name) {
+        // Strip non-alphanumeric chars for clean matching (e.g. "BlackBear TV" -> "blackbeartv")
+        const cleanTargetName = String(c.name).toLowerCase().replace(/[^a-z0-9]/g, '');
+        
+        // Find matching file (e.g., "competitor_02_BlackBear_TV.png")
+        const matchedFile = actualIcons.find(f => {
+          const cleanFileName = f.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return cleanFileName.includes(cleanTargetName);
+        });
+        
+        if (matchedFile) {
+          finalIconUrl = `${publicUrl}/icons/${matchedFile.name}`;
+        }
+      }
+      
+      // Fallback if the fuzzy match failed but the JSON had a valid HTTP link
+      if (!finalIconUrl && typeof c.icon === 'string' && c.icon.startsWith('http')) {
+        finalIconUrl = c.icon;
+      }
+
+      return { ...c, iconUrl: finalIconUrl };
+    });
+  };
+
+  // Apply competitor matching
+  if (Array.isArray(data.competitors)) {
+    data.competitors = resolveCompetitors(data.competitors);
+  }
+  if (data.raw_data && Array.isArray(data.raw_data.competitors)) {
+    data.raw_data.competitors = resolveCompetitors(data.raw_data.competitors);
+  }
+  if (data.intelligence && Array.isArray(data.intelligence.competitors)) {
+    data.intelligence.competitors = resolveCompetitors(data.intelligence.competitors);
+  }
+
+  return data;
+}
+
+// ─── HELPER TO EXTRACT THE BEST ICON (WITH FALLBACK) ──────────────
+function getBestIconUrl(appStoreData: any, apkIntelData: any): string | null {
+  // 1. Direct bucket match (Bulletproof)
+  if (appStoreData?.icons?.main_computed) return appStoreData.icons.main_computed;
+  
+  // 2. JSON Fallback
+  if (appStoreData?.icons && typeof appStoreData.icons === 'object') {
+    const storeIcon = appStoreData.icons.main || appStoreData.icons.app_icon || appStoreData.icons.icon || Object.values(appStoreData.icons).find(v => typeof v === 'string');
+    if (typeof storeIcon === 'string' && storeIcon.trim() !== '') return storeIcon;
+  }
+  
+  // 3. APK Fallback
+  return apkIntelData?.icons?.icon_url || null;
+}
+
 export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
   if (!tenantId) return [];
 
-  // Look INSIDE the specific customer's folder
   const { data: appFolders, error } = await supabase.storage.from('reviews').list(tenantId, { limit: 100 });
   if (error || !appFolders) return [];
 
@@ -107,12 +196,13 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
 
     if (!hasOnboarding && !hasBrowsing) return null;
 
-    const [apkIntel, browsingMemory] = await Promise.all([
+    const [apkIntel, appStoreData, browsingMemory] = await Promise.all([
       fetchApkIntelligence(appName, tenantId),
+      fetchAppStoreData(appName, tenantId),
       fetchAgentMemory(appName, 'browsing', tenantId),
     ]);
 
-    const iconUrl = apkIntel?.icons?.icon_url || null;
+    const iconUrl = getBestIconUrl(appStoreData, apkIntel);
     const rawAppType = browsingMemory?.app_type;
     const appType = rawAppType ? formatCategory(rawAppType) : category;
 
@@ -132,7 +222,10 @@ export async function getAppDetails(appName: string, tenantId: string) {
     fetchAppStoreData(appName, tenantId),
     fetchApkIntelligence(appName, tenantId),   
   ]);
-  return { appName, onboarding, browsing, appStore, apkIntelligence };
+  
+  const iconUrl = getBestIconUrl(appStore, apkIntelligence);
+  
+  return { appName, onboarding, browsing, appStore, apkIntelligence, iconUrl };
 }
 
 async function fetchSessionData(appName: string, sessionType: string, tenantId: string) {
@@ -161,18 +254,4 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
   });
 
   return { summary: manifest.processing_stats, sessionIntel, flowsData, steps: await Promise.all(stepsPromises) };
-}
-
-async function fetchAppStoreData(appName: string, tenantId: string) {
-  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/app_store`;
-  const res = await fetch(`${publicUrl}/app_store_manifest.json`, { cache: 'no-store' });
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (data.screenshots) {
-    for (const key of Object.keys(data.screenshots)) {
-      const filename = data.screenshots[key].split('/').pop();
-      data.screenshots[key] = `${publicUrl}/screenshots/${filename}`;
-    }
-  }
-  return data;
 }

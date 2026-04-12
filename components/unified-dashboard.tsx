@@ -64,14 +64,13 @@ export function UnifiedDashboard({
             {appData.onboarding && appData.browsing && (
               <div className="absolute right-10">
                 <button
-  onClick={() => setMode(mode === 'browsing' ? 'onboarding' : 'browsing')}
-  className="h-9 px-5 flex items-center gap-2 rounded-full backdrop-blur-md bg-white/20 dark:bg-white/5 border border-white/60 dark:border-white/20 hover:bg-white/40 dark:hover:bg-white/10 transition-all duration-200 group"
->
-
-  <span className="text-zinc-700 dark:text-zinc-300 text-[12px] font-semibold tracking-wide">
-    {mode === 'browsing' ? 'View Onboarding' : 'View Teardown'}
-  </span>
-</button>
+                  onClick={() => setMode(mode === 'browsing' ? 'onboarding' : 'browsing')}
+                  className="h-9 px-5 flex items-center gap-2 rounded-full backdrop-blur-md bg-white/20 dark:bg-white/5 border border-white/60 dark:border-white/20 hover:bg-white/40 dark:hover:bg-white/10 transition-all duration-200 group"
+                >
+                  <span className="text-zinc-700 dark:text-zinc-300 text-[12px] font-semibold tracking-wide">
+                    {mode === 'browsing' ? 'View Onboarding' : 'View Teardown'}
+                  </span>
+                </button>
               </div>
             )}
           </div>
@@ -114,7 +113,11 @@ export function UnifiedDashboard({
         {hasBrandKit && (
           <TabsContent value="brand_kit" className="m-0">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 p-8">
-              <BrandKitViewer brandKit={brandKitData} apkIntelligence={apkIntelligence} />
+              <BrandKitViewer 
+                brandKit={brandKitData} 
+                apkIntelligence={apkIntelligence} 
+                appIconUrl={appData.iconUrl} 
+              />
             </div>
           </TabsContent>
         )}
