@@ -40,7 +40,7 @@ export function SnapshotSelector({
             text-zinc-700 dark:text-zinc-300
             hover:bg-white/60 dark:hover:bg-white/10
             transition-all shadow-none focus:outline-none
-            text-[12px] font-mono font-semibold
+            text-[12px] font-mono font-semibold cursor-pointer
           "
           aria-label="Select Snapshot"
         >

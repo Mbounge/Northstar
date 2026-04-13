@@ -16,7 +16,7 @@ export function ThemeToggle() {
         border border-white/60 dark:border-white/10 
         text-zinc-700 dark:text-zinc-300 
         hover:bg-white/60 dark:hover:bg-white/10 
-        transition-all shadow-none
+        transition-all shadow-none cursor-pointer
       "
       title="Toggle theme"
     >

@@ -17,17 +17,22 @@ export default async function DashboardLayout({ children }: { children: React.Re
       
       {/* ── AMBIENT BACKGROUND ── */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
-        <div className="relative w-[1372px] h-[676px]">
-          <div className="absolute w-[1814px] h-[1814px] top-[-673px] left-[-398px] -rotate-[123.61deg] opacity-30 dark:opacity-20 mix-blend-multiply blur-[48px]">
-            <Image
-              src="/topaz_enhance.png"
-              alt=""
-              fill
-              className="object-cover"
-              priority
-              quality={80}
-            />
-          </div>
+        <div 
+          className="relative flex-shrink-0 opacity-30 dark:opacity-20 mix-blend-multiply blur-[48px]"
+          style={{ 
+            width: '1450px', 
+            height: '1450px', 
+            transform: 'rotate(310deg)',
+          }}
+        >
+          <Image 
+            src="/topaz_enhance.png" 
+            alt="Ambient Background" 
+            fill 
+            className="object-cover -scale-x-100" 
+            priority 
+            quality={80}
+          />
         </div>
       </div>
 
@@ -39,7 +44,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </main>
 
       {/* ── RIGHT SIDEBAR ── */}
-      <div className="relative z-20 border-l border-white/30 dark:border-white/10 bg-white/20 dark:bg-black/20 backdrop-blur-xl">
+      {/* Removed bg-white/20 and backdrop-blur-xl so it is completely transparent */}
+      <div className="relative z-20">
         <AppSidebar apps={apps} />
       </div>
     </div>

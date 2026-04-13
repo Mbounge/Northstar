@@ -40,20 +40,31 @@ export function UnifiedDashboard({
       <Tabs defaultValue="overview" className="flex flex-col">
 
         {/* ── IDENTITY + NAV HEADER ── */}
-        <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 shrink-0 mb-8">
-          {header}
-          <div className="relative flex items-center justify-center px-10 pb-6 pt-2">
+        <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-8 relative border border-white/20 dark:border-white/10 backdrop-blur-md">
+          
+          <div className="flex-1 w-full relative">
+            {header}
+          </div>
+          
+          {/* Bottom Section: Subnav row */}
+          {/* Changed items-center to items-end, and added pb-4 to push tabs to the bottom */}
+          <div className="relative flex items-end justify-center px-10 h-[64px] shrink-0 border-none pb-[14px]">
             <TabsList className="!bg-transparent h-auto p-0 gap-12 !border-none !shadow-none flex items-center">
               {subTabs.map(({ value, label }) => (
                 <TabsTrigger
                   key={value}
                   value={value}
                   className="
-                    !bg-transparent !border-none !shadow-none px-0 py-2 rounded-none
-                    text-[15px] font-medium text-zinc-500 dark:text-zinc-400
-                    hover:text-zinc-900 dark:hover:text-zinc-200
-                    data-[state=active]:text-zinc-900 dark:data-[state=active]:text-white
-                    data-[state=active]:!shadow-none transition-colors
+                    relative !bg-transparent !shadow-none rounded-none px-0 pb-[6px] !border-none
+                    outline-none focus:outline-none focus-visible:ring-0 cursor-pointer
+                    text-[15px] font-[400] text-[#747474] dark:text-zinc-400
+                    hover:text-[#000000] dark:hover:text-white
+                    data-[state=active]:text-[#000000] dark:data-[state=active]:text-white
+                    data-[state=active]:font-[600]
+                    after:absolute after:bottom-0 after:left-0 after:right-0 
+                    after:h-[2px] after:rounded-full after:bg-transparent
+                    data-[state=active]:after:bg-[#000000] dark:data-[state=active]:after:bg-white
+                    transition-all
                   "
                 >
                   {label}
@@ -62,10 +73,11 @@ export function UnifiedDashboard({
             </TabsList>
 
             {appData.onboarding && appData.browsing && (
-              <div className="absolute right-10">
+              <div className="absolute right-10 top-1/2 -translate-y-1/2">
                 <button
                   onClick={() => setMode(mode === 'browsing' ? 'onboarding' : 'browsing')}
-                  className="h-9 px-5 flex items-center gap-2 rounded-full backdrop-blur-md bg-white/20 dark:bg-white/5 border border-white/60 dark:border-white/20 hover:bg-white/40 dark:hover:bg-white/10 transition-all duration-200 group"
+                  // Restored authentic frosted glass: bg-white/20, white/60 border, backdrop-blur
+                  className="h-9 px-5 flex items-center gap-2 rounded-full backdrop-blur-md bg-white/20 dark:bg-white/5 border border-white/60 dark:border-white/20 hover:bg-white/40 dark:hover:bg-white/10 transition-all duration-200 group cursor-pointer"
                 >
                   <span className="text-zinc-700 dark:text-zinc-300 text-[12px] font-semibold tracking-wide">
                     {mode === 'browsing' ? 'View Onboarding' : 'View Teardown'}

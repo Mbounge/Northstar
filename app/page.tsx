@@ -10,7 +10,7 @@ import { AskBar } from "@/components/ask-bar";
 
 import { redirect } from "next/navigation";
 
-const unbounded = Unbounded({ subsets: ["latin"], weight: ["600"] });
+const unbounded = Unbounded({ subsets: ["latin"], weight: ["200", "300", "400", "600", "700"] });
 
 export default async function PortfolioPage({
   searchParams,
@@ -40,13 +40,6 @@ export default async function PortfolioPage({
 
       {/* ── AMBIENT BACKGROUND ── */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
-        {/* 
-          1. Removed the weird absolute top/left offsets.
-          2. Used flex-center on the parent to perfectly center it.
-          3. Matched Verification page rotation (310deg) and flip (-scale-x-100).
-          4. Made it smaller (1200x1200px).
-          5. Kept the blur and multiply blend mode for the ambient dashboard effect.
-        */}
         <div 
           className="relative flex-shrink-0"
           style={{ 
@@ -304,9 +297,18 @@ export default async function PortfolioPage({
 
       {/* ── ADD COMPETITOR MODAL ── */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-lg">
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          
+          {/* 1. Clickable Backdrop - Acts as a massive close button */}
+          <Link 
+            href="/" 
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default"
+            aria-label="Close modal"
+          />
+
+          {/* 2. Modal Content - Sits on top (z-10) so clicking it doesn't trigger the backdrop link */}
           <div
-            className="relative w-[599px] h-[535px] flex flex-col items-center justify-center p-8 border border-white/10"
+            className="relative z-10 w-[599px] h-[535px] flex flex-col items-center justify-center border border-white/10"
             style={{
               background: "rgba(0,0,0,0.60)",
               backdropFilter: "blur(24px)",
@@ -314,30 +316,42 @@ export default async function PortfolioPage({
               boxShadow: "0 24px 80px rgba(0,0,0,0.40)",
             }}
           >
+            {/* Back Icon */}
             <Link
               href="/"
-              className="absolute top-8 left-8 p-2 text-white/50 no-underline flex"
+              className="absolute top-8 left-8 p-2 text-white no-underline flex hover:opacity-70 transition-opacity"
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-6 h-6" />
             </Link>
-            <h2
-              className={`${unbounded.className} text-[36px] tracking-tight text-white leading-[1.15] mb-8 text-center font-semibold`}
-            >
-              Add a new<br />competitor
+            
+            <h2 className={`${unbounded.className} text-center text-white tracking-[-0.02em] mb-10 m-0 p-0`}>
+              <span className="font-[200] text-[36px] block leading-[1.1]">Add a new</span>
+              <span className="font-[700] text-[36px] block leading-[1.1]">competitor</span>
             </h2>
-            <p className="text-sm text-[#828282] mb-2">We will notify you on:</p>
-            <p className="text-[16px] text-white font-medium mb-10">{userEmail}</p>
-            <form className="flex flex-col w-full max-w-[320px] gap-4" action="/">
+            
+            <p className={`${unbounded.className} text-[14px] font-[300] leading-[18px] text-white m-0 p-0 mb-2`}>
+              We will notify you on:
+            </p>
+            
+            <p className={`${unbounded.className} text-[22px] font-[400] leading-[18px] text-white m-0 p-0 mb-10`}>
+              {userEmail}
+            </p>
+            
+            <form className="flex flex-col w-[349px] gap-[8px]" action="/">
               <input
                 type="text"
                 placeholder="Company website"
-                className="w-full bg-transparent border border-[#828282] px-4 py-3 text-sm text-white outline-none rounded-none box-border placeholder:text-zinc-500"
+                className="w-full h-[56px] bg-transparent border border-zinc-300 dark:border-white px-4 text-[14px] text-white outline-none rounded-none box-border placeholder:text-zinc-500 focus:bg-white/5 transition-colors"
               />
+              
               <button
                 type="submit"
-                className="w-full bg-[#2A2A2A] border border-[#333333] text-white font-medium py-3 text-sm cursor-pointer rounded-none"
+                className="w-full h-[56px] cursor-pointer bg-white/10 hover:bg-white/20 border-0 border-y border-white/30 hover:border-white/50 text-white rounded-none transition-all duration-300 ease-out flex items-center justify-center"
               >
-                Submit
+                {/* Updated to exactly match Figma: Geist, 16px, 700 Weight, 24px Line height, -1% Letter spacing */}
+                <span className="font-sans text-[16px] font-[700] leading-[24px] tracking-[-0.01em] text-white">
+                  Submit
+                </span>
               </button>
             </form>
           </div>

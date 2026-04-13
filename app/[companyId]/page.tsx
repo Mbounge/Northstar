@@ -104,45 +104,77 @@ export default async function CompanyDashboardPage({
   const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
 
   const IdentityHeader = () => (
-    <div className="flex items-center justify-between px-10 pt-8 pb-8">
+    // Removed h-[200px] and bg-white/20 so it doesn't double-stack!
+    <div className="w-full h-full flex items-center justify-between px-10 pt-6 relative">
+      
       <div className="flex items-center">
-        <Link href="/" className="p-2 hover:bg-white/40 dark:hover:bg-white/10 backdrop-blur-md rounded-full transition-colors mr-6">
+        {/* Back Button */}
+        <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6">
           <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
         </Link>
+        
+        {/* Icon & Title Block */}
         <div className="flex items-center gap-5">
-          <div className="w-[72px] h-[72px] rounded-[18px] p-[2.5px] bg-gradient-to-tr from-[#3b82f6] via-[#8b5cf6] to-[#d946ef] shrink-0">
-            <div className="w-full h-full bg-[#35272a] rounded-[16px] flex items-center justify-center overflow-hidden border-[3px] border-white dark:border-[#050505] relative">
+          <div className="w-[110px] h-[110px] rounded-full p-[4px] bg-gradient-to-br from-[#191FD1] via-[#2EBDCD] to-[#CC48E1] shrink-0 shadow-sm">
+            <div className="w-full h-full bg-[#35272a] rounded-full flex items-center justify-center overflow-hidden relative">
               {iconUrl ? (
                 <img src={iconUrl} alt={appName} className="w-full h-full object-cover" />
               ) : (
-                <span className="text-white flex items-center justify-center h-full text-2xl font-bold lowercase tracking-wider">{appName.substring(0, 2)}</span>
+                <span className="text-white flex items-center justify-center h-full text-4xl font-bold lowercase tracking-wider">
+                  {appName.substring(0, 2)}
+                </span>
               )}
             </div>
           </div>
-          <div className="flex flex-col justify-center">
-            <h2 className="text-[26px] font-bold text-zinc-900 dark:text-white leading-none tracking-tight uppercase">{appName}</h2>
-            <h3 className="text-[18px] text-zinc-700 dark:text-zinc-300 leading-none mt-2.5">{marketName}</h3>
+          <div className="flex flex-col justify-center font-sans gap-1">
+            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[100%] m-0 p-0">{appName}</h2>
+            <h3 className="text-[30px] font-[400] text-[#000000] dark:text-zinc-300 leading-[100%] m-0 p-0">{marketName}</h3>
           </div>
         </div>
+        
+        {/* Rank & Market Data */}
         <div className="flex items-center gap-12 ml-16">
-          <div className="flex flex-col gap-2">
-            <span className="text-[13px] text-zinc-500 dark:text-zinc-400 leading-none">Rank</span>
-            <span className="text-[14px] text-zinc-900 dark:text-white font-semibold leading-none">#1</span>
+          
+          {/* ── RANK COLUMN ── */}
+          {/* Changed to items-center per your Figma notes */}
+          <div className="flex flex-col gap-[6px] justify-center items-center">
+            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">
+              Rank
+            </span>
+            <span className="font-sans text-[16px] font-[700] text-[#000000] dark:text-white leading-[100%] text-center">
+              #1
+            </span>
           </div>
-          <div className="flex flex-col gap-2">
-            <span className="text-[13px] text-zinc-500 dark:text-zinc-400 leading-none">Market</span>
-            <span className="text-[14px] text-zinc-900 dark:text-white font-semibold leading-none">{marketName}</span>
+
+          {/* ── MARKET COLUMN ── */}
+          {/* Changed to items-center per your Figma notes */}
+          <div className="flex flex-col gap-[6px] justify-center items-center">
+            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">
+              Market
+            </span>
+            <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-zinc-100 leading-[100%] text-center">
+              {marketName}
+            </span>
           </div>
+
         </div>
       </div>
+      
+      {/* Actions */}
       <div className="flex items-center gap-4">
-        <button className="w-12 h-12 rounded-full bg-white/40 dark:bg-white/5 backdrop-blur-md flex items-center justify-center text-zinc-900 dark:text-zinc-100 hover:bg-white/60 dark:hover:bg-white/10 transition-colors border border-white/20 dark:border-white/10 shadow-none">
+        <button className="w-12 h-12 rounded-full bg-white/40 dark:bg-white/5 backdrop-blur-md flex items-center justify-center text-zinc-900 dark:text-zinc-100 hover:bg-white/60 dark:hover:bg-white/10 transition-colors border border-white/20 dark:border-white/10 shadow-none cursor-pointer">
           <MoreHorizontal className="w-6 h-6" />
         </button>
-        <button className="h-12 px-7 rounded-full bg-[#0066FF] text-white text-[15px] font-semibold hover:bg-blue-600 flex items-center gap-2 transition-colors border-none shadow-none">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg> Snaps
+        
+        {/* ── UPDATED SNAPS BUTTON ── */}
+        <button className="w-[114px] h-[48px] rounded-full bg-[#0088FF] text-white text-[15px] font-semibold hover:bg-[#0077EE] flex items-center justify-center gap-[3px] transition-colors border-none shadow-none cursor-pointer">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M5 3l14 9-14 9V3z"/>
+          </svg>
+          Snaps
         </button>
       </div>
+      
     </div>
   );
 
@@ -150,26 +182,41 @@ export default async function CompanyDashboardPage({
     <div className="h-full flex flex-col relative z-10 bg-transparent">
       <Tabs defaultValue="product" className="flex-1 flex flex-col overflow-hidden">
         <div className="flex items-center justify-between pt-8 px-10 shrink-0 relative z-20">
+          
           <div className="flex-1">
-            <h1 className={`${unbounded.className} text-[24px] font-semibold tracking-tight text-[#0A0A0A] dark:text-white`}>
+            <h1 className={`${unbounded.className} text-[30px] font-[600] tracking-[-0.02em] leading-[100%] text-[#020B26] dark:text-white m-0`}>
               North Star
             </h1>
           </div>
+
+          {/* ── UPDATED TABS WITH HOVER EFFECTS ── */}
           <div className="flex-none bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 p-1 rounded-none shadow-none">
             <TabsList className="!bg-transparent h-auto p-0 gap-1 !border-none !shadow-none flex items-center">
               {[{ value: "product", label: "product" }, { value: "marketing", label: "marketing" }, { value: "business", label: "business" }].map(({ value, label }) => (
-                <TabsTrigger key={value} value={value} className="px-8 py-2 rounded-none text-[14px] font-medium text-zinc-600 dark:text-zinc-400 data-[state=active]:!bg-white/40 dark:data-[state=active]:!bg-white/10 data-[state=active]:text-zinc-900 dark:data-[state=active]:text-white transition-all border-none shadow-none">
+                <TabsTrigger 
+                  key={value} 
+                  value={value} 
+                  className="
+                    px-8 py-2 rounded-none text-[14px] font-medium border-none shadow-none
+                    transition-all duration-200 cursor-pointer
+                    text-zinc-600 dark:text-zinc-400
+                    hover:bg-white/20 dark:hover:bg-white/5 hover:text-zinc-900 dark:hover:text-white
+                    data-[state=active]:!bg-white/40 dark:data-[state=active]:!bg-white/10 
+                    data-[state=active]:text-zinc-900 dark:data-[state=active]:text-white 
+                  "
+                >
                   {label}
                 </TabsTrigger>
               ))}
             </TabsList>
           </div>
+
           <div className="flex-1 flex justify-end items-center gap-3">
              <SnapshotSelector snapshots={snapshots} currentSnapshot={activeSnapshotId} />
              <ThemeToggle />
           </div>
         </div>
-        <div className="flex-1 overflow-hidden mt-6 relative z-10 px-10 pb-10">
+        <div className="flex-1 overflow-hidden mt-6 relative z-10 px-10">
           <TabsContent value="product" className="h-full overflow-y-auto m-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             {productData && (productData.browsing || productData.onboarding) ? (
               <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
