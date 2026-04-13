@@ -1,3 +1,5 @@
+// app/verification/page.tsx
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -6,7 +8,8 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Unbounded } from "next/font/google";
 
-const unbounded = Unbounded({ subsets: ["latin"], weight: ["600"] });
+// 1. Matched the font weights to the Login screen
+const unbounded = Unbounded({ subsets: ["latin"], weight: ["200", "300", "600"] });
 
 export default function VerificationPage() {
   const router = useRouter();
@@ -31,51 +34,86 @@ export default function VerificationPage() {
   return (
     <div className="relative w-full min-h-screen bg-black font-sans flex flex-col items-center justify-center overflow-hidden">
       
-      {/* ── BACKGROUND IMAGE (Centered state) ── */}
-      <div className="absolute inset-0 z-0">
-        <Image 
-          src="/topaz_enhance.png" 
-          alt="Abstract 3D Background" 
-          fill 
-          className="object-cover object-center" 
-          priority 
-          quality={100}
-        />
+      {/* ── DYNAMIC BACKGROUND (Exact match to Login) ── */}
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
+        <div 
+          className="relative flex-shrink-0 mt-[132px] scale-[0.86111]"
+          style={{ width: '1600px', height: '1600px', transform: 'rotate(310deg)' }}
+        >
+          <Image 
+            src="/topaz_enhance.png" 
+            alt="Abstract 3D Background" 
+            fill 
+            className="object-cover -scale-x-100" 
+            priority 
+            quality={100}
+          />
+        </div>
       </div>
 
-      {/* ── SQUARE GLASSMORPHIC CARD (Exactly 599x535 on desktop) ── */}
-      <div className="relative z-10 w-[90%] md:w-[599px] py-10 md:py-0 md:h-[535px] bg-black/60 backdrop-blur-2xl border border-white/10 rounded-none flex flex-col items-center justify-center p-8 shadow-2xl text-center animate-in zoom-in-95 fade-in duration-500">
+      {/* ── SQUARE GLASSMORPHIC CARD (Exact 599x535 match) ── */}
+      <div className="relative z-10 w-[90%] md:w-[599px] py-10 md:py-0 md:h-[535px] bg-black/60 backdrop-blur-2xl border-none md:border border-white/10 rounded-none flex flex-col items-center shadow-2xl animate-in zoom-in-95 fade-in duration-500">
 
-        <div className="flex flex-col items-center justify-center flex-1 w-full mt-6">
-          <p className="text-[16px] text-white/80 mb-1">
-            Closed Beta
-          </p>
-          
-          <h1 className={`${unbounded.className} text-[40px] md:text-[55px] tracking-[-0.02em] text-white leading-none mb-10 md:mb-14`}>
-            North Star AI
+        {/* 1. TITLE BLOCK (Absolute positioned Top: 92.5px - matching login) */}
+        <div 
+          className="absolute flex flex-col items-center w-full"
+          style={{ top: '92.5px' }}
+        >
+          <h1 className={`${unbounded.className} text-white flex flex-col items-center m-0 p-0`}>
+            <span 
+              className="block font-[200] text-[36px] leading-[100%] whitespace-nowrap"
+              style={{ letterSpacing: '-0.02em' }}
+            >
+              Closed Beta
+            </span>
+            <span 
+              className="block font-[600] text-[40px] leading-[100%] whitespace-nowrap"
+              style={{ 
+                letterSpacing: '-0.02em',
+                marginTop: '-4px' 
+              }}
+            >
+              North Star AI
+            </span>
           </h1>
+        </div>
 
-          <p className="text-[14px] text-[#828282] mb-2">
+        {/* 2. EMAIL NOTIFICATION BLOCK (Centered absolute) */}
+        <div 
+          className="absolute flex flex-col items-center justify-center w-full"
+          style={{ top: '270px' }}
+        >
+          <p className={`${unbounded.className} text-[#828282] font-[300] text-[14px] leading-[18px] tracking-[0%] text-center m-0 p-0 mb-3`}>
             We will notify you at:
           </p>
-          
-          <p className="text-[16px] text-white font-medium mb-8">
+          <p className={`${unbounded.className} text-white font-[600] text-[16px] leading-[18px] tracking-wide text-center m-0 p-0`}>
             {email}
           </p>
         </div>
 
-        {/* ── FOOTER ACTIONS ── */}
-        <div className="mt-auto pb-2 flex items-center justify-center gap-6">
+        {/* 3. FOOTER ACTIONS (Absolute positioned Top: 497px - matching login) */}
+        <div 
+          className="absolute flex items-center justify-center gap-4"
+          style={{ 
+            width: '100%', 
+            height: '9px', 
+            top: '497px' 
+          }}
+        >
           <button 
             onClick={handleSignOut} 
-            className="text-[12px] text-[#828282] hover:text-white transition-colors"
+            className={`${unbounded.className} text-white/50 hover:text-white font-[300] text-[12px] leading-[100%] transition-colors cursor-pointer bg-transparent border-none p-0 outline-none`}
+            style={{ letterSpacing: '-0.02em' }}
           >
             Sign out
           </button>
-          <div className="w-1 h-1 rounded-full bg-[#828282]/50" />
+          
+          <div className="w-1 h-1 rounded-full bg-white/20" />
+          
           <a 
             href="mailto:support@northstar.com" 
-            className="text-[12px] text-[#828282] hover:text-white transition-colors"
+            className={`${unbounded.className} text-white/50 hover:text-white font-[300] text-[12px] leading-[100%] transition-colors cursor-pointer no-underline`}
+            style={{ letterSpacing: '-0.02em' }}
           >
             Contact Support
           </a>

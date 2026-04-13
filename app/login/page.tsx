@@ -1,3 +1,5 @@
+// app/login/page.tsx
+
 "use client";
 
 import { useState, useEffect } from "react";
@@ -7,8 +9,8 @@ import { createClient } from "@/lib/supabase/client";
 import { Unbounded } from "next/font/google";
 import { cn } from "@/lib/utils";
 
-// Initialize the Unbounded font exactly as specified in Figma
-const unbounded = Unbounded({ subsets: ["latin"], weight: ["600"] });
+// 1. Added "300" (Light) to the font weights
+const unbounded = Unbounded({ subsets: ["latin"], weight: ["200", "300", "600"] });
 
 // Standard Google 'G' Logo SVG
 const GoogleIcon = () => (
@@ -22,24 +24,17 @@ const GoogleIcon = () => (
 
 export default function LoginPage() {
   const [isDesktop, setIsDesktop] = useState(false);
-  const [isChecking, setIsChecking] = useState(true); // Prevents text flashing during SSR/Hydration
+  const [isChecking, setIsChecking] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const supabase = createClient();
 
-  // Check screen width on load and handle resizes
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const checkScreenSize = () => {
-        setIsDesktop(window.innerWidth > 1024);
-      };
-
-      // Initial check
+      const checkScreenSize = () => setIsDesktop(window.innerWidth > 1024);
       checkScreenSize();
       setIsChecking(false);
-
-      // Listen for window resizes just in case
       window.addEventListener("resize", checkScreenSize);
       return () => window.removeEventListener("resize", checkScreenSize);
     }
@@ -48,17 +43,13 @@ export default function LoginPage() {
   const handleGoogleLogin = async () => {
     setIsLoading(true);
     setError(null);
-    
-    // Redirects back to our secure callback route to establish the session
     const redirectUrl = `${window.location.origin}/auth/callback`;
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
         redirectTo: redirectUrl,
-        queryParams: {
-          prompt: 'select_account',
-        },
+        queryParams: { prompt: 'select_account' },
       },
     });
 
@@ -68,7 +59,6 @@ export default function LoginPage() {
     }
   };
 
-  // Render a pure black screen while checking to prevent layout shifts/flashes
   if (isChecking) {
     return <div className="w-full min-h-screen bg-black" />;
   }
@@ -79,23 +69,30 @@ export default function LoginPage() {
       {/* ── DYNAMIC BACKGROUND ── */}
       <div 
         className={cn(
-          "absolute left-0 right-0 top-0 h-[100vh] z-0 transition-transform duration-[1200ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+          "absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center transition-transform duration-[1200ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
           isDesktop ? "translate-y-0" : "-translate-y-[35vh]"
         )}
       >
-        <Image 
-          src="/topaz_enhance.png" 
-          alt="Abstract 3D Background" 
-          fill 
-          className="object-cover object-center" 
-          priority 
-          quality={100}
-        />
-        {/* Smooth fade to black at the bottom of the image so it blends seamlessly into the bg-black when shifted up */}
-        <div className="absolute inset-x-0 bottom-0 h-[30vh] bg-gradient-to-t from-black via-black/80 to-transparent" />
+        {/* 
+          1600x1600 perfectly fills the sides. 
+          Added mt-[80px] to shift the entire block down, bringing the top section further into view! 
+        */}
+        <div 
+          className="relative flex-shrink-0 mt-[132px] scale-[0.86111]"
+          style={{ width: '1600px', height: '1600px', transform: 'rotate(310deg)' }}
+        >
+          <Image 
+            src="/topaz_enhance.png" 
+            alt="Abstract 3D Background" 
+            fill 
+            className="object-cover -scale-x-100" 
+            priority 
+            quality={100}
+          />
+        </div>
       </div>
 
-      {/* ── MOBILE / IPAD VIEW (DEAD END) ── */}
+      {/* ── MOBILE VIEW ── */}
       {!isDesktop && (
         <div className="relative z-10 flex flex-col items-center justify-center flex-1 w-full mt-[25vh] animate-in fade-in duration-700">
           <h1 className={`${unbounded.className} text-[48px] md:text-[55px] tracking-[-0.02em] text-white leading-[100%] mb-2 text-center drop-shadow-lg`}>
@@ -109,48 +106,99 @@ export default function LoginPage() {
 
       {/* ── DESKTOP VIEW (LOGIN CARD) ── */}
       {isDesktop && (
-        <div className="relative z-10 w-[90%] md:w-[599px] py-10 md:py-0 md:h-[535px] bg-black/60 backdrop-blur-2xl border border-white/10 rounded-none flex flex-col items-center justify-center p-8 shadow-2xl animate-in slide-in-from-bottom-12 fade-in duration-700">
+        <div className="relative z-10 w-[90%] md:w-[599px] py-10 md:py-0 md:h-[535px] bg-black/60 backdrop-blur-2xl border-none md:border border-white/10 rounded-none shadow-2xl animate-in slide-in-from-bottom-12 fade-in duration-700">
           
           {error && (
-            <div className="absolute top-4 left-0 right-0 px-8">
+            <div className="absolute top-4 left-0 right-0 px-8 z-50">
               <p className="text-[12px] text-rose-300 bg-rose-500/20 p-2 rounded border border-rose-500/30 text-center backdrop-blur-md">
                 {error}
               </p>
             </div>
           )}
 
-          <div className="flex flex-col items-center justify-center flex-1 w-full mt-4">
-            <p className="text-[16px] text-white/80 mb-1">
-              Welcome to
-            </p>
-            
-            <h1 className={`${unbounded.className} text-[40px] md:text-[55px] tracking-[-0.02em] text-white leading-none mb-10 md:mb-12 text-center`}>
-              North Star AI
+          {/* 1. TITLE BLOCK (Absolute positioned Top: 92.5px) */}
+          <div 
+            className="absolute flex flex-col items-center w-full"
+            style={{ top: '92.5px' }}
+          >
+            <h1 className={`${unbounded.className} text-white flex flex-col items-center m-0 p-0`}>
+              <span 
+                className="block font-[200] text-[36px] leading-[100%] whitespace-nowrap"
+                style={{ letterSpacing: '-0.02em' }}
+              >
+                Welcome to
+              </span>
+              <span 
+                className="block font-[600] text-[40px] leading-[100%] whitespace-nowrap"
+                style={{ 
+                  letterSpacing: '-0.02em',
+                  marginTop: '-4px' 
+                }}
+              >
+                North Star AI
+              </span>
             </h1>
-            
-            <p className="text-[14px] text-[#828282] mb-6">
+          </div>
+
+          {/* 2. SUBTITLE BLOCK (Exact Figma Specs: W: 228, H: 18, T: 241, L: 186) */}
+          <div 
+            className="absolute flex items-end justify-center"
+            style={{ 
+              width: '228px', 
+              height: '18px', 
+              top: '241px', 
+              left: '186px' 
+            }}
+          >
+            <p className={`${unbounded.className} text-white font-[300] text-[14px] leading-[18px] tracking-[0%] text-center m-0 p-0 w-full`}>
               Sign in or create an account
             </p>
+          </div>
 
+          {/* 3. GOOGLE BUTTON (Flat transparent effect with Top/Bottom borders) */}
+          <div 
+            className="absolute"
+            style={{ 
+              width: '349px', 
+              height: '56px', 
+              top: '321px', 
+              left: '125px' 
+            }}
+          >
             <button
               onClick={handleGoogleLogin}
               disabled={isLoading}
-              className="w-full max-w-[280px] bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-full px-6 py-3.5 text-[14px] font-medium transition-all flex items-center justify-center gap-3 disabled:opacity-70 disabled:cursor-not-allowed shadow-lg"
+              // Added cursor-pointer, fixed the hover background, brightened border on hover, and made transition smoother
+              className="w-full h-full cursor-pointer bg-white/10 hover:bg-white/20 border-0 border-y border-white/30 hover:border-white/50 text-white rounded-none transition-all duration-300 ease-out flex items-center justify-center gap-[10px] disabled:opacity-70 disabled:cursor-not-allowed"
             >
               {isLoading ? (
                 <Loader2 className="w-5 h-5 animate-spin text-white/70" />
               ) : (
                 <>
                   <GoogleIcon />
-                  Continue with Google
+                  <span className={`${unbounded.className} text-[14px] font-[600] leading-none mt-[2px]`}>
+                    Continue with Google
+                  </span>
                 </>
               )}
             </button>
           </div>
 
-          <div className="mt-auto pb-2">
-            <p className="text-[12px] text-[#828282] hover:text-white/80 transition-colors cursor-pointer">
-              Terms & Privacy policy
+          {/* 4. FOOTER (Exact Figma Specs) */}
+          <div 
+            className="absolute flex items-center justify-center"
+            style={{ 
+              width: '148px', 
+              height: '9px', 
+              top: '497px', 
+              left: '225px' 
+            }}
+          >
+            <p 
+              className={`${unbounded.className} text-white font-[300] text-[12px] leading-[100%] text-center m-0 p-0 w-full hover:text-white/80 transition-colors cursor-pointer`}
+              style={{ letterSpacing: '-0.02em' }}
+            >
+              Terms & Privacy apply
             </p>
           </div>
 
