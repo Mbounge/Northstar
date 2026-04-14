@@ -60,10 +60,10 @@ export async function getDashboardData(tenantId: string, companyId: string, spec
 
   const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data`;
 
-  // Helper to fetch JSON from Supabase Public URL
+  // Helper to fetch JSON from Supabase Public URL using isolated tenant path
   const readJson = async (subPath: string) => {
     try {
-      const res = await fetch(`${publicUrl}/${tenantId}/${companyId}/snapshots/${snapshotId}/${subPath}`, { cache: 'no-store' });
+      const res = await fetch(`${publicUrl}/${tenantId}/${companyId}/snapshots/${snapshotId}/${subPath}`, { next: { revalidate: 300 } });
       if (!res.ok) return null;
       return await res.json();
     } catch (error) {

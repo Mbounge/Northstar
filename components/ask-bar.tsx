@@ -64,7 +64,8 @@ export function AskBar() {
 
   return (
     <div
-      className={`absolute left-1/2 -translate-x-1/2 flex flex-col bg-white/50 dark:bg-zinc-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 w-[540px] transition-[border-radius,background-color] duration-300 ${
+      // Changed "transition-[border-radius,background-color]" to just "transition-colors"
+      className={`absolute left-1/2 -translate-x-1/2 flex flex-col bg-white/50 dark:bg-zinc-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 w-[540px] transition-colors duration-300 ${
         isExpanded ? "rounded-[24px]" : "rounded-full"
       }`}
       style={{ boxShadow: "0 8px 30px rgba(0,0,0,0.06)" }}

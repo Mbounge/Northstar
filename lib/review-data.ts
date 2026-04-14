@@ -27,14 +27,14 @@ function formatCategory(cat: string | undefined): string {
 
 async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onboarding', tenantId: string) {
   const url = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/agent_memory.json`;
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(url, { next: { revalidate: 300 } });
   if (!res.ok) return null;
   return await res.json();
 }
 
 async function fetchApkIntelligence(appName: string, tenantId: string) {
   const browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/browsing`;
-  const res = await fetch(`${browsingRoot}/apk_intelligence.json`, { cache: 'no-store' });
+  const res = await fetch(`${browsingRoot}/apk_intelligence.json`, { next: { revalidate: 300 } });
   if (!res.ok) return null;
 
   const data = await res.json();
@@ -49,7 +49,7 @@ async function fetchAppStoreData(appName: string, tenantId: string) {
   
   // 1. Fetch JSON Manifest
   let data: any = {};
-  const res = await fetch(`${publicUrl}/app_store_manifest.json`, { cache: 'no-store' });
+  const res = await fetch(`${publicUrl}/app_store_manifest.json`, { next: { revalidate: 300 } });
   if (res.ok) {
     data = await res.json();
   }
@@ -159,8 +159,8 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
       const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${type}`;
       
       const [manifestRes, intelRes] = await Promise.all([
-        fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'enriched_manifest.json'}`, { cache: 'no-store' }),
-        fetch(`${publicUrl}/enriched/session_intelligence.json`, { cache: 'no-store' })
+        fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'enriched_manifest.json'}`, { next: { revalidate: 300 } }),
+        fetch(`${publicUrl}/enriched/session_intelligence.json`, { next: { revalidate: 300 } })
       ]);
 
       let screenCountForThisSession = 0;
@@ -231,9 +231,9 @@ export async function getAppDetails(appName: string, tenantId: string) {
 async function fetchSessionData(appName: string, sessionType: string, tenantId: string) {
   const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/enriched`;
   const [manifestRes, intelRes, flowsRes] = await Promise.all([
-    fetch(`${publicUrl}/enriched_manifest.json`, { cache: 'no-store' }),
-    fetch(`${publicUrl}/session_intelligence.json`, { cache: 'no-store' }),
-    fetch(`${publicUrl}/flows.json`, { cache: 'no-store' })
+    fetch(`${publicUrl}/enriched_manifest.json`, { next: { revalidate: 300 } }),
+    fetch(`${publicUrl}/session_intelligence.json`, { next: { revalidate: 300 } }),
+    fetch(`${publicUrl}/flows.json`, { next: { revalidate: 300 } })
   ]);
   if (!manifestRes.ok) return null;
 
@@ -242,7 +242,7 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
   const flowsData = flowsRes.ok ? await flowsRes.json() : null;
   
   const stepsPromises = manifest.enriched_screenshots.map(async (entry: any) => {
-    const stepRes = await fetch(`${publicUrl}/${entry.enriched_file}`, { cache: 'no-store' });
+    const stepRes = await fetch(`${publicUrl}/${entry.enriched_file}`, { next: { revalidate: 300 } });
     const enrichedData = stepRes.ok ? await stepRes.json() : null;
     return {
       step: entry.step || entry.timeline_step,

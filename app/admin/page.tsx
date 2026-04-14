@@ -3,10 +3,14 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Command, ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, AlertTriangle, UserX, Search, Loader2, ArrowLeft } from "lucide-react";
+import Image from "next/image";
+import { ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, AlertTriangle, UserX, Search, Loader2, ArrowLeft, User as UserIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { createClient } from "@/lib/supabase/client";
 import { formatDistanceToNow } from "date-fns";
+import { Unbounded } from "next/font/google";
+
+const unbounded = Unbounded({ subsets: ["latin"], weight: ["200", "300", "400", "600", "700"] });
 
 type ActionType = "approve" | "reject" | "revoke";
 
@@ -29,17 +33,18 @@ export default function AdminDashboard() {
   const [orgModalOpen, setOrgModalOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
 
+  // NEW: State for viewing an organization's users
+  const [viewingOrgId, setViewingOrgId] = useState<string | null>(null);
+
   // 1. Fetch real users and customers from Supabase
   const fetchData = async () => {
     setIsLoading(true);
     
-    // Fetch users AND join their associated customer name
     const { data: usersData } = await supabase
       .from('user_profiles')
       .select('*, customer:customers(name)')
       .order('created_at', { ascending: false });
       
-    // Fetch customers
     const { data: customersData } = await supabase
       .from('customers')
       .select('*')
@@ -66,15 +71,13 @@ export default function AdminDashboard() {
   );
 
   const handleActionClick = (user: any, type: ActionType) => {
-    setSelectedCompanyId(user.customer_id || ""); // default to current if exists
+    setSelectedCompanyId(user.customer_id || ""); 
     setConfirmModal({ isOpen: true, type, user });
   };
   
-  // 2. Execute Approve/Reject
   const executeAction = async () => {
     if (!confirmModal.user) return;
     
-    // Prevent approval if no company is selected
     if (confirmModal.type === "approve" && !selectedCompanyId) {
       alert("You must assign the user to a company to approve them.");
       return;
@@ -83,16 +86,14 @@ export default function AdminDashboard() {
     const newStatus = confirmModal.type === "approve" ? "approved" : "rejected";
     const updatePayload = confirmModal.type === "approve" 
       ? { status: newStatus, customer_id: selectedCompanyId }
-      : { status: newStatus, customer_id: null }; // Strip company if rejected/revoked
+      : { status: newStatus, customer_id: null };
 
-    // Actual DB update
     const { error } = await supabase
       .from('user_profiles')
       .update(updatePayload)
       .eq('id', confirmModal.user.id);
 
     if (!error) {
-      // Optimistic refresh
       fetchData();
       setConfirmModal({ isOpen: false, type: "approve", user: null });
       setSelectedCompanyId("");
@@ -101,7 +102,6 @@ export default function AdminDashboard() {
     }
   };
 
-  // 3. Create a new Organization
   const handleCreateOrg = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newOrgName.trim()) return;
@@ -113,41 +113,149 @@ export default function AdminDashboard() {
     if (!error) {
       setNewOrgName("");
       setOrgModalOpen(false);
-      fetchData(); // Refresh list
+      fetchData(); 
     } else {
       alert("Failed to create organization.");
     }
   };
 
-  // Format dates safely
   const formatDate = (dateString: string) => {
     if (!dateString) return "Unknown";
     try { return formatDistanceToNow(new Date(dateString), { addSuffix: true }); } 
     catch { return "Unknown"; }
   };
 
+  // Helper variables for the org viewing modal
+  const viewingOrg = viewingOrgId ? customers.find(c => c.id === viewingOrgId) : null;
+  const orgUsersList = viewingOrgId ? users.filter(u => u.customer_id === viewingOrgId && u.status === "approved") : [];
+
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-[#050505] font-sans text-zinc-900 dark:text-zinc-100 transition-colors duration-300 relative">
+    <div className="relative min-h-screen bg-[#EEF0F8] dark:bg-[#09090b] flex flex-col overflow-hidden font-sans">
       
+      {/* ── AMBIENT BACKGROUND ── */}
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
+        <div 
+          className="relative flex-shrink-0"
+          style={{ 
+            width: '1450px', 
+            height: '1450px', 
+            transform: 'rotate(310deg)',
+            opacity: 0.3,
+            mixBlendMode: "multiply",
+            filter: "blur(48px)"
+          }}
+        >
+          <Image 
+            src="/topaz_enhance.png" 
+            alt="Ambient Background" 
+            fill 
+            className="object-cover -scale-x-100" 
+            priority 
+            quality={80}
+          />
+        </div>
+      </div>
+
+      {/* ── VIEW ORG USERS MODAL ── */}
+      {viewingOrgId && viewingOrg && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default" onClick={() => setViewingOrgId(null)} />
+          <div
+            className="relative z-10 w-[700px] max-h-[80vh] flex flex-col border border-white/10 shadow-2xl animate-in zoom-in-95 duration-200 rounded-none"
+            style={{ background: "rgba(0,0,0,0.60)", backdropFilter: "blur(24px)" }}
+          >
+            {/* Header */}
+            <div className="px-8 pt-8 pb-6 border-b border-white/10 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-4">
+                <button onClick={() => setViewingOrgId(null)} className="p-2 -ml-2 text-white bg-transparent border-none cursor-pointer hover:opacity-70 transition-opacity">
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+                <div>
+                  <h2 className={`${unbounded.className} text-[24px] font-[600] text-white leading-tight m-0`}>
+                    {viewingOrg.name}
+                  </h2>
+                  <p className="text-[13px] text-white/60 m-0 mt-1 flex items-center gap-2">
+                    <Users className="w-3.5 h-3.5" /> {orgUsersList.length} active members
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* User List */}
+            <div className="flex-1 overflow-y-auto px-8 py-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              {orgUsersList.length === 0 ? (
+                <div className="py-12 text-center flex flex-col items-center">
+                  <UserX className="w-8 h-8 text-white/20 mb-3" />
+                  <p className="text-white/50 text-[14px]">No active users assigned to this workspace.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {orgUsersList.map(user => (
+                    <div key={user.id} className="flex items-center justify-between p-4 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 bg-white/10 flex items-center justify-center text-white/60 font-bold text-[14px]">
+                          {user.full_name ? user.full_name.charAt(0).toUpperCase() : <UserIcon className="w-4 h-4" />}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-[15px] text-white">
+                            {user.full_name || <span className="italic opacity-50 font-normal">Unknown Name</span>}
+                          </span>
+                          <span className="text-[12px] text-white/50">{user.email}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${user.role === 'admin' ? 'bg-white text-black' : 'bg-white/10 text-white'}`}>
+                          {user.role}
+                        </span>
+                        <button 
+                          onClick={() => handleActionClick(user, "revoke")} 
+                          className="text-[12px] text-rose-400 hover:text-rose-300 font-medium bg-transparent border border-rose-500/30 hover:bg-rose-500/10 px-3 py-1.5 transition-colors cursor-pointer"
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── CREATE ORGANIZATION MODAL ── */}
       {orgModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200">
-            <h3 className="text-[16px] font-semibold text-zinc-900 dark:text-white mb-1">Add New Organization</h3>
-            <p className="text-[13px] text-zinc-500 dark:text-zinc-400 mb-4">Create a workspace to assign users to.</p>
-            <form onSubmit={handleCreateOrg}>
+        <div className="fixed inset-0 z-[90] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default" onClick={() => setOrgModalOpen(false)} />
+          <div
+            className="relative z-10 w-[599px] py-12 flex flex-col items-center justify-center border border-white/10 animate-in zoom-in-95 duration-200"
+            style={{ background: "rgba(0,0,0,0.60)", backdropFilter: "blur(24px)", boxShadow: "0 24px 80px rgba(0,0,0,0.40)" }}
+          >
+            <button onClick={() => setOrgModalOpen(false)} className="absolute top-8 left-8 p-2 text-white bg-transparent border-none cursor-pointer hover:opacity-70 transition-opacity">
+              <ArrowLeft className="w-6 h-6" />
+            </button>
+            
+            <h2 className={`${unbounded.className} text-center text-white tracking-[-0.02em] mb-10 m-0 p-0`}>
+              <span className="font-[200] text-[36px] block leading-[1.1]">Add a new</span>
+              <span className="font-[700] text-[36px] block leading-[1.1]">organization</span>
+            </h2>
+            
+            <form onSubmit={handleCreateOrg} className="flex flex-col w-[349px] gap-[8px]">
               <input
                 autoFocus
                 type="text"
                 placeholder="e.g. Sequoia Capital"
                 value={newOrgName}
                 onChange={(e) => setNewOrgName(e.target.value)}
-                className="w-full bg-transparent border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-[13px] text-zinc-900 dark:text-white mb-4 outline-none focus:border-indigo-500"
+                className="w-full h-[56px] bg-transparent border border-zinc-300 dark:border-white px-4 text-[14px] text-white outline-none rounded-none box-border placeholder:text-zinc-500 focus:bg-white/5 transition-colors"
               />
-              <div className="flex w-full gap-3">
-                <button type="button" onClick={() => setOrgModalOpen(false)} className="flex-1 px-4 py-2.5 rounded-lg text-[13px] font-medium bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancel</button>
-                <button type="submit" disabled={!newOrgName.trim()} className="flex-1 px-4 py-2.5 rounded-lg text-[13px] font-medium text-white transition-colors bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50">Create Org</button>
-              </div>
+              <button
+                type="submit"
+                disabled={!newOrgName.trim()}
+                className="w-full h-[56px] cursor-pointer bg-white/10 hover:bg-white/20 border-0 border-y border-white/30 hover:border-white/50 text-white rounded-none transition-all duration-300 ease-out flex items-center justify-center disabled:opacity-50"
+              >
+                <span className="font-sans text-[16px] font-[700] leading-[24px] tracking-[-0.01em]">Create</span>
+              </button>
             </form>
           </div>
         </div>
@@ -155,204 +263,216 @@ export default function AdminDashboard() {
 
       {/* ── APPROVE/REJECT MODAL OVERLAY ── */}
       {confirmModal.isOpen && confirmModal.user && (
-         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200">
-            <div className="flex flex-col items-center text-center">
-              {confirmModal.type === "approve" ? ( <div className="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 flex items-center justify-center mb-4"><CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-500" /></div> ) 
-              : confirmModal.type === "revoke" ? ( <div className="w-12 h-12 rounded-full bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 flex items-center justify-center mb-4"><UserX className="w-6 h-6 text-amber-600 dark:text-amber-500" /></div> ) 
-              : ( <div className="w-12 h-12 rounded-full bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 flex items-center justify-center mb-4"><AlertTriangle className="w-6 h-6 text-rose-600 dark:text-rose-500" /></div> )}
-              
-              <h3 className="text-[16px] font-semibold text-zinc-900 dark:text-white mb-1">
-                {confirmModal.type === "approve" ? "Approve Access?" : confirmModal.type === "revoke" ? "Revoke Access?" : "Reject Access?"}
-              </h3>
-              
-              <p className="text-[13px] text-zinc-500 dark:text-zinc-400 leading-relaxed mb-4">
-                Are you sure you want to {confirmModal.type} access for <br/>
-                <span className="font-semibold text-zinc-900 dark:text-zinc-200">{confirmModal.user.full_name || confirmModal.user.email}</span>? 
-                {confirmModal.type !== "approve" && " They will be locked out of the platform."}
-              </p>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default" onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })} />
+          <div
+            className="relative z-10 w-[599px] py-12 flex flex-col items-center justify-center border border-white/10 px-12 animate-in zoom-in-95 duration-200"
+            style={{ background: "rgba(0,0,0,0.60)", backdropFilter: "blur(24px)", boxShadow: "0 24px 80px rgba(0,0,0,0.40)" }}
+          >
+            <button onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })} className="absolute top-8 left-8 p-2 text-white bg-transparent border-none cursor-pointer hover:opacity-70 transition-opacity">
+              <ArrowLeft className="w-6 h-6" />
+            </button>
 
-              {/* COMPANY ASSIGNMENT DROPDOWN (Only for Approval) */}
-              {confirmModal.type === "approve" && (
-                <div className="w-full text-left mb-6 border-t border-zinc-100 dark:border-zinc-800 pt-4">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5 block">Assign to Organization <span className="text-rose-500">*</span></label>
-                  <select 
-                    value={selectedCompanyId}
-                    onChange={(e) => setSelectedCompanyId(e.target.value)}
-                    className="w-full bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2.5 text-[13px] text-zinc-900 dark:text-white outline-none focus:border-emerald-500 transition-colors"
-                  >
-                    <option value="" disabled>-- Select a company --</option>
-                    {customers.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                  {customers.length === 0 && (
-                    <p className="text-[10px] text-rose-500 mt-1">You must create an Organization first!</p>
-                  )}
-                </div>
-              )}
+            <h2 className={`${unbounded.className} text-center text-white tracking-[-0.02em] mb-4 m-0 p-0`}>
+              <span className="font-[200] text-[36px] block leading-[1.1]">
+                {confirmModal.type === "approve" ? "Approve" : confirmModal.type === "revoke" ? "Revoke" : "Reject"}
+              </span>
+              <span className="font-[700] text-[36px] block leading-[1.1]">Access?</span>
+            </h2>
+            
+            <p className={`${unbounded.className} text-[16px] font-[300] leading-[24px] text-white/80 text-center m-0 p-0 mb-8`}>
+              {confirmModal.user.full_name || confirmModal.user.email}
+              {confirmModal.type !== "approve" && <span className="block text-rose-400 mt-2 text-[14px]">This will revoke platform access.</span>}
+            </p>
 
-              <div className="flex w-full gap-3 mt-2">
-                <button onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })} className="flex-1 px-4 py-2.5 rounded-lg text-[13px] font-medium bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancel</button>
-                <button 
-                  onClick={executeAction} 
-                  disabled={confirmModal.type === "approve" && !selectedCompanyId}
-                  className={`flex-1 px-4 py-2.5 rounded-lg text-[13px] font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${ confirmModal.type === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : confirmModal.type === "revoke" ? "bg-amber-600 hover:bg-amber-700" : "bg-rose-600 hover:bg-rose-700" }`}
+            {confirmModal.type === "approve" && (
+              <div className="w-[349px] flex flex-col gap-[8px] mb-8">
+                <label className="text-[12px] font-sans text-white/60 uppercase tracking-wider mb-1">Assign to Workspace</label>
+                <select 
+                  value={selectedCompanyId}
+                  onChange={(e) => setSelectedCompanyId(e.target.value)}
+                  className="w-full h-[56px] bg-transparent border border-zinc-300 dark:border-white px-4 text-[14px] text-white outline-none rounded-none box-border appearance-none focus:bg-white/5 transition-colors cursor-pointer"
                 >
-                  Yes, {confirmModal.type.charAt(0).toUpperCase() + confirmModal.type.slice(1)}
-                </button>
+                  <option value="" disabled className="text-black">-- Select an organization --</option>
+                  {customers.map(c => (
+                    <option key={c.id} value={c.id} className="text-black">{c.name}</option>
+                  ))}
+                </select>
+                {customers.length === 0 && <p className="text-[12px] text-rose-400 mt-1">Create an organization first.</p>}
               </div>
-            </div>
+            )}
+
+            <button
+              onClick={executeAction} 
+              disabled={confirmModal.type === "approve" && !selectedCompanyId}
+              className="w-[349px] h-[56px] cursor-pointer bg-white/10 hover:bg-white/20 border-0 border-y border-white/30 hover:border-white/50 text-white rounded-none transition-all duration-300 ease-out flex items-center justify-center disabled:opacity-50"
+            >
+              <span className="font-sans text-[16px] font-[700] leading-[24px] tracking-[-0.01em]">
+                Confirm {confirmModal.type}
+              </span>
+            </button>
           </div>
         </div>
       )}
 
-      {/* ── ADMIN TOPBAR ── */}
-      <header className="h-14 border-b border-zinc-200 dark:border-zinc-800/80 px-6 flex items-center justify-between bg-white dark:bg-[#0a0a0a]">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-sm"><Command className="w-4 h-4 text-white" /></div>
-          <div><h1 className="text-[14px] font-semibold tracking-tight leading-tight">Northstar Admin</h1><p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest">Superuser Access</p></div>
-        </div>
+      {/* ── HEADER ── */}
+      <header className="relative z-10 w-full px-8 pt-9 pb-6 flex items-center justify-between box-border">
         <div className="flex items-center gap-4">
-          <Link 
-            href="/" 
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-[12px] font-medium"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" /> Return to App
+          <Link href="/" className="p-2 transition-opacity hover:opacity-70">
+            <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
           </Link>
-          <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-800" />
-          <ThemeToggle />
+          <h1 className={`${unbounded.className} text-[30px] font-semibold tracking-tight text-[#0A0A0A] dark:text-white m-0`}>
+            North Star <span className="font-[300] opacity-50">Admin</span>
+          </h1>
         </div>
+        <ThemeToggle />
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8">
-        
-        {/* ── TABS ── */}
-        <div className="flex gap-2 mb-8 border-b border-zinc-200 dark:border-zinc-800 pb-px">
-          <button onClick={() => setActiveTab("requests")} className={`px-4 py-2 text-[13px] font-medium transition-colors relative ${ activeTab === "requests" ? "text-zinc-900 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300" }`}>
-            <div className="flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> Access Requests {pendingUsers.length > 0 && <span className="bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 text-[10px] px-1.5 py-0.5 rounded-full font-bold">{pendingUsers.length}</span>}</div>
-            {activeTab === "requests" && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-indigo-600" />}
+      {/* ── TABS ── */}
+      <div className="relative z-10 w-full px-12 mb-6">
+        <div className="flex flex-row items-center gap-8 border-b border-black/10 dark:border-white/10"> 
+          <button onClick={() => setActiveTab("requests")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "requests" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
+            <ShieldAlert className="w-4 h-4" /> Requests
+            {pendingUsers.length > 0 && <span className="ml-1 bg-white/20 dark:bg-white/10 px-2 py-0.5 rounded-sm text-[12px]">{pendingUsers.length}</span>}
           </button>
-          <button onClick={() => setActiveTab("directory")} className={`px-4 py-2 text-[13px] font-medium transition-colors relative ${ activeTab === "directory" ? "text-zinc-900 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300" }`}>
-            <div className="flex items-center gap-2"><Users className="w-4 h-4" /> User Directory</div>
-            {activeTab === "directory" && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-indigo-600" />}
+          <button onClick={() => setActiveTab("directory")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "directory" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
+            <Users className="w-4 h-4" /> Directory
           </button>
-          <button onClick={() => setActiveTab("customers")} className={`px-4 py-2 text-[13px] font-medium transition-colors relative ${ activeTab === "customers" ? "text-zinc-900 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300" }`}>
-            <div className="flex items-center gap-2"><Building2 className="w-4 h-4" /> Organizations</div>
-            {activeTab === "customers" && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-indigo-600" />}
+          <button onClick={() => setActiveTab("customers")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "customers" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
+            <Building2 className="w-4 h-4" /> Organizations
           </button>
         </div>
+      </div>
 
+      {/* ── MAIN CONTENT ── */}
+      <main className="relative z-10 flex-1 w-full max-w-7xl mx-auto px-12 pb-20 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+        
         {isLoading ? (
-          <div className="flex items-center justify-center py-20 text-zinc-500">
-            <Loader2 className="w-6 h-6 animate-spin" />
+          <div className="flex items-center justify-center py-40 text-black dark:text-white">
+            <Loader2 className="w-8 h-8 animate-spin opacity-50" />
           </div>
         ) : (
           <>
-            {/* ── TAB CONTENT: REQUESTS ── */}
+            {/* ── REQUESTS TAB ── */}
             {activeTab === "requests" && (
-              <div className="animate-in fade-in duration-300">
-                <div className="mb-6"><h2 className="text-lg font-semibold mb-1">Pending Access Requests</h2><p className="text-[13px] text-zinc-500">Users who are stuck on the verification screen.</p></div>
-                <div className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm">
-                  <table className="w-full text-left text-[13px]">
-                    <thead className="bg-zinc-50 dark:bg-zinc-900/50 border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 font-medium"><tr>
-                      <th className="px-6 py-3">Full Name</th>
-                      <th className="px-6 py-3">Email Address</th>
-                      <th className="px-6 py-3">Requested</th>
-                      <th className="px-6 py-3 text-right">Actions</th>
-                    </tr></thead>
-                    <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              <div className="animate-in fade-in duration-500">
+                <div className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl overflow-hidden rounded-none">
+                  <table className="w-full text-left text-[14px]">
+                    <thead className="bg-black/5 dark:bg-white/5 border-b border-black/10 dark:border-white/10 text-zinc-600 dark:text-zinc-400 font-medium">
+                      <tr>
+                        <th className="px-6 py-4">Full Name</th>
+                        <th className="px-6 py-4">Email</th>
+                        <th className="px-6 py-4">Requested</th>
+                        <th className="px-6 py-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-black/5 dark:divide-white/10">
                       {pendingUsers.length > 0 ? (pendingUsers.map((user) => (
-                        <tr key={user.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/20 transition-colors">
-                          <td className="px-6 py-4 font-semibold text-zinc-900 dark:text-white">{user.full_name || <span className="text-zinc-400 font-normal italic">Unknown</span>}</td>
-                          <td className="px-6 py-4 text-zinc-600 dark:text-zinc-400 flex items-center gap-2"><Mail className="w-3.5 h-3.5" />{user.email}</td>
-                          <td className="px-6 py-4 text-zinc-500">{formatDate(user.created_at)}</td>
-                          <td className="px-6 py-4"><div className="flex justify-end gap-2"><button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:text-emerald-400 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/20 font-medium transition-colors"><CheckCircle2 className="w-4 h-4" /> Approve</button><button onClick={() => handleActionClick(user, "reject")} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-zinc-600 bg-zinc-100 hover:bg-zinc-200 dark:text-zinc-400 dark:bg-zinc-900 dark:hover:bg-zinc-800 font-medium transition-colors"><XCircle className="w-4 h-4" /> Reject</button></div></td>
+                        <tr key={user.id} className="hover:bg-white/50 dark:hover:bg-white/5 transition-colors text-black dark:text-white">
+                          <td className="px-6 py-4 font-semibold">{user.full_name || <span className="opacity-50 italic font-normal">Unknown</span>}</td>
+                          <td className="px-6 py-4 opacity-80 flex items-center gap-2"><Mail className="w-3.5 h-3.5" />{user.email}</td>
+                          <td className="px-6 py-4 opacity-60">{formatDate(user.created_at)}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex justify-end gap-2">
+                              <button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white dark:hover:bg-white/20 border border-white/80 dark:border-white/20 text-black dark:text-white transition-colors text-[13px] font-semibold rounded-none cursor-pointer">
+                                Approve
+                              </button>
+                              <button onClick={() => handleActionClick(user, "reject")} className="flex items-center gap-1.5 px-3 py-1.5 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-black/60 dark:text-white/60 transition-colors text-[13px] font-medium rounded-none cursor-pointer">
+                                Reject
+                              </button>
+                            </div>
+                          </td>
                         </tr>
-                      ))) : (<tr><td colSpan={4} className="px-6 py-8 text-center text-zinc-500 font-mono text-[12px]">No pending requests right now. Inbox zero!</td></tr>)}
+                      ))) : (<tr><td colSpan={4} className="px-6 py-12 text-center text-black/50 dark:text-white/50 font-medium text-[14px]">No pending requests.</td></tr>)}
                     </tbody>
                   </table>
                 </div>
               </div>
             )}
 
-            {/* ── TAB CONTENT: DIRECTORY ── */}
+            {/* ── DIRECTORY TAB ── */}
             {activeTab === "directory" && (
-              <div className="animate-in fade-in duration-300">
-                <div className="mb-6">
-                  <div className="flex justify-between items-center mb-1">
-                    <h2 className="text-lg font-semibold">User Directory ({processedUsers.length})</h2>
-                    <div className="relative w-full max-w-xs">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                      <input type="text" placeholder="Search by name, email, or company..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all" />
-                    </div>
+              <div className="animate-in fade-in duration-500">
+                <div className="flex justify-between items-center mb-6">
+                  <div className="relative w-[349px]">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/50 dark:text-white/50" />
+                    <input type="text" placeholder="Search users..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
+                      className="w-full bg-white/40 dark:bg-black/30 backdrop-blur-md border border-white/60 dark:border-white/10 rounded-none pl-11 pr-4 py-3 text-[14px] text-black dark:text-white focus:outline-none focus:border-black/30 dark:focus:border-white/30 transition-colors placeholder:text-black/50 dark:placeholder:text-white/50" 
+                    />
                   </div>
-                  <p className="text-[13px] text-zinc-500">History of all approved and rejected users.</p>
-                </div>
-                <div className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm">
-                  <table className="w-full text-left text-[13px]">
-                    <thead className="bg-zinc-50 dark:bg-zinc-900/50 border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 font-medium"><tr>
-                      <th className="px-6 py-3">Full Name / Email</th>
-                      <th className="px-6 py-3">Company</th>
-                      <th className="px-6 py-3">Role</th>
-                      <th className="px-6 py-3">Status</th>
-                      <th className="px-6 py-3 text-right">Actions</th>
-                    </tr></thead>
-                    <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                      {filteredProcessedUsers.length > 0 ? (filteredProcessedUsers.map((user) => (
-                        <tr key={user.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/20 transition-colors">
-                          <td className="px-6 py-4">
-                            <div className="font-semibold text-zinc-900 dark:text-white mb-0.5">{user.full_name || <span className="text-zinc-400 font-normal italic">Unknown</span>}</div>
-                            <div className="text-[11px] text-zinc-500 flex items-center gap-1.5"><Mail className="w-3 h-3" /> {user.email}</div>
-                          </td>
-                          <td className="px-6 py-4 font-medium">{user.customer ? <span className="px-2 py-1 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 rounded-md text-[11px]">{user.customer.name}</span> : <span className="text-zinc-400 italic">Unassigned</span>}</td>
-                          
-                          <td className="px-6 py-4">
-                            {user.role === 'admin' ? (
-                              <span className="px-2 py-1 bg-purple-50 text-purple-700 dark:bg-purple-500/10 dark:text-purple-400 rounded-md text-[10px] font-bold uppercase tracking-wider">Admin</span>
-                            ) : (
-                              <span className="px-2 py-1 bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 rounded-md text-[10px] font-bold uppercase tracking-wider">User</span>
-                            )}
-                          </td>
-                          
-                          <td className="px-6 py-4">{user.status === "approved" ? ( <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider"><CheckCircle2 className="w-3 h-3" /> Approved</span> ) : ( <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 text-[10px] font-bold uppercase tracking-wider"><XCircle className="w-3 h-3" /> Rejected</span> )}</td>
-                          <td className="px-6 py-4"><div className="flex justify-end gap-2">{user.status === "approved" ? ( <button onClick={() => handleActionClick(user, "revoke")} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-amber-700 bg-amber-50 hover:bg-amber-100 dark:text-amber-400 dark:bg-amber-500/10 dark:hover:bg-amber-500/20 font-medium transition-colors"><UserX className="w-4 h-4" /> Revoke</button> ) : ( <button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:text-emerald-400 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/20 font-medium transition-colors"><CheckCircle2 className="w-4 h-4" /> Approve</button> )}</div></td>
-                        </tr>
-                      ))) : (<tr><td colSpan={5} className="px-6 py-8 text-center text-zinc-500 font-mono text-[12px]">No users found matching your search.</td></tr>)}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* ── TAB CONTENT: CUSTOMERS ── */}
-            {activeTab === "customers" && (
-              <div className="animate-in fade-in duration-300">
-                <div className="mb-6 flex justify-between items-end">
-                  <div><h2 className="text-lg font-semibold mb-1">Organizations</h2><p className="text-[13px] text-zinc-500">Workspaces you can assign approved users into.</p></div>
-                  <button onClick={() => setOrgModalOpen(true)} className="flex items-center gap-1.5 px-4 py-2 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-[13px] font-medium rounded-lg hover:opacity-80 transition-opacity shadow-sm"><Plus className="w-4 h-4" /> Add Organization</button>
                 </div>
                 
-                {customers.length === 0 ? (
-                  <div className="text-center py-16 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl">
-                    <Building2 className="w-8 h-8 text-zinc-300 mx-auto mb-3" />
-                    <p className="text-zinc-500 text-[13px]">No organizations created yet.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {customers.map((customer) => {
-                      const userCount = users.filter(u => u.customer_id === customer.id).length;
-                      return (
-                        <div key={customer.id} className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
-                          <div className="flex justify-between items-start">
-                            <div><h3 className="font-semibold text-[15px] mb-1">{customer.name}</h3><div className="flex items-center gap-1 text-[12px] text-zinc-500"><Users className="w-3.5 h-3.5" /> {userCount} assigned users</div></div>
-                            <span className="bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded">Active</span>
-                          </div>
+                <div className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl overflow-hidden rounded-none">
+                  <table className="w-full text-left text-[14px]">
+                    <thead className="bg-black/5 dark:bg-white/5 border-b border-black/10 dark:border-white/10 text-zinc-600 dark:text-zinc-400 font-medium">
+                      <tr>
+                        <th className="px-6 py-4">User</th>
+                        <th className="px-6 py-4">Organization</th>
+                        <th className="px-6 py-4">Role</th>
+                        <th className="px-6 py-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-black/5 dark:divide-white/10">
+                      {filteredProcessedUsers.length > 0 ? (filteredProcessedUsers.map((user) => (
+                        <tr key={user.id} className="hover:bg-white/50 dark:hover:bg-white/5 transition-colors text-black dark:text-white">
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-[15px] mb-1">{user.full_name || <span className="opacity-50 italic font-normal">Unknown</span>}</div>
+                            <div className="text-[12px] opacity-70 flex items-center gap-1.5"><Mail className="w-3 h-3" /> {user.email}</div>
+                          </td>
+                          <td className="px-6 py-4 font-medium opacity-90">{user.customer ? user.customer.name : <span className="opacity-50 italic">Unassigned</span>}</td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-1 rounded-sm text-[11px] font-bold uppercase tracking-wider ${user.role === 'admin' ? 'bg-black dark:bg-white text-white dark:text-black' : 'bg-black/10 dark:bg-white/10 text-black dark:text-white'}`}>
+                              {user.role}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex justify-end gap-2">
+                              {user.status === "approved" ? ( 
+                                <button onClick={() => handleActionClick(user, "revoke")} className="flex items-center gap-1.5 px-3 py-1.5 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-rose-600 dark:text-rose-400 transition-colors text-[13px] font-medium rounded-none cursor-pointer">Revoke</button> 
+                              ) : ( 
+                                <button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white dark:hover:bg-white/20 border border-white/80 dark:border-white/20 text-black dark:text-white transition-colors text-[13px] font-semibold rounded-none cursor-pointer">Approve</button> 
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))) : (<tr><td colSpan={4} className="px-6 py-12 text-center text-black/50 dark:text-white/50 font-medium text-[14px]">No users found.</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* ── CUSTOMERS TAB ── */}
+            {activeTab === "customers" && (
+              <div className="animate-in fade-in duration-500">
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {/* Add New Card */}
+                  <button onClick={() => setOrgModalOpen(true)} className="flex flex-col items-center justify-center gap-3 bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl hover:bg-white/60 dark:hover:bg-white/5 transition-colors p-8 rounded-none cursor-pointer min-h-[160px]">
+                    <Plus className="w-8 h-8 text-black/50 dark:text-white/50" />
+                    <span className="text-[15px] font-bold text-black/70 dark:text-white/70">Create Workspace</span>
+                  </button>
+
+                  {customers.map((customer) => {
+                    const userCount = users.filter(u => u.customer_id === customer.id).length;
+                    return (
+                      <div 
+                        key={customer.id} 
+                        onClick={() => setViewingOrgId(customer.id)}
+                        className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl hover:bg-white/50 dark:hover:bg-white/5 transition-all p-8 rounded-none min-h-[160px] flex flex-col justify-between cursor-pointer group"
+                      >
+                        <div>
+                          <h3 className="font-bold text-[18px] text-black dark:text-white mb-2 group-hover:text-blue-500 transition-colors">{customer.name}</h3>
+                          <div className="flex items-center gap-2 text-[14px] text-black/60 dark:text-white/60"><Users className="w-4 h-4" /> {userCount} active users</div>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+                        <div className="flex justify-between items-end mt-4">
+                          <span className="text-[11px] text-black/40 dark:text-white/40 font-mono hover:underline">View members →</span>
+                          <span className="bg-black/5 dark:bg-white/10 text-black dark:text-white px-2 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wider">Active</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </>

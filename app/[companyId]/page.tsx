@@ -48,6 +48,15 @@ export default async function CompanyDashboardPage({
     );
   }
 
+  // ── NEW: Log the user's visit to this app! ──
+  if (user?.id) {
+    await supabase.from('user_app_visits').upsert({
+      user_id: user.id,
+      app_name: decodedCompanyId,
+      last_visited_at: new Date().toISOString()
+    }, { onConflict: 'user_id, app_name' });
+  }
+
   const trackedCompanies = await getTrackedCompanies(tenantId);
   let matchedCompany = trackedCompanies.find((c) => c.id === decodedCompanyId);
   if (!matchedCompany) matchedCompany = trackedCompanies.find((c) => c.id.toLowerCase() === decodedCompanyId.toLowerCase());
@@ -75,7 +84,7 @@ export default async function CompanyDashboardPage({
   let preciseAppType = null;
   const fetchMemory = async (type: string) => {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/${type}/agent_memory.json`, { cache: 'no-store' });
+      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/${type}/agent_memory.json`, { next: { revalidate: 300 } });
       if (res.ok) {
         const data = await res.json();
         if (data?.app_type) return data.app_type;
@@ -104,16 +113,13 @@ export default async function CompanyDashboardPage({
   const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
 
   const IdentityHeader = () => (
-    // Removed h-[200px] and bg-white/20 so it doesn't double-stack!
     <div className="w-full h-full flex items-center justify-between px-10 pt-6 relative">
       
       <div className="flex items-center">
-        {/* Back Button */}
         <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6">
           <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
         </Link>
         
-        {/* Icon & Title Block */}
         <div className="flex items-center gap-5">
           <div className="w-[110px] h-[110px] rounded-full p-[4px] bg-gradient-to-br from-[#191FD1] via-[#2EBDCD] to-[#CC48E1] shrink-0 shadow-sm">
             <div className="w-full h-full bg-[#35272a] rounded-full flex items-center justify-center overflow-hidden relative">
@@ -132,41 +138,24 @@ export default async function CompanyDashboardPage({
           </div>
         </div>
         
-        {/* Rank & Market Data */}
         <div className="flex items-center gap-12 ml-16">
-          
-          {/* ── RANK COLUMN ── */}
-          {/* Changed to items-center per your Figma notes */}
           <div className="flex flex-col gap-[6px] justify-center items-center">
-            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">
-              Rank
-            </span>
-            <span className="font-sans text-[16px] font-[700] text-[#000000] dark:text-white leading-[100%] text-center">
-              #1
-            </span>
+            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">Rank</span>
+            <span className="font-sans text-[16px] font-[700] text-[#000000] dark:text-white leading-[100%] text-center">#1</span>
           </div>
 
-          {/* ── MARKET COLUMN ── */}
-          {/* Changed to items-center per your Figma notes */}
           <div className="flex flex-col gap-[6px] justify-center items-center">
-            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">
-              Market
-            </span>
-            <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-zinc-100 leading-[100%] text-center">
-              {marketName}
-            </span>
+            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">Market</span>
+            <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-zinc-100 leading-[100%] text-center">{marketName}</span>
           </div>
-
         </div>
       </div>
       
-      {/* Actions */}
       <div className="flex items-center gap-4">
         <button className="w-12 h-12 rounded-full bg-white/40 dark:bg-white/5 backdrop-blur-md flex items-center justify-center text-zinc-900 dark:text-zinc-100 hover:bg-white/60 dark:hover:bg-white/10 transition-colors border border-white/20 dark:border-white/10 shadow-none cursor-pointer">
           <MoreHorizontal className="w-6 h-6" />
         </button>
         
-        {/* ── UPDATED SNAPS BUTTON ── */}
         <button className="w-[114px] h-[48px] rounded-full bg-[#0088FF] text-white text-[15px] font-semibold hover:bg-[#0077EE] flex items-center justify-center gap-[3px] transition-colors border-none shadow-none cursor-pointer">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
             <path d="M5 3l14 9-14 9V3z"/>
@@ -189,7 +178,6 @@ export default async function CompanyDashboardPage({
             </h1>
           </div>
 
-          {/* ── UPDATED TABS WITH HOVER EFFECTS ── */}
           <div className="flex-none bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 p-1 rounded-none shadow-none">
             <TabsList className="!bg-transparent h-auto p-0 gap-1 !border-none !shadow-none flex items-center">
               {[{ value: "product", label: "product" }, { value: "marketing", label: "marketing" }, { value: "business", label: "business" }].map(({ value, label }) => (

@@ -31,6 +31,7 @@ const findJobScreenshotPath = (jobTitle: string, pages: BusinessPage[], companyI
 
   if (matches.length > 0) {
     const filename = matches[0].split('/').pop();
+    // Path updated to isolate by tenantId
     return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/business/screenshots/${filename}`;
   }
   
@@ -48,8 +49,8 @@ export async function buildStrategicContext(tenantId: string, companyId: string)
 
   // --- 1. PRODUCT PILLAR ---
   contextText += "=== PILLAR 1: PRODUCT (Mobile & Web) ===\n";
-  contextText += `Mobile App Structure: ${data.mobile.tabs.length} Tabs found.\n`;
-  data.mobile.tabs.forEach((tab: any) => {
+  contextText += `Mobile App Structure: ${data.mobile.tabs?.length || 0} Tabs found.\n`;
+  data.mobile.tabs?.forEach((tab: any) => {
     contextText += `- Tab "${tab.name}": Contains sections like ${tab.interactions?.map((i:any) => i.section).join(', ')}.\n`;
     tab.interactions?.forEach((i: any) => {
       const assetId = `mobile_${i.section}_${i.clicked_text}`.replace(/[^a-zA-Z0-9]/g, '_');
@@ -57,7 +58,7 @@ export async function buildStrategicContext(tenantId: string, companyId: string)
         id: assetId,
         type: 'screen',
         title: `Mobile: ${i.section}`,
-        imageUrl: i.screenshots[0] ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/product/mobile/screenshots/${i.screenshots[0].split('/').pop()}` : undefined
+        imageUrl: i.screenshots[0] ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${companyId}/onboarding/screenshots/${i.screenshots[0].split('/').pop()}` : undefined
       });
     });
   });

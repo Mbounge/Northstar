@@ -32,7 +32,7 @@ export function MarketingFeed({ posts, companyId, snapshotId, tenantId }: Market
     if (!rawPath) return "";
     if (rawPath.startsWith('http')) return rawPath;
     const filename = rawPath.split('/').pop();
-    // Ensure the tenantId is in the image URL path
+    // Path updated to isolate by tenantId
     return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/marketing/screenshots/${filename}`;
   };
 

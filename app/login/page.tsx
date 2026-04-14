@@ -129,11 +129,9 @@ export default function LoginPage() {
                 Welcome to
               </span>
               <span 
-                className="block font-[600] text-[40px] leading-[100%] whitespace-nowrap"
-                style={{ 
-                  letterSpacing: '-0.02em',
-                  marginTop: '-4px' 
-                }}
+                // Removed the negative margin hack and added mt-2 (8px gap) for proper spacing
+                className="block font-[600] text-[40px] leading-[100%] whitespace-nowrap mt-2"
+                style={{ letterSpacing: '-0.02em' }}
               >
                 North Star AI
               </span>
@@ -176,7 +174,8 @@ export default function LoginPage() {
               ) : (
                 <>
                   <GoogleIcon />
-                  <span className={`${unbounded.className} text-[14px] font-[600] leading-none mt-[2px]`}>
+                  {/* Removed Unbounded, applied font-sans (Geist), 700 weight, and -1% tracking from your screenshot */}
+                  <span className="font-sans text-[16px] font-[700] leading-[24px] tracking-[-0.01em]">
                     Continue with Google
                   </span>
                 </>
