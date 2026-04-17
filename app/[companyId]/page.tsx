@@ -121,32 +121,42 @@ export default async function CompanyDashboardPage({
         </Link>
         
         <div className="flex items-center gap-5">
-          <div className="w-[110px] h-[110px] rounded-full p-[4px] bg-gradient-to-br from-[#191FD1] via-[#2EBDCD] to-[#CC48E1] shrink-0 shadow-sm">
-            <div className="w-full h-full bg-[#35272a] rounded-full flex items-center justify-center overflow-hidden relative">
-              {iconUrl ? (
-                <img src={iconUrl} alt={appName} className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-white flex items-center justify-center h-full text-4xl font-bold lowercase tracking-wider">
-                  {appName.substring(0, 2)}
-                </span>
-              )}
-            </div>
+          <div className="w-[110px] h-[110px] rounded-full flex items-center justify-center overflow-hidden relative shrink-0 shadow-sm bg-[#35272a]">
+            {iconUrl ? (
+              <img src={iconUrl} alt={appName} className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-white flex items-center justify-center h-full text-4xl font-bold lowercase tracking-wider">
+                {appName.substring(0, 2)}
+              </span>
+            )}
           </div>
-          <div className="flex flex-col justify-center font-sans gap-1">
-            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[100%] m-0 p-0">{appName}</h2>
-            <h3 className="text-[30px] font-[400] text-[#000000] dark:text-zinc-300 leading-[100%] m-0 p-0">{marketName}</h3>
+          <div className="flex flex-col justify-end h-[78px] font-sans gap-[4px] pb-[2px]">
+            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0">
+              {appName}
+            </h2>
+            <h3 className="text-[30px] font-[400] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0">
+              {marketName}
+            </h3>
           </div>
         </div>
         
-        <div className="flex items-center gap-12 ml-16">
-          <div className="flex flex-col gap-[6px] justify-center items-center">
-            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">Rank</span>
-            <span className="font-sans text-[16px] font-[700] text-[#000000] dark:text-white leading-[100%] text-center">#1</span>
+        <div className="flex items-center gap-10 ml-16">
+          <div className="flex flex-col gap-[6px] justify-center items-start">
+            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
+              Rank
+            </span>
+            <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-white leading-[100%] text-left">
+              #1
+            </span>
           </div>
 
-          <div className="flex flex-col gap-[6px] justify-center items-center">
-            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-center">Market</span>
-            <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-zinc-100 leading-[100%] text-center">{marketName}</span>
+          <div className="flex flex-col gap-[6px] justify-center items-start">
+            <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
+              Market
+            </span>
+            <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-white leading-[100%] text-left">
+              {marketName}
+            </span>
           </div>
         </div>
       </div>
@@ -185,12 +195,13 @@ export default async function CompanyDashboardPage({
                   key={value} 
                   value={value} 
                   className="
-                    px-8 py-2 rounded-none text-[14px] font-medium border-none shadow-none
-                    transition-all duration-200 cursor-pointer
-                    text-zinc-600 dark:text-zinc-400
-                    hover:bg-white/20 dark:hover:bg-white/5 hover:text-zinc-900 dark:hover:text-white
+                    px-5 py-1.5 rounded-none border-none shadow-none cursor-pointer
+                    transition-all duration-200
+                    font-sans text-[20px] leading-[100%] tracking-[0%]
+                    font-[400] text-[#000000] dark:text-white
+                    hover:bg-white/20 dark:hover:bg-white/5 
+                    data-[state=active]:font-[700]
                     data-[state=active]:!bg-white/40 dark:data-[state=active]:!bg-white/10 
-                    data-[state=active]:text-zinc-900 dark:data-[state=active]:text-white 
                   "
                 >
                   {label}

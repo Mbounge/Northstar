@@ -5,12 +5,33 @@ import { getReviewApps } from "@/lib/review-data";
 import { createClient } from "@/lib/supabase/server";
 import Image from "next/image";
 
+// ── FORCE DYNAMIC: Ensures the sidebar reorders instantly when navigating between apps ──
+export const dynamic = "force-dynamic";
+
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const { data: profile } = await supabase.from('user_profiles').select('customer_id').eq('id', user?.id).single();
   
   const apps = profile?.customer_id ? await getReviewApps(profile.customer_id) : [];
+
+  // ── NEW: Fetch visit history and sort the apps so the sidebar matches the home page ──
+  const { data: visits } = await supabase
+    .from('user_app_visits')
+    .select('app_name, last_visited_at')
+    .eq('user_id', user?.id);
+
+  const visitMap = new Map((visits || []).map(v => [v.app_name.toLowerCase(), v.last_visited_at]));
+
+  if (apps.length > 0) {
+    apps.sort((a, b) => {
+      const timeA = visitMap.get(a.appName.toLowerCase());
+      const timeB = visitMap.get(b.appName.toLowerCase());
+      const dateA = timeA ? new Date(timeA).getTime() : 0;
+      const dateB = timeB ? new Date(timeB).getTime() : 0;
+      return dateB - dateA; 
+    });
+  }
 
   return (
     <div className="flex h-screen overflow-hidden relative font-[family-name:var(--font-geist-sans,sans-serif)] bg-[#EEF0F8] dark:bg-[#050505] text-zinc-900 dark:text-zinc-100">
@@ -44,7 +65,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </main>
 
       {/* ── RIGHT SIDEBAR ── */}
-      {/* Removed bg-white/20 and backdrop-blur-xl so it is completely transparent */}
       <div className="relative z-20">
         <AppSidebar apps={apps} />
       </div>

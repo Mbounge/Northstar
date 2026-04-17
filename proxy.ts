@@ -3,7 +3,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -96,4 +96,4 @@ export const config = {
 }
 
 // Added failsafe default export
-export default middleware;
+export default proxy;

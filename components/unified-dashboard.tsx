@@ -47,22 +47,21 @@ export function UnifiedDashboard({
           </div>
           
           {/* Bottom Section: Subnav row */}
-          {/* Changed items-center to items-end, and added pb-4 to push tabs to the bottom */}
-          <div className="relative flex items-end justify-center px-10 h-[64px] shrink-0 border-none pb-[14px]">
+          <div className="relative flex items-end justify-center px-10 h-[64px] shrink-0 border-none">
             <TabsList className="!bg-transparent h-auto p-0 gap-12 !border-none !shadow-none flex items-center">
               {subTabs.map(({ value, label }) => (
                 <TabsTrigger
                   key={value}
                   value={value}
                   className="
-                    relative !bg-transparent !shadow-none rounded-none px-0 pb-[6px] !border-none
+                    relative !bg-transparent !shadow-none rounded-none px-0 pb-[20px] !border-none
                     outline-none focus:outline-none focus-visible:ring-0 cursor-pointer
                     text-[15px] font-[400] text-[#747474] dark:text-zinc-400
                     hover:text-[#000000] dark:hover:text-white
                     data-[state=active]:text-[#000000] dark:data-[state=active]:text-white
                     data-[state=active]:font-[600]
-                    after:absolute after:bottom-0 after:left-0 after:right-0 
-                    after:h-[2px] after:rounded-full after:bg-transparent
+                    after:absolute after:-bottom-[1px] after:left-0 after:right-0 
+                    after:h-[2px] after:rounded-t-full after:bg-transparent
                     data-[state=active]:after:bg-[#000000] dark:data-[state=active]:after:bg-white
                     transition-all
                   "

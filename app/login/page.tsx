@@ -78,8 +78,12 @@ export default function LoginPage() {
           Added mt-[80px] to shift the entire block down, bringing the top section further into view! 
         */}
         <div 
-          className="relative flex-shrink-0 mt-[132px] scale-[0.86111]"
-          style={{ width: '1600px', height: '1600px', transform: 'rotate(310deg)' }}
+          className="relative flex-shrink-0 mt-[12vh]"
+          style={{ 
+            width: 'max(1350px, 150vh)', 
+            height: 'max(1350px, 150vh)', 
+            transform: 'rotate(309deg)' 
+          }}
         >
           <Image 
             src="/topaz_enhance.png" 
