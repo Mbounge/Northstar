@@ -35,12 +35,11 @@ export function UnifiedDashboard({
   ];
 
   return (
-    // No h-full, no overflow-hidden — sits in normal document flow
-    <div className="flex flex-col">
-      <Tabs defaultValue="overview" className="flex flex-col">
+    <div className="flex flex-col flex-1 min-h-0 h-full">
+      <Tabs defaultValue="overview" className="flex flex-col flex-1 min-h-0 h-full">
 
         {/* ── IDENTITY + NAV HEADER ── */}
-        <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-8 relative border border-white/20 dark:border-white/10 backdrop-blur-md">
+        <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-6 relative border border-white/20 dark:border-white/10 backdrop-blur-md">
           
           <div className="flex-1 w-full relative">
             {header}
@@ -75,7 +74,6 @@ export function UnifiedDashboard({
               <div className="absolute right-10 top-1/2 -translate-y-1/2">
                 <button
                   onClick={() => setMode(mode === 'browsing' ? 'onboarding' : 'browsing')}
-                  // Restored authentic frosted glass: bg-white/20, white/60 border, backdrop-blur
                   className="h-9 px-5 flex items-center gap-2 rounded-full backdrop-blur-md bg-white/20 dark:bg-white/5 border border-white/60 dark:border-white/20 hover:bg-white/40 dark:hover:bg-white/10 transition-all duration-200 group cursor-pointer"
                 >
                   <span className="text-zinc-700 dark:text-zinc-300 text-[12px] font-semibold tracking-wide">
@@ -87,23 +85,23 @@ export function UnifiedDashboard({
           </div>
         </div>
 
-        {/* ── OVERVIEW — scrolls with page ── */}
-        <TabsContent value="overview" className="m-0">
+        {/* ── OVERVIEW — scrolls naturally ── */}
+        <TabsContent value="overview" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           <div className="max-w-6xl mx-auto w-full pb-16">
             <ExecutiveReport key={`exec-${mode}`} intel={activeData.sessionIntel} steps={activeData.steps} mode={mode} />
           </div>
         </TabsContent>
 
-        {/* ── SCREEN VIEWER — fixed height, internal scroll ── */}
-        <TabsContent value="viewer" className="m-0">
-          <div className="relative bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden" style={{ height: 'calc(100vh - 280px)' }}>
+        {/* ── SCREEN VIEWER — exact fit using Flexbox ── */}
+        <TabsContent value="viewer" className="flex-1 flex flex-col min-h-0 m-0 outline-none data-[state=inactive]:hidden pb-2">
+          <div className="flex-1 relative z-50 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden rounded-2xl">
             <SessionViewer key={`view-${mode}`} data={activeData} />
           </div>
         </TabsContent>
 
-        {/* ── FLOWS — fixed height, internal scroll ── */}
-        <TabsContent value="mobbin" className="m-0">
-          <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden" style={{ height: 'calc(100vh - 280px)' }}>
+        {/* ── FLOWS — exact fit using Flexbox ── */}
+        <TabsContent value="mobbin" className="flex-1 flex flex-col min-h-0 m-0 outline-none data-[state=inactive]:hidden pb-2">
+          <div className="flex-1 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden rounded-2xl">
             {activeData.flowsData ? (
               <FlowsViewer
                 key={`flows-${mode}`}
@@ -120,9 +118,9 @@ export function UnifiedDashboard({
           </div>
         </TabsContent>
 
-        {/* ── BRAND KIT — scrolls with page ── */}
+        {/* ── BRAND KIT — scrolls naturally ── */}
         {hasBrandKit && (
-          <TabsContent value="brand_kit" className="m-0">
+          <TabsContent value="brand_kit" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 p-8">
               <BrandKitViewer 
                 brandKit={brandKitData} 
@@ -133,9 +131,9 @@ export function UnifiedDashboard({
           </TabsContent>
         )}
 
-        {/* ── APP STORE — scrolls with page ── */}
+        {/* ── APP STORE — scrolls naturally ── */}
         {appData.appStore && (
-          <TabsContent value="app_store" className="m-0">
+          <TabsContent value="app_store" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16" style={{ minHeight: 600 }}>
               <AppStoreViewer appStoreData={appData.appStore} />
             </div>

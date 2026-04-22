@@ -178,8 +178,8 @@ export default async function CompanyDashboardPage({
   );
 
   return (
-    <div className="h-full flex flex-col relative z-10 bg-transparent">
-      <Tabs defaultValue="product" className="flex-1 flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col relative z-10 bg-transparent min-h-0">
+      <Tabs defaultValue="product" className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center justify-between pt-8 px-10 shrink-0 relative z-20">
           
           <div className="flex-1">
@@ -215,8 +215,10 @@ export default async function CompanyDashboardPage({
              <ThemeToggle />
           </div>
         </div>
-        <div className="flex-1 overflow-hidden mt-6 relative z-10 px-10">
-          <TabsContent value="product" className="h-full overflow-y-auto m-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+
+        {/* This wrapper guarantees the internal content fills exactly the remaining space */}
+        <div className="flex-1 flex flex-col min-h-0 mt-6 relative z-10 px-10 pb-4">
+          <TabsContent value="product" className="flex-1 flex flex-col min-h-0 m-0 outline-none data-[state=inactive]:hidden">
             {productData && (productData.browsing || productData.onboarding) ? (
               <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
             ) : (
@@ -227,7 +229,7 @@ export default async function CompanyDashboardPage({
               </div>
             )}
           </TabsContent>
-          <TabsContent value="marketing" className="h-full overflow-y-auto m-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+          <TabsContent value="marketing" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>
@@ -235,7 +237,7 @@ export default async function CompanyDashboardPage({
               <MarketingFeed key={`mkt-${activeSnapshotId}`} posts={marketingPosts} companyId={dataBucketId} snapshotId={activeSnapshotId} tenantId={tenantId} />
             </div>
           </TabsContent>
-          <TabsContent value="business" className="h-full overflow-y-auto m-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+          <TabsContent value="business" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>

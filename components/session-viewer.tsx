@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -76,6 +77,7 @@ export function SessionViewer({ data }: { data: any }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<"insights" | "elements" | "context">("insights");
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
 
@@ -92,6 +94,10 @@ export function SessionViewer({ data }: { data: any }) {
   const actualStepNumber = currentStep?.enrichedData?.extraction_meta?.timeline_step || currentStep?.step;
   const deterministicEventsThisScreen = allFrictionEvents.filter((e: any) => e.screen_index === actualStepNumber);
   const keyFindings: any[] = Array.isArray(intel.key_findings) ? intel.key_findings : [];
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const scrollToIndex = useCallback((idx: number) => {
     if (scrollRef.current) {
@@ -177,8 +183,8 @@ export function SessionViewer({ data }: { data: any }) {
   return (
     <>
       {/* ─── FULLSCREEN MODAL ─── */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-[200] flex flex-col bg-zinc-100/95 dark:bg-black/95 backdrop-blur-md animate-in fade-in duration-200">
+      {isModalOpen && mounted && createPortal(
+        <div className="fixed inset-0 z-[9999] flex flex-col bg-zinc-100/95 dark:bg-black/95 backdrop-blur-md animate-in fade-in duration-200">
           <button onClick={() => setIsModalOpen(false)} className="absolute top-6 right-6 z-50 p-3 bg-white/50 dark:bg-white/10 backdrop-blur-md rounded-full border border-white/50 dark:border-white/20">
             <X className="w-6 h-6 text-zinc-900 dark:text-white" />
           </button>
@@ -209,7 +215,8 @@ export function SessionViewer({ data }: { data: any }) {
               <span className="whitespace-nowrap shrink-0">SCREEN {actualStepNumber} / {steps.length}</span>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ─── MAIN LAYOUT ─── */}

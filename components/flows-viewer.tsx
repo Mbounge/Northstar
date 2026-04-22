@@ -2,10 +2,10 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy, Link } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { PanoramicMockup } from "./PanoramicMockup";
 
 // ─── TYPES ──────────────────────────────────────────────────────
@@ -95,6 +95,8 @@ function ScreenDetailModal({
   screens: Screen[]; initialIndex: number; flowLabel: string;
   appName: string; tenantId: string; mode: string; onClose: () => void;
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
@@ -142,9 +144,11 @@ function ScreenDetailModal({
     );
   };
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-[100] backdrop-blur-2xl bg-black/50 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[9999] backdrop-blur-2xl bg-black/50 animate-in fade-in duration-150"
       onClick={handleBackdropClick}
     >
       <div ref={modalRef} className="w-full h-full flex flex-col">
@@ -251,7 +255,8 @@ function ScreenDetailModal({
         </div>
 
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -493,18 +498,16 @@ export function FlowsViewer({
               Flows Explorer
             </h3>
           </div>
-          <div className="flex-1 min-h-0">
-            <ScrollArea className="h-full w-full">
-              <div className="flex flex-col pb-8 pt-2">
-                {sanitizedTaxonomy.map((node) => (
-                  <SidebarNode
-                    key={node.id} node={node}
-                    activeFlowId={activeFlowId} expandedNodes={expandedNodes}
-                    onSelect={handleSidebarSelect} onToggle={toggleExpand}
-                  />
-                ))}
-              </div>
-            </ScrollArea>
+          <div className="flex-1 min-h-0 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+            <div className="flex flex-col pb-8 pt-2">
+              {sanitizedTaxonomy.map((node) => (
+                <SidebarNode
+                  key={node.id} node={node}
+                  activeFlowId={activeFlowId} expandedNodes={expandedNodes}
+                  onSelect={handleSidebarSelect} onToggle={toggleExpand}
+                />
+              ))}
+            </div>
           </div>
         </div>
 
