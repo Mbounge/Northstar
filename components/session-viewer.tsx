@@ -78,8 +78,14 @@ export function SessionViewer({ data }: { data: any }) {
   const [activeTab, setActiveTab] = useState<"insights" | "elements" | "context">("insights");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  
   const scrollRef = useRef<HTMLDivElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
+  
+  // Ref guards to prevent onScroll from fighting programmatic smooth scrolling
+  const isProgrammaticScroll = useRef(false);
+  const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
+  const hasOpenedRef = useRef(false);
 
   const steps = data.steps;
   const currentStep = steps[currentIndex];
@@ -99,29 +105,43 @@ export function SessionViewer({ data }: { data: any }) {
     setMounted(true);
   }, []);
 
-  const scrollToIndex = useCallback((idx: number) => {
+  const scrollToIndex = useCallback((idx: number, behavior: ScrollBehavior = "smooth") => {
     if (scrollRef.current) {
+      isProgrammaticScroll.current = true;
       const child = scrollRef.current.children[idx] as HTMLElement;
       if (child) {
         scrollRef.current.scrollTo({
           left: child.offsetLeft - scrollRef.current.offsetWidth / 2 + child.offsetWidth / 2,
-          behavior: "smooth",
+          behavior,
         });
       }
+      
+      // Clear programmatic flag after scroll finishes to re-enable manual swipe detection
+      if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
+      scrollTimeout.current = setTimeout(() => {
+        isProgrammaticScroll.current = false;
+      }, behavior === "instant" ? 50 : 800); 
     }
   }, []);
 
+  // ONLY update index via scrolling if the user is manually swiping (not button clicking)
   const handleModalScroll = useCallback(() => {
+    if (isProgrammaticScroll.current) return; 
     if (!scrollRef.current) return;
+    
     const container = scrollRef.current;
     const center = container.scrollLeft + container.clientWidth / 2;
     let closestIdx = 0, minDiff = Infinity;
+    
     Array.from(container.children).forEach((child, idx) => {
       const el = child as HTMLElement;
       const diff = Math.abs(el.offsetLeft + el.offsetWidth / 2 - center);
       if (diff < minDiff) { minDiff = diff; closestIdx = idx; }
     });
-    if (closestIdx !== currentIndex) setCurrentIndex(closestIdx);
+    
+    if (closestIdx !== currentIndex) {
+      setCurrentIndex(closestIdx);
+    }
   }, [currentIndex]);
 
   const scrollCarouselToIndex = useCallback((idx: number) => {
@@ -139,31 +159,35 @@ export function SessionViewer({ data }: { data: any }) {
   useEffect(() => { scrollCarouselToIndex(currentIndex); }, [currentIndex, scrollCarouselToIndex]);
   useEffect(() => { setActiveTab("insights"); }, [currentIndex]);
 
+  // Center the correct screen instantly when the modal FIRST opens
   useEffect(() => {
-    if (isModalOpen && scrollRef.current) {
-      const child = scrollRef.current.children[currentIndex] as HTMLElement;
-      if (child) {
-        scrollRef.current.scrollTo({
-          left: child.offsetLeft - scrollRef.current.offsetWidth / 2 + child.offsetWidth / 2,
-          behavior: "instant" as ScrollBehavior,
-        });
-      }
+    if (isModalOpen && !hasOpenedRef.current) {
+      hasOpenedRef.current = true;
+      setTimeout(() => {
+        scrollToIndex(currentIndex, "instant");
+      }, 10);
+    } else if (!isModalOpen) {
+      hasOpenedRef.current = false;
     }
-  }, [isModalOpen, currentIndex]);
+  }, [isModalOpen, currentIndex, scrollToIndex]);
 
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
       if (e.key === "Escape") setIsModalOpen(false);
-      if (e.key === "ArrowRight") setCurrentIndex((p) => {
-        const next = Math.min(p + 1, steps.length - 1);
-        if (isModalOpen) scrollToIndex(next);
-        return next;
-      });
-      if (e.key === "ArrowLeft") setCurrentIndex((p) => {
-        const next = Math.max(p - 1, 0);
-        if (isModalOpen) scrollToIndex(next);
-        return next;
-      });
+      if (e.key === "ArrowRight") {
+        setCurrentIndex((p) => {
+          const next = Math.min(p + 1, steps.length - 1);
+          if (isModalOpen) scrollToIndex(next, "smooth");
+          return next;
+        });
+      }
+      if (e.key === "ArrowLeft") {
+        setCurrentIndex((p) => {
+          const next = Math.max(p - 1, 0);
+          if (isModalOpen) scrollToIndex(next, "smooth");
+          return next;
+        });
+      }
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
@@ -188,26 +212,60 @@ export function SessionViewer({ data }: { data: any }) {
           <button onClick={() => setIsModalOpen(false)} className="absolute top-6 right-6 z-50 p-3 bg-white/50 dark:bg-white/10 backdrop-blur-md rounded-full border border-white/50 dark:border-white/20">
             <X className="w-6 h-6 text-zinc-900 dark:text-white" />
           </button>
-          <button onClick={() => { const p = Math.max(currentIndex - 1, 0); setCurrentIndex(p); scrollToIndex(p); }} disabled={currentIndex === 0} className="absolute left-4 md:left-8 top-1/2 -translate-y-1/2 p-4 bg-white/80 dark:bg-black/60 backdrop-blur-md rounded-full border border-white/60 dark:border-white/20 shadow-xl z-20 disabled:opacity-30">
+          
+          <button 
+            onClick={() => { const p = Math.max(currentIndex - 1, 0); setCurrentIndex(p); scrollToIndex(p, "smooth"); }} 
+            disabled={currentIndex === 0} 
+            className="absolute left-4 md:left-8 top-1/2 -translate-y-1/2 p-4 bg-white/80 dark:bg-black/60 backdrop-blur-md rounded-full border border-white/60 dark:border-white/20 shadow-xl z-20 disabled:opacity-30"
+          >
             <ChevronLeft className="w-8 h-8 text-zinc-900 dark:text-white" />
           </button>
-          <div ref={scrollRef} onScroll={handleModalScroll} className="flex-1 w-full flex items-center gap-12 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}>
+          
+          <div 
+            ref={scrollRef} 
+            onScroll={handleModalScroll} 
+            className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" 
+            style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}
+          >
             {steps.map((step: any, idx: number) => {
               const isActive = idx === currentIndex;
               const isPanoramic = step.imagePath.includes("panoramic") || step.imagePath.includes("full_page");
               const hasNav = step.imagePath.includes("withnav") || (!step.imagePath.includes("nonav") && isPanoramic);
+              
               return (
-                <div key={idx} onClick={() => { setCurrentIndex(idx); scrollToIndex(idx); }} className={cn("snap-center shrink-0 transition-all duration-300 cursor-pointer", isActive ? "h-[80vh] opacity-100" : "h-[65vh] opacity-40 hover:opacity-70")} style={{ aspectRatio: "9/19.5" }}>
-                  <div className="relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl overflow-hidden" style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: isActive ? "1.8rem" : "1.1rem" }}>
+                <div 
+                  key={idx} 
+                  onClick={() => { setCurrentIndex(idx); scrollToIndex(idx, "smooth"); }} 
+                  className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center" 
+                  style={{ aspectRatio: "9/19.5" }}
+                >
+                  <div 
+                    className={cn(
+                      "relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl overflow-hidden transition-all duration-500 ease-out origin-center",
+                      isActive ? "scale-100 opacity-100" : "scale-[0.8125] opacity-40 hover:opacity-70"
+                    )} 
+                    style={{ 
+                      borderWidth: "0.3px", 
+                      borderColor: "#818A98", 
+                      borderStyle: "solid", 
+                      borderRadius: "1.8rem" 
+                    }}
+                  >
                     {isPanoramic ? <PanoramicMockup imgUrl={step.imagePath} alt="" hasBottomNav={hasNav} /> : <Image src={step.imagePath} alt="" fill className="object-cover" unoptimized />}
                   </div>
                 </div>
               );
             })}
           </div>
-          <button onClick={() => { const n = Math.min(currentIndex + 1, steps.length - 1); setCurrentIndex(n); scrollToIndex(n); }} disabled={currentIndex === steps.length - 1} className="absolute right-4 md:right-8 top-1/2 -translate-y-1/2 p-4 bg-white/80 dark:bg-black/60 backdrop-blur-md rounded-full border border-white/60 dark:border-white/20 shadow-xl z-20 disabled:opacity-30">
+
+          <button 
+            onClick={() => { const n = Math.min(currentIndex + 1, steps.length - 1); setCurrentIndex(n); scrollToIndex(n, "smooth"); }} 
+            disabled={currentIndex === steps.length - 1} 
+            className="absolute right-4 md:right-8 top-1/2 -translate-y-1/2 p-4 bg-white/80 dark:bg-black/60 backdrop-blur-md rounded-full border border-white/60 dark:border-white/20 shadow-xl z-20 disabled:opacity-30"
+          >
             <ChevronRight className="w-8 h-8 text-zinc-900 dark:text-white" />
           </button>
+          
           <div className="h-[80px] shrink-0 flex items-center justify-center">
             <div className="bg-white/70 dark:bg-black/70 backdrop-blur-md border border-white/50 dark:border-white/10 text-zinc-700 dark:text-zinc-300 px-6 py-2.5 rounded-full font-mono text-sm shadow-xl flex items-center gap-4">
               <span className="font-bold truncate max-w-[300px]">{displayTitle}</span>

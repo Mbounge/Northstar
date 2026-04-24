@@ -3,13 +3,41 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { cn } from "@/lib/utils";
 
+// ─── DYNAMIC APP TUNING ──────────────────────────────────────────────────────
+// Add new apps to this list to perfectly tune their sticky cut-offs.
+// The component will check if the image URL contains any of the "matchers".
+const APP_TUNING = [
+  {
+    matchers: ["graet"],
+    header: 11.42,
+    footer: 10.5,
+  },
+  {
+    matchers: ["nhl", "eliteprospects", "elite"],
+    header: 12.0,
+    footer: 10.5, 
+  }
+];
+
+function getTuningForImage(url: string) {
+  const lowerUrl = url.toLowerCase();
+  for (const config of APP_TUNING) {
+    if (config.matchers.some(m => lowerUrl.includes(m))) {
+      return { header: config.header, footer: config.footer };
+    }
+  }
+  // Safe default fallback if the app isn't explicitly configured above
+  return { header: 11.5, footer: 10.5 }; 
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 interface PanoramicMockupProps {
   imgUrl: string;
   alt: string;
   isActive?: boolean;
   hasBottomNav?: boolean;
-  headerHeightPct?: number;
-  footerHeightPct?: number;
+  headerHeightPct?: number; // Optional direct override
+  footerHeightPct?: number; // Optional direct override
 }
 
 export function PanoramicMockup({
@@ -17,14 +45,19 @@ export function PanoramicMockup({
   alt,
   isActive = true,
   hasBottomNav = true,
-  headerHeightPct = 14,
-  footerHeightPct = 10,
+  headerHeightPct, 
+  footerHeightPct,   
 }: PanoramicMockupProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 0, h: 0 });
   const [naturalRatio, setNaturalRatio] = useState<number | null>(null);
 
-  // Measure container — grab immediately AND watch for resize
+  // Auto-resolve percentages (Props > Tuning Dictionary > Default)
+  const tuning = getTuningForImage(imgUrl);
+  const activeHeaderPct = headerHeightPct ?? tuning.header;
+  const activeFooterPct = footerHeightPct ?? tuning.footer;
+
+  // Measure container
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -36,9 +69,6 @@ export function PanoramicMockup({
     return () => ro.disconnect();
   }, []);
 
-  // Use the actual rendered <img> onLoad to get natural dimensions.
-  // This is the most reliable method — same request the browser already made,
-  // no CORS/auth issues that affect new Image().
   const handleImgLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
     if (img.naturalWidth > 0 && img.naturalHeight > 0) {
@@ -48,10 +78,9 @@ export function PanoramicMockup({
 
   const { w: containerW, h: containerH } = dims;
 
-  const topPx    = containerH * (headerHeightPct / 100);
-  const bottomPx = containerH * (footerHeightPct / 100);
+  const topPx    = containerH * (activeHeaderPct / 100);
+  const bottomPx = containerH * (activeFooterPct / 100);
 
-  // How tall will the panoramic image be when rendered at full container width?
   const renderedImgH = naturalRatio !== null && containerW > 0
     ? containerW * naturalRatio
     : null;
@@ -77,12 +106,6 @@ export function PanoramicMockup({
         flexDirection: 'column',
       }}
     >
-      {/* ── PHASE 1: naturalRatio not yet known ─────────────────────────
-          Render the full image as a simple scroller. This:
-          - Puts the real <img src> in the DOM immediately (no blank screen)
-          - Fires onLoad so we get naturalRatio
-          - Shows the user something while we wait
-          Once ready=true, this unmounts and the 3-layer layout takes over. */}
       {!ready && (
         <div style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'none' }}>
           <img
@@ -94,19 +117,15 @@ export function PanoramicMockup({
         </div>
       )}
 
-      {/* ── PHASE 2: 3-layer sticky layout ──────────────────────────────
-          Only renders once we know container size AND image natural ratio. */}
       {ready && (
         <>
-          {/* ── Layer 1: STICKY TOP (status bar + app header) ──
-              Fixed height = topPx. overflow:hidden clips to just this strip.
-              The img is full-width, top-anchored, and full renderedImgH tall,
-              so we see exactly the top `topPx` pixels of the panoramic. */}
+          {/* ── Layer 1: STICKY TOP ── */}
           <div style={{
             height: topPx,
             flexShrink: 0,
             overflow: 'hidden',
             position: 'relative',
+            zIndex: 20,
           }}>
             <img
               src={imgUrl}
@@ -124,12 +143,7 @@ export function PanoramicMockup({
             />
           </div>
 
-          {/* ── Layer 2: SCROLLABLE MIDDLE (content only) ──
-              flex:1 fills remaining vertical space.
-              The clipping wrapper div is sized to exactly the content region
-              (renderedImgH minus the two sticky strips), so the status bar
-              and nav tabs are NEVER reachable by scrolling.
-              The img is pulled up by -topPx so scrolling starts at real content. */}
+          {/* ── Layer 2: SCROLLABLE MIDDLE ── */}
           <div style={{
             flex: 1,
             overflowY: 'scroll',
@@ -137,7 +151,7 @@ export function PanoramicMockup({
             scrollbarWidth: 'none',
           }}>
             <div style={{
-              height: renderedImgH! - topPx - bottomPx,
+              height: Math.max(0, renderedImgH! - topPx - bottomPx),
               overflow: 'hidden',
               position: 'relative',
             }}>
@@ -148,7 +162,7 @@ export function PanoramicMockup({
                   display: 'block',
                   width: '100%',
                   height: renderedImgH!,
-                  marginTop: -topPx,
+                  marginTop: -topPx, 
                   pointerEvents: 'none',
                   userSelect: 'none',
                 }}
@@ -156,16 +170,14 @@ export function PanoramicMockup({
             </div>
           </div>
 
-          {/* ── Layer 3: STICKY BOTTOM (nav tabs) ──
-              Same principle as the top strip but bottom-anchored.
-              The img is full renderedImgH tall with bottom:0, so overflow:hidden
-              clips to reveal exactly the last `bottomPx` pixels. */}
+          {/* ── Layer 3: STICKY BOTTOM ── */}
           {hasBottomNav && (
             <div style={{
               height: bottomPx,
               flexShrink: 0,
               overflow: 'hidden',
               position: 'relative',
+              zIndex: 20,
             }}>
               <img
                 src={imgUrl}
