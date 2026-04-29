@@ -73,15 +73,13 @@ export default function LoginPage() {
           isDesktop ? "translate-y-0" : "-translate-y-[35vh]"
         )}
       >
-        {/* 
-          1600x1600 perfectly fills the sides. 
-          Added mt-[80px] to shift the entire block down, bringing the top section further into view! 
-        */}
         <div 
           className="relative flex-shrink-0 mt-[12vh]"
           style={{ 
-            width: 'max(1350px, 150vh)', 
-            height: 'max(1350px, 150vh)', 
+            // Changed 150vh to 75vmax. 
+            // 75vmax is the exact scale required for a 309-degree rotated square to cover all edges safely.
+            width: 'max(1350px, 75vmax)', 
+            height: 'max(1350px, 75vmax)', 
             transform: 'rotate(309deg)' 
           }}
         >

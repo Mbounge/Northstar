@@ -166,8 +166,8 @@ export default async function CompanyDashboardPage({
           <MoreHorizontal className="w-6 h-6" />
         </button>
         
-        <button className="w-[114px] h-[48px] rounded-full bg-[#0088FF] text-white text-[15px] font-semibold hover:bg-[#0077EE] flex items-center justify-center gap-[3px] transition-colors border-none shadow-none cursor-pointer">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+        <button className="w-[114px] h-[48px] rounded-full bg-[#0088FF] text-white text-[15px] font-[400] tracking-[-0.23px] leading-[20px] hover:bg-[#0077EE] flex items-center justify-center gap-[6px] transition-colors border-none shadow-none cursor-pointer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
             <path d="M5 3l14 9-14 9V3z"/>
           </svg>
           Snaps

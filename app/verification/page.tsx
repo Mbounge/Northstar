@@ -41,8 +41,9 @@ export default function VerificationPage() {
         <div
           className="relative flex-shrink-0 mt-[12vh]"
           style={{
-            width: "max(1350px, 150vh)",
-            height: "max(1350px, 150vh)",
+            // Applied the 75vmax fix so it scales safely on ultrawide monitors
+            width: "max(1350px, 75vmax)",
+            height: "max(1350px, 75vmax)",
             transform: "rotate(309deg)",
           }}
         >

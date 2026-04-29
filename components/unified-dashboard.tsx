@@ -53,7 +53,7 @@ export function UnifiedDashboard({
                   key={value}
                   value={value}
                   className="
-                    relative !bg-transparent !shadow-none rounded-none px-0 pb-[20px] !border-none
+                    relative !bg-transparent !shadow-none rounded-none px-0 pb-[8px] !border-none
                     outline-none focus:outline-none focus-visible:ring-0 cursor-pointer
                     text-[15px] font-[400] text-[#747474] dark:text-zinc-400
                     hover:text-[#000000] dark:hover:text-white
