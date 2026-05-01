@@ -35,8 +35,9 @@ export function UnifiedDashboard({
   ];
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 h-full">
-      <Tabs defaultValue="overview" className="flex flex-col flex-1 min-h-0 h-full">
+    // CHANGED: Removed h-full, min-h-0, flex-1. Let it grow with the content.
+    <div className="flex flex-col w-full">
+      <Tabs defaultValue="overview" className="flex flex-col w-full">
 
         {/* ── IDENTITY + NAV HEADER ── */}
         <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-6 relative border border-white/20 dark:border-white/10 backdrop-blur-md">
@@ -85,22 +86,22 @@ export function UnifiedDashboard({
           </div>
         </div>
 
-        {/* ── OVERVIEW — scrolls naturally ── */}
-        <TabsContent value="overview" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+        {/* ── OVERVIEW — scrolls naturally on the whole page ── */}
+        <TabsContent value="overview" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
           <div className="max-w-6xl mx-auto w-full pb-16">
             <ExecutiveReport key={`exec-${mode}`} intel={activeData.sessionIntel} steps={activeData.steps} mode={mode} />
           </div>
         </TabsContent>
 
-        {/* ── SCREEN VIEWER — exact fit using Flexbox ── */}
-        <TabsContent value="viewer" className="flex-1 flex flex-col min-h-0 m-0 outline-none data-[state=inactive]:hidden pb-2">
+        {/* ── SCREEN VIEWER — Needs a calculated explicit height to function as an app panel ── */}
+        <TabsContent value="viewer" className="flex flex-col h-[calc(100vh-320px)] min-h-[700px] m-0 outline-none data-[state=inactive]:hidden pb-2 pt-2">
           <div className="flex-1 relative z-50 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden rounded-2xl">
             <SessionViewer key={`view-${mode}`} data={activeData} />
           </div>
         </TabsContent>
 
-        {/* ── FLOWS — exact fit using Flexbox ── */}
-        <TabsContent value="mobbin" className="flex-1 flex flex-col min-h-0 m-0 outline-none data-[state=inactive]:hidden pb-2">
+        {/* ── FLOWS — Needs a calculated explicit height to function as an app panel ── */}
+        <TabsContent value="mobbin" className="flex flex-col h-[calc(100vh-320px)] min-h-[700px] m-0 outline-none data-[state=inactive]:hidden pb-2 pt-2">
           <div className="flex-1 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden rounded-2xl">
             {activeData.flowsData ? (
               <FlowsViewer
@@ -118,10 +119,10 @@ export function UnifiedDashboard({
           </div>
         </TabsContent>
 
-        {/* ── BRAND KIT — scrolls naturally ── */}
+        {/* ── BRAND KIT — scrolls naturally on the whole page ── */}
         {hasBrandKit && (
-          <TabsContent value="brand_kit" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-            <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 p-8">
+          <TabsContent value="brand_kit" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
+            <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 p-8 rounded-2xl">
               <BrandKitViewer 
                 brandKit={brandKitData} 
                 apkIntelligence={apkIntelligence} 
@@ -131,10 +132,10 @@ export function UnifiedDashboard({
           </TabsContent>
         )}
 
-        {/* ── APP STORE — scrolls naturally ── */}
+        {/* ── APP STORE — scrolls naturally on the whole page ── */}
         {appData.appStore && (
-          <TabsContent value="app_store" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-            <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16" style={{ minHeight: 600 }}>
+          <TabsContent value="app_store" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
+            <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 rounded-2xl">
               <AppStoreViewer appStoreData={appData.appStore} />
             </div>
           </TabsContent>

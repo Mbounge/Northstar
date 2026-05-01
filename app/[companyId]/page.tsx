@@ -21,6 +21,7 @@ export default async function CompanyDashboardPage({
   params: Promise<{ companyId: string }>;
   searchParams: Promise<{ snapshot?: string | string[] }>;
 }) {
+  // ... (Keep all your data fetching code exactly the same) ...
   const { companyId } = await params;
   const resolvedSearchParams = await searchParams;
 
@@ -48,7 +49,6 @@ export default async function CompanyDashboardPage({
     );
   }
 
-  // ── NEW: Log the user's visit to this app! ──
   if (user?.id) {
     await supabase.from('user_app_visits').upsert({
       user_id: user.id,
@@ -113,13 +113,12 @@ export default async function CompanyDashboardPage({
   const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
 
   const IdentityHeader = () => (
+    // ... Keep exactly the same IdentityHeader code ...
     <div className="w-full h-full flex items-center justify-between px-10 pt-6 relative">
-      
       <div className="flex items-center">
         <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6">
           <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
         </Link>
-        
         <div className="flex items-center gap-5">
           <div className="w-[110px] h-[110px] rounded-full flex items-center justify-center overflow-hidden relative shrink-0 shadow-sm bg-[#35272a]">
             {iconUrl ? (
@@ -173,13 +172,13 @@ export default async function CompanyDashboardPage({
           Snaps
         </button>
       </div>
-      
     </div>
   );
 
   return (
-    <div className="h-full flex flex-col relative z-10 bg-transparent min-h-0">
-      <Tabs defaultValue="product" className="flex-1 flex flex-col min-h-0">
+    // CHANGED: Removed h-full, min-h-0. Added min-h-screen to let the page grow naturally.
+    <div className="h-[100dvh] overflow-y-auto overflow-x-hidden flex flex-col relative z-10 bg-transparent scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      <Tabs defaultValue="product" className="flex flex-col w-full">
         <div className="flex items-center justify-between pt-8 px-10 shrink-0 relative z-20">
           
           <div className="flex-1">
@@ -216,20 +215,23 @@ export default async function CompanyDashboardPage({
           </div>
         </div>
 
-        {/* This wrapper guarantees the internal content fills exactly the remaining space */}
-        <div className="flex-1 flex flex-col min-h-0 mt-6 relative z-10 px-10 pb-4">
-          <TabsContent value="product" className="flex-1 flex flex-col min-h-0 m-0 outline-none data-[state=inactive]:hidden">
+        {/* CHANGED: Removed flex-1, min-h-0, overflow-hidden restrictions */}
+        <div className="flex flex-col mt-6 relative z-10 px-10 pb-12">
+          
+          <TabsContent value="product" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             {productData && (productData.browsing || productData.onboarding) ? (
               <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
             ) : (
-              <div className="flex h-full items-center justify-center">
+              <div className="flex h-full items-center justify-center pt-24">
                 <p className="bg-white/10 dark:bg-black/10 backdrop-blur-md border border-white/20 dark:border-white/10 px-6 py-3 text-zinc-600 dark:text-zinc-400 text-sm shadow-none rounded-none">
                   No active product teardowns for this target.
                 </p>
               </div>
             )}
           </TabsContent>
-          <TabsContent value="marketing" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+
+          {/* CHANGED: Removed overflow-y-auto to allow natural page scrolling */}
+          <TabsContent value="marketing" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>
@@ -237,7 +239,9 @@ export default async function CompanyDashboardPage({
               <MarketingFeed key={`mkt-${activeSnapshotId}`} posts={marketingPosts} companyId={dataBucketId} snapshotId={activeSnapshotId} tenantId={tenantId} />
             </div>
           </TabsContent>
-          <TabsContent value="business" className="flex-1 overflow-y-auto m-0 outline-none data-[state=inactive]:hidden [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+
+          {/* CHANGED: Removed overflow-y-auto to allow natural page scrolling */}
+          <TabsContent value="business" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>
@@ -245,6 +249,7 @@ export default async function CompanyDashboardPage({
               <BusinessViewer key={`biz-${activeSnapshotId}`} jobs={businessJobs} roster={businessRoster} companyId={dataBucketId} snapshotId={activeSnapshotId} />
             </div>
           </TabsContent>
+
         </div>
       </Tabs>
     </div>

@@ -242,7 +242,7 @@ export function SessionViewer({ data }: { data: any }) {
                   <div 
                     className={cn(
                       "relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl overflow-hidden transition-all duration-500 ease-out origin-center",
-                      isActive ? "scale-100 opacity-100" : "scale-[0.8125] opacity-40 hover:opacity-70"
+                      isActive ? "scale-100 opacity-100 ring-2 ring-white/10" : "scale-95 opacity-40 hover:opacity-70"
                     )} 
                     style={{ 
                       borderWidth: "0.3px", 
@@ -278,45 +278,65 @@ export function SessionViewer({ data }: { data: any }) {
       )}
 
       {/* ─── MAIN LAYOUT ─── */}
-      <div className="flex flex-col h-full bg-transparent">
+      <div className="flex flex-col flex-1 h-full min-h-0 bg-transparent">
 
         {/* TOP: phone + intelligence */}
         <div className="flex flex-1 min-h-0 overflow-hidden">
 
           {/* LEFT: Phone */}
           <div className="w-[45%] flex flex-col p-6 border-r border-black/5 dark:border-white/10 min-h-0">
-            <div className="shrink-0 mb-4 flex flex-wrap gap-2 items-start">
-              <Badge className="bg-white/60 dark:bg-white/10 backdrop-blur-md text-zinc-800 dark:text-zinc-200 border-white/80 dark:border-white/20 font-mono shadow-sm">
-                SCREEN {actualStepNumber} / {steps.length}
-              </Badge>
-              {displayPhase && (
-                <Badge className="bg-blue-50/80 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-200/50 dark:border-blue-500/30 uppercase tracking-widest text-[10px]">
-                  {displayPhase.replace(/_/g, " ")}
+            
+            {/* FIXED HEIGHT HEADER */}
+            <div className="h-[90px] shrink-0 flex flex-col gap-2 overflow-hidden mb-2">
+              <div className="flex flex-wrap gap-2 items-start shrink-0">
+                <Badge className="bg-white/60 dark:bg-white/10 backdrop-blur-md text-zinc-800 dark:text-zinc-200 border-white/80 dark:border-white/20 font-mono shadow-sm">
+                  SCREEN {actualStepNumber} / {steps.length}
                 </Badge>
-              )}
-              <h2 className="w-full text-zinc-900 dark:text-white font-bold tracking-tight text-xl truncate mt-1" title={displayTitle}>
+                {displayPhase && (
+                  <Badge className="bg-blue-50/80 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-200/50 dark:border-blue-500/30 uppercase tracking-widest text-[10px]">
+                    {displayPhase.replace(/_/g, " ")}
+                  </Badge>
+                )}
+              </div>
+              <h2 className="w-full text-zinc-900 dark:text-white font-bold tracking-tight text-xl line-clamp-2" title={displayTitle}>
                 {displayTitle}
               </h2>
             </div>
 
-            <div className="flex-1 flex items-center justify-center relative min-h-0">
+            {/* ANCHORED CENTERING CONTAINER */}
+            <div className="flex-1 w-full relative flex items-center justify-center min-h-0 pb-2">
+              
               <button onClick={() => setCurrentIndex((p) => Math.max(p - 1, 0))} disabled={currentIndex === 0} className="absolute left-0 z-20 p-3 bg-white/50 dark:bg-black/50 backdrop-blur-md text-zinc-900 dark:text-white rounded-full border border-white/50 dark:border-white/10 shadow-sm hover:scale-105 transition-all disabled:opacity-30">
                 <ChevronLeft className="w-6 h-6" />
               </button>
-              <div className="relative h-full aspect-[9/19.5] bg-white dark:bg-zinc-900 shadow-2xl shrink-0 cursor-pointer group overflow-hidden" style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "0.98rem" }} onClick={() => setIsModalOpen(true)}>
-                {isCurrentPanoramic
-                  ? <PanoramicMockup imgUrl={currentStep.imagePath} alt={displayTitle} hasBottomNav={currentStep.imagePath.includes("withnav") || (!currentStep.imagePath.includes("nonav") && isCurrentPanoramic)} />
-                  : <Image src={currentStep.imagePath} alt={displayTitle} fill className="object-cover" unoptimized />
-                }
-                <div className="absolute inset-0 z-40 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100">
-                  <div className="bg-white/90 backdrop-blur-sm p-4 rounded-full shadow-xl scale-90 group-hover:scale-100 transition-all">
-                    <Maximize2 className="w-6 h-6 text-black" />
+              
+              {/* THE FIX: Two-layer sizing. The outer div strictly dictates the math. */}
+              <div 
+                className="relative h-full max-h-[580px] shrink-0" 
+                style={{ aspectRatio: "9/19.5" }}
+              >
+                {/* The inner div safely fills 100% of the calculated space without crashing flexbox */}
+                <div 
+                  className="relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl cursor-pointer group overflow-hidden" 
+                  style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "1.2rem" }} 
+                  onClick={() => setIsModalOpen(true)}
+                >
+                  {isCurrentPanoramic
+                    ? <PanoramicMockup imgUrl={currentStep.imagePath} alt={displayTitle} hasBottomNav={currentStep.imagePath.includes("withnav") || (!currentStep.imagePath.includes("nonav") && isCurrentPanoramic)} />
+                    : <Image src={currentStep.imagePath} alt={displayTitle} fill className="object-cover" unoptimized />
+                  }
+                  <div className="absolute inset-0 z-40 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100">
+                    <div className="bg-white/90 backdrop-blur-sm p-4 rounded-full shadow-xl scale-90 group-hover:scale-100 transition-all">
+                      <Maximize2 className="w-6 h-6 text-black" />
+                    </div>
                   </div>
                 </div>
               </div>
+
               <button onClick={() => setCurrentIndex((p) => Math.min(p + 1, steps.length - 1))} disabled={currentIndex === steps.length - 1} className="absolute right-0 z-20 p-3 bg-white/50 dark:bg-black/50 backdrop-blur-md text-zinc-900 dark:text-white rounded-full border border-white/50 dark:border-white/10 shadow-sm hover:scale-105 transition-all disabled:opacity-30">
                 <ChevronRight className="w-6 h-6" />
               </button>
+              
             </div>
           </div>
 
