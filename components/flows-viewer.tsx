@@ -1,7 +1,7 @@
 // components/flows-viewer.tsx
 "use client";
 
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy, Link } from "lucide-react";
@@ -96,18 +96,21 @@ function ScreenDetailModal({
   appName: string; tenantId: string; mode: string; onClose: () => void;
 }) {
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
+  
   const scrollRef = useRef<HTMLDivElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  const isProgrammaticScroll = useRef(false);
+  const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
 
   const currentScreen = screens[currentIndex];
   const currentImgUrl = currentScreen ? buildImgUrl(tenantId, appName, mode, currentScreen.screenshot_file) : "";
 
   const scrollToIndex = useCallback((idx: number, behavior: ScrollBehavior = "smooth") => {
     if (scrollRef.current) {
+      isProgrammaticScroll.current = true;
       const child = scrollRef.current.children[idx] as HTMLElement;
       if (child) {
         scrollRef.current.scrollTo({
@@ -115,18 +118,54 @@ function ScreenDetailModal({
           behavior,
         });
       }
+      
+      // Release the programmatic lock after scroll finishes
+      if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
+      scrollTimeout.current = setTimeout(() => {
+        isProgrammaticScroll.current = false;
+      }, behavior === "instant" ? 10 : 800); // Shorter timeout for instant jumps
     }
   }, []);
 
-  useEffect(() => {
-    requestAnimationFrame(() => scrollToIndex(initialIndex, "instant"));
-  }, [initialIndex, scrollToIndex]);
+  // Update active index if the user manually swipes/scrolls the container
+  const handleModalScroll = useCallback(() => {
+    if (isProgrammaticScroll.current) return; 
+    if (!scrollRef.current) return;
+    
+    const container = scrollRef.current;
+    const center = container.scrollLeft + container.clientWidth / 2;
+    let closestIdx = 0, minDiff = Infinity;
+    
+    Array.from(container.children).forEach((child, idx) => {
+      const el = child as HTMLElement;
+      const diff = Math.abs(el.offsetLeft + el.offsetWidth / 2 - center);
+      if (diff < minDiff) { minDiff = diff; closestIdx = idx; }
+    });
+    
+    if (closestIdx !== currentIndex) {
+      setCurrentIndex(closestIdx);
+    }
+  }, [currentIndex]);
 
+  // Mount the modal
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // THE FIX: useLayoutEffect fires *before* the browser paints the screen.
+  // This guarantees the modal starts perfectly centered on the clicked image with zero jitter.
+  useLayoutEffect(() => {
+    if (mounted && scrollRef.current) {
+      scrollToIndex(initialIndex, "instant");
+    }
+  }, [mounted, initialIndex, scrollToIndex]);
+
+  // Keyboard navigation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-      if (e.key === "ArrowRight") setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); requestAnimationFrame(() => scrollToIndex(n)); return n; });
-      if (e.key === "ArrowLeft") setCurrentIndex((i) => { const n = Math.max(i - 1, 0); requestAnimationFrame(() => scrollToIndex(n)); return n; });
+      if (e.key === "ArrowRight") setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; });
+      if (e.key === "ArrowLeft") setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; });
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -183,10 +222,10 @@ function ScreenDetailModal({
         </div>
 
         {/* ── CAROUSEL ── */}
-        <div className="flex-1 relative min-h-0">
+        <div className="flex-1 relative min-h-0 flex flex-col justify-center">
           {/* Prev arrow */}
           <button
-            onClick={() => setCurrentIndex((i) => { const n = Math.max(i - 1, 0); requestAnimationFrame(() => scrollToIndex(n)); return n; })}
+            onClick={() => setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; })}
             disabled={currentIndex === 0}
             className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
           >
@@ -196,7 +235,9 @@ function ScreenDetailModal({
           {/* Scrollable screen strip */}
           <div
             ref={scrollRef}
-            className="flex items-end h-full overflow-x-auto overflow-y-hidden gap-6 px-20 pb-8 pt-6 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+            onScroll={handleModalScroll}
+            className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+            style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}
           >
             {screens.map((screen, idx) => {
               const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
@@ -207,21 +248,19 @@ function ScreenDetailModal({
               return (
                 <div
                   key={idx}
-                  onClick={() => { setCurrentIndex(idx); requestAnimationFrame(() => scrollToIndex(idx)); }}
-                  className={cn(
-                    "shrink-0 cursor-pointer transition-all duration-300 ease-out flex items-end",
-                    isActive ? "h-[94%]" : "h-[75%] hover:h-[80%]"
-                  )}
+                  onClick={() => { setCurrentIndex(idx); scrollToIndex(idx); }}
+                  className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center"
+                  style={{ aspectRatio: "9/19.5" }}
                 >
                   <div
                     className={cn(
-                      "relative h-full aspect-[9/19.5] bg-white transition-all duration-300",
+                      "relative w-full h-full bg-white transition-all duration-500 ease-out origin-center",
                       isPanoramic ? "overflow-hidden" : "overflow-hidden",
                       isActive
-                        ? "opacity-100 shadow-2xl ring-4 ring-white/30 ring-offset-4 ring-offset-transparent"
-                        : "opacity-50 hover:opacity-80 shadow-lg"
+                        ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20"
+                        : "scale-95 opacity-40 hover:opacity-70 shadow-lg"
                     )}
-                    style={{ borderRadius: "2rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
+                    style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
                   >
                     {isPanoramic ? (
                       <PanoramicMockup
@@ -241,7 +280,7 @@ function ScreenDetailModal({
 
           {/* Next arrow */}
           <button
-            onClick={() => setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); requestAnimationFrame(() => scrollToIndex(n)); return n; })}
+            onClick={() => setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; })}
             disabled={currentIndex === screens.length - 1}
             className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
           >
@@ -377,10 +416,11 @@ function FlowSection({
                 {/* Phone frame */}
                 <div
                   className={cn(
-                    "relative w-[200px] h-[433px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1",
-                    isPanoramic ? "overflow-hidden" : "overflow-hidden",
+                    // CHANGED: Increased size to w-[260px] h-[563px] (maintaining 9/19.5 aspect ratio)
+                    "relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden",
                   )}
-                  style={{ borderRadius: "1.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
+                  // CHANGED: Reduced borderRadius from 1.8rem to 0.8rem for sharper edges
+                  style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
                 >
                   {isPanoramic ? (
                     <PanoramicMockup
@@ -394,18 +434,7 @@ function FlowSection({
                   )}
                 </div>
 
-                {/* Label */}
-                <div className="pt-3 w-[200px] flex flex-col items-center text-center gap-1.5">
-                  <span
-                    className="text-zinc-800 dark:text-zinc-200 text-[13px] font-semibold truncate w-full group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors"
-                    title={screen.display_label}
-                  >
-                    {screen.display_label}
-                  </span>
-                  <span className="text-zinc-500 dark:text-zinc-400 text-[10px] font-mono font-bold bg-white/50 dark:bg-white/10 border border-white/60 dark:border-white/20 px-2.5 py-0.5 rounded-full">
-                    {screen.timeline_step}
-                  </span>
-                </div>
+                {/* CHANGED: Deleted the bottom text labels and timeline step pills entirely */}
               </div>
             );
           })}

@@ -1,7 +1,7 @@
 // components/session-viewer.tsx
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { Badge } from "@/components/ui/badge";
@@ -159,10 +159,11 @@ export function SessionViewer({ data }: { data: any }) {
   useEffect(() => { scrollCarouselToIndex(currentIndex); }, [currentIndex, scrollCarouselToIndex]);
   useEffect(() => { setActiveTab("insights"); }, [currentIndex]);
 
-  // Center the correct screen instantly when the modal FIRST opens
-  useEffect(() => {
+  // CHANGED: Swapped useEffect for useLayoutEffect for instant, zero-jitter rendering when the modal opens.
+  useLayoutEffect(() => {
     if (isModalOpen && !hasOpenedRef.current) {
       hasOpenedRef.current = true;
+      // We use a tiny 10ms timeout just to let the DOM paint the modal's overlay first
       setTimeout(() => {
         scrollToIndex(currentIndex, "instant");
       }, 10);
@@ -241,14 +242,19 @@ export function SessionViewer({ data }: { data: any }) {
                 >
                   <div 
                     className={cn(
-                      "relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl overflow-hidden transition-all duration-500 ease-out origin-center",
-                      isActive ? "scale-100 opacity-100 ring-2 ring-white/10" : "scale-95 opacity-40 hover:opacity-70"
+                      "relative w-full h-full bg-white dark:bg-zinc-900 transition-all duration-500 ease-out origin-center",
+                      isPanoramic ? "overflow-hidden" : "overflow-hidden",
+                      // CHANGED: Replaced jarred scaling with smooth 100/95 scaling.
+                      isActive 
+                        ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20" 
+                        : "scale-95 opacity-40 hover:opacity-70 shadow-lg"
                     )} 
+                    // CHANGED: Reduced borderRadius to 0.8rem to match the sharp edges of the grid
                     style={{ 
                       borderWidth: "0.3px", 
                       borderColor: "#818A98", 
                       borderStyle: "solid", 
-                      borderRadius: "1.8rem" 
+                      borderRadius: "0.8rem" 
                     }}
                   >
                     {isPanoramic ? <PanoramicMockup imgUrl={step.imagePath} alt="" hasBottomNav={hasNav} /> : <Image src={step.imagePath} alt="" fill className="object-cover" unoptimized />}
@@ -310,15 +316,14 @@ export function SessionViewer({ data }: { data: any }) {
                 <ChevronLeft className="w-6 h-6" />
               </button>
               
-              {/* THE FIX: Two-layer sizing. The outer div strictly dictates the math. */}
               <div 
                 className="relative h-full max-h-[580px] shrink-0" 
                 style={{ aspectRatio: "9/19.5" }}
               >
-                {/* The inner div safely fills 100% of the calculated space without crashing flexbox */}
                 <div 
                   className="relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl cursor-pointer group overflow-hidden" 
-                  style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "1.2rem" }} 
+                  // CHANGED: Sharpened borderRadius from 1.2rem to 0.8rem
+                  style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "0.8rem" }} 
                   onClick={() => setIsModalOpen(true)}
                 >
                   {isCurrentPanoramic
@@ -545,12 +550,23 @@ export function SessionViewer({ data }: { data: any }) {
                 key={idx}
                 onClick={() => setCurrentIndex(idx)}
                 className={cn(
-                  "relative h-full aspect-[9/19.5] shrink-0 overflow-hidden cursor-pointer transition-all duration-200 rounded-lg",
-                  idx === currentIndex ? "scale-105 shadow-xl ring-2 ring-[#0066FF]" : "opacity-50 hover:opacity-80 shadow-sm"
+                  "relative h-full aspect-[9/19.5] shrink-0 overflow-hidden cursor-pointer transition-all duration-300 ease-out",
+                  // CHANGED: Swapped jumpy scale-105 for stable scale-95 (like the modal)
+                  idx === currentIndex 
+                    ? "scale-100 opacity-100 shadow-xl ring-2 ring-[#0066FF]" 
+                    : "scale-95 opacity-40 hover:opacity-70 shadow-sm"
                 )}
+                // CHANGED: Added proportional sharp borders to match the main mockups
+                style={{ borderRadius: "0.4rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
               >
-                <Image src={step.imagePath} alt="" fill className={cn("bg-white dark:bg-zinc-900", step.imagePath.includes("panoramic") || step.imagePath.includes("full_page") ? "object-cover object-top" : "object-cover")} unoptimized />
-                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[8px] text-white text-center py-0.5 font-mono">{idx + 1}</div>
+                <Image 
+                  src={step.imagePath} 
+                  alt="" 
+                  fill 
+                  className={cn("bg-white dark:bg-zinc-900", step.imagePath.includes("panoramic") || step.imagePath.includes("full_page") ? "object-cover object-top" : "object-cover")} 
+                  unoptimized 
+                />
+                {/* CHANGED: Deleted the bottom label badge with idx + 1 for a cleaner look */}
               </div>
             ))}
           </div>

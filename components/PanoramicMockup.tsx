@@ -4,8 +4,6 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { cn } from "@/lib/utils";
 
 // ─── DYNAMIC APP TUNING ──────────────────────────────────────────────────────
-// Add new apps to this list to perfectly tune their sticky cut-offs.
-// The component will check if the image URL contains any of the "matchers".
 const APP_TUNING = [
   {
     matchers: ["graet"],
@@ -26,7 +24,6 @@ function getTuningForImage(url: string) {
       return { header: config.header, footer: config.footer };
     }
   }
-  // Safe default fallback if the app isn't explicitly configured above
   return { header: 11.5, footer: 10.5 }; 
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,8 +33,8 @@ interface PanoramicMockupProps {
   alt: string;
   isActive?: boolean;
   hasBottomNav?: boolean;
-  headerHeightPct?: number; // Optional direct override
-  footerHeightPct?: number; // Optional direct override
+  headerHeightPct?: number; 
+  footerHeightPct?: number; 
 }
 
 export function PanoramicMockup({
@@ -52,12 +49,10 @@ export function PanoramicMockup({
   const [dims, setDims] = useState({ w: 0, h: 0 });
   const [naturalRatio, setNaturalRatio] = useState<number | null>(null);
 
-  // Auto-resolve percentages (Props > Tuning Dictionary > Default)
   const tuning = getTuningForImage(imgUrl);
   const activeHeaderPct = headerHeightPct ?? tuning.header;
   const activeFooterPct = footerHeightPct ?? tuning.footer;
 
-  // Measure container
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -90,17 +85,10 @@ export function PanoramicMockup({
   return (
     <div
       ref={containerRef}
-      className={cn(
-        "w-full h-full bg-white transition-all duration-300",
-        isActive
-          ? "shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.7)]"
-          : "shadow-md"
-      )}
+      className="w-full h-full bg-white transition-all duration-300"
       style={{
-        borderWidth: '0.3px',
-        borderColor: '#818A98',
-        borderStyle: 'solid',
-        borderRadius: isActive ? '1.8rem' : '1.1rem',
+        // CHANGED: Removed borders, border-radius, and shadows. 
+        // This component will now perfectly fill its parent's shape (0.8rem or 1.2rem).
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
