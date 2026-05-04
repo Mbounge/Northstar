@@ -1,7 +1,7 @@
 // components/flows-viewer.tsx
 "use client";
 
-import { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy, Link } from "lucide-react";
@@ -53,9 +53,7 @@ function findFlow(nodes: FlowNode[], id: string): FlowNode | null {
 }
 
 function buildImgUrl(tenantId: string, appName: string, mode: string, file: string): string {
-  // THE FIX: Extract ONLY the filename from the JSON string
   const cleanFileName = file.split('/').pop() || file;
-  
   return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${appName}/${mode}/screenshots/${cleanFileName}`;
 }
 
@@ -121,16 +119,13 @@ function ScreenDetailModal({
           behavior,
         });
       }
-      
-      // Release the programmatic lock after scroll finishes
       if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
       scrollTimeout.current = setTimeout(() => {
         isProgrammaticScroll.current = false;
-      }, behavior === "instant" ? 10 : 800); // Shorter timeout for instant jumps
+      }, behavior === "instant" ? 10 : 500); 
     }
   }, []);
 
-  // Update active index if the user manually swipes/scrolls the container
   const handleModalScroll = useCallback(() => {
     if (isProgrammaticScroll.current) return; 
     if (!scrollRef.current) return;
@@ -145,25 +140,17 @@ function ScreenDetailModal({
       if (diff < minDiff) { minDiff = diff; closestIdx = idx; }
     });
     
-    if (closestIdx !== currentIndex) {
-      setCurrentIndex(closestIdx);
-    }
+    if (closestIdx !== currentIndex) setCurrentIndex(closestIdx);
   }, [currentIndex]);
 
-  // Mount the modal
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  useEffect(() => setMounted(true), []);
 
-  // THE FIX: useLayoutEffect fires *before* the browser paints the screen.
-  // This guarantees the modal starts perfectly centered on the clicked image with zero jitter.
   useLayoutEffect(() => {
     if (mounted && scrollRef.current) {
       scrollToIndex(initialIndex, "instant");
     }
   }, [mounted, initialIndex, scrollToIndex]);
 
-  // Keyboard navigation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -189,59 +176,29 @@ function ScreenDetailModal({
   if (!mounted) return null;
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-[9999] backdrop-blur-2xl bg-black/50 animate-in fade-in duration-150"
-      onClick={handleBackdropClick}
-    >
+    <div className="fixed inset-0 z-[9999] backdrop-blur-2xl bg-black/50 animate-in fade-in duration-150" onClick={handleBackdropClick}>
       <div ref={modalRef} className="w-full h-full flex flex-col">
-
-        {/* ── TOP BAR ── */}
         <div className="h-[60px] shrink-0 flex items-center justify-between px-8 border-b border-white/10">
           <div className="flex items-center gap-3">
             <span className="text-white font-bold text-[15px]">{flowLabel}</span>
             <span className="text-white/40 font-mono text-[13px]">{currentIndex + 1} / {screens.length}</span>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={handleCopy}
-              className={cn(
-                "h-9 px-5 flex items-center gap-2 rounded-full text-[13px] font-bold transition-all border",
-                copied ? "bg-emerald-500 border-emerald-400 text-white"
-                  : copyError ? "bg-red-500 border-red-400 text-white"
-                  : "bg-white/10 border-white/20 text-white hover:bg-white/20"
-              )}
-            >
-              {copied ? <><Check className="w-3.5 h-3.5" />Copied!</>
-               : copyError ? "Failed"
-               : <><Copy className="w-3.5 h-3.5" />Copy</>}
+            <button onClick={handleCopy} className={cn("h-9 px-5 flex items-center gap-2 rounded-full text-[13px] font-bold transition-all border", copied ? "bg-emerald-500 border-emerald-400 text-white" : copyError ? "bg-red-500 border-red-400 text-white" : "bg-white/10 border-white/20 text-white hover:bg-white/20")}>
+              {copied ? <><Check className="w-3.5 h-3.5" />Copied!</> : copyError ? "Failed" : <><Copy className="w-3.5 h-3.5" />Copy</>}
             </button>
-            <button
-              onClick={onClose}
-              className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all"
-            >
+            <button onClick={onClose} className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all">
               <X className="w-4 h-4 text-white" />
             </button>
           </div>
         </div>
 
-        {/* ── CAROUSEL ── */}
         <div className="flex-1 relative min-h-0 flex flex-col justify-center">
-          {/* Prev arrow */}
-          <button
-            onClick={() => setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; })}
-            disabled={currentIndex === 0}
-            className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
-          >
+          <button onClick={() => setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; })} disabled={currentIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none">
             <ChevronLeft className="w-6 h-6 text-white" />
           </button>
 
-          {/* Scrollable screen strip */}
-          <div
-            ref={scrollRef}
-            onScroll={handleModalScroll}
-            className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
-            style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}
-          >
+          <div ref={scrollRef} onScroll={handleModalScroll} className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}>
             {screens.map((screen, idx) => {
               const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
               const isActive = idx === currentIndex;
@@ -249,53 +206,23 @@ function ScreenDetailModal({
               const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
               return (
-                <div
-                  key={idx}
-                  onClick={() => { setCurrentIndex(idx); scrollToIndex(idx); }}
-                  className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center"
-                  style={{ aspectRatio: "9/19.5" }}
-                >
-                  <div
-                    className={cn(
-                      "relative w-full h-full bg-white transition-all duration-500 ease-out origin-center",
-                      isPanoramic ? "overflow-hidden" : "overflow-hidden",
-                      isActive
-                        ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20"
-                        : "scale-95 opacity-40 hover:opacity-70 shadow-lg"
-                    )}
-                    style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
-                  >
-                    {isPanoramic ? (
-                      <PanoramicMockup
-                        imgUrl={imgUrl}
-                        alt={screen.display_label}
-                        isActive={isActive}
-                        hasBottomNav={hasNav}
-                      />
-                    ) : (
-                      <Image src={imgUrl} alt={screen.display_label} fill className="object-cover" unoptimized />
-                    )}
+                <div key={idx} onClick={() => { setCurrentIndex(idx); scrollToIndex(idx); }} className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center" style={{ aspectRatio: "9/19.5" }}>
+                  <div className={cn("relative w-full h-full bg-white transition-all duration-300 ease-out origin-center", isPanoramic ? "overflow-hidden" : "overflow-hidden", isActive ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20" : "scale-95 opacity-40 hover:opacity-70 shadow-lg")} style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
+                    {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={isActive} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
                   </div>
                 </div>
               );
             })}
           </div>
 
-          {/* Next arrow */}
-          <button
-            onClick={() => setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; })}
-            disabled={currentIndex === screens.length - 1}
-            className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
-          >
+          <button onClick={() => setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; })} disabled={currentIndex === screens.length - 1} className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none">
             <ChevronRight className="w-6 h-6 text-white" />
           </button>
         </div>
 
-        {/* ── BOTTOM LABEL ── */}
         <div className="h-[52px] shrink-0 flex items-center justify-center border-t border-white/10">
           <span className="text-white/60 text-[13px] font-medium">{currentScreen?.display_label}</span>
         </div>
-
       </div>
     </div>,
     document.body
@@ -330,31 +257,27 @@ function SidebarNode({
         <div className="flex items-center gap-2 truncate pr-2 min-w-0">
           {hasChildren ? (
             <button onClick={(e) => onToggle(node.id, e)} className="p-1 -ml-1 rounded-md hover:bg-white/60 dark:hover:bg-white/10 transition-colors shrink-0">
-              {isExpanded
-                ? <ChevronDown className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />
-                : <ChevronRight className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
+              {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" /> : <ChevronRight className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
             </button>
-          ) : (
-            <span className="w-5 shrink-0" />
-          )}
+          ) : <span className="w-5 shrink-0" />}
+          
           <span className={cn(
             "truncate leading-tight",
             isActive ? "font-bold" : "font-medium",
-            depth === 0 ? "text-[14px] font-bold" : "text-[13px]",
-            node.is_reference && "text-blue-600 dark:text-blue-400 italic"
+            depth === 0 ? "text-[14px] font-bold" : "text-[13px]"
+            // CHANGED: Removed blue italic styling for clean appearance
           )}>
             {node.label}
           </span>
+          {/* CHANGED: Made the link icon subtle gray instead of bright blue */}
           {node.is_reference && (
-            <Link className="w-3 h-3 shrink-0 text-blue-500 opacity-70" />
+            <Link className="w-3 h-3 shrink-0 text-zinc-400 dark:text-zinc-500 opacity-50" />
           )}
         </div>
         {node.screen_count > 0 && (
           <span className={cn(
             "text-[11px] tabular-nums shrink-0 font-mono font-semibold px-2 py-0.5 rounded-full",
-            isActive
-              ? "bg-white/60 dark:bg-black/40 text-zinc-800 dark:text-zinc-200"
-              : "bg-white/30 dark:bg-white/5 text-zinc-500 dark:text-zinc-400"
+            isActive ? "bg-white/60 dark:bg-black/40 text-zinc-800 dark:text-zinc-200" : "bg-white/30 dark:bg-white/5 text-zinc-500 dark:text-zinc-400"
           )}>
             {node.screen_count}
           </span>
@@ -363,11 +286,7 @@ function SidebarNode({
       {hasChildren && isExpanded && (
         <div className="flex flex-col mt-0.5">
           {node.children!.map((child) => (
-            <SidebarNode
-              key={child.id} node={child} depth={depth + 1}
-              activeFlowId={activeFlowId} expandedNodes={expandedNodes}
-              onSelect={onSelect} onToggle={onToggle}
-            />
+            <SidebarNode key={child.id} node={child} depth={depth + 1} activeFlowId={activeFlowId} expandedNodes={expandedNodes} onSelect={onSelect} onToggle={onToggle} />
           ))}
         </div>
       )}
@@ -384,12 +303,9 @@ function FlowSection({
   sectionRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
-    <div ref={sectionRef} className="flex flex-col">
-      <div className="px-10 pt-10 pb-4 flex items-baseline gap-4">
-        <h2 className={cn(
-          "text-2xl font-bold tracking-tight transition-colors",
-          isHighlighted ? "text-zinc-900 dark:text-white" : "text-zinc-700 dark:text-zinc-300"
-        )}>
+    <div ref={sectionRef} className="flex flex-col pt-4 pb-8">
+      <div className="px-10 pb-4 flex items-baseline gap-4">
+        <h2 className={cn("text-2xl font-bold tracking-tight transition-colors", isHighlighted ? "text-zinc-900 dark:text-white" : "text-zinc-700 dark:text-zinc-300")}>
           {flow.label}
         </h2>
         <span className="text-zinc-500 dark:text-zinc-400 text-sm font-semibold bg-white/40 dark:bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/50 dark:border-white/10">
@@ -403,7 +319,7 @@ function FlowSection({
         </p>
       )}
 
-      <div className="overflow-x-auto overflow-y-hidden pb-8 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex gap-8 px-10 min-w-max items-end">
           {screens.map((screen, idx) => {
             const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
@@ -411,33 +327,10 @@ function FlowSection({
             const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
             return (
-              <div
-                key={idx}
-                onClick={() => onScreenClick(screens, idx, flow.label)}
-                className="group flex flex-col shrink-0 cursor-pointer"
-              >
-                {/* Phone frame */}
-                <div
-                  className={cn(
-                    // CHANGED: Increased size to w-[260px] h-[563px] (maintaining 9/19.5 aspect ratio)
-                    "relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden",
-                  )}
-                  // CHANGED: Reduced borderRadius from 1.8rem to 0.8rem for sharper edges
-                  style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
-                >
-                  {isPanoramic ? (
-                    <PanoramicMockup
-                      imgUrl={imgUrl}
-                      alt={screen.display_label}
-                      isActive={false}
-                      hasBottomNav={hasNav}
-                    />
-                  ) : (
-                    <Image src={imgUrl} alt={screen.display_label} fill className="object-cover" unoptimized />
-                  )}
+              <div key={idx} onClick={() => onScreenClick(screens, idx, flow.label)} className="group flex flex-col shrink-0 cursor-pointer">
+                <div className={cn("relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden")} style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
+                  {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
                 </div>
-
-                {/* CHANGED: Deleted the bottom text labels and timeline step pills entirely */}
               </div>
             );
           })}
@@ -473,7 +366,6 @@ export function FlowsViewer({
   const [detailModal, setDetailModal] = useState<{ screens: Screen[]; initialIndex: number; flowLabel: string } | null>(null);
 
   const sectionRefs = useRef<Map<string, React.RefObject<HTMLDivElement | null>>>(new Map());
-  const mainScrollRef = useRef<HTMLDivElement>(null);
 
   const flowScreensMap = useMemo(() => {
     const map = new Map<string, Screen[]>();
@@ -496,11 +388,12 @@ export function FlowsViewer({
     });
   }, []);
 
+  // CHANGED: The window now naturally scrolls to the correct ref section on click
   const handleSidebarSelect = useCallback((id: string) => {
     setActiveFlowId(id);
-    const ref = sectionRefs.current.get(id);
-    if (ref?.current && mainScrollRef.current) {
-      mainScrollRef.current.scrollTo({ top: ref.current.offsetTop, behavior: "smooth" });
+    const target = sectionRefs.current.get(id)?.current;
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, []);
 
@@ -510,7 +403,7 @@ export function FlowsViewer({
 
   if (!flowsData?.taxonomy?.length) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex h-[500px] items-center justify-center">
         <div className="flex flex-col items-center gap-4 bg-white/40 dark:bg-black/30 backdrop-blur-xl border border-white/50 dark:border-white/10 p-8 rounded-3xl shadow-xl">
           <Layers className="w-8 h-8 opacity-50 text-zinc-500" />
           <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">No flow taxonomy generated yet.</p>
@@ -521,16 +414,18 @@ export function FlowsViewer({
 
   return (
     <>
-      <div className="flex h-full overflow-hidden bg-transparent">
+      <div className="flex items-start bg-transparent relative w-full h-full">
 
         {/* ═══ LEFT SIDEBAR ═══ */}
-        <div className="w-[280px] flex flex-col bg-white/20 dark:bg-white/5 backdrop-blur-2xl border-r border-white/40 dark:border-white/10 shrink-0 h-full">
+        {/* CHANGED: sticky top-[24px] successfully glues the sidebar to your screen as the rest of the page scrolls */}
+        <div className="w-[280px] sticky top-[24px] h-[calc(100vh-48px)] flex flex-col border-r border-black/5 dark:border-white/10 shrink-0 z-10">
           <div className="px-6 pt-6 pb-4 shrink-0 border-b border-black/5 dark:border-white/5">
             <h3 className="text-zinc-500 dark:text-zinc-400 text-[11px] font-bold uppercase tracking-[0.15em]">
               Flows Explorer
             </h3>
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          {/* Internal scroll logic for the sidebar itself */}
+          <div className="flex-1 min-h-0 w-full overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <div className="flex flex-col pb-8 pt-2">
               {sanitizedTaxonomy.map((node) => (
                 <SidebarNode
@@ -544,7 +439,8 @@ export function FlowsViewer({
         </div>
 
         {/* ═══ MAIN CONTENT ═══ */}
-        <div ref={mainScrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-transparent [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+        {/* Unrestricted height allows normal scrolling! */}
+        <div className="flex-1 min-w-0 bg-transparent">
           <div className="flex flex-col divide-y divide-black/5 dark:divide-white/5">
             {allFlows.map((flow) => {
               const screens = flowScreensMap.get(flow.id) || [];
@@ -560,7 +456,6 @@ export function FlowsViewer({
               );
             })}
           </div>
-          <div className="h-16" />
         </div>
       </div>
 
