@@ -1,11 +1,10 @@
-// app/[companyId]/layout.tsx
+//app/[companyId]/layout.tsx
 import { AppSidebar } from "@/components/shell/app-sidebar";
 import { InsightProvider } from "@/components/providers/insight-provider"; 
 import { getReviewApps } from "@/lib/review-data";
 import { createClient } from "@/lib/supabase/server";
 import Image from "next/image";
 
-// ── FORCE DYNAMIC: Ensures the sidebar reorders instantly when navigating between apps ──
 export const dynamic = "force-dynamic";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -15,7 +14,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
   
   const apps = profile?.customer_id ? await getReviewApps(profile.customer_id) : [];
 
-  // ── NEW: Fetch visit history and sort the apps so the sidebar matches the home page ──
   const { data: visits } = await supabase
     .from('user_app_visits')
     .select('app_name, last_visited_at')
@@ -34,7 +32,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   return (
-    <div className="flex h-screen overflow-hidden relative font-[family-name:var(--font-geist-sans,sans-serif)] bg-[#EEF0F8] dark:bg-[#050505] text-zinc-900 dark:text-zinc-100">
+    // CHANGED: Switched to h-screen w-screen to allow layering
+    <div className="h-screen w-screen overflow-hidden relative font-[family-name:var(--font-geist-sans,sans-serif)] bg-[#EEF0F8] dark:bg-[#050505] text-zinc-900 dark:text-zinc-100">
       
       {/* ── AMBIENT BACKGROUND ── */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
@@ -58,15 +57,25 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </div>
 
       {/* ── MAIN CONTENT ── */}
-      <main className="flex-1 overflow-hidden relative z-10 flex flex-col">
+      {/* CHANGED: Now spans the entire width absolutely, removing the visual cut */}
+      <main 
+        className="absolute inset-0 z-10 overflow-y-auto overflow-x-hidden flex flex-col scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+        style={{
+          WebkitMaskImage: "linear-gradient(black, black)",
+          maskImage: "linear-gradient(black, black)",
+        }}
+      >
         <InsightProvider>
           {children}
         </InsightProvider>
       </main>
 
-      {/* ── RIGHT SIDEBAR ── */}
-      <div className="relative z-20">
-        <AppSidebar apps={apps} />
+      {/* ── FLOATING RIGHT SIDEBAR ── */}
+      {/* CHANGED: Floats on top of the main content on the right edge */}
+      <div className="absolute right-0 top-0 bottom-0 z-40 pointer-events-none flex justify-end">
+        <div className="pointer-events-auto h-full">
+          <AppSidebar apps={apps} />
+        </div>
       </div>
     </div>
   );

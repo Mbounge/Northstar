@@ -12,7 +12,7 @@ export function AppSidebar({ apps }: { apps: AppSummary[] }) {
   const [isAppsVisible, setIsAppsVisible] = useState(true);
 
   return (
-    <aside className="w-[96px] h-full flex flex-col items-center shrink-0">
+    <aside className="w-[72px] h-full flex flex-col items-center shrink-0">
       
       {/* ── MASKED SCROLL CONTAINER ── */}
       <div 

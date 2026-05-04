@@ -246,11 +246,11 @@ rgba(255,255,255,0.01) 100%
                           />
 
                           {/* iOS rim light — white catch light on top-left edge only */}
-<div
-  className="absolute inset-0 pointer-events-none"
-  style={{
-    borderRadius: "22.5%",
-    background: `
+                          <div
+                            className="absolute inset-0 pointer-events-none"
+                            style={{
+                              borderRadius: "22.5%",
+                              background: `
       radial-gradient(
         ellipse 120% 120% at 10% 10%,
         rgba(255,255,255,0.04) 0%,
@@ -258,9 +258,9 @@ rgba(255,255,255,0.01) 100%
         rgba(255,255,255,0.00) 55%
       )
     `,
-    zIndex: 10,
-  }}
-/>
+                              zIndex: 10,
+                            }}
+                          />
 
                           <div
                             className="absolute inset-0 pointer-events-none"
@@ -272,7 +272,7 @@ rgba(255,255,255,0.01) 100%
   inset 0 0 0 2.28px rgba(244,245,248,0.074),
   inset 0 0 0 2.98px rgba(244,245,248,0.021)
 `,
-                             WebkitMaskImage: `
+                              WebkitMaskImage: `
   radial-gradient(circle at 14% 14%,
     rgba(0,0,0,0.70) 8%,
     rgba(0,0,0,0.62) 16%,
@@ -340,7 +340,7 @@ rgba(255,255,255,0.01) 100%
                             Rank
                           </span>
                           <span className="text-[10px] text-white/90 font-medium">
-                            #{Math.floor(Math.random() * 10) + 1}
+                            #{app.rank ?? "?"}
                           </span>
                         </div>
                       </div>
@@ -357,13 +357,15 @@ rgba(255,255,255,0.01) 100%
                     </p>
                     <div className="flex gap-[10px] items-center flex-wrap">
                       <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
-                        $1B revenues
+                        {app.revenue ? `${app.revenue} revenues` : "? revenues"}
                       </span>
                       <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
-                        950 employees
+                        {app.employees
+                          ? `${app.employees} employees`
+                          : "? employees"}
                       </span>
                       <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
-                        {(app.totalScreens || 0) * 12 || "1,421"} insights
+                        {app.totalScreens || 0} insights
                       </span>
                     </div>
                   </div>

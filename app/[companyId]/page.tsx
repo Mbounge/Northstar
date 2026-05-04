@@ -114,7 +114,7 @@ export default async function CompanyDashboardPage({
 
   const IdentityHeader = () => (
     // ... Keep exactly the same IdentityHeader code ...
-    <div className="w-full h-full flex items-center justify-between px-10 pt-6 relative">
+    <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
       <div className="flex items-center">
         <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6">
           <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
@@ -179,7 +179,7 @@ export default async function CompanyDashboardPage({
     // CHANGED: Removed h-full, min-h-0. Added min-h-screen to let the page grow naturally.
     <div className="h-[100dvh] overflow-y-auto overflow-x-hidden flex flex-col relative z-10 bg-transparent scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
       <Tabs defaultValue="product" className="flex flex-col w-full">
-        <div className="flex items-center justify-between pt-8 px-10 shrink-0 relative z-20">
+        <div className="flex items-center justify-between pt-8 pl-10 pr-[84px] shrink-0 relative z-20">
           
           <div className="flex-1">
             <h1 className={`${unbounded.className} text-[30px] font-[600] tracking-[-0.02em] leading-[100%] text-[#020B26] dark:text-white m-0`}>
@@ -216,7 +216,7 @@ export default async function CompanyDashboardPage({
         </div>
 
         {/* CHANGED: Removed flex-1, min-h-0, overflow-hidden restrictions */}
-        <div className="flex flex-col mt-6 relative z-10 px-10 pb-12">
+        <div className="flex flex-col mt-6 relative z-10 pl-10 pr-[84px] pb-12">
           
           <TabsContent value="product" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             {productData && (productData.browsing || productData.onboarding) ? (

@@ -16,6 +16,10 @@ export interface AppSummary {
   browsingGrade: string;
   totalScreens: number;
   iconUrl?: string | null;
+  // New fields for business metrics
+  rank?: number | string | null;
+  revenue?: string | null;
+  employees?: number | string | null;
 }
 
 function formatCategory(cat: string | undefined): string {
@@ -101,6 +105,67 @@ function getBestIconUrl(appStoreData: any, apkIntelData: any): string | null {
   return apkIntelData?.icons?.icon_url || null;
 }
 
+async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
+  console.log(`\n--- FETCHING EMPLOYEES FOR: ${appName} ---`);
+  
+  const folderPath = `${tenantId}/${appName}/snapshots`;
+  const { data: snapshots, error } = await supabase.storage.from('data').list(folderPath, { limit: 100 });
+
+  if (error || !snapshots || snapshots.length === 0) {
+    console.log(`❌ No snapshots found in folder: ${folderPath}`);
+    return null;
+  }
+
+  const sortedSnapshots = snapshots
+    .filter(s => !s.id && s.name !== '.emptyFolderPlaceholder')
+    .map(s => s.name)
+    .sort((a, b) => b.localeCompare(a));
+
+  console.log(`📂 Found valid snapshots:`, sortedSnapshots);
+
+  for (const snapshot of sortedSnapshots) {
+    // Try both lowercase and exact case to prevent 404 errors!
+    const fileNamesToTry = [
+      `${appName.toLowerCase()}_omni_roster.json`,
+      `${appName}_omni_roster.json`
+    ];
+
+    for (const fileName of fileNamesToTry) {
+      const url = `${supabaseUrl}/storage/v1/object/public/data/${tenantId}/${appName}/snapshots/${snapshot}/business/${fileName}?t=${Date.now()}`;
+      
+      console.log(`🌐 Trying URL: ${url}`);
+      
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        console.log(`📡 Response Status: ${res.status}`);
+        
+        if (res.ok) {
+          const rosterData = await res.json();
+          console.log(`✅ File parsed. Array length:`, rosterData?.length);
+          
+          if (rosterData && rosterData.length > 0 && rosterData[0].type === "Brand") {
+            const employees = rosterData[0].metrics?.employees;
+            console.log(`🎯 Employees value found:`, employees);
+            
+            if (employees) {
+              return employees;
+            } else {
+              console.log(`⚠️ Metrics block exists, but 'employees' is missing or null.`);
+            }
+          } else {
+            console.log(`⚠️ First item in JSON is not type="Brand".`);
+          }
+        }
+      } catch (e) {
+        console.log(`❌ Fetch failed for ${fileName}`);
+      }
+    }
+  }
+
+  console.log(`🏁 Finished checking all snapshots. Returning null.`);
+  return null;
+}
+
 // ─── THE FIX: SEQUENTIAL DATA LOADING TO PREVENT NETWORK THROTTLING ───
 
 export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
@@ -172,18 +237,30 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
 
     if (!hasOnboarding && !hasBrowsing) continue;
 
-    // Fetch deep intelligence for this specific app
-    const [apkIntel, appStoreData, browsingMemory] = await Promise.all([
+    // Fetch deep intelligence for this specific app, including our new fallback logic
+    const [apkIntel, appStoreData, browsingMemory, employees] = await Promise.all([
       fetchApkIntelligence(appName, tenantId),
       fetchAppStoreData(appName, tenantId),
       fetchAgentMemory(appName, 'browsing', tenantId),
+      fetchLatestEmployeeCount(appName, tenantId)
     ]);
 
     const iconUrl = getBestIconUrl(appStoreData, apkIntel);
     const rawAppType = browsingMemory?.app_type;
     const appType = rawAppType ? formatCategory(rawAppType) : category;
 
-    results.push({ appName, category, appType, hasOnboarding, hasBrowsing, onboardingGrade, browsingGrade, totalScreens, iconUrl });
+    results.push({ 
+      appName, 
+      category, 
+      appType, 
+      hasOnboarding, 
+      hasBrowsing, 
+      onboardingGrade, 
+      browsingGrade, 
+      totalScreens, 
+      iconUrl,
+      employees 
+    });
   }
 
   return results;
