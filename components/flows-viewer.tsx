@@ -53,7 +53,10 @@ function findFlow(nodes: FlowNode[], id: string): FlowNode | null {
 }
 
 function buildImgUrl(tenantId: string, appName: string, mode: string, file: string): string {
-  return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${appName}/${mode}/screenshots/${file}`;
+  // THE FIX: Extract ONLY the filename from the JSON string
+  const cleanFileName = file.split('/').pop() || file;
+  
+  return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${appName}/${mode}/screenshots/${cleanFileName}`;
 }
 
 async function copyImageToClipboard(url: string, onSuccess?: () => void, onError?: () => void) {
