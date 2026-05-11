@@ -25,7 +25,7 @@ interface FlowNode {
 }
 interface FlowsData {
   taxonomy: FlowNode[];
-  screen_catalog: Screen[];
+  screen_catalog?: Screen[];
 }
 
 // ─── HELPERS ────────────────────────────────────────────────────
@@ -346,6 +346,10 @@ export function FlowsViewer({
 }: {
   flowsData: FlowsData; appName: string; tenantId: string; mode: string;
 }) {
+
+  console.log("flowsData keys:", Object.keys(flowsData ?? {}));
+  console.log("screen_catalog length:", flowsData?.screen_catalog?.length);
+  console.log("taxonomy length:", flowsData?.taxonomy?.length);
   const sanitizedTaxonomy = useMemo(() => {
     if (!flowsData?.taxonomy) return [];
     const seenIds = new Set<string>();
@@ -368,16 +372,24 @@ export function FlowsViewer({
   const sectionRefs = useRef<Map<string, React.RefObject<HTMLDivElement | null>>>(new Map());
 
   const flowScreensMap = useMemo(() => {
-    const map = new Map<string, Screen[]>();
-    for (const flow of allFlows) {
-      const resolved = flow.screens
-        .map((step) => flowsData.screen_catalog.find((s) => s.timeline_step === step))
-        .filter(Boolean) as Screen[];
-      map.set(flow.id, resolved);
-      if (!sectionRefs.current.has(flow.id)) sectionRefs.current.set(flow.id, { current: null });
-    }
-    return map;
-  }, [allFlows, flowsData.screen_catalog]);
+  const map = new Map<string, Screen[]>();
+  const catalog = flowsData.screen_catalog ?? [];
+  
+  // Debug: log first flow's steps vs catalog steps
+  if (allFlows[0]) {
+    console.log("First flow steps:", allFlows[0].screens.slice(0, 5));
+    console.log("Catalog sample:", catalog.slice(0, 5).map(s => s.timeline_step));
+  }
+  
+  for (const flow of allFlows) {
+    const resolved = flow.screens
+      .map((step) => catalog.find((s) => Number(s.timeline_step) === Number(step)))
+      .filter(Boolean) as Screen[];
+    map.set(flow.id, resolved);
+    if (!sectionRefs.current.has(flow.id)) sectionRefs.current.set(flow.id, { current: null });
+  }
+  return map;
+}, [allFlows, flowsData.screen_catalog]);
 
   const toggleExpand = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();

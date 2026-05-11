@@ -106,13 +106,13 @@ function getBestIconUrl(appStoreData: any, apkIntelData: any): string | null {
 }
 
 async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
-  console.log(`\n--- FETCHING EMPLOYEES FOR: ${appName} ---`);
+  // Use lowercase for the app folder path to match Supabase storage
+  const safeAppFolder = appName.toLowerCase();
   
-  const folderPath = `${tenantId}/${appName}/snapshots`;
+  const folderPath = `${tenantId}/${safeAppFolder}/snapshots`;
   const { data: snapshots, error } = await supabase.storage.from('data').list(folderPath, { limit: 100 });
 
   if (error || !snapshots || snapshots.length === 0) {
-    console.log(`❌ No snapshots found in folder: ${folderPath}`);
     return null;
   }
 
@@ -121,48 +121,28 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
     .map(s => s.name)
     .sort((a, b) => b.localeCompare(a));
 
-  console.log(`📂 Found valid snapshots:`, sortedSnapshots);
-
   for (const snapshot of sortedSnapshots) {
-    // Try both lowercase and exact case to prevent 404 errors!
-    const fileNamesToTry = [
-      `${appName.toLowerCase()}_omni_roster.json`,
-      `${appName}_omni_roster.json`
-    ];
-
-    for (const fileName of fileNamesToTry) {
-      const url = `${supabaseUrl}/storage/v1/object/public/data/${tenantId}/${appName}/snapshots/${snapshot}/business/${fileName}?t=${Date.now()}`;
+    // Both safeAppFolder and lowercase file name
+    const url = `${supabaseUrl}/storage/v1/object/public/data/${tenantId}/${safeAppFolder}/snapshots/${snapshot}/business/${safeAppFolder}_omni_roster.json?t=${Date.now()}`;
+    
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
       
-      console.log(`🌐 Trying URL: ${url}`);
-      
-      try {
-        const res = await fetch(url, { cache: 'no-store' });
-        console.log(`📡 Response Status: ${res.status}`);
+      if (res.ok) {
+        const rosterData = await res.json();
         
-        if (res.ok) {
-          const rosterData = await res.json();
-          console.log(`✅ File parsed. Array length:`, rosterData?.length);
-          
-          if (rosterData && rosterData.length > 0 && rosterData[0].type === "Brand") {
-            const employees = rosterData[0].metrics?.employees;
-            console.log(`🎯 Employees value found:`, employees);
-            
-            if (employees) {
-              return employees;
-            } else {
-              console.log(`⚠️ Metrics block exists, but 'employees' is missing or null.`);
-            }
-          } else {
-            console.log(`⚠️ First item in JSON is not type="Brand".`);
+        if (rosterData && rosterData.length > 0 && rosterData[0].type === "Brand") {
+          const employees = rosterData[0].metrics?.employees;
+          if (employees) {
+            return employees;
           }
         }
-      } catch (e) {
-        console.log(`❌ Fetch failed for ${fileName}`);
       }
+    } catch (e) {
+      continue;
     }
   }
 
-  console.log(`🏁 Finished checking all snapshots. Returning null.`);
   return null;
 }
 
@@ -310,6 +290,20 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
       enrichedData
     };
   });
+  
+  const steps = await Promise.all(stepsPromises);
+
+// Inject screen_catalog into flowsData so FlowsViewer can resolve step → filename
+// Works with both old flows.json (no catalog) and new ones (catalog already present)
+if (flowsData && !flowsData.screen_catalog) {
+  flowsData.screen_catalog = steps.map((step: any) => ({
+    timeline_step:  step.step,
+    screenshot_file: step.imagePath.split('/screenshots/').pop() ?? step.imagePath,
+    display_label:  step.screen_type ?? "",
+    root_section:   "",
+    is_panoramic:   false,
+  }));
+}
 
   return { summary: manifest.processing_stats, sessionIntel, flowsData, steps: await Promise.all(stepsPromises) };
 }
