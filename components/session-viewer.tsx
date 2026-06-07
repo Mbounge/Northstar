@@ -79,6 +79,9 @@ export function SessionViewer({ data }: { data: any }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   
+  // NEW: State for pathway partitioning
+  const [selectedPathway, setSelectedPathway] = useState<string>("All");
+  
   const scrollRef = useRef<HTMLDivElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
   
@@ -88,6 +91,23 @@ export function SessionViewer({ data }: { data: any }) {
   const hasOpenedRef = useRef(false);
 
   const steps = data.steps;
+
+  // NEW: Extract unique pathways from the metadata
+  const uniquePathways = Array.from(new Set(steps.map((s: any) => 
+    s.enrichedData?.extraction_meta?.agent_pathway && s.enrichedData?.extraction_meta?.agent_pathway !== "Common" 
+      ? s.enrichedData.extraction_meta.agent_pathway 
+      : "Main Flow"
+  ))) as string[];
+
+  // NEW: Filter steps based on the selected partition
+  const visibleSteps = selectedPathway === "All" 
+    ? steps 
+    : steps.filter((s: any) => {
+        const p = s.enrichedData?.extraction_meta?.agent_pathway;
+        const mappedP = p && p !== "Common" ? p : "Main Flow";
+        return mappedP === selectedPathway;
+      });
+
   const currentStep = steps[currentIndex];
 
   const metadata = currentStep?.enrichedData || {};
@@ -159,7 +179,7 @@ export function SessionViewer({ data }: { data: any }) {
   useEffect(() => { scrollCarouselToIndex(currentIndex); }, [currentIndex, scrollCarouselToIndex]);
   useEffect(() => { setActiveTab("insights"); }, [currentIndex]);
 
-  // CHANGED: Swapped useEffect for useLayoutEffect for instant, zero-jitter rendering when the modal opens.
+  // Swapped useEffect for useLayoutEffect for instant, zero-jitter rendering when the modal opens.
   useLayoutEffect(() => {
     if (isModalOpen && !hasOpenedRef.current) {
       hasOpenedRef.current = true;
@@ -244,12 +264,10 @@ export function SessionViewer({ data }: { data: any }) {
                     className={cn(
                       "relative w-full h-full bg-white dark:bg-zinc-900 transition-all duration-500 ease-out origin-center",
                       isPanoramic ? "overflow-hidden" : "overflow-hidden",
-                      // CHANGED: Replaced jarred scaling with smooth 100/95 scaling.
                       isActive 
                         ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20" 
                         : "scale-95 opacity-40 hover:opacity-70 shadow-lg"
                     )} 
-                    // CHANGED: Reduced borderRadius to 0.8rem to match the sharp edges of the grid
                     style={{ 
                       borderWidth: "0.3px", 
                       borderColor: "#818A98", 
@@ -298,6 +316,14 @@ export function SessionViewer({ data }: { data: any }) {
                 <Badge className="bg-white/60 dark:bg-white/10 backdrop-blur-md text-zinc-800 dark:text-zinc-200 border-white/80 dark:border-white/20 font-mono shadow-sm">
                   SCREEN {actualStepNumber} / {steps.length}
                 </Badge>
+                
+                {/* Pathway Badge for Branching Apps */}
+                {agentMeta.agent_pathway && agentMeta.agent_pathway !== "Common" && (
+                  <Badge className="bg-purple-50/80 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border-purple-200/50 dark:border-purple-500/30 uppercase tracking-widest text-[10px]">
+                    PATHWAY: {agentMeta.agent_pathway}
+                  </Badge>
+                )}
+
                 {displayPhase && (
                   <Badge className="bg-blue-50/80 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-200/50 dark:border-blue-500/30 uppercase tracking-widest text-[10px]">
                     {displayPhase.replace(/_/g, " ")}
@@ -322,7 +348,6 @@ export function SessionViewer({ data }: { data: any }) {
               >
                 <div 
                   className="relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl cursor-pointer group overflow-hidden" 
-                  // CHANGED: Sharpened borderRadius from 1.2rem to 0.8rem
                   style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "0.8rem" }} 
                   onClick={() => setIsModalOpen(true)}
                 >
@@ -542,33 +567,67 @@ export function SessionViewer({ data }: { data: any }) {
           </div>
         </div>
 
-        {/* BOTTOM CAROUSEL */}
-        <div className="h-[100px] shrink-0 bg-white/40 dark:bg-black/40 backdrop-blur-xl border-t border-white/60 dark:border-white/10 px-4 flex items-center">
-          <div ref={carouselRef} className="flex items-center gap-3 h-full py-3 overflow-x-auto w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-            {steps.map((step: any, idx: number) => (
-              <div
-                key={idx}
-                onClick={() => setCurrentIndex(idx)}
-                className={cn(
-                  "relative h-full aspect-[9/19.5] shrink-0 overflow-hidden cursor-pointer transition-all duration-300 ease-out",
-                  // CHANGED: Swapped jumpy scale-105 for stable scale-95 (like the modal)
-                  idx === currentIndex 
-                    ? "scale-100 opacity-100 shadow-xl ring-2 ring-[#0066FF]" 
-                    : "scale-95 opacity-40 hover:opacity-70 shadow-sm"
-                )}
-                // CHANGED: Added proportional sharp borders to match the main mockups
-                style={{ borderRadius: "0.4rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
+        {/* BOTTOM CAROUSEL & PARTITION TABS */}
+        <div className="shrink-0 bg-white/40 dark:bg-black/40 backdrop-blur-xl border-t border-white/60 dark:border-white/10 flex flex-col">
+          
+          {/* Pathway Partition Tabs (only displays when more than one pathway is detected) */}
+          {uniquePathways.length > 1 && (
+            <div className="flex items-center gap-2 px-6 pt-3 pb-1 overflow-x-auto [&::-webkit-scrollbar]:hidden">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mr-2">Pathways:</span>
+              <button 
+                onClick={() => setSelectedPathway("All")}
+                className={cn("px-3 py-1 rounded-full text-[11px] font-bold transition-all border", selectedPathway === "All" ? "bg-purple-500 text-white border-purple-400" : "bg-white/50 dark:bg-white/5 text-zinc-600 dark:text-zinc-400 border-transparent hover:bg-white dark:hover:bg-white/10")}
               >
-                <Image 
-                  src={step.imagePath} 
-                  alt="" 
-                  fill 
-                  className={cn("bg-white dark:bg-zinc-900", step.imagePath.includes("panoramic") || step.imagePath.includes("full_page") ? "object-cover object-top" : "object-cover")} 
-                  unoptimized 
-                />
-                {/* CHANGED: Deleted the bottom label badge with idx + 1 for a cleaner look */}
-              </div>
-            ))}
+                All Screens
+              </button>
+              {uniquePathways.map(pw => (
+                <button 
+                  key={pw}
+                  onClick={() => {
+                    setSelectedPathway(pw);
+                    // Jump to the first screen of this pathway
+                    const firstIndex = steps.findIndex((s: any) => {
+                      const p = s.enrichedData?.extraction_meta?.agent_pathway;
+                      return (p && p !== "Common" ? p : "Main Flow") === pw;
+                    });
+                    if (firstIndex !== -1) setCurrentIndex(firstIndex);
+                  }}
+                  className={cn("px-3 py-1 rounded-full text-[11px] font-bold transition-all border", selectedPathway === pw ? "bg-purple-500 text-white border-purple-400" : "bg-white/50 dark:bg-white/5 text-zinc-600 dark:text-zinc-400 border-transparent hover:bg-white dark:hover:bg-white/10")}
+                >
+                  {pw}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="h-[100px] px-4 flex items-center">
+            <div ref={carouselRef} className="flex items-center gap-3 h-full py-3 overflow-x-auto w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              {visibleSteps.map((step: any) => {
+                // Find the absolute index of this step in the main array to keep sync intact
+                const absoluteIdx = steps.indexOf(step);
+                return (
+                  <div
+                    key={absoluteIdx}
+                    onClick={() => setCurrentIndex(absoluteIdx)}
+                    className={cn(
+                      "relative h-full aspect-[9/19.5] shrink-0 overflow-hidden cursor-pointer transition-all duration-300 ease-out",
+                      absoluteIdx === currentIndex 
+                        ? "scale-100 opacity-100 shadow-xl ring-2 ring-[#0066FF]" 
+                        : "scale-95 opacity-40 hover:opacity-70 shadow-sm"
+                    )}
+                    style={{ borderRadius: "0.4rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
+                  >
+                    <Image 
+                      src={step.imagePath} 
+                      alt="" 
+                      fill 
+                      className={cn("bg-white dark:bg-zinc-900", step.imagePath.includes("panoramic") || step.imagePath.includes("full_page") ? "object-cover object-top" : "object-cover")} 
+                      unoptimized 
+                    />
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 

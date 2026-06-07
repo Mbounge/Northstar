@@ -21,7 +21,6 @@ export default async function CompanyDashboardPage({
   params: Promise<{ companyId: string }>;
   searchParams: Promise<{ snapshot?: string | string[] }>;
 }) {
-  // ... (Keep all your data fetching code exactly the same) ...
   const { companyId } = await params;
   const resolvedSearchParams = await searchParams;
 
@@ -77,10 +76,12 @@ export default async function CompanyDashboardPage({
   const iconUrl = productData?.iconUrl; 
   
   let marketName = "General Utilities";
-  const bCat = productData?.browsing?.summary?.app_category;
-  const oCat = productData?.onboarding?.summary?.metadata?.app_category;
-  const aCat = productData?.apkIntelligence?.app_metadata?.category;
+
+  // 1. High Priority: Synthesized category from Teardown (Browsing) or Onboarding Session Intelligence
+  const bSynthesized = productData?.browsing?.sessionIntel?.competitive_profile?.app_category;
+  const oSynthesized = productData?.onboarding?.sessionIntel?.competitive_profile?.app_category;
   
+  // 2. Middle Priority: Ground-truth memory classifications (agent_memory.json)
   let preciseAppType = null;
   const fetchMemory = async (type: string) => {
     try {
@@ -92,14 +93,21 @@ export default async function CompanyDashboardPage({
     } catch (e) {}
     return null;
   };
-  
   preciseAppType = await fetchMemory('browsing') || await fetchMemory('onboarding');
 
-  if (preciseAppType) {
+  // 3. Low Priority: Fallback Google Play Store Category
+  const playStoreCategory = productData?.apkIntelligence?.app_metadata?.category;
+
+  // Apply the prioritization hierarchy
+  if (bSynthesized && bSynthesized !== "Unknown" && bSynthesized !== "unknown") {
+    marketName = bSynthesized;
+  } else if (oSynthesized && oSynthesized !== "Unknown" && oSynthesized !== "unknown") {
+    marketName = oSynthesized;
+  } else if (preciseAppType) {
     marketName = preciseAppType;
-  } else if (bCat && bCat !== "Unknown") marketName = bCat;
-  else if (oCat && oCat !== "Unknown") marketName = oCat;
-  else if (aCat && aCat !== "Unknown") marketName = aCat;
+  } else if (playStoreCategory && playStoreCategory !== "Unknown") {
+    marketName = playStoreCategory;
+  }
   
   marketName = marketName.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 
@@ -113,7 +121,6 @@ export default async function CompanyDashboardPage({
   const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
 
   const IdentityHeader = () => (
-    // ... Keep exactly the same IdentityHeader code ...
     <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
       <div className="flex items-center">
         <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6">
@@ -129,17 +136,19 @@ export default async function CompanyDashboardPage({
               </span>
             )}
           </div>
-          <div className="flex flex-col justify-end h-[78px] font-sans gap-[4px] pb-[2px]">
-            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0">
+          {/* Max-width container to prevent layout shifting while letting text wrap naturally */}
+          <div className="flex flex-col justify-end h-[78px] font-sans gap-[4px] pb-[2px] max-w-[320px] shrink-0 min-w-0 pr-4">
+            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0" title={appName}>
               {appName}
             </h2>
-            <h3 className="text-[30px] font-[400] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0">
+            <h3 className="text-[30px] font-[400] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0" title={marketName}>
               {marketName}
             </h3>
           </div>
         </div>
         
-        <div className="flex items-center gap-10 ml-16">
+        {/* Statistics container - completely static, position will never move */}
+        <div className="flex items-center gap-10 ml-16 shrink-0">
           <div className="flex flex-col gap-[6px] justify-center items-start">
             <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
               Rank
@@ -160,7 +169,7 @@ export default async function CompanyDashboardPage({
         </div>
       </div>
       
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 shrink-0">
         <button className="w-12 h-12 rounded-full bg-white/40 dark:bg-white/5 backdrop-blur-md flex items-center justify-center text-zinc-900 dark:text-zinc-100 hover:bg-white/60 dark:hover:bg-white/10 transition-colors border border-white/20 dark:border-white/10 shadow-none cursor-pointer">
           <MoreHorizontal className="w-6 h-6" />
         </button>
@@ -176,7 +185,6 @@ export default async function CompanyDashboardPage({
   );
 
   return (
-    // CHANGED: Removed h-full, min-h-0. Added min-h-screen to let the page grow naturally.
     <div className="h-[100dvh] overflow-y-auto overflow-x-hidden flex flex-col relative z-10 bg-transparent scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
       <Tabs defaultValue="product" className="flex flex-col w-full">
         <div className="flex items-center justify-between pt-8 pl-10 pr-[84px] shrink-0 relative z-20">
@@ -215,7 +223,6 @@ export default async function CompanyDashboardPage({
           </div>
         </div>
 
-        {/* CHANGED: Removed flex-1, min-h-0, overflow-hidden restrictions */}
         <div className="flex flex-col mt-6 relative z-10 pl-10 pr-[84px] pb-12">
           
           <TabsContent value="product" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
@@ -230,7 +237,6 @@ export default async function CompanyDashboardPage({
             )}
           </TabsContent>
 
-          {/* CHANGED: Removed overflow-y-auto to allow natural page scrolling */}
           <TabsContent value="marketing" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
@@ -240,7 +246,6 @@ export default async function CompanyDashboardPage({
             </div>
           </TabsContent>
 
-          {/* CHANGED: Removed overflow-y-auto to allow natural page scrolling */}
           <TabsContent value="business" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
