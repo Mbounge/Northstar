@@ -111,6 +111,9 @@ export default async function CompanyDashboardPage({
   
   marketName = marketName.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 
+  // Conditional formatting trigger for long market descriptions
+  const isLongMarketName = marketName.length > 20;
+
   let marketingPosts: any[] = [];
   if (dashboardData?.marketing) {
     if (Array.isArray(dashboardData.marketing)) marketingPosts = dashboardData.marketing;
@@ -141,7 +144,10 @@ export default async function CompanyDashboardPage({
             <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0" title={appName}>
               {appName}
             </h2>
-            <h3 className="text-[30px] font-[400] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0" title={marketName}>
+            <h3 className={isLongMarketName 
+              ? "text-[26px] font-[400] text-[#000000] dark:text-white leading-[28px] tracking-[0%] m-0 p-0" 
+              : "text-[30px] font-[400] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0"
+            } title={marketName}>
               {marketName}
             </h3>
           </div>

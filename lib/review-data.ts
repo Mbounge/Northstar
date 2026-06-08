@@ -106,7 +106,6 @@ function getBestIconUrl(appStoreData: any, apkIntelData: any): string | null {
 }
 
 async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
-  // Use lowercase for the app folder path to match Supabase storage
   const safeAppFolder = appName.toLowerCase();
   
   const folderPath = `${tenantId}/${safeAppFolder}/snapshots`;
@@ -122,7 +121,6 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
     .sort((a, b) => b.localeCompare(a));
 
   for (const snapshot of sortedSnapshots) {
-    // Both safeAppFolder and lowercase file name
     const url = `${supabaseUrl}/storage/v1/object/public/data/${tenantId}/${safeAppFolder}/snapshots/${snapshot}/business/${safeAppFolder}_omni_roster.json?t=${Date.now()}`;
     
     try {
@@ -146,20 +144,15 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
   return null;
 }
 
-// ─── THE FIX: SEQUENTIAL DATA LOADING TO PREVENT NETWORK THROTTLING ───
-
 export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
   if (!tenantId) return [];
 
   const { data: appFolders, error } = await supabase.storage.from('reviews').list(tenantId, { limit: 100 });
   if (error || !appFolders) return [];
 
-  // 1. Filter out hidden Supabase placeholders which corrupt the UI
   const validFolders = appFolders.filter(f => !f.id && f.name !== '.emptyFolderPlaceholder');
   const results: AppSummary[] = [];
 
-  // 2. Process Sequentially instead of Promise.all(). 
-  // This completely eliminates network dropping and missing apps.
   for (const appFolderObj of validFolders) {
     const appName = appFolderObj.name;
     const { data: sessionFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}`, { limit: 10 });
@@ -197,7 +190,6 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
           screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
         }
       } else {
-        // Safe fallback if JSON parsing fails
         if (type === 'onboarding') hasOnboarding = true;
         else hasBrowsing = true;
       }
@@ -217,7 +209,6 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
 
     if (!hasOnboarding && !hasBrowsing) continue;
 
-    // Fetch deep intelligence for this specific app, including our new fallback logic
     const [apkIntel, appStoreData, browsingMemory, employees] = await Promise.all([
       fetchApkIntelligence(appName, tenantId),
       fetchAppStoreData(appName, tenantId),
@@ -275,35 +266,43 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
   const sessionIntel = intelRes.ok ? await intelRes.json() : null;
   const flowsData = flowsRes.ok ? await flowsRes.json() : null;
   
-  const stepsPromises = manifest.enriched_screenshots.map(async (entry: any) => {
-    const stepRes = await fetch(`${publicUrl}/${entry.enriched_file}`, { next: { revalidate: 300 } });
-    const enrichedData = stepRes.ok ? await stepRes.json() : null;
-    
-    // ── THE FIX: Extract ONLY the filename to stop broken URLs ──
-    const cleanFileName = entry.screenshot.split('/').pop() || entry.screenshot;
-    
-    return {
-      step: entry.step || entry.timeline_step,
-      phase: entry.phase,
-      screen_type: entry.screen_type,
-      imagePath: `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/screenshots/${cleanFileName}`,
-      enrichedData
-    };
-  });
-  
-  const steps = await Promise.all(stepsPromises);
+  const steps: any[] = [];
+  const BATCH_SIZE = 6; // Limit peak concurrent sockets to 6 to fully guarantee Vercel's EMFILE safety
 
-// Inject screen_catalog into flowsData so FlowsViewer can resolve step → filename
-// Works with both old flows.json (no catalog) and new ones (catalog already present)
-if (flowsData && !flowsData.screen_catalog) {
-  flowsData.screen_catalog = steps.map((step: any) => ({
-    timeline_step:  step.step,
-    screenshot_file: step.imagePath.split('/screenshots/').pop() ?? step.imagePath,
-    display_label:  step.screen_type ?? "",
-    root_section:   "",
-    is_panoramic:   false,
-  }));
-}
+  // ─── THE FIX: BATCHED CONCURRENCY FOR SOCKET SAFETY ───
+  for (let i = 0; i < manifest.enriched_screenshots.length; i += BATCH_SIZE) {
+    const batch = manifest.enriched_screenshots.slice(i, i + BATCH_SIZE);
+    
+    const batchResults = await Promise.all(
+      batch.map(async (entry: any) => {
+        const stepRes = await fetch(`${publicUrl}/${entry.enriched_file}`, { next: { revalidate: 300 } });
+        const enrichedData = stepRes.ok ? await stepRes.json() : null;
+        
+        const cleanFileName = entry.screenshot.split('/').pop() || entry.screenshot;
+        
+        return {
+          step: entry.step || entry.timeline_step,
+          phase: entry.phase,
+          screen_type: entry.screen_type,
+          imagePath: `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/screenshots/${cleanFileName}`,
+          enrichedData
+        };
+      })
+    );
+    
+    steps.push(...batchResults);
+  }
 
-  return { summary: manifest.processing_stats, sessionIntel, flowsData, steps: await Promise.all(stepsPromises) };
+  // Inject screen_catalog into flowsData if absent so FlowsViewer maps dynamically
+  if (flowsData && !flowsData.screen_catalog) {
+    flowsData.screen_catalog = steps.map((step: any) => ({
+      timeline_step: step.step,
+      screenshot_file: step.imagePath.split('/screenshots/').pop() ?? step.imagePath,
+      display_label: step.screen_type ?? "",
+      root_section: "",
+      is_panoramic: false,
+    }));
+  }
+
+  return { summary: manifest.processing_stats, sessionIntel, flowsData, steps };
 }
