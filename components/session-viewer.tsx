@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PanoramicMockup } from "@/components/PanoramicMockup";
+import { BrowserMockup } from "@/components/BrowserMockup";
 
 function formatScreenshotTitle(filename: string, fallback: string) {
   if (!filename) return formatFallback(fallback);
@@ -78,28 +79,23 @@ export function SessionViewer({ data }: { data: any }) {
   const [activeTab, setActiveTab] = useState<"insights" | "elements" | "context">("insights");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  
-  // NEW: State for pathway partitioning
   const [selectedPathway, setSelectedPathway] = useState<string>("All");
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
   
-  // Ref guards to prevent onScroll from fighting programmatic smooth scrolling
   const isProgrammaticScroll = useRef(false);
   const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
   const hasOpenedRef = useRef(false);
 
   const steps = data.steps;
 
-  // NEW: Extract unique pathways from the metadata
   const uniquePathways = Array.from(new Set(steps.map((s: any) => 
     s.enrichedData?.extraction_meta?.agent_pathway && s.enrichedData?.extraction_meta?.agent_pathway !== "Common" 
       ? s.enrichedData.extraction_meta.agent_pathway 
       : "Main Flow"
   ))) as string[];
 
-  // NEW: Filter steps based on the selected partition
   const visibleSteps = selectedPathway === "All" 
     ? steps 
     : steps.filter((s: any) => {
@@ -135,8 +131,6 @@ export function SessionViewer({ data }: { data: any }) {
           behavior,
         });
       }
-      
-      // Clear programmatic flag after scroll finishes to re-enable manual swipe detection
       if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
       scrollTimeout.current = setTimeout(() => {
         isProgrammaticScroll.current = false;
@@ -144,7 +138,6 @@ export function SessionViewer({ data }: { data: any }) {
     }
   }, []);
 
-  // ONLY update index via scrolling if the user is manually swiping (not button clicking)
   const handleModalScroll = useCallback(() => {
     if (isProgrammaticScroll.current) return; 
     if (!scrollRef.current) return;
@@ -179,11 +172,9 @@ export function SessionViewer({ data }: { data: any }) {
   useEffect(() => { scrollCarouselToIndex(currentIndex); }, [currentIndex, scrollCarouselToIndex]);
   useEffect(() => { setActiveTab("insights"); }, [currentIndex]);
 
-  // Swapped useEffect for useLayoutEffect for instant, zero-jitter rendering when the modal opens.
   useLayoutEffect(() => {
     if (isModalOpen && !hasOpenedRef.current) {
       hasOpenedRef.current = true;
-      // We use a tiny 10ms timeout just to let the DOM paint the modal's overlay first
       setTimeout(() => {
         scrollToIndex(currentIndex, "instant");
       }, 10);
@@ -219,6 +210,9 @@ export function SessionViewer({ data }: { data: any }) {
   const fileName = currentStep.imagePath.split("/").pop() || "";
   const displayTitle = formatScreenshotTitle(fileName, currentStep.screen_type);
   const isCurrentPanoramic = currentStep.imagePath.includes("panoramic") || currentStep.imagePath.includes("full_page");
+  
+  // Platform Detection
+  const isWebRun = currentStep.imagePath.includes("/web/");
 
   let displayPhase = currentStep.phase;
   if (!displayPhase || displayPhase === "null" || displayPhase === "UNKNOWN") {
@@ -250,6 +244,7 @@ export function SessionViewer({ data }: { data: any }) {
           >
             {steps.map((step: any, idx: number) => {
               const isActive = idx === currentIndex;
+              const isStepWebRun = step.imagePath.includes("/web/");
               const isPanoramic = step.imagePath.includes("panoramic") || step.imagePath.includes("full_page");
               const hasNav = step.imagePath.includes("withnav") || (!step.imagePath.includes("nonav") && isPanoramic);
               
@@ -257,26 +252,24 @@ export function SessionViewer({ data }: { data: any }) {
                 <div 
                   key={idx} 
                   onClick={() => { setCurrentIndex(idx); scrollToIndex(idx, "smooth"); }} 
-                  className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center" 
-                  style={{ aspectRatio: "9/19.5" }}
+                  className={cn(
+                    "snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center transition-all duration-500 ease-out origin-center",
+                    isActive ? "scale-100 opacity-100" : "scale-95 opacity-40 hover:opacity-70"
+                  )} 
+                  style={{ aspectRatio: isStepWebRun ? "16/10" : "9/19.5" }}
                 >
-                  <div 
-                    className={cn(
-                      "relative w-full h-full bg-white dark:bg-zinc-900 transition-all duration-500 ease-out origin-center",
-                      isPanoramic ? "overflow-hidden" : "overflow-hidden",
-                      isActive 
-                        ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20" 
-                        : "scale-95 opacity-40 hover:opacity-70 shadow-lg"
-                    )} 
-                    style={{ 
-                      borderWidth: "0.3px", 
-                      borderColor: "#818A98", 
-                      borderStyle: "solid", 
-                      borderRadius: "0.8rem" 
-                    }}
-                  >
-                    {isPanoramic ? <PanoramicMockup imgUrl={step.imagePath} alt="" hasBottomNav={hasNav} /> : <Image src={step.imagePath} alt="" fill className="object-cover" unoptimized />}
-                  </div>
+                  {isStepWebRun ? (
+                     <div className={cn("w-full h-full shadow-2xl", isActive && "ring-2 ring-white/20 rounded-[14px]")}>
+                       <BrowserMockup imgUrl={step.imagePath} alt="" />
+                     </div>
+                  ) : (
+                    <div 
+                      className={cn("relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl", isPanoramic ? "overflow-hidden" : "overflow-hidden", isActive && "ring-2 ring-white/20")} 
+                      style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "0.8rem" }}
+                    >
+                      {isPanoramic ? <PanoramicMockup imgUrl={step.imagePath} alt="" hasBottomNav={hasNav} /> : <Image src={step.imagePath} alt="" fill className="object-cover" unoptimized />}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -304,20 +297,17 @@ export function SessionViewer({ data }: { data: any }) {
       {/* ─── MAIN LAYOUT ─── */}
       <div className="flex flex-col flex-1 h-full min-h-0 bg-transparent">
 
-        {/* TOP: phone + intelligence */}
         <div className="flex flex-1 min-h-0 overflow-hidden">
 
-          {/* LEFT: Phone */}
-          <div className="w-[45%] flex flex-col p-6 border-r border-black/5 dark:border-white/10 min-h-0">
+          {/* LEFT: Phone / Browser */}
+          <div className={cn("flex flex-col p-6 border-r border-black/5 dark:border-white/10 min-h-0 transition-all", isWebRun ? "w-[55%]" : "w-[45%]")}>
             
-            {/* FIXED HEIGHT HEADER */}
             <div className="h-[90px] shrink-0 flex flex-col gap-2 overflow-hidden mb-2">
               <div className="flex flex-wrap gap-2 items-start shrink-0">
                 <Badge className="bg-white/60 dark:bg-white/10 backdrop-blur-md text-zinc-800 dark:text-zinc-200 border-white/80 dark:border-white/20 font-mono shadow-sm">
                   SCREEN {actualStepNumber} / {steps.length}
                 </Badge>
                 
-                {/* Pathway Badge for Branching Apps */}
                 {agentMeta.agent_pathway && agentMeta.agent_pathway !== "Common" && (
                   <Badge className="bg-purple-50/80 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border-purple-200/50 dark:border-purple-500/30 uppercase tracking-widest text-[10px]">
                     PATHWAY: {agentMeta.agent_pathway}
@@ -335,33 +325,38 @@ export function SessionViewer({ data }: { data: any }) {
               </h2>
             </div>
 
-            {/* ANCHORED CENTERING CONTAINER */}
             <div className="flex-1 w-full relative flex items-center justify-center min-h-0 pb-2">
               
               <button onClick={() => setCurrentIndex((p) => Math.max(p - 1, 0))} disabled={currentIndex === 0} className="absolute left-0 z-20 p-3 bg-white/50 dark:bg-black/50 backdrop-blur-md text-zinc-900 dark:text-white rounded-full border border-white/50 dark:border-white/10 shadow-sm hover:scale-105 transition-all disabled:opacity-30">
                 <ChevronLeft className="w-6 h-6" />
               </button>
               
-              <div 
-                className="relative h-full max-h-[580px] shrink-0" 
-                style={{ aspectRatio: "9/19.5" }}
-              >
-                <div 
-                  className="relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl cursor-pointer group overflow-hidden" 
-                  style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "0.8rem" }} 
-                  onClick={() => setIsModalOpen(true)}
-                >
-                  {isCurrentPanoramic
-                    ? <PanoramicMockup imgUrl={currentStep.imagePath} alt={displayTitle} hasBottomNav={currentStep.imagePath.includes("withnav") || (!currentStep.imagePath.includes("nonav") && isCurrentPanoramic)} />
-                    : <Image src={currentStep.imagePath} alt={displayTitle} fill className="object-cover" unoptimized />
-                  }
-                  <div className="absolute inset-0 z-40 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100">
-                    <div className="bg-white/90 backdrop-blur-sm p-4 rounded-full shadow-xl scale-90 group-hover:scale-100 transition-all">
-                      <Maximize2 className="w-6 h-6 text-black" />
+              {isWebRun ? (
+                <div className="w-full h-full max-h-[580px] max-w-[800px] shrink-0 px-4 group cursor-pointer" onClick={() => setIsModalOpen(true)}>
+                  <div className="relative w-full h-full">
+                    <BrowserMockup imgUrl={currentStep.imagePath} alt={displayTitle} />
+                    <div className="absolute inset-0 z-40 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100 rounded-[12px]">
+                      <div className="bg-white/90 backdrop-blur-sm p-4 rounded-full shadow-xl scale-90 group-hover:scale-100 transition-all">
+                        <Maximize2 className="w-6 h-6 text-black" />
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="relative h-full max-h-[580px] shrink-0" style={{ aspectRatio: "9/19.5" }}>
+                  <div className="relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl cursor-pointer group overflow-hidden" style={{ borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid", borderRadius: "0.8rem" }} onClick={() => setIsModalOpen(true)}>
+                    {isCurrentPanoramic
+                      ? <PanoramicMockup imgUrl={currentStep.imagePath} alt={displayTitle} hasBottomNav={currentStep.imagePath.includes("withnav") || (!currentStep.imagePath.includes("nonav") && isCurrentPanoramic)} />
+                      : <Image src={currentStep.imagePath} alt={displayTitle} fill className="object-cover" unoptimized />
+                    }
+                    <div className="absolute inset-0 z-40 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100">
+                      <div className="bg-white/90 backdrop-blur-sm p-4 rounded-full shadow-xl scale-90 group-hover:scale-100 transition-all">
+                        <Maximize2 className="w-6 h-6 text-black" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <button onClick={() => setCurrentIndex((p) => Math.min(p + 1, steps.length - 1))} disabled={currentIndex === steps.length - 1} className="absolute right-0 z-20 p-3 bg-white/50 dark:bg-black/50 backdrop-blur-md text-zinc-900 dark:text-white rounded-full border border-white/50 dark:border-white/10 shadow-sm hover:scale-105 transition-all disabled:opacity-30">
                 <ChevronRight className="w-6 h-6" />
@@ -372,14 +367,12 @@ export function SessionViewer({ data }: { data: any }) {
 
           {/* RIGHT: Intelligence */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* Tab bar */}
             <div className="px-8 pt-6 border-b border-black/5 dark:border-white/10 shrink-0 flex items-center gap-8">
               <InnerTab active={activeTab === "insights"} onClick={() => setActiveTab("insights")} icon={<BrainCircuit className="w-4 h-4" />} label="Strategic Insights" activeColor="text-[#0066FF] border-[#0066FF]" />
               <InnerTab active={activeTab === "elements"} onClick={() => setActiveTab("elements")} icon={<LayoutTemplate className="w-4 h-4" />} label="UI Elements" activeColor="text-emerald-600 dark:text-emerald-400 border-emerald-600 dark:border-emerald-400" />
               <InnerTab active={activeTab === "context"} onClick={() => setActiveTab("context")} icon={<BookOpen className="w-4 h-4" />} label="Context & Logs" activeColor="text-purple-600 dark:text-purple-400 border-purple-600 dark:border-purple-400" />
             </div>
 
-            {/* Content */}
             <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
 
               {/* INSIGHTS */}
@@ -567,10 +560,8 @@ export function SessionViewer({ data }: { data: any }) {
           </div>
         </div>
 
-        {/* BOTTOM CAROUSEL & PARTITION TABS */}
+        {/* BOTTOM CAROUSEL */}
         <div className="shrink-0 bg-white/40 dark:bg-black/40 backdrop-blur-xl border-t border-white/60 dark:border-white/10 flex flex-col">
-          
-          {/* Pathway Partition Tabs (only displays when more than one pathway is detected) */}
           {uniquePathways.length > 1 && (
             <div className="flex items-center gap-2 px-6 pt-3 pb-1 overflow-x-auto [&::-webkit-scrollbar]:hidden">
               <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mr-2">Pathways:</span>
@@ -585,7 +576,6 @@ export function SessionViewer({ data }: { data: any }) {
                   key={pw}
                   onClick={() => {
                     setSelectedPathway(pw);
-                    // Jump to the first screen of this pathway
                     const firstIndex = steps.findIndex((s: any) => {
                       const p = s.enrichedData?.extraction_meta?.agent_pathway;
                       return (p && p !== "Common" ? p : "Main Flow") === pw;
@@ -603,19 +593,19 @@ export function SessionViewer({ data }: { data: any }) {
           <div className="h-[100px] px-4 flex items-center">
             <div ref={carouselRef} className="flex items-center gap-3 h-full py-3 overflow-x-auto w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
               {visibleSteps.map((step: any) => {
-                // Find the absolute index of this step in the main array to keep sync intact
                 const absoluteIdx = steps.indexOf(step);
+                const isStepWebRun = step.imagePath.includes("/web/");
                 return (
                   <div
                     key={absoluteIdx}
                     onClick={() => setCurrentIndex(absoluteIdx)}
                     className={cn(
-                      "relative h-full aspect-[9/19.5] shrink-0 overflow-hidden cursor-pointer transition-all duration-300 ease-out",
+                      "relative h-full shrink-0 overflow-hidden cursor-pointer transition-all duration-300 ease-out",
                       absoluteIdx === currentIndex 
                         ? "scale-100 opacity-100 shadow-xl ring-2 ring-[#0066FF]" 
                         : "scale-95 opacity-40 hover:opacity-70 shadow-sm"
                     )}
-                    style={{ borderRadius: "0.4rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
+                    style={{ aspectRatio: isStepWebRun ? "16/10" : "9/19.5", borderRadius: "0.4rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}
                   >
                     <Image 
                       src={step.imagePath} 

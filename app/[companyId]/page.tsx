@@ -78,14 +78,23 @@ export default async function CompanyDashboardPage({
   let marketName = "General Utilities";
 
   // 1. High Priority: Synthesized category from Teardown (Browsing) or Onboarding Session Intelligence
-  const bSynthesized = productData?.browsing?.sessionIntel?.competitive_profile?.app_category;
-  const oSynthesized = productData?.onboarding?.sessionIntel?.competitive_profile?.app_category;
+  // Safely check BOTH web and mobile platforms for synthesized category data
+  const bSynthesized = productData?.web?.browsing?.sessionIntel?.competitive_profile?.app_category || 
+                       productData?.mobile?.browsing?.sessionIntel?.competitive_profile?.app_category;
+                       
+  const oSynthesized = productData?.web?.onboarding?.sessionIntel?.competitive_profile?.app_category || 
+                       productData?.mobile?.onboarding?.sessionIntel?.competitive_profile?.app_category;
   
   // 2. Middle Priority: Ground-truth memory classifications (agent_memory.json)
   let preciseAppType = null;
   const fetchMemory = async (type: string) => {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/${type}/agent_memory.json`, { next: { revalidate: 300 } });
+      // Prioritize web memory, fallback to mobile/legacy memory
+      let res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/web/${type}/agent_memory.json`, { next: { revalidate: 300 } });
+      if (!res.ok) {
+        res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/${type}/agent_memory.json`, { next: { revalidate: 300 } });
+      }
+      
       if (res.ok) {
         const data = await res.json();
         if (data?.app_type) return data.app_type;
@@ -232,7 +241,8 @@ export default async function CompanyDashboardPage({
         <div className="flex flex-col mt-6 relative z-10 pl-10 pr-[84px] pb-12">
           
           <TabsContent value="product" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
-            {productData && (productData.browsing || productData.onboarding) ? (
+            {/* Check if EITHER mobile OR web data is present to render the Unified Dashboard */}
+            {productData && (productData.mobile || productData.web) ? (
               <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
             ) : (
               <div className="flex h-full items-center justify-center pt-24">

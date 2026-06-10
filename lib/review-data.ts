@@ -16,10 +16,30 @@ export interface AppSummary {
   browsingGrade: string;
   totalScreens: number;
   iconUrl?: string | null;
-  // New fields for business metrics
   rank?: number | string | null;
   revenue?: string | null;
   employees?: number | string | null;
+}
+
+export interface SessionData {
+  summary: any;
+  sessionIntel: any;
+  flowsData: any;
+  steps: any[];
+}
+
+export interface PlatformViews {
+  onboarding: SessionData | null;
+  browsing: SessionData | null;
+}
+
+export interface AppDetailsResult {
+  appName: string;
+  iconUrl: string | null;
+  appStore: any;
+  apkIntelligence: any;
+  mobile: PlatformViews | null;
+  web: PlatformViews | null;
 }
 
 function formatCategory(cat: string | undefined): string {
@@ -29,16 +49,24 @@ function formatCategory(cat: string | undefined): string {
 
 // ─── DATA FETCHING (ISOLATED BY TENANT ID) ─────────────────────────
 
-async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onboarding', tenantId: string) {
-  const url = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/agent_memory.json`;
+async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onboarding', tenantId: string, platformPrefix = "") {
+  const pathPart = platformPrefix ? `${platformPrefix}/` : "";
+  const url = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${sessionType}/agent_memory.json`;
   const res = await fetch(url, { next: { revalidate: 300 } });
   if (!res.ok) return null;
   return await res.json();
 }
 
 async function fetchApkIntelligence(appName: string, tenantId: string) {
-  const browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/browsing`;
-  const res = await fetch(`${browsingRoot}/apk_intelligence.json`, { next: { revalidate: 300 } });
+  // Check legacy first, then mobile
+  let browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/browsing`;
+  let res = await fetch(`${browsingRoot}/apk_intelligence.json`, { next: { revalidate: 300 } });
+  
+  if (!res.ok) {
+    browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/mobile/browsing`;
+    res = await fetch(`${browsingRoot}/apk_intelligence.json`, { next: { revalidate: 300 } });
+  }
+
   if (!res.ok) return null;
 
   const data = await res.json();
@@ -57,7 +85,6 @@ async function fetchAppStoreData(appName: string, tenantId: string) {
     data = await res.json();
   }
 
-  // Fetch icons and screenshots safely
   const [screenshotsList, iconsList] = await Promise.all([
     supabase.storage.from('reviews').list(`${tenantId}/${appName}/app_store/screenshots`, { limit: 100 }),
     supabase.storage.from('reviews').list(`${tenantId}/${appName}/app_store/icons`, { limit: 100 })
@@ -107,13 +134,10 @@ function getBestIconUrl(appStoreData: any, apkIntelData: any): string | null {
 
 async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
   const safeAppFolder = appName.toLowerCase();
-  
   const folderPath = `${tenantId}/${safeAppFolder}/snapshots`;
   const { data: snapshots, error } = await supabase.storage.from('data').list(folderPath, { limit: 100 });
 
-  if (error || !snapshots || snapshots.length === 0) {
-    return null;
-  }
+  if (error || !snapshots || snapshots.length === 0) return null;
 
   const sortedSnapshots = snapshots
     .filter(s => !s.id && s.name !== '.emptyFolderPlaceholder')
@@ -122,25 +146,19 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
 
   for (const snapshot of sortedSnapshots) {
     const url = `${supabaseUrl}/storage/v1/object/public/data/${tenantId}/${safeAppFolder}/snapshots/${snapshot}/business/${safeAppFolder}_omni_roster.json?t=${Date.now()}`;
-    
     try {
       const res = await fetch(url, { cache: 'no-store' });
-      
       if (res.ok) {
         const rosterData = await res.json();
-        
         if (rosterData && rosterData.length > 0 && rosterData[0].type === "Brand") {
           const employees = rosterData[0].metrics?.employees;
-          if (employees) {
-            return employees;
-          }
+          if (employees) return employees;
         }
       }
     } catch (e) {
       continue;
     }
   }
-
   return null;
 }
 
@@ -155,21 +173,19 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
 
   for (const appFolderObj of validFolders) {
     const appName = appFolderObj.name;
-    const { data: sessionFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}`, { limit: 10 });
+    const { data: rootFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}`, { limit: 20 });
     
+    if (!rootFolders) continue;
+
     let hasOnboarding = false, hasBrowsing = false;
     let onboardingGrade = "N/A", browsingGrade = "N/A";
     let totalScreens = 0;
     let category = "General";
 
-    if (!sessionFolders) continue;
-
-    for (const session of sessionFolders) {
-      if (session.id) continue;
-      const type = session.name; 
-      if (!['onboarding', 'browsing'].includes(type)) continue;
-
-      const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${type}`;
+    // Helper to process a session directory (legacy root, mobile, or web)
+    const processSessionFolder = async (type: string, platformPrefix: string = "") => {
+      const pathPart = platformPrefix ? `${platformPrefix}/` : "";
+      const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${type}`;
       
       const [manifestRes, intelRes] = await Promise.all([
         fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'enriched_manifest.json'}`, { next: { revalidate: 300 } }),
@@ -189,22 +205,45 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
           category = formatCategory(manifest.app_category || category);
           screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
         }
-      } else {
-        if (type === 'onboarding') hasOnboarding = true;
-        else hasBrowsing = true;
       }
 
       if (intelRes.ok) {
         const intel = await intelRes.json();
         if (type === 'onboarding') {
-          onboardingGrade = intel.friction_assessment?.friction_grade || intel.friction_report?.friction_grade || "N/A";
+          hasOnboarding = true;
+          const newGrade = intel.friction_assessment?.friction_grade || intel.friction_report?.friction_grade || "N/A";
+          if (onboardingGrade === "N/A") onboardingGrade = newGrade;
           screenCountForThisSession = Math.max(intel.friction_report?.actual_total_screens || intel.funnel_summary?.total_screens || 0, screenCountForThisSession);
         } else if (type === 'browsing') {
-          browsingGrade = intel.ux_quality_assessment?.ux_grade || intel.ux_quality_report?.ux_grade || "N/A";
+          hasBrowsing = true;
+          const newGrade = intel.ux_quality_assessment?.ux_grade || intel.ux_quality_report?.ux_grade || "N/A";
+          if (browsingGrade === "N/A") browsingGrade = newGrade;
           screenCountForThisSession = Math.max(intel.exploration_summary?.total_screenshots || 0, screenCountForThisSession);
         }
       }
       totalScreens += screenCountForThisSession;
+    };
+
+    const rootNames = rootFolders.map(f => f.name.toLowerCase());
+    
+    // Process legacy root folders
+    if (rootNames.includes('onboarding')) await processSessionFolder('onboarding');
+    if (rootNames.includes('browsing')) await processSessionFolder('browsing');
+
+    // Process nested mobile folders
+    if (rootNames.includes('mobile')) {
+      const { data: mobFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}/mobile`, { limit: 10 });
+      const mobNames = (mobFolders || []).map(f => f.name.toLowerCase());
+      if (mobNames.includes('onboarding')) await processSessionFolder('onboarding', 'mobile');
+      if (mobNames.includes('browsing')) await processSessionFolder('browsing', 'mobile');
+    }
+
+    // Process nested web folders
+    if (rootNames.includes('web')) {
+      const { data: webFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}/web`, { limit: 10 });
+      const webNames = (webFolders || []).map(f => f.name.toLowerCase());
+      if (webNames.includes('onboarding')) await processSessionFolder('onboarding', 'web');
+      if (webNames.includes('browsing')) await processSessionFolder('browsing', 'web');
     }
 
     if (!hasOnboarding && !hasBrowsing) continue;
@@ -212,7 +251,7 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
     const [apkIntel, appStoreData, browsingMemory, employees] = await Promise.all([
       fetchApkIntelligence(appName, tenantId),
       fetchAppStoreData(appName, tenantId),
-      fetchAgentMemory(appName, 'browsing', tenantId),
+      fetchAgentMemory(appName, 'browsing', tenantId, rootNames.includes('mobile') ? 'mobile' : ''),
       fetchLatestEmployeeCount(appName, tenantId)
     ]);
 
@@ -237,23 +276,51 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
   return results;
 }
 
-export async function getAppDetails(appName: string, tenantId: string) {
+export async function getAppDetails(appName: string, tenantId: string): Promise<AppDetailsResult | null> {
   if (!tenantId) return null;
 
-  const [onboarding, browsing, appStore, apkIntelligence] = await Promise.all([
-    fetchSessionData(appName, 'onboarding', tenantId),
-    fetchSessionData(appName, 'browsing', tenantId),
+  const { data: subFolders } = await supabase.storage
+    .from('reviews')
+    .list(`${tenantId}/${appName}`, { limit: 20 });
+
+  const folders = (subFolders || []).map(f => f.name.toLowerCase());
+  const hasWebFolder = folders.includes('web');
+  const hasMobileFolder = folders.includes('mobile');
+
+  // Mobile data (Fallback to legacy root if no explicit mobile folder)
+  const mobilePrefix = hasMobileFolder ? 'mobile' : '';
+  const mobileOnboarding = await fetchSessionData(appName, 'onboarding', tenantId, mobilePrefix);
+  const mobileBrowsing = await fetchSessionData(appName, 'browsing', tenantId, mobilePrefix);
+  
+  let mobile: PlatformViews | null = null;
+  if (mobileOnboarding || mobileBrowsing) {
+    mobile = { onboarding: mobileOnboarding, browsing: mobileBrowsing };
+  }
+
+  // Web data
+  let web: PlatformViews | null = null;
+  if (hasWebFolder) {
+    const webOnboarding = await fetchSessionData(appName, 'onboarding', tenantId, 'web');
+    const webBrowsing = await fetchSessionData(appName, 'browsing', tenantId, 'web');
+    if (webOnboarding || webBrowsing) {
+      web = { onboarding: webOnboarding, browsing: webBrowsing };
+    }
+  }
+
+  const [appStore, apkIntelligence] = await Promise.all([
     fetchAppStoreData(appName, tenantId),
     fetchApkIntelligence(appName, tenantId),   
   ]);
   
   const iconUrl = getBestIconUrl(appStore, apkIntelligence);
   
-  return { appName, onboarding, browsing, appStore, apkIntelligence, iconUrl };
+  return { appName, iconUrl, appStore, apkIntelligence, mobile, web };
 }
 
-async function fetchSessionData(appName: string, sessionType: string, tenantId: string) {
-  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/enriched`;
+async function fetchSessionData(appName: string, sessionType: string, tenantId: string, platformPrefix = "") {
+  const pathPart = platformPrefix ? `${platformPrefix}/` : "";
+  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${sessionType}/enriched`;
+  
   const [manifestRes, intelRes, flowsRes] = await Promise.all([
     fetch(`${publicUrl}/enriched_manifest.json`, { next: { revalidate: 300 } }),
     fetch(`${publicUrl}/session_intelligence.json`, { next: { revalidate: 300 } }),
@@ -267,9 +334,8 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
   const flowsData = flowsRes.ok ? await flowsRes.json() : null;
   
   const steps: any[] = [];
-  const BATCH_SIZE = 6; // Limit peak concurrent sockets to 6 to fully guarantee Vercel's EMFILE safety
+  const BATCH_SIZE = 6; 
 
-  // ─── THE FIX: BATCHED CONCURRENCY FOR SOCKET SAFETY ───
   for (let i = 0; i < manifest.enriched_screenshots.length; i += BATCH_SIZE) {
     const batch = manifest.enriched_screenshots.slice(i, i + BATCH_SIZE);
     
@@ -284,7 +350,7 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
           step: entry.step || entry.timeline_step,
           phase: entry.phase,
           screen_type: entry.screen_type,
-          imagePath: `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${sessionType}/screenshots/${cleanFileName}`,
+          imagePath: `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${sessionType}/screenshots/${cleanFileName}`,
           enrichedData
         };
       })
@@ -293,7 +359,6 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
     steps.push(...batchResults);
   }
 
-  // Inject screen_catalog into flowsData if absent so FlowsViewer maps dynamically
   if (flowsData && !flowsData.screen_catalog) {
     flowsData.screen_catalog = steps.map((step: any) => ({
       timeline_step: step.step,
