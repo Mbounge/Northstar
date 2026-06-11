@@ -133,7 +133,7 @@ export default async function CompanyDashboardPage({
   const IdentityHeader = () => (
     <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
       <div className="flex items-center">
-        <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6">
+        <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6 animate-in fade-in duration-200">
           <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
         </Link>
         <div className="flex items-center gap-5">
@@ -146,20 +146,25 @@ export default async function CompanyDashboardPage({
               </span>
             )}
           </div>
-          <div className="flex flex-col justify-end h-[78px] font-sans gap-[4px] pb-[2px] max-w-[320px] shrink-0 min-w-0 pr-4">
-            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0" title={appName}>
+          {/* Unified Height Wrapper featuring vertical centering and line-clamping */}
+          <div className="flex flex-col justify-center min-h-[78px] font-sans gap-[4px] py-1 max-w-[320px] shrink-0 min-w-0 pr-4">
+            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0 truncate" title={appName}>
               {appName}
             </h2>
-            <h3 className={isLongMarketName 
-              ? "text-[26px] font-[400] text-[#000000] dark:text-white leading-[28px] tracking-[0%] m-0 p-0" 
-              : "text-[30px] font-[400] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0"
-            } title={marketName}>
+            <h3 
+              className={`
+                text-[#000000] dark:text-white tracking-[0%] m-0 p-0 line-clamp-2
+                ${isLongMarketName ? "text-[22px] leading-[24px]" : "text-[30px] leading-[32px]"}
+              `} 
+              title={marketName}
+            >
               {marketName}
             </h3>
           </div>
         </div>
         
-        <div className="flex items-center gap-10 ml-16 shrink-0">
+        {/* Statistics container - completely static, position will never move */}
+        <div className="flex items-start gap-10 ml-16 shrink-0">
           <div className="flex flex-col gap-[6px] justify-center items-start">
             <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
               Rank
@@ -169,11 +174,12 @@ export default async function CompanyDashboardPage({
             </span>
           </div>
 
-          <div className="flex flex-col gap-[6px] justify-center items-start">
+          <div className="flex flex-col gap-[6px] justify-center items-start max-w-[340px]">
             <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
               Market
             </span>
-            <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-white leading-[100%] text-left">
+            {/* Generous max-width and line-clamp-2 to prevent vertical layout shifting */}
+            <span className="font-sans text-[16px] font-[500] text-[#000000] dark:text-white leading-[20px] text-left line-clamp-2" title={marketName}>
               {marketName}
             </span>
           </div>
