@@ -78,7 +78,6 @@ export default async function CompanyDashboardPage({
   let marketName = "General Utilities";
 
   // 1. High Priority: Synthesized category from Teardown (Browsing) or Onboarding Session Intelligence
-  // Safely check BOTH web and mobile platforms for synthesized category data
   const bSynthesized = productData?.web?.browsing?.sessionIntel?.competitive_profile?.app_category || 
                        productData?.mobile?.browsing?.sessionIntel?.competitive_profile?.app_category;
                        
@@ -89,7 +88,6 @@ export default async function CompanyDashboardPage({
   let preciseAppType = null;
   const fetchMemory = async (type: string) => {
     try {
-      // Prioritize web memory, fallback to mobile/legacy memory
       let res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/web/${type}/agent_memory.json`, { next: { revalidate: 300 } });
       if (!res.ok) {
         res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/${type}/agent_memory.json`, { next: { revalidate: 300 } });
@@ -120,7 +118,6 @@ export default async function CompanyDashboardPage({
   
   marketName = marketName.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 
-  // Conditional formatting trigger for long market descriptions
   const isLongMarketName = marketName.length > 20;
 
   let marketingPosts: any[] = [];
@@ -131,6 +128,7 @@ export default async function CompanyDashboardPage({
   }
   const businessJobs = Array.isArray(dashboardData?.business?.jobs) ? dashboardData.business.jobs : [];
   const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
+  const businessScreenshots = Array.isArray(dashboardData?.businessScreenshots) ? dashboardData.businessScreenshots : [];
 
   const IdentityHeader = () => (
     <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
@@ -148,7 +146,6 @@ export default async function CompanyDashboardPage({
               </span>
             )}
           </div>
-          {/* Max-width container to prevent layout shifting while letting text wrap naturally */}
           <div className="flex flex-col justify-end h-[78px] font-sans gap-[4px] pb-[2px] max-w-[320px] shrink-0 min-w-0 pr-4">
             <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0" title={appName}>
               {appName}
@@ -162,7 +159,6 @@ export default async function CompanyDashboardPage({
           </div>
         </div>
         
-        {/* Statistics container - completely static, position will never move */}
         <div className="flex items-center gap-10 ml-16 shrink-0">
           <div className="flex flex-col gap-[6px] justify-center items-start">
             <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
@@ -241,7 +237,6 @@ export default async function CompanyDashboardPage({
         <div className="flex flex-col mt-6 relative z-10 pl-10 pr-[84px] pb-12">
           
           <TabsContent value="product" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
-            {/* Check if EITHER mobile OR web data is present to render the Unified Dashboard */}
             {productData && (productData.mobile || productData.web) ? (
               <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
             ) : (
@@ -267,7 +262,7 @@ export default async function CompanyDashboardPage({
               <IdentityHeader />
             </div>
             <div className="max-w-6xl mx-auto w-full">
-              <BusinessViewer key={`biz-${activeSnapshotId}`} jobs={businessJobs} roster={businessRoster} companyId={dataBucketId} snapshotId={activeSnapshotId} />
+              <BusinessViewer key={`biz-${activeSnapshotId}`} jobs={businessJobs} roster={businessRoster} companyId={dataBucketId} snapshotId={activeSnapshotId} tenantId={tenantId} businessScreenshots={businessScreenshots} />
             </div>
           </TabsContent>
 

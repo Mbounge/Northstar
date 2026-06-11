@@ -4,8 +4,10 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
+// Initialize the Supabase Client
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Define Type Interfaces
 export interface AppSummary {
   appName: string;
   category: string;
@@ -47,7 +49,7 @@ function formatCategory(cat: string | undefined): string {
   return cat.split('_').join(' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
 }
 
-// ─── DATA FETCHING (ISOLATED BY TENANT ID) ─────────────────────────
+// ─── DATA FETCHING HELPERS (ISOLATED BY TENANT ID) ─────────────────────────
 
 async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onboarding', tenantId: string, platformPrefix = "") {
   const pathPart = platformPrefix ? `${platformPrefix}/` : "";
@@ -58,7 +60,6 @@ async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onbo
 }
 
 async function fetchApkIntelligence(appName: string, tenantId: string) {
-  // Check legacy first, then mobile
   let browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/browsing`;
   let res = await fetch(`${browsingRoot}/apk_intelligence.json`, { next: { revalidate: 300 } });
   
@@ -77,28 +78,55 @@ async function fetchApkIntelligence(appName: string, tenantId: string) {
 }
 
 async function fetchAppStoreData(appName: string, tenantId: string) {
-  const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/app_store`;
-  
-  let data: any = {};
-  const res = await fetch(`${publicUrl}/app_store_manifest.json`, { next: { revalidate: 300 } });
-  if (res.ok) {
-    data = await res.json();
+  // 1. Try Mobile App Store First
+  let publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/app_store`;
+  let res = await fetch(`${publicUrl}/app_store_manifest.json`, { next: { revalidate: 300 } });
+  let isWebMeta = false;
+
+  // 2. Fallback to Web Site Meta if App Store is missing
+  if (!res.ok) {
+    publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/web/site_meta`;
+    res = await fetch(`${publicUrl}/site_meta_manifest.json`, { next: { revalidate: 300 } });
+    isWebMeta = true;
   }
 
+  let data: any = {};
+  if (res.ok) {
+    data = await res.json();
+    
+    // Mimic the App Store data structure so the frontend UI doesn't crash
+    if (isWebMeta) {
+      data.raw_data = {
+        app_info: {
+          Category: data.category || "General Utilities",
+          "Age Rating": "Web",
+          Size: "SaaS"
+        }
+      };
+      data.hero = { title: data.app_name || appName, subtitle: data.url };
+    }
+  }
+
+  const folderSuffix = isWebMeta ? 'web/site_meta' : 'app_store';
+  
   const [screenshotsList, iconsList] = await Promise.all([
-    supabase.storage.from('reviews').list(`${tenantId}/${appName}/app_store/screenshots`, { limit: 100 }),
-    supabase.storage.from('reviews').list(`${tenantId}/${appName}/app_store/icons`, { limit: 100 })
+    supabase.storage.from('reviews').list(`${tenantId}/${appName}/${folderSuffix}/screenshots`, { limit: 100 }),
+    supabase.storage.from('reviews').list(`${tenantId}/${appName}/${folderSuffix}/icons`, { limit: 100 })
   ]);
 
-  const actualScreenshots = (screenshotsList.data || []).filter(f => f.name.match(/\.(jpg|jpeg|png|webp|gif)$/i));
-  const actualIcons = (iconsList.data || []).filter(f => f.name.match(/\.(jpg|jpeg|png|webp|gif)$/i));
+  const actualScreenshots = (screenshotsList.data || []).filter(f => f.name.match(/\.(jpg|jpeg|png|webp|gif|ico|svg)$/i));
+  const actualIcons = (iconsList.data || []).filter(f => f.name.match(/\.(jpg|jpeg|png|webp|gif|ico|svg)$/i));
 
   data.actual_screenshots = actualScreenshots.map(f => `${publicUrl}/screenshots/${f.name}`);
 
+  // Find best icon
   const mainIconFile = actualIcons.find(f => f.name.toLowerCase().includes('app_icon') || f.name.toLowerCase().includes('main'));
   if (mainIconFile) {
     if (!data.icons) data.icons = {};
     data.icons.main_computed = `${publicUrl}/icons/${mainIconFile.name}`;
+  } else if (actualIcons.length > 0) {
+    if (!data.icons) data.icons = {};
+    data.icons.main_computed = `${publicUrl}/icons/${actualIcons[0].name}`;
   }
 
   const resolveCompetitors = (compArray: any[]) => {
@@ -162,151 +190,169 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
   return null;
 }
 
+// ─── OPTIMIZED DATABASE-DRIVEN REVIEW APPS FETCH ─────────────────────────
+
 export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
   if (!tenantId) return [];
 
-  const { data: appFolders, error } = await supabase.storage.from('reviews').list(tenantId, { limit: 100 });
-  if (error || !appFolders) return [];
+  // ONE single database query replacing hundreds of slow Storage directory list calls
+  const { data: apps, error } = await supabase
+    .from('target_apps')
+    .select(`
+      app_name,
+      category,
+      icon_url,
+      rank,
+      revenue,
+      employees,
+      app_sessions (
+        platform,
+        session_type,
+        ux_grade,
+        total_screens
+      )
+    `)
+    .eq('tenant_id', tenantId);
 
-  const validFolders = appFolders.filter(f => !f.id && f.name !== '.emptyFolderPlaceholder');
-  const results: AppSummary[] = [];
-
-  for (const appFolderObj of validFolders) {
-    const appName = appFolderObj.name;
-    const { data: rootFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}`, { limit: 20 });
-    
-    if (!rootFolders) continue;
-
-    let hasOnboarding = false, hasBrowsing = false;
-    let onboardingGrade = "N/A", browsingGrade = "N/A";
-    let totalScreens = 0;
-    let category = "General";
-
-    // Helper to process a session directory (legacy root, mobile, or web)
-    const processSessionFolder = async (type: string, platformPrefix: string = "") => {
-      const pathPart = platformPrefix ? `${platformPrefix}/` : "";
-      const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${type}`;
-      
-      const [manifestRes, intelRes] = await Promise.all([
-        fetch(`${publicUrl}/${type === 'onboarding' ? 'onboarding_manifest.json' : 'enriched_manifest.json'}`, { next: { revalidate: 300 } }),
-        fetch(`${publicUrl}/enriched/session_intelligence.json`, { next: { revalidate: 300 } })
-      ]);
-
-      let screenCountForThisSession = 0;
-
-      if (manifestRes.ok) {
-        const manifest = await manifestRes.json();
-        if (type === 'onboarding') {
-          hasOnboarding = true;
-          category = formatCategory(manifest.metadata?.app_category || category);
-          screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
-        } else {
-          hasBrowsing = true;
-          category = formatCategory(manifest.app_category || category);
-          screenCountForThisSession = manifest.enriched_screenshots?.length || 0;
-        }
-      }
-
-      if (intelRes.ok) {
-        const intel = await intelRes.json();
-        if (type === 'onboarding') {
-          hasOnboarding = true;
-          const newGrade = intel.friction_assessment?.friction_grade || intel.friction_report?.friction_grade || "N/A";
-          if (onboardingGrade === "N/A") onboardingGrade = newGrade;
-          screenCountForThisSession = Math.max(intel.friction_report?.actual_total_screens || intel.funnel_summary?.total_screens || 0, screenCountForThisSession);
-        } else if (type === 'browsing') {
-          hasBrowsing = true;
-          const newGrade = intel.ux_quality_assessment?.ux_grade || intel.ux_quality_report?.ux_grade || "N/A";
-          if (browsingGrade === "N/A") browsingGrade = newGrade;
-          screenCountForThisSession = Math.max(intel.exploration_summary?.total_screenshots || 0, screenCountForThisSession);
-        }
-      }
-      totalScreens += screenCountForThisSession;
-    };
-
-    const rootNames = rootFolders.map(f => f.name.toLowerCase());
-    
-    // Process legacy root folders
-    if (rootNames.includes('onboarding')) await processSessionFolder('onboarding');
-    if (rootNames.includes('browsing')) await processSessionFolder('browsing');
-
-    // Process nested mobile folders
-    if (rootNames.includes('mobile')) {
-      const { data: mobFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}/mobile`, { limit: 10 });
-      const mobNames = (mobFolders || []).map(f => f.name.toLowerCase());
-      if (mobNames.includes('onboarding')) await processSessionFolder('onboarding', 'mobile');
-      if (mobNames.includes('browsing')) await processSessionFolder('browsing', 'mobile');
-    }
-
-    // Process nested web folders
-    if (rootNames.includes('web')) {
-      const { data: webFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}/web`, { limit: 10 });
-      const webNames = (webFolders || []).map(f => f.name.toLowerCase());
-      if (webNames.includes('onboarding')) await processSessionFolder('onboarding', 'web');
-      if (webNames.includes('browsing')) await processSessionFolder('browsing', 'web');
-    }
-
-    if (!hasOnboarding && !hasBrowsing) continue;
-
-    const [apkIntel, appStoreData, browsingMemory, employees] = await Promise.all([
-      fetchApkIntelligence(appName, tenantId),
-      fetchAppStoreData(appName, tenantId),
-      fetchAgentMemory(appName, 'browsing', tenantId, rootNames.includes('mobile') ? 'mobile' : ''),
-      fetchLatestEmployeeCount(appName, tenantId)
-    ]);
-
-    const iconUrl = getBestIconUrl(appStoreData, apkIntel);
-    const rawAppType = browsingMemory?.app_type;
-    const appType = rawAppType ? formatCategory(rawAppType) : category;
-
-    results.push({ 
-      appName, 
-      category, 
-      appType, 
-      hasOnboarding, 
-      hasBrowsing, 
-      onboardingGrade, 
-      browsingGrade, 
-      totalScreens, 
-      iconUrl,
-      employees 
-    });
+  if (error || !apps) {
+    console.error("Failed to fetch apps from DB:", error);
+    return [];
   }
 
-  return results;
+  // Map the raw Postgres relational data back to your UI's expected AppSummary format
+  return apps.map((app: any) => {
+    let hasOnboarding = false;
+    let hasBrowsing = false;
+    let onboardingGrade = "N/A";
+    let browsingGrade = "N/A";
+    let totalScreens = 0;
+
+    // Aggregate stats from the child sessions
+    if (app.app_sessions && Array.isArray(app.app_sessions)) {
+      for (const session of app.app_sessions) {
+        totalScreens += session.total_screens || 0;
+        
+        if (session.session_type === 'onboarding') {
+          hasOnboarding = true;
+          if (onboardingGrade === "N/A" || session.ux_grade !== "N/A") {
+            onboardingGrade = session.ux_grade;
+          }
+        }
+        
+        if (session.session_type === 'browsing') {
+          hasBrowsing = true;
+          if (browsingGrade === "N/A" || session.ux_grade !== "N/A") {
+            browsingGrade = session.ux_grade;
+          }
+        }
+      }
+    }
+
+    return {
+      appName: app.app_name,
+      category: app.category || "General Utilities",
+      appType: app.category || "General Utilities",
+      iconUrl: app.icon_url,
+      rank: app.rank || "?",
+      revenue: app.revenue || "?",
+      employees: app.employees || "?",
+      hasOnboarding,
+      hasBrowsing,
+      onboardingGrade,
+      browsingGrade,
+      totalScreens
+    };
+  });
 }
+
+// ─── DATABASE-FIRST DETAIL FETCH (Compiles all tabs in 1 query) ───
 
 export async function getAppDetails(appName: string, tenantId: string): Promise<AppDetailsResult | null> {
   if (!tenantId) return null;
 
-  const { data: subFolders } = await supabase.storage
-    .from('reviews')
-    .list(`${tenantId}/${appName}`, { limit: 20 });
+  // 1. Fetch ALL sessions for this app in ONE single DB query
+  const { data: dbSessions, error } = await supabase
+    .from('app_sessions')
+    .select('platform, session_type, ux_grade, total_screens, session_intel, flows_data, steps_data')
+    .eq('tenant_id', tenantId)
+    .ilike('app_name', appName); // Case-insensitive matching
 
+  if (error) {
+    console.error("Error fetching app sessions from DB:", error);
+  }
+
+  // 2. Map sessions into platform structures (with SELF-HEALING Fallbacks)
+  const parseDBSession = async (sess: any, platformPrefix: string, sessionType: string): Promise<SessionData | null> => {
+    // If DB has the pre-compiled JSONB screenshots array, load it instantly!
+    // We default missing/optional files (session_intel or flows_data) to null without breaking the cache.
+    if (sess && sess.steps_data && sess.steps_data.length > 0) {
+      //console.log(`⚡ Instant DB-Load [${platformPrefix || 'legacy_mobile'}/${sessionType}] — ${sess.steps_data.length} screens`);
+      
+      // ─── THE SELF-HEALING SCREEN_CATALOG BRIDGE ───
+      // If flows_data exists in the DB, but lacks the screen_catalog array (legacy runs),
+      // dynamically construct the complete catalog mapping on-the-fly using the pre-compiled steps_data!
+      if (sess.flows_data && !sess.flows_data.screen_catalog) {
+        //console.log(`🩹 Self-Healing: Rebuilding flows catalog in memory for ${appName} [${sessionType}]...`);
+        sess.flows_data.screen_catalog = sess.steps_data.map((step: any) => ({
+          timeline_step: step.step,
+          screenshot_file: step.imagePath,
+          display_label: step.screen_type ?? "",
+          root_section: "",
+          is_panoramic: false,
+        }));
+      }
+
+      return {
+        summary: { total_screenshots: sess.steps_data.length },
+        sessionIntel: sess.session_intel || null,
+        flowsData: sess.flows_data || null,
+        steps: sess.steps_data
+      };
+    }
+    
+    // SELF-HEALING FALLBACK: If DB row is missing, null, or incomplete, crawl Storage directly!
+    //console.log(`🐢 Slow Storage-Fallback [${platformPrefix || 'legacy_mobile'}/${sessionType}]`);
+    return await fetchSessionData(appName, sessionType, tenantId, platformPrefix);
+  };
+
+  const getSessByPlatformAndType = (plat: 'mobile' | 'web', type: 'onboarding' | 'browsing') => {
+    return (dbSessions || []).find(s => s.platform === plat && s.session_type === type) || null;
+  };
+
+  // Check legacy platform folder existence
+  const { data: subFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}`, { limit: 20 });
   const folders = (subFolders || []).map(f => f.name.toLowerCase());
-  const hasWebFolder = folders.includes('web');
   const hasMobileFolder = folders.includes('mobile');
 
-  // Mobile data (Fallback to legacy root if no explicit mobile folder)
-  const mobilePrefix = hasMobileFolder ? 'mobile' : '';
-  const mobileOnboarding = await fetchSessionData(appName, 'onboarding', tenantId, mobilePrefix);
-  const mobileBrowsing = await fetchSessionData(appName, 'browsing', tenantId, mobilePrefix);
+  // Resolve Mobile Sessions
+  const mobileOnboardingDb = getSessByPlatformAndType('mobile', 'onboarding');
+  const mobileBrowsingDb = getSessByPlatformAndType('mobile', 'browsing');
   
+  const [mobileOnboarding, mobileBrowsing] = await Promise.all([
+    parseDBSession(mobileOnboardingDb, hasMobileFolder ? 'mobile' : '', 'onboarding'),
+    parseDBSession(mobileBrowsingDb, hasMobileFolder ? 'mobile' : '', 'browsing')
+  ]);
+
   let mobile: PlatformViews | null = null;
   if (mobileOnboarding || mobileBrowsing) {
     mobile = { onboarding: mobileOnboarding, browsing: mobileBrowsing };
   }
 
-  // Web data
+  // Resolve Web Sessions
+  const webOnboardingDb = getSessByPlatformAndType('web', 'onboarding');
+  const webBrowsingDb = getSessByPlatformAndType('web', 'browsing');
+
+  const [webOnboarding, webBrowsing] = await Promise.all([
+    parseDBSession(webOnboardingDb, 'web', 'onboarding'),
+    parseDBSession(webBrowsingDb, 'web', 'browsing')
+  ]);
+
   let web: PlatformViews | null = null;
-  if (hasWebFolder) {
-    const webOnboarding = await fetchSessionData(appName, 'onboarding', tenantId, 'web');
-    const webBrowsing = await fetchSessionData(appName, 'browsing', tenantId, 'web');
-    if (webOnboarding || webBrowsing) {
-      web = { onboarding: webOnboarding, browsing: webBrowsing };
-    }
+  if (webOnboarding || webBrowsing) {
+    web = { onboarding: webOnboarding, browsing: webBrowsing };
   }
 
+  // Fetch general app store & apk metadata
   const [appStore, apkIntelligence] = await Promise.all([
     fetchAppStoreData(appName, tenantId),
     fetchApkIntelligence(appName, tenantId),   
@@ -359,10 +405,24 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
     steps.push(...batchResults);
   }
 
-  if (flowsData && !flowsData.screen_catalog) {
+  // ─── THE CRITICAL FLOWS BRIDGE FIX ───
+  // Overwrite the catalog's relative screenshot paths with the correct pre-resolved public URLs
+  if (flowsData && flowsData.screen_catalog) {
+    flowsData.screen_catalog = flowsData.screen_catalog.map((catEntry: any) => {
+      const matchingStep = steps.find(s => {
+        const catFilename = catEntry.screenshot_file.split('/').pop()?.toLowerCase();
+        const stepFilename = s.imagePath.split('/').pop()?.toLowerCase();
+        return catFilename === stepFilename || Number(s.step) === Number(catEntry.timeline_step);
+      });
+      return {
+        ...catEntry,
+        screenshot_file: matchingStep ? matchingStep.imagePath : catEntry.screenshot_file
+      };
+    });
+  } else if (flowsData && !flowsData.screen_catalog) {
     flowsData.screen_catalog = steps.map((step: any) => ({
       timeline_step: step.step,
-      screenshot_file: step.imagePath.split('/screenshots/').pop() ?? step.imagePath,
+      screenshot_file: step.imagePath,
       display_label: step.screen_type ?? "",
       root_section: "",
       is_panoramic: false,

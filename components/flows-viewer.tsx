@@ -3,10 +3,10 @@
 
 import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import Image from "next/image";
 import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy, Link } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PanoramicMockup } from "./PanoramicMockup";
+import { BrowserMockup } from "./BrowserMockup";
 
 // ─── TYPES ──────────────────────────────────────────────────────
 interface Screen {
@@ -30,7 +30,6 @@ interface FlowNode {
   children?: FlowNode[];
   is_reference?: boolean;
   is_nav_tab?: boolean;
-  // Dual-Compatible V2 Fields
   spine?: string[];
   branches?: FlowBranch[];
 }
@@ -38,6 +37,14 @@ interface FlowNode {
 interface FlowsData {
   taxonomy: FlowNode[];
   screen_catalog?: Screen[];
+}
+
+interface FlowsViewerProps {
+  flowsData: FlowsData;
+  appName: string;
+  tenantId: string;
+  mode: string;
+  platform?: "mobile" | "web";
 }
 
 // ─── HELPERS ────────────────────────────────────────────────────
@@ -57,7 +64,6 @@ function findFlow(nodes: FlowNode[], id: string): FlowNode | null {
   for (const node of nodes) {
     if (node.id === id) return node;
     
-    // Check virtual children (branches) first
     if (node.branches) {
       const branchIndex = node.branches.findIndex((_, bi) => `${node.id}__branch_${bi}` === id);
       if (branchIndex !== -1) {
@@ -73,7 +79,6 @@ function findFlow(nodes: FlowNode[], id: string): FlowNode | null {
       }
     }
     
-    // Check real taxonomy children
     if (node.children) {
       const found = findFlow(node.children, id);
       if (found) return found;
@@ -97,9 +102,12 @@ function getLeafFlows(node: FlowNode): FlowNode[] {
   return leaves;
 }
 
-function buildImgUrl(tenantId: string, appName: string, mode: string, file: string): string {
+// Fixed: Instantly return the file path if it is already a pre-resolved, complete public URL
+function buildImgUrl(tenantId: string, appName: string, mode: string, file: string, platform: string): string {
+  if (file && file.startsWith("http")) return file; // Absolute URL bypass
   const cleanFileName = file.split('/').pop() || file;
-  return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${appName}/${mode}/screenshots/${cleanFileName}`;
+  const platformPrefix = platform === "web" ? "web/" : (platform === "mobile" ? "mobile/" : "");
+  return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${appName}/${platformPrefix}${mode}/screenshots/${cleanFileName}`;
 }
 
 async function copyImageToClipboard(url: string, onSuccess?: () => void, onError?: () => void) {
@@ -136,10 +144,10 @@ async function convertToPng(blob: Blob): Promise<Blob> {
 
 // ─── DETAIL MODAL ───────────────────────────────────────────────
 function ScreenDetailModal({
-  screens, initialIndex, flowLabel, appName, tenantId, mode, onClose,
+  screens, initialIndex, flowLabel, appName, tenantId, mode, onClose, platform = "mobile",
 }: {
   screens: Screen[]; initialIndex: number; flowLabel: string;
-  appName: string; tenantId: string; mode: string; onClose: () => void;
+  appName: string; tenantId: string; mode: string; onClose: () => void; platform?: string;
 }) {
   const [mounted, setMounted] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
@@ -152,7 +160,8 @@ function ScreenDetailModal({
   const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
 
   const currentScreen = screens[currentIndex];
-  const currentImgUrl = currentScreen ? buildImgUrl(tenantId, appName, mode, currentScreen.screenshot_file) : "";
+  const currentImgUrl = currentScreen ? buildImgUrl(tenantId, appName, mode, currentScreen.screenshot_file, platform) : "";
+  const isWeb = platform === "web" || currentImgUrl.includes("/web/");
 
   const scrollToIndex = useCallback((idx: number, behavior: ScrollBehavior = "smooth") => {
     if (scrollRef.current) {
@@ -164,8 +173,7 @@ function ScreenDetailModal({
           behavior,
         });
       }
-      if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
-      scrollTimeout.current = setTimeout(() => {
+      if (scrollTimeout.current) setTimeout(() => {
         isProgrammaticScroll.current = false;
       }, behavior === "instant" ? 10 : 500); 
     }
@@ -199,8 +207,12 @@ function ScreenDetailModal({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-      if (e.key === "ArrowRight") setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; });
-      if (e.key === "ArrowLeft") setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; });
+      if (e.key === "ArrowRight") {
+        setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; });
+      }
+      if (e.key === "ArrowLeft") {
+        setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; });
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -240,28 +252,35 @@ function ScreenDetailModal({
 
         <div className="flex-1 relative min-h-0 flex flex-col justify-center">
           <button onClick={() => setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; })} disabled={currentIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none">
-            <ChevronLeft className="w-6 h-6 text-white" />
+            <ChevronLeft className="w-6 h-6" />
           </button>
 
-          <div ref={scrollRef} onScroll={handleModalScroll} className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}>
+          <div ref={scrollRef} onScroll={handleModalScroll} className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" style={{ paddingLeft: isWeb ? "calc(50vw - 320px)" : "calc(50vw - 18.5vh)", paddingRight: isWeb ? "calc(50vw - 320px)" : "calc(50vw - 18.5vh)" }}>
             {screens.map((screen, idx) => {
-              const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
+              const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
               const isActive = idx === currentIndex;
+              const isStepWebRun = platform === "web" || imgUrl.includes("/web/");
               const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
               const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
               return (
-                <div key={idx} onClick={() => { setCurrentIndex(idx); scrollToIndex(idx); }} className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center" style={{ aspectRatio: "9/19.5" }}>
-                  <div className={cn("relative w-full h-full bg-white transition-all duration-300 ease-out origin-center", isPanoramic ? "overflow-hidden" : "overflow-hidden", isActive ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20" : "scale-95 opacity-40 hover:opacity-70 shadow-lg")} style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                    {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
-                  </div>
+                <div key={idx} onClick={() => { setCurrentIndex(idx); scrollToIndex(idx); }} className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center" style={{ aspectRatio: isStepWebRun ? "16/10" : "9/19.5" }}>
+                  {isStepWebRun ? (
+                    <div className={cn("w-full h-full bg-white transition-all duration-300 ease-out origin-center rounded-[12px] shadow-2xl", isActive ? "scale-100 opacity-100 ring-2 ring-white/20" : "scale-95 opacity-40 hover:opacity-70")}>
+                      <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                    </div>
+                  ) : (
+                    <div className={cn("relative w-full h-full bg-white transition-all duration-300 ease-out origin-center overflow-hidden", isActive ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20" : "scale-95 opacity-40 hover:opacity-70 shadow-lg")} style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
+                      {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
 
           <button onClick={() => setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; })} disabled={currentIndex === screens.length - 1} className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none">
-            <ChevronRight className="w-6 h-6 text-white" />
+            <ChevronRight className="w-6 h-6" />
           </button>
         </div>
 
@@ -288,7 +307,6 @@ function SidebarNode({
   const hasVirtualChildren = node.branches && node.branches.length > 0;
   const hasChildren = hasRealChildren || hasVirtualChildren;
 
-  // Synthesize interaction branches as visual children in the sidebar
   const virtualChildren = useMemo(() => {
     if (!node.branches) return [];
     return node.branches.map((b, bi) => ({
@@ -300,7 +318,6 @@ function SidebarNode({
     }));
   }, [node.branches, node.id]);
 
-  // Dynamic Highlight: Highlight parent folder if any of its nested branches are active
   const isBranchOfThisNodeActive = useMemo(() => {
     if (!activeFlowId || !node.branches) return false;
     return node.branches.some((_, bi) => `${node.id}__branch_${bi}` === activeFlowId);
@@ -370,20 +387,23 @@ interface FlowSectionProps {
   tenantId: string;
   mode: string;
   isHighlighted: boolean;
-  activeFlowId: string | null; // Pass down the globally active section ID
+  activeFlowId: string | null;
   onScreenClick: (screens: Screen[], index: number, label: string) => void;
   sectionRef?: React.RefObject<HTMLDivElement | null>;
   getRef: (id: string) => React.RefObject<HTMLDivElement | null>;
+  platform: string;
 }
 
 function FlowSection({
-  flow, catalog, appName, tenantId, mode, isHighlighted, activeFlowId, onScreenClick, sectionRef, getRef,
+  flow, catalog, appName, tenantId, mode, isHighlighted, activeFlowId, onScreenClick, sectionRef, getRef, platform = "mobile",
 }: FlowSectionProps) {
   const hasSpineOrBranches = (Array.isArray(flow.spine) && flow.spine.length > 0) || 
                              (Array.isArray(flow.branches) && flow.branches.length > 0);
+  
+  // Dynamic resolution for mixed platforms (e.g. if the image url has /web/ or isWeb prop is on)
+  const isWeb = platform === "web";
 
   if (hasSpineOrBranches) {
-    // Resolve spine screenshots
     const spineScreens = (flow.spine || [])
       .map(path => {
         const fname = path.split('/').pop()?.toLowerCase();
@@ -394,7 +414,6 @@ function FlowSection({
     return (
       <div ref={sectionRef} data-section-id={flow.id} className="flex flex-col pt-4 pb-8 divide-y divide-black/5 dark:divide-white/5">
         
-        {/* Main Viewport Spine / Pristine Survey Lane */}
         {spineScreens.length > 0 && (
           <div className="py-4" data-section-id={flow.id}>
             <div className="px-10 pb-4 flex items-baseline gap-4">
@@ -413,15 +432,21 @@ function FlowSection({
             <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
               <div className="flex gap-8 px-10 min-w-max items-end">
                 {spineScreens.map((screen, idx) => {
-                  const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
+                  const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
                   const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
                   const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
                   return (
                     <div key={idx} onClick={() => onScreenClick(spineScreens, idx, flow.label)} className="group flex flex-col shrink-0 cursor-pointer">
-                      <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                        {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
-                      </div>
+                      {isWeb ? (
+                        <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
+                          <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                        </div>
+                      ) : (
+                        <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
+                          {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -430,7 +455,6 @@ function FlowSection({
           </div>
         )}
 
-        {/* Interaction Storyboard Lanes (Each has its own unique anchor ref) */}
         {(flow.branches || []).map((branch, bi) => {
           const branchId = `${flow.id}__branch_${bi}`;
           const isBranchActive = branchId === activeFlowId;
@@ -446,7 +470,6 @@ function FlowSection({
           return (
             <div key={bi} ref={getRef(branchId)} data-section-id={branchId} className="py-8">
               <div className="px-10 pb-4 flex items-baseline gap-4">
-                {/* Dynamically highlight the active interaction branch on scroll */}
                 <h3 className={cn("text-xl font-bold tracking-tight transition-colors", isBranchActive ? "text-[#0066FF]" : "text-zinc-800 dark:text-zinc-200")}>
                   {branch.label}
                 </h3>
@@ -462,15 +485,21 @@ function FlowSection({
               <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 <div className="flex gap-8 px-10 min-w-max items-end">
                   {branchScreens.map((screen, idx) => {
-                    const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
+                    const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
                     const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
                     const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
                     return (
                       <div key={idx} onClick={() => onScreenClick(branchScreens, idx, branch.label)} className="group flex flex-col shrink-0 cursor-pointer">
-                        <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                          {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
-                        </div>
+                        {isWeb ? (
+                          <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
+                            <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                          </div>
+                        ) : (
+                          <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
+                            {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -483,7 +512,6 @@ function FlowSection({
     );
   }
 
-  // Fallback: Standard Linear Flow (Single Flat Track)
   const legacyScreens = (flow.screens || [])
     .map(step => catalog.find(s => Number(s.timeline_step) === Number(step)))
     .filter(Boolean) as Screen[];
@@ -508,15 +536,21 @@ function FlowSection({
       <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex gap-8 px-10 min-w-max items-end">
           {legacyScreens.map((screen, idx) => {
-            const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
+            const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
             const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
             const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
             return (
               <div key={idx} onClick={() => onScreenClick(legacyScreens, idx, flow.label)} className="group flex flex-col shrink-0 cursor-pointer">
-                <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                  {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
-                </div>
+                {isWeb ? (
+                  <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
+                    <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                  </div>
+                ) : (
+                  <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
+                    {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -528,10 +562,8 @@ function FlowSection({
 
 // ─── MAIN COMPONENT ─────────────────────────────────────────────
 export function FlowsViewer({
-  flowsData, appName, tenantId, mode,
-}: {
-  flowsData: FlowsData; appName: string; tenantId: string; mode: string;
-}) {
+  flowsData, appName, tenantId, mode, platform = "mobile",
+}: FlowsViewerProps) {
 
   const sanitizedTaxonomy = useMemo(() => {
     if (!flowsData?.taxonomy) return [];
@@ -556,7 +588,6 @@ export function FlowsViewer({
   const isScrollAnchoring = useRef(false);
   const anchorTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // Helper to dynamically get or create a ref for any section or branch ID
   const getRef = useCallback((id: string) => {
     if (!sectionRefs.current.has(id)) {
       sectionRefs.current.set(id, { current: null });
@@ -564,11 +595,8 @@ export function FlowsViewer({
     return sectionRefs.current.get(id)!;
   }, []);
 
-  // ── DUAL STYLE RESOLUTION ENGINE (SAFE ON BOTH STANDARD & BRANCHED RUNS) ──
   const resolveFlowScreens = useCallback((flow: FlowNode): Screen[] => {
     const catalog = flowsData.screen_catalog ?? [];
-    
-    // Determine if this run has visual spine/branch file indicators (Teardown & Pathway)
     const hasSpineOrBranches = (Array.isArray(flow.spine) && flow.spine.length > 0) || 
                                (Array.isArray(flow.branches) && flow.branches.length > 0);
                                
@@ -626,9 +654,8 @@ export function FlowsViewer({
       if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
       anchorTimeout.current = setTimeout(() => {
         isScrollAnchoring.current = false;
-      }, 800); // Wait for smooth scroll transit to finish before releasing observer
+      }, 800);
     } else {
-      // If a parent tab itself is tapped, smoothly scroll to its first child
       const parent = findFlow(sanitizedTaxonomy, id);
       if (parent && parent.children && parent.children.length > 0) {
         const firstChildId = parent.children[0].id;
@@ -650,7 +677,6 @@ export function FlowsViewer({
     setDetailModal({ screens, initialIndex: index, flowLabel: label });
   }, []);
 
-  // ─── DYNAMIC INTERSECTION OBSERVER (SCROLL-SPY ENGINE) ───
   useEffect(() => {
     const observerCallback = (entries: IntersectionObserverEntry[]) => {
       if (isScrollAnchoring.current) return;
@@ -658,7 +684,6 @@ export function FlowsViewer({
       const intersectingEntries = entries.filter(entry => entry.isIntersecting);
       
       if (intersectingEntries.length > 0) {
-        // Find the intersection entry closest to the top of the viewport
         const bestEntry = intersectingEntries.reduce((best, current) => {
           return (current.boundingClientRect.top < best.boundingClientRect.top) ? current : best;
         });
@@ -672,11 +697,10 @@ export function FlowsViewer({
 
     const observer = new IntersectionObserver(observerCallback, {
       root: null,
-      rootMargin: "-15% 0px -70% 0px", // Trigger active state when entering the upper-middle reading band
+      rootMargin: "-15% 0px -70% 0px", 
       threshold: 0
     });
 
-    // Observe all container divs currently registered in sectionRefs
     sectionRefs.current.forEach((ref) => {
       if (ref.current) {
         observer.observe(ref.current);
@@ -689,22 +713,18 @@ export function FlowsViewer({
     };
   }, [allFlows, sanitizedTaxonomy]);
 
-  // ─── ANCESTRY AUTO-EXPANSION ON SCROLL ───
   useEffect(() => {
     if (!activeFlowId) return;
 
-    // Recursively walk the active ID's path and expand all parental folders in the sidebar
     const findParentPath = (nodes: FlowNode[], targetId: string, path: string[] = []): string[] | null => {
       for (const n of nodes) {
         if (n.id === targetId) return path;
 
-        // Trace virtual branch children
         if (n.branches) {
           const hasBranch = n.branches.some((_, bi) => `${n.id}__branch_${bi}` === targetId);
           if (hasBranch) return [...path, n.id];
         }
 
-        // Trace real taxonomy children
         if (n.children) {
           const found = findParentPath(n.children, targetId, [...path, n.id]);
           if (found) return found;
@@ -729,7 +749,6 @@ export function FlowsViewer({
     }
   }, [activeFlowId, sanitizedTaxonomy]);
 
-  // ─── DYNAMIC SIDEBAR AUTO-SCROLLER ───
   useEffect(() => {
     if (activeFlowId) {
       const activeEl = document.querySelector(`[data-id="${activeFlowId}"]`);
@@ -739,7 +758,6 @@ export function FlowsViewer({
     }
   }, [activeFlowId]);
 
-  // Pre-initialize refs for every section and sub-branch in the active tree
   useEffect(() => {
     for (const flow of allFlows) {
       if (!sectionRefs.current.has(flow.id)) {
@@ -772,6 +790,8 @@ export function FlowsViewer({
     );
   }
 
+  const isWeb = platform === "web";
+
   return (
     <>
       <div className="flex items-start bg-transparent relative w-full h-full">
@@ -796,11 +816,10 @@ export function FlowsViewer({
           </div>
         </div>
 
-        {/* ═══ MAIN CONTENT (ONE GIANT CONTINUOUS CANVAS) ═══ */}
+        {/* ═══ MAIN CONTENT ═══ */}
         <div className="flex-1 min-w-0 bg-transparent">
           <div className="flex flex-col divide-y divide-black/5 dark:divide-white/5">
             {sanitizedTaxonomy.map((rootNode) => {
-              // Gather every unique screenshot under this entire parent node sequentially
               const combinedScreens: Screen[] = [];
               const leaves = getLeafFlows(rootNode);
               leaves.forEach(leaf => {
@@ -815,7 +834,7 @@ export function FlowsViewer({
               return (
                 <div key={rootNode.id} className="flex flex-col">
                   
-                  {/* Parent Tab Master Timeline View */}
+                  {/* Parent Tab Master View */}
                   <div ref={getRef(rootNode.id)} data-section-id={rootNode.id} className="flex flex-col pt-8 pb-8 bg-zinc-50/20 dark:bg-black/10">
                     <div className="px-10 pb-4 flex items-baseline gap-4">
                       <h2 className={cn("text-3xl font-extrabold tracking-tight transition-colors", rootNode.id === activeFlowId ? "text-[#0066FF]" : "text-zinc-900 dark:text-white")}>
@@ -833,15 +852,21 @@ export function FlowsViewer({
                     <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                       <div className="flex gap-8 px-10 min-w-max items-end">
                         {combinedScreens.map((screen, idx) => {
-                          const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file);
+                          const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
                           const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
                           const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
                           return (
                             <div key={idx} onClick={() => openDetail(combinedScreens, idx, rootNode.label)} className="group flex flex-col shrink-0 cursor-pointer">
-                              <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                                {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
-                              </div>
+                              {isWeb ? (
+                                <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
+                                  <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                                </div>
+                              ) : (
+                                <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
+                                  {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -849,7 +874,7 @@ export function FlowsViewer({
                     </div>
                   </div>
 
-                  {/* Child Storyboard Lanes belonging to this parent */}
+                  {/* Child Storyboard Lanes */}
                   {rootNode.children?.map((childFlow) => {
                     const leafScreens = resolveFlowScreens(childFlow);
                     if (leafScreens.length === 0) return null;
@@ -859,10 +884,11 @@ export function FlowsViewer({
                         key={childFlow.id} flow={childFlow} catalog={flowsData.screen_catalog ?? []}
                         appName={appName} tenantId={tenantId} mode={mode}
                         isHighlighted={childFlow.id === activeFlowId || (childFlow.branches?.some((_, bi) => `${childFlow.id}__branch_${bi}` === activeFlowId) ?? false)}
-                        activeFlowId={activeFlowId} // Pass down activeFlowId so children can highlight
+                        activeFlowId={activeFlowId} 
                         onScreenClick={openDetail}
                         sectionRef={getRef(childFlow.id)}
-                        getRef={getRef} // Pass getRef down so we can attach refs to the dynamic branches!
+                        getRef={getRef}
+                        platform={platform}
                       />
                     );
                   })}
@@ -884,6 +910,7 @@ export function FlowsViewer({
           tenantId={tenantId}
           mode={mode}
           onClose={() => setDetailModal(null)}
+          platform={platform}
         />
       )}
     </>

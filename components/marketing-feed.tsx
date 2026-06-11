@@ -10,12 +10,6 @@ import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
 
 // ── TEXT CLEANER ──────────────────────────────────────────────────────────────
-// Scraped social posts often start with platform metadata dumped as raw text:
-// "Feed post number 1\nElite Prospects\nElite Prospects\n1,218 followers\n2d •\n..."
-// or for X:
-// "Peter Sibner reposted\nHockeysverige.se @hockeysverige · Jan 7\nActual content..."
-// We strip this boilerplate so only the real post content is shown on cards.
-
 function cleanPostText(raw: string, platform: string, entity: string): string {
   if (!raw) return "";
 
@@ -28,7 +22,6 @@ function cleanPostText(raw: string, platform: string, entity: string): string {
   const lines = raw.split("\n").map((l) => l.trim());
 
   if (isLinkedIn) {
-    // Normalize entity for comparison (handles "EliteProspects" vs "Elite Prospects")
     const entityNorm = (entity ?? "").toLowerCase().replace(/[\s\-_.]/g, "");
 
     const isJunkLine = (line: string): boolean => {
@@ -48,7 +41,6 @@ function cleanPostText(raw: string, platform: string, entity: string): string {
       return false;
     };
 
-    // Find the last junk line in the first 15 lines — content starts after it
     let lastJunkIdx = -1;
     const scanLimit = Math.min(15, lines.length);
 
@@ -64,15 +56,12 @@ function cleanPostText(raw: string, platform: string, entity: string): string {
       if (isJunk || isEntityRepeat) {
         lastJunkIdx = i;
       } else if (line.length > 30) {
-        // Long non-junk line = real content, stop scanning
         break;
       }
-      // Short non-junk lines: keep scanning (could still be header artifact)
     }
 
     let result = lines.slice(lastJunkIdx + 1).filter((l) => l);
 
-    // Remove truncated duplicate lines (scraper sometimes emits both full + "…" version)
     result = result.filter((line, i, arr) => {
       const isTrunc = /[\.…]{2,}$/.test(line) || line.endsWith("…");
       if (!isTrunc) return true;
@@ -142,7 +131,7 @@ function LinkedInIcon({ size = 14 }: { size?: number }) {
 function InstagramIcon({ size = 14 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/>
+      <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204 013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/>
     </svg>
   );
 }
@@ -275,7 +264,7 @@ function PostDetailModal({
         {/* Scrollable body */}
         <div className="overflow-y-auto flex-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
 
-          {/* Full image — no crop, full natural height */}
+          {/* Full image */}
           {imagePath && (
             <div className="bg-black">
               <img src={imagePath} alt="" className="w-full object-contain" />
@@ -291,7 +280,7 @@ function PostDetailModal({
               </p>
             )}
 
-            {/* Replies / comments */}
+            {/* Replies */}
             {post.comments && post.comments.length > 0 && (
               <div className="space-y-2.5">
                 <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-zinc-400 dark:text-zinc-500">
@@ -346,7 +335,7 @@ function PostDetailModal({
                 >
                   View original
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                     <polyline points="15 3 21 3 21 9"/>
                     <line x1="10" y1="14" x2="21" y2="3"/>
                   </svg>
@@ -376,11 +365,8 @@ function PostCard({ post, imagePath, timeAgo }: { post: SocialPost; imagePath: s
       <div
         onClick={() => setOpen(true)}
         className={cn(
-          "group cursor-pointer rounded-2xl overflow-hidden transition-all duration-200",
-          "border",
-          // Light
+          "group cursor-pointer rounded-2xl overflow-hidden transition-all duration-200 border",
           "bg-white border-zinc-200 hover:border-zinc-300 hover:shadow-lg",
-          // Dark
           "dark:bg-zinc-900 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:shadow-2xl",
           "hover:-translate-y-[1px]",
         )}
@@ -449,7 +435,7 @@ function PostCard({ post, imagePath, timeAgo }: { post: SocialPost; imagePath: s
           </div>
         )}
 
-        {/* Footer: meta + cue */}
+        {/* Footer */}
         <div className="px-4 pb-3.5 flex items-center gap-2 flex-wrap">
           {meta.sentiment && (
             <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-white/8 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-white/10">
@@ -483,11 +469,18 @@ function PostCard({ post, imagePath, timeAgo }: { post: SocialPost; imagePath: s
 export function MarketingFeed({ posts, companyId, snapshotId, tenantId }: MarketingFeedProps) {
   const [filter, setFilter] = useState<string | null>(null);
 
+  // ─── THE DIAGNOSTIC IMAGE PATH RESOLVER ───
   const getImagePath = (rawPath: string) => {
-    if (!rawPath) return "";
+    if (!rawPath) return null;
     if (rawPath.startsWith("http")) return rawPath;
+    
     const filename = rawPath.split("/").pop();
-    return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${companyId}/snapshots/${snapshotId}/marketing/screenshots/${filename}`;
+    const safeCompanyId = companyId.toLowerCase();
+    
+    // We construct the unified, correct direct CDN URL pointing to the file under screenshots/
+    const resolved = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data/${tenantId}/${safeCompanyId}/snapshots/${snapshotId}/marketing/screenshots/${filename}`;
+    
+    return resolved;
   };
 
   if (!posts || posts.length === 0) {
@@ -542,7 +535,7 @@ export function MarketingFeed({ posts, companyId, snapshotId, tenantId }: Market
       {/* Masonry grid */}
       <div className="columns-1 md:columns-2 lg:columns-3 gap-4 space-y-4">
         {filteredPosts.map((post, i) => {
-          const imagePath = post.screenshot ? getImagePath(post.screenshot) : null;
+          const imagePath = getImagePath(post.screenshot);
           let timeAgo = "recently";
           try { timeAgo = formatDistanceToNow(new Date(post.timestamp), { addSuffix: true }); } catch {}
 

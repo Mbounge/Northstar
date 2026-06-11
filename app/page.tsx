@@ -340,7 +340,7 @@ rgba(255,255,255,0.01) 100%
                             Rank
                           </span>
                           <span className="text-[10px] text-white/90 font-medium">
-                            #{app.rank ?? "?"}
+                            {app.rank && app.rank !== "?" ? (String(app.rank).startsWith('#') ? app.rank : `#${app.rank}`) : "?"}
                           </span>
                         </div>
                       </div>
@@ -360,9 +360,7 @@ rgba(255,255,255,0.01) 100%
                         {app.revenue ? `${app.revenue} revenues` : "? revenues"}
                       </span>
                       <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
-                        {app.employees
-                          ? `${app.employees} employees`
-                          : "? employees"}
+                        {app.employees && app.employees !== "?" ? `${app.employees} employees` : "? employees"}
                       </span>
                       <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
                         {app.totalScreens || 0} insights

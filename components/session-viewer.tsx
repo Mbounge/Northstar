@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   ChevronLeft, ChevronRight, BrainCircuit, BookOpen, Search,
   LayoutTemplate, SplitSquareHorizontal, MousePointerClick,
-  Type, Maximize2, X,
+  Type, Maximize2, X, Loader2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PanoramicMockup } from "@/components/PanoramicMockup";
@@ -81,6 +81,10 @@ export function SessionViewer({ data }: { data: any }) {
   const [mounted, setMounted] = useState(false);
   const [selectedPathway, setSelectedPathway] = useState<string>("All");
   
+  // Custom states to handle the lazy loading of step-level JSONs on-demand
+  const [activeStepData, setActiveStepData] = useState<any>(null);
+  const [loadingStepData, setLoadingStepData] = useState(false);
+  
   const scrollRef = useRef<HTMLDivElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
   
@@ -99,21 +103,60 @@ export function SessionViewer({ data }: { data: any }) {
   const visibleSteps = selectedPathway === "All" 
     ? steps 
     : steps.filter((s: any) => {
-        const p = s.enrichedData?.extraction_meta?.agent_pathway;
+        const p = s.enrichedData?.extraction_meta?.agent_pathway || s.enriched_file; // Fallback
         const mappedP = p && p !== "Common" ? p : "Main Flow";
         return mappedP === selectedPathway;
       });
 
   const currentStep = steps[currentIndex];
 
-  const metadata = currentStep?.enrichedData || {};
+  // ─── LAZY LOADING CONTROLLER ───
+  // Automatically loads the specific step_enriched.json directly from Storage CDN in 20ms
+  // only when the active screenshot index changes.
+  useEffect(() => {
+    const fetchStepDetails = async () => {
+      if (!currentStep) return;
+
+      // If the data is already inside the object (fallback slow storage run), use it immediately
+      if (currentStep.enrichedData) {
+        setActiveStepData(currentStep.enrichedData);
+        return;
+      }
+
+      setLoadingStepData(true);
+      
+      // Construct the absolute path to the step-level file inside the enriched/ directory
+      const fileName = currentStep.enriched_file || `step_${String(currentStep.step).padStart(3, '0')}_enriched.json`;
+      const enrichedFileUrl = currentStep.imagePath.replace(/\/screenshots\/[^\/]+$/, `/enriched/${fileName}`);
+
+      try {
+        const res = await fetch(enrichedFileUrl);
+        if (res.ok) {
+          const textData = await res.json();
+          setActiveStepData(textData);
+        } else {
+          setActiveStepData(null);
+        }
+      } catch (e) {
+        console.error("Failed to lazy load step details:", e);
+        setActiveStepData(null);
+      } finally {
+        setLoadingStepData(false);
+      }
+    };
+
+    fetchStepDetails();
+  }, [currentIndex, currentStep]);
+
+  // Bind extracted variables to the lazy-loaded state
+  const metadata = activeStepData || {};
   const agentMeta = metadata.extraction_meta || {};
   const intel = metadata.screen_intelligence || {};
   const elements = metadata.elements || {};
   const copy = metadata.copy_analysis || {};
 
   const allFrictionEvents = data.sessionIntel?.friction_report?.friction_events || [];
-  const actualStepNumber = currentStep?.enrichedData?.extraction_meta?.timeline_step || currentStep?.step;
+  const actualStepNumber = agentMeta.timeline_step || currentStep?.step;
   const deterministicEventsThisScreen = allFrictionEvents.filter((e: any) => e.screen_index === actualStepNumber);
   const keyFindings: any[] = Array.isArray(intel.key_findings) ? intel.key_findings : [];
 
@@ -131,6 +174,7 @@ export function SessionViewer({ data }: { data: any }) {
           behavior,
         });
       }
+      
       if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
       scrollTimeout.current = setTimeout(() => {
         isProgrammaticScroll.current = false;
@@ -240,7 +284,7 @@ export function SessionViewer({ data }: { data: any }) {
             ref={scrollRef} 
             onScroll={handleModalScroll} 
             className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" 
-            style={{ paddingLeft: "calc(50vw - 18.5vh)", paddingRight: "calc(50vw - 18.5vh)" }}
+            style={{ paddingLeft: isWebRun ? "calc(50vw - 320px)" : "calc(50vw - 18.5vh)", paddingRight: isWebRun ? "calc(50vw - 320px)" : "calc(50vw - 18.5vh)" }}
           >
             {steps.map((step: any, idx: number) => {
               const isActive = idx === currentIndex;
@@ -366,7 +410,16 @@ export function SessionViewer({ data }: { data: any }) {
           </div>
 
           {/* RIGHT: Intelligence */}
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+            
+            {/* Absolute loading indicator overlay for fast, silent transitions */}
+            {loadingStepData && (
+              <div className="absolute top-4 right-8 z-[60] flex items-center gap-2 bg-black/40 backdrop-blur-md px-3 py-1.5 border border-white/10">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                <span className="text-[10px] uppercase font-mono tracking-widest text-zinc-400">Loading details...</span>
+              </div>
+            )}
+
             <div className="px-8 pt-6 border-b border-black/5 dark:border-white/10 shrink-0 flex items-center gap-8">
               <InnerTab active={activeTab === "insights"} onClick={() => setActiveTab("insights")} icon={<BrainCircuit className="w-4 h-4" />} label="Strategic Insights" activeColor="text-[#0066FF] border-[#0066FF]" />
               <InnerTab active={activeTab === "elements"} onClick={() => setActiveTab("elements")} icon={<LayoutTemplate className="w-4 h-4" />} label="UI Elements" activeColor="text-emerald-600 dark:text-emerald-400 border-emerald-600 dark:border-emerald-400" />
@@ -577,7 +630,7 @@ export function SessionViewer({ data }: { data: any }) {
                   onClick={() => {
                     setSelectedPathway(pw);
                     const firstIndex = steps.findIndex((s: any) => {
-                      const p = s.enrichedData?.extraction_meta?.agent_pathway;
+                      const p = s.enrichedData?.extraction_meta?.agent_pathway || s.enriched_file;
                       return (p && p !== "Common" ? p : "Main Flow") === pw;
                     });
                     if (firstIndex !== -1) setCurrentIndex(firstIndex);

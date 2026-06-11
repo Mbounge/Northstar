@@ -4,7 +4,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, AlertTriangle, UserX, Search, Loader2, ArrowLeft, User as UserIcon } from "lucide-react";
+import { ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, AlertTriangle, UserX, Search, Loader2, ArrowLeft, User as UserIcon, RefreshCw, Bell } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { createClient } from "@/lib/supabase/client";
 import { formatDistanceToNow } from "date-fns";
@@ -13,6 +13,7 @@ import { Unbounded } from "next/font/google";
 const unbounded = Unbounded({ subsets: ["latin"], weight: ["200", "300", "400", "600", "700"] });
 
 type ActionType = "approve" | "reject" | "revoke";
+type ToastType = "success" | "error" | "info";
 
 export default function AdminDashboard() {
   const supabase = createClient();
@@ -24,6 +25,14 @@ export default function AdminDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   
+  // Custom Toast State
+  const [toast, setToast] = useState<{
+    isOpen: boolean; message: string; type: ToastType;
+  }>({ isOpen: false, message: "", type: "success" });
+
+  // Sync state per Organization
+  const [syncingOrgId, setSyncingOrgId] = useState<string | null>(null);
+
   // Modals
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean; type: ActionType; user: any | null;
@@ -33,8 +42,16 @@ export default function AdminDashboard() {
   const [orgModalOpen, setOrgModalOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
 
-  // NEW: State for viewing an organization's users
+  // State for viewing an organization's users
   const [viewingOrgId, setViewingOrgId] = useState<string | null>(null);
+
+  // Helper to trigger the beautiful inline Toast alert
+  const showToast = (message: string, type: ToastType = "success") => {
+    setToast({ isOpen: true, message, type });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, isOpen: false }));
+    }, 5000); // Displays for 5 seconds before disappearing
+  };
 
   // 1. Fetch real users and customers from Supabase
   const fetchData = async () => {
@@ -79,7 +96,7 @@ export default function AdminDashboard() {
     if (!confirmModal.user) return;
     
     if (confirmModal.type === "approve" && !selectedCompanyId) {
-      alert("You must assign the user to a company to approve them.");
+      showToast("You must assign the user to an organization to approve them.", "error");
       return;
     }
 
@@ -97,8 +114,9 @@ export default function AdminDashboard() {
       fetchData();
       setConfirmModal({ isOpen: false, type: "approve", user: null });
       setSelectedCompanyId("");
+      showToast(`User successfully ${confirmModal.type}d!`, "success");
     } else {
-      alert("Failed to update user.");
+      showToast("Failed to update user profile.", "error");
     }
   };
 
@@ -114,8 +132,28 @@ export default function AdminDashboard() {
       setNewOrgName("");
       setOrgModalOpen(false);
       fetchData(); 
+      showToast(`Organization "${newOrgName.trim()}" created!`, "success");
     } else {
-      alert("Failed to create organization.");
+      showToast("Failed to create organization.", "error");
+    }
+  };
+
+  // Triggers the background storage-to-db sync specifically for this organization ID
+  const handleSyncOrganization = async (orgId: string) => {
+    setSyncingOrgId(orgId);
+    try {
+      const res = await fetch(`/api/sync-db?tenant_id=${orgId}`);
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message, "success");
+        fetchData();
+      } else {
+        showToast(data.error || "Failed to sync organization.", "error");
+      }
+    } catch (e) {
+      showToast("An unexpected error occurred during synchronization.", "error");
+    } finally {
+      setSyncingOrgId(null);
     }
   };
 
@@ -125,7 +163,6 @@ export default function AdminDashboard() {
     catch { return "Unknown"; }
   };
 
-  // Helper variables for the org viewing modal
   const viewingOrg = viewingOrgId ? customers.find(c => c.id === viewingOrgId) : null;
   const orgUsersList = viewingOrgId ? users.filter(u => u.customer_id === viewingOrgId && u.status === "approved") : [];
 
@@ -155,6 +192,25 @@ export default function AdminDashboard() {
           />
         </div>
       </div>
+
+      {/* ── INLINE THEME TOAST NOTIFICATION ── */}
+      {toast.isOpen && (
+        <div 
+          className={`
+            fixed bottom-8 right-8 z-[200] flex items-center gap-3.5 px-6 py-4 border shadow-2xl 
+            animate-in slide-in-from-bottom-5 duration-300 rounded-none max-w-md
+            ${toast.type === "success" ? "border-emerald-500/30 text-emerald-400 bg-emerald-950/20" : ""}
+            ${toast.type === "error" ? "border-rose-500/30 text-rose-400 bg-rose-950/20" : ""}
+            ${toast.type === "info" ? "border-sky-500/30 text-sky-400 bg-sky-950/20" : ""}
+          `}
+          style={{ backdropFilter: "blur(20px)" }}
+        >
+          {toast.type === "success" && <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-400" />}
+          {toast.type === "error" && <XCircle className="w-5 h-5 shrink-0 text-rose-400" />}
+          {toast.type === "info" && <Loader2 className="w-5 h-5 shrink-0 text-sky-400 animate-spin" />}
+          <span className="font-sans text-[13.5px] font-medium leading-relaxed tracking-[0.01em]">{toast.message}</span>
+        </div>
+      )}
 
       {/* ── VIEW ORG USERS MODAL ── */}
       {viewingOrgId && viewingOrg && (
@@ -458,16 +514,35 @@ export default function AdminDashboard() {
                     return (
                       <div 
                         key={customer.id} 
-                        onClick={() => setViewingOrgId(customer.id)}
-                        className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl hover:bg-white/50 dark:hover:bg-white/5 transition-all p-8 rounded-none min-h-[160px] flex flex-col justify-between cursor-pointer group"
+                        className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl p-8 rounded-none min-h-[180px] flex flex-col justify-between group"
                       >
-                        <div>
+                        <div className="cursor-pointer" onClick={() => setViewingOrgId(customer.id)}>
                           <h3 className="font-bold text-[18px] text-black dark:text-white mb-2 group-hover:text-blue-500 transition-colors">{customer.name}</h3>
                           <div className="flex items-center gap-2 text-[14px] text-black/60 dark:text-white/60"><Users className="w-4 h-4" /> {userCount} active users</div>
                         </div>
-                        <div className="flex justify-between items-end mt-4">
-                          <span className="text-[11px] text-black/40 dark:text-white/40 font-mono hover:underline">View members →</span>
-                          <span className="bg-black/5 dark:bg-white/10 text-black dark:text-white px-2 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wider">Active</span>
+                        <div className="flex justify-between items-end mt-4 pt-4 border-t border-black/5 dark:border-white/5">
+                          {/* Left: View Members */}
+                          <span onClick={() => setViewingOrgId(customer.id)} className="text-[11px] text-black/40 dark:text-white/40 font-mono hover:underline cursor-pointer">View members →</span>
+                          
+                          {/* Right: DB Sync Button (with Loading State) */}
+                          <button
+                            onClick={() => handleSyncOrganization(customer.id)}
+                            disabled={syncingOrgId !== null}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 dark:bg-white/5 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 text-black dark:text-white text-[11px] font-bold uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-all"
+                            title="Synchronize Storage files to Postgres Database"
+                          >
+                            {syncingOrgId === customer.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                Syncing...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                Sync Storage
+                              </>
+                            )}
+                          </button>
                         </div>
                       </div>
                     );

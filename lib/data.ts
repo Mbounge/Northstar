@@ -17,30 +17,45 @@ export interface CompanyMeta { id: string; name: string; lastScan: string; }
 
 // --- HELPERS ---
 
-// 1. Get List of Tracked Companies for a specific Tenant
+// 1. OPTIMIZED: Get List of Tracked Companies via DB instead of slow Storage directory scans
 export async function getTrackedCompanies(tenantId: string): Promise<CompanyMeta[]> {
   if (!tenantId) return [];
-  const { data, error } = await supabase.storage.from('data').list(tenantId, { limit: 100 });
-  if (error || !data) return [];
   
-  // Supabase returns pseudo-folders without an ID
-  const folders = data.filter(item => !item.id && item.name !== '.emptyFolderPlaceholder');
+  const { data, error } = await supabase
+    .from('target_apps')
+    .select('app_name, last_scan')
+    .eq('tenant_id', tenantId);
+    
+  if (error || !data) {
+    console.error("Failed to fetch tracked companies from DB:", error);
+    return [];
+  }
   
-  return folders.map(folder => ({
-    id: folder.name,
-    name: folder.name.charAt(0).toUpperCase() + folder.name.slice(1),
-    lastScan: new Date().toISOString().split('T')[0] 
+  return data.map(app => ({
+    id: app.app_name,
+    name: app.app_name.charAt(0).toUpperCase() + app.app_name.slice(1),
+    lastScan: app.last_scan || new Date().toISOString().split('T')[0] 
   }));
 }
 
-// 2. Get All Snapshots for a Company within a Tenant
+// 2. OPTIMIZED: Get All Snapshots via DB instead of slow Storage directory scans
 export async function getAvailableSnapshots(tenantId: string, companyId: string): Promise<string[]> {
   if (!tenantId || !companyId) return [];
-  const { data, error } = await supabase.storage.from('data').list(`${tenantId}/${companyId}/snapshots`, { limit: 100 });
-  if (error || !data) return [];
   
-  // Return sorted ascending (oldest first)
-  return data.filter(item => !item.id).map(s => s.name).sort(); 
+  // ilike handles case-sensitivity issues gracefully
+  const { data, error } = await supabase
+    .from('app_snapshots')
+    .select('snapshot_id')
+    .eq('tenant_id', tenantId)
+    .ilike('app_name', companyId)
+    .order('snapshot_id', { ascending: true });
+
+  if (error || !data) {
+    console.error("Failed to fetch snapshots from DB:", error);
+    return [];
+  }
+  
+  return data.map(s => s.snapshot_id);
 }
 
 // --- MAIN DATA LOADER ---
@@ -59,11 +74,14 @@ export async function getDashboardData(tenantId: string, companyId: string, spec
   if (!snapshotId) return null;
 
   const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/data`;
+  
+  // Force the companyId to be lowercase to match the lowercase folder structure in your 'data' bucket
+  const safeCompanyId = companyId.toLowerCase();
 
-  // Helper to fetch JSON from Supabase Public URL using isolated tenant path
+  // Fetching direct JSON by its direct URL is O(1) and extremely fast.
   const readJson = async (subPath: string) => {
     try {
-      const res = await fetch(`${publicUrl}/${tenantId}/${companyId}/snapshots/${snapshotId}/${subPath}`, { next: { revalidate: 300 } });
+      const res = await fetch(`${publicUrl}/${tenantId}/${safeCompanyId}/snapshots/${snapshotId}/${subPath}`, { next: { revalidate: 300 } });
       if (!res.ok) return null;
       return await res.json();
     } catch (error) {
@@ -71,14 +89,15 @@ export async function getDashboardData(tenantId: string, companyId: string, spec
     }
   };
 
-  // Fetch all pillars in parallel for speed
-  const [mobileData, webData, marketingData, businessData, rosterData, deltaReport] = await Promise.all([
+  // Fetch all pillars in parallel for speed, including a list of business screenshot filenames
+  const [mobileData, webData, marketingData, businessData, rosterData, deltaReport, screenshotsList] = await Promise.all([
     readJson('product/mobile/session_manifest.json') as Promise<MobileSession | null>,
     readJson('product/web/ui_manifest.json') as Promise<WebManifest[] | null>,
     readJson('marketing/master_feed.json') as Promise<SocialPost[] | null>,
     readJson('business/master_manifest.json') as Promise<BusinessManifest | null>,
-    readJson(`business/${companyId}_omni_roster.json`) as Promise<RosterPerson[] | null>,
-    readJson('product/delta_report.json') as Promise<DeltaReport | null>
+    readJson(`business/${safeCompanyId}_omni_roster.json`) as Promise<RosterPerson[] | null>,
+    readJson('product/delta_report.json') as Promise<DeltaReport | null>,
+    supabase.storage.from('data').list(`${tenantId}/${safeCompanyId}/snapshots/${snapshotId}/business/screenshots`, { limit: 100 })
   ]);
 
   return {
@@ -89,6 +108,7 @@ export async function getDashboardData(tenantId: string, companyId: string, spec
     marketing: marketingData,
     business: businessData,
     roster: rosterData,
-    deltaReport: deltaReport
+    deltaReport: deltaReport,
+    businessScreenshots: (screenshotsList.data || []).map(f => f.name) // Pass list of filenames directly
   };
 }
