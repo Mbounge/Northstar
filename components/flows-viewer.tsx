@@ -102,7 +102,6 @@ function getLeafFlows(node: FlowNode): FlowNode[] {
   return leaves;
 }
 
-// Fixed: Instantly return the file path if it is already a pre-resolved, complete public URL
 function buildImgUrl(tenantId: string, appName: string, mode: string, file: string, platform: string): string {
   if (file && file.startsWith("http")) return file; // Absolute URL bypass
   const cleanFileName = file.split('/').pop() || file;
@@ -173,7 +172,8 @@ function ScreenDetailModal({
           behavior,
         });
       }
-      if (scrollTimeout.current) setTimeout(() => {
+      if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
+      scrollTimeout.current = setTimeout(() => {
         isProgrammaticScroll.current = false;
       }, behavior === "instant" ? 10 : 500); 
     }
@@ -245,7 +245,7 @@ function ScreenDetailModal({
               {copied ? <><Check className="w-3.5 h-3.5" />Copied!</> : copyError ? "Failed" : <><Copy className="w-3.5 h-3.5" />Copy</>}
             </button>
             <button onClick={onClose} className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all">
-              <X className="w-4 h-4 text-white" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -341,7 +341,7 @@ function SidebarNode({
         <div className="flex items-center gap-2 pr-2 min-w-0">
           {hasChildren ? (
             <button onClick={(e) => onToggle(node.id, e)} className="p-1 -ml-1 rounded-md hover:bg-white/60 dark:hover:bg-white/10 transition-colors shrink-0">
-              {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" /> : <ChevronRight className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
+              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
             </button>
           ) : <span className="w-5 shrink-0" />}
           
@@ -400,7 +400,6 @@ function FlowSection({
   const hasSpineOrBranches = (Array.isArray(flow.spine) && flow.spine.length > 0) || 
                              (Array.isArray(flow.branches) && flow.branches.length > 0);
   
-  // Dynamic resolution for mixed platforms (e.g. if the image url has /web/ or isWeb prop is on)
   const isWeb = platform === "web";
 
   if (hasSpineOrBranches) {
@@ -644,17 +643,18 @@ export function FlowsViewer({
     });
   }, []);
 
+  // FIXED: Extend scroll-lock timeout to 1400ms to allow deep smooth scrolls to complete
   const handleSidebarSelect = useCallback((id: string) => {
     setActiveFlowId(id);
     const target = sectionRefs.current.get(id)?.current;
     if (target) {
-      isScrollAnchoring.current = true;
+      isScrollAnchoring.current = true; // Lock observer
       target.scrollIntoView({ behavior: "smooth", block: "start" });
       
       if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
       anchorTimeout.current = setTimeout(() => {
-        isScrollAnchoring.current = false;
-      }, 800);
+        isScrollAnchoring.current = false; // Release observer
+      }, 1400); // 1400ms is perfectly balanced for deep scrolls
     } else {
       const parent = findFlow(sanitizedTaxonomy, id);
       if (parent && parent.children && parent.children.length > 0) {
@@ -667,7 +667,7 @@ export function FlowsViewer({
           if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
           anchorTimeout.current = setTimeout(() => {
             isScrollAnchoring.current = false;
-          }, 800);
+          }, 1400);
         }
       }
     }
@@ -679,7 +679,7 @@ export function FlowsViewer({
 
   useEffect(() => {
     const observerCallback = (entries: IntersectionObserverEntry[]) => {
-      if (isScrollAnchoring.current) return;
+      if (isScrollAnchoring.current) return; // Prevent observer hijacking during active scroll
 
       const intersectingEntries = entries.filter(entry => entry.isIntersecting);
       
@@ -713,44 +713,9 @@ export function FlowsViewer({
     };
   }, [allFlows, sanitizedTaxonomy]);
 
+  // FIXED: Only scroll sidebar automatically if the user is not actively navigating/scrolling
   useEffect(() => {
-    if (!activeFlowId) return;
-
-    const findParentPath = (nodes: FlowNode[], targetId: string, path: string[] = []): string[] | null => {
-      for (const n of nodes) {
-        if (n.id === targetId) return path;
-
-        if (n.branches) {
-          const hasBranch = n.branches.some((_, bi) => `${n.id}__branch_${bi}` === targetId);
-          if (hasBranch) return [...path, n.id];
-        }
-
-        if (n.children) {
-          const found = findParentPath(n.children, targetId, [...path, n.id]);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-
-    const parentPath = findParentPath(sanitizedTaxonomy, activeFlowId);
-    if (parentPath && parentPath.length > 0) {
-      setExpandedNodes(prev => {
-        const next = new Set(prev);
-        let changed = false;
-        parentPath.forEach(id => {
-          if (!next.has(id)) {
-            next.add(id);
-            changed = true;
-          }
-        });
-        return changed ? next : prev;
-      });
-    }
-  }, [activeFlowId, sanitizedTaxonomy]);
-
-  useEffect(() => {
-    if (activeFlowId) {
+    if (activeFlowId && !isScrollAnchoring.current) {
       const activeEl = document.querySelector(`[data-id="${activeFlowId}"]`);
       if (activeEl) {
         activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
