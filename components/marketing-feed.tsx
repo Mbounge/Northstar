@@ -7,7 +7,7 @@ import { SocialPost } from "@/lib/data";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { cn } from "@/lib/utils";
-import { X } from "lucide-react";
+import { X, Megaphone, CheckCircle2, MessageSquare, BrainCircuit, Globe } from "lucide-react";
 
 // ── TEXT CLEANER ──────────────────────────────────────────────────────────────
 function cleanPostText(raw: string, platform: string, entity: string): string {
@@ -233,11 +233,14 @@ function PostDetailModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-xl w-full p-0 overflow-hidden bg-white dark:bg-[#0d0d0d] border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
+      <DialogContent 
+        className="w-full p-0 overflow-hidden bg-white dark:bg-[#0d0d0d] border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] [&>button]:hidden animate-in fade-in zoom-in-95 duration-200"
+        style={{ maxWidth: '1152px', width: '90vw' }} // FORCED INLINE STYLE BYPASS
+      >
         <VisuallyHidden><DialogTitle>{displayName} · {config.label}</DialogTitle></VisuallyHidden>
 
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
           <div className="flex items-center gap-3">
             <div
               className="w-9 h-9 rounded-full flex items-center justify-center text-white shrink-0 text-[13px] font-bold"
@@ -261,61 +264,57 @@ function PostDetailModal({
           </button>
         </div>
 
-        {/* Scrollable body */}
-        <div className="overflow-y-auto flex-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-
-          {/* Full image */}
-          {imagePath && (
-            <div className="bg-black">
-              <img src={imagePath} alt="" className="w-full object-contain" />
-            </div>
-          )}
-
-          <div className="px-5 py-5 space-y-5">
-
-            {/* Post text */}
+        {/* Double-Pane Split View */}
+        <div className="flex-1 flex min-h-0 overflow-hidden bg-zinc-50 dark:bg-black/20">
+          
+          {/* Left Pane (38% width): Text & Analysis */}
+          <div className="w-[38%] border-r border-zinc-200 dark:border-zinc-800 p-6 overflow-y-auto space-y-6 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+            
+            {/* Cleaned Post Text */}
             {text && (
-              <p className="text-zinc-900 dark:text-zinc-100 text-[15px] leading-[1.65] whitespace-pre-wrap break-words">
+              <p className="text-zinc-900 dark:text-zinc-100 text-[14.5px] leading-[1.65] whitespace-pre-wrap break-words font-sans">
                 {text}
               </p>
             )}
 
             {/* Replies */}
             {post.comments && post.comments.length > 0 && (
-              <div className="space-y-2.5">
-                <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-zinc-400 dark:text-zinc-500">
-                  Captured replies · {post.comments.length}
+              <div className="bg-white/50 dark:bg-white/[0.02] border border-zinc-200/60 dark:border-white/[0.04] p-5 rounded-xl space-y-3.5 shadow-sm">
+                <h4 className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <MessageSquare className="w-3.5 h-3.5 text-[#0066FF]" /> Captured replies · {post.comments.length}
+                </h4>
+                <div className="space-y-3">
+                  {post.comments.map((c, i) => (
+                    <div
+                      key={i}
+                      className="bg-zinc-50/50 dark:bg-white/5 border border-zinc-100 dark:border-white/10 rounded-xl px-4 py-3"
+                    >
+                      <p className="text-zinc-700 dark:text-zinc-300 text-[12.5px] leading-relaxed">{c}</p>
+                    </div>
+                  ))}
                 </div>
-                {post.comments.map((c, i) => (
-                  <div
-                    key={i}
-                    className="bg-zinc-50 dark:bg-white/5 border border-zinc-100 dark:border-white/10 rounded-xl px-4 py-3"
-                  >
-                    <p className="text-zinc-700 dark:text-zinc-300 text-[13px] leading-relaxed">{c}</p>
-                  </div>
-                ))}
               </div>
             )}
 
             {/* Intelligence signals */}
             {(meta.sentiment || meta.category || meta.summary) && (
-              <div className="pt-4 border-t border-zinc-100 dark:border-white/10 space-y-3">
-                <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-zinc-400 dark:text-zinc-500">
-                  Intelligence
-                </div>
+              <div className="bg-white/50 dark:bg-white/[0.02] border border-zinc-200/60 dark:border-white/[0.04] p-5 rounded-xl space-y-3.5 shadow-sm">
+                <h4 className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <BrainCircuit className="w-3.5 h-3.5 text-purple-500" /> Intelligence Analysis
+                </h4>
                 {meta.summary && (
-                  <p className="text-zinc-600 dark:text-zinc-300 text-[13px] leading-relaxed italic">
+                  <p className="text-zinc-600 dark:text-zinc-300 text-[13px] leading-relaxed italic border-l-2 border-purple-400/50 pl-3">
                     "{meta.summary}"
                   </p>
                 )}
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 pt-1">
                   {meta.sentiment && (
-                    <span className="px-3 py-1 rounded-full text-[11px] font-semibold bg-zinc-100 dark:bg-white/10 text-zinc-600 dark:text-zinc-300 uppercase tracking-wide border border-zinc-200 dark:border-white/10">
+                    <span className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-zinc-100 dark:bg-white/10 text-zinc-600 dark:text-zinc-300 uppercase tracking-wide border border-zinc-200 dark:border-white/10">
                       {meta.sentiment}
                     </span>
                   )}
                   {meta.category && (
-                    <span className="px-3 py-1 rounded-full text-[11px] font-semibold bg-zinc-100 dark:bg-white/10 text-zinc-600 dark:text-zinc-300 uppercase tracking-wide border border-zinc-200 dark:border-white/10">
+                    <span className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-zinc-100 dark:bg-white/10 text-zinc-600 dark:text-zinc-300 uppercase tracking-wide border border-zinc-200 dark:border-white/10">
                       {meta.category}
                     </span>
                   )}
@@ -324,25 +323,41 @@ function PostDetailModal({
             )}
 
             {/* Footer */}
-            <div className="pt-4 border-t border-zinc-100 dark:border-white/10 flex items-center justify-between">
-              <span className="text-zinc-400 dark:text-zinc-500 text-[12px]">{fullDate || timeAgo}</span>
+            <div className="pt-2 flex items-center justify-between text-zinc-400 dark:text-zinc-500 text-[12px] border-t border-zinc-100 dark:border-zinc-800">
+              <span>{fullDate || timeAgo}</span>
               {post.url && (
                 <a
                   href={post.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 text-[12px] font-semibold text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
+                  className="flex items-center gap-1.5 font-bold text-[#0066FF] hover:underline"
                 >
                   View original
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
                     <polyline points="15 3 21 3 21 9"/>
                     <line x1="10" y1="14" x2="21" y2="3"/>
                   </svg>
                 </a>
               )}
             </div>
+
           </div>
+
+          {/* Right Pane (62% width): Scrollable Screenshot */}
+          <div className="flex-1 p-8 overflow-y-auto select-none [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+            {imagePath ? (
+              <div className="relative border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-xl overflow-hidden bg-white dark:bg-zinc-950">
+                <img src={imagePath} alt="" className="w-full h-auto object-cover object-top block" />
+              </div>
+            ) : (
+              <div className="py-24 text-center flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-500">
+                <Megaphone className="w-10 h-10 opacity-40 mb-3" />
+                <p className="text-[14px]">No screenshot captured for this signal.</p>
+              </div>
+            )}
+          </div>
+
         </div>
       </DialogContent>
     </Dialog>
@@ -471,10 +486,13 @@ export function MarketingFeed({ posts, companyId, snapshotId, tenantId }: Market
 
   // ─── THE DIAGNOSTIC IMAGE PATH RESOLVER ───
   const getImagePath = (rawPath: string) => {
-    if (!rawPath) return null;
+    if (!rawPath) {
+      console.warn(`[Marketing Image Diagnostic] Empty rawPath received.`);
+      return null;
+    }
     if (rawPath.startsWith("http")) return rawPath;
     
-    const filename = rawPath.split("/").pop();
+    let filename = rawPath.split("/").pop();
     const safeCompanyId = companyId.toLowerCase();
     
     // We construct the unified, correct direct CDN URL pointing to the file under screenshots/
