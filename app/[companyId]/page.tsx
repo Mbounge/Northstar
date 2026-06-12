@@ -170,7 +170,7 @@ export default async function CompanyDashboardPage({
               Rank
             </span>
             <span className="font-sans text-[16px] font-[400] text-[#000000] dark:text-white leading-[100%] text-left">
-              #1
+              ?
             </span>
           </div>
 
