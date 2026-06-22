@@ -48,12 +48,23 @@ export default async function PortfolioPage() {
     return dateB - dateA;
   });
 
-  const userEmail = user?.email || "kroni@graent.com";
+  const userEmail = user?.email || "default@gmail.com";
   const userInitial = userEmail.charAt(0).toUpperCase();
   const userName = userEmail.split("@")[0];
 
   return (
     <div className="relative min-h-screen bg-[#EEF0F8] dark:bg-[#09090b] flex flex-col overflow-hidden font-sans">
+      {/* Hide default browser scrollbar visually while keeping scrolling functional */}
+      <style dangerouslySetInnerHTML={{__html: `
+        ::-webkit-scrollbar {
+          display: none !important;
+        }
+        html, body {
+          -ms-overflow-style: none !important; /* IE/Edge */
+          scrollbar-width: none !important;    /* Firefox */
+        }
+      `}} />
+
       {/* ── AMBIENT BACKGROUND ── */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
         <div

@@ -135,7 +135,15 @@ export function UnifiedDashboard({
         {hasBrandKit && (
           <TabsContent value="brand_kit" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 p-8 rounded-2xl">
-              <BrandKitViewer brandKit={brandKitData} apkIntelligence={apkIntelligence} appIconUrl={appData.iconUrl} />
+              <BrandKitViewer 
+                brandKit={brandKitData} 
+                apkIntelligence={apkIntelligence} 
+                appIconUrl={appData.iconUrl} 
+                appName={appData.appName}
+                tenantId={tenantId}
+                platform={platform}
+                mode={mode}
+              />
             </div>
           </TabsContent>
         )}

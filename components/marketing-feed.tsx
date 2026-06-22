@@ -103,6 +103,32 @@ function cleanPostText(raw: string, platform: string, entity: string): string {
   return raw.trim();
 }
 
+
+type SocialPostWithDisplayText = SocialPost & {
+  post_text?: string | null;
+};
+
+function getDisplayPostText(post: SocialPost): string {
+  const postWithDisplayText = post as SocialPostWithDisplayText;
+  const cleanStoredPostText = postWithDisplayText.post_text?.trim();
+
+  if (cleanStoredPostText) return cleanStoredPostText;
+
+  return cleanPostText(post.raw_text ?? "", post.platform ?? "", post.entity ?? "");
+}
+
+function getCommentText(comment: unknown): string {
+  if (typeof comment === "string") return comment;
+
+  if (comment && typeof comment === "object") {
+    const value = comment as { author?: string; text?: string };
+    if (value.author && value.text) return `${value.author}: ${value.text}`;
+    if (value.text) return value.text;
+  }
+
+  return "";
+}
+
 interface MarketingFeedProps {
   posts: SocialPost[];
   companyId: string;
@@ -224,7 +250,7 @@ function PostDetailModal({
   onClose: () => void;
 }) {
   const config = getPlatformConfig(post.platform ?? "");
-  const text = cleanPostText(post.raw_text ?? "", post.platform ?? "", post.entity ?? "");
+  const text = getDisplayPostText(post);
   const displayName = post.entity || post.platform || "Unknown";
   const meta = post.meta ?? {};
 
@@ -284,14 +310,19 @@ function PostDetailModal({
                   <MessageSquare className="w-3.5 h-3.5 text-[#0066FF]" /> Captured replies · {post.comments.length}
                 </h4>
                 <div className="space-y-3">
-                  {post.comments.map((c, i) => (
-                    <div
-                      key={i}
-                      className="bg-zinc-50/50 dark:bg-white/5 border border-zinc-100 dark:border-white/10 rounded-xl px-4 py-3"
-                    >
-                      <p className="text-zinc-700 dark:text-zinc-300 text-[12.5px] leading-relaxed">{c}</p>
-                    </div>
-                  ))}
+                  {post.comments.map((c, i) => {
+                    const commentText = getCommentText(c);
+                    if (!commentText) return null;
+
+                    return (
+                      <div
+                        key={i}
+                        className="bg-zinc-50/50 dark:bg-white/5 border border-zinc-100 dark:border-white/10 rounded-xl px-4 py-3"
+                      >
+                        <p className="text-zinc-700 dark:text-zinc-300 text-[12.5px] leading-relaxed">{commentText}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -369,7 +400,7 @@ function PostDetailModal({
 function PostCard({ post, imagePath, timeAgo }: { post: SocialPost; imagePath: string | null; timeAgo: string }) {
   const [open, setOpen] = useState(false);
   const config = getPlatformConfig(post.platform ?? "");
-  const text = cleanPostText(post.raw_text ?? "", post.platform ?? "", post.entity ?? "");
+  const text = getDisplayPostText(post);
   const displayName = post.entity || post.platform || "Unknown";
   const meta = post.meta ?? {};
   const isX = config.key === "twitter";

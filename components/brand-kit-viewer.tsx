@@ -178,7 +178,11 @@ export interface BrandKitViewerProps {
   apkIntelligence?: ApkIntelligence;
   framework?: string;
   extractionMethods?: string;
-  appIconUrl?: string; // Newly added to override APK icon
+  appIconUrl?: string;
+  appName?: string;
+  tenantId?: string;
+  platform?: string;
+  mode?: string;
 }
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
@@ -467,16 +471,137 @@ function AppIcon({ url, appName, dominantColors }: { url?: string; appName?: str
 
 // ─── FONT DOWNLOAD BUTTON ─────────────────────────────────────────────────────
 
-function FontDownloadBtn({ font }: { font: ApkFontEntry }) {
-  if (!font.font_url) return null;
+function FontDownloadBtn({ 
+  font, appName, tenantId
+}: { 
+  font: ApkFontEntry; appName?: string; tenantId?: string; 
+}) {
+  const [status, setStatus] = useState<"idle" | "loading" | "error" | "success">("idle");
+
+  if (!font.filename && !font.font_url) return null;
+
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (status === "loading") return;
+    setStatus("loading");
+    
+    // Silent local variables configuration
+    const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const originalFileName = font.filename || "";
+    const cleanAppName = appName?.toLowerCase() || "";
+    const fileNameVariants: string[] = [];
+    
+    if (originalFileName) {
+      const baseName = originalFileName.split('/').pop() || "";
+      fileNameVariants.push(baseName); // Standard split
+      fileNameVariants.push(baseName.toLowerCase()); // Lowercase fallback
+      fileNameVariants.push(baseName.replace(/\s+/g, '_')); // Replace spaces with underscores
+      fileNameVariants.push(baseName.toLowerCase().replace(/\s+/g, '_')); // Lowercase with underscores
+    }
+
+    const appNameVariants: string[] = [];
+    if (appName) {
+      appNameVariants.push(appName); // Capitalized
+      appNameVariants.push(appName.toLowerCase()); // Lowercase
+    }
+
+    const urlsToTry: string[] = [];
+
+    // 1. Explicit backend URL
+    if (font.font_url) {
+      urlsToTry.push(font.font_url);
+      if (!font.font_url.startsWith('http') && baseUrl && tenantId) {
+        for (const appVariant of appNameVariants) {
+          urlsToTry.push(`${baseUrl}/storage/v1/object/public/reviews/${tenantId}/${appVariant}/${font.font_url}`);
+        }
+      }
+    }
+
+    // 2. Fallbacks with both casing structures
+    if (baseUrl && tenantId && appNameVariants.length > 0) {
+      for (const appVariant of appNameVariants) {
+        const baseApp = `${baseUrl}/storage/v1/object/public/reviews/${tenantId}/${appVariant}`;
+        for (const fileVariant of fileNameVariants) {
+          const encoded = encodeURIComponent(fileVariant);
+          urlsToTry.push(`${baseApp}/mobile/browsing/extracted_fonts/${encoded}`);
+          urlsToTry.push(`${baseApp}/browsing/extracted_fonts/${encoded}`);
+          urlsToTry.push(`${baseApp}/mobile/onboarding/extracted_fonts/${encoded}`);
+          urlsToTry.push(`${baseApp}/onboarding/extracted_fonts/${encoded}`);
+          urlsToTry.push(`${baseApp}/extracted_fonts/${encoded}`);
+        }
+      }
+    }
+
+    const uniqueUrls = Array.from(new Set(urlsToTry));
+    let success = false;
+    let corsBlockedUrl = "";
+
+    for (const targetUrl of uniqueUrls) {
+      if (!targetUrl) continue;
+      try {
+        const res = await fetch(targetUrl);
+        if (res.ok) {
+          const blob = await res.blob();
+          const blobUrl = window.URL.createObjectURL(blob);
+          
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          link.download = originalFileName.split('/').pop() || 'font.ttf';
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          
+          setTimeout(() => {
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(blobUrl);
+          }, 100);
+          
+          success = true;
+          break;
+        }
+      } catch (err) {
+        // Quiet capture (typically CORS blocked fetches)
+        if (err instanceof TypeError) {
+          if (!corsBlockedUrl) corsBlockedUrl = targetUrl;
+        }
+      }
+    }
+
+    // Direct anchor configuration for strict CORS policies
+    if (!success && corsBlockedUrl) {
+      try {
+        const link = document.createElement("a");
+        link.href = corsBlockedUrl;
+        link.download = originalFileName.split('/').pop() || 'font.ttf';
+        link.target = "_top";
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        success = true;
+      } catch (fallbackError) {
+        // Silent fallthrough
+      }
+    }
+
+    // Graceful visual feedback update (strictly avoids console.error/alert)
+    if (success) {
+      setStatus("success");
+      setTimeout(() => setStatus("idle"), 2000);
+    } else {
+      setStatus("error");
+      setTimeout(() => setStatus("idle"), 2000);
+    }
+  };
 
   return (
-    <a
-      href={font.font_url}
-      download={font.filename}
-      onClick={e => e.stopPropagation()}
+    <button
+      onClick={handleDownload}
+      disabled={status === "loading" || status === "success" || status === "error"}
       title={`Download ${font.filename}`}
-      className="bg-white/50 dark:bg-white/10 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 hover:text-emerald-700 dark:hover:text-emerald-300 hover:border-emerald-300 dark:hover:border-emerald-700 border border-white/60 dark:border-white/20 text-zinc-800 dark:text-zinc-200"
+      className="bg-white/50 dark:bg-white/10 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 hover:text-emerald-700 dark:hover:text-emerald-300 hover:border-emerald-300 dark:hover:border-emerald-700 border border-white/60 dark:border-white/20 text-zinc-800 dark:text-zinc-200 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed transition-all"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -491,14 +616,17 @@ function FontDownloadBtn({ font }: { font: ApkFontEntry }) {
         transition: "background 0.2s, color 0.2s",
       }}
     >
-      ↓ .{font.format || "ttf"}
-    </a>
+      {status === "loading" && <span className="animate-pulse">⏳ Fetching</span>}
+      {status === "success" && <span className="text-emerald-600 dark:text-emerald-400 font-bold">✓ Saved</span>}
+      {status === "error" && <span className="text-rose-500 dark:text-rose-400 font-medium">Not Found</span>}
+      {status === "idle" && `↓ .${font.format || font.filename.split('.').pop() || "ttf"}`}
+    </button>
   );
 }
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
-export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUrl }: BrandKitViewerProps) {
+export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUrl, appName, tenantId, platform, mode }: BrandKitViewerProps) {
   const [paletteExpanded,  setPaletteExpanded]  = useState(false);
   const [tokenMapExpanded, setTokenMapExpanded] = useState(false);
 
@@ -542,7 +670,7 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
     ? ({ react_native: "React Native", flutter: "Flutter", unity: "Unity", cordova: "Cordova", xamarin: "Xamarin", native_android: "Native Android" } as Record<string, string>)[apkIntelligence.framework] ?? apkIntelligence.framework
     : framework;
 
-  const appName  = apkMeta.app_label || apkMeta.package?.split(".").pop() || "";
+  const currentAppName  = appName || apkMeta.app_label || apkMeta.package?.split(".").pop() || "";
   
   // Prioritize the high-res appIconUrl over the APK extracted icon
   const iconUrl  = appIconUrl || apkIcons?.icon_url;
@@ -565,7 +693,7 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
         <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 20 }}>
 
           {(iconUrl || iconColors.length >= 4) && (
-            <AppIcon url={iconUrl} appName={appName} dominantColors={iconColors} />
+            <AppIcon url={iconUrl} appName={currentAppName} dominantColors={iconColors} />
           )}
 
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -833,7 +961,7 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
                         Google Font
                       </span>
                     )}
-                    <FontDownloadBtn font={f} />
+                    <FontDownloadBtn font={f} appName={currentAppName} tenantId={tenantId} />
                   </div>
                 </div>
               ))}
