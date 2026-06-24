@@ -1,8 +1,7 @@
 // components/unified-dashboard.tsx
-// components/unified-dashboard.tsx
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SessionViewer } from "@/components/session-viewer";
 import { ExecutiveReport } from "@/components/executive-report";
@@ -10,6 +9,13 @@ import { FlowsViewer } from "@/components/flows-viewer";
 import { BrandKitViewer } from "@/components/brand-kit-viewer";
 import { AppStoreViewer } from "@/components/app-store-viewer";
 import { Smartphone, Globe } from "lucide-react";
+
+type Platform = "mobile" | "web";
+type Mode = "browsing" | "onboarding";
+
+function makeSessionKey(platform: Platform, mode: Mode) {
+  return `${platform}:${mode}`;
+}
 
 export function UnifiedDashboard({
   appData,
@@ -23,14 +29,21 @@ export function UnifiedDashboard({
   const hasMobile = !!appData.mobile;
   const hasWeb = !!appData.web;
 
-  const defaultPlatform: "mobile" | "web" = hasMobile ? "mobile" : "web";
+  const defaultPlatform: Platform = hasMobile ? "mobile" : "web";
 
-  const [platform, setPlatform] = useState<"mobile" | "web">(defaultPlatform);
-  const [mode, setMode] = useState<"browsing" | "onboarding">(
+  const [platform, setPlatform] = useState<Platform>(defaultPlatform);
+  const [mode, setMode] = useState<Mode>(
     appData[defaultPlatform]?.browsing ? "browsing" : "onboarding"
   );
 
   const [activeTab, setActiveTab] = useState("overview");
+
+  const [sessionCache, setSessionCache] = useState<Record<string, any>>({});
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+
+  const [flowsLoading, setFlowsLoading] = useState(false);
+  const [flowsError, setFlowsError] = useState<string | null>(null);
 
   const [appStoreData, setAppStoreData] = useState<any>(appData.appStore ?? null);
   const [appStoreLoading, setAppStoreLoading] = useState(false);
@@ -42,13 +55,138 @@ export function UnifiedDashboard({
   const [apkLoading, setApkLoading] = useState(false);
   const [apkError, setApkError] = useState<string | null>(null);
 
+  const viewerRequestStartedRef = useRef<Record<string, boolean>>({});
+  const flowsRequestStartedRef = useRef<Record<string, boolean>>({});
   const appStoreRequestStartedRef = useRef(false);
   const apkRequestStartedRef = useRef(false);
 
   const activePlatformData = appData[platform];
-  const activeData = activePlatformData ? activePlatformData[mode] : null;
+  const initialActiveData = activePlatformData ? activePlatformData[mode] : null;
+  const activeSessionKey = makeSessionKey(platform, mode);
+  const loadedSessionData = sessionCache[activeSessionKey] || null;
+
+  const activeData = useMemo(() => {
+    if (!initialActiveData && !loadedSessionData) return null;
+
+    return {
+      ...(initialActiveData || {}),
+      ...(loadedSessionData || {}),
+      sessionIntel:
+        loadedSessionData?.sessionIntel ||
+        initialActiveData?.sessionIntel ||
+        null,
+      summary:
+        loadedSessionData?.summary ||
+        initialActiveData?.summary ||
+        null,
+      steps:
+        loadedSessionData?.steps ||
+        initialActiveData?.steps ||
+        [],
+      flowsData:
+        loadedSessionData?.flowsData ||
+        initialActiveData?.flowsData ||
+        null,
+    };
+  }, [initialActiveData, loadedSessionData]);
 
   const encodedAppName = encodeURIComponent(appData.appName);
+
+  useEffect(() => {
+    if (activeTab !== "viewer") return;
+    if (sessionCache[activeSessionKey]?.steps?.length > 0) return;
+    if (viewerRequestStartedRef.current[activeSessionKey]) return;
+
+    viewerRequestStartedRef.current[activeSessionKey] = true;
+    setViewerLoading(true);
+    setViewerError(null);
+
+    async function loadViewerData() {
+      try {
+        const params = new URLSearchParams({
+          platform,
+          mode,
+        });
+
+        const res = await fetch(`/api/apps/${encodedAppName}/viewer?${params.toString()}`, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+
+        const payload = await res.json();
+
+        if (!res.ok) {
+          throw new Error(payload?.error || "Failed to load viewer data");
+        }
+
+        setSessionCache(prev => ({
+          ...prev,
+          [activeSessionKey]: {
+            ...(prev[activeSessionKey] || {}),
+            ...(payload.data || {}),
+          },
+        }));
+      } catch (error) {
+        console.error("Failed to load viewer data:", error);
+        setViewerError(
+          error instanceof Error ? error.message : "Failed to load viewer data"
+        );
+        viewerRequestStartedRef.current[activeSessionKey] = false;
+      } finally {
+        setViewerLoading(false);
+      }
+    }
+
+    loadViewerData();
+  }, [activeTab, activeSessionKey, encodedAppName, mode, platform, sessionCache]);
+
+  useEffect(() => {
+    if (activeTab !== "mobbin") return;
+    if (sessionCache[activeSessionKey]?.flowsData) return;
+    if (flowsRequestStartedRef.current[activeSessionKey]) return;
+
+    flowsRequestStartedRef.current[activeSessionKey] = true;
+    setFlowsLoading(true);
+    setFlowsError(null);
+
+    async function loadFlowsData() {
+      try {
+        const params = new URLSearchParams({
+          platform,
+          mode,
+        });
+
+        const res = await fetch(`/api/apps/${encodedAppName}/flows?${params.toString()}`, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+
+        const payload = await res.json();
+
+        if (!res.ok) {
+          throw new Error(payload?.error || "Failed to load flows data");
+        }
+
+        setSessionCache(prev => ({
+          ...prev,
+          [activeSessionKey]: {
+            ...(prev[activeSessionKey] || {}),
+            ...(payload.data || {}),
+          },
+        }));
+      } catch (error) {
+        console.error("Failed to load flows data:", error);
+        setFlowsError(
+          error instanceof Error ? error.message : "Failed to load flows data"
+        );
+        flowsRequestStartedRef.current[activeSessionKey] = false;
+      } finally {
+        setFlowsLoading(false);
+      }
+    }
+
+    loadFlowsData();
+  }, [activeTab, activeSessionKey, encodedAppName, mode, platform, sessionCache]);
 
   useEffect(() => {
     if (activeTab !== "app_store") return;
@@ -78,8 +216,6 @@ export function UnifiedDashboard({
         setAppStoreError(
           error instanceof Error ? error.message : "Failed to load app store data"
         );
-
-        // Allow retry if the user leaves and comes back to the tab.
         appStoreRequestStartedRef.current = false;
       } finally {
         setAppStoreLoading(false);
@@ -117,8 +253,6 @@ export function UnifiedDashboard({
         setApkError(
           error instanceof Error ? error.message : "Failed to load APK intelligence"
         );
-
-        // Allow retry if the user leaves and comes back to the tab.
         apkRequestStartedRef.current = false;
       } finally {
         setApkLoading(false);
@@ -163,7 +297,6 @@ export function UnifiedDashboard({
   return (
     <div className="flex flex-col w-full">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col w-full">
-        {/* ── IDENTITY + NAV HEADER ── */}
         <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-6 relative border border-white/20 dark:border-white/10 backdrop-blur-md">
           <div className="flex-1 w-full relative">{header}</div>
 
@@ -181,7 +314,6 @@ export function UnifiedDashboard({
             </TabsList>
 
             <div className="absolute right-10 top-1/2 -translate-y-1/2 flex items-center gap-4">
-              {/* Platform Selector */}
               {hasMobile && hasWeb && (
                 <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-full p-1 border border-black/10 dark:border-white/10 shrink-0">
                   <button
@@ -218,7 +350,6 @@ export function UnifiedDashboard({
                 </div>
               )}
 
-              {/* Mode Selector */}
               {activePlatformData?.onboarding && activePlatformData?.browsing && (
                 <button
                   onClick={() => setMode(mode === "browsing" ? "onboarding" : "browsing")}
@@ -238,7 +369,7 @@ export function UnifiedDashboard({
             <ExecutiveReport
               key={`exec-${platform}-${mode}`}
               intel={activeData.sessionIntel}
-              steps={activeData.steps}
+              steps={activeData.steps || []}
               mode={mode}
             />
           </div>
@@ -246,19 +377,42 @@ export function UnifiedDashboard({
 
         <TabsContent value="viewer" className="flex flex-col h-[calc(100vh-320px)] min-h-[700px] m-0 outline-none data-[state=inactive]:hidden pb-2 pt-2">
           <div className="flex-1 relative z-50 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden rounded-2xl">
-            <SessionViewer key={`view-${platform}-${mode}`} data={activeData} />
+            {viewerLoading ? (
+              <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
+                Loading screen viewer...
+              </div>
+            ) : viewerError ? (
+              <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
+                Unable to load screen viewer.
+              </div>
+            ) : activeData.steps && activeData.steps.length > 0 ? (
+              <SessionViewer key={`view-${platform}-${mode}`} data={activeData} />
+            ) : (
+              <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
+                No screen viewer data available.
+              </div>
+            )}
           </div>
         </TabsContent>
 
         <TabsContent value="mobbin" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden pb-2 pt-2">
           <div className="flex-1 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 rounded-2xl shadow-none">
-            {activeData.flowsData ? (
+            {flowsLoading ? (
+              <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
+                Loading flows...
+              </div>
+            ) : flowsError ? (
+              <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
+                Unable to load flows.
+              </div>
+            ) : activeData.flowsData ? (
               <FlowsViewer
                 key={`flows-${platform}-${mode}`}
                 flowsData={activeData.flowsData}
                 appName={appData.appName}
                 tenantId={tenantId}
                 mode={mode}
+                platform={platform}
               />
             ) : (
               <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">

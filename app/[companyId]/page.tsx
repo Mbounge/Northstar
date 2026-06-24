@@ -15,19 +15,6 @@ import Link from "next/link";
 
 const unbounded = Unbounded({ subsets: ["latin"], weight: ["600"] });
 
-async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
-  const start = Date.now();
-
-  try {
-    const result = await fn();
-    console.log(`[CompanyPage timing] ${label}: ${Date.now() - start}ms`);
-    return result;
-  } catch (error) {
-    console.log(`[CompanyPage timing] ${label} failed after ${Date.now() - start}ms`);
-    throw error;
-  }
-}
-
 export default async function CompanyDashboardPage({
   params,
   searchParams,
@@ -35,8 +22,6 @@ export default async function CompanyDashboardPage({
   params: Promise<{ companyId: string }>;
   searchParams: Promise<{ snapshot?: string | string[] }>;
 }) {
-  const pageStart = Date.now();
-
   const { companyId } = await params;
   const resolvedSearchParams = await searchParams;
 
@@ -46,27 +31,17 @@ export default async function CompanyDashboardPage({
 
   const decodedCompanyId = decodeURIComponent(companyId).trim();
 
-  const supabase = await timed("create supabase client", async () => {
-    return await createClient();
-  });
-
-  const { data: { user } } = await timed("auth.getUser", async () => {
-    return await supabase.auth.getUser();
-  });
-
-  const { data: profile } = await timed("fetch user profile", async () => {
-    return await supabase
-      .from("user_profiles")
-      .select("customer_id")
-      .eq("id", user?.id)
-      .single();
-  });
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: profile } = await supabase
+    .from("user_profiles")
+    .select("customer_id")
+    .eq("id", user?.id)
+    .single();
     
   const tenantId = profile?.customer_id;
 
   if (!tenantId) {
-    console.log(`[CompanyPage timing] total before no-tenant return: ${Date.now() - pageStart}ms`);
-
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-zinc-500 font-mono text-[13px]">Workspace access required. Please contact your administrator.</p>
@@ -74,9 +49,7 @@ export default async function CompanyDashboardPage({
     );
   }
 
-  const trackedCompanies = await timed("getTrackedCompanies", () =>
-    getTrackedCompanies(tenantId)
-  );
+  const trackedCompanies = await getTrackedCompanies(tenantId);
 
   let matchedCompany = trackedCompanies.find((c) => c.id === decodedCompanyId);
   if (!matchedCompany) matchedCompany = trackedCompanies.find((c) => c.id.toLowerCase() === decodedCompanyId.toLowerCase());
@@ -84,20 +57,13 @@ export default async function CompanyDashboardPage({
   
   const dataBucketId = matchedCompany ? matchedCompany.id : decodedCompanyId;
 
-  const snapshots = await timed("getAvailableSnapshots", () =>
-    getAvailableSnapshots(tenantId, dataBucketId)
-  );
-
+  const snapshots = await getAvailableSnapshots(tenantId, dataBucketId);
   const latestSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : "";
   const activeSnapshotId = snapshotParam || latestSnapshot;
 
   const [dashboardData, productData] = await Promise.all([
-    timed("getDashboardData", () =>
-      getDashboardData(tenantId, dataBucketId, activeSnapshotId)
-    ),
-    timed("getAppDetails", () =>
-      getAppDetails(decodedCompanyId, tenantId)
-    ),
+    getDashboardData(tenantId, dataBucketId, activeSnapshotId),
+    getAppDetails(decodedCompanyId, tenantId),
   ]);
 
   const appName = productData?.appName || decodedCompanyId;
@@ -105,14 +71,14 @@ export default async function CompanyDashboardPage({
   
   let marketName = "General Utilities";
 
-  // 1. High Priority: Synthesized category from Teardown (Browsing) or Onboarding Session Intelligence
-  const bSynthesized = productData?.web?.browsing?.sessionIntel?.competitive_profile?.app_category || 
-                       productData?.mobile?.browsing?.sessionIntel?.competitive_profile?.app_category;
+  const bSynthesized =
+    productData?.web?.browsing?.sessionIntel?.competitive_profile?.app_category ||
+    productData?.mobile?.browsing?.sessionIntel?.competitive_profile?.app_category;
                        
-  const oSynthesized = productData?.web?.onboarding?.sessionIntel?.competitive_profile?.app_category || 
-                       productData?.mobile?.onboarding?.sessionIntel?.competitive_profile?.app_category;
+  const oSynthesized =
+    productData?.web?.onboarding?.sessionIntel?.competitive_profile?.app_category ||
+    productData?.mobile?.onboarding?.sessionIntel?.competitive_profile?.app_category;
   
-  // 2. Middle Priority: Ground-truth memory classifications (agent_memory.json)
   let preciseAppType = null;
 
   const fetchMemory = async (type: string) => {
@@ -132,14 +98,10 @@ export default async function CompanyDashboardPage({
     return null;
   };
 
-  preciseAppType =
-    await timed("fetchMemory browsing", () => fetchMemory("browsing")) ||
-    await timed("fetchMemory onboarding", () => fetchMemory("onboarding"));
+  preciseAppType = await fetchMemory("browsing") || await fetchMemory("onboarding");
 
-  // 3. Low Priority: Fallback Google Play Store Category
   const playStoreCategory = productData?.apkIntelligence?.app_metadata?.category;
 
-  // Apply the prioritization hierarchy
   if (bSynthesized && bSynthesized !== "Unknown" && bSynthesized !== "unknown") {
     marketName = bSynthesized;
   } else if (oSynthesized && oSynthesized !== "Unknown" && oSynthesized !== "unknown") {
@@ -150,22 +112,26 @@ export default async function CompanyDashboardPage({
     marketName = playStoreCategory;
   }
   
-  marketName = marketName.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+  marketName = marketName
+    .split("_")
+    .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
 
   const isLongMarketName = marketName.length > 20;
 
   let marketingPosts: any[] = [];
+
   if (dashboardData?.marketing) {
-    if (Array.isArray(dashboardData.marketing)) marketingPosts = dashboardData.marketing;
-    else if (Array.isArray((dashboardData.marketing as any).posts))
+    if (Array.isArray(dashboardData.marketing)) {
+      marketingPosts = dashboardData.marketing;
+    } else if (Array.isArray((dashboardData.marketing as any).posts)) {
       marketingPosts = (dashboardData.marketing as any).posts;
+    }
   }
 
   const businessJobs = Array.isArray(dashboardData?.business?.jobs) ? dashboardData.business.jobs : [];
   const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
   const businessScreenshots = Array.isArray(dashboardData?.businessScreenshots) ? dashboardData.businessScreenshots : [];
-
-  console.log(`[CompanyPage timing] total before render return: ${Date.now() - pageStart}ms`);
 
   const IdentityHeader = () => (
     <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
@@ -185,7 +151,6 @@ export default async function CompanyDashboardPage({
             )}
           </div>
 
-          {/* Unified Height Wrapper featuring vertical centering and line-clamping */}
           <div className="flex flex-col justify-center min-h-[78px] font-sans gap-[4px] py-1 max-w-[320px] shrink-0 min-w-0 pr-4">
             <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0 truncate" title={appName}>
               {appName}
@@ -203,7 +168,6 @@ export default async function CompanyDashboardPage({
           </div>
         </div>
         
-        {/* Statistics container - completely static, position will never move */}
         <div className="flex items-start gap-10 ml-16 shrink-0">
           <div className="flex flex-col gap-[6px] justify-center items-start">
             <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
@@ -219,7 +183,6 @@ export default async function CompanyDashboardPage({
               Market
             </span>
 
-            {/* Generous max-width and line-clamp-2 to prevent vertical layout shifting */}
             <span className="font-sans text-[16px] font-[500] text-[#000000] dark:text-white leading-[20px] text-left line-clamp-2" title={marketName}>
               {marketName}
             </span>

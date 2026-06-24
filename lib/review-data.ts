@@ -52,7 +52,7 @@ function formatCategory(cat: string | undefined): string {
   return cat.split('_').join(' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
 }
 
-// ─── DATA FETCHING HELPERS (ISOLATED BY TENANT ID) ─────────────────────────
+// ─── DATA FETCHING HELPERS ───────────────────────────────────────────────────
 
 async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onboarding', tenantId: string, platformPrefix = "") {
   const pathPart = platformPrefix ? `${platformPrefix}/` : "";
@@ -83,12 +83,10 @@ export async function fetchApkIntelligence(appName: string, tenantId: string) {
 }
 
 export async function fetchAppStoreData(appName: string, tenantId: string) {
-  // 1. Try Mobile App Store First
   let publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/app_store`;
   let res = await fetch(`${publicUrl}/app_store_manifest.json`, { next: { revalidate: 300 } });
   let isWebMeta = false;
 
-  // 2. Fallback to Web Site Meta if App Store is missing
   if (!res.ok) {
     publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/web/site_meta`;
     res = await fetch(`${publicUrl}/site_meta_manifest.json`, { next: { revalidate: 300 } });
@@ -100,14 +98,13 @@ export async function fetchAppStoreData(appName: string, tenantId: string) {
   if (res.ok) {
     data = await res.json();
     
-    // Mimic the App Store data structure so the frontend UI doesn't crash
     if (isWebMeta) {
       data.raw_data = {
         app_info: {
           Category: data.category || "General Utilities",
           "Age Rating": "Web",
-          Size: "SaaS"
-        }
+          Size: "SaaS",
+        },
       };
       data.hero = { title: data.app_name || appName, subtitle: data.url };
     }
@@ -117,7 +114,7 @@ export async function fetchAppStoreData(appName: string, tenantId: string) {
   
   const [screenshotsList, iconsList] = await Promise.all([
     supabase.storage.from('reviews').list(`${tenantId}/${appName}/${folderSuffix}/screenshots`, { limit: 100 }),
-    supabase.storage.from('reviews').list(`${tenantId}/${appName}/${folderSuffix}/icons`, { limit: 100 })
+    supabase.storage.from('reviews').list(`${tenantId}/${appName}/${folderSuffix}/icons`, { limit: 100 }),
   ]);
 
   const actualScreenshots = (screenshotsList.data || []).filter(f => f.name.match(/\.(jpg|jpeg|png|webp|gif|ico|svg)$/i));
@@ -125,7 +122,6 @@ export async function fetchAppStoreData(appName: string, tenantId: string) {
 
   data.actual_screenshots = actualScreenshots.map(f => `${publicUrl}/screenshots/${f.name}`);
 
-  // Find best icon
   const mainIconFile = actualIcons.find(f => f.name.toLowerCase().includes('app_icon') || f.name.toLowerCase().includes('main'));
 
   if (mainIconFile) {
@@ -214,12 +210,11 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
   return null;
 }
 
-// ─── OPTIMIZED DATABASE-DRIVEN REVIEW APPS FETCH ─────────────────────────
+// ─── REVIEW APPS FETCH ───────────────────────────────────────────────────────
 
 export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
   if (!tenantId) return [];
 
-  // ONE single database query replacing hundreds of slow Storage directory list calls
   const { data: apps, error } = await supabase
     .from('target_apps')
     .select(`
@@ -243,7 +238,6 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
     return [];
   }
 
-  // Map the raw Postgres relational data back to your UI's expected AppSummary format
   return apps.map((app: any) => {
     let hasOnboarding = false;
     let hasBrowsing = false;
@@ -251,7 +245,6 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
     let browsingGrade = "N/A";
     let totalScreens = 0;
 
-    // Aggregate stats from the child sessions
     if (app.app_sessions && Array.isArray(app.app_sessions)) {
       for (const session of app.app_sessions) {
         totalScreens += session.total_screens || 0;
@@ -286,7 +279,7 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
       hasBrowsing,
       onboardingGrade,
       browsingGrade,
-      totalScreens
+      totalScreens,
     };
   });
 }
@@ -324,10 +317,6 @@ function normalizeStepShell(rawStep: any, index: number, screenshotBaseUrl?: str
       rawStep?.metadata_file ||
       rawStep?.json_file ||
       null,
-
-    // Important:
-    // Do not hydrate every screen's intelligence during initial page render.
-    // SessionViewer already lazy-loads this on demand.
     enrichedData: null,
   };
 }
@@ -376,7 +365,19 @@ function hydrateFlowsCatalog(flowsData: any, steps: any[]) {
   return nextFlowsData;
 }
 
-// ─── DATABASE-FIRST DETAIL FETCH ─────────────────────────────────────────────
+async function getMobilePlatformPrefix(appName: string, tenantId: string) {
+  const { data: subFolders } = await supabase.storage
+    .from('reviews')
+    .list(`${tenantId}/${appName}`, { limit: 20 });
+
+  const folders = (subFolders || []).map(f => f.name.toLowerCase());
+  return folders.includes('mobile') ? 'mobile' : '';
+}
+
+// ─── INITIAL DATABASE-FIRST DETAIL FETCH ─────────────────────────────────────
+// PR 5:
+// Initial company render no longer selects steps_data or flows_data.
+// Screen viewer and flows load through API routes when their tabs open.
 
 export async function getAppDetails(appName: string, tenantId: string): Promise<AppDetailsResult | null> {
   if (!tenantId) return null;
@@ -384,7 +385,7 @@ export async function getAppDetails(appName: string, tenantId: string): Promise<
   const [sessionsResult, appMetaResult] = await Promise.all([
     supabase
       .from('app_sessions')
-      .select('platform, session_type, ux_grade, total_screens, session_intel, flows_data, steps_data')
+      .select('platform, session_type, ux_grade, total_screens, session_intel')
       .eq('tenant_id', tenantId)
       .ilike('app_name', appName),
 
@@ -393,7 +394,7 @@ export async function getAppDetails(appName: string, tenantId: string): Promise<
       .select('app_name, category, icon_url')
       .eq('tenant_id', tenantId)
       .ilike('app_name', appName)
-      .maybeSingle()
+      .maybeSingle(),
   ]);
 
   const dbSessions = sessionsResult.data || [];
@@ -408,74 +409,29 @@ export async function getAppDetails(appName: string, tenantId: string): Promise<
 
   const appMeta = appMetaResult.data;
 
+  const createInitialSession = (sess: any): SessionData => ({
+    summary: {
+      total_screenshots: sess.total_screens || 0,
+      ux_grade: sess.ux_grade || "N/A",
+    },
+    sessionIntel: sess.session_intel || null,
+    flowsData: null,
+    steps: [],
+  });
+
   const getSessByPlatformAndType = (
     plat: 'mobile' | 'web',
     type: 'onboarding' | 'browsing'
   ) => {
-    return (dbSessions || []).find(
+    const sess = (dbSessions || []).find(
       (s: any) => s.platform === plat && s.session_type === type
-    ) || null;
+    );
+
+    return sess ? createInitialSession(sess) : null;
   };
 
-  const hasUsableSteps = (sess: any) => {
-    return !!sess && Array.isArray(sess.steps_data) && sess.steps_data.length > 0;
-  };
-
-  const mobileOnboardingDb = getSessByPlatformAndType('mobile', 'onboarding');
-  const mobileBrowsingDb = getSessByPlatformAndType('mobile', 'browsing');
-
-  let hasMobileFolder = false;
-  const needsMobileStorageFallback =
-    !hasUsableSteps(mobileOnboardingDb) || !hasUsableSteps(mobileBrowsingDb);
-
-  if (needsMobileStorageFallback) {
-    const { data: subFolders } = await supabase.storage
-      .from('reviews')
-      .list(`${tenantId}/${appName}`, { limit: 20 });
-
-    const folders = (subFolders || []).map(f => f.name.toLowerCase());
-    hasMobileFolder = folders.includes('mobile');
-  }
-
-  const parseDBSession = async (
-    sess: any,
-    platformPrefix: string,
-    sessionType: string
-  ): Promise<SessionData | null> => {
-    if (hasUsableSteps(sess)) {
-      const steps = sess.steps_data.map((step: any, index: number) =>
-        normalizeStepShell(step, index)
-      );
-
-      const flowsData = hydrateFlowsCatalog(sess.flows_data || null, steps);
-
-      return {
-        summary: {
-          total_screenshots: sess.total_screens || steps.length,
-        },
-        sessionIntel: sess.session_intel || null,
-        flowsData,
-        steps,
-      };
-    }
-
-    // Storage fallback now returns only a lightweight step shell.
-    // It no longer fetches every enriched JSON file upfront.
-    return await fetchSessionData(appName, sessionType, tenantId, platformPrefix);
-  };
-
-  const [mobileOnboarding, mobileBrowsing] = await Promise.all([
-    parseDBSession(
-      mobileOnboardingDb,
-      hasMobileFolder ? 'mobile' : '',
-      'onboarding'
-    ),
-    parseDBSession(
-      mobileBrowsingDb,
-      hasMobileFolder ? 'mobile' : '',
-      'browsing'
-    ),
-  ]);
+  const mobileOnboarding = getSessByPlatformAndType('mobile', 'onboarding');
+  const mobileBrowsing = getSessByPlatformAndType('mobile', 'browsing');
 
   let mobile: PlatformViews | null = null;
 
@@ -486,13 +442,8 @@ export async function getAppDetails(appName: string, tenantId: string): Promise<
     };
   }
 
-  const webOnboardingDb = getSessByPlatformAndType('web', 'onboarding');
-  const webBrowsingDb = getSessByPlatformAndType('web', 'browsing');
-
-  const [webOnboarding, webBrowsing] = await Promise.all([
-    parseDBSession(webOnboardingDb, 'web', 'onboarding'),
-    parseDBSession(webBrowsingDb, 'web', 'browsing'),
-  ]);
+  const webOnboarding = getSessByPlatformAndType('web', 'onboarding');
+  const webBrowsing = getSessByPlatformAndType('web', 'browsing');
 
   let web: PlatformViews | null = null;
 
@@ -503,22 +454,81 @@ export async function getAppDetails(appName: string, tenantId: string): Promise<
     };
   }
 
-  // PR 4:
-  // Do NOT fetch app store or APK intelligence here.
-  // Those are now loaded on-demand by the App Store and Brand Kit tabs.
   return {
     appName: appMeta?.app_name || appName,
     category: appMeta?.category || null,
     iconUrl: appMeta?.icon_url || null,
     appStore: null,
     apkIntelligence: null,
-
-    // These preserve tab availability while deferring heavy data.
     hasAppStore: true,
     hasApkIntelligence: true,
-
     mobile,
     web,
+  };
+}
+
+// ─── ON-DEMAND VIEWER/FLOWS DATA ─────────────────────────────────────────────
+
+export async function getAppSessionData(
+  appName: string,
+  tenantId: string,
+  platform: 'mobile' | 'web',
+  sessionType: 'onboarding' | 'browsing'
+): Promise<SessionData | null> {
+  if (!tenantId || !appName) return null;
+
+  const { data: sess, error } = await supabase
+    .from('app_sessions')
+    .select('platform, session_type, ux_grade, total_screens, session_intel, flows_data, steps_data')
+    .eq('tenant_id', tenantId)
+    .ilike('app_name', appName)
+    .eq('platform', platform)
+    .eq('session_type', sessionType)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Error fetching app session data:", error);
+  }
+
+  if (sess && Array.isArray(sess.steps_data) && sess.steps_data.length > 0) {
+    const steps = sess.steps_data.map((step: any, index: number) =>
+      normalizeStepShell(step, index)
+    );
+
+    const flowsData = hydrateFlowsCatalog(sess.flows_data || null, steps);
+
+    return {
+      summary: {
+        total_screenshots: sess.total_screens || steps.length,
+        ux_grade: sess.ux_grade || "N/A",
+      },
+      sessionIntel: sess.session_intel || null,
+      flowsData,
+      steps,
+    };
+  }
+
+  const platformPrefix =
+    platform === 'web'
+      ? 'web'
+      : await getMobilePlatformPrefix(appName, tenantId);
+
+  return await fetchSessionData(appName, sessionType, tenantId, platformPrefix);
+}
+
+export async function getAppFlowsData(
+  appName: string,
+  tenantId: string,
+  platform: 'mobile' | 'web',
+  sessionType: 'onboarding' | 'browsing'
+) {
+  const sessionData = await getAppSessionData(appName, tenantId, platform, sessionType);
+
+  return {
+    flowsData: sessionData?.flowsData || null,
+    steps: sessionData?.steps || [],
+    sessionIntel: sessionData?.sessionIntel || null,
+    summary: sessionData?.summary || null,
   };
 }
 
@@ -535,7 +545,7 @@ async function fetchSessionData(
   const [manifestRes, intelRes, flowsRes] = await Promise.all([
     fetch(`${publicUrl}/enriched_manifest.json`, { next: { revalidate: 300 } }),
     fetch(`${publicUrl}/session_intelligence.json`, { next: { revalidate: 300 } }),
-    fetch(`${publicUrl}/flows.json`, { next: { revalidate: 300 } })
+    fetch(`${publicUrl}/flows.json`, { next: { revalidate: 300 } }),
   ]);
   
   if (!manifestRes.ok) return null;
