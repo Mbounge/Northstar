@@ -1,27 +1,47 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UnifiedDashboard } from "@/components/unified-dashboard";
 import { BusinessViewer } from "@/components/business-viewer";
 import { MarketingFeed } from "@/components/marketing-feed";
 import { SnapshotSelector } from "@/components/snapshot-selector";
 import { ThemeToggle } from "@/components/theme-toggle";
+import type { BusinessJob, RosterPerson, SocialPost } from "@/lib/data";
 
 type TopTab = "product" | "marketing" | "business";
 
 type MarketingPayload = {
-  posts: any[];
+  posts: SocialPost[];
 };
 
 type BusinessPayload = {
-  jobs: any[];
-  roster: any[];
-  businessScreenshots: any[];
+  jobs: BusinessJob[];
+  roster: RosterPerson[];
+  businessScreenshots: string[];
 };
 
-function getMarketingPosts(payload: MarketingPayload | null) {
-  return Array.isArray(payload?.posts) ? payload.posts : [];
+function snapshotKey(snapshotId: string) {
+  return snapshotId || "no-snapshot";
+}
+
+function getNearbySnapshots(snapshots: string[], activeSnapshotId: string) {
+  const activeIndex = snapshots.indexOf(activeSnapshotId);
+
+  if (activeIndex < 0) {
+    return [];
+  }
+
+  return [
+    snapshots[activeIndex - 1],
+    snapshots[activeIndex + 1],
+  ].filter(Boolean);
 }
 
 export function CompanyDashboardTabs({
@@ -46,43 +66,61 @@ export function CompanyDashboardTabs({
   const [marketingBySnapshot, setMarketingBySnapshot] = useState<
     Record<string, MarketingPayload>
   >({});
-  const [marketingLoading, setMarketingLoading] = useState(false);
+  const [marketingLoadingSnapshot, setMarketingLoadingSnapshot] = useState<
+    string | null
+  >(null);
   const [marketingError, setMarketingError] = useState<string | null>(null);
 
   const [businessBySnapshot, setBusinessBySnapshot] = useState<
     Record<string, BusinessPayload>
   >({});
-  const [businessLoading, setBusinessLoading] = useState(false);
+  const [businessLoadingSnapshot, setBusinessLoadingSnapshot] = useState<
+    string | null
+  >(null);
   const [businessError, setBusinessError] = useState<string | null>(null);
 
-  const marketingPromisesRef = useRef<Record<string, Promise<MarketingPayload | null>>>(
-    {}
-  );
-  const businessPromisesRef = useRef<Record<string, Promise<BusinessPayload | null>>>(
-    {}
-  );
+  const marketingPromisesRef = useRef<
+    Record<string, Promise<MarketingPayload | null>>
+  >({});
+  const businessPromisesRef = useRef<
+    Record<string, Promise<BusinessPayload | null>>
+  >({});
 
+  const activeKey = snapshotKey(activeSnapshotId);
   const encodedBucketId = encodeURIComponent(dataBucketId);
-  const encodedSnapshotId = encodeURIComponent(activeSnapshotId || "");
-  const marketingData = marketingBySnapshot[activeSnapshotId] || null;
-  const businessData = businessBySnapshot[activeSnapshotId] || null;
 
-  const loadMarketing = useCallback(
-    async (visible = false) => {
-      const key = activeSnapshotId || "no-snapshot";
+  const marketingData = marketingBySnapshot[activeKey] || null;
+  const businessData = businessBySnapshot[activeKey] || null;
 
-      if (marketingBySnapshot[activeSnapshotId]) {
-        return marketingBySnapshot[activeSnapshotId];
+  const marketingLoading =
+    marketingLoadingSnapshot === activeKey && !marketingData;
+  const businessLoading =
+    businessLoadingSnapshot === activeKey && !businessData;
+
+  const nearbySnapshots = useMemo(
+    () => getNearbySnapshots(snapshots, activeSnapshotId),
+    [activeSnapshotId, snapshots]
+  );
+
+  const loadMarketingForSnapshot = useCallback(
+    async (targetSnapshotId: string, visible = false) => {
+      const key = snapshotKey(targetSnapshotId);
+
+      if (marketingBySnapshot[key]) {
+        return marketingBySnapshot[key];
       }
 
       if (visible) {
-        setMarketingLoading(true);
+        setMarketingLoadingSnapshot(key);
         setMarketingError(null);
       }
 
       if (!marketingPromisesRef.current[key]) {
+        const params = new URLSearchParams();
+        params.set("snapshot", targetSnapshotId || "");
+
         marketingPromisesRef.current[key] = fetch(
-          `/api/apps/${encodedBucketId}/marketing?snapshot=${encodedSnapshotId}`,
+          `/api/apps/${encodedBucketId}/marketing?${params.toString()}`,
           {
             method: "GET",
             credentials: "same-origin",
@@ -95,13 +133,15 @@ export function CompanyDashboardTabs({
               throw new Error(payload?.error || "Failed to load marketing data");
             }
 
-            const nextData = {
-              posts: Array.isArray(payload?.data?.posts) ? payload.data.posts : [],
+            const nextData: MarketingPayload = {
+              posts: Array.isArray(payload?.data?.posts)
+                ? payload.data.posts
+                : [],
             };
 
             setMarketingBySnapshot((prev) => ({
               ...prev,
-              [activeSnapshotId]: nextData,
+              [key]: nextData,
             }));
 
             return nextData;
@@ -125,34 +165,34 @@ export function CompanyDashboardTabs({
         return null;
       } finally {
         if (visible) {
-          setMarketingLoading(false);
+          setMarketingLoadingSnapshot((current) =>
+            current === key ? null : current
+          );
         }
       }
     },
-    [
-      activeSnapshotId,
-      encodedBucketId,
-      encodedSnapshotId,
-      marketingBySnapshot,
-    ]
+    [encodedBucketId, marketingBySnapshot]
   );
 
-  const loadBusiness = useCallback(
-    async (visible = false) => {
-      const key = activeSnapshotId || "no-snapshot";
+  const loadBusinessForSnapshot = useCallback(
+    async (targetSnapshotId: string, visible = false) => {
+      const key = snapshotKey(targetSnapshotId);
 
-      if (businessBySnapshot[activeSnapshotId]) {
-        return businessBySnapshot[activeSnapshotId];
+      if (businessBySnapshot[key]) {
+        return businessBySnapshot[key];
       }
 
       if (visible) {
-        setBusinessLoading(true);
+        setBusinessLoadingSnapshot(key);
         setBusinessError(null);
       }
 
       if (!businessPromisesRef.current[key]) {
+        const params = new URLSearchParams();
+        params.set("snapshot", targetSnapshotId || "");
+
         businessPromisesRef.current[key] = fetch(
-          `/api/apps/${encodedBucketId}/business?snapshot=${encodedSnapshotId}`,
+          `/api/apps/${encodedBucketId}/business?${params.toString()}`,
           {
             method: "GET",
             credentials: "same-origin",
@@ -165,17 +205,21 @@ export function CompanyDashboardTabs({
               throw new Error(payload?.error || "Failed to load business data");
             }
 
-            const nextData = {
+            const nextData: BusinessPayload = {
               jobs: Array.isArray(payload?.data?.jobs) ? payload.data.jobs : [],
-              roster: Array.isArray(payload?.data?.roster) ? payload.data.roster : [],
-              businessScreenshots: Array.isArray(payload?.data?.businessScreenshots)
+              roster: Array.isArray(payload?.data?.roster)
+                ? payload.data.roster
+                : [],
+              businessScreenshots: Array.isArray(
+                payload?.data?.businessScreenshots
+              )
                 ? payload.data.businessScreenshots
                 : [],
             };
 
             setBusinessBySnapshot((prev) => ({
               ...prev,
-              [activeSnapshotId]: nextData,
+              [key]: nextData,
             }));
 
             return nextData;
@@ -199,29 +243,26 @@ export function CompanyDashboardTabs({
         return null;
       } finally {
         if (visible) {
-          setBusinessLoading(false);
+          setBusinessLoadingSnapshot((current) =>
+            current === key ? null : current
+          );
         }
       }
     },
-    [
-      activeSnapshotId,
-      businessBySnapshot,
-      encodedBucketId,
-      encodedSnapshotId,
-    ]
+    [businessBySnapshot, encodedBucketId]
   );
 
   const prefetchTopTab = useCallback(
     (tab: TopTab) => {
       if (tab === "marketing") {
-        void loadMarketing(false);
+        void loadMarketingForSnapshot(activeSnapshotId, false);
       }
 
       if (tab === "business") {
-        void loadBusiness(false);
+        void loadBusinessForSnapshot(activeSnapshotId, false);
       }
     },
-    [loadBusiness, loadMarketing]
+    [activeSnapshotId, loadBusinessForSnapshot, loadMarketingForSnapshot]
   );
 
   const handleTopTabChange = useCallback(
@@ -231,19 +272,65 @@ export function CompanyDashboardTabs({
       setActiveTab(nextTab);
 
       if (nextTab === "marketing") {
-        void loadMarketing(true);
+        void loadMarketingForSnapshot(activeSnapshotId, true);
       }
 
       if (nextTab === "business") {
-        void loadBusiness(true);
+        void loadBusinessForSnapshot(activeSnapshotId, true);
       }
     },
-    [loadBusiness, loadMarketing]
+    [activeSnapshotId, loadBusinessForSnapshot, loadMarketingForSnapshot]
   );
 
-  const marketingPosts = getMarketingPosts(marketingData);
+  useEffect(() => {
+    if (activeTab === "marketing") {
+      void loadMarketingForSnapshot(activeSnapshotId, true);
+    }
 
-  const businessJobs = Array.isArray(businessData?.jobs) ? businessData.jobs : [];
+    if (activeTab === "business") {
+      void loadBusinessForSnapshot(activeSnapshotId, true);
+    }
+  }, [
+    activeSnapshotId,
+    activeTab,
+    loadBusinessForSnapshot,
+    loadMarketingForSnapshot,
+  ]);
+
+  useEffect(() => {
+    if (activeTab !== "marketing" && activeTab !== "business") {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      for (const snapshotId of nearbySnapshots) {
+        if (activeTab === "marketing") {
+          void loadMarketingForSnapshot(snapshotId, false);
+        }
+
+        if (activeTab === "business") {
+          void loadBusinessForSnapshot(snapshotId, false);
+        }
+      }
+    }, 650);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeTab,
+    loadBusinessForSnapshot,
+    loadMarketingForSnapshot,
+    nearbySnapshots,
+  ]);
+
+  const marketingPosts = Array.isArray(marketingData?.posts)
+    ? marketingData.posts
+    : [];
+
+  const businessJobs = Array.isArray(businessData?.jobs)
+    ? businessData.jobs
+    : [];
   const businessRoster = Array.isArray(businessData?.roster)
     ? businessData.roster
     : [];
@@ -252,7 +339,11 @@ export function CompanyDashboardTabs({
     : [];
 
   return (
-    <Tabs value={activeTab} onValueChange={handleTopTabChange} className="flex flex-col w-full">
+    <Tabs
+      value={activeTab}
+      onValueChange={handleTopTabChange}
+      className="flex flex-col w-full"
+    >
       <div className="flex items-center justify-between pt-8 pl-10 pr-[84px] shrink-0 relative z-20">
         <div className="flex-1">
           <h1 className={titleClassName}>North Star</h1>
