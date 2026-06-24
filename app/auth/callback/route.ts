@@ -1,39 +1,41 @@
 // app/auth/callback/route.ts
-import { NextResponse } from 'next/server'
-import { createServerClient, type CookieOptions } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 
-export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url)
-  const code = searchParams.get('code')
-  // if "next" is in param, use it as the redirect URL
-  const next = searchParams.get('next') ?? '/'
+function getSafeNextPath(value: string | null) {
+  if (!value) return "/";
 
-  if (code) {
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value
-          },
-          set(name: string, value: string, options: CookieOptions) {
-            cookieStore.set({ name, value, ...options })
-          },
-          remove(name: string, options: CookieOptions) {
-            cookieStore.set({ name, value: '', ...options })
-          },
-        },
-      }
-    )
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
-    if (!error) {
-      return NextResponse.redirect(`${origin}${next}`)
-    }
+  if (!value.startsWith("/")) {
+    return "/";
   }
 
-  // return the user to an error page with instructions
-  return NextResponse.redirect(`${origin}/login?error=Could not authenticate user`)
+  if (value.startsWith("//")) {
+    return "/";
+  }
+
+  return value;
+}
+
+export async function GET(request: Request) {
+  const requestUrl = new URL(request.url);
+  const code = requestUrl.searchParams.get("code");
+  const next = getSafeNextPath(requestUrl.searchParams.get("next"));
+  const origin = requestUrl.origin;
+
+  if (!code) {
+    return NextResponse.redirect(`${origin}/login`);
+  }
+
+  const supabase = await createClient();
+
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+  if (error) {
+    const loginUrl = new URL("/login", origin);
+    loginUrl.searchParams.set("error", error.message);
+
+    return NextResponse.redirect(loginUrl);
+  }
+
+  return NextResponse.redirect(`${origin}${next}`);
 }

@@ -1,14 +1,11 @@
-// app/verification/page.tsx
-
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Unbounded } from "next/font/google";
 
-// 1. Matched the font weights to the Login screen
 const unbounded = Unbounded({
   subsets: ["latin"],
   weight: ["200", "300", "600"],
@@ -16,17 +13,29 @@ const unbounded = Unbounded({
 
 export default function VerificationPage() {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [email, setEmail] = useState<string>("Loading user data...");
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
+    let cancelled = false;
+
+    const loadUser = async () => {
+      const { data } = await supabase.auth.getUser();
+
+      if (cancelled) return;
+
       if (data?.user?.email) {
         setEmail(data.user.email);
       } else {
         setEmail("Unknown User");
       }
-    });
+    };
+
+    void loadUser();
+
+    return () => {
+      cancelled = true;
+    };
   }, [supabase]);
 
   const handleSignOut = async () => {
@@ -36,12 +45,10 @@ export default function VerificationPage() {
 
   return (
     <div className="relative w-full min-h-screen bg-black font-sans flex flex-col items-center justify-center overflow-hidden">
-      {/* ── DYNAMIC BACKGROUND (Exact match to Login) ── */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
         <div
           className="relative flex-shrink-0 mt-[12vh]"
           style={{
-            // Applied the 75vmax fix so it scales safely on ultrawide monitors
             width: "max(1350px, 75vmax)",
             height: "max(1350px, 75vmax)",
             transform: "rotate(309deg)",
@@ -58,9 +65,7 @@ export default function VerificationPage() {
         </div>
       </div>
 
-      {/* ── SQUARE GLASSMORPHIC CARD (Exact 599x535 match) ── */}
       <div className="relative z-10 w-[90%] md:w-[599px] py-10 md:py-0 md:h-[535px] bg-black/60 backdrop-blur-2xl border-none md:border border-white/10 rounded-none flex flex-col items-center shadow-2xl animate-in zoom-in-95 fade-in duration-500">
-        {/* 1. TITLE BLOCK (Absolute positioned Top: 92.5px - matching login) */}
         <div
           className="absolute flex flex-col items-center w-full"
           style={{ top: "92.5px" }}
@@ -74,11 +79,11 @@ export default function VerificationPage() {
             >
               Closed Beta
             </span>
+
             <span
               className="block font-[600] text-[40px] leading-[100%] whitespace-nowrap mt-2"
               style={{
                 letterSpacing: "-0.02em",
-        
               }}
             >
               North Star AI
@@ -86,7 +91,6 @@ export default function VerificationPage() {
           </h1>
         </div>
 
-        {/* 2. EMAIL NOTIFICATION BLOCK (Centered absolute) */}
         <div
           className="absolute flex flex-col items-center justify-center w-full"
           style={{ top: "270px" }}
@@ -96,6 +100,7 @@ export default function VerificationPage() {
           >
             We will notify you at:
           </p>
+
           <p
             className={`${unbounded.className} text-white font-[600] text-[16px] leading-[18px] tracking-wide text-center m-0 p-0`}
           >
@@ -103,7 +108,6 @@ export default function VerificationPage() {
           </p>
         </div>
 
-        {/* 3. FOOTER ACTIONS (Absolute positioned Top: 497px - matching login) */}
         <div
           className="absolute flex items-center justify-center gap-4"
           style={{
