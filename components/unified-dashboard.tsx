@@ -1,7 +1,14 @@
 // components/unified-dashboard.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SessionViewer } from "@/components/session-viewer";
 import { ExecutiveReport } from "@/components/executive-report";
@@ -12,6 +19,7 @@ import { Smartphone, Globe } from "lucide-react";
 
 type Platform = "mobile" | "web";
 type Mode = "browsing" | "onboarding";
+type ProductTab = "overview" | "viewer" | "mobbin" | "brand_kit" | "app_store";
 
 function makeSessionKey(platform: Platform, mode: Mode) {
   return `${platform}:${mode}`;
@@ -26,6 +34,8 @@ export function UnifiedDashboard({
   header: React.ReactNode;
   tenantId: string;
 }) {
+  const [, startTransition] = useTransition();
+
   const hasMobile = !!appData.mobile;
   const hasWeb = !!appData.web;
 
@@ -36,7 +46,8 @@ export function UnifiedDashboard({
     appData[defaultPlatform]?.browsing ? "browsing" : "onboarding"
   );
 
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState<ProductTab>("overview");
+  const [readyTab, setReadyTab] = useState<ProductTab | null>("overview");
 
   const [sessionCache, setSessionCache] = useState<Record<string, any>>({});
   const [viewerLoading, setViewerLoading] = useState(false);
@@ -46,19 +57,24 @@ export function UnifiedDashboard({
   const [flowsError, setFlowsError] = useState<string | null>(null);
 
   const [appStoreData, setAppStoreData] = useState<any>(appData.appStore ?? null);
+  const [appStoreLoaded, setAppStoreLoaded] = useState(!!appData.appStore);
   const [appStoreLoading, setAppStoreLoading] = useState(false);
   const [appStoreError, setAppStoreError] = useState<string | null>(null);
 
   const [apkIntelligenceData, setApkIntelligenceData] = useState<any>(
     appData.apkIntelligence ?? null
   );
+  const [apkLoaded, setApkLoaded] = useState(!!appData.apkIntelligence);
   const [apkLoading, setApkLoading] = useState(false);
   const [apkError, setApkError] = useState<string | null>(null);
 
-  const viewerRequestStartedRef = useRef<Record<string, boolean>>({});
-  const flowsRequestStartedRef = useRef<Record<string, boolean>>({});
-  const appStoreRequestStartedRef = useRef(false);
-  const apkRequestStartedRef = useRef(false);
+  const viewerPromisesRef = useRef<Record<string, Promise<any>>>({});
+  const flowsPromisesRef = useRef<Record<string, Promise<any>>>({});
+  const appStorePromiseRef = useRef<Promise<any> | null>(null);
+  const apkPromiseRef = useRef<Promise<any> | null>(null);
+  const prefetchTabDataRef = useRef<(tab: ProductTab) => void>(() => {});
+  const warmedKeyRef = useRef<string | null>(null);
+  const contentRafRef = useRef<number | null>(null);
 
   const activePlatformData = appData[platform];
   const initialActiveData = activePlatformData ? activePlatformData[mode] : null;
@@ -92,175 +108,396 @@ export function UnifiedDashboard({
 
   const encodedAppName = encodeURIComponent(appData.appName);
 
-  useEffect(() => {
-    if (activeTab !== "viewer") return;
-    if (sessionCache[activeSessionKey]?.steps?.length > 0) return;
-    if (viewerRequestStartedRef.current[activeSessionKey]) return;
-
-    viewerRequestStartedRef.current[activeSessionKey] = true;
-    setViewerLoading(true);
-    setViewerError(null);
-
-    async function loadViewerData() {
-      try {
-        const params = new URLSearchParams({
-          platform,
-          mode,
-        });
-
-        const res = await fetch(`/api/apps/${encodedAppName}/viewer?${params.toString()}`, {
-          method: "GET",
-          credentials: "same-origin",
-        });
-
-        const payload = await res.json();
-
-        if (!res.ok) {
-          throw new Error(payload?.error || "Failed to load viewer data");
-        }
-
-        setSessionCache(prev => ({
+  const mergeSessionCache = useCallback(
+    (key: string, data: any, extra: Record<string, any>) => {
+      startTransition(() => {
+        setSessionCache((prev) => ({
           ...prev,
-          [activeSessionKey]: {
-            ...(prev[activeSessionKey] || {}),
-            ...(payload.data || {}),
+          [key]: {
+            ...(prev[key] || {}),
+            ...(data || {}),
+            ...extra,
           },
         }));
-      } catch (error) {
-        console.error("Failed to load viewer data:", error);
-        setViewerError(
-          error instanceof Error ? error.message : "Failed to load viewer data"
-        );
-        viewerRequestStartedRef.current[activeSessionKey] = false;
-      } finally {
-        setViewerLoading(false);
+      });
+    },
+    [startTransition]
+  );
+
+  const loadViewerData = useCallback(
+    async (options?: {
+      targetPlatform?: Platform;
+      targetMode?: Mode;
+      visible?: boolean;
+    }) => {
+      const targetPlatform = options?.targetPlatform ?? platform;
+      const targetMode = options?.targetMode ?? mode;
+      const visible = options?.visible ?? false;
+      const key = makeSessionKey(targetPlatform, targetMode);
+
+      if (sessionCache[key]?.viewerLoaded || sessionCache[key]?.steps?.length > 0) {
+        return sessionCache[key];
       }
-    }
 
-    loadViewerData();
-  }, [activeTab, activeSessionKey, encodedAppName, mode, platform, sessionCache]);
+      if (visible) {
+        setViewerLoading(true);
+        setViewerError(null);
+      }
 
-  useEffect(() => {
-    if (activeTab !== "mobbin") return;
-    if (sessionCache[activeSessionKey]?.flowsData) return;
-    if (flowsRequestStartedRef.current[activeSessionKey]) return;
-
-    flowsRequestStartedRef.current[activeSessionKey] = true;
-    setFlowsLoading(true);
-    setFlowsError(null);
-
-    async function loadFlowsData() {
-      try {
+      if (!viewerPromisesRef.current[key]) {
         const params = new URLSearchParams({
-          platform,
-          mode,
+          platform: targetPlatform,
+          mode: targetMode,
         });
 
-        const res = await fetch(`/api/apps/${encodedAppName}/flows?${params.toString()}`, {
-          method: "GET",
-          credentials: "same-origin",
-        });
+        viewerPromisesRef.current[key] = fetch(
+          `/api/apps/${encodedAppName}/viewer?${params.toString()}`,
+          {
+            method: "GET",
+            credentials: "same-origin",
+          }
+        )
+          .then(async (res) => {
+            const payload = await res.json();
 
-        const payload = await res.json();
+            if (!res.ok) {
+              throw new Error(payload?.error || "Failed to load viewer data");
+            }
 
-        if (!res.ok) {
-          throw new Error(payload?.error || "Failed to load flows data");
+            mergeSessionCache(key, payload.data, { viewerLoaded: true });
+            return payload.data;
+          })
+          .catch((error) => {
+            delete viewerPromisesRef.current[key];
+            throw error;
+          });
+      }
+
+      try {
+        return await viewerPromisesRef.current[key];
+      } catch (error) {
+        if (visible) {
+          console.error("Failed to load viewer data:", error);
+          setViewerError(
+            error instanceof Error ? error.message : "Failed to load viewer data"
+          );
         }
 
-        setSessionCache(prev => ({
-          ...prev,
-          [activeSessionKey]: {
-            ...(prev[activeSessionKey] || {}),
-            ...(payload.data || {}),
-          },
-        }));
-      } catch (error) {
-        console.error("Failed to load flows data:", error);
-        setFlowsError(
-          error instanceof Error ? error.message : "Failed to load flows data"
-        );
-        flowsRequestStartedRef.current[activeSessionKey] = false;
+        return null;
       } finally {
-        setFlowsLoading(false);
+        if (visible) {
+          setViewerLoading(false);
+        }
       }
-    }
+    },
+    [encodedAppName, mergeSessionCache, mode, platform, sessionCache]
+  );
 
-    loadFlowsData();
-  }, [activeTab, activeSessionKey, encodedAppName, mode, platform, sessionCache]);
+  const loadFlowsData = useCallback(
+    async (options?: {
+      targetPlatform?: Platform;
+      targetMode?: Mode;
+      visible?: boolean;
+    }) => {
+      const targetPlatform = options?.targetPlatform ?? platform;
+      const targetMode = options?.targetMode ?? mode;
+      const visible = options?.visible ?? false;
+      const key = makeSessionKey(targetPlatform, targetMode);
+
+      if (sessionCache[key]?.flowsLoaded || sessionCache[key]?.flowsData) {
+        return sessionCache[key];
+      }
+
+      if (visible) {
+        setFlowsLoading(true);
+        setFlowsError(null);
+      }
+
+      if (!flowsPromisesRef.current[key]) {
+        const params = new URLSearchParams({
+          platform: targetPlatform,
+          mode: targetMode,
+        });
+
+        flowsPromisesRef.current[key] = fetch(
+          `/api/apps/${encodedAppName}/flows?${params.toString()}`,
+          {
+            method: "GET",
+            credentials: "same-origin",
+          }
+        )
+          .then(async (res) => {
+            const payload = await res.json();
+
+            if (!res.ok) {
+              throw new Error(payload?.error || "Failed to load flows data");
+            }
+
+            mergeSessionCache(key, payload.data, { flowsLoaded: true });
+            return payload.data;
+          })
+          .catch((error) => {
+            delete flowsPromisesRef.current[key];
+            throw error;
+          });
+      }
+
+      try {
+        return await flowsPromisesRef.current[key];
+      } catch (error) {
+        if (visible) {
+          console.error("Failed to load flows data:", error);
+          setFlowsError(
+            error instanceof Error ? error.message : "Failed to load flows data"
+          );
+        }
+
+        return null;
+      } finally {
+        if (visible) {
+          setFlowsLoading(false);
+        }
+      }
+    },
+    [encodedAppName, mergeSessionCache, mode, platform, sessionCache]
+  );
+
+  const loadAppStore = useCallback(
+    async (visible = false) => {
+      if (appStoreLoaded) return appStoreData;
+
+      if (visible) {
+        setAppStoreLoading(true);
+        setAppStoreError(null);
+      }
+
+      if (!appStorePromiseRef.current) {
+        appStorePromiseRef.current = fetch(`/api/apps/${encodedAppName}/app-store`, {
+          method: "GET",
+          credentials: "same-origin",
+        })
+          .then(async (res) => {
+            const payload = await res.json();
+
+            if (!res.ok) {
+              throw new Error(payload?.error || "Failed to load app store data");
+            }
+
+            startTransition(() => {
+              setAppStoreData(payload.data ?? null);
+              setAppStoreLoaded(true);
+            });
+
+            return payload.data ?? null;
+          })
+          .catch((error) => {
+            appStorePromiseRef.current = null;
+            throw error;
+          });
+      }
+
+      try {
+        return await appStorePromiseRef.current;
+      } catch (error) {
+        if (visible) {
+          console.error("Failed to load app store data:", error);
+          setAppStoreError(
+            error instanceof Error ? error.message : "Failed to load app store data"
+          );
+        }
+
+        return null;
+      } finally {
+        if (visible) {
+          setAppStoreLoading(false);
+        }
+      }
+    },
+    [appStoreData, appStoreLoaded, encodedAppName, startTransition]
+  );
+
+  const loadApkIntelligence = useCallback(
+    async (visible = false) => {
+      if (apkLoaded) return apkIntelligenceData;
+
+      if (visible) {
+        setApkLoading(true);
+        setApkError(null);
+      }
+
+      if (!apkPromiseRef.current) {
+        apkPromiseRef.current = fetch(`/api/apps/${encodedAppName}/apk-intelligence`, {
+          method: "GET",
+          credentials: "same-origin",
+        })
+          .then(async (res) => {
+            const payload = await res.json();
+
+            if (!res.ok) {
+              throw new Error(payload?.error || "Failed to load APK intelligence");
+            }
+
+            startTransition(() => {
+              setApkIntelligenceData(payload.data ?? null);
+              setApkLoaded(true);
+            });
+
+            return payload.data ?? null;
+          })
+          .catch((error) => {
+            apkPromiseRef.current = null;
+            throw error;
+          });
+      }
+
+      try {
+        return await apkPromiseRef.current;
+      } catch (error) {
+        if (visible) {
+          console.error("Failed to load APK intelligence:", error);
+          setApkError(
+            error instanceof Error ? error.message : "Failed to load APK intelligence"
+          );
+        }
+
+        return null;
+      } finally {
+        if (visible) {
+          setApkLoading(false);
+        }
+      }
+    },
+    [apkIntelligenceData, apkLoaded, encodedAppName, startTransition]
+  );
+
+  const prefetchTabData = useCallback(
+    (tab: ProductTab) => {
+      if (tab === "viewer") {
+        void loadViewerData({ visible: false });
+      }
+
+      if (tab === "mobbin") {
+        void loadFlowsData({ visible: false });
+      }
+
+      if (tab === "brand_kit") {
+        void loadApkIntelligence(false);
+      }
+
+      if (tab === "app_store") {
+        void loadAppStore(false);
+      }
+    },
+    [loadApkIntelligence, loadAppStore, loadFlowsData, loadViewerData]
+  );
 
   useEffect(() => {
-    if (activeTab !== "app_store") return;
-    if (appStoreData) return;
-    if (appStoreRequestStartedRef.current) return;
-
-    appStoreRequestStartedRef.current = true;
-    setAppStoreLoading(true);
-    setAppStoreError(null);
-
-    async function loadAppStore() {
-      try {
-        const res = await fetch(`/api/apps/${encodedAppName}/app-store`, {
-          method: "GET",
-          credentials: "same-origin",
-        });
-
-        const payload = await res.json();
-
-        if (!res.ok) {
-          throw new Error(payload?.error || "Failed to load app store data");
-        }
-
-        setAppStoreData(payload.data ?? null);
-      } catch (error) {
-        console.error("Failed to load app store data:", error);
-        setAppStoreError(
-          error instanceof Error ? error.message : "Failed to load app store data"
-        );
-        appStoreRequestStartedRef.current = false;
-      } finally {
-        setAppStoreLoading(false);
-      }
-    }
-
-    loadAppStore();
-  }, [activeTab, appStoreData, encodedAppName]);
+    prefetchTabDataRef.current = prefetchTabData;
+  }, [prefetchTabData]);
 
   useEffect(() => {
-    if (activeTab !== "brand_kit") return;
-    if (apkIntelligenceData) return;
-    if (apkRequestStartedRef.current) return;
-
-    apkRequestStartedRef.current = true;
-    setApkLoading(true);
-    setApkError(null);
-
-    async function loadApkIntelligence() {
-      try {
-        const res = await fetch(`/api/apps/${encodedAppName}/apk-intelligence`, {
-          method: "GET",
-          credentials: "same-origin",
-        });
-
-        const payload = await res.json();
-
-        if (!res.ok) {
-          throw new Error(payload?.error || "Failed to load APK intelligence");
-        }
-
-        setApkIntelligenceData(payload.data ?? null);
-      } catch (error) {
-        console.error("Failed to load APK intelligence:", error);
-        setApkError(
-          error instanceof Error ? error.message : "Failed to load APK intelligence"
-        );
-        apkRequestStartedRef.current = false;
-      } finally {
-        setApkLoading(false);
-      }
+    if (activeTab === "viewer") {
+      void loadViewerData({ visible: true });
     }
 
-    loadApkIntelligence();
-  }, [activeTab, apkIntelligenceData, encodedAppName]);
+    if (activeTab === "mobbin") {
+      void loadFlowsData({ visible: true });
+    }
+
+    if (activeTab === "brand_kit") {
+      void loadApkIntelligence(true);
+    }
+
+    if (activeTab === "app_store") {
+      void loadAppStore(true);
+    }
+  }, [
+    activeTab,
+    loadApkIntelligence,
+    loadAppStore,
+    loadFlowsData,
+    loadViewerData,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const warmKey = `${encodedAppName}:${activeSessionKey}`;
+    if (warmedKeyRef.current === warmKey) return;
+
+    warmedKeyRef.current = warmKey;
+
+    const connection = (navigator as any).connection;
+    if (connection?.saveData) return;
+
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const idleIds: number[] = [];
+
+    const scheduleWarmup = (delay: number, tab: ProductTab) => {
+      const timer = setTimeout(() => {
+        if ("requestIdleCallback" in window) {
+          const idleId = (window as any).requestIdleCallback(
+            () => prefetchTabDataRef.current(tab),
+            { timeout: 2000 }
+          );
+
+          idleIds.push(idleId);
+        } else {
+          prefetchTabDataRef.current(tab);
+        }
+      }, delay);
+
+      timers.push(timer);
+    };
+
+    // Staggered warmup so the Product overview remains responsive.
+    scheduleWarmup(500, "viewer");
+    scheduleWarmup(900, "brand_kit");
+    scheduleWarmup(1200, "app_store");
+    scheduleWarmup(1800, "mobbin");
+
+    return () => {
+      timers.forEach(clearTimeout);
+
+      if ("cancelIdleCallback" in window) {
+        idleIds.forEach((id) => (window as any).cancelIdleCallback(id));
+      }
+    };
+  }, [activeSessionKey, encodedAppName]);
+
+  useEffect(() => {
+    return () => {
+      if (contentRafRef.current !== null) {
+        window.cancelAnimationFrame(contentRafRef.current);
+      }
+    };
+  }, []);
+
+  const handleSubTabChange = useCallback(
+    (value: string) => {
+      const nextTab = value as ProductTab;
+
+      if (nextTab === activeTab) {
+        prefetchTabData(nextTab);
+        return;
+      }
+
+      setActiveTab(nextTab);
+      setReadyTab(null);
+      prefetchTabData(nextTab);
+
+      if (contentRafRef.current !== null) {
+        window.cancelAnimationFrame(contentRafRef.current);
+      }
+
+      contentRafRef.current = window.requestAnimationFrame(() => {
+        startTransition(() => {
+          setReadyTab(nextTab);
+        });
+      });
+    },
+    [activeTab, prefetchTabData, startTransition]
+  );
 
   if (!activeData) {
     return (
@@ -284,19 +521,26 @@ export function UnifiedDashboard({
   const hasAppStore =
     !!appData.appStore ||
     !!appData.hasAppStore ||
-    !!appStoreData;
+    !!appStoreData ||
+    appStoreLoaded;
 
-  const subTabs = [
+  const subTabs: { value: ProductTab; label: string }[] = [
     { value: "overview", label: "Overview" },
     { value: "viewer", label: "Screen viewer" },
     { value: "mobbin", label: "Flows" },
-    ...(hasBrandKit ? [{ value: "brand_kit", label: "Brand kit" }] : []),
-    ...(hasAppStore ? [{ value: "app_store", label: "App store" }] : []),
+    ...(hasBrandKit ? [{ value: "brand_kit" as ProductTab, label: "Brand kit" }] : []),
+    ...(hasAppStore ? [{ value: "app_store" as ProductTab, label: "App store" }] : []),
   ];
+
+  const canRenderOverview = readyTab === "overview";
+  const canRenderViewer = readyTab === "viewer";
+  const canRenderFlows = readyTab === "mobbin";
+  const canRenderBrandKit = readyTab === "brand_kit";
+  const canRenderAppStore = readyTab === "app_store";
 
   return (
     <div className="flex flex-col w-full">
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col w-full">
+      <Tabs value={activeTab} onValueChange={handleSubTabChange} className="flex flex-col w-full">
         <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-6 relative border border-white/20 dark:border-white/10 backdrop-blur-md">
           <div className="flex-1 w-full relative">{header}</div>
 
@@ -306,6 +550,9 @@ export function UnifiedDashboard({
                 <TabsTrigger
                   key={value}
                   value={value}
+                  onPointerEnter={() => prefetchTabData(value)}
+                  onFocus={() => prefetchTabData(value)}
+                  onPointerDown={() => prefetchTabData(value)}
                   className="relative !bg-transparent !shadow-none rounded-none px-0 pb-[8px] !border-none outline-none focus:outline-none focus-visible:ring-0 cursor-pointer text-[15px] font-[400] text-[#747474] dark:text-zinc-400 hover:text-[#000000] dark:hover:text-white data-[state=active]:text-[#000000] dark:data-[state=active]:text-white data-[state=active]:font-[600] after:absolute after:-bottom-[1px] after:left-0 after:right-0 after:h-[2px] after:rounded-t-full after:bg-transparent data-[state=active]:after:bg-[#000000] dark:data-[state=active]:after:bg-white transition-all"
                 >
                   {label}
@@ -366,18 +613,20 @@ export function UnifiedDashboard({
 
         <TabsContent value="overview" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
           <div className="max-w-6xl mx-auto w-full pb-16">
-            <ExecutiveReport
-              key={`exec-${platform}-${mode}`}
-              intel={activeData.sessionIntel}
-              steps={activeData.steps || []}
-              mode={mode}
-            />
+            {canRenderOverview ? (
+              <ExecutiveReport
+                key={`exec-${platform}-${mode}`}
+                intel={activeData.sessionIntel}
+                steps={activeData.steps || []}
+                mode={mode}
+              />
+            ) : null}
           </div>
         </TabsContent>
 
         <TabsContent value="viewer" className="flex flex-col h-[calc(100vh-320px)] min-h-[700px] m-0 outline-none data-[state=inactive]:hidden pb-2 pt-2">
           <div className="flex-1 relative z-50 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden rounded-2xl">
-            {viewerLoading ? (
+            {viewerLoading || !canRenderViewer ? (
               <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
                 Loading screen viewer...
               </div>
@@ -397,7 +646,7 @@ export function UnifiedDashboard({
 
         <TabsContent value="mobbin" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden pb-2 pt-2">
           <div className="flex-1 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 rounded-2xl shadow-none">
-            {flowsLoading ? (
+            {flowsLoading || !canRenderFlows ? (
               <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
                 Loading flows...
               </div>
@@ -425,7 +674,7 @@ export function UnifiedDashboard({
         {hasBrandKit && (
           <TabsContent value="brand_kit" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 p-8 rounded-2xl">
-              {apkLoading ? (
+              {apkLoading || !canRenderBrandKit ? (
                 <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
                   Loading brand intelligence...
                 </div>
@@ -451,7 +700,7 @@ export function UnifiedDashboard({
         {hasAppStore && (
           <TabsContent value="app_store" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-16 rounded-2xl">
-              {appStoreLoading ? (
+              {appStoreLoading || !canRenderAppStore ? (
                 <div className="p-6 text-zinc-500 text-[14px] flex items-center justify-center h-full font-medium">
                   Loading app store data...
                 </div>

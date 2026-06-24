@@ -15,6 +15,18 @@ import Link from "next/link";
 
 const unbounded = Unbounded({ subsets: ["latin"], weight: ["600"] });
 
+function normalizeMarketName(value: string | null | undefined) {
+  if (!value || value.toLowerCase() === "unknown") return "General Utilities";
+
+  return value
+    .split("_")
+    .join(" ")
+    .split(" ")
+    .filter(Boolean)
+    .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
 export default async function CompanyDashboardPage({
   params,
   searchParams,
@@ -33,6 +45,7 @@ export default async function CompanyDashboardPage({
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
+
   const { data: profile } = await supabase
     .from("user_profiles")
     .select("customer_id")
@@ -44,7 +57,9 @@ export default async function CompanyDashboardPage({
   if (!tenantId) {
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-zinc-500 font-mono text-[13px]">Workspace access required. Please contact your administrator.</p>
+        <p className="text-zinc-500 font-mono text-[13px]">
+          Workspace access required. Please contact your administrator.
+        </p>
       </div>
     );
   }
@@ -52,8 +67,16 @@ export default async function CompanyDashboardPage({
   const trackedCompanies = await getTrackedCompanies(tenantId);
 
   let matchedCompany = trackedCompanies.find((c) => c.id === decodedCompanyId);
-  if (!matchedCompany) matchedCompany = trackedCompanies.find((c) => c.id.toLowerCase() === decodedCompanyId.toLowerCase());
-  if (!matchedCompany) matchedCompany = trackedCompanies.find((c) => decodedCompanyId.toLowerCase().includes(c.id.toLowerCase()));
+  if (!matchedCompany) {
+    matchedCompany = trackedCompanies.find(
+      (c) => c.id.toLowerCase() === decodedCompanyId.toLowerCase()
+    );
+  }
+  if (!matchedCompany) {
+    matchedCompany = trackedCompanies.find(
+      (c) => decodedCompanyId.toLowerCase().includes(c.id.toLowerCase())
+    );
+  }
   
   const dataBucketId = matchedCompany ? matchedCompany.id : decodedCompanyId;
 
@@ -69,8 +92,6 @@ export default async function CompanyDashboardPage({
   const appName = productData?.appName || decodedCompanyId;
   const iconUrl = productData?.iconUrl; 
   
-  let marketName = "General Utilities";
-
   const bSynthesized =
     productData?.web?.browsing?.sessionIntel?.competitive_profile?.app_category ||
     productData?.mobile?.browsing?.sessionIntel?.competitive_profile?.app_category;
@@ -78,44 +99,13 @@ export default async function CompanyDashboardPage({
   const oSynthesized =
     productData?.web?.onboarding?.sessionIntel?.competitive_profile?.app_category ||
     productData?.mobile?.onboarding?.sessionIntel?.competitive_profile?.app_category;
-  
-  let preciseAppType = null;
 
-  const fetchMemory = async (type: string) => {
-    try {
-      let res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/web/${type}/agent_memory.json`, { next: { revalidate: 300 } });
-
-      if (!res.ok) {
-        res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/${type}/agent_memory.json`, { next: { revalidate: 300 } });
-      }
-      
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.app_type) return data.app_type;
-      }
-    } catch (e) {}
-
-    return null;
-  };
-
-  preciseAppType = await fetchMemory("browsing") || await fetchMemory("onboarding");
-
-  const playStoreCategory = productData?.apkIntelligence?.app_metadata?.category;
-
-  if (bSynthesized && bSynthesized !== "Unknown" && bSynthesized !== "unknown") {
-    marketName = bSynthesized;
-  } else if (oSynthesized && oSynthesized !== "Unknown" && oSynthesized !== "unknown") {
-    marketName = oSynthesized;
-  } else if (preciseAppType) {
-    marketName = preciseAppType;
-  } else if (playStoreCategory && playStoreCategory !== "Unknown") {
-    marketName = playStoreCategory;
-  }
-  
-  marketName = marketName
-    .split("_")
-    .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ");
+  const marketName = normalizeMarketName(
+    bSynthesized ||
+    oSynthesized ||
+    productData?.category ||
+    "General Utilities"
+  );
 
   const isLongMarketName = marketName.length > 20;
 
@@ -129,9 +119,17 @@ export default async function CompanyDashboardPage({
     }
   }
 
-  const businessJobs = Array.isArray(dashboardData?.business?.jobs) ? dashboardData.business.jobs : [];
-  const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
-  const businessScreenshots = Array.isArray(dashboardData?.businessScreenshots) ? dashboardData.businessScreenshots : [];
+  const businessJobs = Array.isArray(dashboardData?.business?.jobs)
+    ? dashboardData.business.jobs
+    : [];
+
+  const businessRoster = Array.isArray(dashboardData?.roster)
+    ? dashboardData.roster
+    : [];
+
+  const businessScreenshots = Array.isArray(dashboardData?.businessScreenshots)
+    ? dashboardData.businessScreenshots
+    : [];
 
   const IdentityHeader = () => (
     <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
@@ -152,15 +150,18 @@ export default async function CompanyDashboardPage({
           </div>
 
           <div className="flex flex-col justify-center min-h-[78px] font-sans gap-[4px] py-1 max-w-[320px] shrink-0 min-w-0 pr-4">
-            <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0 truncate" title={appName}>
+            <h2
+              className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0 truncate"
+              title={appName}
+            >
               {appName}
             </h2>
 
-            <h3 
+            <h3
               className={`
                 text-[#000000] dark:text-white tracking-[0%] m-0 p-0 line-clamp-2
                 ${isLongMarketName ? "text-[22px] leading-[24px]" : "text-[30px] leading-[32px]"}
-              `} 
+              `}
               title={marketName}
             >
               {marketName}
@@ -183,7 +184,10 @@ export default async function CompanyDashboardPage({
               Market
             </span>
 
-            <span className="font-sans text-[16px] font-[500] text-[#000000] dark:text-white leading-[20px] text-left line-clamp-2" title={marketName}>
+            <span
+              className="font-sans text-[16px] font-[500] text-[#000000] dark:text-white leading-[20px] text-left line-clamp-2"
+              title={marketName}
+            >
               {marketName}
             </span>
           </div>
@@ -224,9 +228,9 @@ export default async function CompanyDashboardPage({
                 { value: "marketing", label: "marketing" },
                 { value: "business", label: "business" },
               ].map(({ value, label }) => (
-                <TabsTrigger 
-                  key={value} 
-                  value={value} 
+                <TabsTrigger
+                  key={value}
+                  value={value}
                   className="
                     px-5 py-1.5 rounded-none border-none shadow-none cursor-pointer
                     transition-all duration-200
@@ -252,7 +256,11 @@ export default async function CompanyDashboardPage({
         <div className="flex flex-col mt-6 relative z-10 pl-10 pr-[84px] pb-12">
           <TabsContent value="product" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             {productData && (productData.mobile || productData.web) ? (
-              <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
+              <UnifiedDashboard
+                appData={productData}
+                header={<IdentityHeader />}
+                tenantId={tenantId}
+              />
             ) : (
               <div className="flex h-full items-center justify-center pt-24">
                 <p className="bg-white/10 dark:bg-black/10 backdrop-blur-md border border-white/20 dark:border-white/10 px-6 py-3 text-zinc-600 dark:text-zinc-400 text-sm shadow-none rounded-none">
