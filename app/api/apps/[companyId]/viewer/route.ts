@@ -1,7 +1,7 @@
 // app/api/apps/[companyId]/viewer/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getAppSessionData } from "@/lib/review-data";
+import { getAppViewerData } from "@/lib/review-data";
 
 export const dynamic = "force-dynamic";
 
@@ -75,7 +75,7 @@ export async function GET(
   }
 
   try {
-    const data = await getAppSessionData(
+    const data = await getAppViewerData(
       appName,
       profile.customer_id,
       platform,

@@ -111,14 +111,27 @@ export function UnifiedDashboard({
   const mergeSessionCache = useCallback(
     (key: string, data: any, extra: Record<string, any>) => {
       startTransition(() => {
-        setSessionCache((prev) => ({
-          ...prev,
-          [key]: {
-            ...(prev[key] || {}),
+        setSessionCache((prev) => {
+          const previousForKey = prev[key] || {};
+          const nextForKey = {
+            ...previousForKey,
             ...(data || {}),
             ...extra,
-          },
-        }));
+          };
+
+          if (data && !("steps" in data) && previousForKey.steps) {
+            nextForKey.steps = previousForKey.steps;
+          }
+
+          if (data && !("flowsData" in data) && previousForKey.flowsData) {
+            nextForKey.flowsData = previousForKey.flowsData;
+          }
+
+          return {
+            ...prev,
+            [key]: nextForKey,
+          };
+        });
       });
     },
     [startTransition]
@@ -450,7 +463,6 @@ export function UnifiedDashboard({
       timers.push(timer);
     };
 
-    // Staggered warmup so the Product overview remains responsive.
     scheduleWarmup(500, "viewer");
     scheduleWarmup(900, "brand_kit");
     scheduleWarmup(1200, "app_store");
