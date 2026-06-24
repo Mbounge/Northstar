@@ -2,6 +2,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { fetchApkIntelligence } from "@/lib/review-data";
+import {
+  getOrSetServerResponseCache,
+  privateApiCacheHeaders,
+} from "@/lib/server-response-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -46,12 +50,27 @@ export async function GET(
   }
 
   try {
-    const data = await fetchApkIntelligence(appName, profile.customer_id);
+    const cacheKey = [
+      "apk-intelligence",
+      "v1",
+      profile.customer_id,
+      appName,
+    ].join(":");
 
-    return NextResponse.json({
-      ok: true,
-      data,
-    });
+    const { value: data, status: cacheStatus } =
+      await getOrSetServerResponseCache(cacheKey, () =>
+        fetchApkIntelligence(appName, profile.customer_id)
+      );
+
+    return NextResponse.json(
+      {
+        ok: true,
+        data,
+      },
+      {
+        headers: privateApiCacheHeaders(cacheStatus),
+      }
+    );
   } catch (error) {
     console.error("Failed to load APK intelligence:", error);
 

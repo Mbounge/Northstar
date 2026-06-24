@@ -2,6 +2,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getAppViewerData } from "@/lib/review-data";
+import {
+  getOrSetServerResponseCache,
+  privateApiCacheHeaders,
+} from "@/lib/server-response-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -75,17 +79,29 @@ export async function GET(
   }
 
   try {
-    const data = await getAppViewerData(
-      appName,
+    const cacheKey = [
+      "viewer",
+      "v1",
       profile.customer_id,
+      appName,
       platform,
-      mode
-    );
+      mode,
+    ].join(":");
 
-    return NextResponse.json({
-      ok: true,
-      data,
-    });
+    const { value: data, status: cacheStatus } =
+      await getOrSetServerResponseCache(cacheKey, () =>
+        getAppViewerData(appName, profile.customer_id, platform, mode)
+      );
+
+    return NextResponse.json(
+      {
+        ok: true,
+        data,
+      },
+      {
+        headers: privateApiCacheHeaders(cacheStatus),
+      }
+    );
   } catch (error) {
     console.error("Failed to load viewer data:", error);
 
