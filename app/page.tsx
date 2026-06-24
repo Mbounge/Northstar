@@ -1,5 +1,5 @@
 // app/page.tsx
-import Link from "next/link";
+import { PrefetchCardLink } from "@/components/prefetch-card-link";
 import Image from "next/image";
 import { getReviewApps } from "@/lib/review-data";
 import { createClient } from "@/lib/supabase/server";
@@ -130,11 +130,11 @@ export default async function PortfolioPage() {
                 : "Not visited yet";
 
               return (
-                <Link
-                  key={app.appName}
-                  href={`/${app.appName}`}
-                  className="relative w-full h-[210px] overflow-hidden block no-underline shadow-none border border-white/40 dark:border-white/10"
-                >
+                <PrefetchCardLink
+                    key={app.appName}
+                    href={`/${encodeURIComponent(app.appName)}`}
+                    className="relative w-full h-[210px] overflow-hidden block no-underline shadow-none border border-white/40 dark:border-white/10"
+                  >
                   {/* Top: Icon background */}
                   <div className="absolute top-0 left-0 right-0 h-[125px] overflow-hidden ">
                     {app.iconUrl ? (
@@ -378,7 +378,7 @@ rgba(255,255,255,0.01) 100%
                       </span>
                     </div>
                   </div>
-                </Link>
+                </PrefetchCardLink>
               );
             })}
 

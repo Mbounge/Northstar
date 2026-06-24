@@ -8,6 +8,7 @@ import { BusinessViewer } from "@/components/business-viewer";
 import { MarketingFeed } from "@/components/marketing-feed";
 import { SnapshotSelector } from "@/components/snapshot-selector";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { VisitRecorder } from "@/components/visit-recorder";
 import { createClient } from "@/lib/supabase/server";
 import { Unbounded } from "next/font/google";
 import Link from "next/link";
@@ -46,14 +47,6 @@ export default async function CompanyDashboardPage({
         <p className="text-zinc-500 font-mono text-[13px]">Workspace access required. Please contact your administrator.</p>
       </div>
     );
-  }
-
-  if (user?.id) {
-    await supabase.from('user_app_visits').upsert({
-      user_id: user.id,
-      app_name: decodedCompanyId,
-      last_visited_at: new Date().toISOString()
-    }, { onConflict: 'user_id, app_name' });
   }
 
   const trackedCompanies = await getTrackedCompanies(tenantId);
@@ -203,6 +196,8 @@ export default async function CompanyDashboardPage({
 
   return (
     <div className="h-[100dvh] overflow-y-auto overflow-x-hidden flex flex-col relative z-10 bg-transparent scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      <VisitRecorder appName={decodedCompanyId} />
+
       <Tabs defaultValue="product" className="flex flex-col w-full">
         <div className="flex items-center justify-between pt-8 pl-10 pr-[84px] shrink-0 relative z-20">
           
