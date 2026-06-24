@@ -234,6 +234,16 @@ function VerifiedBadge({ color }: { color: string }) {
   );
 }
 
+function parsePostDate(timestamp?: string) {
+  if (!timestamp) return null;
+
+  const parsedDate = new Date(timestamp);
+
+  if (Number.isNaN(parsedDate.getTime())) return null;
+
+  return parsedDate;
+}
+
 // ── POST DETAIL MODAL ─────────────────────────────────────────────────────────
 
 function PostDetailModal({
@@ -254,8 +264,10 @@ function PostDetailModal({
   const displayName = post.entity || post.platform || "Unknown";
   const meta = post.meta ?? {};
 
-  let fullDate = "";
-  try { fullDate = format(new Date(post.timestamp), "h:mm a · MMM d, yyyy"); } catch {}
+  const parsedDate = parsePostDate(post.timestamp);
+  const fullDate = parsedDate
+    ? format(parsedDate, "h:mm a · MMM d, yyyy")
+    : "";
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -585,8 +597,10 @@ export function MarketingFeed({ posts, companyId, snapshotId, tenantId }: Market
       <div className="columns-1 md:columns-2 lg:columns-3 gap-4 space-y-4">
         {filteredPosts.map((post, i) => {
           const imagePath = getImagePath(post.screenshot);
-          let timeAgo = "recently";
-          try { timeAgo = formatDistanceToNow(new Date(post.timestamp), { addSuffix: true }); } catch {}
+          const parsedDate = parsePostDate(post.timestamp);
+          const timeAgo = parsedDate
+            ? formatDistanceToNow(parsedDate, { addSuffix: true })
+            : "recently";
 
           return (
             <div key={i} className="break-inside-avoid">
