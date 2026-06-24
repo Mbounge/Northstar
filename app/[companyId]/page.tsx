@@ -5,6 +5,7 @@ import { ArrowLeft, MoreHorizontal } from "lucide-react";
 import { CompanyDashboardTabs } from "@/components/company-dashboard-tabs";
 import { VisitRecorder } from "@/components/visit-recorder";
 import { createClient } from "@/lib/supabase/server";
+import { getOrSetServerResponseCache } from "@/lib/server-response-cache";
 import { Unbounded } from "next/font/google";
 import Link from "next/link";
 
@@ -62,7 +63,14 @@ export default async function CompanyDashboardPage({
     );
   }
 
-  const trackedCompanies = await getTrackedCompanies(tenantId);
+  const { value: trackedCompanies } = await getOrSetServerResponseCache(
+    ["tracked-companies", "v1", tenantId].join(":"),
+    () => getTrackedCompanies(tenantId),
+    {
+      ttlMs: 5 * 60 * 1000,
+      maxEntries: 250,
+    }
+  );
 
   let matchedCompany = trackedCompanies.find((c) => c.id === decodedCompanyId);
 
@@ -80,11 +88,26 @@ export default async function CompanyDashboardPage({
 
   const dataBucketId = matchedCompany ? matchedCompany.id : decodedCompanyId;
 
-  const snapshots = await getAvailableSnapshots(tenantId, dataBucketId);
+  const { value: snapshots } = await getOrSetServerResponseCache(
+    ["snapshots", "v1", tenantId, dataBucketId].join(":"),
+    () => getAvailableSnapshots(tenantId, dataBucketId),
+    {
+      ttlMs: 5 * 60 * 1000,
+      maxEntries: 500,
+    }
+  );
+
   const latestSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : "";
   const activeSnapshotId = snapshotParam || latestSnapshot;
 
-  const productData = await getAppDetails(decodedCompanyId, tenantId);
+  const { value: productData } = await getOrSetServerResponseCache(
+    ["app-details", "v3", tenantId, decodedCompanyId].join(":"),
+    () => getAppDetails(decodedCompanyId, tenantId),
+    {
+      ttlMs: 5 * 60 * 1000,
+      maxEntries: 500,
+    }
+  );
 
   const appName = productData?.appName || decodedCompanyId;
   const iconUrl = productData?.iconUrl;
