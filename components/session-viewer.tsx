@@ -5,6 +5,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   useRef,
   useLayoutEffect,
 } from "react";
@@ -76,6 +77,8 @@ function GlassCard({
   );
 }
 
+const MODAL_WINDOW_RADIUS = 2;
+
 function SectionLabel({
   icon,
   children,
@@ -117,70 +120,150 @@ export function SessionViewer({ data }: { data: any }) {
   const isProgrammaticScroll = useRef(false);
   const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
   const hasOpenedRef = useRef(false);
+  const stepDataCacheRef = useRef<Record<string, any>>({});
+  const stepDataPromiseRef = useRef<Record<string, Promise<any>>>({});
 
-  const steps = data.steps;
+  const steps = data.steps || [];
 
-  const uniquePathways = Array.from(
-    new Set(
-      steps.map((s: any) =>
-        s.enrichedData?.extraction_meta?.agent_pathway &&
-        s.enrichedData?.extraction_meta?.agent_pathway !== "Common"
-          ? s.enrichedData.extraction_meta.agent_pathway
-          : "Main Flow",
-      ),
+  const getStepPathway = useCallback((step: any) => {
+    const pathway = step?.enrichedData?.extraction_meta?.agent_pathway;
+
+    return pathway && pathway !== "Common" ? pathway : "Main Flow";
+  }, []);
+
+  const getFilterPathway = useCallback((step: any) => {
+    const pathway =
+      step?.enrichedData?.extraction_meta?.agent_pathway || step?.enriched_file;
+
+    return pathway && pathway !== "Common" ? pathway : "Main Flow";
+  }, []);
+
+  const uniquePathways = useMemo(() => {
+    return Array.from(
+      new Set(steps.map((s: any) => getStepPathway(s))),
+    ) as string[];
+  }, [getStepPathway, steps]);
+
+  const visibleStepEntries = useMemo(() => {
+    return steps
+      .map((step: any, absoluteIdx: number) => ({ step, absoluteIdx }))
+      .filter(({ step }: { step: any }) => {
+        if (selectedPathway === "All") return true;
+        if (selectedPathway === "Main Flow") {
+          return getStepPathway(step) === "Main Flow";
+        }
+
+        return getFilterPathway(step) === selectedPathway;
+      });
+  }, [getFilterPathway, getStepPathway, selectedPathway, steps]);
+
+  const activeVisibleIndex = Math.max(
+    0,
+    visibleStepEntries.findIndex(
+      ({ absoluteIdx }: { absoluteIdx: number }) =>
+        absoluteIdx === currentIndex,
     ),
-  ) as string[];
+  );
 
-  const visibleSteps =
-    selectedPathway === "All"
-      ? steps
-      : steps.filter((s: any) => {
-          const p =
-            s.enrichedData?.extraction_meta?.agent_pathway || s.enriched_file;
-          const mappedP = p && p !== "Common" ? p : "Main Flow";
-          return mappedP === selectedPathway;
-        });
+  const modalStepEntries = useMemo(() => {
+    const start = Math.max(0, currentIndex - MODAL_WINDOW_RADIUS);
+    const end = Math.min(steps.length, currentIndex + MODAL_WINDOW_RADIUS + 1);
+
+    return steps.slice(start, end).map((step: any, localIdx: number) => ({
+      step,
+      absoluteIdx: start + localIdx,
+    }));
+  }, [currentIndex, steps]);
 
   const currentStep = steps[currentIndex];
 
+  const buildEnrichedFileUrl = useCallback((step: any) => {
+    if (!step?.imagePath) return null;
+
+    const fileName =
+      step.enriched_file ||
+      `step_${String(step.step).padStart(3, "0")}_enriched.json`;
+
+    return step.imagePath.replace(
+      /\/screenshots\/[^\/]+$/,
+      `/enriched/${fileName}`,
+    );
+  }, []);
+
+  const loadStepDetails = useCallback(
+    async (step: any) => {
+      if (!step) return null;
+
+      if (step.enrichedData) return step.enrichedData;
+
+      const enrichedFileUrl = buildEnrichedFileUrl(step);
+      if (!enrichedFileUrl) return null;
+
+      if (enrichedFileUrl in stepDataCacheRef.current) {
+        return stepDataCacheRef.current[enrichedFileUrl];
+      }
+
+      if (!stepDataPromiseRef.current[enrichedFileUrl]) {
+        stepDataPromiseRef.current[enrichedFileUrl] = fetch(enrichedFileUrl)
+          .then(async (res) => {
+            if (!res.ok) return null;
+            return await res.json();
+          })
+          .then((json) => {
+            stepDataCacheRef.current[enrichedFileUrl] = json;
+            return json;
+          })
+          .catch((e) => {
+            console.error("Failed to lazy load step details:", e);
+            stepDataCacheRef.current[enrichedFileUrl] = null;
+            return null;
+          });
+      }
+
+      return await stepDataPromiseRef.current[enrichedFileUrl];
+    },
+    [buildEnrichedFileUrl],
+  );
+
   // ─── LAZY LOADING CONTROLLER ───
   useEffect(() => {
+    let cancelled = false;
+
     const fetchStepDetails = async () => {
       if (!currentStep) return;
 
+      const enrichedFileUrl = buildEnrichedFileUrl(currentStep);
+
       if (currentStep.enrichedData) {
         setActiveStepData(currentStep.enrichedData);
-        return;
-      }
+      } else if (
+        enrichedFileUrl &&
+        enrichedFileUrl in stepDataCacheRef.current
+      ) {
+        setActiveStepData(stepDataCacheRef.current[enrichedFileUrl]);
+      } else {
+        setLoadingStepData(true);
+        const textData = await loadStepDetails(currentStep);
 
-      setLoadingStepData(true);
-
-      const fileName =
-        currentStep.enriched_file ||
-        `step_${String(currentStep.step).padStart(3, "0")}_enriched.json`;
-      const enrichedFileUrl = currentStep.imagePath.replace(
-        /\/screenshots\/[^\/]+$/,
-        `/enriched/${fileName}`,
-      );
-
-      try {
-        const res = await fetch(enrichedFileUrl);
-        if (res.ok) {
-          const textData = await res.json();
+        if (!cancelled) {
           setActiveStepData(textData);
-        } else {
-          setActiveStepData(null);
+          setLoadingStepData(false);
         }
-      } catch (e) {
-        console.error("Failed to lazy load step details:", e);
-        setActiveStepData(null);
-      } finally {
-        setLoadingStepData(false);
       }
+
+      const nextStep = steps[currentIndex + 1];
+      const prevStep = steps[currentIndex - 1];
+
+      if (nextStep) void loadStepDetails(nextStep);
+      if (prevStep) void loadStepDetails(prevStep);
     };
 
     fetchStepDetails();
-  }, [currentIndex, currentStep]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [buildEnrichedFileUrl, currentIndex, currentStep, loadStepDetails, steps]);
 
   // Bind extracted variables to the lazy-loaded state
   const metadata = activeStepData || {};
@@ -207,7 +290,9 @@ export function SessionViewer({ data }: { data: any }) {
     (idx: number, behavior: ScrollBehavior = "smooth") => {
       if (scrollRef.current) {
         isProgrammaticScroll.current = true;
-        const child = scrollRef.current.children[idx] as HTMLElement;
+        const child = scrollRef.current.querySelector(
+          `[data-absolute-index="${idx}"]`,
+        ) as HTMLElement | null;
         if (child) {
           scrollRef.current.scrollTo({
             left:
@@ -239,12 +324,13 @@ export function SessionViewer({ data }: { data: any }) {
     let closestIdx = 0,
       minDiff = Infinity;
 
-    Array.from(container.children).forEach((child, idx) => {
+    Array.from(container.children).forEach((child) => {
       const el = child as HTMLElement;
+      const absoluteIdx = Number(el.dataset.absoluteIndex);
       const diff = Math.abs(el.offsetLeft + el.offsetWidth / 2 - center);
-      if (diff < minDiff) {
+      if (Number.isFinite(absoluteIdx) && diff < minDiff) {
         minDiff = diff;
-        closestIdx = idx;
+        closestIdx = absoluteIdx;
       }
     });
 
@@ -255,7 +341,9 @@ export function SessionViewer({ data }: { data: any }) {
 
   const scrollCarouselToIndex = useCallback((idx: number) => {
     if (carouselRef.current) {
-      const child = carouselRef.current.children[idx] as HTMLElement;
+      const child = carouselRef.current.querySelector(
+        `[data-absolute-index="${idx}"]`,
+      ) as HTMLElement | null;
       if (child) {
         carouselRef.current.scrollTo({
           left:
@@ -357,86 +445,89 @@ export function SessionViewer({ data }: { data: any }) {
               // Ensures perfect centering of the carousel items regardless of web/mobile
               style={{ paddingLeft: "50vw", paddingRight: "50vw" }}
             >
-              {steps.map((step: any, idx: number) => {
-                const isActive = idx === currentIndex;
-                const isStepWebRun = step.imagePath.includes("/web/");
-                const isPanoramic =
-                  step.imagePath.includes("panoramic") ||
-                  step.imagePath.includes("full_page");
-                const hasNav =
-                  step.imagePath.includes("withnav") ||
-                  (!step.imagePath.includes("nonav") && isPanoramic);
+              {modalStepEntries.map(
+                ({ step, absoluteIdx }: { step: any; absoluteIdx: number }) => {
+                  const isActive = absoluteIdx === currentIndex;
+                  const isStepWebRun = step.imagePath.includes("/web/");
+                  const isPanoramic =
+                    step.imagePath.includes("panoramic") ||
+                    step.imagePath.includes("full_page");
+                  const hasNav =
+                    step.imagePath.includes("withnav") ||
+                    (!step.imagePath.includes("nonav") && isPanoramic);
 
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => {
-                      setCurrentIndex(idx);
-                      scrollToIndex(idx, "smooth");
-                    }}
-                    className={cn(
-                      "snap-center shrink-0 cursor-pointer flex items-center justify-center transition-all duration-500 ease-out origin-center",
-                      isActive
-                        ? "scale-100 opacity-100"
-                        : "scale-90 opacity-40 hover:opacity-70",
-                    )}
-                    // EXACT PIXEL DIMENSIONS computed via viewport height to guarantee zero layout shifting
-                    style={{
-                      height: "80vh",
-                      width: isStepWebRun
-                        ? "calc(80vh * 1.6)"
-                        : "calc(80vh * (9/19.5))",
-                      marginLeft: isStepWebRun
-                        ? "calc(-40vh * 1.6)"
-                        : "calc(-40vh * (9/19.5))", // offsets the 50vw padding for perfect centering
-                      marginRight: "48px",
-                    }}
-                  >
-                    {isStepWebRun ? (
-                      <div
-                        className={cn(
-                          "w-full h-full shadow-2xl",
-                          isActive && "ring-2 ring-white/20 rounded-[12px]",
-                        )}
-                      >
-                        <BrowserMockup
-                          imgUrl={step.imagePath}
-                          alt={`Screen ${idx + 1}`}
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        className={cn(
-                          "relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl overflow-hidden",
-                          isActive && "ring-2 ring-white/20",
-                        )}
-                        style={{
-                          borderWidth: "0.3px",
-                          borderColor: "#818A98",
-                          borderStyle: "solid",
-                          borderRadius: "0.8rem",
-                        }}
-                      >
-                        {isPanoramic ? (
-                          <PanoramicMockup
+                  return (
+                    <div
+                      key={absoluteIdx}
+                      data-absolute-index={absoluteIdx}
+                      onClick={() => {
+                        setCurrentIndex(absoluteIdx);
+                        scrollToIndex(absoluteIdx, "smooth");
+                      }}
+                      className={cn(
+                        "snap-center shrink-0 cursor-pointer flex items-center justify-center transition-all duration-500 ease-out origin-center",
+                        isActive
+                          ? "scale-100 opacity-100"
+                          : "scale-90 opacity-40 hover:opacity-70",
+                      )}
+                      // EXACT PIXEL DIMENSIONS computed via viewport height to guarantee zero layout shifting
+                      style={{
+                        height: "80vh",
+                        width: isStepWebRun
+                          ? "calc(80vh * 1.6)"
+                          : "calc(80vh * (9/19.5))",
+                        marginLeft: isStepWebRun
+                          ? "calc(-40vh * 1.6)"
+                          : "calc(-40vh * (9/19.5))", // offsets the 50vw padding for perfect centering
+                        marginRight: "48px",
+                      }}
+                    >
+                      {isStepWebRun ? (
+                        <div
+                          className={cn(
+                            "w-full h-full shadow-2xl",
+                            isActive && "ring-2 ring-white/20 rounded-[12px]",
+                          )}
+                        >
+                          <BrowserMockup
                             imgUrl={step.imagePath}
-                            alt={`Screen ${idx + 1}`}
-                            hasBottomNav={hasNav}
+                            alt={`Screen ${absoluteIdx + 1}`}
                           />
-                        ) : (
-                          <Image
-                            src={step.imagePath}
-                            alt={`Screen ${idx + 1}`}
-                            fill
-                            className="object-cover"
-                            unoptimized
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                        </div>
+                      ) : (
+                        <div
+                          className={cn(
+                            "relative w-full h-full bg-white dark:bg-zinc-900 shadow-2xl overflow-hidden",
+                            isActive && "ring-2 ring-white/20",
+                          )}
+                          style={{
+                            borderWidth: "0.3px",
+                            borderColor: "#818A98",
+                            borderStyle: "solid",
+                            borderRadius: "0.8rem",
+                          }}
+                        >
+                          {isPanoramic ? (
+                            <PanoramicMockup
+                              imgUrl={step.imagePath}
+                              alt={`Screen ${absoluteIdx + 1}`}
+                              hasBottomNav={hasNav}
+                            />
+                          ) : (
+                            <Image
+                              src={step.imagePath}
+                              alt={`Screen ${absoluteIdx + 1}`}
+                              fill
+                              className="object-cover"
+                              unoptimized
+                            />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                },
+              )}
             </div>
 
             <button
@@ -510,7 +601,10 @@ export function SessionViewer({ data }: { data: any }) {
                 onClick={() => setCurrentIndex((p) => Math.max(p - 1, 0))}
                 disabled={currentIndex === 0}
                 className="absolute left-6 z-20 p-3 bg-white/50 dark:bg-black/50 backdrop-blur-md text-zinc-900 dark:text-white rounded-full border border-white/50 dark:border-white/10 shadow-sm hover:scale-105 transition-all disabled:opacity-30"
-                style={{ top: mainDeviceHeight / 2, transform: "translateY(-50%)" }}
+                style={{
+                  top: mainDeviceHeight / 2,
+                  transform: "translateY(-50%)",
+                }}
               >
                 <ChevronLeft className="w-6 h-6" />
               </button>
@@ -570,7 +664,10 @@ export function SessionViewer({ data }: { data: any }) {
                 }
                 disabled={currentIndex === steps.length - 1}
                 className="absolute right-6 z-20 p-3 bg-white/50 dark:bg-black/50 backdrop-blur-md text-zinc-900 dark:text-white rounded-full border border-white/50 dark:border-white/10 shadow-sm hover:scale-105 transition-all disabled:opacity-30"
-                style={{ top: mainDeviceHeight / 2, transform: "translateY(-50%)" }}
+                style={{
+                  top: mainDeviceHeight / 2,
+                  transform: "translateY(-50%)",
+                }}
               >
                 <ChevronRight className="w-6 h-6" />
               </button>
@@ -943,43 +1040,47 @@ export function SessionViewer({ data }: { data: any }) {
               ref={carouselRef}
               className="flex items-center gap-3 h-full py-3 overflow-x-auto w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
             >
-              {visibleSteps.map((step: any) => {
-                const absoluteIdx = steps.indexOf(step);
-                const isStepWebRun = step.imagePath.includes("/web/");
-                return (
-                  <div
-                    key={absoluteIdx}
-                    onClick={() => setCurrentIndex(absoluteIdx)}
-                    className={cn(
-                      "relative h-full shrink-0 overflow-hidden cursor-pointer transition-all duration-300 ease-out",
-                      absoluteIdx === currentIndex
-                        ? "scale-100 opacity-100 shadow-xl ring-2 ring-[#0066FF]"
-                        : "scale-95 opacity-40 hover:opacity-70 shadow-sm",
-                    )}
-                    style={{
-                      aspectRatio: isStepWebRun ? "16/10" : "9/19.5",
-                      borderRadius: "0.4rem",
-                      borderWidth: "0.3px",
-                      borderColor: "#818A98",
-                      borderStyle: "solid",
-                    }}
-                  >
-                    <Image
-                      src={step.imagePath}
-                      alt=""
-                      fill
+              {visibleStepEntries.map(
+                ({ step, absoluteIdx }: { step: any; absoluteIdx: number }) => {
+                  const isStepWebRun = step.imagePath.includes("/web/");
+                  return (
+                    <div
+                      key={absoluteIdx}
+                      data-absolute-index={absoluteIdx}
+                      onClick={() => setCurrentIndex(absoluteIdx)}
                       className={cn(
-                        "bg-white dark:bg-zinc-900",
-                        step.imagePath.includes("panoramic") ||
-                          step.imagePath.includes("full_page")
-                          ? "object-cover object-top"
-                          : "object-cover",
+                        "relative h-full shrink-0 overflow-hidden cursor-pointer transition-all duration-300 ease-out",
+                        absoluteIdx === currentIndex
+                          ? "scale-100 opacity-100 shadow-xl ring-2 ring-[#0066FF]"
+                          : "scale-95 opacity-40 hover:opacity-70 shadow-sm",
                       )}
-                      unoptimized
-                    />
-                  </div>
-                );
-              })}
+                      style={{
+                        aspectRatio: isStepWebRun ? "16/10" : "9/19.5",
+                        borderRadius: "0.4rem",
+                        borderWidth: "0.3px",
+                        borderColor: "#818A98",
+                        borderStyle: "solid",
+                      }}
+                    >
+                      <Image
+                        src={step.imagePath}
+                        alt=""
+                        fill
+                        sizes="64px"
+                        loading="lazy"
+                        className={cn(
+                          "bg-white dark:bg-zinc-900",
+                          step.imagePath.includes("panoramic") ||
+                            step.imagePath.includes("full_page")
+                            ? "object-cover object-top"
+                            : "object-cover",
+                        )}
+                        unoptimized
+                      />
+                    </div>
+                  );
+                },
+              )}
             </div>
           </div>
         </div>

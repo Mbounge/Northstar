@@ -1,9 +1,26 @@
 // components/flows-viewer.tsx
 "use client";
 
-import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useRef,
+  memo,
+} from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight, ChevronDown, ChevronLeft, Layers, X, Check, Copy, Link } from "lucide-react";
+import {
+  ChevronRight,
+  ChevronDown,
+  ChevronLeft,
+  Layers,
+  X,
+  Check,
+  Copy,
+  Link,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PanoramicMockup } from "./PanoramicMockup";
 import { BrowserMockup } from "./BrowserMockup";
@@ -47,15 +64,22 @@ interface FlowsViewerProps {
   platform?: "mobile" | "web";
 }
 
+interface CatalogIndexes {
+  byStep: Map<number, Screen>;
+  byFile: Map<string, Screen>;
+}
+
 // ─── HELPERS ────────────────────────────────────────────────────
 function collectAllFlows(nodes: FlowNode[]): FlowNode[] {
   const result: FlowNode[] = [];
+
   const walk = (list: FlowNode[]) => {
     for (const n of list) {
       if (n.screens && n.screens.length > 0) result.push(n);
       if (n.children) walk(n.children);
     }
   };
+
   walk(nodes);
   return result;
 }
@@ -63,60 +87,156 @@ function collectAllFlows(nodes: FlowNode[]): FlowNode[] {
 function findFlow(nodes: FlowNode[], id: string): FlowNode | null {
   for (const node of nodes) {
     if (node.id === id) return node;
-    
+
     if (node.branches) {
-      const branchIndex = node.branches.findIndex((_, bi) => `${node.id}__branch_${bi}` === id);
+      const branchIndex = node.branches.findIndex(
+        (_, bi) => `${node.id}__branch_${bi}` === id,
+      );
+
       if (branchIndex !== -1) {
         const b = node.branches[branchIndex];
+
         return {
           id,
           label: b.label || "Interaction",
           description: b.description,
           screen_count: b.screenshots ? b.screenshots.length : 0,
           screens: [],
-          children: []
+          children: [],
         };
       }
     }
-    
+
     if (node.children) {
       const found = findFlow(node.children, id);
       if (found) return found;
     }
   }
+
   return null;
 }
 
 function getLeafFlows(node: FlowNode): FlowNode[] {
   const leaves: FlowNode[] = [];
+
   const walk = (n: FlowNode) => {
     const hasChildren = n.children && n.children.length > 0;
+
     if (!hasChildren && n.screens && n.screens.length > 0) {
       leaves.push(n);
     }
+
     if (n.children) {
       n.children.forEach(walk);
     }
   };
+
   walk(node);
   return leaves;
 }
 
-function buildImgUrl(tenantId: string, appName: string, mode: string, file: string, platform: string): string {
-  if (file && file.startsWith("http")) return file; // Absolute URL bypass
-  const cleanFileName = file.split('/').pop() || file;
-  const platformPrefix = platform === "web" ? "web/" : (platform === "mobile" ? "mobile/" : "");
+function getFileKey(value?: string | null) {
+  if (!value || typeof value !== "string") return "";
+  return value.split("/").pop()?.toLowerCase() || value.toLowerCase();
+}
+
+function buildCatalogIndexes(catalog: Screen[] = []): CatalogIndexes {
+  const byStep = new Map<number, Screen>();
+  const byFile = new Map<string, Screen>();
+
+  for (const screen of catalog) {
+    if (screen?.timeline_step !== undefined && screen?.timeline_step !== null) {
+      byStep.set(Number(screen.timeline_step), screen);
+    }
+
+    const fileKey = getFileKey(screen?.screenshot_file);
+    if (fileKey) byFile.set(fileKey, screen);
+  }
+
+  return { byStep, byFile };
+}
+
+function resolveScreenByFile(indexes: CatalogIndexes, file: string) {
+  return indexes.byFile.get(getFileKey(file)) || null;
+}
+
+function resolveScreenByStep(indexes: CatalogIndexes, step: number | string) {
+  return indexes.byStep.get(Number(step)) || null;
+}
+
+function resolveScreensForFlow(
+  flow: FlowNode,
+  catalogIndexes: CatalogIndexes,
+): Screen[] {
+  const hasSpineOrBranches =
+    (Array.isArray(flow.spine) && flow.spine.length > 0) ||
+    (Array.isArray(flow.branches) && flow.branches.length > 0);
+
+  if (hasSpineOrBranches) {
+    const uniqueFileNames = new Set<string>();
+
+    if (Array.isArray(flow.spine)) {
+      flow.spine.forEach((path) => {
+        const fname = getFileKey(path);
+        if (fname) uniqueFileNames.add(fname);
+      });
+    }
+
+    if (Array.isArray(flow.branches)) {
+      flow.branches.forEach((branch) => {
+        if (Array.isArray(branch.screenshots)) {
+          branch.screenshots.forEach((path) => {
+            const fname = getFileKey(path);
+            if (fname) uniqueFileNames.add(fname);
+          });
+        }
+      });
+    }
+
+    return Array.from(uniqueFileNames)
+      .map((fname) => catalogIndexes.byFile.get(fname))
+      .filter(Boolean) as Screen[];
+  }
+
+  return (flow.screens || [])
+    .map((step) => resolveScreenByStep(catalogIndexes, step))
+    .filter(Boolean) as Screen[];
+}
+
+function buildImgUrl(
+  tenantId: string,
+  appName: string,
+  mode: string,
+  file: string,
+  platform: string,
+): string {
+  if (file && file.startsWith("http")) return file;
+
+  const cleanFileName = file.split("/").pop() || file;
+  const platformPrefix =
+    platform === "web" ? "web/" : platform === "mobile" ? "mobile/" : "";
+
   return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${appName}/${platformPrefix}${mode}/screenshots/${cleanFileName}`;
 }
 
-async function copyImageToClipboard(url: string, onSuccess?: () => void, onError?: () => void) {
+async function copyImageToClipboard(
+  url: string,
+  onSuccess?: () => void,
+  onError?: () => void,
+) {
   try {
     const res = await fetch(url, { mode: "cors" });
     if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+
     const blob = await res.blob();
     const pngBlob = blob.type === "image/png" ? blob : await convertToPng(blob);
-    if (!navigator.clipboard?.write) throw new Error("Clipboard API unavailable");
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
+
+    if (!navigator.clipboard?.write)
+      throw new Error("Clipboard API unavailable");
+
+    await navigator.clipboard.write([
+      new ClipboardItem({ "image/png": pngBlob }),
+    ]);
     onSuccess?.();
   } catch (err) {
     console.warn("Copy failed:", err instanceof Error ? err.message : err);
@@ -128,14 +248,19 @@ async function convertToPng(blob: Blob): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
     const url = URL.createObjectURL(blob);
+
     img.onload = () => {
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       canvas.getContext("2d")!.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
-      canvas.toBlob((b) => b ? resolve(b) : reject(new Error("toBlob failed")), "image/png");
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+        "image/png",
+      );
     };
+
     img.onerror = reject;
     img.src = url;
   });
@@ -143,56 +268,94 @@ async function convertToPng(blob: Blob): Promise<Blob> {
 
 // ─── DETAIL MODAL ───────────────────────────────────────────────
 function ScreenDetailModal({
-  screens, initialIndex, flowLabel, appName, tenantId, mode, onClose, platform = "mobile",
+  screens,
+  initialIndex,
+  flowLabel,
+  appName,
+  tenantId,
+  mode,
+  onClose,
+  platform = "mobile",
 }: {
-  screens: Screen[]; initialIndex: number; flowLabel: string;
-  appName: string; tenantId: string; mode: string; onClose: () => void; platform?: string;
+  screens: Screen[];
+  initialIndex: number;
+  flowLabel: string;
+  appName: string;
+  tenantId: string;
+  mode: string;
+  onClose: () => void;
+  platform?: string;
 }) {
   const [mounted, setMounted] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
-  
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const isProgrammaticScroll = useRef(false);
   const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
 
   const currentScreen = screens[currentIndex];
-  const currentImgUrl = currentScreen ? buildImgUrl(tenantId, appName, mode, currentScreen.screenshot_file, platform) : "";
+  const currentImgUrl = currentScreen
+    ? buildImgUrl(
+        tenantId,
+        appName,
+        mode,
+        currentScreen.screenshot_file,
+        platform,
+      )
+    : "";
   const isWeb = platform === "web" || currentImgUrl.includes("/web/");
 
-  const scrollToIndex = useCallback((idx: number, behavior: ScrollBehavior = "smooth") => {
-    if (scrollRef.current) {
-      isProgrammaticScroll.current = true;
-      const child = scrollRef.current.children[idx] as HTMLElement;
-      if (child) {
-        scrollRef.current.scrollTo({
-          left: child.offsetLeft - scrollRef.current.offsetWidth / 2 + child.offsetWidth / 2,
-          behavior,
-        });
+  const scrollToIndex = useCallback(
+    (idx: number, behavior: ScrollBehavior = "smooth") => {
+      if (scrollRef.current) {
+        isProgrammaticScroll.current = true;
+        const child = scrollRef.current.children[idx] as HTMLElement;
+
+        if (child) {
+          scrollRef.current.scrollTo({
+            left:
+              child.offsetLeft -
+              scrollRef.current.offsetWidth / 2 +
+              child.offsetWidth / 2,
+            behavior,
+          });
+        }
+
+        if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
+
+        scrollTimeout.current = setTimeout(
+          () => {
+            isProgrammaticScroll.current = false;
+          },
+          behavior === "instant" ? 10 : 500,
+        );
       }
-      if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
-      scrollTimeout.current = setTimeout(() => {
-        isProgrammaticScroll.current = false;
-      }, behavior === "instant" ? 10 : 500); 
-    }
-  }, []);
+    },
+    [],
+  );
 
   const handleModalScroll = useCallback(() => {
-    if (isProgrammaticScroll.current) return; 
+    if (isProgrammaticScroll.current) return;
     if (!scrollRef.current) return;
-    
+
     const container = scrollRef.current;
     const center = container.scrollLeft + container.clientWidth / 2;
-    let closestIdx = 0, minDiff = Infinity;
-    
+    let closestIdx = 0;
+    let minDiff = Infinity;
+
     Array.from(container.children).forEach((child, idx) => {
       const el = child as HTMLElement;
       const diff = Math.abs(el.offsetLeft + el.offsetWidth / 2 - center);
-      if (diff < minDiff) { minDiff = diff; closestIdx = idx; }
+
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestIdx = idx;
+      }
     });
-    
+
     if (closestIdx !== currentIndex) setCurrentIndex(closestIdx);
   }, [currentIndex]);
 
@@ -207,71 +370,203 @@ function ScreenDetailModal({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+
       if (e.key === "ArrowRight") {
-        setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; });
+        setCurrentIndex((i) => {
+          const n = Math.min(i + 1, screens.length - 1);
+          scrollToIndex(n);
+          return n;
+        });
       }
+
       if (e.key === "ArrowLeft") {
-        setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; });
+        setCurrentIndex((i) => {
+          const n = Math.max(i - 1, 0);
+          scrollToIndex(n);
+          return n;
+        });
       }
     };
+
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose, screens.length, scrollToIndex]);
 
-  const handleBackdropClick = useCallback((e: React.MouseEvent) => {
-    if (modalRef.current && !modalRef.current.contains(e.target as Node)) onClose();
-  }, [onClose]);
+  const handleBackdropClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (modalRef.current && !modalRef.current.contains(e.target as Node))
+        onClose();
+    },
+    [onClose],
+  );
 
   const handleCopy = () => {
     copyImageToClipboard(
       currentImgUrl,
-      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
-      () => { setCopyError(true); setTimeout(() => setCopyError(false), 2000); }
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => {
+        setCopyError(true);
+        setTimeout(() => setCopyError(false), 2000);
+      },
     );
   };
 
   if (!mounted) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] backdrop-blur-2xl bg-black/50 animate-in fade-in duration-150" onClick={handleBackdropClick}>
+    <div
+      className="fixed inset-0 z-[9999] backdrop-blur-2xl bg-black/50 animate-in fade-in duration-150"
+      onClick={handleBackdropClick}
+    >
       <div ref={modalRef} className="w-full h-full flex flex-col">
         <div className="h-[60px] shrink-0 flex items-center justify-between px-8 border-b border-white/10">
           <div className="flex items-center gap-3">
-            <span className="text-white font-bold text-[15px]">{flowLabel}</span>
-            <span className="text-white/40 font-mono text-[13px]">{currentIndex + 1} / {screens.length}</span>
+            <span className="text-white font-bold text-[15px]">
+              {flowLabel}
+            </span>
+            <span className="text-white/40 font-mono text-[13px]">
+              {currentIndex + 1} / {screens.length}
+            </span>
           </div>
+
           <div className="flex items-center gap-3">
-            <button onClick={handleCopy} className={cn("h-9 px-5 flex items-center gap-2 rounded-full text-[13px] font-bold transition-all border", copied ? "bg-emerald-500 border-emerald-400 text-white" : copyError ? "bg-red-500 border-red-400 text-white" : "bg-white/10 border-white/20 text-white hover:bg-white/20")}>
-              {copied ? <><Check className="w-3.5 h-3.5" />Copied!</> : copyError ? "Failed" : <><Copy className="w-3.5 h-3.5" />Copy</>}
+            <button
+              onClick={handleCopy}
+              className={cn(
+                "h-9 px-5 flex items-center gap-2 rounded-full text-[13px] font-bold transition-all border",
+                copied
+                  ? "bg-emerald-500 border-emerald-400 text-white"
+                  : copyError
+                    ? "bg-red-500 border-red-400 text-white"
+                    : "bg-white/10 border-white/20 text-white hover:bg-white/20",
+              )}
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  Copied!
+                </>
+              ) : copyError ? (
+                "Failed"
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy
+                </>
+              )}
             </button>
-            <button onClick={onClose} className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all">
+
+            <button
+              onClick={onClose}
+              className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-all"
+            >
               <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
         <div className="flex-1 relative min-h-0 flex flex-col justify-center">
-          <button onClick={() => setCurrentIndex((i) => { const n = Math.max(i - 1, 0); scrollToIndex(n); return n; })} disabled={currentIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none">
+          <button
+            onClick={() =>
+              setCurrentIndex((i) => {
+                const n = Math.max(i - 1, 0);
+                scrollToIndex(n);
+                return n;
+              })
+            }
+            disabled={currentIndex === 0}
+            className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
+          >
             <ChevronLeft className="w-6 h-6" />
           </button>
 
-          <div ref={scrollRef} onScroll={handleModalScroll} className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]" style={{ paddingLeft: isWeb ? "calc(50vw - 320px)" : "calc(50vw - 18.5vh)", paddingRight: isWeb ? "calc(50vw - 320px)" : "calc(50vw - 18.5vh)" }}>
+          <div
+            ref={scrollRef}
+            onScroll={handleModalScroll}
+            className="flex-1 w-full flex items-center gap-8 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+            style={{
+              paddingLeft: isWeb ? "calc(50vw - 320px)" : "calc(50vw - 18.5vh)",
+              paddingRight: isWeb
+                ? "calc(50vw - 320px)"
+                : "calc(50vw - 18.5vh)",
+            }}
+          >
             {screens.map((screen, idx) => {
-              const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
+              const imgUrl = buildImgUrl(
+                tenantId,
+                appName,
+                mode,
+                screen.screenshot_file,
+                platform,
+              );
               const isActive = idx === currentIndex;
-              const isStepWebRun = platform === "web" || imgUrl.includes("/web/");
-              const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
-              const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
+              const isStepWebRun =
+                platform === "web" || imgUrl.includes("/web/");
+              const isPanoramic =
+                screen.screenshot_file.includes("panoramic") ||
+                screen.screenshot_file.includes("full_page");
+              const hasNav =
+                screen.screenshot_file.includes("withnav") ||
+                (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
               return (
-                <div key={idx} onClick={() => { setCurrentIndex(idx); scrollToIndex(idx); }} className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center" style={{ aspectRatio: isStepWebRun ? "16/10" : "9/19.5" }}>
+                <div
+                  key={idx}
+                  onClick={() => {
+                    setCurrentIndex(idx);
+                    scrollToIndex(idx);
+                  }}
+                  className="snap-center shrink-0 cursor-pointer h-[80vh] flex items-center justify-center"
+                  style={{ aspectRatio: isStepWebRun ? "16/10" : "9/19.5" }}
+                >
                   {isStepWebRun ? (
-                    <div className={cn("w-full h-full bg-white transition-all duration-300 ease-out origin-center rounded-[12px] shadow-2xl", isActive ? "scale-100 opacity-100 ring-2 ring-white/20" : "scale-95 opacity-40 hover:opacity-70")}>
-                      <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                    <div
+                      className={cn(
+                        "w-full h-full bg-white transition-all duration-300 ease-out origin-center rounded-[12px] shadow-2xl",
+                        isActive
+                          ? "scale-100 opacity-100 ring-2 ring-white/20"
+                          : "scale-95 opacity-40 hover:opacity-70",
+                      )}
+                    >
+                      <BrowserMockup
+                        imgUrl={imgUrl}
+                        alt={screen.display_label}
+                      />
                     </div>
                   ) : (
-                    <div className={cn("relative w-full h-full bg-white transition-all duration-300 ease-out origin-center overflow-hidden", isActive ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20" : "scale-95 opacity-40 hover:opacity-70 shadow-lg")} style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                      {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                    <div
+                      className={cn(
+                        "relative w-full h-full bg-white transition-all duration-300 ease-out origin-center overflow-hidden",
+                        isActive
+                          ? "scale-100 opacity-100 shadow-2xl ring-2 ring-white/20"
+                          : "scale-95 opacity-40 hover:opacity-70 shadow-lg",
+                      )}
+                      style={{
+                        borderRadius: "0.8rem",
+                        borderWidth: "0.3px",
+                        borderColor: "#818A98",
+                        borderStyle: "solid",
+                      }}
+                    >
+                      {isPanoramic ? (
+                        <PanoramicMockup
+                          imgUrl={imgUrl}
+                          alt={screen.display_label}
+                          isActive={false}
+                          hasBottomNav={hasNav}
+                        />
+                      ) : (
+                        <img
+                          src={imgUrl}
+                          alt={screen.display_label}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
                     </div>
                   )}
                 </div>
@@ -279,48 +574,71 @@ function ScreenDetailModal({
             })}
           </div>
 
-          <button onClick={() => setCurrentIndex((i) => { const n = Math.min(i + 1, screens.length - 1); scrollToIndex(n); return n; })} disabled={currentIndex === screens.length - 1} className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none">
+          <button
+            onClick={() =>
+              setCurrentIndex((i) => {
+                const n = Math.min(i + 1, screens.length - 1);
+                scrollToIndex(n);
+                return n;
+              })
+            }
+            disabled={currentIndex === screens.length - 1}
+            className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md transition-all disabled:opacity-20 disabled:pointer-events-none"
+          >
             <ChevronRight className="w-6 h-6" />
           </button>
         </div>
 
         <div className="h-[52px] shrink-0 flex items-center justify-center border-t border-white/10">
-          <span className="text-white/60 text-[13px] font-medium">{currentScreen?.display_label}</span>
+          <span className="text-white/60 text-[13px] font-medium">
+            {currentScreen?.display_label}
+          </span>
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }
 
 // ─── SIDEBAR NODE ───────────────────────────────────────────────
-function SidebarNode({
-  node, depth = 0, activeFlowId, expandedNodes, onSelect, onToggle,
+const SidebarNode = memo(function SidebarNode({
+  node,
+  depth = 0,
+  activeFlowId,
+  expandedNodes,
+  onSelect,
+  onToggle,
 }: {
-  node: FlowNode; depth?: number; activeFlowId: string | null;
-  expandedNodes: Set<string>; onSelect: (id: string) => void;
+  node: FlowNode;
+  depth?: number;
+  activeFlowId: string | null;
+  expandedNodes: Set<string>;
+  onSelect: (id: string) => void;
   onToggle: (id: string, e: React.MouseEvent) => void;
 }) {
   const isExpanded = expandedNodes.has(node.id);
-  
+
   const hasRealChildren = node.children && node.children.length > 0;
   const hasVirtualChildren = node.branches && node.branches.length > 0;
   const hasChildren = hasRealChildren || hasVirtualChildren;
 
   const virtualChildren = useMemo(() => {
     if (!node.branches) return [];
+
     return node.branches.map((b, bi) => ({
       id: `${node.id}__branch_${bi}`,
       label: b.label || "Interaction",
       screen_count: b.screenshots ? b.screenshots.length : 0,
       screens: [],
-      children: []
+      children: [],
     }));
   }, [node.branches, node.id]);
 
   const isBranchOfThisNodeActive = useMemo(() => {
     if (!activeFlowId || !node.branches) return false;
-    return node.branches.some((_, bi) => `${node.id}__branch_${bi}` === activeFlowId);
+    return node.branches.some(
+      (_, bi) => `${node.id}__branch_${bi}` === activeFlowId,
+    );
   }, [node.branches, node.id, activeFlowId]);
 
   const isActive = activeFlowId === node.id || isBranchOfThisNodeActive;
@@ -340,49 +658,86 @@ function SidebarNode({
       >
         <div className="flex items-center gap-2 pr-2 min-w-0">
           {hasChildren ? (
-            <button onClick={(e) => onToggle(node.id, e)} className="p-1 -ml-1 rounded-md hover:bg-white/60 dark:hover:bg-white/10 transition-colors shrink-0">
-              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            <button
+              onClick={(e) => onToggle(node.id, e)}
+              className="p-1 -ml-1 rounded-md hover:bg-white/60 dark:hover:bg-white/10 transition-colors shrink-0"
+            >
+              {isExpanded ? (
+                <ChevronDown className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5" />
+              )}
             </button>
-          ) : <span className="w-5 shrink-0" />}
-          
-          <span className={cn(
-            "truncate leading-tight",
-            isActive ? "font-bold" : "font-medium",
-            depth === 0 ? "text-[14px] font-bold" : "text-[13px]"
-          )}>
+          ) : (
+            <span className="w-5 shrink-0" />
+          )}
+
+          <span
+            className={cn(
+              "truncate leading-tight",
+              isActive ? "font-bold" : "font-medium",
+              depth === 0 ? "text-[14px] font-bold" : "text-[13px]",
+            )}
+          >
             {node.label}
           </span>
+
           {node.is_reference && (
             <Link className="w-3 h-3 shrink-0 text-zinc-400 dark:text-zinc-500 opacity-50" />
           )}
         </div>
+
         {node.screen_count > 0 && !hasVirtualChildren && (
-          <span className={cn(
-            "text-[11px] tabular-nums shrink-0 font-mono font-semibold px-2 py-0.5 rounded-full",
-            isActive ? "bg-white/60 dark:bg-black/40 text-zinc-800 dark:text-zinc-200" : "bg-white/30 dark:bg-white/5 text-zinc-500 dark:text-zinc-400"
-          )}>
+          <span
+            className={cn(
+              "text-[11px] tabular-nums shrink-0 font-mono font-semibold px-2 py-0.5 rounded-full",
+              isActive
+                ? "bg-white/60 dark:bg-black/40 text-zinc-800 dark:text-zinc-200"
+                : "bg-white/30 dark:bg-white/5 text-zinc-500 dark:text-zinc-400",
+            )}
+          >
             {node.screen_count}
           </span>
         )}
       </div>
+
       {hasChildren && isExpanded && (
         <div className="flex flex-col mt-0.5">
-          {hasRealChildren && node.children!.map((child) => (
-            <SidebarNode key={child.id} node={child} depth={depth + 1} activeFlowId={activeFlowId} expandedNodes={expandedNodes} onSelect={onSelect} onToggle={onToggle} />
-          ))}
-          {hasVirtualChildren && virtualChildren.map((child) => (
-            <SidebarNode key={child.id} node={child as any} depth={depth + 1} activeFlowId={activeFlowId} expandedNodes={expandedNodes} onSelect={onSelect} onToggle={onToggle} />
-          ))}
+          {hasRealChildren &&
+            node.children!.map((child) => (
+              <SidebarNode
+                key={child.id}
+                node={child}
+                depth={depth + 1}
+                activeFlowId={activeFlowId}
+                expandedNodes={expandedNodes}
+                onSelect={onSelect}
+                onToggle={onToggle}
+              />
+            ))}
+
+          {hasVirtualChildren &&
+            virtualChildren.map((child) => (
+              <SidebarNode
+                key={child.id}
+                node={child as any}
+                depth={depth + 1}
+                activeFlowId={activeFlowId}
+                expandedNodes={expandedNodes}
+                onSelect={onSelect}
+                onToggle={onToggle}
+              />
+            ))}
         </div>
       )}
     </div>
   );
-}
+});
 
 // ─── FLOW SECTION ───────────────────────────────────────────────
 interface FlowSectionProps {
   flow: FlowNode;
-  catalog: Screen[];
+  catalogIndexes: CatalogIndexes;
   appName: string;
   tenantId: string;
   mode: string;
@@ -394,56 +749,131 @@ interface FlowSectionProps {
   platform: string;
 }
 
-function FlowSection({
-  flow, catalog, appName, tenantId, mode, isHighlighted, activeFlowId, onScreenClick, sectionRef, getRef, platform = "mobile",
+const FlowSection = memo(function FlowSection({
+  flow,
+  catalogIndexes,
+  appName,
+  tenantId,
+  mode,
+  isHighlighted,
+  activeFlowId,
+  onScreenClick,
+  sectionRef,
+  getRef,
+  platform = "mobile",
 }: FlowSectionProps) {
-  const hasSpineOrBranches = (Array.isArray(flow.spine) && flow.spine.length > 0) || 
-                             (Array.isArray(flow.branches) && flow.branches.length > 0);
-  
+  const hasSpineOrBranches =
+    (Array.isArray(flow.spine) && flow.spine.length > 0) ||
+    (Array.isArray(flow.branches) && flow.branches.length > 0);
+
   const isWeb = platform === "web";
 
-  if (hasSpineOrBranches) {
-    const spineScreens = (flow.spine || [])
-      .map(path => {
-        const fname = path.split('/').pop()?.toLowerCase();
-        return catalog.find(s => s.screenshot_file.split('/').pop()?.toLowerCase() === fname);
-      })
-      .filter(Boolean) as Screen[];
+  const spineScreens = useMemo(() => {
+    if (!hasSpineOrBranches) return [];
 
+    return (flow.spine || [])
+      .map((path) => resolveScreenByFile(catalogIndexes, path))
+      .filter(Boolean) as Screen[];
+  }, [catalogIndexes, flow.spine, hasSpineOrBranches]);
+
+  const legacyScreens = useMemo(() => {
+    if (hasSpineOrBranches) return [];
+
+    return (flow.screens || [])
+      .map((step) => resolveScreenByStep(catalogIndexes, step))
+      .filter(Boolean) as Screen[];
+  }, [catalogIndexes, flow.screens, hasSpineOrBranches]);
+
+  if (hasSpineOrBranches) {
     return (
-      <div ref={sectionRef} data-section-id={flow.id} className="flex flex-col pt-4 pb-8 divide-y divide-black/5 dark:divide-white/5">
-        
+      <div
+        ref={sectionRef}
+        data-section-id={flow.id}
+        className="flex flex-col pt-4 pb-8 divide-y divide-black/5 dark:divide-white/5"
+      >
         {spineScreens.length > 0 && (
           <div className="py-4" data-section-id={flow.id}>
             <div className="px-10 pb-4 flex items-baseline gap-4">
-              <h2 className={cn("text-2xl font-bold tracking-tight transition-colors", isHighlighted ? "text-[#0066FF]" : "text-zinc-700 dark:text-zinc-300")}>
+              <h2
+                className={cn(
+                  "text-2xl font-bold tracking-tight transition-colors",
+                  isHighlighted
+                    ? "text-[#0066FF]"
+                    : "text-zinc-700 dark:text-zinc-300",
+                )}
+              >
                 {flow.label}
               </h2>
               <span className="text-zinc-500 dark:text-zinc-400 text-sm font-semibold bg-white/40 dark:bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/50 dark:border-white/10">
-                {spineScreens.length} screen{spineScreens.length !== 1 ? "s" : ""}
+                {spineScreens.length} screen
+                {spineScreens.length !== 1 ? "s" : ""}
               </span>
             </div>
+
             {flow.description && (
               <p className="mx-10 mb-2 text-[14px] text-zinc-600 dark:text-zinc-400 leading-relaxed bg-white/30 dark:bg-black/20 backdrop-blur-md px-5 py-3 rounded-xl border border-white/40 dark:border-white/10">
                 {flow.description}
               </p>
             )}
+
             <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
               <div className="flex gap-8 px-10 min-w-max items-end">
                 {spineScreens.map((screen, idx) => {
-                  const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
-                  const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
-                  const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
+                  const imgUrl = buildImgUrl(
+                    tenantId,
+                    appName,
+                    mode,
+                    screen.screenshot_file,
+                    platform,
+                  );
+                  const isPanoramic =
+                    screen.screenshot_file.includes("panoramic") ||
+                    screen.screenshot_file.includes("full_page");
+                  const hasNav =
+                    screen.screenshot_file.includes("withnav") ||
+                    (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
                   return (
-                    <div key={idx} onClick={() => onScreenClick(spineScreens, idx, flow.label)} className="group flex flex-col shrink-0 cursor-pointer">
+                    <div
+                      key={`${screen.timeline_step}-${idx}`}
+                      onClick={() =>
+                        onScreenClick(spineScreens, idx, flow.label)
+                      }
+                      className="group flex flex-col shrink-0 cursor-pointer"
+                    >
                       {isWeb ? (
                         <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
-                          <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                          <BrowserMockup
+                            imgUrl={imgUrl}
+                            alt={screen.display_label}
+                          />
                         </div>
                       ) : (
-                        <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                          {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                        <div
+                          className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden"
+                          style={{
+                            borderRadius: "0.8rem",
+                            borderWidth: "0.3px",
+                            borderColor: "#818A98",
+                            borderStyle: "solid",
+                          }}
+                        >
+                          {isPanoramic ? (
+                            <PanoramicMockup
+                              imgUrl={imgUrl}
+                              alt={screen.display_label}
+                              isActive={false}
+                              hasBottomNav={hasNav}
+                            />
+                          ) : (
+                            <img
+                              src={imgUrl}
+                              alt={screen.display_label}
+                              loading="lazy"
+                              decoding="async"
+                              className="w-full h-full object-cover"
+                            />
+                          )}
                         </div>
                       )}
                     </div>
@@ -458,45 +888,100 @@ function FlowSection({
           const branchId = `${flow.id}__branch_${bi}`;
           const isBranchActive = branchId === activeFlowId;
           const branchScreens = (branch.screenshots || [])
-            .map(path => {
-              const fname = path.split('/').pop()?.toLowerCase();
-              return catalog.find(s => s.screenshot_file.split('/').pop()?.toLowerCase() === fname);
-            })
+            .map((path) => resolveScreenByFile(catalogIndexes, path))
             .filter(Boolean) as Screen[];
 
           if (branchScreens.length === 0) return null;
 
           return (
-            <div key={bi} ref={getRef(branchId)} data-section-id={branchId} className="py-8">
+            <div
+              key={bi}
+              ref={getRef(branchId)}
+              data-section-id={branchId}
+              className="py-8"
+            >
               <div className="px-10 pb-4 flex items-baseline gap-4">
-                <h3 className={cn("text-xl font-bold tracking-tight transition-colors", isBranchActive ? "text-[#0066FF]" : "text-zinc-800 dark:text-zinc-200")}>
+                <h3
+                  className={cn(
+                    "text-xl font-bold tracking-tight transition-colors",
+                    isBranchActive
+                      ? "text-[#0066FF]"
+                      : "text-zinc-800 dark:text-zinc-200",
+                  )}
+                >
                   {branch.label}
                 </h3>
                 <span className="text-zinc-500 dark:text-zinc-400 text-xs font-semibold bg-white/40 dark:bg-black/30 backdrop-blur-md px-2.5 py-0.5 rounded-full border border-white/50 dark:border-white/10">
-                  {branchScreens.length} screen{branchScreens.length !== 1 ? "s" : ""}
+                  {branchScreens.length} screen
+                  {branchScreens.length !== 1 ? "s" : ""}
                 </span>
               </div>
+
               {branch.description && (
                 <p className="mx-10 mb-2 text-[13px] text-zinc-600 dark:text-zinc-400 leading-relaxed bg-white/20 dark:bg-black/10 backdrop-blur-sm px-5 py-2.5 rounded-xl border border-white/30 dark:border-white/5">
                   {branch.description}
                 </p>
               )}
+
               <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 <div className="flex gap-8 px-10 min-w-max items-end">
                   {branchScreens.map((screen, idx) => {
-                    const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
-                    const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
-                    const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
+                    const imgUrl = buildImgUrl(
+                      tenantId,
+                      appName,
+                      mode,
+                      screen.screenshot_file,
+                      platform,
+                    );
+                    const isPanoramic =
+                      screen.screenshot_file.includes("panoramic") ||
+                      screen.screenshot_file.includes("full_page");
+                    const hasNav =
+                      screen.screenshot_file.includes("withnav") ||
+                      (!screen.screenshot_file.includes("nonav") &&
+                        isPanoramic);
 
                     return (
-                      <div key={idx} onClick={() => onScreenClick(branchScreens, idx, branch.label)} className="group flex flex-col shrink-0 cursor-pointer">
+                      <div
+                        key={`${screen.timeline_step}-${idx}`}
+                        onClick={() =>
+                          onScreenClick(branchScreens, idx, branch.label)
+                        }
+                        className="group flex flex-col shrink-0 cursor-pointer"
+                      >
                         {isWeb ? (
                           <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
-                            <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                            <BrowserMockup
+                              imgUrl={imgUrl}
+                              alt={screen.display_label}
+                            />
                           </div>
                         ) : (
-                          <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                            {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                          <div
+                            className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden"
+                            style={{
+                              borderRadius: "0.8rem",
+                              borderWidth: "0.3px",
+                              borderColor: "#818A98",
+                              borderStyle: "solid",
+                            }}
+                          >
+                            {isPanoramic ? (
+                              <PanoramicMockup
+                                imgUrl={imgUrl}
+                                alt={screen.display_label}
+                                isActive={false}
+                                hasBottomNav={hasNav}
+                              />
+                            ) : (
+                              <img
+                                src={imgUrl}
+                                alt={screen.display_label}
+                                loading="lazy"
+                                decoding="async"
+                                className="w-full h-full object-cover"
+                              />
+                            )}
                           </div>
                         )}
                       </div>
@@ -511,43 +996,89 @@ function FlowSection({
     );
   }
 
-  const legacyScreens = (flow.screens || [])
-    .map(step => catalog.find(s => Number(s.timeline_step) === Number(step)))
-    .filter(Boolean) as Screen[];
-
   if (legacyScreens.length === 0) return null;
 
   return (
-    <div ref={sectionRef} data-section-id={flow.id} className="flex flex-col pt-4 pb-8">
+    <div
+      ref={sectionRef}
+      data-section-id={flow.id}
+      className="flex flex-col pt-4 pb-8"
+    >
       <div className="px-10 pb-4 flex items-baseline gap-4">
-        <h2 className={cn("text-2xl font-bold tracking-tight transition-colors", isHighlighted ? "text-[#0066FF]" : "text-zinc-700 dark:text-zinc-300")}>
+        <h2
+          className={cn(
+            "text-2xl font-bold tracking-tight transition-colors",
+            isHighlighted
+              ? "text-[#0066FF]"
+              : "text-zinc-700 dark:text-zinc-300",
+          )}
+        >
           {flow.label}
         </h2>
         <span className="text-zinc-500 dark:text-zinc-400 text-sm font-semibold bg-white/40 dark:bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/50 dark:border-white/10">
           {legacyScreens.length} screen{legacyScreens.length !== 1 ? "s" : ""}
         </span>
       </div>
+
       {flow.description && (
         <p className="mx-10 mb-2 text-[14px] text-zinc-600 dark:text-zinc-400 leading-relaxed bg-white/30 dark:bg-black/20 backdrop-blur-md px-5 py-3 rounded-xl border border-white/40 dark:border-white/10">
           {flow.description}
         </p>
       )}
+
       <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex gap-8 px-10 min-w-max items-end">
           {legacyScreens.map((screen, idx) => {
-            const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
-            const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
-            const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
+            const imgUrl = buildImgUrl(
+              tenantId,
+              appName,
+              mode,
+              screen.screenshot_file,
+              platform,
+            );
+            const isPanoramic =
+              screen.screenshot_file.includes("panoramic") ||
+              screen.screenshot_file.includes("full_page");
+            const hasNav =
+              screen.screenshot_file.includes("withnav") ||
+              (!screen.screenshot_file.includes("nonav") && isPanoramic);
 
             return (
-              <div key={idx} onClick={() => onScreenClick(legacyScreens, idx, flow.label)} className="group flex flex-col shrink-0 cursor-pointer">
+              <div
+                key={`${screen.timeline_step}-${idx}`}
+                onClick={() => onScreenClick(legacyScreens, idx, flow.label)}
+                className="group flex flex-col shrink-0 cursor-pointer"
+              >
                 {isWeb ? (
                   <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
                     <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
                   </div>
                 ) : (
-                  <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                    {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                  <div
+                    className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden"
+                    style={{
+                      borderRadius: "0.8rem",
+                      borderWidth: "0.3px",
+                      borderColor: "#818A98",
+                      borderStyle: "solid",
+                    }}
+                  >
+                    {isPanoramic ? (
+                      <PanoramicMockup
+                        imgUrl={imgUrl}
+                        alt={screen.display_label}
+                        isActive={false}
+                        hasBottomNav={hasNav}
+                      />
+                    ) : (
+                      <img
+                        src={imgUrl}
+                        alt={screen.display_label}
+                        loading="lazy"
+                        decoding="async"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
                   </div>
                 )}
               </div>
@@ -557,33 +1088,68 @@ function FlowSection({
       </div>
     </div>
   );
-}
+});
 
 // ─── MAIN COMPONENT ─────────────────────────────────────────────
 export function FlowsViewer({
-  flowsData, appName, tenantId, mode, platform = "mobile",
+  flowsData,
+  appName,
+  tenantId,
+  mode,
+  platform = "mobile",
 }: FlowsViewerProps) {
-
   const sanitizedTaxonomy = useMemo(() => {
     if (!flowsData?.taxonomy) return [];
+
     const seenIds = new Set<string>();
+
     const sanitize = (nodes: FlowNode[]): FlowNode[] =>
       nodes.map((n) => {
-        let newId = n.id; let counter = 1;
-        while (seenIds.has(newId)) { newId = `${n.id}-${counter}`; counter++; }
+        let newId = n.id;
+        let counter = 1;
+
+        while (seenIds.has(newId)) {
+          newId = `${n.id}-${counter}`;
+          counter++;
+        }
+
         seenIds.add(newId);
-        return { ...n, id: newId, children: n.children ? sanitize(n.children) : undefined };
+
+        return {
+          ...n,
+          id: newId,
+          children: n.children ? sanitize(n.children) : undefined,
+        };
       });
+
     return sanitize(flowsData.taxonomy);
   }, [flowsData?.taxonomy]);
 
-  const allFlows = useMemo(() => collectAllFlows(sanitizedTaxonomy), [sanitizedTaxonomy]);
+  const catalogIndexes = useMemo(
+    () => buildCatalogIndexes(flowsData.screen_catalog ?? []),
+    [flowsData.screen_catalog],
+  );
 
-  const [activeFlowId, setActiveFlowId] = useState<string | null>(allFlows[0]?.id || sanitizedTaxonomy[0]?.id || null);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(sanitizedTaxonomy.map((t) => t.id)));
-  const [detailModal, setDetailModal] = useState<{ screens: Screen[]; initialIndex: number; flowLabel: string } | null>(null);
+  const allFlows = useMemo(
+    () => collectAllFlows(sanitizedTaxonomy),
+    [sanitizedTaxonomy],
+  );
 
-  const sectionRefs = useRef<Map<string, React.RefObject<HTMLDivElement | null>>>(new Map());
+  const [activeFlowId, setActiveFlowId] = useState<string | null>(
+    allFlows[0]?.id || sanitizedTaxonomy[0]?.id || null,
+  );
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
+    new Set(sanitizedTaxonomy.map((t) => t.id)),
+  );
+  const [detailModal, setDetailModal] = useState<{
+    screens: Screen[];
+    initialIndex: number;
+    flowLabel: string;
+  } | null>(null);
+
+  const sectionRefs = useRef<
+    Map<string, React.RefObject<HTMLDivElement | null>>
+  >(new Map());
   const isScrollAnchoring = useRef(false);
   const anchorTimeout = useRef<NodeJS.Timeout | null>(null);
 
@@ -591,51 +1157,45 @@ export function FlowsViewer({
     if (!sectionRefs.current.has(id)) {
       sectionRefs.current.set(id, { current: null });
     }
+
     return sectionRefs.current.get(id)!;
   }, []);
 
-  const resolveFlowScreens = useCallback((flow: FlowNode): Screen[] => {
-    const catalog = flowsData.screen_catalog ?? [];
-    const hasSpineOrBranches = (Array.isArray(flow.spine) && flow.spine.length > 0) || 
-                               (Array.isArray(flow.branches) && flow.branches.length > 0);
-                               
-    if (hasSpineOrBranches) {
-      const uniqueFileNames = new Set<string>();
-      
-      if (Array.isArray(flow.spine)) {
-        flow.spine.forEach(path => {
-          const fname = path.split('/').pop()?.toLowerCase();
-          if (fname) uniqueFileNames.add(fname);
-        });
-      }
-      
-      if (Array.isArray(flow.branches)) {
-        flow.branches.forEach(branch => {
-          if (Array.isArray(branch.screenshots)) {
-            branch.screenshots.forEach(path => {
-              const fname = path.split('/').pop()?.toLowerCase();
-              if (fname) uniqueFileNames.add(fname);
-            });
+  const resolveFlowScreens = useCallback(
+    (flow: FlowNode): Screen[] => resolveScreensForFlow(flow, catalogIndexes),
+    [catalogIndexes],
+  );
+
+  const rootCombinedScreens = useMemo(() => {
+    const map = new Map<string, Screen[]>();
+
+    for (const rootNode of sanitizedTaxonomy) {
+      const combinedScreens: Screen[] = [];
+      const leaves = getLeafFlows(rootNode);
+
+      leaves.forEach((leaf) => {
+        const leafScreens = resolveScreensForFlow(leaf, catalogIndexes);
+
+        leafScreens.forEach((screen) => {
+          if (
+            !combinedScreens.some(
+              (existing) => existing.screenshot_file === screen.screenshot_file,
+            )
+          ) {
+            combinedScreens.push(screen);
           }
         });
-      }
-      
-      return Array.from(uniqueFileNames)
-        .map(fname => catalog.find(s => {
-          const catalogFname = s.screenshot_file.split('/').pop()?.toLowerCase();
-          return catalogFname === fname;
-        }))
-        .filter(Boolean) as Screen[];
-        
-    } else {
-      return (flow.screens || [])
-        .map((step) => catalog.find((s) => Number(s.timeline_step) === Number(step)))
-        .filter(Boolean) as Screen[];
+      });
+
+      map.set(rootNode.id, combinedScreens);
     }
-  }, [flowsData.screen_catalog]);
+
+    return map;
+  }, [catalogIndexes, sanitizedTaxonomy]);
 
   const toggleExpand = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+
     setExpandedNodes((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -643,68 +1203,81 @@ export function FlowsViewer({
     });
   }, []);
 
-  // FIXED: Extend scroll-lock timeout to 1400ms to allow deep smooth scrolls to complete
-  const handleSidebarSelect = useCallback((id: string) => {
-    setActiveFlowId(id);
-    const target = sectionRefs.current.get(id)?.current;
-    if (target) {
-      isScrollAnchoring.current = true; // Lock observer
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-      
-      if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
-      anchorTimeout.current = setTimeout(() => {
-        isScrollAnchoring.current = false; // Release observer
-      }, 1400); // 1400ms is perfectly balanced for deep scrolls
-    } else {
-      const parent = findFlow(sanitizedTaxonomy, id);
-      if (parent && parent.children && parent.children.length > 0) {
-        const firstChildId = parent.children[0].id;
-        const firstChildTarget = sectionRefs.current.get(firstChildId)?.current;
-        if (firstChildTarget) {
-          isScrollAnchoring.current = true;
-          firstChildTarget.scrollIntoView({ behavior: "smooth", block: "start" });
-          
-          if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
-          anchorTimeout.current = setTimeout(() => {
-            isScrollAnchoring.current = false;
-          }, 1400);
+  const handleSidebarSelect = useCallback(
+    (id: string) => {
+      setActiveFlowId(id);
+
+      const target = sectionRefs.current.get(id)?.current;
+
+      if (target) {
+        isScrollAnchoring.current = true;
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+
+        if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
+        anchorTimeout.current = setTimeout(() => {
+          isScrollAnchoring.current = false;
+        }, 1400);
+      } else {
+        const parent = findFlow(sanitizedTaxonomy, id);
+
+        if (parent && parent.children && parent.children.length > 0) {
+          const firstChildId = parent.children[0].id;
+          const firstChildTarget =
+            sectionRefs.current.get(firstChildId)?.current;
+
+          if (firstChildTarget) {
+            isScrollAnchoring.current = true;
+            firstChildTarget.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            });
+
+            if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
+            anchorTimeout.current = setTimeout(() => {
+              isScrollAnchoring.current = false;
+            }, 1400);
+          }
         }
       }
-    }
-  }, [sanitizedTaxonomy]);
+    },
+    [sanitizedTaxonomy],
+  );
 
-  const openDetail = useCallback((screens: Screen[], index: number, label: string) => {
-    setDetailModal({ screens, initialIndex: index, flowLabel: label });
-  }, []);
+  const openDetail = useCallback(
+    (screens: Screen[], index: number, label: string) => {
+      setDetailModal({ screens, initialIndex: index, flowLabel: label });
+    },
+    [],
+  );
 
   useEffect(() => {
     const observerCallback = (entries: IntersectionObserverEntry[]) => {
-      if (isScrollAnchoring.current) return; // Prevent observer hijacking during active scroll
+      if (isScrollAnchoring.current) return;
 
-      const intersectingEntries = entries.filter(entry => entry.isIntersecting);
-      
+      const intersectingEntries = entries.filter(
+        (entry) => entry.isIntersecting,
+      );
+
       if (intersectingEntries.length > 0) {
-        const bestEntry = intersectingEntries.reduce((best, current) => {
-          return (current.boundingClientRect.top < best.boundingClientRect.top) ? current : best;
-        });
-        
+        const bestEntry = intersectingEntries.reduce((best, current) =>
+          current.boundingClientRect.top < best.boundingClientRect.top
+            ? current
+            : best,
+        );
+
         const id = bestEntry.target.getAttribute("data-section-id");
-        if (id) {
-          setActiveFlowId(id);
-        }
+        if (id) setActiveFlowId(id);
       }
     };
 
     const observer = new IntersectionObserver(observerCallback, {
       root: null,
-      rootMargin: "-15% 0px -70% 0px", 
-      threshold: 0
+      rootMargin: "-15% 0px -70% 0px",
+      threshold: 0,
     });
 
     sectionRefs.current.forEach((ref) => {
-      if (ref.current) {
-        observer.observe(ref.current);
-      }
+      if (ref.current) observer.observe(ref.current);
     });
 
     return () => {
@@ -713,10 +1286,10 @@ export function FlowsViewer({
     };
   }, [allFlows, sanitizedTaxonomy]);
 
-  // FIXED: Only scroll sidebar automatically if the user is not actively navigating/scrolling
   useEffect(() => {
     if (activeFlowId && !isScrollAnchoring.current) {
       const activeEl = document.querySelector(`[data-id="${activeFlowId}"]`);
+
       if (activeEl) {
         activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
@@ -728,6 +1301,7 @@ export function FlowsViewer({
       if (!sectionRefs.current.has(flow.id)) {
         sectionRefs.current.set(flow.id, { current: null });
       }
+
       if (flow.branches) {
         flow.branches.forEach((_, bi) => {
           const branchId = `${flow.id}__branch_${bi}`;
@@ -737,7 +1311,8 @@ export function FlowsViewer({
         });
       }
     }
-    sanitizedTaxonomy.forEach(root => {
+
+    sanitizedTaxonomy.forEach((root) => {
       if (!sectionRefs.current.has(root.id)) {
         sectionRefs.current.set(root.id, { current: null });
       }
@@ -749,7 +1324,9 @@ export function FlowsViewer({
       <div className="flex h-[500px] items-center justify-center">
         <div className="flex flex-col items-center gap-4 bg-white/40 dark:bg-black/30 backdrop-blur-xl border border-white/50 dark:border-white/10 p-8 rounded-3xl shadow-xl">
           <Layers className="w-8 h-8 opacity-50 text-zinc-500" />
-          <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">No flow taxonomy generated yet.</p>
+          <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+            No flow taxonomy generated yet.
+          </p>
         </div>
       </div>
     );
@@ -760,7 +1337,6 @@ export function FlowsViewer({
   return (
     <>
       <div className="flex items-start bg-transparent relative w-full h-full">
-
         {/* ═══ LEFT SIDEBAR ═══ */}
         <div className="w-[280px] sticky top-[24px] h-[calc(100vh-48px)] flex flex-col border-r border-black/5 dark:border-white/10 shrink-0 z-10">
           <div className="px-6 pt-6 pb-4 shrink-0 border-b border-black/5 dark:border-white/5">
@@ -768,13 +1344,17 @@ export function FlowsViewer({
               Flows Explorer
             </h3>
           </div>
+
           <div className="flex-1 min-h-0 w-full overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <div className="flex flex-col pb-8 pt-2">
               {sanitizedTaxonomy.map((node) => (
                 <SidebarNode
-                  key={node.id} node={node}
-                  activeFlowId={activeFlowId} expandedNodes={expandedNodes}
-                  onSelect={handleSidebarSelect} onToggle={toggleExpand}
+                  key={node.id}
+                  node={node}
+                  activeFlowId={activeFlowId}
+                  expandedNodes={expandedNodes}
+                  onSelect={handleSidebarSelect}
+                  onToggle={toggleExpand}
                 />
               ))}
             </div>
@@ -785,51 +1365,99 @@ export function FlowsViewer({
         <div className="flex-1 min-w-0 bg-transparent">
           <div className="flex flex-col divide-y divide-black/5 dark:divide-white/5">
             {sanitizedTaxonomy.map((rootNode) => {
-              const combinedScreens: Screen[] = [];
-              const leaves = getLeafFlows(rootNode);
-              leaves.forEach(leaf => {
-                const leafScreens = resolveFlowScreens(leaf);
-                leafScreens.forEach(s => {
-                  if (!combinedScreens.some(exist => exist.screenshot_file === s.screenshot_file)) {
-                    combinedScreens.push(s);
-                  }
-                });
-              });
+              const combinedScreens =
+                rootCombinedScreens.get(rootNode.id) ?? [];
 
               return (
                 <div key={rootNode.id} className="flex flex-col">
-                  
                   {/* Parent Tab Master View */}
-                  <div ref={getRef(rootNode.id)} data-section-id={rootNode.id} className="flex flex-col pt-8 pb-8 bg-zinc-50/20 dark:bg-black/10">
+                  <div
+                    ref={getRef(rootNode.id)}
+                    data-section-id={rootNode.id}
+                    className="flex flex-col pt-8 pb-8 bg-zinc-50/20 dark:bg-black/10"
+                  >
                     <div className="px-10 pb-4 flex items-baseline gap-4">
-                      <h2 className={cn("text-3xl font-extrabold tracking-tight transition-colors", rootNode.id === activeFlowId ? "text-[#0066FF]" : "text-zinc-900 dark:text-white")}>
+                      <h2
+                        className={cn(
+                          "text-3xl font-extrabold tracking-tight transition-colors",
+                          rootNode.id === activeFlowId
+                            ? "text-[#0066FF]"
+                            : "text-zinc-900 dark:text-white",
+                        )}
+                      >
                         {rootNode.label}
                       </h2>
                       <span className="text-zinc-500 dark:text-zinc-400 text-sm font-semibold bg-white/40 dark:bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/50 dark:border-white/10">
-                        {combinedScreens.length} screen{combinedScreens.length !== 1 ? "s" : ""}
+                        {combinedScreens.length} screen
+                        {combinedScreens.length !== 1 ? "s" : ""}
                       </span>
                     </div>
+
                     {rootNode.description && (
                       <p className="mx-10 mb-4 text-[14px] text-zinc-600 dark:text-zinc-400 leading-relaxed bg-white/30 dark:bg-black/20 backdrop-blur-md px-5 py-3 rounded-xl border border-white/40 dark:border-white/10">
                         {rootNode.description}
                       </p>
                     )}
+
                     <div className="overflow-x-auto overflow-y-hidden pb-4 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                       <div className="flex gap-8 px-10 min-w-max items-end">
                         {combinedScreens.map((screen, idx) => {
-                          const imgUrl = buildImgUrl(tenantId, appName, mode, screen.screenshot_file, platform);
-                          const isPanoramic = screen.screenshot_file.includes("panoramic") || screen.screenshot_file.includes("full_page");
-                          const hasNav = screen.screenshot_file.includes("withnav") || (!screen.screenshot_file.includes("nonav") && isPanoramic);
+                          const imgUrl = buildImgUrl(
+                            tenantId,
+                            appName,
+                            mode,
+                            screen.screenshot_file,
+                            platform,
+                          );
+                          const isPanoramic =
+                            screen.screenshot_file.includes("panoramic") ||
+                            screen.screenshot_file.includes("full_page");
+                          const hasNav =
+                            screen.screenshot_file.includes("withnav") ||
+                            (!screen.screenshot_file.includes("nonav") &&
+                              isPanoramic);
 
                           return (
-                            <div key={idx} onClick={() => openDetail(combinedScreens, idx, rootNode.label)} className="group flex flex-col shrink-0 cursor-pointer">
+                            <div
+                              key={`${screen.timeline_step}-${idx}`}
+                              onClick={() =>
+                                openDetail(combinedScreens, idx, rootNode.label)
+                              }
+                              className="group flex flex-col shrink-0 cursor-pointer"
+                            >
                               {isWeb ? (
                                 <div className="w-[320px] h-[200px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 rounded-[12px] overflow-hidden">
-                                  <BrowserMockup imgUrl={imgUrl} alt={screen.display_label} />
+                                  <BrowserMockup
+                                    imgUrl={imgUrl}
+                                    alt={screen.display_label}
+                                  />
                                 </div>
                               ) : (
-                                <div className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden" style={{ borderRadius: "0.8rem", borderWidth: "0.3px", borderColor: "#818A98", borderStyle: "solid" }}>
-                                  {isPanoramic ? <PanoramicMockup imgUrl={imgUrl} alt={screen.display_label} isActive={false} hasBottomNav={hasNav} /> : <img src={imgUrl} alt={screen.display_label} loading="lazy" decoding="async" className="w-full h-full object-cover" />}
+                                <div
+                                  className="relative w-[260px] h-[563px] bg-white shadow-xl transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1 overflow-hidden"
+                                  style={{
+                                    borderRadius: "0.8rem",
+                                    borderWidth: "0.3px",
+                                    borderColor: "#818A98",
+                                    borderStyle: "solid",
+                                  }}
+                                >
+                                  {isPanoramic ? (
+                                    <PanoramicMockup
+                                      imgUrl={imgUrl}
+                                      alt={screen.display_label}
+                                      isActive={false}
+                                      hasBottomNav={hasNav}
+                                    />
+                                  ) : (
+                                    <img
+                                      src={imgUrl}
+                                      alt={screen.display_label}
+                                      loading="lazy"
+                                      decoding="async"
+                                      className="w-full h-full object-cover"
+                                    />
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -846,10 +1474,21 @@ export function FlowsViewer({
 
                     return (
                       <FlowSection
-                        key={childFlow.id} flow={childFlow} catalog={flowsData.screen_catalog ?? []}
-                        appName={appName} tenantId={tenantId} mode={mode}
-                        isHighlighted={childFlow.id === activeFlowId || (childFlow.branches?.some((_, bi) => `${childFlow.id}__branch_${bi}` === activeFlowId) ?? false)}
-                        activeFlowId={activeFlowId} 
+                        key={childFlow.id}
+                        flow={childFlow}
+                        catalogIndexes={catalogIndexes}
+                        appName={appName}
+                        tenantId={tenantId}
+                        mode={mode}
+                        isHighlighted={
+                          childFlow.id === activeFlowId ||
+                          (childFlow.branches?.some(
+                            (_, bi) =>
+                              `${childFlow.id}__branch_${bi}` === activeFlowId,
+                          ) ??
+                            false)
+                        }
+                        activeFlowId={activeFlowId}
                         onScreenClick={openDetail}
                         sectionRef={getRef(childFlow.id)}
                         getRef={getRef}
@@ -857,7 +1496,6 @@ export function FlowsViewer({
                       />
                     );
                   })}
-
                 </div>
               );
             })}
