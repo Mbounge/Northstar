@@ -37,9 +37,12 @@ export interface PlatformViews {
 
 export interface AppDetailsResult {
   appName: string;
+  category?: string | null;
   iconUrl: string | null;
   appStore: any;
   apkIntelligence: any;
+  hasAppStore?: boolean;
+  hasApkIntelligence?: boolean;
   mobile: PlatformViews | null;
   web: PlatformViews | null;
 }
@@ -59,7 +62,7 @@ async function fetchAgentMemory(appName: string, sessionType: 'browsing' | 'onbo
   return await res.json();
 }
 
-async function fetchApkIntelligence(appName: string, tenantId: string) {
+export async function fetchApkIntelligence(appName: string, tenantId: string) {
   let browsingRoot = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/browsing`;
   let res = await fetch(`${browsingRoot}/apk_intelligence.json`, { next: { revalidate: 300 } });
   
@@ -71,13 +74,15 @@ async function fetchApkIntelligence(appName: string, tenantId: string) {
   if (!res.ok) return null;
 
   const data = await res.json();
+
   if (data.icons?.icon_path) {
     data.icons.icon_url = `${browsingRoot}/${data.icons.icon_path}`;
   }
+
   return data;
 }
 
-async function fetchAppStoreData(appName: string, tenantId: string) {
+export async function fetchAppStoreData(appName: string, tenantId: string) {
   // 1. Try Mobile App Store First
   let publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/app_store`;
   let res = await fetch(`${publicUrl}/app_store_manifest.json`, { next: { revalidate: 300 } });
@@ -91,6 +96,7 @@ async function fetchAppStoreData(appName: string, tenantId: string) {
   }
 
   let data: any = {};
+
   if (res.ok) {
     data = await res.json();
     
@@ -121,6 +127,7 @@ async function fetchAppStoreData(appName: string, tenantId: string) {
 
   // Find best icon
   const mainIconFile = actualIcons.find(f => f.name.toLowerCase().includes('app_icon') || f.name.toLowerCase().includes('main'));
+
   if (mainIconFile) {
     if (!data.icons) data.icons = {};
     data.icons.main_computed = `${publicUrl}/icons/${mainIconFile.name}`;
@@ -132,14 +139,20 @@ async function fetchAppStoreData(appName: string, tenantId: string) {
   const resolveCompetitors = (compArray: any[]) => {
     return compArray.map((c: any) => {
       let finalIconUrl = null;
+
       if (c.name) {
         const cleanTargetName = String(c.name).toLowerCase().replace(/[^a-z0-9]/g, '');
-        const matchedFile = actualIcons.find(f => f.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(cleanTargetName));
+        const matchedFile = actualIcons.find(f =>
+          f.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(cleanTargetName)
+        );
+
         if (matchedFile) finalIconUrl = `${publicUrl}/icons/${matchedFile.name}`;
       }
+
       if (!finalIconUrl && typeof c.icon === 'string' && c.icon.startsWith('http')) {
         finalIconUrl = c.icon;
       }
+
       return { ...c, iconUrl: finalIconUrl };
     });
   };
@@ -153,10 +166,17 @@ async function fetchAppStoreData(appName: string, tenantId: string) {
 
 function getBestIconUrl(appStoreData: any, apkIntelData: any): string | null {
   if (appStoreData?.icons?.main_computed) return appStoreData.icons.main_computed;
+
   if (appStoreData?.icons && typeof appStoreData.icons === 'object') {
-    const storeIcon = appStoreData.icons.main || appStoreData.icons.app_icon || appStoreData.icons.icon || Object.values(appStoreData.icons).find(v => typeof v === 'string');
+    const storeIcon =
+      appStoreData.icons.main ||
+      appStoreData.icons.app_icon ||
+      appStoreData.icons.icon ||
+      Object.values(appStoreData.icons).find(v => typeof v === 'string');
+
     if (typeof storeIcon === 'string' && storeIcon.trim() !== '') return storeIcon;
   }
+
   return apkIntelData?.icons?.icon_url || null;
 }
 
@@ -174,10 +194,13 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
 
   for (const snapshot of sortedSnapshots) {
     const url = `${supabaseUrl}/storage/v1/object/public/data/${tenantId}/${safeAppFolder}/snapshots/${snapshot}/business/${safeAppFolder}_omni_roster.json?t=${Date.now()}`;
+
     try {
       const res = await fetch(url, { cache: 'no-store' });
+
       if (res.ok) {
         const rosterData = await res.json();
+
         if (rosterData && rosterData.length > 0 && rosterData[0].type === "Brand") {
           const employees = rosterData[0].metrics?.employees;
           if (employees) return employees;
@@ -187,6 +210,7 @@ async function fetchLatestEmployeeCount(appName: string, tenantId: string) {
       continue;
     }
   }
+
   return null;
 }
 
@@ -234,6 +258,7 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
         
         if (session.session_type === 'onboarding') {
           hasOnboarding = true;
+
           if (onboardingGrade === "N/A" || session.ux_grade !== "N/A") {
             onboardingGrade = session.ux_grade;
           }
@@ -241,6 +266,7 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
         
         if (session.session_type === 'browsing') {
           hasBrowsing = true;
+
           if (browsingGrade === "N/A" || session.ux_grade !== "N/A") {
             browsingGrade = session.ux_grade;
           }
@@ -265,107 +291,246 @@ export async function getReviewApps(tenantId: string): Promise<AppSummary[]> {
   });
 }
 
-// ─── DATABASE-FIRST DETAIL FETCH (Compiles all tabs in 1 query) ───
+// ─── LIGHTWEIGHT SESSION HELPERS ─────────────────────────────────────────────
+
+function normalizeStepShell(rawStep: any, index: number, screenshotBaseUrl?: string) {
+  const screenshotSource =
+    rawStep?.imagePath ||
+    rawStep?.screenshot ||
+    rawStep?.screenshot_file ||
+    rawStep?.path ||
+    "";
+
+  const cleanFileName =
+    typeof screenshotSource === "string" && screenshotSource.length > 0
+      ? screenshotSource.split("/").pop()
+      : "";
+
+  const imagePath =
+    rawStep?.imagePath ||
+    (screenshotBaseUrl && cleanFileName
+      ? `${screenshotBaseUrl}/${cleanFileName}`
+      : screenshotSource);
+
+  return {
+    ...rawStep,
+    step: rawStep?.step ?? rawStep?.timeline_step ?? rawStep?.screen_index ?? index + 1,
+    phase: rawStep?.phase ?? null,
+    screen_type: rawStep?.screen_type ?? rawStep?.display_label ?? "",
+    imagePath,
+    enriched_file:
+      rawStep?.enriched_file ||
+      rawStep?.enrichedFile ||
+      rawStep?.metadata_file ||
+      rawStep?.json_file ||
+      null,
+
+    // Important:
+    // Do not hydrate every screen's intelligence during initial page render.
+    // SessionViewer already lazy-loads this on demand.
+    enrichedData: null,
+  };
+}
+
+function hydrateFlowsCatalog(flowsData: any, steps: any[]) {
+  if (!flowsData) return null;
+
+  const nextFlowsData = { ...flowsData };
+
+  if (Array.isArray(nextFlowsData.screen_catalog)) {
+    nextFlowsData.screen_catalog = nextFlowsData.screen_catalog.map((catEntry: any) => {
+      const catFilename =
+        typeof catEntry?.screenshot_file === "string"
+          ? catEntry.screenshot_file.split("/").pop()?.toLowerCase()
+          : "";
+
+      const matchingStep = steps.find((step: any) => {
+        const stepFilename =
+          typeof step?.imagePath === "string"
+            ? step.imagePath.split("/").pop()?.toLowerCase()
+            : "";
+
+        return (
+          catFilename === stepFilename ||
+          Number(step?.step) === Number(catEntry?.timeline_step)
+        );
+      });
+
+      return {
+        ...catEntry,
+        screenshot_file: matchingStep ? matchingStep.imagePath : catEntry.screenshot_file,
+      };
+    });
+
+    return nextFlowsData;
+  }
+
+  nextFlowsData.screen_catalog = steps.map((step: any) => ({
+    timeline_step: step.step,
+    screenshot_file: step.imagePath,
+    display_label: step.screen_type ?? "",
+    root_section: "",
+    is_panoramic: false,
+  }));
+
+  return nextFlowsData;
+}
+
+// ─── DATABASE-FIRST DETAIL FETCH ─────────────────────────────────────────────
 
 export async function getAppDetails(appName: string, tenantId: string): Promise<AppDetailsResult | null> {
   if (!tenantId) return null;
 
-  // 1. Fetch ALL sessions for this app in ONE single DB query
-  const { data: dbSessions, error } = await supabase
-    .from('app_sessions')
-    .select('platform, session_type, ux_grade, total_screens, session_intel, flows_data, steps_data')
-    .eq('tenant_id', tenantId)
-    .ilike('app_name', appName); // Case-insensitive matching
+  const [sessionsResult, appMetaResult] = await Promise.all([
+    supabase
+      .from('app_sessions')
+      .select('platform, session_type, ux_grade, total_screens, session_intel, flows_data, steps_data')
+      .eq('tenant_id', tenantId)
+      .ilike('app_name', appName),
 
-  if (error) {
-    console.error("Error fetching app sessions from DB:", error);
+    supabase
+      .from('target_apps')
+      .select('app_name, category, icon_url')
+      .eq('tenant_id', tenantId)
+      .ilike('app_name', appName)
+      .maybeSingle()
+  ]);
+
+  const dbSessions = sessionsResult.data || [];
+
+  if (sessionsResult.error) {
+    console.error("Error fetching app sessions from DB:", sessionsResult.error);
   }
 
-  // 2. Map sessions into platform structures (with SELF-HEALING Fallbacks)
-  const parseDBSession = async (sess: any, platformPrefix: string, sessionType: string): Promise<SessionData | null> => {
-    // If DB has the pre-compiled JSONB screenshots array, load it instantly!
-    // We default missing/optional files (session_intel or flows_data) to null without breaking the cache.
-    if (sess && sess.steps_data && sess.steps_data.length > 0) {
-      //console.log(`⚡ Instant DB-Load [${platformPrefix || 'legacy_mobile'}/${sessionType}] — ${sess.steps_data.length} screens`);
-      
-      // ─── THE SELF-HEALING SCREEN_CATALOG BRIDGE ───
-      // If flows_data exists in the DB, but lacks the screen_catalog array (legacy runs),
-      // dynamically construct the complete catalog mapping on-the-fly using the pre-compiled steps_data!
-      if (sess.flows_data && !sess.flows_data.screen_catalog) {
-        //console.log(`🩹 Self-Healing: Rebuilding flows catalog in memory for ${appName} [${sessionType}]...`);
-        sess.flows_data.screen_catalog = sess.steps_data.map((step: any) => ({
-          timeline_step: step.step,
-          screenshot_file: step.imagePath,
-          display_label: step.screen_type ?? "",
-          root_section: "",
-          is_panoramic: false,
-        }));
-      }
+  if (appMetaResult.error) {
+    console.error("Error fetching app metadata from DB:", appMetaResult.error);
+  }
+
+  const appMeta = appMetaResult.data;
+
+  const getSessByPlatformAndType = (
+    plat: 'mobile' | 'web',
+    type: 'onboarding' | 'browsing'
+  ) => {
+    return (dbSessions || []).find(
+      (s: any) => s.platform === plat && s.session_type === type
+    ) || null;
+  };
+
+  const hasUsableSteps = (sess: any) => {
+    return !!sess && Array.isArray(sess.steps_data) && sess.steps_data.length > 0;
+  };
+
+  const mobileOnboardingDb = getSessByPlatformAndType('mobile', 'onboarding');
+  const mobileBrowsingDb = getSessByPlatformAndType('mobile', 'browsing');
+
+  let hasMobileFolder = false;
+  const needsMobileStorageFallback =
+    !hasUsableSteps(mobileOnboardingDb) || !hasUsableSteps(mobileBrowsingDb);
+
+  if (needsMobileStorageFallback) {
+    const { data: subFolders } = await supabase.storage
+      .from('reviews')
+      .list(`${tenantId}/${appName}`, { limit: 20 });
+
+    const folders = (subFolders || []).map(f => f.name.toLowerCase());
+    hasMobileFolder = folders.includes('mobile');
+  }
+
+  const parseDBSession = async (
+    sess: any,
+    platformPrefix: string,
+    sessionType: string
+  ): Promise<SessionData | null> => {
+    if (hasUsableSteps(sess)) {
+      const steps = sess.steps_data.map((step: any, index: number) =>
+        normalizeStepShell(step, index)
+      );
+
+      const flowsData = hydrateFlowsCatalog(sess.flows_data || null, steps);
 
       return {
-        summary: { total_screenshots: sess.steps_data.length },
+        summary: {
+          total_screenshots: sess.total_screens || steps.length,
+        },
         sessionIntel: sess.session_intel || null,
-        flowsData: sess.flows_data || null,
-        steps: sess.steps_data
+        flowsData,
+        steps,
       };
     }
-    
-    // SELF-HEALING FALLBACK: If DB row is missing, null, or incomplete, crawl Storage directly!
-    //console.log(`🐢 Slow Storage-Fallback [${platformPrefix || 'legacy_mobile'}/${sessionType}]`);
+
+    // Storage fallback now returns only a lightweight step shell.
+    // It no longer fetches every enriched JSON file upfront.
     return await fetchSessionData(appName, sessionType, tenantId, platformPrefix);
   };
 
-  const getSessByPlatformAndType = (plat: 'mobile' | 'web', type: 'onboarding' | 'browsing') => {
-    return (dbSessions || []).find(s => s.platform === plat && s.session_type === type) || null;
-  };
-
-  // Check legacy platform folder existence
-  const { data: subFolders } = await supabase.storage.from('reviews').list(`${tenantId}/${appName}`, { limit: 20 });
-  const folders = (subFolders || []).map(f => f.name.toLowerCase());
-  const hasMobileFolder = folders.includes('mobile');
-
-  // Resolve Mobile Sessions
-  const mobileOnboardingDb = getSessByPlatformAndType('mobile', 'onboarding');
-  const mobileBrowsingDb = getSessByPlatformAndType('mobile', 'browsing');
-  
   const [mobileOnboarding, mobileBrowsing] = await Promise.all([
-    parseDBSession(mobileOnboardingDb, hasMobileFolder ? 'mobile' : '', 'onboarding'),
-    parseDBSession(mobileBrowsingDb, hasMobileFolder ? 'mobile' : '', 'browsing')
+    parseDBSession(
+      mobileOnboardingDb,
+      hasMobileFolder ? 'mobile' : '',
+      'onboarding'
+    ),
+    parseDBSession(
+      mobileBrowsingDb,
+      hasMobileFolder ? 'mobile' : '',
+      'browsing'
+    ),
   ]);
 
   let mobile: PlatformViews | null = null;
+
   if (mobileOnboarding || mobileBrowsing) {
-    mobile = { onboarding: mobileOnboarding, browsing: mobileBrowsing };
+    mobile = {
+      onboarding: mobileOnboarding,
+      browsing: mobileBrowsing,
+    };
   }
 
-  // Resolve Web Sessions
   const webOnboardingDb = getSessByPlatformAndType('web', 'onboarding');
   const webBrowsingDb = getSessByPlatformAndType('web', 'browsing');
 
   const [webOnboarding, webBrowsing] = await Promise.all([
     parseDBSession(webOnboardingDb, 'web', 'onboarding'),
-    parseDBSession(webBrowsingDb, 'web', 'browsing')
+    parseDBSession(webBrowsingDb, 'web', 'browsing'),
   ]);
 
   let web: PlatformViews | null = null;
+
   if (webOnboarding || webBrowsing) {
-    web = { onboarding: webOnboarding, browsing: webBrowsing };
+    web = {
+      onboarding: webOnboarding,
+      browsing: webBrowsing,
+    };
   }
 
-  // Fetch general app store & apk metadata
-  const [appStore, apkIntelligence] = await Promise.all([
-    fetchAppStoreData(appName, tenantId),
-    fetchApkIntelligence(appName, tenantId),   
-  ]);
-  
-  const iconUrl = getBestIconUrl(appStore, apkIntelligence);
-  
-  return { appName, iconUrl, appStore, apkIntelligence, mobile, web };
+  // PR 4:
+  // Do NOT fetch app store or APK intelligence here.
+  // Those are now loaded on-demand by the App Store and Brand Kit tabs.
+  return {
+    appName: appMeta?.app_name || appName,
+    category: appMeta?.category || null,
+    iconUrl: appMeta?.icon_url || null,
+    appStore: null,
+    apkIntelligence: null,
+
+    // These preserve tab availability while deferring heavy data.
+    hasAppStore: true,
+    hasApkIntelligence: true,
+
+    mobile,
+    web,
+  };
 }
 
-async function fetchSessionData(appName: string, sessionType: string, tenantId: string, platformPrefix = "") {
+async function fetchSessionData(
+  appName: string,
+  sessionType: string,
+  tenantId: string,
+  platformPrefix = ""
+) {
   const pathPart = platformPrefix ? `${platformPrefix}/` : "";
   const publicUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${sessionType}/enriched`;
+  const screenshotBaseUrl = `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${sessionType}/screenshots`;
   
   const [manifestRes, intelRes, flowsRes] = await Promise.all([
     fetch(`${publicUrl}/enriched_manifest.json`, { next: { revalidate: 300 } }),
@@ -377,57 +542,28 @@ async function fetchSessionData(appName: string, sessionType: string, tenantId: 
 
   const manifest = await manifestRes.json();
   const sessionIntel = intelRes.ok ? await intelRes.json() : null;
-  const flowsData = flowsRes.ok ? await flowsRes.json() : null;
-  
-  const steps: any[] = [];
-  const BATCH_SIZE = 6; 
+  const rawFlowsData = flowsRes.ok ? await flowsRes.json() : null;
 
-  for (let i = 0; i < manifest.enriched_screenshots.length; i += BATCH_SIZE) {
-    const batch = manifest.enriched_screenshots.slice(i, i + BATCH_SIZE);
-    
-    const batchResults = await Promise.all(
-      batch.map(async (entry: any) => {
-        const stepRes = await fetch(`${publicUrl}/${entry.enriched_file}`, { next: { revalidate: 300 } });
-        const enrichedData = stepRes.ok ? await stepRes.json() : null;
-        
-        const cleanFileName = entry.screenshot.split('/').pop() || entry.screenshot;
-        
-        return {
-          step: entry.step || entry.timeline_step,
-          phase: entry.phase,
-          screen_type: entry.screen_type,
-          imagePath: `${supabaseUrl}/storage/v1/object/public/reviews/${tenantId}/${appName}/${pathPart}${sessionType}/screenshots/${cleanFileName}`,
-          enrichedData
-        };
-      })
-    );
-    
-    steps.push(...batchResults);
-  }
+  const screenshots =
+    manifest.enriched_screenshots ||
+    manifest.onboarding_screenshots ||
+    manifest.screenshots ||
+    [];
 
-  // ─── THE CRITICAL FLOWS BRIDGE FIX ───
-  // Overwrite the catalog's relative screenshot paths with the correct pre-resolved public URLs
-  if (flowsData && flowsData.screen_catalog) {
-    flowsData.screen_catalog = flowsData.screen_catalog.map((catEntry: any) => {
-      const matchingStep = steps.find(s => {
-        const catFilename = catEntry.screenshot_file.split('/').pop()?.toLowerCase();
-        const stepFilename = s.imagePath.split('/').pop()?.toLowerCase();
-        return catFilename === stepFilename || Number(s.step) === Number(catEntry.timeline_step);
-      });
-      return {
-        ...catEntry,
-        screenshot_file: matchingStep ? matchingStep.imagePath : catEntry.screenshot_file
-      };
-    });
-  } else if (flowsData && !flowsData.screen_catalog) {
-    flowsData.screen_catalog = steps.map((step: any) => ({
-      timeline_step: step.step,
-      screenshot_file: step.imagePath,
-      display_label: step.screen_type ?? "",
-      root_section: "",
-      is_panoramic: false,
-    }));
-  }
+  const steps = Array.isArray(screenshots)
+    ? screenshots.map((entry: any, index: number) =>
+        normalizeStepShell(entry, index, screenshotBaseUrl)
+      )
+    : [];
 
-  return { summary: manifest.processing_stats, sessionIntel, flowsData, steps };
+  const flowsData = hydrateFlowsCatalog(rawFlowsData, steps);
+
+  return {
+    summary: manifest.processing_stats || {
+      total_screenshots: steps.length,
+    },
+    sessionIntel,
+    flowsData,
+    steps,
+  };
 }

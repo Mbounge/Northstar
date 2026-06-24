@@ -15,6 +15,19 @@ import Link from "next/link";
 
 const unbounded = Unbounded({ subsets: ["latin"], weight: ["600"] });
 
+async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+
+  try {
+    const result = await fn();
+    console.log(`[CompanyPage timing] ${label}: ${Date.now() - start}ms`);
+    return result;
+  } catch (error) {
+    console.log(`[CompanyPage timing] ${label} failed after ${Date.now() - start}ms`);
+    throw error;
+  }
+}
+
 export default async function CompanyDashboardPage({
   params,
   searchParams,
@@ -22,6 +35,8 @@ export default async function CompanyDashboardPage({
   params: Promise<{ companyId: string }>;
   searchParams: Promise<{ snapshot?: string | string[] }>;
 }) {
+  const pageStart = Date.now();
+
   const { companyId } = await params;
   const resolvedSearchParams = await searchParams;
 
@@ -31,17 +46,27 @@ export default async function CompanyDashboardPage({
 
   const decodedCompanyId = decodeURIComponent(companyId).trim();
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('customer_id')
-    .eq('id', user?.id)
-    .single();
+  const supabase = await timed("create supabase client", async () => {
+    return await createClient();
+  });
+
+  const { data: { user } } = await timed("auth.getUser", async () => {
+    return await supabase.auth.getUser();
+  });
+
+  const { data: profile } = await timed("fetch user profile", async () => {
+    return await supabase
+      .from("user_profiles")
+      .select("customer_id")
+      .eq("id", user?.id)
+      .single();
+  });
     
   const tenantId = profile?.customer_id;
 
   if (!tenantId) {
+    console.log(`[CompanyPage timing] total before no-tenant return: ${Date.now() - pageStart}ms`);
+
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-zinc-500 font-mono text-[13px]">Workspace access required. Please contact your administrator.</p>
@@ -49,20 +74,30 @@ export default async function CompanyDashboardPage({
     );
   }
 
-  const trackedCompanies = await getTrackedCompanies(tenantId);
+  const trackedCompanies = await timed("getTrackedCompanies", () =>
+    getTrackedCompanies(tenantId)
+  );
+
   let matchedCompany = trackedCompanies.find((c) => c.id === decodedCompanyId);
   if (!matchedCompany) matchedCompany = trackedCompanies.find((c) => c.id.toLowerCase() === decodedCompanyId.toLowerCase());
   if (!matchedCompany) matchedCompany = trackedCompanies.find((c) => decodedCompanyId.toLowerCase().includes(c.id.toLowerCase()));
   
   const dataBucketId = matchedCompany ? matchedCompany.id : decodedCompanyId;
 
-  const snapshots = await getAvailableSnapshots(tenantId, dataBucketId);
+  const snapshots = await timed("getAvailableSnapshots", () =>
+    getAvailableSnapshots(tenantId, dataBucketId)
+  );
+
   const latestSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : "";
   const activeSnapshotId = snapshotParam || latestSnapshot;
 
   const [dashboardData, productData] = await Promise.all([
-    getDashboardData(tenantId, dataBucketId, activeSnapshotId),
-    getAppDetails(decodedCompanyId, tenantId),
+    timed("getDashboardData", () =>
+      getDashboardData(tenantId, dataBucketId, activeSnapshotId)
+    ),
+    timed("getAppDetails", () =>
+      getAppDetails(decodedCompanyId, tenantId)
+    ),
   ]);
 
   const appName = productData?.appName || decodedCompanyId;
@@ -79,9 +114,11 @@ export default async function CompanyDashboardPage({
   
   // 2. Middle Priority: Ground-truth memory classifications (agent_memory.json)
   let preciseAppType = null;
+
   const fetchMemory = async (type: string) => {
     try {
       let res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/web/${type}/agent_memory.json`, { next: { revalidate: 300 } });
+
       if (!res.ok) {
         res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/reviews/${tenantId}/${decodedCompanyId}/${type}/agent_memory.json`, { next: { revalidate: 300 } });
       }
@@ -91,9 +128,13 @@ export default async function CompanyDashboardPage({
         if (data?.app_type) return data.app_type;
       }
     } catch (e) {}
+
     return null;
   };
-  preciseAppType = await fetchMemory('browsing') || await fetchMemory('onboarding');
+
+  preciseAppType =
+    await timed("fetchMemory browsing", () => fetchMemory("browsing")) ||
+    await timed("fetchMemory onboarding", () => fetchMemory("onboarding"));
 
   // 3. Low Priority: Fallback Google Play Store Category
   const playStoreCategory = productData?.apkIntelligence?.app_metadata?.category;
@@ -109,7 +150,7 @@ export default async function CompanyDashboardPage({
     marketName = playStoreCategory;
   }
   
-  marketName = marketName.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  marketName = marketName.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 
   const isLongMarketName = marketName.length > 20;
 
@@ -119,9 +160,12 @@ export default async function CompanyDashboardPage({
     else if (Array.isArray((dashboardData.marketing as any).posts))
       marketingPosts = (dashboardData.marketing as any).posts;
   }
+
   const businessJobs = Array.isArray(dashboardData?.business?.jobs) ? dashboardData.business.jobs : [];
   const businessRoster = Array.isArray(dashboardData?.roster) ? dashboardData.roster : [];
   const businessScreenshots = Array.isArray(dashboardData?.businessScreenshots) ? dashboardData.businessScreenshots : [];
+
+  console.log(`[CompanyPage timing] total before render return: ${Date.now() - pageStart}ms`);
 
   const IdentityHeader = () => (
     <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
@@ -129,6 +173,7 @@ export default async function CompanyDashboardPage({
         <Link href="/" className="p-2 transition-opacity hover:opacity-70 mr-6 animate-in fade-in duration-200">
           <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
         </Link>
+
         <div className="flex items-center gap-5">
           <div className="w-[110px] h-[110px] rounded-full flex items-center justify-center overflow-hidden relative shrink-0 shadow-sm bg-[#35272a]">
             {iconUrl ? (
@@ -139,11 +184,13 @@ export default async function CompanyDashboardPage({
               </span>
             )}
           </div>
+
           {/* Unified Height Wrapper featuring vertical centering and line-clamping */}
           <div className="flex flex-col justify-center min-h-[78px] font-sans gap-[4px] py-1 max-w-[320px] shrink-0 min-w-0 pr-4">
             <h2 className="text-[30px] font-[700] text-[#000000] dark:text-white leading-[32px] tracking-[0%] m-0 p-0 truncate" title={appName}>
               {appName}
             </h2>
+
             <h3 
               className={`
                 text-[#000000] dark:text-white tracking-[0%] m-0 p-0 line-clamp-2
@@ -171,6 +218,7 @@ export default async function CompanyDashboardPage({
             <span className="font-sans text-[16px] font-[400] text-[#747474] dark:text-zinc-400 leading-[100%] text-left">
               Market
             </span>
+
             {/* Generous max-width and line-clamp-2 to prevent vertical layout shifting */}
             <span className="font-sans text-[16px] font-[500] text-[#000000] dark:text-white leading-[20px] text-left line-clamp-2" title={marketName}>
               {marketName}
@@ -200,7 +248,6 @@ export default async function CompanyDashboardPage({
 
       <Tabs defaultValue="product" className="flex flex-col w-full">
         <div className="flex items-center justify-between pt-8 pl-10 pr-[84px] shrink-0 relative z-20">
-          
           <div className="flex-1">
             <h1 className={`${unbounded.className} text-[30px] font-[600] tracking-[-0.02em] leading-[100%] text-[#020B26] dark:text-white m-0`}>
               North Star
@@ -209,7 +256,11 @@ export default async function CompanyDashboardPage({
 
           <div className="flex-none bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 p-1 rounded-none shadow-none">
             <TabsList className="!bg-transparent h-auto p-0 gap-1 !border-none !shadow-none flex items-center">
-              {[{ value: "product", label: "product" }, { value: "marketing", label: "marketing" }, { value: "business", label: "business" }].map(({ value, label }) => (
+              {[
+                { value: "product", label: "product" },
+                { value: "marketing", label: "marketing" },
+                { value: "business", label: "business" },
+              ].map(({ value, label }) => (
                 <TabsTrigger 
                   key={value} 
                   value={value} 
@@ -230,13 +281,12 @@ export default async function CompanyDashboardPage({
           </div>
 
           <div className="flex-1 flex justify-end items-center gap-3">
-             <SnapshotSelector snapshots={snapshots} currentSnapshot={activeSnapshotId} />
-             <ThemeToggle />
+            <SnapshotSelector snapshots={snapshots} currentSnapshot={activeSnapshotId} />
+            <ThemeToggle />
           </div>
         </div>
 
         <div className="flex flex-col mt-6 relative z-10 pl-10 pr-[84px] pb-12">
-          
           <TabsContent value="product" className="flex flex-col m-0 outline-none data-[state=inactive]:hidden">
             {productData && (productData.mobile || productData.web) ? (
               <UnifiedDashboard appData={productData} header={<IdentityHeader />} tenantId={tenantId} />
@@ -253,8 +303,15 @@ export default async function CompanyDashboardPage({
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>
+
             <div className="max-w-6xl mx-auto w-full">
-              <MarketingFeed key={`mkt-${activeSnapshotId}`} posts={marketingPosts} companyId={dataBucketId} snapshotId={activeSnapshotId} tenantId={tenantId} />
+              <MarketingFeed
+                key={`mkt-${activeSnapshotId}`}
+                posts={marketingPosts}
+                companyId={dataBucketId}
+                snapshotId={activeSnapshotId}
+                tenantId={tenantId}
+              />
             </div>
           </TabsContent>
 
@@ -262,11 +319,19 @@ export default async function CompanyDashboardPage({
             <div className="bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden mb-8 shrink-0 rounded-none shadow-none">
               <IdentityHeader />
             </div>
+
             <div className="max-w-6xl mx-auto w-full">
-              <BusinessViewer key={`biz-${activeSnapshotId}`} jobs={businessJobs} roster={businessRoster} companyId={dataBucketId} snapshotId={activeSnapshotId} tenantId={tenantId} businessScreenshots={businessScreenshots} />
+              <BusinessViewer
+                key={`biz-${activeSnapshotId}`}
+                jobs={businessJobs}
+                roster={businessRoster}
+                companyId={dataBucketId}
+                snapshotId={activeSnapshotId}
+                tenantId={tenantId}
+                businessScreenshots={businessScreenshots}
+              />
             </div>
           </TabsContent>
-
         </div>
       </Tabs>
     </div>
