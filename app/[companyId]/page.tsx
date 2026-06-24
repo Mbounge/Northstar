@@ -129,8 +129,8 @@ export default async function CompanyDashboardPage({
 
   const isLongMarketName = marketName.length > 20;
 
-  const IdentityHeader = () => (
-    <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
+  const identityHeader = (
+      <div className="w-full h-full flex items-center justify-between pl-10 pr-[84px] pt-6 relative">
       <div className="flex items-center">
         <Link
           href="/"
@@ -220,7 +220,7 @@ export default async function CompanyDashboardPage({
       <CompanyDashboardTabs
         titleClassName={`${unbounded.className} text-[30px] font-[600] tracking-[-0.02em] leading-[100%] text-[#020B26] dark:text-white m-0`}
         productData={productData}
-        header={<IdentityHeader />}
+        header={identityHeader}
         tenantId={tenantId}
         dataBucketId={dataBucketId}
         activeSnapshotId={activeSnapshotId}
