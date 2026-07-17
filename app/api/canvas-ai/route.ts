@@ -25,6 +25,8 @@ import {
 import {
   NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA,
   appendNorthstarArtboardMutation,
+  repairNorthstarArtboardMutationDraft,
+  buildDeterministicNorthstarPublicationDraft,
   buildNorthstarArtboardMutationModelInput,
   buildNorthstarArtboardMutationSystemInstruction,
   type NorthstarArtboardMutationDraft,
@@ -62,7 +64,9 @@ import {
   NORTHSTAR_VISUAL_DNA,
 } from "@/lib/canvas-ai/northstar-design-reference-pack";
 import { captureNorthstarArtifactPng } from "@/lib/canvas-ai/northstar-render-capture";
-import { waitForNorthstarArtifactAcknowledgement } from "@/lib/canvas-ai/northstar-artboard-ack";
+import { getNorthstarArtifactAcknowledgement, waitForNorthstarArtifactAcknowledgement } from "@/lib/canvas-ai/northstar-artboard-ack";
+import { NorthstarArtboardActor } from "@/lib/canvas-ai/northstar-artboard-actor";
+import { compileNorthstarMutationDraft } from "@/lib/canvas-ai/northstar-mutation-compiler";
 import {
   NORTHSTAR_CODE_ARTIFACT_ACTION_SCHEMA,
   NORTHSTAR_GENERATED_CODE_ARTIFACT_SCHEMA,
@@ -6825,7 +6829,7 @@ async function buildGeneratedCodeArtifactPackage({
 
   const designAddendum = `${buildNorthstarDesignBehaviorAddendum()}\n\n${NORTHSTAR_VISUAL_DNA}`;
   const evidenceSummary = {
-    referencePackVersion: "northstar-eight-reference-pack.v0.4.8.4",
+    referencePackVersion: "northstar-eight-reference-pack.v0.4.8.5.1",
     identityRule: "All eight gold-standard references condition every autonomous move; none is a template.",
     screenshotCount: dataBundle.screenshots.length,
     flowCount: dataBundle.flows.length,
@@ -6834,8 +6838,12 @@ async function buildGeneratedCodeArtifactPackage({
     decisionCount: dataBundle.decisions.length,
     coverageSummary: dataBundle.coverageSummary,
   };
-  const maximumMoves = budget.designActCount;
-  const minimumMoves = thinkingDepth === "low" ? 8 : thinkingDepth === "high" ? 12 : 10;
+  const maximumMoves = thinkingDepth === "low"
+    ? Math.min(8, budget.designActCount)
+    : thinkingDepth === "medium"
+      ? Math.min(12, budget.designActCount)
+      : budget.designActCount;
+  const minimumMoves = thinkingDepth === "low" ? 6 : thinkingDepth === "high" ? 12 : 9;
   let visibleMutationCount = 0;
   let latestReviewSummary = "The live artboard is beginning its autonomous design evolution.";
   let finalVerified = false;
@@ -6866,7 +6874,7 @@ async function buildGeneratedCodeArtifactPackage({
           role: "user",
           parts: [
             ...designReferenceParts,
-            { text: `CURRENT EXACT LIVING ARTBOARD. Inspect these pixels and autonomously decide the single most valuable next design move. Do not choose from a checklist. ${moveIndex >= Math.floor(maximumMoves * 0.55) ? "The composition is now mature enough to challenge: prefer transformation, subtraction, recomposition, and semantic cleanup over appending another card or decorative layer." : "Build momentum with a clear, immediately observable move."}` },
+            { text: `CURRENT EXACT LIVING ARTBOARD. Inspect these pixels and autonomously decide the single most valuable next design move. Do not choose from a checklist. ${moveIndex >= Math.floor(maximumMoves * 0.55) ? "The composition is mature enough to challenge. Prefer transformation, subtraction, and recomposition. When using relationships, define exact source and target semantic nodes, a relationship type and meaning, and use grounded app icons or screenshot evidence as actors. Reject anonymous dots, arbitrary pills, unsupported axes, and approximate diagonal lines." : "Build momentum with a clear, immediately observable move."}` },
             { inlineData: { mimeType: beforeCapture.mimeType, data: beforeCapture.data } },
             {
               text: JSON.stringify(buildNorthstarDynamicDesignMoveModelInput({
@@ -6891,8 +6899,8 @@ async function buildGeneratedCodeArtifactPackage({
         }],
         schema: NORTHSTAR_DYNAMIC_DESIGN_MOVE_JSON_SCHEMA,
         signal,
-        maxOutputTokens: thinkingDepth === "low" ? 2_800 : 4_200,
-        temperature: Math.min(0.9, budget.artifactTemperature + 0.08),
+        maxOutputTokens: thinkingDepth === "low" ? 2_200 : 4_200,
+        temperature: Math.min(0.98, budget.artifactTemperature + 0.14),
       });
       move = sanitizeNorthstarDynamicDesignMove(rawMove, {
         moveIndex,
@@ -6929,8 +6937,16 @@ async function buildGeneratedCodeArtifactPackage({
     let candidate: NorthstarGeneratedCodeArtifactPackage | undefined;
     let published = false;
 
-    for (let attempt = 1; attempt <= budget.designActAttempts; attempt += 1) {
+    const moveAttemptLimit = thinkingDepth === "low" ? 1 : Math.min(2, budget.designActAttempts);
+    for (let attempt = 1; attempt <= moveAttemptLimit; attempt += 1) {
       try {
+        // Every attempt is rooted in the exact browser-acknowledged package at the
+        // instant the attempt begins. A rejected or timed-out candidate is never
+        // allowed to become the parent of a retry.
+        const attemptBase = callbacks.getVisibleArtifact() ?? currentPackage;
+        const attemptBaseRevisionId = attemptBase.revisionId;
+        const attemptBaseMutationId = attemptBase.mutationJournal?.at(-1)?.mutationId;
+
         const rawDraft = await callGeminiJson<NorthstarArtboardMutationDraft>({
           apiKey,
           systemInstruction: buildNorthstarArtboardMutationSystemInstruction(designAddendum),
@@ -6938,7 +6954,7 @@ async function buildGeneratedCodeArtifactPackage({
             role: "user",
             parts: [
               ...designReferenceParts,
-              { text: `CURRENT EXACT LIVING ARTBOARD. Execute this autonomous artistic decision: “${move.label}”. The visible result must satisfy: ${move.observableOutcome}` },
+              { text: `CURRENT EXACT LIVING ARTBOARD. Execute this autonomous artistic decision: “${move.label}”. The visible result must satisfy: ${move.observableOutcome}. Use only the allowed operation capability map in the JSON context. Never output set-html. Never replace a structural region. Relationship visuals must be typed semantic markup, not freehand CSS. Preserve accuracy, but do not default to a generic dashboard. Advance the chosen visual communication thesis through composition, scale, rhythm, spatial metaphor, evidence relationships, app identity, and editorial hierarchy. Follow the user's explicit visual instructions. Make one decisive visible change rather than adding decorative complexity.` },
               { inlineData: { mimeType: beforeCapture.mimeType, data: beforeCapture.data } },
               {
                 text: JSON.stringify(buildNorthstarArtboardMutationModelInput({
@@ -6947,7 +6963,7 @@ async function buildGeneratedCodeArtifactPackage({
                   artifactType: blueprint.artifactType,
                   userRequest: message,
                   designAct: dynamicAct,
-                  previous: visibleBefore,
+                  previous: attemptBase,
                   currentRender: { width: beforeCapture.width, height: beforeCapture.height, mimeType: beforeCapture.mimeType },
                   groundedEvidence: {
                     evidenceSummary,
@@ -6957,24 +6973,39 @@ async function buildGeneratedCodeArtifactPackage({
                   creativeDirection,
                   priorCritique,
                   attempt,
-                  maxAttempts: budget.designActAttempts,
+                  maxAttempts: moveAttemptLimit,
                 })),
               },
             ],
           }],
           schema: NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA,
           signal,
-          maxOutputTokens: thinkingDepth === "low" ? 7_000 : 10_000,
+          maxOutputTokens: thinkingDepth === "low" ? 3_200 : 7_200,
           temperature: attempt === 1 ? budget.artifactTemperature : Math.max(0.12, budget.artifactTemperature - 0.1),
         });
 
-        candidate = appendNorthstarArtboardMutation({
-          previous: visibleBefore,
+        const compiled = compileNorthstarMutationDraft({
+          previous: attemptBase,
           draft: rawDraft,
+        });
+        if (compiled.repairs.length) {
+          console.info("Northstar mutation compiler repaired a model draft before publication.", compiled.repairs);
+        }
+        if (compiled.draft.operations.length === 0) {
+          priorCritique = {
+            critique: "The mutation compiler found no safe visible operation in this proposal.",
+            requiredChanges: ["Transform an existing semantic node or choose a different concrete visual move."],
+          };
+          continue;
+        }
+
+        candidate = appendNorthstarArtboardMutation({
+          previous: attemptBase,
+          draft: compiled.draft,
           label: move.label,
           phase: move.phase,
           intent: dynamicAct.intent,
-          diagnostics: [`Northstar v0.4.8.4 autonomous move ${moveIndex + 1}: ${rawDraft.visibleChange}`],
+          diagnostics: [`Northstar v0.4.9.1 autonomous move ${moveIndex + 1}: ${compiled.draft.visibleChange}`],
         });
         const dispatched = await callbacks.publishArtifact(
           candidate,
@@ -6983,6 +7014,10 @@ async function buildGeneratedCodeArtifactPackage({
         );
         if (!dispatched) {
           const rejectedAck = callbacks.getLastMutationAck?.();
+          // The proposal never becomes history. Re-read the actor snapshot and retry
+          // from that exact committed package only.
+          currentPackage = callbacks.getVisibleArtifact() ?? attemptBase;
+          candidate = undefined;
           priorCritique = {
             critique: rejectedAck?.reason || rejectedAck?.review?.summary || "The exact live surface rejected this proposed move.",
             requiredChanges: [
@@ -6990,11 +7025,12 @@ async function buildGeneratedCodeArtifactPackage({
               ...(rejectedAck?.meaningfulChangedNodeIds.length === 0 ? ["Choose a different concrete spatial or hierarchical move; do not repeat copy or styling already present."] : []),
               ...(rejectedAck?.review?.documentScrollRisk ? ["Remove internal scrolling and let intrinsic geometry follow the composition."] : []),
               ...(rejectedAck?.review?.clippedTextCount ? ["Remove clipping and preserve complete readable text."] : []),
+              ...(rejectedAck?.reason === "Mutation lineage is discontinuous." ? ["Rebase the next proposal on the exact last browser-acknowledged mutation; never reuse the rejected candidate lineage."] : []),
             ],
           };
           throw new Error(rejectedAck?.reason || "The browser did not acknowledge a meaningful visible mutation.");
         }
-        currentPackage = callbacks.getVisibleArtifact() ?? candidate;
+        currentPackage = callbacks.getVisibleArtifact() ?? attemptBase;
         visibleMutationCount += 1;
         published = true;
         consecutiveRejectedMoves = 0;
@@ -7024,7 +7060,7 @@ async function buildGeneratedCodeArtifactPackage({
     try {
       const liveAck = callbacks.getLastMutationAck?.();
       const acknowledgedCandidate = callbacks.getVisibleArtifact() ?? candidate;
-      const critiqueInterval = thinkingDepth === "low" ? 3 : thinkingDepth === "medium" ? 2 : 1;
+      const critiqueInterval = thinkingDepth === "low" ? 5 : thinkingDepth === "medium" ? 3 : 2;
       const shouldRunFullCritique = visibleMutationCount === 1
         || visibleMutationCount % critiqueInterval === 0
         || visibleMutationCount >= maximumMoves
@@ -7086,7 +7122,7 @@ async function buildGeneratedCodeArtifactPackage({
         }],
         schema: NORTHSTAR_CREATIVE_CRITIQUE_JSON_SCHEMA,
         signal,
-        maxOutputTokens: 8_000,
+        maxOutputTokens: thinkingDepth === "low" ? 3_600 : 7_000,
         temperature: budget.critiqueTemperature,
       });
       const critique = sanitizeCreativeCritique(rawCritique, visibleMutationCount, afterSurface.document);
@@ -7120,12 +7156,72 @@ async function buildGeneratedCodeArtifactPackage({
     }
   }
 
+  // Deterministic publication resolution on the same mounted artboard.
+  //
+  // The design agent owns the visual thesis and composition. Northstar's
+  // platform-owned working chrome is removed through a deterministic mutation,
+  // so completion cannot fail because a final model call emitted an unsupported
+  // operation or promised an unobservable geometry change.
+  try {
+    const publicationBase = callbacks.getVisibleArtifact() ?? currentPackage;
+    const publicationDraft = buildDeterministicNorthstarPublicationDraft({
+      previous: publicationBase,
+      objective: intent.objective || message,
+    });
+    const publicationCandidate: NorthstarGeneratedCodeArtifactPackage = {
+      ...appendNorthstarArtboardMutation({
+        previous: publicationBase,
+        draft: publicationDraft,
+        label: "Publish the final presentation",
+        phase: "refinement",
+        intent: "Remove temporary Northstar working chrome and publish the exact same browser-acknowledged artboard.",
+        diagnostics: [
+          "Northstar v0.4.9.2 applied deterministic publication cleanup on the same living artboard.",
+        ],
+      }),
+      provisional: false,
+      publicationState: "verified",
+    };
+
+    const publicationApplied = await callbacks.publishArtifact(
+      publicationCandidate,
+      4,
+      "Publish the final presentation",
+    );
+
+    if (publicationApplied) {
+      const committedPublication = callbacks.getVisibleArtifact();
+      const publicationAck = callbacks.getLastMutationAck?.();
+      const publicationMutationId = publicationCandidate.mutationJournal?.at(-1)?.mutationId;
+      finalVerified = Boolean(
+        committedPublication
+        && committedPublication.revisionId === publicationCandidate.revisionId
+        && committedPublication.publicationState === "verified"
+        && committedPublication.provisional === false
+        && liveAcknowledgementPassed(publicationAck, publicationMutationId),
+      );
+      currentPackage = committedPublication ?? publicationCandidate;
+      if (finalVerified) visibleMutationCount += 1;
+    } else {
+      currentPackage = callbacks.getVisibleArtifact() ?? currentPackage;
+      finalVerified = false;
+    }
+  } catch (error) {
+    if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+    console.warn(
+      "Northstar preserved the last committed artboard because deterministic publication did not receive a browser commit.",
+      error,
+    );
+    currentPackage = callbacks.getVisibleArtifact() ?? currentPackage;
+    finalVerified = false;
+  }
+
   return {
     ...currentPackage,
     creativeDirection,
     diagnostics: [
       ...currentPackage.diagnostics,
-      `Northstar v0.4.8.4 accumulated ${visibleMutationCount} visible mutations on one continuously mounted artboard. No document or iframe replacement was used after surface creation.`,
+      `Northstar v0.4.9.2 accumulated ${visibleMutationCount} browser-acknowledged visible mutations on one continuously mounted artboard.`,
       latestReviewSummary,
     ].slice(-60),
     provisional: !finalVerified,
@@ -9976,34 +10072,38 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             let lastLiveArtifactPackage = preparedInitialLivePackage ?? selectedLivePackage;
             let lastLiveArtifactRevisionId = lastLiveArtifactPackage?.revisionId;
             let lastLiveMutationAck: NorthstarArtifactMutationAcknowledgement | undefined;
-            const liveArtifactRevisionIds = new Set<string>(lastLiveArtifactPackage ? [lastLiveArtifactPackage.revisionId] : []);
+            const liveArtboardActor = new NorthstarArtboardActor(lastLiveArtifactPackage);
+            let liveArtifactDispatchQueue: Promise<boolean> = Promise.resolve(true);
 
-            const dispatchLiveArtifactPackage = async (
+            const dispatchLiveArtifactPackageInternal = async (
               packageValue: NorthstarGeneratedCodeArtifactPackage,
               stageIndex: number,
               label: string,
             ): Promise<boolean> => {
-              let publishablePackage: NorthstarGeneratedCodeArtifactPackage;
+              const committed = liveArtboardActor.snapshot();
+              let candidate: NorthstarGeneratedCodeArtifactPackage;
               try {
-                publishablePackage = prepareNorthstarArtboardRevisionForPublication({
-                  previous: lastLiveArtifactPackage,
+                candidate = prepareNorthstarArtboardRevisionForPublication({
+                  previous: committed,
                   candidate: packageValue,
                 });
               } catch (error) {
-                const diagnostics = getNorthstarArtifactSourceDiagnostics(error);
-                console.warn("Northstar blocked a discontinuous artboard revision:", diagnostics);
+                console.warn("Northstar blocked a proposal that was not based on the committed artboard.", error);
                 return false;
               }
-              if (liveArtifactRevisionIds.has(publishablePackage.revisionId)) return false;
-              const previousMutationCount = lastLiveArtifactPackage?.mutationJournal?.length ?? 0;
-              const latestBatch = (publishablePackage.mutationJournal?.length ?? 0) > previousMutationCount
-                ? publishablePackage.mutationJournal?.at(-1)
-                : undefined;
-              const ackToken = `${publishablePackage.artifactId}:${publishablePackage.revisionId}:${crypto.randomUUID()}`;
-              publishablePackage = { ...publishablePackage, pendingAckToken: ackToken };
-              liveArtifactRevisionIds.add(publishablePackage.revisionId);
+
+              let proposal;
+              try {
+                proposal = liveArtboardActor.begin(candidate);
+              } catch (error) {
+                console.warn("Northstar actor refused the proposal.", error);
+                return false;
+              }
+
+              const publishablePackage = proposal.candidate;
+              const latestBatch = publishablePackage.mutationJournal?.at(-1);
               const step: PlannerStep = {
-                id: `live-artifact-${publishablePackage.revisionId.slice(-24).replace(/[^a-z0-9-]/gi, "-")}`,
+                id: `live-artifact-${proposal.proposalId}`,
                 label,
                 tool: "compose_visual_scene",
                 icon: "write",
@@ -10026,6 +10126,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   selectAfter: false,
                 },
               };
+
               try {
                 const action = await buildCanvasActionRequest({
                   step,
@@ -10035,66 +10136,81 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   selectedCanvasContext: body.selectedCanvasContext,
                   validObjectIds,
                 });
+                requestedCanvasActionCount += 1;
+                send("canvas.action.requested", { runId, action });
+
+                let acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined;
+                try {
+                  acknowledgement = await waitForNorthstarArtifactAcknowledgement({
+                    ackToken: proposal.ackToken,
+                    timeoutMs: 30_000,
+                    signal: request.signal,
+                  });
+                } catch (error) {
+                  if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+                  acknowledgement = getNorthstarArtifactAcknowledgement(proposal.ackToken);
+                  if (!acknowledgement) {
+                    liveArtboardActor.discard(proposal);
+                    console.warn("Northstar discarded an unacknowledged proposal; committed state was unchanged.", error);
+                    return false;
+                  }
+                }
+
+                if (!liveArtboardActor.matches(proposal, acknowledgement)
+                  || !liveAcknowledgementPassed(acknowledgement, latestBatch?.mutationId)) {
+                  liveArtboardActor.discard(proposal);
+                  lastLiveMutationAck = acknowledgement;
+                  console.warn("Northstar discarded a rejected or mismatched proposal; committed state was unchanged.", {
+                    proposalId: proposal.proposalId,
+                    revisionId: publishablePackage.revisionId,
+                    mutationId: latestBatch?.mutationId,
+                    status: acknowledgement.status,
+                    reason: acknowledgement.reason,
+                  });
+                  return false;
+                }
+
+                const committedPackage = liveArtboardActor.commit(proposal, acknowledgement);
+                lastLiveArtifactPackage = committedPackage;
+                lastLiveArtifactRevisionId = committedPackage.revisionId;
+                lastLiveMutationAck = acknowledgement;
+
                 toolResults.push({
                   stepId: step.id,
                   tool: step.tool,
                   label: step.label,
-                  detail: "The live artifact revision was dispatched to the Canvas.",
+                  detail: "The browser committed the visible artboard proposal.",
                   objectIds: [],
                   data: {
                     canvasAction: {
                       status: "requested",
                       tool: action.tool,
                       arguments: action.arguments,
-                      artifactId: publishablePackage.artifactId,
+                      artifactId: committedPackage.artifactId,
                     },
                   },
-                  ok: false,
+                  ok: true,
                 });
-                requestedCanvasActionCount += 1;
-                send("canvas.action.requested", { runId, action });
-                const acknowledgement = await waitForNorthstarArtifactAcknowledgement({
-                  ackToken,
-                  timeoutMs: 20_000,
-                  signal: request.signal,
-                });
-                if (!liveAcknowledgementPassed(acknowledgement, latestBatch?.mutationId)) {
-                  console.warn("Northstar live artboard acknowledgement rejected the dispatched revision.", {
-                    revisionId: publishablePackage.revisionId,
-                    mutationId: latestBatch?.mutationId,
-                    status: acknowledgement.status,
-                    reason: acknowledgement.reason,
-                    review: acknowledgement.review,
-                  });
-                  liveArtifactRevisionIds.delete(publishablePackage.revisionId);
-                  lastLiveMutationAck = acknowledgement;
-                  return false;
-                }
-                const measuredBounds = acknowledgement.size?.contentBounds;
-                const measuredWidth = acknowledgement.size?.intrinsicWidth;
-                const measuredHeight = acknowledgement.size?.intrinsicHeight;
-                const acknowledgedPackage: NorthstarGeneratedCodeArtifactPackage = {
-                  ...publishablePackage,
-                  pendingAckToken: undefined,
-                  preferredWidth: measuredWidth ?? publishablePackage.preferredWidth,
-                  preferredHeight: measuredHeight ?? publishablePackage.preferredHeight,
-                  intrinsicBounds: measuredBounds ?? publishablePackage.intrinsicBounds,
-                  runtimeReview: acknowledgement.review,
-                  diagnostics: [
-                    ...publishablePackage.diagnostics,
-                    `Browser acknowledgement ${acknowledgement.status}: ${acknowledgement.meaningfulChangedNodeIds.length} meaningful nodes changed; ${acknowledgement.missingAssetUrls.length} required assets missing.`,
-                  ].slice(-60),
-                };
-                lastLiveArtifactRevisionId = acknowledgedPackage.revisionId;
-                lastLiveArtifactPackage = acknowledgedPackage;
-                lastLiveMutationAck = acknowledgement;
                 return true;
               } catch (error) {
-                liveArtifactRevisionIds.delete(publishablePackage.revisionId);
+                liveArtboardActor.discard(proposal);
                 if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-                console.warn("Northstar deferred a live artifact revision and continued:", error);
+                console.warn("Northstar discarded a failed proposal and preserved the last committed artboard.", error);
                 return false;
               }
+            };
+
+            const dispatchLiveArtifactPackage = (
+              packageValue: NorthstarGeneratedCodeArtifactPackage,
+              stageIndex: number,
+              label: string,
+            ): Promise<boolean> => {
+              const run = liveArtifactDispatchQueue.then(
+                () => dispatchLiveArtifactPackageInternal(packageValue, stageIndex, label),
+                () => dispatchLiveArtifactPackageInternal(packageValue, stageIndex, label),
+              );
+              liveArtifactDispatchQueue = run.then(() => true, () => true);
+              return run;
             };
 
             if (!selectedCodeArtifact && !preparedInitialLivePackage) {
@@ -10520,10 +10636,10 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 }
               },
               getVisibleArtifact() {
-                return lastLiveArtifactPackage;
+                return liveArtboardActor.snapshot();
               },
               getLastMutationAck() {
-                return lastLiveMutationAck;
+                return liveArtboardActor.lastAcknowledgement() ?? lastLiveMutationAck;
               },
               async publishArtifact(packageValue, stageIndex, label) {
                 return dispatchLiveArtifactPackage(packageValue, stageIndex, label);
@@ -10666,9 +10782,22 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               callbacks: researchCallbacks,
               signal: request.signal,
             });
+            const committedCodeArtifactPackage = liveArtboardActor.snapshot() ?? codeArtifactPackage;
+            const finalCodeArtifactPackage: NorthstarGeneratedCodeArtifactPackage = liveArtboardActor.publicationIsComplete()
+              ? committedCodeArtifactPackage
+              : {
+                  ...committedCodeArtifactPackage,
+                  provisional: true,
+                  publicationState: "working",
+                  diagnostics: [
+                    ...committedCodeArtifactPackage.diagnostics,
+                    "Northstar did not claim completion because no verified final browser commit exists.",
+                  ].slice(-60),
+                };
+
             const compositionSteps = buildCompositionActionSteps(
               blueprint,
-              codeArtifactPackage,
+              finalCodeArtifactPackage,
               activeResumeCheckpoint?.sessionType ?? semanticIntent.data?.sessionType,
               Array.from(new Set([
                 ...(activeResumeCheckpoint?.requestedApps ?? compositionCheckpoint?.requestedApps ?? []),
@@ -10907,7 +11036,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 contents,
                 generationConfig: {
                   temperature: 0.2,
-                  maxOutputTokens: thinkingDepth === "low" ? 2_800 : 4_200,
+                  maxOutputTokens: thinkingDepth === "low" ? 2_200 : 4_200,
                   responseMimeType: "application/json",
                   responseJsonSchema: FINAL_RESPONSE_JSON_SCHEMA,
                 },

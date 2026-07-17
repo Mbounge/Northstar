@@ -1,4 +1,4 @@
-// Northstar Canvas Live Web Artifact Host v0.4.8.2 — one iframe, browser-authoritative acknowledgements, dynamic assets, and sequential visible mutations.
+// Northstar Canvas Live Web Artifact Host v0.4.9.1 — exact proposal correlation on one persistent iframe.
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -31,6 +31,9 @@ interface ArtifactPointerMessage {
   artifactId: string;
   surfaceId?: string;
   revisionId?: string;
+  baseRevisionId?: string;
+  proposalId?: string;
+  ackToken?: string;
   mutationId?: string;
   appliedMutationIds?: string[];
   visibleChange?: string;
@@ -115,7 +118,13 @@ function CodeArtifactHostImpl({
   const latestArtifactRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
   const appliedMutationIdsRef = useRef<Set<string>>(new Set());
   const failedMutationIdsRef = useRef<Set<string>>(new Set());
-  const inFlightMutationIdRef = useRef<string | null>(null);
+  const inFlightProposalRef = useRef<{
+    proposalId: string;
+    ackToken: string;
+    baseRevisionId?: string;
+    revisionId: string;
+    mutationId: string;
+  } | null>(null);
   const readyRef = useRef(false);
   const latestSizeRef = useRef<CanvasCodeArtifactContentSize | undefined>(undefined);
   const latestReviewRef = useRef<CanvasCodeArtifactRuntimeReview | undefined>(undefined);
@@ -135,7 +144,7 @@ function CodeArtifactHostImpl({
       setMountedSurface(artifact);
       appliedMutationIdsRef.current = new Set();
       failedMutationIdsRef.current = new Set();
-      inFlightMutationIdRef.current = null;
+      inFlightProposalRef.current = null;
       readyRef.current = false;
       latestSizeRef.current = undefined;
       latestReviewRef.current = undefined;
@@ -171,7 +180,7 @@ function CodeArtifactHostImpl({
   }, []);
 
   const pumpNextMutation = useCallback(() => {
-    if (!readyRef.current || inFlightMutationIdRef.current) return;
+    if (!readyRef.current || inFlightProposalRef.current) return;
     const current = latestArtifactRef.current;
     const frame = frameRef.current;
     if (!current || !frame?.contentWindow) return;
@@ -184,13 +193,26 @@ function CodeArtifactHostImpl({
       setVisibleMutationLabel(null);
       return;
     }
-    inFlightMutationIdRef.current = next.mutationId;
+    const ackToken = current.pendingAckToken;
+    if (!ackToken) return;
+    const proposalId = ackToken.split(":").at(-1) || ackToken;
+    const proposal = {
+      proposalId,
+      ackToken,
+      baseRevisionId: current.parentRevisionId,
+      revisionId: current.revisionId,
+      mutationId: next.mutationId,
+    };
+    inFlightProposalRef.current = proposal;
     setVisibleMutationLabel(next.label);
     frame.contentWindow.postMessage({
       type: "northstar.artifact.apply-mutation",
       artifactId: current.artifactId,
       surfaceId: current.surfaceId ?? current.artifactId,
       revisionId: current.revisionId,
+      baseRevisionId: current.parentRevisionId,
+      proposalId,
+      ackToken,
       batch: next,
       assetUrls: current.dataBundle?.allowedAssetUrls ?? [],
     }, "*");
@@ -208,15 +230,20 @@ function CodeArtifactHostImpl({
     reason?: string;
   }) => {
     const current = latestArtifactRef.current;
-    const ackToken = current?.pendingAckToken;
-    if (!current || !ackToken) return;
+    const isFoundationReady = input.status === "ready" && !input.message.mutationId;
+    const ackToken = input.message.ackToken ?? (isFoundationReady ? current?.pendingAckToken : undefined);
+    const proposalId = input.message.proposalId
+      ?? (isFoundationReady && ackToken ? ackToken.split(":").at(-1) || ackToken : undefined);
+    if (!current || !ackToken || !proposalId) return;
     const acknowledgement: NorthstarArtifactMutationAcknowledgement = {
       schema: "northstar.artboard-ack.v1",
+      proposalId,
       ackToken,
+      baseRevisionId: input.message.baseRevisionId ?? (isFoundationReady ? current.parentRevisionId : undefined),
       artifactId: current.artifactId,
       surfaceId: current.surfaceId ?? current.artifactId,
-      revisionId: current.revisionId,
-      mutationId: current.mutationJournal?.at(-1)?.mutationId ?? input.message.mutationId,
+      revisionId: input.message.revisionId ?? current.revisionId,
+      mutationId: input.message.mutationId,
       status: input.status,
       reason: input.reason,
       size: input.message.size ?? latestSizeRef.current,
@@ -276,7 +303,7 @@ function CodeArtifactHostImpl({
       if (event.data.type === "northstar.artifact.runtime-error") {
         if (event.data.mutationId) {
           failedMutationIdsRef.current.add(event.data.mutationId);
-          inFlightMutationIdRef.current = null;
+          inFlightProposalRef.current = null;
           setVisibleMutationLabel("Repairing an invalid adjustment on this same artboard");
           void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "Runtime mutation error." })
             .catch((error: unknown) => setRuntimeError(error instanceof Error ? error.message : String(error)));
@@ -303,7 +330,9 @@ function CodeArtifactHostImpl({
         // transient geometry to the outer Canvas object.
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         if (event.data.mutationId) failedMutationIdsRef.current.add(event.data.mutationId);
-        if (inFlightMutationIdRef.current === event.data.mutationId) inFlightMutationIdRef.current = null;
+        if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
+          inFlightProposalRef.current = null;
+        }
         setVisibleMutationLabel("Northstar is repairing this rejected adjustment");
         void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "The live runtime rejected the adjustment." })
           .catch((error: unknown) => setRuntimeError(error instanceof Error ? error.message : String(error)));
@@ -314,7 +343,9 @@ function CodeArtifactHostImpl({
         if (event.data.size) { latestSizeRef.current = event.data.size; onContentSize(event.data.size); }
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         if (event.data.mutationId) appliedMutationIdsRef.current.add(event.data.mutationId);
-        if (inFlightMutationIdRef.current === event.data.mutationId) inFlightMutationIdRef.current = null;
+        if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
+          inFlightProposalRef.current = null;
+        }
         setVisibleMutationLabel(event.data.visibleChange || null);
         void postAcknowledgement({ status: "applied", message: event.data })
           .catch((error: unknown) => setRuntimeError(error instanceof Error ? error.message : String(error)))

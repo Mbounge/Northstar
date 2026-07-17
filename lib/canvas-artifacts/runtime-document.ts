@@ -1,4 +1,4 @@
-// Northstar Canvas Artifact Runtime v0.4.8.2 — browser-authoritative transactional mutations, dynamic assets, exact acknowledgements, and live geometry
+// Northstar Canvas Artifact Runtime v0.4.9.2 — browser-authoritative transactional mutations, dynamic assets, exact acknowledgements, and live geometry
 import type { CanvasCodeArtifactPayload } from "./types";
 import { NORTHSTAR_DESIGN_KERNEL_CSS } from "@/lib/canvas-ai/northstar-design-kernel";
 
@@ -330,8 +330,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
   };
 
-  const applyMutationBatch = async (batch, revisionId, acknowledge = true) => {
+  const applyMutationBatch = async (batch, revisionId, acknowledge = true, proposal = null) => {
     if (!batch || appliedMutationIds.has(batch.mutationId)) return;
+    if (proposal?.baseRevisionId && proposal.baseRevisionId !== currentRevisionId) {
+      throw new Error("Proposal base revision does not match the mounted browser revision.");
+    }
     const expectedParent = Array.from(appliedMutationIds).at(-1);
     if (batch.parentMutationId && expectedParent && batch.parentMutationId !== expectedParent) throw new Error("Mutation lineage is discontinuous.");
     registerAssets(batch.requiredAssetUrls || []);
@@ -358,7 +361,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     animateMutation(before, Math.max(80, Math.min(1200, Number(batch.transitionMs) || 320)));
     root.removeAttribute("data-ns-mutating");
     if (acknowledge) {
-      pendingAcknowledgement = { batch, transaction, mutationId: batch.mutationId, revisionId: currentRevisionId, visibleChange: batch.visibleChange };
+      pendingAcknowledgement = {
+        batch,
+        transaction,
+        mutationId: batch.mutationId,
+        revisionId: currentRevisionId,
+        visibleChange: batch.visibleChange,
+        proposal,
+      };
     } else {
       appliedMutationIds.add(batch.mutationId);
     }
@@ -371,9 +381,18 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     try {
       while (mutationQueue.length) {
         const item = mutationQueue.shift();
-        try { await applyMutationBatch(item.batch, item.revisionId, true); }
+        try { await applyMutationBatch(item.batch, item.revisionId, true, item.proposal); }
         catch (error) {
-          parent.postMessage({ type: "northstar.artifact.runtime-error", artifactId: ARTIFACT_ID, revisionId: item.revisionId, mutationId: item.batch?.mutationId, message: error instanceof Error ? error.message : String(error) }, "*");
+          parent.postMessage({
+            type: "northstar.artifact.runtime-error",
+            artifactId: ARTIFACT_ID,
+            revisionId: item.revisionId,
+            baseRevisionId: item.proposal?.baseRevisionId,
+            proposalId: item.proposal?.proposalId,
+            ackToken: item.proposal?.ackToken,
+            mutationId: item.batch?.mutationId,
+            message: error instanceof Error ? error.message : String(error),
+          }, "*");
         }
       }
     } finally { applyingMutation = false; }
@@ -453,7 +472,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const minimumMeaningful = Math.max(1, Number(acknowledgement.batch.minimumMeaningfulChangedNodes) || 1);
         const textOnly = changeKinds.length === 1 && changeKinds[0] === "content";
         const requiredKinds = acknowledgement.batch.requiredChangeKinds || [];
-        const missingRequiredKinds = requiredKinds.filter((kind) => !changeKinds.includes(kind));
+        // Geometry remains browser-measured, but unchanged outer bounds must not
+        // roll back an otherwise meaningful and safe internal recomposition.
+        const missingRequiredKinds = requiredKinds.filter(
+          (kind) => kind !== "geometry" && !changeKinds.includes(kind),
+        );
         const hardIssues = review.overflowElementCount + review.clippedTextCount + review.missingImageCount + (review.documentScrollRisk ? 1 : 0);
         const rejectedReason = missingAssets.length
           ? "Required evidence assets did not load: " + missingAssets.join(", ")
@@ -480,6 +503,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             artifactId: ARTIFACT_ID,
             surfaceId: SURFACE_ID,
             revisionId: acknowledgement.revisionId,
+            baseRevisionId: acknowledgement.proposal?.baseRevisionId,
+            proposalId: acknowledgement.proposal?.proposalId,
+            ackToken: acknowledgement.proposal?.ackToken,
             mutationId: acknowledgement.mutationId,
             message: rejectedReason,
             size,
@@ -509,6 +535,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             artifactId: ARTIFACT_ID,
             surfaceId: SURFACE_ID,
             revisionId: acknowledgement.revisionId,
+            baseRevisionId: acknowledgement.proposal?.baseRevisionId,
+            proposalId: acknowledgement.proposal?.proposalId,
+            ackToken: acknowledgement.proposal?.ackToken,
             mutationId: acknowledgement.mutationId,
             visibleChange: acknowledgement.visibleChange,
             size: acknowledgedSize,
@@ -567,7 +596,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     if (message.type === "northstar.artifact.apply-mutation" && message.batch) {
       registerAssets(message.assetUrls || []);
-      mutationQueue.push({ batch: message.batch, revisionId: message.revisionId }); processQueue();
+      mutationQueue.push({
+        batch: message.batch,
+        revisionId: message.revisionId,
+        proposal: {
+          proposalId: message.proposalId,
+          ackToken: message.ackToken,
+          baseRevisionId: message.baseRevisionId,
+        },
+      });
+      processQueue();
     }
   });
 

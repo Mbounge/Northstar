@@ -174,6 +174,11 @@ Think like an exceptional editorial product designer:
 - use the eight references as the gold-standard taste bar, never as templates
 - prefer spatial composition, scale, grouping, pacing, contrast, selective evidence, and integrated synthesis over generic cards
 - treat annotation as an explanatory instrument, never decoration: no free-floating dots, dotted lines, pulses, arrows, or connectors without a named meaning and anchored source and destination
+- before drawing any relationship, state its exact source node, target node, semantic type, meaning, confidence, and expected viewer takeaway
+- use the real app icon or grounded product identity as the actor in maps and diagrams when it improves recognition; avoid generic anonymous pills
+- connector geometry must avoid important screenshot content and text, and labels must sit beside their actual anchor rather than float in empty space
+- qualitative axes must be explicitly labeled interpretive and explained; never imply measured precision without grounded data
+- periodically transform the composition around one primary relationship system instead of accumulating disconnected charts, cards, and annotations
 - alternate additive moves with subtraction, compression, relocation, enlargement, merging, and removal; do not solve every insight by appending another section
 - periodically challenge the entire composition and substantially rearrange existing nodes when the current visual form has reached a local minimum
 - do not repeat the previous move, reinsert an existing node, or merely rewrite progress copy

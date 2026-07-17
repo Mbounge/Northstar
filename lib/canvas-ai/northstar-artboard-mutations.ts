@@ -1,5 +1,11 @@
-// Northstar Artboard Mutation Engine v0.4.8.3 — granular observable edits, asset declarations, design-act contracts, and no-op rejection on one persistent surface.
+// Northstar Artboard Mutation Engine v0.4.9.2 — granular observable edits, asset declarations, design-act contracts, and no-op rejection on one persistent surface.
 import { createHash } from "node:crypto";
+import {
+  NORTHSTAR_RELATIONSHIP_RENDERING_CONTRACT,
+  relationshipIdsFromMarkup,
+  relationshipInventory,
+  validateNorthstarSemanticRelationships,
+} from "@/lib/canvas-ai/northstar-semantic-relationships";
 import {
   NORTHSTAR_ARTBOARD_MUTATION_SCHEMA,
   type CanvasCodeArtifactBuildPhase,
@@ -42,7 +48,7 @@ const FORBIDDEN_HTML = /<(?:script|iframe|object|embed|link|meta|base|form|input
 const FORBIDDEN_CSS = /@import|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|url\s*\(/i;
 const FORBIDDEN_STYLE_NAME = /^(?:behavior|-moz-binding)$/i;
 const FORBIDDEN_ATTRIBUTE = /^(?:on[a-z]+|srcdoc|formaction|action|target)$/i;
-const STRUCTURAL_SET_HTML_TARGETS = new Set(["artboard", "__root__", "header", "evidence"]);
+const STRUCTURAL_SET_HTML_TARGETS = new Set(["artboard", "__root__", "header", "evidence", "synthesis", "decision"]);
 const PROGRESS_ONLY_TARGETS = new Set(["kicker", "current-act", "current-act-text"]);
 
 export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
@@ -70,16 +76,6 @@ export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
               text: { type: "string", maxLength: 12000 },
             },
             required: ["op", "targetId", "text"],
-          },
-          {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              op: { type: "string", enum: ["set-html"] },
-              targetId: { type: "string", minLength: 1, maxLength: 120 },
-              html: { type: "string", minLength: 1, maxLength: 80000 },
-            },
-            required: ["op", "targetId", "html"],
           },
           {
             type: "object",
@@ -336,15 +332,37 @@ function inferMutationContract(input: {
   const required = new Set<NorthstarArtboardChangeKind>();
   if (/curate|organize|relationship|argument|decisive proof|synthesis|decision|annotation|interpretation/.test(haystack)) required.add(structural ? "structure" : "style");
   if (/scale|breathing room|emphasize|decisive proof/.test(haystack)) required.add(scale ? "scale" : "style");
-  if (/geometry|recompose|rebalance|space/.test(haystack)) required.add("geometry");
+  const changesGeometry = input.operations.some((operation) =>
+    operation.op === "request-space"
+    || operation.op === "move"
+    || operation.op === "insert-html"
+    || operation.op === "remove"
+    || (operation.op === "set-styles"
+      && Object.keys(operation.styles).some((key) =>
+        /width|height|min-width|min-height|max-width|max-height|margin|padding|gap|grid|flex|position|inset|left|right|top|bottom|transform/i.test(key)
+      ))
+  );
+  if (/geometry|recompose|rebalance|space/.test(haystack) && changesGeometry) required.add("geometry");
   if (/evidence|flow|screenshot/.test(haystack) && extractRequiredAssetUrls(input.operations).length) required.add("assets");
   const nonProgressTargets = new Set(input.operations.flatMap((operation) => {
     if ("targetId" in operation && !PROGRESS_ONLY_TARGETS.has(operation.targetId)) return [operation.targetId];
     return [];
   }));
+  const explicitlyMicro = /micro|polish|refine|tighten|align|spacing|typography|label|marker|crop|quiet|remove process|final presentation/.test(haystack);
+  const explicitlyStructural = /recompose|transform|restructure|new visual thesis|new metaphor|radical|structural/.test(haystack);
+  const magnitude: "micro" | "medium" | "structural" = explicitlyMicro
+    ? "micro"
+    : explicitlyStructural || structural
+      ? "structural"
+      : "medium";
+  const minimumMeaningfulChangedNodes = magnitude === "micro"
+    ? 1
+    : magnitude === "medium"
+      ? Math.max(1, Math.min(2, nonProgressTargets.size || 1))
+      : Math.max(2, Math.min(3, nonProgressTargets.size || 2));
   return {
-    minimumMeaningfulChangedNodes: Math.max(1, Math.min(6, nonProgressTargets.size || (structural ? 2 : 1))),
-    allowTextOnly: /sharpen|copy|title|thesis|wording/.test(haystack),
+    minimumMeaningfulChangedNodes,
+    allowTextOnly: /sharpen|copy|title|thesis|wording|deck|publication|final presentation/.test(haystack),
     requiredChangeKinds: Array.from(required),
   };
 }
@@ -385,7 +403,30 @@ function assertInsertedSemanticIdsAreUnique(previous: NorthstarGeneratedCodeArti
 }
 
 
-function assertVisualMarksAreSemantic(operations: NorthstarArtboardMutationOperation[]): void {
+function mutationMarkupSources(operations: NorthstarArtboardMutationOperation[]): string[] {
+  return operations.flatMap((operation) =>
+    operation.op === "insert-html" || operation.op === "set-html" ? [operation.html] : []
+  );
+}
+
+function existingRelationshipIds(previous: NorthstarGeneratedCodeArtifactPackage): Set<string> {
+  const sources = [
+    previous.document.html,
+    ...(previous.mutationJournal ?? []).flatMap((batch) => mutationMarkupSources(batch.operations)),
+  ];
+  return new Set(relationshipInventory(sources).map((relationship) => relationship.id));
+}
+
+function assertVisualMarksAreSemantic(
+  previous: NorthstarGeneratedCodeArtifactPackage,
+  operations: NorthstarArtboardMutationOperation[],
+): void {
+  const knownNodes = existingSemanticIds(previous);
+  const insertedNodes = new Set<string>();
+  for (const source of mutationMarkupSources(operations)) {
+    for (const id of semanticIdsFromMarkup(source)) insertedNodes.add(id);
+  }
+  const knownRelationships = existingRelationshipIds(previous);
   for (const operation of operations) {
     const source = operation.op === "insert-html" || operation.op === "set-html"
       ? operation.html
@@ -393,13 +434,25 @@ function assertVisualMarksAreSemantic(operations: NorthstarArtboardMutationOpera
         ? operation.css
         : "";
     if (!source) continue;
-    const createsDecorativeConnector = /(?:dotted|dashed|pulse|connector|path-marker|relationship-line|border-radius\s*:\s*50%)/i.test(source);
-    if (!createsDecorativeConnector) continue;
-    const hasMeaning = /data-ns-meaning\s*=\s*["'][^"']+["']/i.test(source);
-    const hasAnchors = /data-ns-source-id\s*=\s*["'][^"']+["']/i.test(source)
-      && /data-ns-target-id\s*=\s*["'][^"']+["']/i.test(source);
-    if (!hasMeaning || !hasAnchors) {
-      throw new Error("Decorative connectors, dotted lines, pulse markers, and circular pointers require data-ns-meaning plus anchored data-ns-source-id and data-ns-target-id semantics.");
+    const createsVisualRelationship = operation.op === "set-css-layer"
+      ? /(?:stroke-dasharray|border(?:-top|-right|-bottom|-left)?\s*:\s*[^;]*(?:dashed|dotted)|data-ns-relationship-id|data-ns-source-id|data-ns-target-id)/i.test(source)
+      : /(?:data-ns-relationship-id|data-ns-source-id|data-ns-target-id)/i.test(source);
+    if (!createsVisualRelationship) continue;
+    if (operation.op === "set-css-layer" && !/\[data-ns-relationship-id/i.test(source)) {
+      throw new Error("Relationship styling must target semantic [data-ns-relationship-id] elements; freehand decorative CSS is not allowed.");
+    }
+    if (operation.op === "insert-html" || operation.op === "set-html") {
+      const relationships = validateNorthstarSemanticRelationships({
+        markup: operation.html,
+        existingNodeIds: knownNodes,
+        insertedNodeIds: insertedNodes,
+        existingRelationshipIds: knownRelationships,
+      });
+      for (const relationship of relationships) knownRelationships.add(relationship.id);
+      const genericMarkers = /data-ns-node-id\s*=\s*["'][^"']*(?:dot|circle|pulse|marker)[^"']*["']/i.test(operation.html);
+      if (genericMarkers && relationships.length === 0) {
+        throw new Error("Dots, circular markers, and pills must belong to a typed semantic relationship or be removed.");
+      }
     }
   }
 }
@@ -408,21 +461,68 @@ function assertMutationDoesNotOnlyAccumulate(
   previous: NorthstarGeneratedCodeArtifactPackage,
   operations: NorthstarArtboardMutationOperation[],
 ): void {
-  const recent = (previous.mutationJournal ?? []).slice(-2);
-  const recentWereAdditive = recent.length === 2 && recent.every((batch) =>
+  const recent = (previous.mutationJournal ?? []).slice(-3);
+  const recentWereOnlyAdditive = recent.length === 3 && recent.every((batch) =>
     batch.operations.some((operation) => operation.op === "insert-html")
-    && !batch.operations.some((operation) => operation.op === "remove" || operation.op === "move"),
+    && !batch.operations.some((operation) =>
+      operation.op === "remove"
+      || operation.op === "move"
+      || operation.op === "set-styles"
+      || operation.op === "set-classes"
+    ),
   );
-  const currentAdds = operations.some((operation) => operation.op === "insert-html");
+  const inserts = operations.filter((operation) => operation.op === "insert-html");
   const currentTransforms = operations.some((operation) =>
     operation.op === "remove"
     || operation.op === "move"
     || operation.op === "set-styles"
-    || operation.op === "set-classes",
+    || operation.op === "set-classes"
+    || operation.op === "set-text"
+    || operation.op === "set-attributes",
   );
-  if (recentWereAdditive && currentAdds && !currentTransforms) {
-    throw new Error("The artboard has accumulated enough new sections. Transform, move, resize, merge, quiet, or remove existing nodes before appending another standalone region.");
+  // Do not punish a necessary synthesis or decision region merely because it is new.
+  // Block only clear section spam: three prior additive moves plus multiple new regions
+  // and no transformation of the existing composition.
+  if (recentWereOnlyAdditive && inserts.length >= 2 && !currentTransforms) {
+    throw new Error("This proposal adds multiple standalone regions without evolving the existing composition. Merge the idea into the current visual thesis or transform existing nodes.");
   }
+}
+
+
+/**
+ * Deterministic preflight repair for model-authored drafts.
+ * Invalid structural replacements and freehand relationship CSS are removed before
+ * revision creation, so they can never consume a browser acknowledgement timeout.
+ */
+export function repairNorthstarArtboardMutationDraft(
+  draft: NorthstarArtboardMutationDraft,
+): { draft: NorthstarArtboardMutationDraft; repairs: string[] } {
+  const repairs: string[] = [];
+  const operations: NorthstarArtboardMutationOperation[] = [];
+
+  for (const operation of draft.operations ?? []) {
+    if (operation.op === "set-html" && STRUCTURAL_SET_HTML_TARGETS.has(String(operation.targetId))) {
+      repairs.push(`Dropped illegal structural replacement of ${String(operation.targetId)}.`);
+      continue;
+    }
+
+    if (operation.op === "set-css-layer") {
+      const css = String(operation.css ?? "");
+      const drawsFreehandRelationship = /(?:border(?:-top|-right|-bottom|-left)?\s*:\s*[^;]*(?:dashed|dotted)|stroke-dasharray|clip-path\s*:|rotate\s*:|transform\s*:[^;]*rotate|::(?:before|after)[\s\S]{0,500}(?:dashed|dotted|border-radius\s*:\s*50%))/i.test(css);
+      const targetsTypedRelationship = /\[data-ns-relationship-id(?:=|\])/i.test(css);
+      if (drawsFreehandRelationship && !targetsTypedRelationship) {
+        repairs.push(`Dropped freehand relationship CSS layer ${operation.layerId}.`);
+        continue;
+      }
+    }
+
+    operations.push(operation);
+  }
+
+  return {
+    draft: { ...draft, operations },
+    repairs,
+  };
 }
 
 export function createNorthstarArtboardMutationBatch(input: {
@@ -434,7 +534,7 @@ export function createNorthstarArtboardMutationBatch(input: {
 }): NorthstarArtboardMutationBatch {
   const draft = sanitizeNorthstarArtboardMutationDraft(input.draft);
   assertInsertedSemanticIdsAreUnique(input.previous, draft.operations);
-  assertVisualMarksAreSemantic(draft.operations);
+  assertVisualMarksAreSemantic(input.previous, draft.operations);
   assertMutationDoesNotOnlyAccumulate(input.previous, draft.operations);
   const journal = input.previous.mutationJournal ?? [];
   const sequence = journal.length + 1;
@@ -547,7 +647,9 @@ ONE SURFACE — ABSOLUTE CONTRACT
 - Preserve strong existing work. Never reset the composition.
 - Every operation targets stable data-ns-node-id values. New inserted elements must include unique data-ns-node-id attributes.
 - Use set-css-layer to evolve the visual system without replacing the base stylesheet.
-- Never use set-html on artboard, header, or evidence. Add and mutate stable child nodes individually. set-html is limited to a small leaf synthesis or decision node that already exists.
+- Never use set-html. It is not part of the model-facing mutation language. Use set-text, set-attributes, set-styles, set-classes, move, remove, insert-html into an existing safe container, or set-css-layer.
+- Prefer transforming and recomposing existing semantic nodes over appending dashboard sections.
+- Working-process elements such as current-act, current-act-text, and provisional guidance are temporary and must be removed or resolved in the final publication move.
 - One batch should express one focused design adjustment that a watching human notices. Different design-act labels must produce materially different operations; changing only the progress copy does not count.
 
 GEOMETRY CONTRACT
@@ -560,6 +662,10 @@ GEOMETRY CONTRACT
 GOLD-STANDARD NORTHSTAR LANGUAGE
 - All eight attached reference images are active taste conditioning for every mutation.
 - Learn their editorial confidence, hierarchy, typography, spacing, restrained violet/lilac character, evidence clarity, simplicity, and finish.
+- Search broadly for a problem-specific visual communication thesis before defaulting to rows, tables, dashboards, or stacked cards.
+- The same evidence can become an evidence constellation, tension field, annotated narrative, strategic anatomy, polarity map, transformation arc, editorial confrontation, spatial score, or a new grammar invented for this exact prompt.
+- Follow explicit user visual instructions whenever they remain truthful to the evidence.
+- Divergence must be semantic, not decorative: unusual composition, scale, rhythm, spatial relationship, and visual metaphor must make the problem easier to understand.
 - Never copy any one reference's structure, section order, or component arrangement.
 - The selected medium and metaphor must emerge through the accumulated mutations on the current surface.
 
@@ -573,6 +679,8 @@ SEMANTIC VISUAL DISCIPLINE
 - Do not present qualitative opinions as quantitative metrics or a scored matrix unless the grounded evidence contains a defensible basis.
 - Prefer rearranging, enlarging, compressing, merging, and removing existing evidence over appending generic cards or tables.
 - A later move should often simplify or transform prior work. The artboard must become more coherent, not merely longer.
+
+${NORTHSTAR_RELATIONSHIP_RENDERING_CONTRACT}
 
 SAFETY
 - Return only the required JSON.
@@ -623,7 +731,8 @@ export function buildNorthstarArtboardMutationModelInput(input: {
       currentTitle: input.previous.title,
       currentDescription: input.previous.description,
       baseDocument: input.previous.document,
-      existingMutationJournal: journal.slice(-6),
+      existingMutationJournal: journal.slice(-4),
+      activeSemanticRelationships: relationshipInventory([input.previous.document.html, ...journal.flatMap((batch) => mutationMarkupSources(batch.operations))]).slice(-24),
       currentSemanticNodeIds: extractSemanticNodeIds(input.previous),
       mutationCount: journal.length,
     },
@@ -634,6 +743,9 @@ export function buildNorthstarArtboardMutationModelInput(input: {
       neverReplaceRootOrDocument: true,
       sameSurfaceFromStartToFinish: true,
       geometryMeasuredAfterMutation: true,
+      allowedOperations: ["set-text", "insert-html", "remove", "move", "set-attributes", "set-styles", "set-classes", "set-css-layer", "request-space"],
+      forbiddenStructuralTargets: ["artboard", "__root__", "header", "evidence", "synthesis", "decision"],
+      relationshipRule: "Relationship graphics must be inserted as typed semantic markup with data-ns-relationship-id, data-ns-source-id, data-ns-target-id, and data-ns-meaning. Never draw freehand connector CSS.",
     },
   };
 }
@@ -679,6 +791,95 @@ function escapeMutationHtml(value: string): string {
  * It still performs a real, visible edit on the mounted surface so the progress stream and
  * artboard cannot drift apart. The next model-authored mutation can refine or replace it.
  */
+
+function latestCommittedText(
+  previous: NorthstarGeneratedCodeArtifactPackage,
+  targetId: string,
+  fallback: string,
+): string {
+  let value = fallback;
+  for (const batch of previous.mutationJournal ?? []) {
+    for (const operation of batch.operations) {
+      if (operation.op === "set-text" && operation.targetId === targetId) {
+        value = operation.text;
+      }
+    }
+  }
+  return cleanText(value, 2400) || fallback;
+}
+
+/**
+ * Deterministic final publication compiler.
+ *
+ * The accumulated visual concept remains model-authored. This mutation only
+ * removes Northstar's temporary working scaffold and marks the exact same
+ * mounted artboard as a complete publication.
+ */
+export function buildDeterministicNorthstarPublicationDraft(input: {
+  previous: NorthstarGeneratedCodeArtifactPackage;
+  objective: string;
+}): NorthstarArtboardMutationDraft {
+  const title = latestCommittedText(
+    input.previous,
+    "title",
+    cleanText(input.previous.title, 260)
+      || cleanText(input.objective, 260)
+      || "Northstar synthesis",
+  );
+  const deck = latestCommittedText(
+    input.previous,
+    "deck",
+    cleanText(input.previous.description, 900)
+      || cleanText(input.objective, 900)
+      || "A grounded visual synthesis of the evidence and decision.",
+  );
+
+  return {
+    title: `Publish ${title}`.slice(0, 220),
+    description: "Deterministically remove Northstar working-process chrome and publish the existing visual composition without changing its evidence or design thesis.",
+    visualStrategy: "Preserve the accumulated model-authored composition while resolving only platform-owned working-state elements and publication metadata.",
+    visibleChange: "Removed working-process chrome and resolved the same living artboard into its final published presentation.",
+    geometryIntent: "preserve",
+    transitionMs: 260,
+    operations: [
+      { op: "set-text", targetId: "title", text: title },
+      { op: "set-text", targetId: "deck", text: deck },
+      { op: "remove", targetId: "current-act" },
+      { op: "remove", targetId: "kicker" },
+      {
+        op: "set-attributes",
+        targetId: "artboard",
+        attributes: {
+          "data-ns-publication": "complete",
+          "data-ns-live-phase": null,
+          "data-ns-live-mutation": null,
+        },
+      },
+      {
+        op: "set-classes",
+        targetId: "artboard",
+        remove: ["ns-working-artifact"],
+        add: ["ns-published-artifact"],
+      },
+      {
+        op: "set-css-layer",
+        layerId: "final-publication",
+        css: `
+[data-ns-node-id="artboard"]{align-content:start}
+[data-ns-node-id="header"]{padding-bottom:18px}
+[data-ns-node-id="title"]{text-wrap:balance}
+[data-ns-node-id="deck"]{text-wrap:pretty;max-width:980px}
+[data-ns-node-id="current-act"],
+[data-ns-node-id="kicker"],
+.working-act,
+.working-kicker{display:none!important}
+.ns-published-artifact{--ns-publication-state:complete}
+        `.trim(),
+      },
+    ],
+  };
+}
+
 export function buildDeterministicNorthstarArtboardMutationDraft(input: {
   previous: NorthstarGeneratedCodeArtifactPackage;
   label: string;

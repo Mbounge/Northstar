@@ -284,7 +284,12 @@ export interface NorthstarLiveSurfaceSnapshot {
 
 export interface NorthstarArtifactMutationAcknowledgement {
   schema: "northstar.artboard-ack.v1";
+  /** Stable identity for a speculative proposal. It never becomes lineage by itself. */
+  proposalId?: string;
+  /** Exact dispatch token echoed by the browser runtime. Never infer this from latest props. */
   ackToken: string;
+  /** The browser revision that the proposal was based on. */
+  baseRevisionId?: string;
   artifactId: string;
   surfaceId: string;
   revisionId: string;

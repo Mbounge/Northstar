@@ -1,5 +1,10 @@
-// Northstar v0.4.8.2 — browser-authoritative acknowledgement broker for one living artboard.
+// Northstar v0.4.9.0 — idempotent acknowledgement store keyed by exact proposal identity.
 import type { NorthstarArtifactMutationAcknowledgement } from "@/lib/canvas-artifacts/types";
+
+type StoredAck = {
+  acknowledgement: NorthstarArtifactMutationAcknowledgement;
+  storedAt: number;
+};
 
 type Waiter = {
   resolve: (ack: NorthstarArtifactMutationAcknowledgement) => void;
@@ -7,29 +12,43 @@ type Waiter = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-type AckRegistry = {
-  acknowledgements: Map<string, NorthstarArtifactMutationAcknowledgement>;
+type Registry = {
+  acknowledgements: Map<string, StoredAck>;
   waiters: Map<string, Set<Waiter>>;
 };
 
-const REGISTRY_KEY = "__northstarArtboardAckRegistryV041";
+const REGISTRY_KEY = "__northstarAckStoreV0490";
+const ACK_TTL_MS = 5 * 60_000;
 
-function registry(): AckRegistry {
-  const holder = globalThis as typeof globalThis & { [REGISTRY_KEY]?: AckRegistry };
-  if (!holder[REGISTRY_KEY]) {
-    holder[REGISTRY_KEY] = {
-      acknowledgements: new Map(),
-      waiters: new Map(),
-    };
+function registry(): Registry {
+  const globalState = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Registry };
+  globalState[REGISTRY_KEY] ??= {
+    acknowledgements: new Map(),
+    waiters: new Map(),
+  };
+  return globalState[REGISTRY_KEY]!;
+}
+
+function prune(state: Registry) {
+  const now = Date.now();
+  for (const [token, stored] of state.acknowledgements) {
+    if (now - stored.storedAt > ACK_TTL_MS) state.acknowledgements.delete(token);
   }
-  return holder[REGISTRY_KEY]!;
 }
 
 export function publishNorthstarArtifactAcknowledgement(
   acknowledgement: NorthstarArtifactMutationAcknowledgement,
 ): void {
   const state = registry();
-  state.acknowledgements.set(acknowledgement.ackToken, acknowledgement);
+  prune(state);
+
+  // Store before resolving waiters. This closes ack-before-waiter races and
+  // makes duplicate delivery idempotent.
+  state.acknowledgements.set(acknowledgement.ackToken, {
+    acknowledgement,
+    storedAt: Date.now(),
+  });
+
   const waiters = state.waiters.get(acknowledgement.ackToken);
   if (!waiters) return;
   state.waiters.delete(acknowledgement.ackToken);
@@ -37,11 +56,14 @@ export function publishNorthstarArtifactAcknowledgement(
     clearTimeout(waiter.timer);
     waiter.resolve(acknowledgement);
   }
-  // Keep only a small recent window. Ack tokens are one-use and globally unique.
-  if (state.acknowledgements.size > 256) {
-    const oldest = state.acknowledgements.keys().next().value as string | undefined;
-    if (oldest) state.acknowledgements.delete(oldest);
-  }
+}
+
+export function getNorthstarArtifactAcknowledgement(
+  ackToken: string,
+): NorthstarArtifactMutationAcknowledgement | undefined {
+  const state = registry();
+  prune(state);
+  return state.acknowledgements.get(ackToken)?.acknowledgement;
 }
 
 export async function waitForNorthstarArtifactAcknowledgement(input: {
@@ -50,42 +72,50 @@ export async function waitForNorthstarArtifactAcknowledgement(input: {
   signal?: AbortSignal;
 }): Promise<NorthstarArtifactMutationAcknowledgement> {
   const state = registry();
-  const existing = state.acknowledgements.get(input.ackToken);
-  if (existing) {
-    state.acknowledgements.delete(input.ackToken);
-    return existing;
-  }
+  prune(state);
 
+  const existing = state.acknowledgements.get(input.ackToken);
+  if (existing) return existing.acknowledgement;
+
+  const timeoutMs = Math.max(1_000, input.timeoutMs ?? 30_000);
   return await new Promise<NorthstarArtifactMutationAcknowledgement>((resolve, reject) => {
-    const timeoutMs = Math.max(2_000, Math.min(90_000, input.timeoutMs ?? 35_000));
+    const bucket = state.waiters.get(input.ackToken) ?? new Set<Waiter>();
+
+    const cleanup = (waiter: Waiter) => {
+      clearTimeout(waiter.timer);
+      bucket.delete(waiter);
+      if (bucket.size === 0) state.waiters.delete(input.ackToken);
+      input.signal?.removeEventListener("abort", abort);
+    };
+
     const waiter: Waiter = {
       resolve: (ack) => {
-        input.signal?.removeEventListener("abort", abort);
-        state.acknowledgements.delete(input.ackToken);
+        cleanup(waiter);
         resolve(ack);
       },
       reject: (error) => {
-        input.signal?.removeEventListener("abort", abort);
+        cleanup(waiter);
         reject(error);
       },
       timer: setTimeout(() => {
-        const bucket = state.waiters.get(input.ackToken);
-        bucket?.delete(waiter);
-        if (bucket?.size === 0) state.waiters.delete(input.ackToken);
-        input.signal?.removeEventListener("abort", abort);
-        reject(new Error(`Timed out waiting for the live artboard acknowledgement: ${input.ackToken}`));
+        const raced = getNorthstarArtifactAcknowledgement(input.ackToken);
+        if (raced) {
+          cleanup(waiter);
+          resolve(raced);
+          return;
+        }
+        cleanup(waiter);
+        reject(new Error(`Timed out waiting for proposal acknowledgement: ${input.ackToken}`));
       }, timeoutMs),
     };
-    const abort = () => {
-      clearTimeout(waiter.timer);
-      const bucket = state.waiters.get(input.ackToken);
-      bucket?.delete(waiter);
-      if (bucket?.size === 0) state.waiters.delete(input.ackToken);
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    const bucket = state.waiters.get(input.ackToken) ?? new Set<Waiter>();
+
+    const abort = () => waiter.reject(new DOMException("Aborted", "AbortError"));
     bucket.add(waiter);
     state.waiters.set(input.ackToken, bucket);
     input.signal?.addEventListener("abort", abort, { once: true });
+
+    // Final race check after waiter registration.
+    const raced = getNorthstarArtifactAcknowledgement(input.ackToken);
+    if (raced) waiter.resolve(raced);
   });
 }
