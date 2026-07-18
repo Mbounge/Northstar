@@ -22,6 +22,7 @@ import {
   type NorthstarArtboardMutationDraft,
 } from "@/lib/canvas-ai/northstar-artboard-mutations";
 import type { NorthstarCreativeCritiqueDraft, NorthstarProgressiveDesignAct } from "@/lib/canvas-ai/northstar-design-intelligence";
+import { renderNorthstarVisualSceneDocument, validateNorthstarVisualSceneDocument, type NorthstarVisualScenePlan } from "@/lib/canvas-ai/northstar-visual-scene-engine";
 import {
   NORTHSTAR_FLOW_REFERENCE_PROTOCOL,
   NORTHSTAR_ORIGINALITY_PROTOCOL,
@@ -1299,6 +1300,7 @@ export function createNorthstarWorkingArtifactPackage(input: {
   creativeDirection?: NorthstarCreativeDirection;
   message?: string;
   previousPackage?: NorthstarGeneratedCodeArtifactPackage;
+  scenePlan?: NorthstarVisualScenePlan;
 }): NorthstarGeneratedCodeArtifactPackage {
   const phaseIndex = Math.max(0, REQUIRED_PHASES.indexOf(input.phase));
   const title = input.creativeDirection?.brief.editorialThesis || provisionalWorkingTitle(input);
@@ -1315,21 +1317,24 @@ export function createNorthstarWorkingArtifactPackage(input: {
     const sequence = screens.map((screen, screenIndex) => { const screenNodeId = `${flowNodeId}-screen-${normalizeId(screen!.id, String(screen!.index ?? screenIndex))}`; return `<figure data-ns-node-id="${screenNodeId}" data-ns-evidence-id="${escapeWorkingHtml(screen!.id)}"><img data-ns-node-id="${screenNodeId}-image" src="${escapeWorkingHtml(screen!.imageUrl ?? "")}" alt="${escapeWorkingHtml(screen!.title)}"></figure>`; }).join("");
     return `<section class="working-flow" data-ns-node-id="${flowNodeId}" data-ns-flow-id="${escapeWorkingHtml(flow.id)}" data-ns-stage="evidence">${identity}<div class="working-flow__sequence" data-ns-node-id="${flowNodeId}-sequence">${sequence || '<p class="working-empty">Grounded screens are arriving.</p>'}</div></section>`;
   }).join("");
-  const longestFlowWidth = input.dataBundle.flows.reduce((largest, flow) => {
-    const screenWidth = /desktop|web/i.test(flow.platform ?? "") ? 260 : 176;
-    const count = Math.min(12, flow.screenshotIds.length);
-    return Math.max(largest, 420 + count * screenWidth + Math.max(0, count - 1) * 20);
-  }, 0);
-  const computedWidth = 1480; // starting surface only; the live browser measures content-driven growth.
+  const computedWidth = 1480;
   const computedHeight = Math.max(720, 330 + Math.max(1, input.dataBundle.flows.slice(0, 4).length) * 280);
   const width = input.previousPackage?.preferredWidth ?? computedWidth;
   const height = Math.max(computedHeight, input.previousPackage?.preferredHeight ?? 0);
-  const document: NorthstarWebArtifactDocument = {
-    schema: NORTHSTAR_WEB_ARTIFACT_DOCUMENT_SCHEMA,
-    html: `<main class="ns-artifact ns-working-artifact" data-ns-node-id="artboard" data-ns-design-kernel="v1" data-ns-publication="working"><header data-ns-node-id="header" data-ns-stage="foundation"><p class="working-kicker" data-ns-node-id="kicker">Northstar · live artboard</p><h1 class="ns-thesis" data-ns-node-id="title">${escapeWorkingHtml(title)}</h1><p class="working-deck" data-ns-node-id="deck">${escapeWorkingHtml(input.message || input.dataBundle.coverageSummary || activeAct)}</p><div class="working-act" data-ns-node-id="current-act"><span>Current design act</span><strong data-ns-node-id="current-act-text">${escapeWorkingHtml(activeAct)}</strong></div></header><div class="working-evidence" data-ns-node-id="evidence">${flows || identities}</div><section class="working-synthesis" data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section class="working-decision" data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
-    css: `.ns-working-artifact{width:2360px;max-width:2360px;min-width:1180px;min-height:${height}px;padding:44px 52px 60px;background:radial-gradient(circle at 30% -15%,rgba(107,77,255,.12),transparent 38%),linear-gradient(180deg,#fdfcff,#f6f4fb);color:#151620;font-family:Inter,ui-sans-serif,system-ui,sans-serif;display:grid;align-content:start;gap:30px}.ns-working-artifact header{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:32px;align-items:end}.working-kicker{grid-column:1/-1;margin:0;color:#6b4dff;font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.ns-working-artifact .ns-thesis{margin:0;font-size:56px;line-height:.97;letter-spacing:-.055em;max-width:1050px}.working-deck{margin:14px 0 0;color:#6b6e7d;font-size:16px;line-height:1.5;max-width:920px}.working-act{align-self:start;padding:16px 18px;border-left:2px solid #6b4dff;background:rgba(255,255,255,.72)}.working-act span{display:block;color:#8b8f9f;font-size:11px;text-transform:uppercase;letter-spacing:.12em}.working-act strong{display:block;margin-top:8px;font-size:17px;line-height:1.35}.working-evidence{display:grid;gap:24px}.working-evidence:empty{display:none}.working-identities{display:flex;flex-wrap:wrap;gap:14px;padding-top:20px;border-top:1px solid rgba(78,67,135,.13)}.working-identity{display:flex;align-items:center;gap:14px;min-width:300px;max-width:520px;padding:14px 18px;background:rgba(255,255,255,.66);border:1px solid rgba(78,67,135,.10);border-radius:18px}.working-identity img{width:52px;height:52px;border-radius:15px;object-fit:cover}.working-identity strong{display:block;font-size:18px}.working-identity span{display:block;margin-top:4px;color:#737686;font-size:13px;line-height:1.35}.working-flow{display:grid;grid-template-columns:180px max-content;gap:26px;align-items:center;padding:22px 0;border-top:1px solid rgba(78,67,135,.13)}.working-flow__identity{position:sticky;left:0;display:flex;align-items:center;gap:13px;background:#f9f8fd;padding-right:18px;z-index:1}.working-flow__identity img{width:48px;height:48px;border-radius:14px;object-fit:cover}.working-flow__identity strong{display:block;font-size:20px}.working-flow__identity span{display:block;margin-top:4px;color:#737686;font-size:13px}.working-flow__sequence{display:flex;align-items:flex-end;gap:20px;min-height:286px;width:max-content;overflow:visible}.working-flow figure{margin:0;width:184px;min-width:184px;flex:0 0 184px}.working-flow figure img{width:100%;height:auto;max-height:286px;object-fit:contain;filter:drop-shadow(0 12px 18px rgba(43,34,93,.08))}.working-empty{margin:0;color:#7f8290;font-size:15px}.working-synthesis:empty,.working-decision:empty{display:none}.working-synthesis,.working-decision{display:grid;gap:18px}.ns-artifact [data-ns-node-id]{transition:transform 320ms cubic-bezier(.2,.8,.2,1),opacity 240ms ease,width 320ms ease,height 320ms ease,margin 320ms ease,padding 320ms ease}`,
-    javascript: "",
-  };
+  const document: NorthstarWebArtifactDocument = input.scenePlan
+    ? renderNorthstarVisualSceneDocument(input.scenePlan, input.dataBundle)
+    : {
+      schema: NORTHSTAR_WEB_ARTIFACT_DOCUMENT_SCHEMA,
+      html: `<main class="ns-artifact ns-working-artifact" data-ns-node-id="artboard" data-ns-design-kernel="v1" data-ns-publication="working"><header data-ns-node-id="header" data-ns-stage="foundation"><p class="working-kicker" data-ns-node-id="kicker">Northstar · live artboard</p><h1 class="ns-thesis" data-ns-node-id="title">${escapeWorkingHtml(title)}</h1><p class="working-deck" data-ns-node-id="deck">${escapeWorkingHtml(input.message || input.dataBundle.coverageSummary || activeAct)}</p><div class="working-act" data-ns-node-id="current-act"><span>Current design act</span><strong data-ns-node-id="current-act-text">${escapeWorkingHtml(activeAct)}</strong></div></header><div class="working-evidence" data-ns-node-id="evidence">${flows || identities}</div><section class="working-synthesis" data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section class="working-decision" data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
+      css: `.ns-working-artifact{width:2360px;max-width:2360px;min-width:1180px;min-height:${height}px;padding:44px 52px 60px;background:radial-gradient(circle at 30% -15%,rgba(107,77,255,.12),transparent 38%),linear-gradient(180deg,#fdfcff,#f6f4fb);color:#151620;font-family:Inter,ui-sans-serif,system-ui,sans-serif;display:grid;align-content:start;gap:30px}.ns-working-artifact header{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:32px;align-items:end}.working-kicker{grid-column:1/-1;margin:0;color:#6b4dff;font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.ns-working-artifact .ns-thesis{margin:0;font-size:56px;line-height:.97;letter-spacing:-.055em;max-width:1050px}.working-deck{margin:14px 0 0;color:#6b6e7d;font-size:16px;line-height:1.5;max-width:920px}.working-act{align-self:start;padding:16px 18px;border-left:2px solid #6b4dff;background:rgba(255,255,255,.72)}.working-act span{display:block;color:#8b8f9f;font-size:11px;text-transform:uppercase;letter-spacing:.12em}.working-act strong{display:block;margin-top:8px;font-size:17px;line-height:1.35}.working-evidence{display:grid;gap:24px}.working-evidence:empty{display:none}.working-identities{display:flex;flex-wrap:wrap;gap:14px;padding-top:20px;border-top:1px solid rgba(78,67,135,.13)}.working-identity{display:flex;align-items:center;gap:14px;min-width:300px;max-width:520px;padding:14px 18px;background:rgba(255,255,255,.66);border:1px solid rgba(78,67,135,.10);border-radius:18px}.working-identity img{width:52px;height:52px;border-radius:15px;object-fit:cover}.working-identity strong{display:block;font-size:18px}.working-identity span{display:block;margin-top:4px;color:#737686;font-size:13px;line-height:1.35}.working-flow{display:grid;grid-template-columns:180px minmax(0,1fr);gap:26px;align-items:start;padding:22px 0;border-top:1px solid rgba(78,67,135,.13)}.working-flow__sequence{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:20px;min-width:0}.working-flow figure{margin:0;min-width:0}.working-flow figure img{width:100%;height:auto;max-height:286px;object-fit:contain}.working-synthesis:empty,.working-decision:empty{display:none}.working-synthesis,.working-decision{display:grid;gap:18px}`,
+      javascript: "",
+    };
+  if (input.scenePlan) {
+    const sceneIssues = validateNorthstarVisualSceneDocument(document);
+    if (sceneIssues.length) {
+      throw new NorthstarArtifactSourceError("validation", sceneIssues);
+    }
+  }
   const fingerprint = createHash("sha256").update(`${input.phase}:${document.html}`).digest("hex").slice(0, 14);
   return {
     schema: NORTHSTAR_GENERATED_CODE_ARTIFACT_SCHEMA,

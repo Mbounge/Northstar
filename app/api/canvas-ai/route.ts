@@ -1,5 +1,5 @@
 // app/api/canvas-ai/route.ts
-// Northstar Canvas v0.5.3.6 — evidence-safe creative execution, valid private studies, and browser-rejected spatial damage
+// Northstar Canvas v0.6.0.2 — blank-slate scene planning on the stable v0.5.4.2 runtime baseline
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -68,6 +68,13 @@ import { getNorthstarArtifactAcknowledgement, waitForNorthstarArtifactAcknowledg
 import { NorthstarArtboardActor } from "@/lib/canvas-ai/northstar-artboard-actor";
 import { compileNorthstarMutationDraft } from "@/lib/canvas-ai/northstar-mutation-compiler";
 import { buildNorthstarSpatialMoveAddendum, NORTHSTAR_SPATIAL_INTELLIGENCE_CONTRACT } from "@/lib/canvas-ai/northstar-spatial-intelligence";
+import {
+  NORTHSTAR_VISUAL_SCENE_JSON_SCHEMA,
+  buildNorthstarVisualSceneModelInput,
+  buildNorthstarVisualSceneSystemInstruction,
+  deterministicNorthstarVisualScenePlan,
+  sanitizeNorthstarVisualScenePlan,
+} from "@/lib/canvas-ai/northstar-visual-scene-engine";
 import {
   buildDivergentVisualThesisSystemAddendum,
   buildNorthstarCreativeReviewAddendum,
@@ -6665,6 +6672,22 @@ async function buildPolishedLiveArtifactPackage(input: {
       creativeDirection: input.previousPackage.creativeDirection,
     });
   }
+  let scenePlan = deterministicNorthstarVisualScenePlan({ objective: input.objective, dataBundle: input.dataBundle });
+  try {
+    const rawScene = await callGeminiJson<unknown>({
+      apiKey: input.apiKey,
+      systemInstruction: buildNorthstarVisualSceneSystemInstruction(),
+      contents: [{ role: "user", parts: [{ text: buildNorthstarVisualSceneModelInput({ objective: input.objective, audience: input.audience, artifactType: input.artifactType, dataBundle: input.dataBundle, message: input.message }) }] }],
+      schema: NORTHSTAR_VISUAL_SCENE_JSON_SCHEMA,
+      signal: input.signal,
+      maxOutputTokens: 7_500,
+      temperature: input.thinkingDepth === "high" ? 1.1 : input.thinkingDepth === "medium" ? 0.92 : 0.76,
+    });
+    scenePlan = sanitizeNorthstarVisualScenePlan(rawScene, { objective: input.objective, dataBundle: input.dataBundle });
+  } catch (error) {
+    if (input.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+    console.warn("Northstar used the deterministic blank-slate scene fallback because the opening scene plan could not be validated.", error);
+  }
   return createNorthstarWorkingArtifactPackage({
     artifactId: input.artifactId,
     objective: input.objective,
@@ -6675,6 +6698,7 @@ async function buildPolishedLiveArtifactPackage(input: {
     thinkingDepth: input.thinkingDepth,
     parentRevisionId: input.parentRevisionId,
     message: input.message,
+    scenePlan,
   });
 }
 
@@ -6929,6 +6953,7 @@ async function buildGeneratedCodeArtifactPackage({
     parentRevisionId: previousArtifact?.revisionId,
     creativeDirection,
     message: blueprint.summary || blueprint.subtitle || blueprint.title,
+    scenePlan: deterministicNorthstarVisualScenePlan({ objective: intent.objective || message, dataBundle }),
   });
 
   const thesisExecutionContext = buildThesisExecutionContext({

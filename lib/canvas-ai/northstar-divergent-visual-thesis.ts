@@ -1,4 +1,4 @@
-// Northstar v0.5.3.1 — universal LLM-originated visual thesis and composition-genome contract.
+// Northstar v0.6.0 — universal LLM-originated visual thesis and composition-genome contract.
 // Principles and evaluation language only: no style, medium, topology, or template catalog.
 
 import type {
@@ -89,11 +89,14 @@ export function buildDivergentVisualThesisSystemAddendum(input: { thinkingDepth:
   const direction = extractNorthstarUserVisualDirection(input.userRequest);
   const candidateCount = input.thinkingDepth === "low" ? 2 : input.thinkingDepth === "medium" ? 4 : 6;
   return `
-NORTHSTAR v0.5.3.1 — THESIS-TO-PIXELS VISUAL CONTRACT
+NORTHSTAR v0.6.0 — THESIS-TO-PIXELS VISUAL CONTRACT
 
 Originate ${candidateCount} genuinely different visual theses from the user's desired transformation and the grounded material. No style, medium, topology, or layout catalog exists.
 
 For each thesis reason explicitly about:
+- stage-by-stage visual authorship and working-surface clarity;
+- title-region integration;
+- semantic differentiation of provisional versus resolved thinking;
 - viewer transformation;
 - editorial argument;
 - problem-specific information topology;
@@ -111,6 +114,9 @@ For each thesis reason explicitly about:
 - rhythm plan: baseline cadence, compression, expansion, interruption, and ending behavior;
 - interaction purpose, only when it improves comprehension or actionability;
 - visible synthesis and truthful resolution of the request;
+- research-to-publication visual evolution: how evidence arrival, uncertainty, hypotheses, contradictions, title treatment, and working traces become one coherent visual world;
+- title-region authorship: a problem-specific approach rather than a fixed kicker/title/deck/status shell;
+- semantic working objects and how provisional, confirmed, discarded, and resolved states look materially different;
 - neutralization risks that could flatten the thesis into a conventional layout;
 - risks to grounding, legibility, accessibility, and overstatement.
 
@@ -140,6 +146,9 @@ USER CREATIVE DIRECTION
 ${JSON.stringify(extractNorthstarUserVisualDirection(input.userRequest))}
 
 THESIS-TO-PIXELS EXECUTION CONTRACT
+- Advance one governing visual idea across the entire process; research, sensemaking, thesis, development, and publication must feel like stages of one authored visual world.
+- The title/header is compositional material, not fixed chrome. Re-author it whenever the governing idea demands it.
+- Every working object must have a semantic role and lifecycle state. Never leave unassigned explanatory copy stranded on the board.
 - Advance one governing visual idea; do not accumulate unrelated devices.
 - State the three-second read and establish one unmistakable focal event.
 - Translate the thesis into visible consequences for hierarchy, geometry, evidence roles, and pacing or relationships.
@@ -159,6 +168,9 @@ THESIS-TO-PIXELS EXECUTION CONTRACT
 export function buildNorthstarCreativeReviewAddendum(): string {
   return `
 Evaluate independently:
+- stage-by-stage visual authorship and working-surface clarity;
+- title-region integration;
+- semantic differentiation of provisional versus resolved thinking;
 - viewer transformation;
 - thesis clarity;
 - problem specificity;

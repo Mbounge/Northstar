@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-design-intelligence.ts
-// Northstar Design Intelligence v0.5.3.1 — universal model-led visual reasoning, Northstar taste, and non-template composition intelligence
+// Northstar Design Intelligence v0.6.0 — universal model-led visual reasoning, Northstar taste, and non-template composition intelligence
 import { createHash, randomUUID } from "node:crypto";
 import type {
   CanvasCodeArtifactRuntimeReview,
@@ -14,7 +14,7 @@ import type {
 } from "@/lib/canvas-artifacts/types";
 
 
-export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.5.3.1" as const;
+export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.6.0" as const;
 
 export const NORTHSTAR_VISUAL_IDENTITY = `
 NORTHSTAR VISUAL IDENTITY — TASTE, NOT TEMPLATES
@@ -105,6 +105,19 @@ Never hardcode creative choice from artifactType, audience, app count, evidence 
 Northstar may produce a sparse memo, one elegant diagram, an expansive evidence landscape, a product concept, a narrative, an interactive model, a visual provocation, or a form invented for the current problem. Complexity is never a quality signal. The right form should feel inevitable after it is seen.
 `.trim();
 
+
+
+export const NORTHSTAR_CONTINUOUS_DESIGN_PROTOCOL = `
+NORTHSTAR CONTINUOUS DESIGN — RESEARCH THROUGH PUBLICATION
+
+Design is the visible medium of reasoning from the first evidence item onward. Research states, hypotheses, contradictions, working notes, title regions, and final synthesis must all feel intentionally authored.
+
+The header is not a fixed component. The model may transform, relocate, integrate, compress, or remove title, deck, kicker, status, and research summary when the governing visual idea requires it.
+
+Every temporary object must communicate its lifecycle through form: provisional, contested, confirmed, emerging, discarded, or resolved. Every visible mutation must improve the whole-board composition, not merely append content.
+
+Avoid stranded explanatory paragraphs, default section shells, generic cards, and equal-weight evidence. Use semantic visual objects and problem-specific composition. The final artifact must emerge from the working artboard rather than resetting into a separate template.
+`.trim();
 
 export const NORTHSTAR_THESIS_TO_PIXELS_PROTOCOL = `
 NORTHSTAR THESIS-TO-PIXELS EXECUTION
@@ -865,6 +878,8 @@ ${NORTHSTAR_ORIGINALITY_PROTOCOL}
 
 ${NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL}
 
+${NORTHSTAR_CONTINUOUS_DESIGN_PROTOCOL}
+
 UNIVERSAL EXPLORATION STANDARD
 - Begin with the viewer transformation, not artifactType. State what should become different in the viewer's understanding, confidence, memory, imagination, or ability to act.
 - Infer the real editorial argument. The title and focal structure must express an answer, tension, transformation, pattern, question, hypothesis, principle, or decision—not repeat the instruction.
@@ -877,7 +892,9 @@ UNIVERSAL EXPLORATION STANDARD
 - Different colors, card orders, column counts, labels, or names are not divergent concepts.
 - Never infer a layout from artifactType, audience, number of apps, or presence of screenshots. Those are inputs, not composition rules.
 - The eight references teach taste, hierarchy, restraint, evidence choreography, and finish. They never supply the current layout.
-- Study documents must visibly test the concept's governing idea and hierarchy with grounded representative material. They are private probes, not final templates.
+- Study documents must visibly test the concept's governing idea, working-state visual language, title-region authorship, hierarchy, analytical consequence, and signature behaviour with grounded representative material. They are private probes, not final templates.
+- Each concept must explain how research notes, uncertainty, evidence arrival, thesis formation, and publication evolve inside one coherent visual world.
+- Generic headers and stranded research paragraphs are automatic failures.
 - Preserve truth. Creativity applies to communication, never to evidence, metrics, causal certainty, or product facts.
 - The artifact may expand freely and must contain no essential internal scrolling.
 - Return only the required JSON.
@@ -894,8 +911,11 @@ ${NORTHSTAR_ORIGINALITY_PROTOCOL}
 
 ${NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL}
 
+${NORTHSTAR_CONTINUOUS_DESIGN_PROTOCOL}
+
 UNIVERSAL SELECTION STANDARD
-- Judge rendered studies first and concept prose second.
+- Judge rendered studies first and concept prose only after a blind pixel reading. Map clarity to information hierarchy; grounding to evidence legibility; originality to structural originality and memorability; usefulness to analytical depth; craft to coherence and finish; audienceFit to emotional and viewer fit.
+- Select only a concept whose rendered pixels independently reach at least good: information hierarchy 7/10, concept-to-pixel fidelity 7/10, analytical depth 7/10, structural originality 7/10, wow/memorability 7/10, evidence legibility 8/10, and composition coherence 8/10.
 - Select the concept whose governing visual idea is visibly expressed and makes the problem easier to understand, decide, remember, or imagine.
 - Prefer problem specificity over familiar polish. A beautiful composition that could fit another request is weak.
 - Verify decisive evidence receives decisive visual weight and supporting material stays quieter or inspectable.
@@ -923,7 +943,10 @@ ${NORTHSTAR_PRESENTATION_QUALITY_PROTOCOL}
 
 ${NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL}
 
+${NORTHSTAR_CONTINUOUS_DESIGN_PROTOCOL}
+
 UNIVERSAL RENDERED CRITIQUE
+- Does the whole current stage feel intentionally designed, including research notes, title region, working status, and transitions between provisional and resolved thinking?
 - Can the intended viewer understand the core meaning at the requested speed, or roughly three seconds when unspecified?
 - Does the visual form belong to this exact problem, or could it be reused with different content?
 - Is there one unmistakable focal event, or does every region carry similar weight?
@@ -941,6 +964,7 @@ UNIVERSAL RENDERED CRITIQUE
 - When a compiler or runtime normalization removed an unsupported expressive technique, preserve its semantic intention and request a supported structural re-expression.
 - Preserve grounding and uncertainty. Never reward invented precision or unsupported spatial implications.
 - Missing images, clipping, unreadable type, essential internal scrolling, misleading comparison alignment, absent focal event, broken hierarchy, or runtime rejection force accepted=false.
+- Reject fixed generic header shells, stranded top-right paragraphs, equal-weight research objects, and final artifacts that reset rather than emerge from the working composition.
 - revisedDocument remains schema compatibility only. Return the accumulated document unchanged and describe the next granular mutation in requiredChanges.
 - Return only the required JSON.
 `.trim();

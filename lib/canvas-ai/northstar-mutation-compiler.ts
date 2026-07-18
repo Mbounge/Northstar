@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-mutation-compiler.ts
-// Northstar v0.5.4.1 — evidence-safe analytical placement compiler on the verified transaction baseline.
+// Northstar v0.6.0.1.1 — compile-correct evidence-safe analytical placement and whole-board creative safety compiler.
 import {
   normalizeNorthstarRelationshipMarkup,
   relationshipInventory,
@@ -68,6 +68,31 @@ function validateAnalyticalPlacement(input: { markup: string; targetId: string }
 }
 
 
+
+
+function sanitizeWholeBoardCss(css: string): { css: string; repairs: string[] } {
+  const repairs: string[] = [];
+  let next = String(css ?? "");
+  const dangerousSelector = /(?:\[data-ns-node-id=["']?(?:artboard|evidence|header)["']?\]|\.ns-(?:artifact|composition-artifact)|\.working-evidence)/i;
+  next = next.replace(/([^{}]+)\{([^{}]*)\}/g, (rule, selector: string, body: string) => {
+    if (!dangerousSelector.test(selector)) return rule;
+    const kept = body.split(";").map((part) => part.trim()).filter(Boolean).filter((declaration) => {
+      const unsafe = /^(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$)|overflow(?:-x|-y)?\s*:\s*(?:hidden|clip)|(?:height|max-height)\s*:\s*(?:0|\d{1,3}px)|transform\s*:\s*(?:translate|scale\(0|matrix\())/i.test(declaration);
+      if (unsafe) repairs.push(`Removed whole-board hiding or clipping declaration from selector “${selector.trim()}”.`);
+      return !unsafe;
+    });
+    return kept.length ? `${selector}{${kept.join(";")}}` : "";
+  });
+  return { css: next, repairs };
+}
+
+function isCssOnlyStructuralClaim(draft: NorthstarArtboardMutationDraft): boolean {
+  const structuralWords = /(?:spine|atlas|map|matrix|timeline|constellation|dialectic|stage|divergence|architecture)/i;
+  if (!structuralWords.test(`${draft.title} ${draft.description} ${draft.visualStrategy} ${draft.visibleChange}`)) return false;
+  const meaningfulStructure = draft.operations.some((operation) => operation.op === "insert-html" || operation.op === "move" || operation.op === "remove" || operation.op === "set-html");
+  const cssOnly = draft.operations.some((operation) => operation.op === "set-css-layer") && !meaningfulStructure;
+  return cssOnly;
+}
 
 function sanitizeAnchoredSpatialMarkup(markup: string): { markup: string; repairs: string[] } {
   const repairs: string[] = [];
@@ -412,6 +437,12 @@ export function compileNorthstarMutationDraft(input: {
 }): { draft: NorthstarArtboardMutationDraft; repairs: string[] } {
   const initiallyRepaired = repairNorthstarArtboardMutationDraft(input.draft);
   const repairs = [...initiallyRepaired.repairs];
+  if (isCssOnlyStructuralClaim(initiallyRepaired.draft)) {
+    return {
+      draft: { ...initiallyRepaired.draft, operations: [] },
+      repairs: [...repairs, "Rejected a CSS-only structural concept claim; major visual architecture requires semantic nodes and explicit composition operations."],
+    };
+  }
   const knownNodes = committedSemanticIds(input.previous);
   const browserNodes = semanticSnapshotMap(input.semanticSnapshot);
   for (const nodeId of browserNodes.keys()) knownNodes.add(nodeId);
@@ -431,7 +462,14 @@ export function compileNorthstarMutationDraft(input: {
         repairs.push(`Dropped freehand analytical CSS layer “${rawOperation.layerId}”; analytical meaning must occupy a declared structural lane or typed relationship.`);
         continue;
       }
-      operations.push(rawOperation);
+      if (rawOperation.op === "set-css-layer") {
+        const safeCss = sanitizeWholeBoardCss(rawOperation.css);
+        repairs.push(...safeCss.repairs);
+        if (!safeCss.css.trim()) continue;
+        operations.push({ ...rawOperation, css: safeCss.css });
+      } else {
+        operations.push(rawOperation);
+      }
       if (rawOperation.op === "remove") knownNodes.delete(rawOperation.targetId);
       continue;
     }
