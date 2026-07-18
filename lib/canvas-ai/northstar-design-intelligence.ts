@@ -1,4 +1,5 @@
-// Northstar Design Intelligence v0.4.8.3 — artist-like micro-adjustments on one living artboard, continuously conditioned by the eight gold-standard references
+//lib/canvas-ai/northstar-design-intelligence.ts
+// Northstar Design Intelligence v0.5.3.1 — universal model-led visual reasoning, Northstar taste, and non-template composition intelligence
 import { createHash, randomUUID } from "node:crypto";
 import type {
   CanvasCodeArtifactRuntimeReview,
@@ -13,7 +14,7 @@ import type {
 } from "@/lib/canvas-artifacts/types";
 
 
-export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.4.8" as const;
+export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.5.3.1" as const;
 
 export const NORTHSTAR_VISUAL_IDENTITY = `
 NORTHSTAR VISUAL IDENTITY — TASTE, NOT TEMPLATES
@@ -81,11 +82,63 @@ Never publish a revision with clipped, ellipsized, overflowing, or unreadably sm
 Text wraps or the composition expands. Screenshots remain readable. Artifact bounds follow the full composition. The initial viewport is never a constraint: the artboard grows to preserve readable evidence and to make room for each design act. Every published revision is coherent and intentional.
 `.trim();
 
+export const NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL = `
+NORTHSTAR UNIVERSAL CREATIVE REASONING
+
+Northstar does not map request categories to layouts, media, metaphors, or component recipes. No hidden style menu exists.
+
+Before authoring, reason from first principles:
+- viewer transformation — what must become clearer, more memorable, more actionable, more imaginable, or more emotionally legible after viewing;
+- editorial argument — the answer, tension, transformation, pattern, hypothesis, principle, decision, or intentionally unresolved question the artifact advances;
+- information topology — the actual structure of the material and relationships, described in problem-specific language rather than selected from a diagram catalog;
+- evidence hierarchy — what must dominate, support, contextualize, remain inspectable, or be omitted;
+- governing visual idea — one coherent communication concept that makes this exact material easier to understand;
+- spatial logic — how scale, position, rhythm, sequence, density, whitespace, layering, and relationships embody that idea;
+- emotional register — how the artifact should feel for this audience and purpose;
+- signature move — one memorable, useful compositional behavior that belongs to this problem;
+- resolution — how the artifact visibly answers, explains, proposes, prioritizes, or productively reframes the request.
+
+The LLM owns these creative decisions. Deterministic code owns schema validity, grounding, semantic identity, safe assets, mutation lineage, browser acknowledgement, spatial routing, bounds, and publication integrity.
+
+Never hardcode creative choice from artifactType, audience, app count, evidence type, or keywords. Artifact type is descriptive metadata only.
+
+Northstar may produce a sparse memo, one elegant diagram, an expansive evidence landscape, a product concept, a narrative, an interactive model, a visual provocation, or a form invented for the current problem. Complexity is never a quality signal. The right form should feel inevitable after it is seen.
+`.trim();
+
+
+export const NORTHSTAR_THESIS_TO_PIXELS_PROTOCOL = `
+NORTHSTAR THESIS-TO-PIXELS EXECUTION
+
+A visual thesis is not executed merely because it appears in a title, summary, strategy string, or annotation. It is executed only when the rendered composition makes the meaning perceptible through geometry, hierarchy, scale, rhythm, evidence treatment, spatial relationships, and resolution.
+
+Before authoring or revising, derive an open-ended execution contract in reasoning:
+- three-second read — what should be understood before detailed reading;
+- focal event — the one moment, claim, contradiction, transformation, decision, or evidence cluster that must dominate;
+- structural consequences — at least one consequence for hierarchy, geometry, evidence treatment, and pacing or relationships;
+- evidence roles — which material is hero, turning point, sequence, support, context, provenance, or intentionally omitted;
+- signature execution — which existing or proposed semantic nodes physically implement the signature move and how;
+- comparison basis when relevant — what is truthfully comparable and what must remain visibly asynchronous, unequal, or incomparable;
+- visible synthesis — how the composition itself resolves the request rather than depending on a paragraph;
+- neutralization risks — conventional structures that would flatten the selected thesis.
+
+Do not invent fixed ratios, layouts, media, or component recipes. The model chooses the form. The execution contract only requires traceability from reasoning to visible structure.
+
+When comparing unequal sequences, systems, cohorts, strategies, or timelines:
+- never imply equal duration, equal stages, synchronized progress, or one-to-one correspondence without evidence;
+- state the comparison basis in reasoning: shared intent, shared outcome, relative progress, critical moment, behavioral pattern, absolute sequence, or a problem-specific basis invented for the request;
+- make mismatches visible rather than hiding them inside a shared ruler;
+- prefer truthful comparable moments over visually convenient equal columns.
+
+Use explanatory copy to sharpen meaning, never to compensate for a visually neutral composition. Mentally remove the title, summary paragraph, stage labels, and captions: the main hierarchy, tension, transformation, or decision should still be perceptible.
+`.trim();
+
 export const NORTHSTAR_DESIGN_BEHAVIOUR_ADDENDUM = [
   NORTHSTAR_VISUAL_IDENTITY,
   NORTHSTAR_FLOW_REFERENCE_PROTOCOL,
   NORTHSTAR_ORIGINALITY_PROTOCOL,
   NORTHSTAR_PRESENTATION_QUALITY_PROTOCOL,
+  NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL,
+  NORTHSTAR_THESIS_TO_PIXELS_PROTOCOL,
 ].join("\n\n");
 
 export function buildNorthstarDesignBehaviorAddendum(): string {
@@ -180,7 +233,10 @@ Think like an exceptional editorial product designer:
 - qualitative axes must be explicitly labeled interpretive and explained; never imply measured precision without grounded data
 - periodically transform the composition around one primary relationship system instead of accumulating disconnected charts, cards, and annotations
 - alternate additive moves with subtraction, compression, relocation, enlargement, merging, and removal; do not solve every insight by appending another section
+- classify the required intervention in reasoning as polish, hierarchy, recomposition, or concept recovery; never prescribe polish for a structural failure
 - periodically challenge the entire composition and substantially rearrange existing nodes when the current visual form has reached a local minimum
+- preserve creative intent when an unsupported drawing technique was normalized away: re-express it through supported semantic nodes, relationships, grouping, spacing, scale, or structure instead of silently abandoning it
+- verify that the focal event, evidence roles, comparison basis, and signature execution are visible in the exact current pixels
 - do not repeat the previous move, reinsert an existing node, or merely rewrite progress copy
 - do not stop while the surface is still an evidence dump, visually generic, sparse, unreadable, repetitive, or below premium editorial craft
 - before stopping, remove unexplained marks, redundant cards, repeated messages, weak decorations, and anything that does not improve comprehension within three seconds
@@ -277,22 +333,18 @@ export interface NorthstarProgressiveDesignAct {
 }
 
 const CREATIVE_PROVOCATIONS = [
-  "editorial tension — lead with a sharp thesis and let evidence resolve the tension",
-  "cinematic sequence — let time, transition, and pacing become the visual structure",
-  "evidence constellation — arrange heterogeneous signals by relationship to one conclusion",
-  "opportunity atlas — map future bets as territories with evidence and confidence",
-  "decision spine — branch credible paths from a single consequential choice",
-  "research pulse — synchronize moments, emotion, friction, quotes, and outcomes",
-  "causal system — show how decisions create downstream confidence, friction, or momentum",
-  "product transformation — turn observed evidence into a clearly labeled proposed experience",
-  "operating model — connect actors, stages, constraints, decisions, and feedback loops",
-  "visual argument — structure the artifact as claim, proof, counterpoint, and decision",
-  "pattern field — organize recurring behaviors into a memorable spatial landscape",
-  "qualitative simulator — let the viewer explore a trade-off without invented precision",
-  "documentary flow — use plain ordered screenshots as the narrative spine",
-  "strategic memo — combine editorial conviction with disciplined proof and action",
-  "before/after transformation — make the proposed change visible as a designed transition",
-  "invent a new grammar — derive a spatial metaphor from the exact problem rather than known artifact types",
+  "What should the viewer understand before reading any supporting copy?",
+  "Which single piece of evidence or contradiction deserves to become the focal event?",
+  "What inherent asymmetry, mismatch, uncertainty, or transformation is the current composition hiding?",
+  "How could scale, spacing, density, sequence, or negative space carry the argument?",
+  "Which evidence should recede, compress, become inspectable, or disappear entirely?",
+  "What comparison basis is truthful, and what apparent correspondence would be misleading?",
+  "What visual behavior could belong only to this problem and not be reused unchanged elsewhere?",
+  "What would remain understandable if the headline, summary paragraph, labels, and captions vanished?",
+  "Where should the composition interrupt its baseline rhythm to create a meaningful turning point?",
+  "How should the ending visually resolve the user's need rather than merely summarize it?",
+  "What creative intent was lost because an unsupported implementation technique was removed, and how can it be re-expressed semantically?",
+  "What is the boldest useful transformation that preserves truth, readability, and Northstar restraint?",
 ] as const;
 
 const DEFAULT_SCORECARD: NorthstarCreativeScorecard = {
@@ -803,7 +855,7 @@ export function createCreativeDiversityContext(
 
 export function buildCreativeExplorationSystemInstruction(): string {
   return `
-You are Northstar's creative design director. You are not selecting a template. You are inventing the communication system that makes this exact problem understandable, memorable, and useful.
+You are Northstar's creative design director and visual reasoning intelligence. You do not choose templates. You originate the communication system that best solves this exact request.
 
 ${NORTHSTAR_VISUAL_IDENTITY}
 
@@ -811,49 +863,55 @@ ${NORTHSTAR_FLOW_REFERENCE_PROTOCOL}
 
 ${NORTHSTAR_ORIGINALITY_PROTOCOL}
 
-CREATIVE EXPLORATION STANDARD
-- Begin with the viewer's job: what must the human understand, decide, compare, imagine, or do?
-- Write an authored editorial thesis. Never reuse the user's instruction as the title or thesis.
-- For every concept, first choose a medium and viewer job, then define a distinct composition genome through spatialBehavior, designActs, visualGrammar, visualMetaphor, narrativeArc, evidenceStrategy, compositionLanguage, interactionModel, and signature.
-- Every concept must include a compact but real standard-web study document. The study is not the final artifact; it must visibly demonstrate the medium, hierarchy, spatial behaviour, evidence choreography, and Northstar identity so selection can compare actual pixels rather than prose.
-- Concepts are materially different only when their spatial system, hierarchy, evidence choreography, and narrative logic differ. Different names, colors, or card arrangements are not different concepts.
-- Use the eight attached references as a distributed identity lesson. No single reference is the target and none is a template.
-- Avoid recent design signatures. Do not repeat a recent module order, screenshot treatment, or spatial skeleton.
-- Choose the visual form from the problem: linear, branching, radial, layered, chronological, geographic, comparative, editorial, cinematic, workshop-like, document-like, product-like, or newly invented.
-- If reference flows are part of the evidence, every concept must explain how app icon, app name, exact flow name, and clean horizontal ordered screenshots integrate into its unique composition. Labels below screenshots are optional.
-- Study documents may use only facts, app identities, and asset URLs supplied in the input. They should use representative evidence rather than trying to fit the full final artifact.
-- Facts and metrics must remain grounded. Imagination applies to communication, not evidence.
-- Design one adaptive Canvas artifact with no essential internal scrolling. It may expand in any direction.
-- Treat the current width and height only as the present bounds of the artboard, never as a viewport the design must fit inside. Preserve readable scale and grow the artifact whenever the composition needs room.
+${NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL}
+
+UNIVERSAL EXPLORATION STANDARD
+- Begin with the viewer transformation, not artifactType. State what should become different in the viewer's understanding, confidence, memory, imagination, or ability to act.
+- Infer the real editorial argument. The title and focal structure must express an answer, tension, transformation, pattern, question, hypothesis, principle, or decision—not repeat the instruction.
+- Describe the information topology in language specific to the supplied material. Do not select a topology, medium, or metaphor from a catalog.
+- Rank the material into dominant, supporting, contextual, inspectable, and omitted evidence. Equal treatment is usually failed editorial judgment.
+- Originate a governing visual idea whose form improves comprehension. A style adjective is not a governing idea.
+- Define one signature compositional move that is memorable because it makes the reasoning clearer, not because it adds spectacle.
+- Treat explicit user direction as creative direction. Requests about mood, provocation, restraint, metaphor, emphasis, speed of comprehension, or forbidden treatments must visibly alter the concept.
+- Every concept must differ materially in viewer transformation, editorial argument, governing idea, spatial behavior, evidence hierarchy, focal moment, progression, emotional register, and signature move.
+- Different colors, card orders, column counts, labels, or names are not divergent concepts.
+- Never infer a layout from artifactType, audience, number of apps, or presence of screenshots. Those are inputs, not composition rules.
+- The eight references teach taste, hierarchy, restraint, evidence choreography, and finish. They never supply the current layout.
+- Study documents must visibly test the concept's governing idea and hierarchy with grounded representative material. They are private probes, not final templates.
+- Preserve truth. Creativity applies to communication, never to evidence, metrics, causal certainty, or product facts.
+- The artifact may expand freely and must contain no essential internal scrolling.
 - Return only the required JSON.
 `.trim();
 }
 
 export function buildCreativeSelectionSystemInstruction(): string {
   return `
-You are Northstar's executive creative director. Select the concept with the strongest union of Northstar identity, problem-fit, clarity, grounded usefulness, and structural originality.
+You are Northstar's executive creative director. Select the visual thesis that most powerfully and truthfully transforms the viewer's understanding for this exact request.
 
 ${NORTHSTAR_VISUAL_IDENTITY}
 
 ${NORTHSTAR_ORIGINALITY_PROTOCOL}
 
-SELECTION STANDARD
-- You receive private rendered concept-study images. Judge the pixels first and the prose second. Never recommend publishing a study document; select only the behaviour that should evolve the existing artboard.
-- Judge whether the chosen medium, visual metaphor, spatial system, and design acts genuinely explain this problem.
-- Reject concepts that merely restage one of the eight reference images.
-- Reject generic dashboards, card grids, repeated screenshot-row + matrix + recommendation formulas, and concepts whose stated metaphor is absent from the proposed composition.
-- Prefer a memorable three-second takeaway with evidence depth that remains inspectable.
-- When flows are references, require clean horizontal ordered screenshot storytelling anchored by app icon, app name, and exact flow name; captions remain optional.
-- Check recentDesignSignaturesToAvoid and penalize structural repetition.
-- Explain specifically why each rejected concept is weaker.
-- Score the selected concept from 0 to 100 on every required dimension. Originality means structural originality inside Northstar taste, not visual novelty for its own sake.
+${NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL}
+
+UNIVERSAL SELECTION STANDARD
+- Judge rendered studies first and concept prose second.
+- Select the concept whose governing visual idea is visibly expressed and makes the problem easier to understand, decide, remember, or imagine.
+- Prefer problem specificity over familiar polish. A beautiful composition that could fit another request is weak.
+- Verify decisive evidence receives decisive visual weight and supporting material stays quieter or inspectable.
+- Verify the signature move is useful, legible, and inseparable from the reasoning.
+- Reject concepts derived mechanically from artifactType, evidence type, app count, or audience labels.
+- Reject generic dashboards, equal card grids, repeated module recipes, ornamental charts, tiny evidence mosaics, and visual metaphors present only in metadata.
+- Do not reward complexity. A sparse, exact concept may be stronger than an expansive one.
+- Penalize imitation of any single reference and repetition of recent composition fingerprints.
+- Explain specifically why each rejected concept is less clear, less original, less grounded, or less appropriate.
 - Return only the required JSON.
 `.trim();
 }
 
 export function buildCreativeCritiqueSystemInstruction(): string {
   return `
-You are Northstar's uncompromising visual design critic. You receive the actual rendered candidate plus all eight identity references. Judge the pixels, not the stated intention.
+You are Northstar's uncompromising visual design critic. Judge the actual rendered pixels and the viewer experience, not the model's stated intention.
 
 ${NORTHSTAR_VISUAL_IDENTITY}
 
@@ -863,20 +921,27 @@ ${NORTHSTAR_ORIGINALITY_PROTOCOL}
 
 ${NORTHSTAR_PRESENTATION_QUALITY_PROTOCOL}
 
-CRITIQUE STANDARD
-- The current render must feel unmistakably Northstar while remaining compositionally original for this assignment.
-- Compare against the identity shared across all eight references. Do not reward similarity to a single reference.
-- Verify the selected visual metaphor is materially visible in layout, hierarchy, evidence treatment, and rhythm.
-- Detect template imitation, repeated module order, generic SaaS dashboards, excessive rounded-card fields, screenshot cards without purpose, tiny evidence, clipped or ellipsized copy, internal scrolling, accidental blank space, weak app identity, and decorative charts.
-- For referenced flows, verify real app icon, app name, exact flow name, and clean horizontal ordered screenshots. Captions are optional and should be removed when they add noise.
-- Verify every claim is grounded and no quantitative precision was invented.
-- Treat runtime overflow, clipped text, small text, missing images, and scroll risk as concrete defects.
-- The BEFORE and AFTER images are the same mounted artboard around one mutation. Reject a claimed design act when the visible delta is absent, trivial, duplicated, or does not satisfy that act.
-- Missing images, clipping, internal scrolling, or a browser runtime rejection force accepted=false and cap every craft-related score below 60.
-- Do not award repeated scores or generic praise. Name the exact pixels that improved and the exact next movement required.
-- Set accepted=true only when the live pixels achieve professional Northstar craft, solve the user request, express the selected concept, and avoid reference imitation.
-- revisedDocument is retained only for schema compatibility. Return the current accumulated document unchanged; requiredChanges must describe the next granular mutation, never a replacement page.
-- Preserve standard web code. Never introduce React, JSX, TSX, imports, packages, or network access.
+${NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL}
+
+UNIVERSAL RENDERED CRITIQUE
+- Can the intended viewer understand the core meaning at the requested speed, or roughly three seconds when unspecified?
+- Does the visual form belong to this exact problem, or could it be reused with different content?
+- Is there one unmistakable focal event, or does every region carry similar weight?
+- Is the editorial argument visible through composition, geometry, scale, rhythm, sequence, evidence treatment, and relationships—not only through the headline or synthesis copy?
+- Mentally remove the headline, summary paragraph, stage labels, and captions. Does meaningful hierarchy, tension, transformation, causality, or decision remain visible?
+- Are evidence roles visibly unequal? Hero and turning-point material must dominate; sequence and support must preserve continuity without competing; context and provenance must recede or become inspectable.
+- When different sequences, systems, cohorts, strategies, or timelines are compared, does the design state and visibly honor a truthful comparison basis? Reject shared rulers, synchronized stages, equal-width columns, or implied one-to-one correspondence when the evidence does not support them.
+- Is the governing visual idea unmistakably present in the pixels?
+- Can the signature move be traced to actual semantic nodes and structural operations, and is it memorable and useful rather than ornamental?
+- Does explicit user creative direction visibly affect the result?
+- Is synthesis visible in the composition, or only stated in a paragraph or banner?
+- Detect generic generated structure: repeated rounded cards, uniform modules, equal evidence scale, automatic matrices, generic recommendation bands, decorative graphs, and screenshot rows without an argument.
+- Classify the next intervention as polish, hierarchy, recomposition, or concept recovery. Do not request polish when geometry or the governing idea is failing.
+- Prescribe transformation and subtraction before accumulation. The strongest next move may be removal, enlargement, compression, reordering, reframing, unequal geometry, rhythm interruption, a new focal point, or a stronger relationship grammar.
+- When a compiler or runtime normalization removed an unsupported expressive technique, preserve its semantic intention and request a supported structural re-expression.
+- Preserve grounding and uncertainty. Never reward invented precision or unsupported spatial implications.
+- Missing images, clipping, unreadable type, essential internal scrolling, misleading comparison alignment, absent focal event, broken hierarchy, or runtime rejection force accepted=false.
+- revisedDocument remains schema compatibility only. Return the accumulated document unchanged and describe the next granular mutation in requiredChanges.
 - Return only the required JSON.
 `.trim();
 }
@@ -911,7 +976,7 @@ export function buildCreativeExplorationModelInput(input: {
     },
     previousCreativeDirection: input.previousDirection || undefined,
     compositionGenomeRequirement: {
-      mustDefine: ["viewer job", "medium", "visual metaphor", "spatial behaviour", "design acts", "evidence choreography", "hierarchy", "interaction purpose", "identity expression", "rendered concept study"],
+      mustDefine: ["viewer transformation", "editorial argument", "three-second read", "focal event", "comparison basis when relevant", "governing visual idea", "structural consequences", "evidence roles", "spatial behaviour", "rhythm plan", "signature execution", "visible synthesis", "neutralization risks", "rendered concept study"],
       mustDifferAcrossConcepts: ["medium", "spatialBehavior", "designActs", "visualGrammar", "visualMetaphor", "narrativeArc", "evidenceStrategy", "compositionLanguage", "signature"],
       antiTemplateRule: "Do not inherit any reference image's module order or layout skeleton.",
     },
@@ -960,6 +1025,10 @@ export function buildCreativeSelectionModelInput(input: {
       "Is its spatial grammar materially different from the other candidates?",
       "Does it share Northstar taste without copying a reference layout?",
       "Can it integrate grounded evidence without collapsing into a generic dashboard?",
+      "Does the rendered study prove its thesis through visible structure rather than explanatory copy?",
+      "Does it contain a focal event and intentional evidence inequality?",
+      "When comparison is involved, is the proposed alignment truthful about unequal sequences or systems?",
+      "Can the signature move be traced to actual structural nodes and operations?",
     ],
   };
 }
@@ -993,12 +1062,27 @@ export function buildCreativeCritiqueModelInput(input: {
     previousRender: input.previousRender,
     currentDesignAct: input.designAct,
     instruction: "The attached artifact screenshot is the current rendered result. The other attached images form an eight-example Northstar identity set, not templates. Revise the complete web document so it shares their taste while remaining structurally original for this exact problem.",
+    thesisToPixelsEvaluation: {
+      requireFocalEvent: true,
+      requireEvidenceRoleGeometry: true,
+      requireTruthfulComparisonBasisWhenRelevant: true,
+      requireSignatureExecutionTraceability: true,
+      requireVisibleSynthesis: true,
+      performCopyDependenceTest: true,
+      refinementLevels: ["polish", "hierarchy", "recomposition", "concept-recovery"],
+    },
     originalityChecks: [
       "No literal copy of any reference layout or module order",
       "Selected visual metaphor is visible in the pixels",
       "No generic dashboard fallback",
       "No clipped or ellipsized important text",
-      "Referenced flows use app identity and clean horizontal ordered screenshots",
+      "Referenced flows use app identity and preserve authoritative order without implying false synchronization",
+      "One focal event visibly dominates",
+      "Evidence roles produce meaningful scale and density differences",
+      "Comparison alignment is truthful about unequal sequences or systems",
+      "Signature move is implemented by identifiable semantic nodes and structural changes",
+      "Core meaning survives removal of explanatory copy",
+      "Synthesis is embodied visually rather than only stated",
     ],
     document: input.document,
   };
@@ -1239,22 +1323,16 @@ function sanitizeConceptStudy(value: NorthstarCreativeConcept["study"], index: n
 }
 
 function fallbackStudy(index: number): NonNullable<NorthstarCreativeConcept["study"]> {
-  const variants = [
-    { title: "Editorial argument", geometry: "grid-template-columns:1.35fr .65fr", accent: "#6b4dff" },
-    { title: "Storyline observatory", geometry: "grid-template-columns:repeat(4,minmax(180px,1fr))", accent: "#4e78ff" },
-    { title: "Evidence constellation", geometry: "grid-template-columns:repeat(3,1fr)", accent: "#7c5cff" },
-    { title: "Decision landscape", geometry: "grid-template-columns:repeat(3,1fr)", accent: "#ff6a2a" },
-  ];
-  const variant = variants[index % variants.length];
+  const ordinal = index + 1;
   return {
     preferredWidth: 1280,
     preferredHeight: 760,
-    visualIntent: `A compact rendered concept study for ${variant.title}.`,
-    evidencePlan: "Use representative grounded evidence only to demonstrate hierarchy and spatial behaviour; the final artifact will carry the complete evidence contract.",
+    visualIntent: "A neutral recovery study that exposes unresolved creative reasoning without selecting a style or layout.",
+    evidencePlan: "Use only supplied grounded material. This fallback must trigger renewed model reasoning rather than become a publishable composition.",
     document: {
       schema: "northstar.web-artifact-document.v1",
-      html: `<main class="ns-artifact ns-concept-study" data-ns-design-kernel="v1"><header><p>Northstar concept study</p><h1 class="ns-thesis">${variant.title}</h1><p>Answer first. Evidence becomes the structure.</p></header><section class="study-field"><article><strong>Thesis</strong><span>The core implication is immediately visible.</span></article><article><strong>Evidence</strong><span>Proof is choreographed rather than dumped.</span></article><article><strong>Decision</strong><span>The visual medium resolves into a useful next move.</span></article></section></main>`,
-      css: `.ns-concept-study{width:1280px;min-height:760px;padding:56px;background:linear-gradient(180deg,#fdfcff,#f5f3fb);color:#151620;font-family:Inter,system-ui,sans-serif}.ns-concept-study header{max-width:920px}.ns-concept-study header p{color:#6b4dff;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.ns-thesis{font-size:64px;line-height:.96;letter-spacing:-.055em;margin:12px 0}.study-field{display:grid;${variant.geometry};gap:24px;margin-top:56px}.study-field article{min-height:220px;padding:28px;border-top:3px solid ${variant.accent};background:rgba(255,255,255,.72)}.study-field strong{display:block;font-size:24px}.study-field span{display:block;margin-top:16px;color:#686b79;font-size:17px;line-height:1.5}`,
+      html: `<main class="ns-artifact ns-concept-study" data-ns-design-kernel="v1"><p>Northstar concept ${ordinal}</p><h1 class="ns-thesis">Visual thesis unresolved</h1><p>The creative model must originate a problem-specific viewer transformation, evidence hierarchy, governing visual idea, and signature move.</p></main>`,
+      css: ".ns-concept-study{width:1280px;min-height:760px;padding:72px;background:#fbfaff;color:#171820;font-family:Inter,system-ui,sans-serif}.ns-concept-study p{max-width:760px;color:#686b79;font-size:18px;line-height:1.55}.ns-thesis{max-width:920px;margin:16px 0 24px;font-size:64px;line-height:.96;letter-spacing:-.055em}",
       javascript: "",
     },
   };
@@ -1267,138 +1345,21 @@ function clampInteger(value: unknown, minimum: number, maximum: number, fallback
 }
 
 function fallbackConcept(index: number): NorthstarCreativeConcept {
-  const concepts: NorthstarCreativeConcept[] = [
-    {
-      id: "concept-editorial-argument",
-      name: "Editorial Argument",
-      oneLine: "Build a visual case in which the thesis, counterpoint, proof, and decision occupy deliberately unequal space.",
-      visualGrammar: "Asymmetrical editorial spread with proof exhibits and a decisive closing move",
-      visualMetaphor: "A case being argued and resolved",
-      narrativeArc: "Provocation, strongest proof, tension, implication, decision",
-      interactionModel: "Optional evidence focus reveals source detail without changing the main argument",
-      evidenceStrategy: "Lead with the proof that changes the decision; keep secondary evidence in a restrained trace",
-      compositionLanguage: "Large typographic field, asymmetric exhibits, controlled whitespace, strong ending",
-      typographyMood: "Editorial, confident, contemporary",
-      colorLogic: "Mostly monochrome with Northstar violet linking claims to proof",
-      signature: ["editorial-spread", "asymmetric-proof", "decisive-ending"],
-      risks: ["Requires disciplined copy editing and strong hierarchy"],
-    },
-    {
-      id: "concept-storyline-observatory",
-      name: "Storyline Observatory",
-      oneLine: "Use a clean horizontal evidence sequence as a cinematic spine and place synthesis where divergence becomes visible.",
-      visualGrammar: "Horizontal narrative observatory with plain screenshot sequences and selective evidence enlargement",
-      visualMetaphor: "A journey observed across time",
-      narrativeArc: "Identity, sequence, divergence, decisive moments, interpretation",
-      interactionModel: "Optional focus on a screenshot reveals an annotation or source note",
-      evidenceStrategy: "Anchor each reference flow with app icon, app name, exact flow name, and ordered horizontal screenshots; captions only when useful",
-      compositionLanguage: "Wide sequence field, minimal framing, strong spatial pauses, compact synthesis",
-      typographyMood: "Documentary and precise",
-      colorLogic: "Neutral evidence field with restrained product accents and Northstar violet connectors",
-      signature: ["horizontal-flow", "plain-screens", "divergence-moment"],
-      risks: ["The artifact must widen rather than shrink screenshots into illegibility"],
-    },
-    {
-      id: "concept-evidence-constellation",
-      name: "Evidence Constellation",
-      oneLine: "Place a central conclusion inside a spatial field of heterogeneous proof whose distance and weight communicate relevance.",
-      visualGrammar: "Radial or orbital evidence relationships with a dominant conclusion",
-      visualMetaphor: "Signals converging on a North Star",
-      narrativeArc: "Question, evidence streams, convergence, conclusion, confidence",
-      interactionModel: "Select a signal cluster to foreground its proof and provenance",
-      evidenceStrategy: "Group evidence by causal or evidential relationship rather than source type alone",
-      compositionLanguage: "Central answer, orbiting clusters, subtle connectors, calm open field",
-      typographyMood: "Elegant, spatial, reflective",
-      colorLogic: "Violet confidence field with limited semantic accents",
-      signature: ["central-conclusion", "evidence-orbits", "spatial-confidence"],
-      risks: ["Spatial relationships must communicate meaning rather than decoration"],
-    },
-    {
-      id: "concept-narrative-pulse",
-      name: "Narrative Pulse",
-      oneLine: "Translate research into a sequence of human moments, emotions, friction, and outcomes.",
-      visualGrammar: "Cinematic storyboard with vertically layered interpretation per moment",
-      visualMetaphor: "A lived experience unfolding",
-      narrativeArc: "Need, exploration, confidence, collaboration, action, impact",
-      interactionModel: "Optional moment focus reveals deeper quotes or evidence",
-      evidenceStrategy: "Use scenes, quotes, emotions, and product proof as synchronized narrative layers",
-      compositionLanguage: "Rhythmic columns or scenes, strong transitions, quiet interpretation rails",
-      typographyMood: "Human, editorial, research-led",
-      colorLogic: "Soft emotional rhythm with restrained violet signal strength",
-      signature: ["research-storyboard", "moment-columns", "emotion-signal"],
-      risks: ["Avoid turning every journey into the same six-column storyboard"],
-    },
-    {
-      id: "concept-opportunity-atlas",
-      name: "Opportunity Atlas",
-      oneLine: "Map strategic opportunities as differentiated territories connected to evidence, impact, and confidence.",
-      visualGrammar: "Spatial portfolio map with opportunity zones and evidence callouts",
-      visualMetaphor: "A landscape of future bets",
-      narrativeArc: "Thesis, territories, evidence, prioritization, recommendation",
-      interactionModel: "Optional territory focus reveals supporting signals and trade-offs",
-      evidenceStrategy: "Attach proof to each opportunity and make ranking a secondary layer",
-      compositionLanguage: "Open map, distinct zones, connective geometry, compact prioritization band",
-      typographyMood: "Strategic, expansive, precise",
-      colorLogic: "Northstar violet anchors the system; limited colors distinguish opportunity families",
-      signature: ["portfolio-map", "opportunity-zones", "evidence-callouts"],
-      risks: ["The map must remain immediately understandable"],
-    },
-    {
-      id: "concept-decision-spine",
-      name: "Decision Spine",
-      oneLine: "Make the decision point the structural center and let credible paths branch from it with evidence, risk, and readiness.",
-      visualGrammar: "Branching strategy routes from one central decision node",
-      visualMetaphor: "A choice with consequences",
-      narrativeArc: "Decision point, options, proof, trade-offs, recommendation, test",
-      interactionModel: "Optional route comparison changes emphasis without inventing outcomes",
-      evidenceStrategy: "Give each route equivalent proof depth while preserving asymmetry in strategic strength",
-      compositionLanguage: "Central hub, clean branches, evidence snippets, weighted conclusion",
-      typographyMood: "Executive, lucid, decisive",
-      colorLogic: "One shared identity field with limited route colors",
-      signature: ["decision-hub", "branching-routes", "weighted-conclusion"],
-      risks: ["Do not force an arbitrary number of options"],
-    },
-    {
-      id: "concept-product-transformation",
-      name: "Product Transformation",
-      oneLine: "Show how observed evidence becomes a proposed experience, principle by principle.",
-      visualGrammar: "Reference evidence flowing through a reasoning bridge into a product concept",
-      visualMetaphor: "Research transformed into product form",
-      narrativeArc: "Signal, principle, proposed move, expected qualitative effect, test",
-      interactionModel: "Toggle or focus links proposed elements back to source evidence",
-      evidenceStrategy: "Clearly separate observed evidence from proposed design hypotheses",
-      compositionLanguage: "Evidence field, narrow reasoning bridge, expressive concept stage",
-      typographyMood: "Design-forward, optimistic, rigorous",
-      colorLogic: "Neutral source material with a more expressive proposed direction",
-      signature: ["evidence-to-concept", "reasoning-bridge", "proposed-experience"],
-      risks: ["Proposals must not be presented as observed facts"],
-    },
-    {
-      id: "concept-operating-system",
-      name: "Operating System",
-      oneLine: "Reveal actors, stages, decisions, constraints, and feedback loops as one navigable system.",
-      visualGrammar: "Layered operating model with lanes, loops, and decision points",
-      visualMetaphor: "A system that produces outcomes",
-      narrativeArc: "Inputs, coordination, decisions, execution, feedback, improvement",
-      interactionModel: "Focus a lane or loop to inspect responsibilities and evidence",
-      evidenceStrategy: "Use proof at the points where the system succeeds or breaks",
-      compositionLanguage: "Structured layers, meaningful connectors, selective callouts, clear system boundary",
-      typographyMood: "Systems-oriented and calm",
-      colorLogic: "Violet connective logic with sparse role or state accents",
-      signature: ["operating-model", "feedback-loops", "decision-points"],
-      risks: ["Complexity must be edited into a dominant path"],
-    },
-  ];
-  const base = concepts[index % concepts.length];
-  const cycle = Math.floor(index / concepts.length);
-  return cycle === 0
-    ? base
-    : {
-        ...base,
-        id: `${base.id}-${cycle + 1}`,
-        name: `${base.name} ${cycle + 1}`,
-        signature: [...base.signature, `variation-${cycle + 1}`],
-      };
+  return {
+    id: `concept-unresolved-${index + 1}`,
+    name: `Unresolved visual thesis ${index + 1}`,
+    oneLine: "The model must originate a problem-specific visual thesis from the request and evidence.",
+    visualGrammar: "Unresolved; do not infer from artifact type or a predefined style.",
+    visualMetaphor: "Unresolved; derive from the viewer transformation and information topology.",
+    narrativeArc: "Unresolved; derive from the editorial argument and evidence hierarchy.",
+    interactionModel: "None unless interaction materially improves comprehension or actionability.",
+    evidenceStrategy: "Rank grounded material into dominant, supporting, contextual, inspectable, and omitted evidence.",
+    compositionLanguage: "Originate one coherent governing visual idea and one useful signature move.",
+    typographyMood: "Derive from audience, emotional register, and comprehension goal.",
+    colorLogic: "Use color semantically and sparingly; do not use palette as a substitute for concept.",
+    signature: [`unresolved-${index + 1}`, "model-originated", "problem-specific"],
+    risks: ["This recovery object is not publishable and must trigger renewed creative reasoning."],
+  };
 }
 
 function conceptIdentity(concept: NorthstarCreativeConcept): string {

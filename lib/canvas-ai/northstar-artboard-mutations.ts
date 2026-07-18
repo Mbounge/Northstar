@@ -1,4 +1,5 @@
-// Northstar Artboard Mutation Engine v0.4.9.2 — granular observable edits, asset declarations, design-act contracts, and no-op rejection on one persistent surface.
+//lib/canvas-ai/northstar-artboard-mutations.ts
+// Northstar Artboard Mutation Engine v0.5.2.2 — granular observable edits, asset declarations, design-act contracts, and no-op rejection on one persistent surface.
 import { createHash } from "node:crypto";
 import {
   NORTHSTAR_RELATIONSHIP_RENDERING_CONTRACT,
@@ -389,16 +390,24 @@ function existingSemanticIds(previous: NorthstarGeneratedCodeArtifactPackage): S
 }
 
 function assertInsertedSemanticIdsAreUnique(previous: NorthstarGeneratedCodeArtifactPackage, operations: NorthstarArtboardMutationOperation[]): void {
-  const known = existingSemanticIds(previous);
-  const inserted = new Set<string>();
+  // Validate against a sequential working catalog. A remove earlier in the same
+  // transaction must make an atomic remove-and-reinsert update legal.
+  const working = existingSemanticIds(previous);
   for (const operation of operations) {
+    if (operation.op === "remove") {
+      working.delete(operation.targetId);
+      continue;
+    }
     if (operation.op !== "insert-html" && operation.op !== "set-html") continue;
-    for (const id of semanticIdsFromMarkup(operation.html)) {
-      if (known.has(id) || inserted.has(id)) {
+    const operationIds = semanticIdsFromMarkup(operation.html);
+    const local = new Set<string>();
+    for (const id of operationIds) {
+      if (working.has(id) || local.has(id)) {
         throw new Error(`The proposed mutation would duplicate semantic node id “${id}”. Modify the existing node instead of inserting it again.`);
       }
-      inserted.add(id);
+      local.add(id);
     }
+    for (const id of local) working.add(id);
   }
 }
 

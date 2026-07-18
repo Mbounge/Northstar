@@ -1,4 +1,4 @@
-// Northstar Canvas Live Web Artifact Host v0.4.9.1 — exact proposal correlation on one persistent iframe.
+// Northstar Canvas Live Web Artifact Host v0.5.4.2 — stable single-mount surface with exact proposal-owned acknowledgements.
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -86,12 +86,17 @@ function surfaceIdentity(artifact?: CanvasCodeArtifactPayload): string | undefin
   return artifact.surfaceId ?? artifact.artifactId;
 }
 
-function artifactGeometry(artifact: CanvasCodeArtifactPayload | undefined, width: number, height: number) {
-  const bounds = artifact?.intrinsicBounds;
+function artifactGeometry(
+  artifact: CanvasCodeArtifactPayload | undefined,
+  width: number,
+  height: number,
+  liveSize?: CanvasCodeArtifactContentSize,
+) {
+  const bounds = liveSize?.contentBounds ?? artifact?.intrinsicBounds;
   const measuredWidth = bounds ? Math.max(1, bounds.maxX - bounds.minX) : 1;
   const measuredHeight = bounds ? Math.max(1, bounds.maxY - bounds.minY) : 1;
-  const intrinsicWidth = Math.max(1, artifact?.preferredWidth ?? 1, measuredWidth);
-  const intrinsicHeight = Math.max(1, artifact?.preferredHeight ?? 1, measuredHeight);
+  const intrinsicWidth = Math.max(1, liveSize?.intrinsicWidth ?? artifact?.preferredWidth ?? 1, measuredWidth);
+  const intrinsicHeight = Math.max(1, liveSize?.intrinsicHeight ?? artifact?.preferredHeight ?? 1, measuredHeight);
   const scale = Math.max(0.01, Math.min(width / intrinsicWidth, height / intrinsicHeight));
   return {
     intrinsicWidth,
@@ -116,6 +121,7 @@ function CodeArtifactHostImpl({
 }: CodeArtifactHostProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const latestArtifactRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
+  const mountedSurfaceRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
   const appliedMutationIdsRef = useRef<Set<string>>(new Set());
   const failedMutationIdsRef = useRef<Set<string>>(new Set());
   const inFlightProposalRef = useRef<{
@@ -131,6 +137,8 @@ function CodeArtifactHostImpl({
   const [mountedSurface, setMountedSurface] = useState<CanvasCodeArtifactPayload | undefined>(artifact);
   const [surfaceReady, setSurfaceReady] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [liveSize, setLiveSize] = useState<CanvasCodeArtifactContentSize | undefined>(undefined);
+  const liveSizeSequenceRef = useRef(-1);
   const [dragShieldActive, setDragShieldActive] = useState(false);
   const [visibleMutationLabel, setVisibleMutationLabel] = useState<string | null>(null);
 
@@ -141,6 +149,7 @@ function CodeArtifactHostImpl({
     latestArtifactRef.current = artifact;
     if (!artifact) return;
     if (!mountedSurface || activeSurfaceId !== mountedSurfaceId) {
+      mountedSurfaceRef.current = artifact;
       setMountedSurface(artifact);
       appliedMutationIdsRef.current = new Set();
       failedMutationIdsRef.current = new Set();
@@ -148,11 +157,17 @@ function CodeArtifactHostImpl({
       readyRef.current = false;
       latestSizeRef.current = undefined;
       latestReviewRef.current = undefined;
+      liveSizeSequenceRef.current = -1;
+      setLiveSize(undefined);
       setSurfaceReady(false);
       setRuntimeError(null);
       setVisibleMutationLabel(null);
     }
   }, [activeSurfaceId, artifact, mountedSurface, mountedSurfaceId]);
+
+  useEffect(() => {
+    mountedSurfaceRef.current = mountedSurface;
+  }, [mountedSurface]);
 
   const runtimeDocument = useMemo(
     () => mountedSurface ? buildCanvasArtifactRuntimeDocument(mountedSurface) : undefined,
@@ -229,21 +244,36 @@ function CodeArtifactHostImpl({
     message: ArtifactPointerMessage;
     reason?: string;
   }) => {
-    const current = latestArtifactRef.current;
+    const latest = latestArtifactRef.current;
+    const mounted = mountedSurfaceRef.current;
+    const inFlight = inFlightProposalRef.current;
     const isFoundationReady = input.status === "ready" && !input.message.mutationId;
-    const ackToken = input.message.ackToken ?? (isFoundationReady ? current?.pendingAckToken : undefined);
+
+    // The acknowledgement belongs to the exact mounted browser event. Later
+    // React props may already contain the next speculative package, so they must
+    // never supply proposal identity for the event currently being acknowledged.
+    const ackToken = input.message.ackToken
+      ?? (!isFoundationReady ? inFlight?.ackToken : mounted?.pendingAckToken);
     const proposalId = input.message.proposalId
-      ?? (isFoundationReady && ackToken ? ackToken.split(":").at(-1) || ackToken : undefined);
-    if (!current || !ackToken || !proposalId) return;
+      ?? (!isFoundationReady ? inFlight?.proposalId : undefined)
+      ?? (ackToken ? ackToken.split(":").at(-1) || ackToken : undefined);
+    const current = mounted ?? latest;
+    const revisionId = input.message.revisionId
+      ?? (!isFoundationReady ? inFlight?.revisionId : current?.revisionId);
+
+    if (!current || !ackToken || !proposalId || !revisionId) return;
+
     const acknowledgement: NorthstarArtifactMutationAcknowledgement = {
       schema: "northstar.artboard-ack.v1",
       proposalId,
       ackToken,
-      baseRevisionId: input.message.baseRevisionId ?? (isFoundationReady ? current.parentRevisionId : undefined),
+      baseRevisionId: input.message.baseRevisionId
+        ?? (!isFoundationReady ? inFlight?.baseRevisionId : current.parentRevisionId),
       artifactId: current.artifactId,
       surfaceId: current.surfaceId ?? current.artifactId,
-      revisionId: input.message.revisionId ?? current.revisionId,
-      mutationId: input.message.mutationId,
+      revisionId,
+      mutationId: input.message.mutationId
+        ?? (!isFoundationReady ? inFlight?.mutationId : undefined),
       status: input.status,
       reason: input.reason,
       size: input.message.size ?? latestSizeRef.current,
@@ -257,14 +287,28 @@ function CodeArtifactHostImpl({
       snapshot: input.message.snapshot,
       acknowledgedAt: new Date().toISOString(),
     };
-    const response = await fetch("/api/canvas-ai/artifact-ack", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(acknowledgement),
-      cache: "no-store",
-      keepalive: true,
-    });
-    if (!response.ok) throw new Error(`Live artboard acknowledgement failed with ${response.status}.`);
+
+    const delays = [0, 180, 420, 900, 1_800, 3_000];
+    let lastError: unknown;
+    for (const delay of delays) {
+      if (delay > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+      try {
+        const response = await fetch("/api/canvas-ai/artifact-ack", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(acknowledgement),
+          cache: "no-store",
+          keepalive: true,
+        });
+        if (response.ok) return;
+        lastError = new Error(`Live artboard acknowledgement failed with ${response.status}.`);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Live artboard acknowledgement transport failed.");
   }, []);
 
   useEffect(() => {
@@ -288,25 +332,40 @@ function CodeArtifactHostImpl({
 
       if (event.data.type === "northstar.artifact.ready") {
         for (const id of event.data.appliedMutationIds ?? []) appliedMutationIdsRef.current.add(id);
-        if (event.data.size) latestSizeRef.current = event.data.size;
+        if (event.data.size) {
+          latestSizeRef.current = event.data.size;
+          liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, event.data.size.sequence ?? -1);
+          setLiveSize(event.data.size);
+          onContentSize(event.data.size);
+        }
         if (event.data.review) latestReviewRef.current = event.data.review;
         readyRef.current = true;
         setSurfaceReady(true);
         setRuntimeError(null);
         postCurrentContext();
         void postAcknowledgement({ status: "ready", message: event.data })
-          .catch((error: unknown) => setRuntimeError(error instanceof Error ? error.message : String(error)))
-          .finally(() => window.setTimeout(pumpNextMutation, 40));
+          .then(() => window.setTimeout(pumpNextMutation, 40))
+          .catch((error: unknown) => {
+            console.warn("Northstar acknowledgement transport failed after retries; locking the mutation queue while preserving the mounted artboard.", error);
+            setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+          });
         return;
       }
 
       if (event.data.type === "northstar.artifact.runtime-error") {
         if (event.data.mutationId) {
-          failedMutationIdsRef.current.add(event.data.mutationId);
-          inFlightProposalRef.current = null;
           setVisibleMutationLabel("Repairing an invalid adjustment on this same artboard");
           void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "Runtime mutation error." })
-            .catch((error: unknown) => setRuntimeError(error instanceof Error ? error.message : String(error)));
+            .then(() => {
+              failedMutationIdsRef.current.add(event.data.mutationId!);
+              if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
+                inFlightProposalRef.current = null;
+              }
+            })
+            .catch((error: unknown) => {
+              console.warn("Northstar could not report the rejected mutation; locking the queue while preserving the mounted artboard.", error);
+              setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+            });
         } else {
           setRuntimeError(event.data.message || "The persistent artifact surface could not render.");
         }
@@ -314,7 +373,13 @@ function CodeArtifactHostImpl({
       }
 
       if (event.data.type === "northstar.artifact.content-size" && event.data.size) {
+        const nextSequence = event.data.size.sequence ?? liveSizeSequenceRef.current + 1;
+        if (nextSequence < liveSizeSequenceRef.current) return;
+        liveSizeSequenceRef.current = nextSequence;
         latestSizeRef.current = event.data.size;
+        // Resize the mounted iframe immediately from the current live DOM. This is
+        // deliberately independent of acknowledgement and commit state.
+        setLiveSize(event.data.size);
         onContentSize(event.data.size);
         return;
       }
@@ -329,30 +394,45 @@ function CodeArtifactHostImpl({
         // The runtime has already rolled the DOM back. Never commit the rejected mutation's
         // transient geometry to the outer Canvas object.
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
-        if (event.data.mutationId) failedMutationIdsRef.current.add(event.data.mutationId);
-        if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
-          inFlightProposalRef.current = null;
-        }
         setVisibleMutationLabel("Northstar is repairing this rejected adjustment");
         void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "The live runtime rejected the adjustment." })
-          .catch((error: unknown) => setRuntimeError(error instanceof Error ? error.message : String(error)));
+          .then(() => {
+            if (event.data.mutationId) failedMutationIdsRef.current.add(event.data.mutationId);
+            if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
+              inFlightProposalRef.current = null;
+            }
+          })
+          .catch((error: unknown) => {
+            console.warn("Northstar acknowledgement transport failed; locking the queue while preserving the mounted artboard.", error);
+            setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+          });
         return;
       }
 
       if (event.data.type === "northstar.artifact.mutation-applied") {
-        if (event.data.size) { latestSizeRef.current = event.data.size; onContentSize(event.data.size); }
-        if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
-        if (event.data.mutationId) appliedMutationIdsRef.current.add(event.data.mutationId);
-        if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
-          inFlightProposalRef.current = null;
+        if (event.data.size) {
+          latestSizeRef.current = event.data.size;
+          liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, event.data.size.sequence ?? -1);
+          setLiveSize(event.data.size);
+          onContentSize(event.data.size);
         }
+        if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         setVisibleMutationLabel(event.data.visibleChange || null);
         void postAcknowledgement({ status: "applied", message: event.data })
-          .catch((error: unknown) => setRuntimeError(error instanceof Error ? error.message : String(error)))
-          .finally(() => window.setTimeout(() => {
-            setVisibleMutationLabel(null);
-            pumpNextMutation();
-          }, 180));
+          .then(() => {
+            if (event.data.mutationId) appliedMutationIdsRef.current.add(event.data.mutationId);
+            if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
+              inFlightProposalRef.current = null;
+            }
+            window.setTimeout(() => {
+              setVisibleMutationLabel(null);
+              pumpNextMutation();
+            }, 180);
+          })
+          .catch((error: unknown) => {
+            console.warn("Northstar acknowledgement transport failed; locking the queue while preserving the mounted artboard.", error);
+            setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+          });
         return;
       }
 
@@ -364,7 +444,7 @@ function CodeArtifactHostImpl({
       const frame = frameRef.current;
       if (!frame) return;
       const rect = frame.getBoundingClientRect();
-      const geometry = artifactGeometry(current, width, height);
+      const geometry = artifactGeometry(current, width, height, liveSize);
       const point = {
         x: rect.left + (event.data.clientX ?? 0) * (rect.width / Math.max(1, geometry.intrinsicWidth)),
         y: rect.top + (event.data.clientY ?? 0) * (rect.height / Math.max(1, geometry.intrinsicHeight)),
@@ -388,7 +468,7 @@ function CodeArtifactHostImpl({
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [height, onCanvasDragStart, onCanvasWheel, onContentSize, onRequestSelect, onRuntimeReview, postAcknowledgement, postCurrentContext, pumpNextMutation, width]);
+  }, [height, liveSize, onCanvasDragStart, onCanvasWheel, onContentSize, onRequestSelect, onRuntimeReview, postAcknowledgement, postCurrentContext, pumpNextMutation, width]);
 
   if (!artifact && !mountedSurface) {
     return (
@@ -399,7 +479,7 @@ function CodeArtifactHostImpl({
   }
 
   const current = artifact ?? mountedSurface;
-  const geometry = artifactGeometry(current, width, height);
+  const geometry = artifactGeometry(current, width, height, liveSize);
   const liveInteractionEnabled = viewportZoom >= MINIMUM_INTERACTIVE_ZOOM;
   const pendingMutation = Boolean(current && (current.mutationJournal ?? []).some((batch: NorthstarArtboardMutationBatch) =>
     !appliedMutationIdsRef.current.has(batch.mutationId) &&

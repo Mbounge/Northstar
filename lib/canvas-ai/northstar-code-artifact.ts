@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-code-artifact.ts
 // Northstar Visual Web Artifact Authoring v0.4.8.2 — one mounted surface, stable semantic evidence nodes, authoritative ordering, and reference-conditioned craft
 import { Script } from "node:vm";
 import { createHash } from "node:crypto";

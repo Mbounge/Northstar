@@ -1,3 +1,5 @@
+//app/api/canvas-ai/artifact-acl/route.ts
+
 import { NextResponse } from "next/server";
 import { publishNorthstarArtifactAcknowledgement } from "@/lib/canvas-ai/northstar-artboard-ack";
 import type { NorthstarArtifactMutationAcknowledgement } from "@/lib/canvas-artifacts/types";

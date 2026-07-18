@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-trusted-compositor.ts
 // Northstar Trusted Progress Compositor v0.4.4 — a neutral, polished live checkpoint.
 // It keeps grounded evidence visible while bespoke model authorship happens privately.
 // It is intentionally not a final template and never dictates the bespoke composition.

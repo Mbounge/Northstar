@@ -1,3 +1,5 @@
+//lib/canvas-artifacts/prototype-react.tsx
+
 import type { CSSProperties, ReactNode } from "react";
 
 interface ScreenCardProps {

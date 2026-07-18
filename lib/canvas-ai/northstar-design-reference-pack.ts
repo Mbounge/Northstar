@@ -1,3 +1,5 @@
+//lib/canvas-ai/northstar-design-reference-pack.ts
+
 // Northstar Visual Reference Pack v0.4.5 — eight multimodal few-shot identity references for design behaviour and rendered review.
 // Every image is sent to exploration, selection, authoring, repair, and pixel review.
 import { readFile } from "node:fs/promises";

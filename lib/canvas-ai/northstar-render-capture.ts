@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-render-capture.ts
 // Northstar Render Capture v0.4.8 — exact capture of the one base surface plus its accumulated mutation journal.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";

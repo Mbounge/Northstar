@@ -1,4 +1,5 @@
-// Northstar Canvas Artifact Contracts v0.4.8.2 — one authoritative live surface, browser acknowledgements, granular mutations, and measured geometry
+//lib/canvas-artifacts/types.ts
+// Northstar Canvas Artifact Contracts v0.5.2.3 — one authoritative live surface, browser acknowledgements, granular mutations, and measured geometry
 export const NORTHSTAR_CODE_ARTIFACT_SCHEMA = "northstar.code-artifact.v0.1" as const;
 export const NORTHSTAR_GENERATED_CODE_ARTIFACT_SCHEMA =
   "northstar.generated-web-artifact.v0.3" as const;
@@ -80,6 +81,59 @@ export type NorthstarArtboardMutationOperation =
   | { op: "set-classes"; targetId: string; add?: string[]; remove?: string[] }
   | { op: "set-css-layer"; layerId: string; css: string }
   | { op: "request-space"; left?: number; top?: number; right?: number; bottom?: number };
+
+
+export interface NorthstarSpatialPoint {
+  x: number;
+  y: number;
+}
+
+export interface NorthstarSpatialRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  right: number;
+  bottom: number;
+}
+
+export interface NorthstarSpatialNode {
+  nodeId: string;
+  parentId?: string;
+  rect: NorthstarSpatialRect;
+  center: NorthstarSpatialPoint;
+  ports: Record<"top" | "right" | "bottom" | "left" | "center", NorthstarSpatialPoint>;
+  semanticRole?: string;
+  evidenceId?: string;
+  stage?: string;
+}
+
+export interface NorthstarSpatialAudit {
+  snapshotRevisionId: string;
+  layoutVersion: number;
+  unresolvedAnchorIds: string[];
+  overlappingAnnotationPairs: Array<[string, string]>;
+  annotationTargetOverlapIds: string[];
+  clippedAnnotationIds: string[];
+  excessiveDistanceIds: string[];
+  unresolvedRelationshipIds: string[];
+  obstacleIntersectionIds: string[];
+  falseIntersectionIds: string[];
+  crossingCount: number;
+  hardFailureCount: number;
+  softIssueCount: number;
+}
+
+export interface NorthstarSpatialSnapshot {
+  artifactId: string;
+  revisionId: string;
+  mutationId?: string;
+  measuredAt: string;
+  artboardBounds: NorthstarSpatialRect;
+  nodes: NorthstarSpatialNode[];
+  audit: NorthstarSpatialAudit;
+  layoutVersion: number;
+}
 
 export interface NorthstarArtboardMutationBatch {
   schema: typeof NORTHSTAR_ARTBOARD_MUTATION_SCHEMA;
@@ -276,10 +330,21 @@ export interface CanvasCodeArtifactContentSize {
   meaningfulChangedNodeIds?: string[];
 }
 
+export interface NorthstarCommittedSemanticNode {
+  nodeId: string;
+  parentId?: string;
+  normalizedText: string;
+  normalizedAttributes: Record<string, string>;
+  normalizedClasses: string[];
+  normalizedStyles: Record<string, string>;
+  subtreeFingerprint: string;
+}
+
 export interface NorthstarLiveSurfaceSnapshot {
   html: string;
   css: string;
   capturedAt: string;
+  semanticNodes?: NorthstarCommittedSemanticNode[];
 }
 
 export interface NorthstarArtifactMutationAcknowledgement {

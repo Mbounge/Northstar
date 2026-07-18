@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-artboard-ack.ts
 // Northstar v0.4.9.0 — idempotent acknowledgement store keyed by exact proposal identity.
 import type { NorthstarArtifactMutationAcknowledgement } from "@/lib/canvas-artifacts/types";
 

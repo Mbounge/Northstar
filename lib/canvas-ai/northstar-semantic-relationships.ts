@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-semantic-relationships.ts
 // Northstar Semantic Relationship Intelligence v0.4.9.1
 
 export type NorthstarRelationshipType =
@@ -207,6 +208,9 @@ RELATIONSHIP FIDELITY
 - Relationship types are causal, comparative, contrastive, evidentiary, sequential, or synthesis.
 - Route grammars are straight, elbow, soft-curve, bracket, shared-spine, converging, or diverging.
 - Endpoints must be stable existing semantic nodes. Never use invented coordinates as the semantic source of truth.
+- The semantic relationship element is metadata; the browser-owned spatial router renders the visible path from measured endpoint ports.
+- Never insert manual SVG paths or model-authored connector coordinates for semantic relationships.
+- After every geometry change the browser reroutes the relationship and audits endpoint clarity, obstacle intersections, crossings, and false visual intersections.
 - Lines, pills, labels, and markers must read as one system. A label belongs to a relationship, not to empty space.
 - Prefer real app icons and grounded product assets as actors in maps and diagrams when they improve recognition.
 - Qualitative maps must explicitly say they are interpretive and must explain their axes.

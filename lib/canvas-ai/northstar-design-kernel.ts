@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-design-kernel.ts
 // Northstar Artifact Design Kernel v1.4 — identity primitives for bespoke composition, plain reference flows, unclipped text, and adaptive Canvas surfaces.
 // This is deliberately a grammar, not a fixed template. Models compose these primitives into bespoke artifacts.
 

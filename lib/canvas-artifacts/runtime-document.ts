@@ -1,4 +1,4 @@
-// Northstar Canvas Artifact Runtime v0.4.9.2 — browser-authoritative transactional mutations, dynamic assets, exact acknowledgements, and live geometry
+// Northstar Canvas Artifact Runtime v0.5.4.2 — restored stable intrinsic sizing and persistent-surface geometry — convergent isolated spatial service — browser-authoritative transactional mutations, dynamic assets, exact acknowledgements, and live geometry
 import type { CanvasCodeArtifactPayload } from "./types";
 import { NORTHSTAR_DESIGN_KERNEL_CSS } from "@/lib/canvas-ai/northstar-design-kernel";
 
@@ -66,6 +66,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   let applyingMutation = false;
   let pendingAcknowledgement = null;
   let requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
+  let spatialBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  let spatialLayoutVersion = 0;
+  let lastSpatialAudit = null;
+  let solvingSpatialLayout = false;
 
   const stageSurface = document.getElementById("northstar-artifact-stage");
   const origin = document.getElementById("northstar-artifact-origin");
@@ -152,6 +156,440 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const linePath = (points) => (points || []).map((point, index) => (index ? "L" : "M") + Number(point[0]).toFixed(2) + "," + Number(point[1]).toFixed(2)).join(" ");
   const formatNumber = (value, options) => new Intl.NumberFormat(undefined, options || {}).format(Number(value) || 0);
 
+
+  // Isolated spatial service. It reads stable content geometry and reports only
+  // actual resolved overlay extents back to getContentBounds().
+  root.style.position = root.style.position || "relative";
+
+  document.documentElement.style.margin = "0";
+  document.documentElement.style.padding = "0";
+  document.documentElement.style.width = "max-content";
+  document.documentElement.style.height = "max-content";
+  document.body.style.margin = "0";
+  document.body.style.padding = "0";
+  document.body.style.display = "block";
+  document.body.style.width = "max-content";
+  document.body.style.height = "max-content";
+  document.body.style.minWidth = "0";
+  document.body.style.minHeight = "0";
+  root.style.margin = "0";
+
+  const spatialStyle = document.createElement("style");
+  spatialStyle.setAttribute("data-ns-runtime-spatial-style", "true");
+  spatialStyle.textContent = [
+    "[data-ns-spatial-system]{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:40}",
+    "[data-ns-relationship-layer]{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}",
+    "[data-ns-annotation-layer]{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}",
+    "[data-ns-annotation-id]:not([data-ns-spatial-copy]){display:none!important}",
+    "[data-ns-spatial-copy]{position:absolute!important;display:block!important;box-sizing:border-box;pointer-events:none;z-index:2}",
+    "[data-ns-spatial-copy][data-ns-flow-caption=true]{text-align:center;line-height:1.2}",
+    "[data-ns-relationship-id]{display:none!important}",
+    ".ns-spatial-path{fill:none;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}",
+    ".ns-spatial-route-label{font:700 12px/1.2 Inter,ui-sans-serif,system-ui,sans-serif;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}",
+  ].join("\\n");
+  document.head.appendChild(spatialStyle);
+
+  const spatialSystem = document.createElement("div");
+  spatialSystem.setAttribute("data-ns-spatial-system", "true");
+  const relationshipLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  relationshipLayer.setAttribute("data-ns-relationship-layer", "true");
+  relationshipLayer.setAttribute("aria-hidden", "true");
+  const annotationLayer = document.createElement("div");
+  annotationLayer.setAttribute("data-ns-annotation-layer", "true");
+  spatialSystem.append(relationshipLayer, annotationLayer);
+  root.appendChild(spatialSystem);
+
+  const emptySpatialAudit = (runtimeError) => ({
+    snapshotRevisionId: currentRevisionId,
+    layoutVersion: spatialLayoutVersion,
+    unresolvedAnchorIds: [],
+    overlappingAnnotationPairs: [],
+    annotationTargetOverlapIds: [],
+    clippedAnnotationIds: [],
+    excessiveDistanceIds: [],
+    unresolvedRelationshipIds: [],
+    obstacleIntersectionIds: [],
+    falseIntersectionIds: [],
+    crossingCount: 0,
+    hardFailureCount: 0,
+    softIssueCount: runtimeError ? 1 : 0,
+    runtimeError: runtimeError || undefined,
+  });
+
+  const localRect = (rect, rootRect) => ({
+    x: rect.left - rootRect.left,
+    y: rect.top - rootRect.top,
+    width: rect.width,
+    height: rect.height,
+    right: rect.right - rootRect.left,
+    bottom: rect.bottom - rootRect.top,
+  });
+  const overlaps = (a, b, padding) =>
+    a.x < b.right + padding && a.right > b.x - padding &&
+    a.y < b.bottom + padding && a.bottom > b.y - padding;
+  const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const ports = (rect) => ({
+    top: { x: rect.x + rect.width / 2, y: rect.y },
+    right: { x: rect.right, y: rect.y + rect.height / 2 },
+    bottom: { x: rect.x + rect.width / 2, y: rect.bottom },
+    left: { x: rect.x, y: rect.y + rect.height / 2 },
+    center: { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 },
+  });
+  const semanticScene = () => {
+    const rootRect = root.getBoundingClientRect();
+    return Array.from(root.querySelectorAll("[data-ns-node-id]"))
+      .filter((element) => !element.closest("[data-ns-spatial-system]"))
+      .map((element) => {
+        const rect = localRect(element.getBoundingClientRect(), rootRect);
+        const nodeId = element.getAttribute("data-ns-node-id") || "";
+        return {
+          nodeId,
+          rect,
+          center: { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 },
+          ports: ports(rect),
+          tagName: element.tagName.toLowerCase(),
+          evidenceId: element.getAttribute("data-ns-evidence-id") || undefined,
+          isScreenshot:
+            element.tagName === "FIGURE"
+            || Boolean(element.getAttribute("data-ns-evidence-id"))
+            || Boolean(element.querySelector(":scope > img")),
+          flowId: element.closest("[data-ns-flow-id]")?.getAttribute("data-ns-flow-id") || undefined,
+          flowSequenceId: element.closest("[data-ns-flow-sequence],[data-ns-node-id$='-sequence']")?.getAttribute("data-ns-node-id") || undefined,
+        };
+      })
+      .filter((node) => node.nodeId && node.rect.width > 0 && node.rect.height > 0);
+  };
+  const candidateRect = (anchorRect, width, height, side, alignment, gap) => {
+    let x = anchorRect.x + (anchorRect.width - width) / 2;
+    let y = anchorRect.bottom + gap;
+    if (side === "top") y = anchorRect.y - height - gap;
+    if (side === "left") {
+      x = anchorRect.x - width - gap;
+      y = anchorRect.y + (anchorRect.height - height) / 2;
+    }
+    if (side === "right") {
+      x = anchorRect.right + gap;
+      y = anchorRect.y + (anchorRect.height - height) / 2;
+    }
+    if (side === "top" || side === "bottom") {
+      if (alignment === "start") x = anchorRect.x;
+      if (alignment === "end") x = anchorRect.right - width;
+    } else {
+      if (alignment === "start") y = anchorRect.y;
+      if (alignment === "end") y = anchorRect.bottom - height;
+    }
+    return { x, y, width, height, right: x + width, bottom: y + height };
+  };
+  const choosePorts = (source, target) => {
+    const dx = target.center.x - source.center.x;
+    const dy = target.center.y - source.center.y;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx >= 0
+        ? [source.ports.right, target.ports.left]
+        : [source.ports.left, target.ports.right];
+    }
+    return dy >= 0
+      ? [source.ports.bottom, target.ports.top]
+      : [source.ports.top, target.ports.bottom];
+  };
+  const makeRelationshipPath = (source, target, route) => {
+    const selected = choosePorts(source, target);
+    const start = selected[0], end = selected[1];
+    if (route === "straight") {
+      return { d: "M" + start.x + "," + start.y + " L" + end.x + "," + end.y, points: [start, end] };
+    }
+    if (route === "elbow" || route === "shared-spine" || route === "bracket") {
+      const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+      const first = horizontal
+        ? { x: (start.x + end.x) / 2, y: start.y }
+        : { x: start.x, y: (start.y + end.y) / 2 };
+      const second = horizontal
+        ? { x: (start.x + end.x) / 2, y: end.y }
+        : { x: end.x, y: (start.y + end.y) / 2 };
+      return {
+        d: "M" + start.x + "," + start.y + " L" + first.x + "," + first.y + " L" + second.x + "," + second.y + " L" + end.x + "," + end.y,
+        points: [start, first, second, end],
+      };
+    }
+    const curve = Math.max(48, Math.min(260, distance(start, end) * 0.28));
+    const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+    const c1 = horizontal
+      ? { x: start.x + Math.sign(end.x - start.x || 1) * curve, y: start.y }
+      : { x: start.x, y: start.y + Math.sign(end.y - start.y || 1) * curve };
+    const c2 = horizontal
+      ? { x: end.x - Math.sign(end.x - start.x || 1) * curve, y: end.y }
+      : { x: end.x, y: end.y - Math.sign(end.y - start.y || 1) * curve };
+    return {
+      d: "M" + start.x + "," + start.y + " C" + c1.x + "," + c1.y + " " + c2.x + "," + c2.y + " " + end.x + "," + end.y,
+      points: [start, c1, c2, end],
+    };
+  };
+
+  const solveSpatialSystem = () => {
+    if (solvingSpatialLayout) return lastSpatialAudit || emptySpatialAudit();
+    solvingSpatialLayout = true;
+    spatialLayoutVersion += 1;
+    try {
+      spatialBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      const scene = semanticScene();
+      const byId = new Map(scene.map((node) => [node.nodeId, node]));
+      const unresolvedAnchorIds = [];
+      const overlappingAnnotationPairs = [];
+      const annotationTargetOverlapIds = [];
+      const clippedAnnotationIds = [];
+      const excessiveDistanceIds = [];
+      const unresolvedRelationshipIds = [];
+      const obstacleIntersectionIds = [];
+      const falseIntersectionIds = [];
+      const placed = [];
+      let crossingCount = 0;
+
+      const annotations = Array.from(root.querySelectorAll("[data-ns-annotation-id]"))
+        .filter((element) => !element.hasAttribute("data-ns-spatial-copy"));
+
+      const flowCaptionCounts = new Map();
+      for (const metadata of annotations) {
+        const anchor = byId.get(metadata.getAttribute("data-ns-anchor-node-id") || "");
+        if (!anchor?.isScreenshot || !anchor.flowId) continue;
+        flowCaptionCounts.set(anchor.flowId, (flowCaptionCounts.get(anchor.flowId) || 0) + 1);
+      }
+      root.querySelectorAll("[data-ns-flow-id]").forEach((flow) => {
+        const flowId = flow.getAttribute("data-ns-flow-id") || "";
+        const count = flowCaptionCounts.get(flowId) || 0;
+        const requiredPadding = count > 0 ? Math.min(132, 54 + Math.ceil(count / 5) * 26) : 0;
+        const currentPadding = Number(flow.getAttribute("data-ns-spatial-caption-padding") || 0);
+        if (currentPadding !== requiredPadding) {
+          flow.setAttribute("data-ns-spatial-caption-padding", String(requiredPadding));
+          flow.style.paddingBottom = requiredPadding ? requiredPadding + "px" : "";
+        }
+      });
+      const activeAnnotationIds = new Set();
+      for (const metadata of annotations) {
+        const annotationId = metadata.getAttribute("data-ns-annotation-id") || metadata.getAttribute("data-ns-node-id") || "annotation";
+        activeAnnotationIds.add(annotationId);
+        const anchorId = metadata.getAttribute("data-ns-anchor-node-id") || "";
+        const anchorNode = byId.get(anchorId);
+        let annotation = annotationLayer.querySelector('[data-ns-spatial-copy][data-ns-annotation-id="' + CSS.escape(annotationId) + '"]');
+        if (!anchorNode) {
+          unresolvedAnchorIds.push(annotationId);
+          annotation?.remove();
+          continue;
+        }
+        if (!annotation) {
+          annotation = metadata.cloneNode(true);
+          annotation.setAttribute("data-ns-spatial-copy", "true");
+          annotation.querySelectorAll("[data-ns-node-id]").forEach((node) => node.removeAttribute("data-ns-node-id"));
+          annotation.removeAttribute("data-ns-node-id");
+          annotationLayer.appendChild(annotation);
+        } else if (annotation.innerHTML !== metadata.innerHTML) {
+          annotation.innerHTML = metadata.innerHTML;
+          annotation.querySelectorAll("[data-ns-node-id]").forEach((node) => node.removeAttribute("data-ns-node-id"));
+        }
+        for (const attribute of Array.from(metadata.attributes)) {
+          if (attribute.name === "style" || attribute.name === "data-ns-node-id") continue;
+          annotation.setAttribute(attribute.name, attribute.value);
+        }
+        annotation.setAttribute("data-ns-spatial-copy", "true");
+        annotation.style.left = "0px";
+        annotation.style.top = "0px";
+        annotation.style.width = "max-content";
+        annotation.style.height = "auto";
+        const maxWidth = Math.max(80, Number(metadata.getAttribute("data-ns-max-width")) || 220);
+        annotation.style.maxWidth = maxWidth + "px";
+        const measured = annotation.getBoundingClientRect();
+        const width = Math.min(maxWidth, Math.max(72, measured.width));
+        annotation.style.width = width + "px";
+        const height = Math.max(18, annotation.getBoundingClientRect().height);
+        const rawPreferred = (metadata.getAttribute("data-ns-preferred-side") || "auto")
+          .split(/[\s,|]+/)
+          .filter(Boolean);
+        const screenshotAnchor = Boolean(anchorNode.isScreenshot);
+        const sides = screenshotAnchor
+          ? ["bottom"]
+          : rawPreferred.includes("auto") || !rawPreferred.length
+            ? ["bottom", "top", "right", "left"]
+            : rawPreferred.concat(["bottom", "top", "right", "left"].filter((side) => !rawPreferred.includes(side)));
+        const alignment = screenshotAnchor ? "center" : (metadata.getAttribute("data-ns-alignment") || "center");
+        const gap = Math.max(screenshotAnchor ? 18 : 6, Number(metadata.getAttribute("data-ns-gap")) || 14);
+        let best = null;
+
+        const flowScreens = screenshotAnchor && anchorNode.flowId
+          ? scene.filter((node) => node.isScreenshot && node.flowId === anchorNode.flowId)
+          : [];
+        const captionLaneY = flowScreens.length
+          ? Math.max(...flowScreens.map((node) => node.rect.bottom)) + gap
+          : anchorNode.rect.bottom + gap;
+
+        for (const side of sides) {
+          for (const extra of screenshotAnchor ? [0, 28, 56] : [0, 10, 24, 44, 72, 110]) {
+            const candidate = screenshotAnchor
+              ? {
+                  x: anchorNode.center.x - width / 2,
+                  y: captionLaneY + extra,
+                  width,
+                  height,
+                  right: anchorNode.center.x + width / 2,
+                  bottom: captionLaneY + extra + height,
+                }
+              : candidateRect(anchorNode.rect, width, height, side, alignment, gap + extra);
+            const protectedEvidenceCollisions = scene.filter(
+              (node) => node.isScreenshot && overlaps(candidate, node.rect, 10),
+            ).length;
+            const nodeCollisions = scene.filter(
+              (node) => node.nodeId !== anchorId && !node.isScreenshot && overlaps(candidate, node.rect, 4),
+            ).length;
+            const labelCollisions = placed.filter((item) => overlaps(candidate, item.rect, 10)).length;
+            const targetCollision = overlaps(candidate, anchorNode.rect, 6) ? 1 : 0;
+            const center = { x: candidate.x + candidate.width / 2, y: candidate.y + candidate.height / 2 };
+            const anchorDistance = distance(center, anchorNode.center);
+            const cost =
+              protectedEvidenceCollisions * 100000 +
+              targetCollision * 100000 +
+              labelCollisions * 20000 +
+              nodeCollisions * 10000 +
+              anchorDistance;
+            if (!best || cost < best.cost) {
+              best = { rect: candidate, cost, anchorDistance, protectedEvidenceCollisions };
+            }
+          }
+        }
+        if (!best) {
+          unresolvedAnchorIds.push(annotationId);
+          annotation.remove();
+          continue;
+        }
+        annotation.style.left = best.rect.x + "px";
+        annotation.style.top = best.rect.y + "px";
+        annotation.style.width = best.rect.width + "px";
+        annotation.setAttribute("data-ns-resolved-anchor-id", anchorId);
+        annotation.setAttribute("data-ns-spatial-status", best.cost >= 10000 ? "adjusted" : "resolved");
+        if (screenshotAnchor) annotation.setAttribute("data-ns-flow-caption", "true");
+        else annotation.removeAttribute("data-ns-flow-caption");
+        if (overlaps(best.rect, anchorNode.rect, 1) || best.protectedEvidenceCollisions > 0) {
+          annotationTargetOverlapIds.push(annotationId);
+        }
+        if (best.anchorDistance > Math.max(360, Number(metadata.getAttribute("data-ns-maximum-distance")) || 520)) excessiveDistanceIds.push(annotationId);
+        for (const item of placed) {
+          if (overlaps(best.rect, item.rect, 4)) overlappingAnnotationPairs.push([item.id, annotationId]);
+        }
+        placed.push({ id: annotationId, rect: best.rect });
+        spatialBounds.minX = Math.min(spatialBounds.minX, Math.floor(best.rect.x - 24));
+        spatialBounds.minY = Math.min(spatialBounds.minY, Math.floor(best.rect.y - 24));
+        spatialBounds.maxX = Math.max(spatialBounds.maxX, Math.ceil(best.rect.right + 24));
+        spatialBounds.maxY = Math.max(spatialBounds.maxY, Math.ceil(best.rect.bottom + 24));
+      }
+      annotationLayer.querySelectorAll("[data-ns-spatial-copy][data-ns-annotation-id]").forEach((copy) => {
+        const id = copy.getAttribute("data-ns-annotation-id") || "";
+        if (!activeAnnotationIds.has(id)) copy.remove();
+      });
+
+      relationshipLayer.replaceChildren();
+      const metadataNodes = Array.from(root.querySelectorAll("[data-ns-relationship-id]"))
+        .filter((element) => !element.closest("[data-ns-spatial-system]"));
+      const routedBounds = [];
+      for (const metadata of metadataNodes) {
+        const relationshipId = metadata.getAttribute("data-ns-relationship-id") || "";
+        const source = byId.get(metadata.getAttribute("data-ns-source-id") || "");
+        const target = byId.get(metadata.getAttribute("data-ns-target-id") || "");
+        if (!relationshipId || !source || !target) {
+          unresolvedRelationshipIds.push(relationshipId || "relationship");
+          continue;
+        }
+        const routed = makeRelationshipPath(source, target, metadata.getAttribute("data-ns-route") || "soft-curve");
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("class", "ns-spatial-path");
+        path.setAttribute("data-ns-routed-relationship-id", relationshipId);
+        path.setAttribute("d", routed.d);
+        const priority = metadata.getAttribute("data-ns-priority") || "secondary";
+        const confidence = Math.max(0.5, Math.min(1, Number(metadata.getAttribute("data-ns-confidence")) || 0.65));
+        path.setAttribute("stroke", priority === "primary" ? "#694cff" : priority === "supporting" ? "rgba(68,62,100,.42)" : "rgba(105,76,255,.68)");
+        path.setAttribute("stroke-width", priority === "primary" ? "3.5" : priority === "supporting" ? "1.5" : "2.25");
+        path.setAttribute("stroke-opacity", String(confidence));
+        if ((metadata.getAttribute("data-ns-relationship-type") || "") === "contrastive") path.setAttribute("stroke-dasharray", "8 7");
+        relationshipLayer.appendChild(path);
+        const xs = routed.points.map((point) => point.x);
+        const ys = routed.points.map((point) => point.y);
+        const bounds = {
+          x: Math.min.apply(null, xs),
+          y: Math.min.apply(null, ys),
+          right: Math.max.apply(null, xs),
+          bottom: Math.max.apply(null, ys),
+        };
+        routedBounds.push(bounds);
+        spatialBounds.minX = Math.min(spatialBounds.minX, Math.floor(bounds.x - 24));
+        spatialBounds.minY = Math.min(spatialBounds.minY, Math.floor(bounds.y - 24));
+        spatialBounds.maxX = Math.max(spatialBounds.maxX, Math.ceil(bounds.right + 24));
+        spatialBounds.maxY = Math.max(spatialBounds.maxY, Math.ceil(bounds.bottom + 24));
+        const label = metadata.getAttribute("data-ns-label");
+        if (label) {
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          const midpoint = routed.points[Math.floor(routed.points.length / 2)];
+          text.setAttribute("class", "ns-spatial-route-label");
+          text.setAttribute("x", String(midpoint.x + 8));
+          text.setAttribute("y", String(midpoint.y - 8));
+          text.setAttribute("fill", "#40366f");
+          text.textContent = label;
+          relationshipLayer.appendChild(text);
+        }
+      }
+
+      for (let first = 0; first < routedBounds.length; first += 1) {
+        for (let second = first + 1; second < routedBounds.length; second += 1) {
+          const a = routedBounds[first], b = routedBounds[second];
+          const aa = { x: a.x, y: a.y, right: a.right, bottom: a.bottom };
+          const bb = { x: b.x, y: b.y, right: b.right, bottom: b.bottom };
+          if (overlaps(aa, bb, 0)) crossingCount += 1;
+        }
+      }
+
+      const overlayWidth = Math.max(MINIMUM_WIDTH, spatialBounds.maxX - Math.min(0, spatialBounds.minX));
+      const overlayHeight = Math.max(MINIMUM_HEIGHT, spatialBounds.maxY - Math.min(0, spatialBounds.minY));
+      spatialSystem.style.width = overlayWidth + "px";
+      spatialSystem.style.height = overlayHeight + "px";
+      relationshipLayer.setAttribute("viewBox", "0 0 " + overlayWidth + " " + overlayHeight);
+      relationshipLayer.setAttribute("width", String(overlayWidth));
+      relationshipLayer.setAttribute("height", String(overlayHeight));
+
+      const hardFailureCount =
+        unresolvedAnchorIds.length +
+        overlappingAnnotationPairs.length +
+        annotationTargetOverlapIds.length +
+        clippedAnnotationIds.length +
+        unresolvedRelationshipIds.length;
+      const softIssueCount =
+        excessiveDistanceIds.length +
+        obstacleIntersectionIds.length +
+        falseIntersectionIds.length +
+        crossingCount;
+      lastSpatialAudit = {
+        snapshotRevisionId: currentRevisionId,
+        layoutVersion: spatialLayoutVersion,
+        unresolvedAnchorIds,
+        overlappingAnnotationPairs,
+        annotationTargetOverlapIds,
+        clippedAnnotationIds,
+        excessiveDistanceIds,
+        unresolvedRelationshipIds,
+        obstacleIntersectionIds,
+        falseIntersectionIds,
+        crossingCount,
+        hardFailureCount,
+        softIssueCount,
+        annotationCount: annotations.length,
+        relationshipCount: metadataNodes.length,
+      };
+      return lastSpatialAudit;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("Northstar isolated spatial service recovered without changing intrinsic layout.", error);
+      spatialBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      lastSpatialAudit = emptySpatialAudit(message);
+      return lastSpatialAudit;
+    } finally {
+      solvingSpatialLayout = false;
+    }
+  };
+
   const Northstar = Object.freeze({
     get data() { return currentData; },
     get creative() { return currentCreative; },
@@ -237,6 +675,260 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     const meaningful = changed.filter((id) => !PROGRESS_ONLY_NODE_IDS.has(id));
     return { changed, meaningful };
+  };
+  const rectIntersectionArea = (a, b) => {
+    const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+    const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    return width * height;
+  };
+  const visualSafetySnapshot = () => {
+    const rootRect = root.getBoundingClientRect();
+    const singletonRoleForElement = (element) => {
+      const source = [
+        element.getAttribute("data-ns-role") || "",
+        element.getAttribute("data-ns-node-id") || "",
+        element.className || "",
+        element.querySelector(":scope > h1, :scope > h2, :scope > h3")?.textContent || "",
+      ].join(" ").toLowerCase();
+      if (/(?:executive|strategic)[-_ ]?synthesis|exec[-_ ]?summary/.test(source)) return "executive-synthesis";
+      if (/(?:comparison|comparative|synthesis|trade[-_ ]?off)[-_ ]?matrix/.test(source)) return "comparison-matrix";
+      if (/(?:primary|comparison|tension|divergence)[-_ ]?axis|decision[-_ ]?spine/.test(source)) return "primary-axis";
+      if (/(?:primary|executive)[-_ ]?recommendation|recommendation[-_ ]?panel/.test(source)) return "recommendation";
+      if (/(?:primary[-_ ]?decision|decision[-_ ]?panel|decision[-_ ]?summary)/.test(source)) return "decision";
+      if (/(?:provenance[-_ ]?panel|evidence[-_ ]?provenance|source[-_ ]?register)/.test(source)) return "provenance";
+      return "";
+    };
+    const classifySemanticGeometryRole = (element) => {
+      const id = (element.getAttribute("data-ns-node-id") || "").toLowerCase();
+      const role = (element.getAttribute("data-ns-role") || "").toLowerCase();
+      const explicit = (element.getAttribute("data-ns-geometry-role") || "").toLowerCase();
+      if (element === root || id === "artboard" || role === "root" || explicit === "root") return "root";
+      if (explicit === "decorative" || element.hasAttribute("data-ns-decorative") || /(?:background|wash|glow|shadow|bleed|ornament)/.test(id + " " + role)) return "decorative";
+      if (explicit === "structural" || element.hasAttribute("data-ns-structural-layer") || /(?:layer|wrapper|container|grid|rail|lane|surface)/.test(id + " " + role)) return "structural";
+      return "content";
+    };
+    const semantic = Array.from(root.querySelectorAll("[data-ns-node-id]"))
+      .filter((element) => element !== root && !element.closest("[data-ns-spatial-system]") && !PROGRESS_ONLY_NODE_IDS.has(element.getAttribute("data-ns-node-id") || ""))
+      .map((element) => ({
+        element,
+        id: element.getAttribute("data-ns-node-id") || "",
+        rect: element.getBoundingClientRect(),
+        geometryRole: classifySemanticGeometryRole(element),
+      }))
+      .filter((item) => item.geometryRole !== "root" && item.rect.width > 1 && item.rect.height > 1);
+    const evidenceElements = Array.from(root.querySelectorAll("[data-ns-evidence-id], figure:has(img)"));
+    const evidenceRects = evidenceElements.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 4 && rect.height > 4);
+    const unsafeEvidenceOverlayIds = [];
+    const majorAnalyticalItems = [];
+    for (const item of semantic) {
+      const id = item.id.toLowerCase();
+      const role = (item.element.getAttribute("data-ns-role") || "").toLowerCase();
+      const isSynthetic = /(?:marker|callout|annotation|axis|badge|label|friction|trust|sso)/.test(id)
+        || item.element.hasAttribute("data-ns-annotation-id")
+        || item.element.hasAttribute("data-ns-relationship-id");
+      const isMajorAnalytical = /(?:synthesis|summary|decision|recommendation|takeaway|trade[-_ ]?off|insight|conclusion|implication|comparison[-_ ]?axis)/.test(id + " " + role)
+        || item.element.hasAttribute("data-ns-major-region")
+        || ["synthesis", "decision", "recommendation", "takeaway", "conclusion"].includes(role);
+      if (isMajorAnalytical && item.element.tagName !== "FIGCAPTION" && !item.element.hasAttribute("data-ns-evidence-caption")) {
+        majorAnalyticalItems.push(item);
+      }
+      if (!isSynthetic || item.element.tagName === "FIGCAPTION" || item.element.hasAttribute("data-ns-evidence-caption")) continue;
+      for (const evidenceRect of evidenceRects) {
+        const overlapArea = rectIntersectionArea(item.rect, evidenceRect);
+        const ownArea = Math.max(1, item.rect.width * item.rect.height);
+        if (overlapArea / ownArea > 0.12) {
+          unsafeEvidenceOverlayIds.push(item.id || "synthetic-overlay");
+          break;
+        }
+      }
+    }
+    const incoherentMajorRegionIds = [];
+    for (const item of majorAnalyticalItems) {
+      const ownArea = Math.max(1, item.rect.width * item.rect.height);
+      for (const evidenceRect of evidenceRects) {
+        const overlapArea = rectIntersectionArea(item.rect, evidenceRect);
+        const evidenceArea = Math.max(1, evidenceRect.width * evidenceRect.height);
+        if (overlapArea / ownArea > 0.08 || overlapArea / evidenceArea > 0.10) {
+          incoherentMajorRegionIds.push(item.id || "major-analytical-region");
+          break;
+        }
+      }
+    }
+    const majorRegionCollisionPairs = [];
+    for (let index = 0; index < majorAnalyticalItems.length; index += 1) {
+      for (let otherIndex = index + 1; otherIndex < majorAnalyticalItems.length; otherIndex += 1) {
+        const first = majorAnalyticalItems[index];
+        const second = majorAnalyticalItems[otherIndex];
+        if (first.element.contains(second.element) || second.element.contains(first.element)) continue;
+        const overlapArea = rectIntersectionArea(first.rect, second.rect);
+        const smallerArea = Math.max(1, Math.min(first.rect.width * first.rect.height, second.rect.width * second.rect.height));
+        if (overlapArea / smallerArea > 0.16) {
+          majorRegionCollisionPairs.push([first.id || "major-region", second.id || "major-region"]);
+        }
+      }
+    }
+    const singletonRoleOwners = new Map();
+    for (const item of semantic) {
+      const role = singletonRoleForElement(item.element);
+      if (!role) continue;
+      const owners = singletonRoleOwners.get(role) || [];
+      owners.push(item.id || role);
+      singletonRoleOwners.set(role, owners);
+    }
+    const duplicateSingletonRoles = Array.from(singletonRoleOwners.entries())
+      .filter(([, owners]) => owners.length > 1)
+      .map(([role, owners]) => ({ role, owners }));
+    if (!semantic.length) return {
+      occupiedWidthRatio: 0,
+      occupiedHeightRatio: 0,
+      centroidXRatio: .5,
+      centroidYRatio: .5,
+      evidenceCount: evidenceRects.length,
+      evidenceArea: evidenceRects.reduce((sum, rect) => sum + rect.width * rect.height, 0),
+      unsafeEvidenceOverlayIds,
+      incoherentMajorRegionIds: Array.from(new Set(incoherentMajorRegionIds)),
+      majorRegionCollisionPairs,
+      outOfBoundsNodeIds: [],
+      overflowDetails: [],
+      clippedSemanticNodeIds: [],
+      rootOriginOffset: { x: rootRect.left, y: rootRect.top },
+      comparisonEntityCount: root.querySelectorAll("[data-ns-flow-id], [data-ns-comparison-entity]").length,
+      declaredStructureFailures: [],
+      duplicateSingletonRoles,
+      contentBounds: { left: rootRect.left, top: rootRect.top, right: rootRect.right, bottom: rootRect.bottom },
+    };
+    const left = Math.min(...semantic.map((item) => item.rect.left));
+    const right = Math.max(...semantic.map((item) => item.rect.right));
+    const top = Math.min(...semantic.map((item) => item.rect.top));
+    const bottom = Math.max(...semantic.map((item) => item.rect.bottom));
+    const containmentTolerance = 4;
+    const toRootLocalRect = (rect) => ({
+      left: rect.left - rootRect.left,
+      top: rect.top - rootRect.top,
+      right: rect.right - rootRect.left,
+      bottom: rect.bottom - rootRect.top,
+      width: rect.width,
+      height: rect.height,
+    });
+    const rootLocalBounds = { left: 0, top: 0, right: rootRect.width, bottom: rootRect.height };
+    const meaningfulChildrenInside = (item) => {
+      if (item.geometryRole === "content") return false;
+      const children = Array.from(item.element.querySelectorAll("[data-ns-node-id]"))
+        .filter((child) => classifySemanticGeometryRole(child) === "content")
+        .map((child) => toRootLocalRect(child.getBoundingClientRect()))
+        .filter((rect) => rect.width > 1 && rect.height > 1);
+      return children.length > 0 && children.every((rect) => rect.left >= rootLocalBounds.left - containmentTolerance
+        && rect.top >= rootLocalBounds.top - containmentTolerance
+        && rect.right <= rootLocalBounds.right + containmentTolerance
+        && rect.bottom <= rootLocalBounds.bottom + containmentTolerance);
+    };
+    const overflowDetails = semantic
+      .map((item) => {
+        const rect = toRootLocalRect(item.rect);
+        const overflow = {
+          left: Math.max(0, rootLocalBounds.left - rect.left),
+          top: Math.max(0, rootLocalBounds.top - rect.top),
+          right: Math.max(0, rect.right - rootLocalBounds.right),
+          bottom: Math.max(0, rect.bottom - rootLocalBounds.bottom),
+        };
+        const maxOverflow = Math.max(overflow.left, overflow.top, overflow.right, overflow.bottom);
+        if (maxOverflow <= containmentTolerance) return null;
+        if ((item.geometryRole === "structural" || item.geometryRole === "decorative") && meaningfulChildrenInside(item)) return null;
+        return { id: item.id || "semantic-node", geometryRole: item.geometryRole, overflow };
+      })
+      .filter(Boolean);
+    const outOfBoundsNodeIds = overflowDetails.map((item) => item.id);
+    const clippedSemanticNodeIds = semantic
+      .filter((item) => {
+        let ancestor = item.element.parentElement;
+        while (ancestor && ancestor !== root) {
+          const style = getComputedStyle(ancestor);
+          const clipsX = ["hidden", "clip"].includes(style.overflowX);
+          const clipsY = ["hidden", "clip"].includes(style.overflowY);
+          if (clipsX || clipsY) {
+            const ancestorRect = ancestor.getBoundingClientRect();
+            if ((clipsX && (item.rect.left < ancestorRect.left - 1 || item.rect.right > ancestorRect.right + 1))
+              || (clipsY && (item.rect.top < ancestorRect.top - 1 || item.rect.bottom > ancestorRect.bottom + 1))) return true;
+          }
+          ancestor = ancestor.parentElement;
+        }
+        return false;
+      })
+      .map((item) => item.id || "semantic-node");
+    const comparisonEntityCount = root.querySelectorAll("[data-ns-flow-id], [data-ns-comparison-entity]").length;
+    const currentActText = (root.querySelector('[data-ns-node-id="current-act-text"]')?.textContent || "").toLowerCase();
+    const declaredStructureFailures = [];
+    if (/implemented|completed|finalized/.test(currentActText)) {
+      if (/spine/.test(currentActText) && !root.querySelector('[data-ns-node-id*="spine"], [data-ns-role="spine"], [data-ns-comparison-axis]')) declaredStructureFailures.push("declared-spine-not-visible");
+      if (/comparison/.test(currentActText) && comparisonEntityCount < 2) declaredStructureFailures.push("declared-comparison-incomplete");
+    }
+    const weightedArea = semantic.reduce((sum, item) => sum + Math.max(1, item.rect.width * item.rect.height), 0);
+    const centroidX = semantic.reduce((sum, item) => sum + (item.rect.left + item.rect.width / 2) * Math.max(1, item.rect.width * item.rect.height), 0) / weightedArea;
+    const centroidY = semantic.reduce((sum, item) => sum + (item.rect.top + item.rect.height / 2) * Math.max(1, item.rect.width * item.rect.height), 0) / weightedArea;
+    return {
+      occupiedWidthRatio: Math.max(0, Math.min(1, (right - left) / Math.max(1, rootRect.width))),
+      occupiedHeightRatio: Math.max(0, Math.min(1, (bottom - top) / Math.max(1, rootRect.height))),
+      centroidXRatio: Math.max(0, Math.min(1, (centroidX - rootRect.left) / Math.max(1, rootRect.width))),
+      centroidYRatio: Math.max(0, Math.min(1, (centroidY - rootRect.top) / Math.max(1, rootRect.height))),
+      evidenceCount: evidenceRects.length,
+      evidenceArea: evidenceRects.reduce((sum, rect) => sum + rect.width * rect.height, 0),
+      unsafeEvidenceOverlayIds: Array.from(new Set(unsafeEvidenceOverlayIds)),
+      incoherentMajorRegionIds: Array.from(new Set(incoherentMajorRegionIds)),
+      majorRegionCollisionPairs,
+      outOfBoundsNodeIds: Array.from(new Set(outOfBoundsNodeIds)),
+      overflowDetails,
+      clippedSemanticNodeIds: Array.from(new Set(clippedSemanticNodeIds)),
+      rootOriginOffset: { x: rootRect.left, y: rootRect.top },
+      comparisonEntityCount,
+      declaredStructureFailures,
+      duplicateSingletonRoles,
+      contentBounds: { left, top, right, bottom },
+    };
+  };
+  const visualSafetyFailure = (before, after) => {
+    if (after.duplicateSingletonRoles?.length) {
+      return "Canonical artboard role uniqueness failed; duplicate singleton regions were present: " + after.duplicateSingletonRoles.map((entry) => entry.role + " [" + entry.owners.join(", ") + "]").join("; ");
+    }
+    if (after.unsafeEvidenceOverlayIds.length) {
+      return "Synthetic annotation overlapped a protected evidence screenshot: " + after.unsafeEvidenceOverlayIds.join(", ");
+    }
+    if (after.incoherentMajorRegionIds?.length) {
+      return "A major analytical region overlapped grounded evidence instead of receiving a complete atomic reflow: " + after.incoherentMajorRegionIds.join(", ");
+    }
+    if (after.majorRegionCollisionPairs?.length) {
+      return "Major analytical regions collided in the visible composition: " + after.majorRegionCollisionPairs.map((pair) => pair.join(" ↔ ")).join(", ");
+    }
+    if (after.outOfBoundsNodeIds?.length) {
+      const detail = (after.overflowDetails || []).slice(0, 6).map((item) => {
+        const directions = Object.entries(item.overflow)
+          .filter(([, value]) => value > 4)
+          .map(([direction, value]) => direction + " " + Math.ceil(value) + "px")
+          .join("/");
+        return item.id + (directions ? " (" + directions + ")" : "");
+      });
+      return "Whole-artboard containment failed; meaningful content extended beyond the rendered root: " + (detail.length ? detail.join(", ") : after.outOfBoundsNodeIds.slice(0, 8).join(", "));
+    }
+    if (after.clippedSemanticNodeIds?.length) {
+      return "Whole-artboard clipping failed; meaningful nodes were clipped by an ancestor: " + after.clippedSemanticNodeIds.slice(0, 8).join(", ");
+    }
+    if (after.declaredStructureFailures?.length) {
+      return "The working status claimed a completed structure that was not fully visible: " + after.declaredStructureFailures.join(", ");
+    }
+    if (before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
+      return "Comparison completeness failed; a required comparison entity or evidence lane disappeared.";
+    }
+    const excessiveVerticalVoid = after.occupiedHeightRatio < .42 && after.occupiedWidthRatio > .55 && after.centroidYRatio < .42;
+    const excessiveHorizontalVoid = after.occupiedWidthRatio < .48 && after.occupiedHeightRatio > .42;
+    if (excessiveVerticalVoid || excessiveHorizontalVoid) {
+      return "Whole-artboard utilization failed; the visible composition occupied only a thin strip and left disproportionate empty space.";
+    }
+    const widthCollapsed = before.occupiedWidthRatio >= .52 && after.occupiedWidthRatio < Math.max(.28, before.occupiedWidthRatio * .58);
+    const heightCollapsed = before.occupiedHeightRatio >= .45 && after.occupiedHeightRatio < Math.max(.24, before.occupiedHeightRatio * .55);
+    const edgeCollapsed = after.occupiedWidthRatio < .46 && (after.centroidXRatio < .22 || after.centroidXRatio > .78);
+    const evidenceDestroyed = before.evidenceCount >= 4 && after.evidenceCount < Math.ceil(before.evidenceCount * .35) && after.evidenceArea < before.evidenceArea * .28;
+    if (widthCollapsed || heightCollapsed || edgeCollapsed) return "The proposed recomposition collapsed meaningful content into an unsafe edge-weighted or mostly empty layout.";
+    if (evidenceDestroyed) return "The proposed recomposition removed or collapsed too much grounded evidence at once.";
+    return "";
   };
   const captureStyleState = () => new Map(Array.from(document.querySelectorAll('style[id^="northstar-mutation-style-"]')).map((style) => [style.id, style.textContent || ""]));
   const restoreStyleState = (state) => {
@@ -346,6 +1038,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       mutationId: currentMutationId,
       beforeSnapshot: semanticSnapshot(),
       beforeBounds: getContentBounds(),
+      beforeVisualSafety: visualSafetySnapshot(),
     };
     if (batch.geometryIntent === "contract-after-refinement" || batch.geometryIntent === "recompose") {
       requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
@@ -368,11 +1061,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         revisionId: currentRevisionId,
         visibleChange: batch.visibleChange,
         proposal,
+        pendingSince: Date.now(),
       };
     } else {
       appliedMutationIds.add(batch.mutationId);
     }
+    // The complete live DOM is the size authority. Report immediately after the
+    // mutation and again throughout the transition so the outer Canvas frame can
+    // follow every visible reflow before acknowledgement or commit.
     queueContentSize();
+    const transitionWindow = Math.max(120, Math.min(1400, Number(batch.transitionMs) || 320));
+    [0, 40, 90, 160, 260, 420, 700, transitionWindow].forEach((delay) => {
+      window.setTimeout(queueContentSize, delay);
+    });
   };
 
   const processQueue = async () => {
@@ -403,6 +1104,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     let minX = Math.min(0, requestedBounds.minX), minY = Math.min(0, requestedBounds.minY);
     let maxX = Math.max(MINIMUM_WIDTH, requestedBounds.maxX), maxY = Math.max(MINIMUM_HEIGHT, requestedBounds.maxY);
     [root, ...root.querySelectorAll("*")].forEach((element) => {
+      if (element !== root && element.closest("[data-ns-spatial-system]")) return;
       const style = getComputedStyle(element);
       if (style.display === "none" || style.visibility === "hidden") return;
       const rect = element.getBoundingClientRect();
@@ -412,12 +1114,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       maxX = Math.max(maxX, rect.right - rootRect.left, left + (element.scrollWidth || 0));
       maxY = Math.max(maxY, rect.bottom - rootRect.top, top + (element.scrollHeight || 0));
     });
+    minX = Math.min(minX, spatialBounds.minX);
+    minY = Math.min(minY, spatialBounds.minY);
+    maxX = Math.max(maxX, spatialBounds.maxX);
+    maxY = Math.max(maxY, spatialBounds.maxY);
     minX = Math.floor(minX); minY = Math.floor(minY); maxX = Math.ceil(maxX); maxY = Math.ceil(maxY);
     return { minX, minY, maxX, maxY, width: Math.max(MINIMUM_WIDTH, maxX - minX), height: Math.max(MINIMUM_HEIGHT, maxY - minY) };
   };
 
   const audit = () => {
-    const elements = Array.from(root.querySelectorAll("*"));
+    const elements = Array.from(root.querySelectorAll("*")).filter((element) => !element.closest("[data-ns-spatial-system]"));
     let overflowElementCount = 0, clippedTextCount = 0, smallTextCount = 0, tinyInteractiveCount = 0, missingImageCount = 0, internalScrollElementCount = 0;
     elements.forEach((element) => {
       const style = getComputedStyle(element), rect = element.getBoundingClientRect();
@@ -440,6 +1146,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       rootWidth: bounds.width, rootHeight: bounds.height, elementCount: elements.length,
       stageRegionCount: stageRegions.length, visibleStageRegionCount: stageRegions.length,
       overflowElementCount, clippedTextCount, smallTextCount, tinyInteractiveCount, missingImageCount, documentScrollRisk,
+      spatialAudit: lastSpatialAudit || emptySpatialAudit(),
+      spatialSnapshot: {
+        artifactId: ARTIFACT_ID,
+        revisionId: currentRevisionId,
+        mutationId: currentMutationId,
+        measuredAt: new Date().toISOString(),
+        layoutVersion: spatialLayoutVersion,
+        artboardBounds: { x: bounds.minX, y: bounds.minY, width: bounds.width, height: bounds.height, right: bounds.maxX, bottom: bounds.maxY },
+        audit: lastSpatialAudit || emptySpatialAudit(),
+      },
       summary: issueCount ? "Live artboard audit detected " + issueCount + " potential visual issues for the next micro-adjustment." : "Live artboard audit passed.",
     };
     parent.postMessage({ type: "northstar.artifact.runtime-review", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, review }, "*");
@@ -448,12 +1164,40 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   let sizeFrame = 0, lastSignature = "", stableCount = 0, sequence = 0, initialReady = false;
   const reportContentSize = () => {
+    solveSpatialSystem();
     const bounds = getContentBounds(), signature = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].join(":");
     stableCount = signature === lastSignature ? stableCount + 1 : 1; lastSignature = signature; sequence += 1;
     stageSurface.style.width = bounds.width + "px"; stageSurface.style.height = bounds.height + "px";
     origin.style.transform = "translate(" + (-bounds.minX) + "px," + (-bounds.minY) + "px)";
-    const settled = document.readyState === "complete" && (!document.fonts || document.fonts.status === "loaded") && Array.from(document.images).every((image) => image.complete) && stableCount >= 2;
-    const size = { artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, measuredAt: new Date().toISOString(), intrinsicWidth: bounds.width, intrinsicHeight: bounds.height, contentBounds: { minX: bounds.minX, minY: bounds.minY, maxX: bounds.maxX, maxY: bounds.maxY }, sequence, settled };
+    const resourcesSettled =
+      document.readyState === "complete" &&
+      (!document.fonts || document.fonts.status === "loaded") &&
+      Array.from(document.images).every((image) => image.complete);
+    const pendingAge = pendingAcknowledgement ? Date.now() - (pendingAcknowledgement.pendingSince || Date.now()) : 0;
+    const settled = resourcesSettled && (stableCount >= 3 || pendingAge >= 10_000);
+    const verifiedDocumentWidth = Math.max(bounds.width, root.scrollWidth, root.getBoundingClientRect().width);
+    const verifiedDocumentHeight = Math.max(bounds.height, root.scrollHeight, root.getBoundingClientRect().height);
+    const size = {
+      artifactId: ARTIFACT_ID,
+      surfaceId: SURFACE_ID,
+      revisionId: currentRevisionId,
+      mutationId: currentMutationId,
+      measuredAt: new Date().toISOString(),
+      intrinsicWidth: Math.ceil(verifiedDocumentWidth),
+      intrinsicHeight: Math.ceil(verifiedDocumentHeight),
+      contentBounds: {
+        minX: bounds.minX,
+        minY: bounds.minY,
+        maxX: Math.max(bounds.maxX, bounds.minX + verifiedDocumentWidth),
+        maxY: Math.max(bounds.maxY, bounds.minY + verifiedDocumentHeight),
+      },
+      // sequence is monotonic for the lifetime of the mounted iframe. The host and
+      // workspace use it as the live-layout clock, independent of proposal commit.
+      sequence,
+      layoutVersion: sequence,
+      settled,
+      live: true,
+    };
     parent.postMessage({ type: "northstar.artifact.content-size", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, size }, "*");
     if (settled) {
       const review = audit();
@@ -477,8 +1221,21 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const missingRequiredKinds = requiredKinds.filter(
           (kind) => kind !== "geometry" && !changeKinds.includes(kind),
         );
-        const hardIssues = review.overflowElementCount + review.clippedTextCount + review.missingImageCount + (review.documentScrollRisk ? 1 : 0);
-        const rejectedReason = missingAssets.length
+        const spatialMutation = acknowledgement.batch.operations.some((operation) =>
+          (operation.op === "insert-html" || operation.op === "set-html")
+          && /data-ns-(?:annotation-id|relationship-id)/i.test(operation.html || "")
+        );
+        const hardIssues =
+          review.overflowElementCount +
+          review.clippedTextCount +
+          review.missingImageCount +
+          (review.documentScrollRisk ? 1 : 0) +
+          (spatialMutation ? (review.spatialAudit?.hardFailureCount || 0) : 0);
+        const afterVisualSafety = visualSafetySnapshot();
+        const visualSafetyReason = visualSafetyFailure(acknowledgement.transaction.beforeVisualSafety || afterVisualSafety, afterVisualSafety);
+        const rejectedReason = visualSafetyReason
+          ? visualSafetyReason
+          : missingAssets.length
           ? "Required evidence assets did not load: " + missingAssets.join(", ")
           : diff.meaningful.length < minimumMeaningful
             ? "The proposed adjustment did not visibly change enough semantic content."
@@ -521,6 +1278,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         } else {
           pendingAcknowledgement = null;
           appliedMutationIds.add(acknowledgement.mutationId);
+          // request-space is provisional room for composing the mutation. Once
+          // the browser has measured the accepted visible result, actual content
+          // and resolved spatial extents become the sole sizing authority.
+          requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
           const changedRects = diff.meaningful.map((id) => nodeById(id)?.getBoundingClientRect()).filter(Boolean);
           const rootRect = root.getBoundingClientRect();
           const changedBounds = changedRects.length ? {
@@ -550,13 +1311,22 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             missingAssetUrls: [],
             snapshot: captureLiveSnapshot(),
           }, "*");
+          queueContentSize();
         }
       }
     }
   };
   const queueContentSize = () => { cancelAnimationFrame(sizeFrame); sizeFrame = requestAnimationFrame(() => requestAnimationFrame(reportContentSize)); };
 
-  const observer = new MutationObserver(() => { enforceAssetPolicy(root); queueContentSize(); });
+  const observer = new MutationObserver((records) => {
+    const externalChange = records.some((record) => {
+      const target = record.target instanceof Element ? record.target : record.target.parentElement;
+      return !target?.closest?.("[data-ns-spatial-system]");
+    });
+    if (!externalChange) return;
+    enforceAssetPolicy(root);
+    queueContentSize();
+  });
   observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
   new ResizeObserver(queueContentSize).observe(root);
   document.addEventListener("load", queueContentSize, true);

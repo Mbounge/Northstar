@@ -1,5 +1,6 @@
+// Northstar Canvas Workspace v0.5.4.2 — live-DOM-authoritative artboard sizing on every layout change
 // components/canvas/north-star-canvas-workspace.tsx
-// Northstar Canvas v0.4.8 — one living artboard, continuous semantic mutations, exact geometry after every move.
+// Northstar Canvas v0.5.2.4 — one living artboard, continuous semantic mutations, exact geometry after every move.
 // Legacy Shapes Atlas remains available for humans until the Patch 4 cutover
 
 "use client";
@@ -14653,14 +14654,13 @@ export function NorthStarCanvasWorkspace({
                   beginObjectMoveAtPoint(object, { clientX, clientY });
                 }}
                 onArtifactContentSize={(size) => {
-                  const sequenceKey = `${size.artifactId}:${size.revisionId}:${size.mutationId ?? "revision"}`;
+                  // One monotonic live-layout clock per mounted artifact. Revision and
+                  // mutation identity govern data commits, but never gate visual sizing.
+                  const sequenceKey = size.artifactId;
                   const previousSequence = artifactContentSizeSequenceRef.current.get(sequenceKey) ?? -1;
                   const nextSequence = size.sequence ?? previousSequence + 1;
                   if (nextSequence < previousSequence) return;
                   artifactContentSizeSequenceRef.current.set(sequenceKey, nextSequence);
-                  // The browser is the geometry authority. Never commit transient font/image-load
-                  // measurements to the Canvas object; only settled mutation acknowledgements move it.
-                  if (!size.settled) return;
 
                   const current = objectsRef.current;
                   // TypeScript does not propagate assignments made inside Array.map callbacks
@@ -14676,12 +14676,10 @@ export function NorthStarCanvasWorkspace({
                     if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
                       return candidate;
                     }
-                    const latestMutationId = candidate.codeArtifact.mutationJournal?.at(-1)?.mutationId;
-                    const matchesRevision = candidate.codeArtifact.revisionId === size.revisionId;
-                    const matchesLatestMutation = Boolean(size.mutationId && latestMutationId === size.mutationId);
-                    if (!matchesRevision && !matchesLatestMutation) {
-                      return candidate;
-                    }
+                    // The current live DOM may be provisional, committed, rolling back,
+                    // loading assets, or animating. If it belongs to this mounted artifact,
+                    // its complete bounds are authoritative for the visible Canvas object.
+                    if (candidate.codeArtifact.artifactId !== size.artifactId) return candidate;
 
                     const previousIntrinsicWidth = Math.max(
                       1,
@@ -14710,6 +14708,15 @@ export function NorthStarCanvasWorkspace({
                       maxX: previousBounds.minX + Math.max(1, size.intrinsicWidth),
                       maxY: previousBounds.minY + Math.max(1, size.intrinsicHeight),
                     };
+                    const reportedWidth = Math.max(1, reportedBounds.maxX - reportedBounds.minX);
+                    const reportedHeight = Math.max(1, reportedBounds.maxY - reportedBounds.minY);
+                    // Reject viewport/self-measurement echoes. A single settled report must not
+                    // inflate an artboard by orders of magnitude or preserve blank viewport bands.
+                    if (
+                      reportedWidth > 24000 || reportedHeight > 24000 ||
+                      reportedWidth > previousIntrinsicWidth * 6 ||
+                      reportedHeight > Math.max(previousIntrinsicHeight * 6, 12000)
+                    ) return candidate;
                     const clampedReportedBounds = {
                       minX: Math.max(-24000, Math.min(24000, Math.floor(reportedBounds.minX))),
                       minY: Math.max(-24000, Math.min(24000, Math.floor(reportedBounds.minY))),
@@ -14717,10 +14724,9 @@ export function NorthStarCanvasWorkspace({
                       maxY: Math.max(-24000, Math.min(24000, Math.ceil(reportedBounds.maxY))),
                     };
 
-                    // Geometry is part of every live design move. While a mutation is still
-                    // settling, preserve the union to avoid image/font-load flicker. As soon as the
-                    // runtime reports a settled surface, adopt its exact bounds — including legitimate
-                    // contraction or origin shifts created by recomposition.
+                    // Geometry follows the complete live DOM immediately. A later reflow,
+                    // rollback, image load, font load, or publication cleanup simply emits a
+                    // newer sequence and moves the same object to the new exact bounds.
                     const targetBounds = clampedReportedBounds;
                     const targetIntrinsicWidth = Math.max(
                       candidate.codeArtifact.minimumWidth,

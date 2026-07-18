@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-creative-intelligence.ts
 // Northstar Creative Design Intelligence v0.4.4 — eight-reference identity conditioning, composition genomes, anti-template selection, and rendered originality review
 import { createHash, randomUUID } from "node:crypto";
 import {

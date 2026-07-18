@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-artboard-actor.ts
 // Northstar v0.4.9.0 — single-owner actor for one browser-authoritative living artboard.
 import type {
   NorthstarArtifactMutationAcknowledgement,

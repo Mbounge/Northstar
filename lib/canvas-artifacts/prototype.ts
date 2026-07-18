@@ -1,3 +1,4 @@
+//lib/canvas-artifacts/prototype.ts
 import {
   NORTHSTAR_CODE_ARTIFACT_SCHEMA,
   type CanvasCodeArtifactPayload,

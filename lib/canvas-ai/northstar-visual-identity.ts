@@ -1,3 +1,4 @@
+//lib/canvas-ai/northstar-visual-identity.ts
 // Northstar Visual Identity v0.4.4 — the eight-reference few-shot philosophy.
 // This module deliberately defines taste and communication principles, not layouts or components.
 
