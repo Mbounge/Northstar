@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-design-intelligence.ts
-// Northstar Design Intelligence v0.6.0 — universal model-led visual reasoning, Northstar taste, and non-template composition intelligence
+// Northstar Design Intelligence v0.6.4.0 — universal model-led visual reasoning, Northstar taste, and non-template composition intelligence
 import { createHash, randomUUID } from "node:crypto";
 import type {
   CanvasCodeArtifactRuntimeReview,
@@ -14,7 +14,7 @@ import type {
 } from "@/lib/canvas-artifacts/types";
 
 
-export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.6.0" as const;
+export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.6.4.0" as const;
 
 export const NORTHSTAR_VISUAL_IDENTITY = `
 NORTHSTAR VISUAL IDENTITY — TASTE, NOT TEMPLATES
@@ -33,7 +33,7 @@ Learn the constants shared across the references:
 
 Do not learn accidental similarities as rules: fixed rails, matrices, screenshot cards, recommendation banners, card grids, or one standard dashboard skeleton.
 
-A successful artifact feels unmistakably Northstar while being structurally original for the exact problem. Concept studies are private design reasoning; the single visible artboard evolves continuously and is never replaced by study markup.
+A successful artifact feels unmistakably Northstar while being structurally original for the exact problem. Full private artboards are forbidden. Alternative ideas exist only as provisional reasoning until they are tested through visible, reversible moves on the one canonical living artboard.
 `.trim();
 
 export const NORTHSTAR_FLOW_REFERENCE_PROTOCOL = `
@@ -71,7 +71,7 @@ Automatic failures:
 - repeated screenshot rows + matrix + insight cards + recommendation as a universal formula
 - generic dashboard or card grid chosen because no stronger visual idea exists
 - a stated metaphor absent from the rendered pixels
-- selecting a concept from prose without comparing rendered concept studies
+- declaring a concept victorious before its consequential moves have been visibly tested and browser-verified on the canonical artboard
 `.trim();
 
 export const NORTHSTAR_PRESENTATION_QUALITY_PROTOCOL = `
@@ -145,6 +145,42 @@ When comparing unequal sequences, systems, cohorts, strategies, or timelines:
 Use explanatory copy to sharpen meaning, never to compensate for a visually neutral composition. Mentally remove the title, summary paragraph, stage labels, and captions: the main hierarchy, tension, transformation, or decision should still be perceptible.
 `.trim();
 
+export const NORTHSTAR_SURFACE_FIRST_EDITORIAL_PROTOCOL = `
+SURFACE-FIRST EDITORIAL PROTOCOL
+
+Treat the natural artboard surface as the default visual material. Begin with typography, evidence, spacing, alignment, scale, rhythm, and negative space.
+
+A card, panel, pill, filled region, border, or rounded container must earn its place by solving a specific clarity, grouping, focus, legibility, temporary-state, or material-metaphor problem. Never containerize every region by default.
+
+Prefer direct evidence presentation. Screenshots, diagrams, and labels should usually sit cleanly on the surface with restrained shadows, fine rules, and deliberate spacing.
+
+Use the least visually heavy treatment that communicates a working thought. A thought can be a margin note, pinned fragment, screenshot crop, typographic interruption, underline, proof mark, confidence signal, or compact annotation. A card is only one option.
+
+Keep the hero title concise: normally 3–8 words and no more than two lines. Move nuance into a subtitle. Avoid colon-heavy titles and repeated entity names when identity is already obvious.
+
+Publication is subtraction. Remove temporary fills, working-state borders, process copy, current-focus treatments, redundant notes, and unjustified containers. The final artifact should feel lighter than the working state.
+
+Penalize dashboard resemblance, repeated rounded rectangles, generic card grids, labels rendered as pills without semantic purpose, and multiple equally weighted framed sections. Reward open-surface composition, purposeful whitespace, direct evidence, selective framing, coherent material language, and one memorable spatial idea.
+
+Do not translate concept names literally into generic diagrams. Make the intended argument materially visible in pixels.
+
+Completion is a first-class design requirement. If the artifact contains a comparative synthesis, closing implication, recommendation, or decision region, those regions must end in a visibly authored state rather than an empty lane, placeholder strip, or confusing half-built scaffold.
+
+DYNAMIC COMPOSITION AND VISUAL RELATIONSHIP CONTRACT
+
+Northstar owns the composition. Do not hardcode a preferred orientation, chart type, diagram family, title formula, or analytical medium for a request. Repeated runs may resolve the same grounded evidence through materially different visual arguments.
+
+Preserve the strongest current evidence topology unless a different topology creates a demonstrably clearer viewer transformation. A radical change to reading direction, evidence orientation, density, scale, or artboard aspect ratio must be justified by the exact evidence and must outperform the current composition in a rendered comparison. Never infer geometry literally from a concept name.
+
+Make reasoning visible in pixels. When the evidence supports it, the model may invent bespoke charts, tables, matrices, maps, axes, brackets, pathways, causal diagrams, relationship webs, connectors, annotations, or new visual forms. These are capabilities, not required components. Every relationship graphic must connect exact semantic endpoints and reveal a real analytical claim.
+
+The user must be able to watch Northstar think through meaningful visible updates on the same artboard. Prefer cumulative semantic changes, explicit evolving/resolved states, and honest restoration over hidden parallel rendering or sudden replacement.
+
+Low thinking reduces the number of alternatives and critique passes, not the quality floor. It must preserve evidence legibility, coherent hierarchy, orientation judgment, container restraint, visual relationships, and publication cleanup.
+
+Use the least visually heavy treatment that still makes the insight unmistakable. Avoid habitual highlighter stripes, generic yellow notes, repeated cards, and interface-like furniture unless the chosen art direction specifically earns them.
+`.trim();
+
 export const NORTHSTAR_DESIGN_BEHAVIOUR_ADDENDUM = [
   NORTHSTAR_VISUAL_IDENTITY,
   NORTHSTAR_FLOW_REFERENCE_PROTOCOL,
@@ -152,6 +188,7 @@ export const NORTHSTAR_DESIGN_BEHAVIOUR_ADDENDUM = [
   NORTHSTAR_PRESENTATION_QUALITY_PROTOCOL,
   NORTHSTAR_UNIVERSAL_CREATIVE_REASONING_PROTOCOL,
   NORTHSTAR_THESIS_TO_PIXELS_PROTOCOL,
+  NORTHSTAR_SURFACE_FIRST_EDITORIAL_PROTOCOL,
 ].join("\n\n");
 
 export function buildNorthstarDesignBehaviorAddendum(): string {
@@ -252,9 +289,12 @@ Think like an exceptional editorial product designer:
 - verify that the focal event, evidence roles, comparison basis, and signature execution are visible in the exact current pixels
 - do not repeat the previous move, reinsert an existing node, or merely rewrite progress copy
 - do not stop while the surface is still an evidence dump, visually generic, sparse, unreadable, repetitive, or below premium editorial craft
+- do not stop while synthesis, implication, recommendation, or decision areas are visually unfinished, confusing, placeholder-like, or spatially detached from their evidence
 - before stopping, remove unexplained marks, redundant cards, repeated messages, weak decorations, and anything that does not improve comprehension within three seconds
 
-Set continueDesigning=false only when the current exact surface is genuinely resolved at the reference-quality bar and no important visual improvement remains. Return only JSON.
+Every move is one visible reversible transaction on the canonical artboard: creative thesis, affected semantic regions, rollback authority, operations, required geometry, and publication consequences must agree before it is proposed. Never rely on a later repair pass to make the current move fit. If the current artboard cannot safely support the intended move, choose a different topology, subtraction, compression, or explicit geometry expansion in the same revision.
+
+Set continueDesigning=false only when the current canonical surface is genuinely resolved and no blocking obligation or rejected required transaction remains. A comparative board is not resolved while its synthesis or closing implication remains empty, confusing, clipped, or visibly provisional. Do not continue merely to satisfy an iteration quota. Return only JSON.
 `.trim();
 }
 
@@ -264,9 +304,9 @@ export function sanitizeNorthstarDynamicDesignMove(
 ): NorthstarDynamicDesignMoveDraft {
   const recent = new Set(input.recentLabels.map((label) => label.toLowerCase()));
   const label = cleanText(value?.label, 120) || `Refine the living composition ${input.moveIndex + 1}`;
-  const continueDesigning = input.moveIndex < input.minimumMoves ? true : Boolean(value?.continueDesigning);
+  let continueDesigning = Boolean(value?.continueDesigning);
   if (continueDesigning && recent.has(label.toLowerCase())) {
-    throw new Error("The dynamic design move repeats a recent artistic decision.");
+    continueDesigning = false;
   }
   return {
     continueDesigning,
@@ -776,6 +816,7 @@ export function buildNorthstarProgressiveDesignActs(input: {
       "Reveal the emerging synthesis inside the existing visual grammar. Add or reshape the synthesis region without bolting on a generic summary panel.",
       [
         "The synthesis follows naturally from visible evidence.",
+        "The synthesis reads as a finished analytical result rather than an empty lane or disconnected headings.",
         "The artboard expands or recomposes at readable scale when the synthesis needs room.",
       ],
     ),
@@ -788,6 +829,7 @@ export function buildNorthstarProgressiveDesignActs(input: {
         : "Resolve the visual story into a concise implication and next understanding without inventing a recommendation.",
       [
         "The conclusion is useful, grounded, and visually integrated.",
+        "The implication / decision region reaches a visibly finished state on the same artboard.",
         "No separate final page or final render is introduced.",
       ],
     ),
@@ -1442,3 +1484,6 @@ function synthesizeThesis(objective: string): string {
   if (!clean) return "The evidence reveals a clearer decision.";
   return clean.length <= 140 ? clean : `${clean.slice(0, 137).trimEnd()}…`;
 }
+
+
+export const NORTHSTAR_V064_CANONICAL_SETTLEMENT_PROTOCOL = `All reasoning, activity, completion, and publication decisions must read the exact materialized browser-visible canonical scene. Process thoughts live together in one reasoning zone, identity status must advance with committed execution state, and every transaction must settle as committed, restored, or unresolved before another blocking obligation begins.`.trim();

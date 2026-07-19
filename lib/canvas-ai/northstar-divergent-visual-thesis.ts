@@ -1,4 +1,4 @@
-// Northstar v0.6.0 — universal LLM-originated visual thesis and composition-genome contract.
+// Northstar v0.6.4.0 — universal LLM-originated visual thesis, completion closure, and composition-genome contract.
 // Principles and evaluation language only: no style, medium, topology, or template catalog.
 
 import type {
@@ -6,6 +6,19 @@ import type {
   NorthstarGeneratedCodeArtifactPackage,
 } from "@/lib/canvas-artifacts/types";
 
+
+const SURFACE_FIRST_THESIS_RULES = `
+- Start from the open artboard surface, not a card or dashboard template.
+- Use containers only when they materially improve grouping, focus, legibility, temporary-state communication, or the governing visual metaphor.
+- Treat direct evidence, typography, spacing, and negative space as primary design tools.
+- Titles should normally be 3–8 words, visually balanced, and no more than two lines; put nuance in a subtitle.
+- Prefer one memorable compositional move over many framed regions.
+- The final publication should subtract working-state furniture and feel lighter than the process view.
+- Do not prescribe an orientation, topology, chart family, diagram type, or visual metaphor. The model must derive these from the exact viewer job and evidence.
+- A radical reorientation or aspect-ratio change is eligible only when its rendered pixels communicate the evidence more clearly than the current state.
+- Visual analysis may use bespoke charts, maps, matrices, connectors, relationship webs, axes, tables, diagrams, or newly invented forms when they materially reveal a grounded relationship. None is mandatory.
+- Repeated executions of the same prompt should preserve truth and legibility while producing materially different visual theses and signature moves.
+`;
 export type NorthstarUserVisualDirection = {
   requestedMedium?: string;
   requestedMood?: string;
@@ -120,7 +133,7 @@ For each thesis reason explicitly about:
 - neutralization risks that could flatten the thesis into a conventional layout;
 - risks to grounding, legibility, accessibility, and overstatement.
 
-Candidates must differ in the reasoning above. Different colors, card order, column count, or labels are not divergence.
+Candidates must differ in the reasoning above. They are provisional move theses, not parallel artboards. No candidate is a winner until its consequential behavior is visibly tested on the canonical surface. Different colors, card order, column count, or labels are not divergence.
 
 Do not derive creative form from artifactType, audience label, evidence type, number of apps, or keywords. Those inputs describe the assignment; they do not choose the design.
 
@@ -190,10 +203,14 @@ Evaluate independently:
 - visual meaning without explanatory copy;
 - signature execution traceability;
 - visible synthesis;
+- whether synthesis / implication regions are fully resolved rather than half-built or confusing;
 - required refinement level: polish, hierarchy, recomposition, or concept recovery.
 
 A clean conventional composition may score well on craft while failing visual argument, problem specificity, signature execution, or memorability. Do not accept it merely because it is polished.
 
-Originality is not decoration. A strong result discovers a memorable form that makes this exact request easier to understand, decide, remember, or imagine. Use critique to prescribe the next conceptual move without erasing a valid visible artifact.
+Originality is not decoration. A strong result discovers a memorable form that makes this exact request easier to understand, decide, remember, or imagine. Reject unfinished closure: an empty synthesis strip, detached comparative labels, or an unresolved decision lane is not an acceptable final state. Use critique to prescribe the next visible reversible move without erasing the last browser-verified artifact. The user should be able to understand the evolution from the artboard itself.
 `.trim();
 }
+
+
+export const NORTHSTAR_V064_VISIBLE_REASONING_RULE = `Explore on the one visible artboard. Keep process reasoning consolidated in the reasoning zone and never scatter task instructions through the evidence field.`.trim();

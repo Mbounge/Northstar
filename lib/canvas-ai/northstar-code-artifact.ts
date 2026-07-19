@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-code-artifact.ts
-// Northstar Visual Web Artifact Authoring v0.4.8.2 — one mounted surface, stable semantic evidence nodes, authoritative ordering, and reference-conditioned craft
+// Northstar Visual Web Artifact Authoring v0.6.4.0 — one mounted surface, stable semantic evidence nodes, authoritative ordering, and reference-conditioned craft
 import { Script } from "node:vm";
 import { createHash } from "node:crypto";
 import {
@@ -23,6 +23,10 @@ import {
 } from "@/lib/canvas-ai/northstar-artboard-mutations";
 import type { NorthstarCreativeCritiqueDraft, NorthstarProgressiveDesignAct } from "@/lib/canvas-ai/northstar-design-intelligence";
 import { renderNorthstarVisualSceneDocument, validateNorthstarVisualSceneDocument, type NorthstarVisualScenePlan } from "@/lib/canvas-ai/northstar-visual-scene-engine";
+import {
+  NORTHSTAR_CANONICAL_EVIDENCE_SCENE_VERSION,
+  buildCanonicalEvidenceOperations,
+} from "@/lib/canvas-ai/northstar-canonical-evidence-scene";
 import {
   NORTHSTAR_FLOW_REFERENCE_PROTOCOL,
   NORTHSTAR_ORIGINALITY_PROTOCOL,
@@ -136,7 +140,7 @@ After the initial surface exists, every visible revision must be an incremental 
 - make a visible, coherent adjustment that a watching human can notice
 - allow geometry to change after every mutation so content determines x, y, width, and height
 
-Private concept studies may influence judgment, but their markup never reaches the live surface. The final state is only the accumulated result of all mutations made to the original artboard.
+Full private artboards are not created. Alternative ideas remain provisional reasoning and are tested only through reversible semantic transactions on this same visible surface. The final state is only the accumulated result of all mutations made to the original artboard.
 `.trim();
 
 function sourceImageUrls(document: NorthstarWebArtifactDocument, dataBundle: CanvasCodeArtifactDataBundle): string[] {
@@ -485,6 +489,22 @@ function urlsFromSource(source: string): string[] {
   return Array.from(urls);
 }
 
+function extractArtifactNodeInnerHtml(html: string, nodeId: string): string {
+  if (!html || !nodeId) return "";
+  const escaped = nodeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`<([a-z0-9:-]+)\\b[^>]*data-ns-node-id=["']${escaped}["'][^>]*>([\\s\\S]*?)<\\/\\1>`, "i");
+  const match = html.match(pattern);
+  return match?.[2]?.trim() ?? "";
+}
+
+function artifactSectionLooksMeaningful(innerHtml: string): boolean {
+  if (!innerHtml) return false;
+  const text = plainTextFromHtml(innerHtml).replace(/\s+/g, " ").trim();
+  if (text.length >= 90) return true;
+  if (/(<li\b|<table\b|<svg\b|<canvas\b|<figure\b|<img\b|data-ns-relationship-id=)/i.test(innerHtml) && text.length >= 32) return true;
+  return false;
+}
+
 function validateWebArtifactDocument(
   document: NorthstarWebArtifactDocument,
   input: Pick<NorthstarCodeArtifactGenerationInput, "objective" | "artifactType" | "userRequest" | "dataBundle">,
@@ -659,10 +679,34 @@ function validateWebArtifactDocument(
   const requestWords = input.userRequest.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((word) => word.length > 3);
   const headingMatch = html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
   const headingText = plainTextFromHtml(headingMatch?.[1] ?? "").toLowerCase();
+  const titleWords = headingText.split(/\s+/).filter(Boolean);
+  const titleSentenceMarks = (headingText.match(/[.!?]/g) ?? []).length;
+  if (headingText.length > 150 || titleWords.length > 22 || titleSentenceMarks > 1) {
+    issues.push("The hero title behaves like descriptive body copy. Author a concise title and move explanation into deck, thesis, or supporting context.");
+  }
+  const deckMatch = html.match(/<(?:p|div)\b[^>]*data-ns-node-id=["']deck["'][^>]*>([\s\S]*?)<\/(?:p|div)>/i);
+  const deckText = plainTextFromHtml(deckMatch?.[1] ?? "").toLowerCase();
+  if (headingText && deckText && (deckText.includes(headingText) || headingText.includes(deckText))) {
+    issues.push("Title and deck must perform distinct semantic roles rather than repeating the same prose.");
+  }
+
   if (headingText && requestWords.length >= 6) {
     const overlap = requestWords.filter((word) => headingText.includes(word)).length / requestWords.length;
     if (overlap >= 0.72 || headingText.length > 190) {
       issues.push("The main headline appears to repeat the user's instruction instead of presenting an authored editorial thesis.");
+    }
+  }
+
+  if (obligations.comparison) {
+    const synthesisInner = extractArtifactNodeInnerHtml(html, "synthesis");
+    if (!artifactSectionLooksMeaningful(synthesisInner)) {
+      issues.push("Comparison artifacts must resolve the synthesis region with meaningful analytical content; an empty or confusing synthesis lane is not complete.");
+    }
+  }
+  if (obligations.requireRecommendation) {
+    const decisionInner = extractArtifactNodeInnerHtml(html, "decision");
+    if (!artifactSectionLooksMeaningful(decisionInner)) {
+      issues.push("Artifacts that require a recommendation or implication must resolve the decision region with meaningful content on the artboard.");
     }
   }
 
@@ -811,6 +855,8 @@ export function buildNorthstarLiveArtifactSystemInstruction(
 LIVE POLISHED-STATE MODE
 - This is an intermediate visible revision, not a loading screen and not a wireframe.
 - Produce a complete, polished composition using only the evidence available at this stage.
+- Keep title, deck, thesis, and supporting context semantically distinct even when the chosen composition integrates them spatially.
+- Treat every revision as a visible reversible transaction on the one canonical artboard; never rely on a hidden full-artboard alternative.
 - Do not invent missing research. Use app identity and current evidence beautifully, then leave room for later revisions without placeholder boxes.
 - The revision must look intentionally designed at intrinsic size even though Northstar will continue evolving it.
 - Use a concise provisional editorial statement, never the full user prompt.
@@ -1288,6 +1334,45 @@ function workingIdentityMarkup(dataBundle: CanvasCodeArtifactDataBundle): string
     : "";
 }
 
+
+function estimateNorthstarFlowGeometry(dataBundle: CanvasCodeArtifactDataBundle): { width: number; height: number } {
+  const flows = dataBundle.flows.slice(0, 4);
+  const screenshotsById = new Map(dataBundle.screenshots.map((screen) => [screen.id, screen]));
+  const rowWidths = flows.map((flow) => {
+    const screens = flow.screenshotIds.map((id) => screenshotsById.get(id)).filter(Boolean).slice(0, 12);
+    const screenWidths = screens.map((screen) => /desktop|web/i.test(String(screen?.platform ?? "")) ? 260 : 176);
+    return 180 + 26 + screenWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, screenWidths.length - 1) * 20;
+  });
+  const contentWidth = Math.max(1120, ...rowWidths);
+  const width = Math.min(12000, Math.max(1480, contentWidth + 104));
+  const headerHeight = 250;
+  const rowHeight = 310;
+  const synthesisReserve = dataBundle.apps.length > 1 || dataBundle.flows.length > 1 ? 210 : 120;
+  const decisionReserve = dataBundle.decisions.length > 0 ? 150 : 96;
+  const analysisReserve = 120 + synthesisReserve + decisionReserve;
+  const height = Math.min(12000, Math.max(920, headerHeight + Math.max(1, flows.length) * rowHeight + analysisReserve));
+  return { width, height };
+}
+
+function mergeNorthstarRequiredGeometry(
+  packageValue: NorthstarGeneratedCodeArtifactPackage,
+  dataBundle: CanvasCodeArtifactDataBundle,
+): NorthstarGeneratedCodeArtifactPackage {
+  const required = estimateNorthstarFlowGeometry(dataBundle);
+  const preferredWidth = Math.max(packageValue.preferredWidth, required.width);
+  const preferredHeight = Math.max(packageValue.preferredHeight, required.height);
+  return {
+    ...packageValue,
+    preferredWidth,
+    preferredHeight,
+    layoutBaseWidth: preferredWidth,
+    layoutBaseHeight: preferredHeight,
+    intrinsicBounds: { minX: 0, minY: 0, maxX: preferredWidth, maxY: preferredHeight },
+    minimumWidth: Math.max(740, Math.round(preferredWidth / 2)),
+    minimumHeight: Math.max(480, Math.round(preferredHeight / 2)),
+  };
+}
+
 export function createNorthstarWorkingArtifactPackage(input: {
   artifactId: string;
   objective: string;
@@ -1317,16 +1402,17 @@ export function createNorthstarWorkingArtifactPackage(input: {
     const sequence = screens.map((screen, screenIndex) => { const screenNodeId = `${flowNodeId}-screen-${normalizeId(screen!.id, String(screen!.index ?? screenIndex))}`; return `<figure data-ns-node-id="${screenNodeId}" data-ns-evidence-id="${escapeWorkingHtml(screen!.id)}"><img data-ns-node-id="${screenNodeId}-image" src="${escapeWorkingHtml(screen!.imageUrl ?? "")}" alt="${escapeWorkingHtml(screen!.title)}"></figure>`; }).join("");
     return `<section class="working-flow" data-ns-node-id="${flowNodeId}" data-ns-flow-id="${escapeWorkingHtml(flow.id)}" data-ns-stage="evidence">${identity}<div class="working-flow__sequence" data-ns-node-id="${flowNodeId}-sequence">${sequence || '<p class="working-empty">Grounded screens are arriving.</p>'}</div></section>`;
   }).join("");
-  const computedWidth = 1480;
-  const computedHeight = Math.max(720, 330 + Math.max(1, input.dataBundle.flows.slice(0, 4).length) * 280);
-  const width = input.previousPackage?.preferredWidth ?? computedWidth;
+  const requiredGeometry = estimateNorthstarFlowGeometry(input.dataBundle);
+  const computedWidth = requiredGeometry.width;
+  const computedHeight = requiredGeometry.height;
+  const width = Math.max(computedWidth, input.previousPackage?.preferredWidth ?? 0);
   const height = Math.max(computedHeight, input.previousPackage?.preferredHeight ?? 0);
   const document: NorthstarWebArtifactDocument = input.scenePlan
     ? renderNorthstarVisualSceneDocument(input.scenePlan, input.dataBundle)
     : {
       schema: NORTHSTAR_WEB_ARTIFACT_DOCUMENT_SCHEMA,
       html: `<main class="ns-artifact ns-working-artifact" data-ns-node-id="artboard" data-ns-design-kernel="v1" data-ns-publication="working"><header data-ns-node-id="header" data-ns-stage="foundation"><p class="working-kicker" data-ns-node-id="kicker">Northstar · live artboard</p><h1 class="ns-thesis" data-ns-node-id="title">${escapeWorkingHtml(title)}</h1><p class="working-deck" data-ns-node-id="deck">${escapeWorkingHtml(input.message || input.dataBundle.coverageSummary || activeAct)}</p><div class="working-act" data-ns-node-id="current-act"><span>Current design act</span><strong data-ns-node-id="current-act-text">${escapeWorkingHtml(activeAct)}</strong></div></header><div class="working-evidence" data-ns-node-id="evidence">${flows || identities}</div><section class="working-synthesis" data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section class="working-decision" data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
-      css: `.ns-working-artifact{width:2360px;max-width:2360px;min-width:1180px;min-height:${height}px;padding:44px 52px 60px;background:radial-gradient(circle at 30% -15%,rgba(107,77,255,.12),transparent 38%),linear-gradient(180deg,#fdfcff,#f6f4fb);color:#151620;font-family:Inter,ui-sans-serif,system-ui,sans-serif;display:grid;align-content:start;gap:30px}.ns-working-artifact header{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:32px;align-items:end}.working-kicker{grid-column:1/-1;margin:0;color:#6b4dff;font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.ns-working-artifact .ns-thesis{margin:0;font-size:56px;line-height:.97;letter-spacing:-.055em;max-width:1050px}.working-deck{margin:14px 0 0;color:#6b6e7d;font-size:16px;line-height:1.5;max-width:920px}.working-act{align-self:start;padding:16px 18px;border-left:2px solid #6b4dff;background:rgba(255,255,255,.72)}.working-act span{display:block;color:#8b8f9f;font-size:11px;text-transform:uppercase;letter-spacing:.12em}.working-act strong{display:block;margin-top:8px;font-size:17px;line-height:1.35}.working-evidence{display:grid;gap:24px}.working-evidence:empty{display:none}.working-identities{display:flex;flex-wrap:wrap;gap:14px;padding-top:20px;border-top:1px solid rgba(78,67,135,.13)}.working-identity{display:flex;align-items:center;gap:14px;min-width:300px;max-width:520px;padding:14px 18px;background:rgba(255,255,255,.66);border:1px solid rgba(78,67,135,.10);border-radius:18px}.working-identity img{width:52px;height:52px;border-radius:15px;object-fit:cover}.working-identity strong{display:block;font-size:18px}.working-identity span{display:block;margin-top:4px;color:#737686;font-size:13px;line-height:1.35}.working-flow{display:grid;grid-template-columns:180px minmax(0,1fr);gap:26px;align-items:start;padding:22px 0;border-top:1px solid rgba(78,67,135,.13)}.working-flow__sequence{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:20px;min-width:0}.working-flow figure{margin:0;min-width:0}.working-flow figure img{width:100%;height:auto;max-height:286px;object-fit:contain}.working-synthesis:empty,.working-decision:empty{display:none}.working-synthesis,.working-decision{display:grid;gap:18px}`,
+      css: `.ns-working-artifact{width:${width}px;max-width:none;min-width:1180px;min-height:${height}px;padding:44px 52px 104px;background:radial-gradient(circle at 30% -15%,rgba(107,77,255,.12),transparent 38%),linear-gradient(180deg,#fdfcff,#f6f4fb);color:#151620;font-family:Inter,ui-sans-serif,system-ui,sans-serif;display:grid;align-content:start;gap:30px}.ns-working-artifact header{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:32px;align-items:end}.working-kicker{grid-column:1/-1;margin:0;color:#6b4dff;font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.ns-working-artifact .ns-thesis{margin:0;font-size:56px;line-height:.97;letter-spacing:-.055em;max-width:1050px}.working-deck{margin:14px 0 0;color:#6b6e7d;font-size:16px;line-height:1.5;max-width:920px}.working-act{align-self:start;padding:16px 18px;border-left:2px solid #6b4dff;background:rgba(255,255,255,.72)}.working-act span{display:block;color:#8b8f9f;font-size:11px;text-transform:uppercase;letter-spacing:.12em}.working-act strong{display:block;margin-top:8px;font-size:17px;line-height:1.35}.working-evidence{display:grid;gap:24px}.working-evidence:empty{display:none}.working-identities{display:flex;flex-wrap:wrap;gap:14px;padding-top:20px;border-top:1px solid rgba(78,67,135,.13)}.working-identity{display:flex;align-items:center;gap:14px;min-width:300px;max-width:520px;padding:14px 18px;background:rgba(255,255,255,.66);border:1px solid rgba(78,67,135,.10);border-radius:18px}.working-identity img{width:52px;height:52px;border-radius:15px;object-fit:cover}.working-identity strong{display:block;font-size:18px}.working-identity span{display:block;margin-top:4px;color:#737686;font-size:13px;line-height:1.35}.working-flow{display:grid;grid-template-columns:180px minmax(0,1fr);gap:26px;align-items:start;padding:22px 0;border-top:1px solid rgba(78,67,135,.13)}.working-flow__sequence{display:flex;flex-wrap:nowrap;align-items:flex-end;gap:20px;width:max-content;min-width:0}.working-flow figure{margin:0;min-width:0}.working-flow figure img{width:100%;height:auto;max-height:286px;object-fit:contain}.working-synthesis:empty,.working-decision:empty{display:none}.working-synthesis,.working-decision{display:grid;gap:18px}`,
       javascript: "",
     };
   if (input.scenePlan) {
@@ -1369,97 +1455,35 @@ export function createNorthstarWorkingArtifactPackage(input: {
 }
 
 
-function liveFlowNodeId(flowId: string): string {
-  return `flow-${normalizeId(flowId, "flow")}`;
+
+function northstarSemanticIdsFromHtml(html: string): Set<string> {
+  return new Set([...html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)].map((match) => match[1]));
 }
 
-function stableNodeHash(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
+function alignDeterministicOperationsToDocument(
+  operations: NorthstarArtboardMutationOperation[],
+  html: string,
+): NorthstarArtboardMutationOperation[] {
+  const visible = northstarSemanticIdsFromHtml(html);
+  const inserted = new Set<string>();
+  for (const operation of operations) {
+    if (operation.op !== "insert-html") continue;
+    for (const match of operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)) inserted.add(match[1]);
   }
-  return (hash >>> 0).toString(36).padStart(7, "0");
-}
-
-function liveScreenNodeId(flowId: string, screenshotId: string, index: number): string {
-  return `${liveFlowNodeId(flowId)}-screen-${String(index).padStart(2, "0")}-${stableNodeHash(`${flowId}:${screenshotId}`)}`;
-}
-
-function liveFlowMarkup(
-  dataBundle: CanvasCodeArtifactDataBundle,
-  flow: CanvasCodeArtifactDataBundle["flows"][number],
-): string {
-  const app = dataBundle.apps.find((candidate) => candidate.name.toLowerCase() === flow.appName.toLowerCase());
-  const screensById = new Map(dataBundle.screenshots.map((screen) => [screen.id, screen]));
-  const nodeId = liveFlowNodeId(flow.id);
-  const screens = flow.screenshotIds.map((id) => screensById.get(id)).filter(Boolean).slice(0, 24);
-  const images = screens.map((screen, position) => {
-    const screenNodeId = liveScreenNodeId(flow.id, screen!.id, screen!.index ?? position);
-    return `<figure data-ns-node-id="${screenNodeId}" data-ns-evidence-id="${escapeWorkingHtml(screen!.id)}"><img data-ns-node-id="${screenNodeId}-image" src="${escapeWorkingHtml(screen!.imageUrl ?? "")}" alt="${escapeWorkingHtml(screen!.title)}"></figure>`;
-  }).join("");
-  return `<section class="working-flow" data-ns-node-id="${nodeId}" data-ns-flow-id="${escapeWorkingHtml(flow.id)}" data-ns-stage="evidence"><div class="working-flow__identity" data-ns-node-id="${nodeId}-identity">${app?.iconUrl ? `<img data-ns-node-id="${nodeId}-icon" src="${escapeWorkingHtml(app.iconUrl)}" alt="${escapeWorkingHtml(flow.appName)} icon">` : ""}<div><strong data-ns-node-id="${nodeId}-app-name">${escapeWorkingHtml(flow.appName)}</strong><span data-ns-node-id="${nodeId}-flow-name">${escapeWorkingHtml(flow.flowName)}</span></div></div><div class="working-flow__sequence" data-ns-node-id="${nodeId}-sequence">${images || '<p class="working-empty" data-ns-node-id="' + nodeId + '-empty">Grounded screens are arriving.</p>'}</div></section>`;
-}
-
-function buildGranularResearchOperations(input: {
-  previous: CanvasCodeArtifactDataBundle;
-  next: CanvasCodeArtifactDataBundle;
-}): NorthstarArtboardMutationOperation[] {
-  const operations: NorthstarArtboardMutationOperation[] = [];
-  const previousFlows = new Map(input.previous.flows.map((flow) => [flow.id, flow]));
-  const previousScreens = new Set(input.previous.screenshots.map((screen) => screen.id));
-  const screensById = new Map(input.next.screenshots.map((screen) => [screen.id, screen]));
-  const appsByName = new Map(input.next.apps.map((app) => [app.name.toLowerCase(), app]));
-
-  for (const flow of input.next.flows.slice(0, 4)) {
-    const flowNodeId = liveFlowNodeId(flow.id);
-    const previousFlow = previousFlows.get(flow.id);
-    if (!previousFlow) {
-      const predecessor = input.previous.flows.find((candidate) =>
-        candidate.appName.toLowerCase() === flow.appName.toLowerCase() && candidate.id !== flow.id,
-      );
-      if (predecessor) operations.push({ op: "remove", targetId: liveFlowNodeId(predecessor.id) });
-      operations.push({ op: "insert-html", targetId: "evidence", position: "beforeend", html: liveFlowMarkup(input.next, flow) });
-      continue;
+  const available = new Set([...visible, ...inserted]);
+  const protectedSceneTargets = new Set(["artboard", "header", "evidence", "synthesis", "decision"]);
+  return operations.filter((operation) => {
+    if (operation.op === "set-css-layer") return true;
+    if (operation.op === "set-html" && protectedSceneTargets.has(operation.targetId)) return false;
+    if (operation.op === "remove" && protectedSceneTargets.has(operation.targetId)) return false;
+    if (operation.op === "insert-html") return available.has(operation.targetId);
+    if ("targetId" in operation && operation.targetId && !available.has(operation.targetId)) return false;
+    if (operation.op === "move") {
+      if (!available.has(operation.parentId)) return false;
+      if (operation.beforeId && !available.has(operation.beforeId)) return false;
     }
-    operations.push({ op: "set-text", targetId: `${flowNodeId}-app-name`, text: flow.appName });
-    operations.push({ op: "set-text", targetId: `${flowNodeId}-flow-name`, text: flow.flowName });
-    const app = appsByName.get(flow.appName.toLowerCase());
-    if (app?.iconUrl) operations.push({ op: "set-attributes", targetId: `${flowNodeId}-icon`, attributes: { src: app.iconUrl, alt: `${flow.appName} icon` } });
-
-    const desiredNodeIds: string[] = [];
-    flow.screenshotIds.slice(0, 24).forEach((screenshotId, position) => {
-      const screen = screensById.get(screenshotId);
-      if (!screen) return;
-      const nodeId = liveScreenNodeId(flow.id, screenshotId, screen.index ?? position);
-      desiredNodeIds.push(nodeId);
-      if (!previousScreens.has(screenshotId) || !previousFlow.screenshotIds.includes(screenshotId)) {
-        operations.push({
-          op: "insert-html",
-          targetId: `${flowNodeId}-sequence`,
-          position: "beforeend",
-          html: `<figure data-ns-node-id="${nodeId}" data-ns-evidence-id="${escapeWorkingHtml(screen.id)}"><img data-ns-node-id="${nodeId}-image" src="${escapeWorkingHtml(screen.imageUrl ?? "")}" alt="${escapeWorkingHtml(screen.title)}"></figure>`,
-        });
-      } else {
-        operations.push({ op: "set-attributes", targetId: `${nodeId}-image`, attributes: { src: screen.imageUrl ?? null, alt: screen.title } });
-      }
-    });
-    let beforeId: string | undefined;
-    for (const nodeId of [...desiredNodeIds].reverse()) {
-      operations.push({ op: "move", targetId: nodeId, parentId: `${flowNodeId}-sequence`, beforeId });
-      beforeId = nodeId;
-    }
-    operations.push({ op: "remove", targetId: `${flowNodeId}-empty` });
-  }
-
-  let beforeFlowId: string | undefined;
-  for (const flow of [...input.next.flows.slice(0, 4)].reverse()) {
-    const nodeId = liveFlowNodeId(flow.id);
-    operations.push({ op: "move", targetId: nodeId, parentId: "evidence", beforeId: beforeFlowId });
-    beforeFlowId = nodeId;
-  }
-  if (input.next.flows.length > 0) operations.push({ op: "remove", targetId: "identities" });
-  return operations;
+    return true;
+  });
 }
 
 export function createNorthstarWorkingMutationPackage(input: {
@@ -1474,39 +1498,38 @@ export function createNorthstarWorkingMutationPackage(input: {
   const designActs = input.creativeDirection?.selectedConcept.designActs ?? [];
   const activeAct = designActs[Math.min(phaseIndex, Math.max(0, designActs.length - 1))] || input.message;
   const operations: NorthstarArtboardMutationOperation[] = [
-    { op: "set-text", targetId: "title", text: title },
-    { op: "set-text", targetId: "deck", text: input.message || input.dataBundle.coverageSummary },
-    { op: "set-text", targetId: "current-act-text", text: activeAct || input.message },
-    ...buildGranularResearchOperations({ previous: input.previousPackage.dataBundle, next: input.dataBundle }),
+    ...buildCanonicalEvidenceOperations({ currentHtml: input.previousPackage.document.html, currentJournal: input.previousPackage.mutationJournal, nextBundle: input.dataBundle }),
   ];
   operations.push({
     op: "set-css-layer",
     layerId: "research-evolution",
     css: input.phase === "evidence"
-      ? `[data-ns-node-id="evidence"]{gap:30px}[data-ns-node-id="header"]{padding-bottom:10px}`
+      ? `[data-ns-node-id="evidence"]{gap:30px}[data-ns-node-id="header"]{padding-bottom:10px}.working-flow{background:transparent;border-radius:0;box-shadow:none}`
       : input.phase === "analysis"
-        ? `[data-ns-node-id="header"]{grid-template-columns:minmax(0,1fr) 340px}[data-ns-node-id="evidence"]{gap:36px}`
+        ? `[data-ns-node-id="header"]{grid-template-columns:minmax(0,1fr) minmax(220px,300px)}[data-ns-node-id="evidence"]{gap:36px}.ns-role-identity{background:transparent;box-shadow:none;border-radius:0}`
         : input.phase === "recommendation"
-          ? `[data-ns-node-id="artboard"]{gap:42px}`
+          ? `[data-ns-node-id="artboard"]{gap:38px}[data-ns-node-id="synthesis"],[data-ns-node-id="decision"]{background:transparent;box-shadow:none;border-radius:0}`
           : `[data-ns-node-id="artboard"]{letter-spacing:-.005em}`,
   });
+  const alignedOperations = alignDeterministicOperationsToDocument(operations, input.previousPackage.document.html);
   const draft: NorthstarArtboardMutationDraft = {
     title,
     description: input.message || input.previousPackage.description,
     visualStrategy: `The same live artboard is being adjusted through the ${input.phase} phase.`,
     visibleChange: `Updated the same artboard with the latest ${input.phase} evidence and composition state.`,
-    geometryIntent: input.phase === "evidence" ? "expand-horizontal" : input.phase === "analysis" ? "expand-vertical" : "recompose",
+    geometryIntent: input.phase === "evidence" ? "expand-horizontal" : "recompose",
     transitionMs: 360,
-    operations,
+    operations: alignedOperations,
   };
-  return appendNorthstarArtboardMutation({
+  const next = appendNorthstarArtboardMutation({
     previous: { ...input.previousPackage, dataBundle: input.dataBundle, creativeDirection: input.creativeDirection ?? input.previousPackage.creativeDirection },
     draft,
     label: `Live ${input.phase} adjustment`,
     phase: input.phase,
     intent: input.message,
-    diagnostics: [`Northstar v0.4.8.1 granularly updated the original surface during ${input.phase}.`],
+    diagnostics: [`${NORTHSTAR_CANONICAL_EVIDENCE_SCENE_VERSION} reconciled the visible scene during ${input.phase}.`],
   });
+  return mergeNorthstarRequiredGeometry(next, input.dataBundle);
 }
 
 function escapeWorkingHtml(value: unknown): string {

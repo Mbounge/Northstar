@@ -1,5 +1,5 @@
 // app/api/canvas-ai/route.ts
-// Northstar Canvas v0.6.0.2 — blank-slate scene planning on the stable v0.5.4.2 runtime baseline
+// Northstar Canvas v0.6.4.0 — visible canonical intelligence, reversible live transactions, obligation-led publication, and state-grounded final responses
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -19,9 +19,9 @@ import {
   getNorthstarArtifactSourceDiagnostics,
   createNorthstarWorkingArtifactPackage,
   createNorthstarWorkingMutationPackage,
-  prepareNorthstarConceptStudyDocument,
   prepareNorthstarArtboardRevisionForPublication,
 } from "@/lib/canvas-ai/northstar-code-artifact";
+import { NORTHSTAR_CANONICAL_EVIDENCE_SCENE_VERSION } from "@/lib/canvas-ai/northstar-canonical-evidence-scene";
 import {
   NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA,
   appendNorthstarArtboardMutation,
@@ -52,7 +52,6 @@ import {
   buildNorthstarDynamicDesignMoveModelInput,
   buildNorthstarDynamicDesignMoveSystemInstruction,
   sanitizeNorthstarDynamicDesignMove,
-  fingerprintSource,
   type NorthstarCreativeCritiqueDraft,
   type NorthstarCreativeExplorationDraft,
   type NorthstarCreativeSelectionDraft,
@@ -67,6 +66,7 @@ import { captureNorthstarArtifactPng } from "@/lib/canvas-ai/northstar-render-ca
 import { getNorthstarArtifactAcknowledgement, waitForNorthstarArtifactAcknowledgement } from "@/lib/canvas-ai/northstar-artboard-ack";
 import { NorthstarArtboardActor } from "@/lib/canvas-ai/northstar-artboard-actor";
 import { compileNorthstarMutationDraft } from "@/lib/canvas-ai/northstar-mutation-compiler";
+import { alignNorthstarMutationToVisibleScene, enrichNorthstarMutationWithLivingThoughtTheatre, prepareNorthstarEditorialPublicationDraft } from "@/lib/canvas-ai/northstar-living-thought-theatre";
 import { buildNorthstarSpatialMoveAddendum, NORTHSTAR_SPATIAL_INTELLIGENCE_CONTRACT } from "@/lib/canvas-ai/northstar-spatial-intelligence";
 import {
   NORTHSTAR_VISUAL_SCENE_JSON_SCHEMA,
@@ -1462,6 +1462,16 @@ Rules:
 `.trim();
 
 const FINAL_SYSTEM_INSTRUCTION = `
+You are writing the final user-facing response from the ACTUAL canonical Canvas state.
+
+NON-NEGOTIABLE STATE GROUNDING
+- Never use a canned artifact-completion sentence or a hardcoded product/title phrase.
+- Read canonicalArtifactState from the final context.
+- Use the actual artifact title, publication state, visible thesis, and working-surface status.
+- If publicationState is not verified, explicitly say the artboard remains in progress and do not claim completion.
+- Do not claim a move, relationship, synthesis, or visual form that the canonical state does not contain.
+- Keep the wording natural and model-authored; deterministic state constrains facts, not prose.
+
 You are North Star, an expert product, design, research, strategy, and problem-solving collaborator working inside a canvas workspace.
 
 This version can perform explicit, reversible canvas actions through the structured action results supplied to you. You may also retrieve, inspect, analyze, explain, compare, diagnose, summarize, reference, and suggest next steps. Never claim an action succeeded unless its tool result is marked successful.
@@ -6158,6 +6168,26 @@ function captureDocumentFromLiveAcknowledgement(
   };
 }
 
+function materializeNorthstarCanonicalPackage(
+  packageValue: NorthstarGeneratedCodeArtifactPackage,
+  acknowledgement?: NorthstarArtifactMutationAcknowledgement,
+): NorthstarGeneratedCodeArtifactPackage {
+  const captured = captureDocumentFromLiveAcknowledgement(packageValue, acknowledgement);
+  return {
+    ...packageValue,
+    document: captured.document,
+    mutationJournal: captured.mutationJournal,
+    preferredWidth: captured.width,
+    preferredHeight: captured.height,
+    diagnostics: [
+      ...packageValue.diagnostics,
+      acknowledgement?.snapshot
+        ? `Canonicalized browser-visible revision ${packageValue.revisionId} from the exact acknowledgement snapshot.`
+        : `Preserved revision ${packageValue.revisionId} without a browser snapshot; mutation journal remains authoritative.`,
+    ].slice(-60),
+  };
+}
+
 function liveAcknowledgementPassed(
   acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined,
   expectedMutationId?: string,
@@ -6178,7 +6208,80 @@ function liveAcknowledgementPassed(
   );
 }
 
+
+function escapeRegExpForNorthstar(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripNorthstarArtifactText(value: string): string {
+  return String(value ?? "")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractNorthstarNodeInnerHtml(document: NorthstarWebArtifactDocument | undefined, nodeId: string): string {
+  const html = document?.html ?? "";
+  if (!html || !nodeId) return "";
+  const pattern = new RegExp(`<([a-z0-9:-]+)\\b[^>]*data-ns-node-id=["']${escapeRegExpForNorthstar(nodeId)}["'][^>]*>([\\s\\S]*?)<\\/\\1>`, "i");
+  const match = html.match(pattern);
+  return match?.[2]?.trim() ?? "";
+}
+
+function northstarSectionLooksResolved(innerHtml: string): boolean {
+  if (!innerHtml) return false;
+  const text = stripNorthstarArtifactText(innerHtml);
+  if (text.length >= 90) return true;
+  if (/(<li\b|<table\b|<svg\b|<canvas\b|<figure\b|<img\b|data-ns-relationship-id=)/i.test(innerHtml) && text.length >= 32) return true;
+  return false;
+}
+
+function northstarTitleLooksResolved(document: NorthstarWebArtifactDocument | undefined): boolean {
+  const titleHtml = extractNorthstarNodeInnerHtml(document, "title");
+  const title = stripNorthstarArtifactText(titleHtml);
+  if (!title) return false;
+  const words = title.split(/\s+/).filter(Boolean);
+  const sentenceMarks = (title.match(/[.!?]/g) ?? []).length;
+  return title.length <= 150 && words.length <= 22 && sentenceMarks <= 1;
+}
+
+function northstarHasVisibleRelationship(document: NorthstarWebArtifactDocument | undefined): boolean {
+  const html = document?.html ?? "";
+  const synthesis = extractNorthstarNodeInnerHtml(document, "synthesis");
+  return /data-ns-relationship-id=|data-ns-evidence-id=|<table\b|<svg\b|<canvas\b|<figure\b|class=["'][^"']*(?:matrix|axis|map|trajectory|comparison|relationship|synthesis)/i.test(synthesis || html);
+}
+
+function northstarHasStaleWorkingLanguage(document: NorthstarWebArtifactDocument | undefined): boolean {
+  return /Northstar is acquiring|Grounded screens are arriving|Current design act|Live reasoning/i.test(stripNorthstarArtifactText(document?.html ?? ""));
+}
+
+function assessNorthstarArtifactCompletion(
+  artifact: NorthstarGeneratedCodeArtifactPackage | undefined,
+  acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined,
+): { resolved: boolean; synthesisResolved: boolean; decisionResolved: boolean; unresolved: string[] } {
+  const unresolved: string[] = [];
+  const synthesisHtml = extractNorthstarNodeInnerHtml(artifact?.document, "synthesis");
+  const decisionHtml = extractNorthstarNodeInnerHtml(artifact?.document, "decision");
+  const synthesisResolved = northstarSectionLooksResolved(synthesisHtml);
+  const decisionRequired = Boolean((artifact?.dataBundle.decisions?.length ?? 0) > 0 || (artifact?.dataBundle.apps?.length ?? 0) > 1 || (artifact?.dataBundle.flows?.length ?? 0) > 1);
+  const decisionResolved = !decisionRequired || northstarSectionLooksResolved(decisionHtml);
+  if (!northstarTitleLooksResolved(artifact?.document)) unresolved.push("title hierarchy remains unresolved or paragraph-like");
+  if (!synthesisResolved) unresolved.push("comparative synthesis remains visually unfinished");
+  if (synthesisResolved && !northstarHasVisibleRelationship(artifact?.document)) unresolved.push("synthesis lacks a visible evidence-backed relationship");
+  if (!decisionResolved) unresolved.push(decisionRequired ? "decision / implication region remains unfinished" : "closing implication remains unfinished");
+  if (northstarHasStaleWorkingLanguage(artifact?.document)) unresolved.push("stale working-stage language remains visible");
+  const rejectionReason = acknowledgement?.reason ?? "";
+  if (/whole-artboard containment failed/i.test(rejectionReason) || /meaningful content extended beyond the rendered root:\s*(?:synthesis|decision)/i.test(rejectionReason)) {
+    unresolved.push("artboard bounds do not yet fully contain synthesis / decision content");
+  }
+  return { resolved: unresolved.length === 0, synthesisResolved, decisionResolved, unresolved };
+}
+
 function compositionResearchSettings(depth: ExecutionDepth) {
+
   if (depth === "quick") {
     return {
       maxScreens: 18,
@@ -6748,29 +6851,24 @@ async function buildGeneratedCodeArtifactPackage({
     },
     {
       id: "explore-creative-concepts",
-      label: `Render ${budget.conceptCount} materially different private studies`,
+      label: `Originate ${budget.conceptCount} materially different live-move theses`,
       tool: "prepare_composition_evidence",
       icon: "plan" as CanvasAIActivityIcon,
     },
     {
       id: "select-creative-direction",
-      label: "Select the strongest rendered design behaviour",
+      label: "Choose the strongest provisional direction for visible testing",
       tool: "prepare_composition_evidence",
       icon: "compare" as CanvasAIActivityIcon,
     },
   ];
   await callbacks.extendPlan(
     directionSteps,
-    `${thinkingDepth[0].toUpperCase()}${thinkingDepth.slice(1)} thinking: choose a medium privately, then evolve the one visible artboard through repeated reference-conditioned design acts.`,
+    `${thinkingDepth[0].toUpperCase()}${thinkingDepth.slice(1)} thinking: originate alternatives in reasoning, then test every consequential choice visibly on the one canonical artboard.`,
   );
 
   let creativeDirection: NorthstarCreativeDirection;
   let exploration: NorthstarCreativeExplorationDraft | null = null;
-  let renderedConceptStudies: Array<{
-    conceptId: string;
-    conceptName: string;
-    capture: Awaited<ReturnType<typeof captureNorthstarArtifactPng>>;
-  }> = [];
 
   try {
     await callbacks.startStep(directionSteps[0]);
@@ -6820,56 +6918,9 @@ async function buildGeneratedCodeArtifactPackage({
       temperature: budget.explorationTemperature,
     });
     exploration = sanitizeCreativeExploration(rawExploration, budget.conceptCount, intent.objective || message);
-    for (let studyIndex = 0; studyIndex < exploration.concepts.length; studyIndex += 1) {
-      const concept = exploration.concepts[studyIndex];
-      if (!concept.study) continue;
-      try {
-        // Private concept studies are visual references, not executable products.
-        // Model-generated placeholder JavaScript (for example a literal `...`) must
-        // never invalidate an otherwise useful HTML/CSS study. Start with the exact
-        // study, then deterministically retry as a static document when JavaScript
-        // syntax validation fails.
-        let studyDocument;
-        try {
-          studyDocument = prepareNorthstarConceptStudyDocument(concept.study.document, {
-            objective: intent.objective || message,
-            artifactType: blueprint.artifactType,
-            userRequest: message,
-            dataBundle,
-          });
-        } catch (studyError) {
-          const issueText = studyError instanceof Error ? studyError.message : String(studyError);
-          if (!/javascript-syntax|JavaScript syntax error|Unexpected token/i.test(issueText)) throw studyError;
-          studyDocument = prepareNorthstarConceptStudyDocument({
-            ...concept.study.document,
-            javascript: "",
-          }, {
-            objective: intent.objective || message,
-            artifactType: blueprint.artifactType,
-            userRequest: message,
-            dataBundle,
-          });
-        }
-        const capture = await captureNorthstarArtifactPng({
-          document: studyDocument,
-          dataBundle,
-          width: concept.study.preferredWidth,
-          height: concept.study.preferredHeight,
-        });
-        exploration.concepts[studyIndex] = {
-          ...concept,
-          study: { ...concept.study, document: studyDocument },
-          renderedStudyFingerprint: fingerprintSource(`${studyDocument.html}\n${studyDocument.css}`),
-        };
-        renderedConceptStudies.push({ conceptId: concept.id, conceptName: concept.name, capture });
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-        console.info(`Northstar omitted one invalid private concept study for ${concept.name}; the live artboard was unaffected.`);
-      }
-    }
-    if (renderedConceptStudies.length < 2) {
-      throw new Error("Northstar could not render two valid private studies; creative selection must not claim a rendered winner.");
-    }
+    // v0.6.3.0 deliberately does not render parallel private artboards. Concepts are
+    // provisional reasoning hypotheses only. Their quality is proven or rejected later
+    // through reversible, browser-verified moves on the one visible canonical surface.
     await callbacks.completeStep({
       id: directionSteps[0].id,
       tool: directionSteps[0].tool,
@@ -6879,7 +6930,7 @@ async function buildGeneratedCodeArtifactPackage({
     await callbacks.completeStep({
       id: directionSteps[1].id,
       tool: directionSteps[1].tool,
-      detail: `Privately rendered ${renderedConceptStudies.length} materially different visual behaviours for pixel comparison.`,
+      detail: `Originated ${exploration.concepts.length} materially different visual-move theses without creating a parallel hidden artboard.`,
     });
 
     await callbacks.startStep(directionSteps[2]);
@@ -6890,10 +6941,7 @@ async function buildGeneratedCodeArtifactPackage({
         role: "user",
         parts: [
           ...designReferenceParts,
-          ...renderedConceptStudies.flatMap((study, index) => [
-            { text: `PRIVATE RENDERED STUDY ${index + 1}: ${study.conceptName} (${study.conceptId}). Select behaviour only; this study document can never replace the live artboard.` },
-            { inlineData: { mimeType: study.capture.mimeType, data: study.capture.data } },
-          ]),
+          { text: "Choose a PROVISIONAL direction from the structured theses. Do not claim a rendered winner. The selected direction must earn permanence through visible browser-verified transactions on the exact living artboard." },
           {
             text: JSON.stringify(buildCreativeSelectionModelInput({
               exploration,
@@ -6913,7 +6961,7 @@ async function buildGeneratedCodeArtifactPackage({
     await callbacks.completeStep({
       id: directionSteps[2].id,
       tool: directionSteps[2].tool,
-      detail: `Selected “${creativeDirection.selectedConcept.name}”. ${creativeDirection.selectionRationale}`,
+      detail: `Chose “${creativeDirection.selectedConcept.name}” as a provisional direction for visible testing. ${creativeDirection.selectionRationale}`,
     });
   } catch (error) {
     if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
@@ -6926,19 +6974,19 @@ async function buildGeneratedCodeArtifactPackage({
     await callbacks.completeStep({
       id: directionSteps[0].id,
       tool: directionSteps[0].tool,
-      detail: "Northstar preserved grounded evidence and used a conservative static visual direction because private studies could not be validated.",
+      detail: "Northstar preserved grounded evidence and formed a conservative provisional direction because creative exploration could not be completed.",
     });
     await callbacks.startStep(directionSteps[1]);
     await callbacks.completeStep({
       id: directionSteps[1].id,
       tool: directionSteps[1].tool,
-      detail: "Private study rendering was unavailable; no study document was published to the Canvas.",
+      detail: "No parallel private artboard was created; the canonical visible surface remained authoritative.",
     });
     await callbacks.startStep(directionSteps[2]);
     await callbacks.completeStep({
       id: directionSteps[2].id,
       tool: directionSteps[2].tool,
-      detail: "No rendered study was declared a winner; the live artboard continued from the strongest grounded composition.",
+      detail: "No fabricated winner was declared; the live artboard continued from its last browser-verified composition.",
     });
   }
 
@@ -6982,7 +7030,7 @@ async function buildGeneratedCodeArtifactPackage({
     : thinkingDepth === "medium"
       ? Math.min(10, budget.designActCount)
       : budget.designActCount;
-  const minimumMoves = thinkingDepth === "low" ? 4 : thinkingDepth === "high" ? 10 : 7;
+  const minimumMoves = 0;
   let visibleMutationCount = 0;
   let latestReviewSummary = "The live artboard is beginning its autonomous design evolution.";
   let finalVerified = false;
@@ -6993,6 +7041,7 @@ async function buildGeneratedCodeArtifactPackage({
   const rejectedSemanticIntentFingerprints = new Set<string>();
   const successfulSemanticIntentFingerprints = new Set<string>();
   let requireStructuralAnalysisLane = false;
+  let blockingMoveFailure: string | undefined;
   const normalizeSemanticIntentSource = (value: unknown) => String(value ?? "")
     .toLowerCase()
     .replace(/data-ns-(?:node|annotation|relationship)-id\s*=\s*["'][^"']+["']/g, "")
@@ -7021,6 +7070,7 @@ async function buildGeneratedCodeArtifactPackage({
   for (let moveIndex = 0; moveIndex < maximumMoves; moveIndex += 1) {
     const visibleBefore = callbacks.getVisibleArtifact() ?? currentPackage;
     const beforeLiveAck = callbacks.getLastMutationAck?.();
+    const completionBeforeMove = assessNorthstarArtifactCompletion(visibleBefore, beforeLiveAck);
     const beforeSurface = captureDocumentFromLiveAcknowledgement(visibleBefore, beforeLiveAck);
     const beforeCapture = await captureNorthstarArtifactPng({
       document: beforeSurface.document,
@@ -7032,7 +7082,7 @@ async function buildGeneratedCodeArtifactPackage({
       height: beforeSurface.height,
     });
 
-    let move;
+    let move: NorthstarDynamicDesignMoveDraft;
     try {
       const rawMove = await callGeminiJson<NorthstarDynamicDesignMoveDraft>({
         apiKey,
@@ -7053,7 +7103,9 @@ ${buildNorthstarSpatialMoveAddendum(visibleBefore.runtimeReview)}
 
 ${moveIndex >= Math.floor(maximumMoves * 0.55) ? "The composition is mature enough to challenge. Prefer transformation, subtraction, and recomposition. When using relationships, define exact source and target semantic nodes, a relationship type and meaning, and use grounded app icons or screenshot evidence as actors. Reject anonymous dots, arbitrary pills, unsupported axes, and approximate diagonal lines." : "Build momentum with a clear, immediately observable move."}
 
-${requireStructuralAnalysisLane ? "A prior analytical overlay collided with protected evidence. Do not propose another floating marker, percentage-positioned label, or absolute spine. Continue the visual thesis only by allocating a real caption lane, margin lane, inter-row analytical lane, or typed external relationship. The placement mode must be structurally different from the rejected overlay." : ""}` },
+${requireStructuralAnalysisLane ? "A prior analytical overlay collided with protected evidence. Do not propose another floating marker, percentage-positioned label, or absolute spine. Continue the visual thesis only by allocating a real caption lane, margin lane, inter-row analytical lane, or typed external relationship. The placement mode must be structurally different from the rejected overlay." : ""}
+
+${!completionBeforeMove.resolved ? `COMPLETION GATE — THE ARTBOARD IS NOT YET FINISHED. Unresolved issues: ${completionBeforeMove.unresolved.join("; ")}. Do not stop. The next move must close these unfinished regions on the same artboard.` : ""}` },
             { inlineData: { mimeType: beforeCapture.mimeType, data: beforeCapture.data } },
             {
               text: JSON.stringify(buildNorthstarDynamicDesignMoveModelInput({
@@ -7094,7 +7146,30 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
       continue;
     }
 
-    if (!move.continueDesigning && visibleMutationCount >= minimumMoves) {
+    if (!move.continueDesigning && !completionBeforeMove.resolved) {
+      move = {
+        continueDesigning: true,
+        label: completionBeforeMove.decisionResolved
+          ? "Finish the comparative synthesis"
+          : "Finish the synthesis and resolve the implication",
+        phase: completionBeforeMove.synthesisResolved ? "refinement" : "recommendation",
+        diagnosis: `The artboard is still unfinished: ${completionBeforeMove.unresolved.join("; ")}.`,
+        intent: completionBeforeMove.decisionResolved
+          ? "Complete the comparative synthesis so it reads as an authored analytical result rather than an empty or confusing lane."
+          : "Complete the comparative synthesis and the closing implication so the board reaches a publication-ready resolved state.",
+        observableOutcome: completionBeforeMove.decisionResolved
+          ? "The synthesis area becomes explicit, readable, and materially integrated with the evidence above it."
+          : "The synthesis and final implication become explicit, readable, contained inside the artboard, and clearly integrated with the evidence.",
+        successCriteria: [
+          "The synthesis region contains meaningful analytical content rather than a placeholder lane or isolated labels.",
+          "If a decision or implication is required, it is visibly present and authored on the artboard.",
+          "The artboard bounds fully contain the completed synthesis and decision content.",
+        ],
+        stopReason: "Northstar may not stop while the synthesis or closing implication remains unfinished.",
+      };
+    }
+
+    if (!move.continueDesigning) {
       break;
     }
 
@@ -7135,7 +7210,7 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
             role: "user",
             parts: [
               ...designReferenceParts,
-              { text: `CURRENT EXACT LIVING ARTBOARD. Execute this autonomous artistic decision: “${move.label}”. The visible result must satisfy: ${move.observableOutcome}. Use only the allowed operation capability map in the JSON context. Never output set-html. Never replace a structural region. Relationship visuals must be typed semantic markup, not freehand CSS. Preserve accuracy, but do not default to a generic dashboard. Advance the chosen visual communication thesis through composition, scale, rhythm, spatial metaphor, evidence relationships, app identity, and editorial hierarchy. Follow the user's explicit visual instructions. Make one decisive visible change rather than adding decorative complexity. Evidence must be choreographed unequally: decisive evidence may dominate, supporting evidence may compress, and redundant evidence may disappear from the publication. Do not recreate a conventional two-row comparison unless the selected thesis explicitly proves it is the strongest communication form. Grounded screenshots are protected evidence surfaces. Never place synthetic labels, axes, markers, callouts, or explanatory copy inside screenshot bounds. Every analytical addition must declare exactly one placement mode on its root with data-ns-analysis-placement: caption-lane, margin-lane, inter-row-lane, or external-relationship. An inter-row lane must be a real normal-flow grid/flex row inserted between evidence regions, never an absolutely positioned layer. A caption lane must live outside the img element. A margin lane must target a structural region, never a screen, image, or sequence. An external relationship must use typed data-ns-relationship-id markup with exact endpoints. Never use percentage-positioned analytical labels or freehand absolute/fixed analytical CSS. Put annotations in structurally reserved captions, margins, inter-row lanes, or routed semantic relationships outside the image. Preserve a balanced occupied canvas; do not collapse the composition against one edge or create a mostly empty artboard. Every accepted design act must be a complete, presentation-ready composition state. When introducing a major region such as synthesis, recommendation, comparison axis, decision, or takeaway, reserve its space and reflow every affected region in the SAME mutation. Never insert a panel now and make room for it in a later move. Treat dependent layout operations as one atomic composition transition: allocate space, resize or move existing regions, place the new region, and establish final local hierarchy together. The viewer must be able to pause after this mutation and see an intentional, demo-worthy frame with no panel/evidence collision, no temporary overlap, no provisional absolute positioning, and no region visibly waiting for a later repair. Validate the WHOLE artboard, not only the changed nodes: every meaningful node must remain fully contained, both sides of any declared comparison must remain visible, root dimensions must closely fit the actual composition, no large accidental empty band may remain, and no status copy may claim a spine, matrix, comparison, or completed structure unless those structures are visibly present. If the current root is too small, change the root layout and dimensions in this same mutation; if a side column cannot fit, choose a coherent vertical reflow instead. Use motion to explain a coherent transition between two finished states, not to disguise an unfinished intermediate state. ${requireStructuralAnalysisLane ? "A prior evidence-overlay placement failed. You MUST switch to a structural lane placement; another overlay or floating relationship label is not an eligible recovery." : ""}` },
+              { text: `CURRENT EXACT LIVING ARTBOARD. Execute this autonomous artistic decision: “${move.label}”. The visible result must satisfy: ${move.observableOutcome}. Use only the allowed operation capability map in the JSON context. Never output set-html. Never replace a structural region. Relationship visuals must be typed semantic markup, not freehand CSS. Preserve accuracy, but do not default to a generic dashboard. Advance the chosen visual communication thesis through composition, scale, rhythm, spatial metaphor, evidence relationships, app identity, and editorial hierarchy. Follow the user's explicit visual instructions. Make one decisive visible change rather than adding decorative complexity. Evidence must be choreographed unequally: decisive evidence may dominate, supporting evidence may compress, and redundant evidence may disappear from the publication. Do not recreate a conventional two-row comparison unless the selected thesis explicitly proves it is the strongest communication form. Grounded screenshots are protected evidence surfaces. Never place synthetic labels, axes, markers, callouts, or explanatory copy inside screenshot bounds. Every analytical addition must declare exactly one placement mode on its root with data-ns-analysis-placement: caption-lane, margin-lane, inter-row-lane, or external-relationship. An inter-row lane must be a real normal-flow grid/flex row inserted between evidence regions, never an absolutely positioned layer. A caption lane must live outside the img element. A margin lane must target a structural region, never a screen, image, or sequence. An external relationship must use typed data-ns-relationship-id markup with exact endpoints. Never use percentage-positioned analytical labels or freehand absolute/fixed analytical CSS. Put annotations in structurally reserved captions, margins, inter-row lanes, or routed semantic relationships outside the image. Preserve a balanced occupied canvas; do not collapse the composition against one edge or create a mostly empty artboard. Every accepted design act must be a complete, presentation-ready composition state. This is a VISIBLE REVERSIBLE TRANSACTION on the one canonical artboard: change only declared semantic regions, preserve the last verified state as the rollback authority, expose the reasoning through the evolving artboard, and never create or depend on a parallel private artboard. The candidate revision must include enough outer width and height for the entire post-mutation DOM; geometryIntent without matching preferred bounds is invalid. Calculate the required bounds from actual evidence count, screen dimensions, gaps, labels, analytical regions, and publication cleanup before proposing operations. A containment rejection forbids retrying the same topology or dimensions. When introducing a major region such as synthesis, recommendation, comparison axis, decision, or takeaway, reserve its space and reflow every affected region in the SAME mutation. Never insert a panel now and make room for it in a later move. Treat dependent layout operations as one atomic composition transition: allocate space, resize or move existing regions, place the new region, and establish final local hierarchy together. The viewer must be able to pause after this mutation and see an intentional, demo-worthy frame with no panel/evidence collision, no temporary overlap, no provisional absolute positioning, and no region visibly waiting for a later repair. Validate the WHOLE artboard, not only the changed nodes: every meaningful node must remain fully contained, both sides of any declared comparison must remain visible, root dimensions must closely fit the actual composition, no large accidental empty band may remain, and no status copy may claim a spine, matrix, comparison, or completed structure unless those structures are visibly present. If the current root is too small, change the root layout and dimensions in this same mutation. Do not choose a vertical reflow merely because a side column cannot fit or because the concept name implies a split, spine, journey, map, or comparison. Preserve the strongest current evidence topology unless a different topology is explicitly justified by the evidence and has already won the rendered concept comparison. A radical change to evidence orientation, primary reading direction, density, or aspect ratio must produce a new analytical advantage that is visible without explanatory copy. You may create bespoke charts, matrices, tables, diagrams, relationship webs, connectors, axes, brackets, paths, or new visual forms when they reveal grounded relationships, but none is required. Every connection must use typed semantic endpoints and remain outside protected screenshot bounds. Use motion to explain a coherent transition between two finished states, not to disguise an unfinished intermediate state. ${requireStructuralAnalysisLane ? "A prior evidence-overlay placement failed. You MUST switch to a structural lane placement; another overlay or floating relationship label is not an eligible recovery." : ""}` },
               { inlineData: { mimeType: beforeCapture.mimeType, data: beforeCapture.data } },
               {
                 text: JSON.stringify(buildNorthstarArtboardMutationModelInput({
@@ -7169,9 +7244,18 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
           callbacks.getLastMutationAck?.()?.revisionId === attemptBase.revisionId
             ? callbacks.getLastMutationAck?.()?.snapshot?.semanticNodes
             : undefined;
+        const theatreDraft = alignNorthstarMutationToVisibleScene(
+          enrichNorthstarMutationWithLivingThoughtTheatre(rawDraft, {
+            stage: move.phase,
+            moveLabel: move.label,
+            objective: intent.objective || message,
+            dataBundle,
+          }),
+          attemptBase.document.html,
+        );
         const compiled = compileNorthstarMutationDraft({
           previous: attemptBase,
-          draft: rawDraft,
+          draft: theatreDraft,
           semanticSnapshot: liveSemanticSnapshot,
         });
         const substantiveRepairs = compiled.repairs.filter(
@@ -7356,15 +7440,19 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
     try {
       const liveAck = callbacks.getLastMutationAck?.();
       const acknowledgedCandidate = callbacks.getVisibleArtifact() ?? candidate;
+      const acknowledgedMutationId = acknowledgedCandidate.mutationJournal?.at(-1)?.mutationId;
+      const canonicalCandidate = materializeNorthstarCanonicalPackage(acknowledgedCandidate, liveAck);
+      currentPackage = canonicalCandidate;
       const critiqueInterval = thinkingDepth === "low" ? 6 : thinkingDepth === "medium" ? 4 : 2;
       const shouldRunFullCritique = visibleMutationCount === 1
         || visibleMutationCount % critiqueInterval === 0
         || visibleMutationCount >= maximumMoves
-        || move.phase === "recommendation";
+        || move.phase === "recommendation"
+        || !completionBeforeMove.resolved;
       if (!shouldRunFullCritique) {
         latestReviewSummary = `${move.label}: browser-verified rapid design pulse; full multimodal critique deferred to the next composition checkpoint.`;
         currentPackage = {
-          ...currentPackage,
+          ...canonicalCandidate,
           diagnostics: [...currentPackage.diagnostics, latestReviewSummary].slice(-60),
           provisional: true,
           publicationState: "working",
@@ -7376,7 +7464,7 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
         });
         continue;
       }
-      const afterSurface = captureDocumentFromLiveAcknowledgement(acknowledgedCandidate, liveAck);
+      const afterSurface = captureDocumentFromLiveAcknowledgement(canonicalCandidate, liveAck);
       const afterCapture = await captureNorthstarArtifactPng({
         document: afterSurface.document,
         mutationJournal: afterSurface.mutationJournal,
@@ -7422,12 +7510,19 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
         temperature: budget.critiqueTemperature,
       });
       const critique = sanitizeCreativeCritique(rawCritique, visibleMutationCount, afterSurface.document);
+      const completionAfterMove = assessNorthstarArtifactCompletion(canonicalCandidate, liveAck);
       const scores = critique.review.scores;
-      latestReviewSummary = `${move.label}: clarity ${scores.clarity}, grounding ${scores.grounding}, originality ${scores.originality}, usefulness ${scores.usefulness}, craft ${scores.craft}, audience fit ${scores.audienceFit}. ${critique.review.critique}`;
-      priorCritique = { critique: critique.review.critique, requiredChanges: critique.review.requiredChanges };
+      latestReviewSummary = `${move.label}: clarity ${scores.clarity}, grounding ${scores.grounding}, originality ${scores.originality}, usefulness ${scores.usefulness}, craft ${scores.craft}, audience fit ${scores.audienceFit}. ${critique.review.critique}${completionAfterMove.resolved ? "" : ` Remaining completion issues: ${completionAfterMove.unresolved.join("; ")}.`}`;
+      priorCritique = {
+        critique: critique.review.critique,
+        requiredChanges: Array.from(new Set([
+          ...critique.review.requiredChanges,
+          ...(!completionAfterMove.resolved ? completionAfterMove.unresolved.map((issue) => `Resolve ${issue}.`) : []),
+        ])).slice(0, 12),
+      };
       const professionalFloor = scores.clarity >= 86 && scores.grounding >= 88 && scores.originality >= 82 && scores.usefulness >= 84 && scores.craft >= 88 && scores.audienceFit >= 84;
-      const latestMutationId = acknowledgedCandidate.mutationJournal?.at(-1)?.mutationId;
-      finalVerified = visibleMutationCount >= minimumMoves && critique.review.accepted && professionalFloor && liveAcknowledgementPassed(liveAck, latestMutationId);
+      const latestMutationId = acknowledgedMutationId;
+      finalVerified = critique.review.accepted && professionalFloor && completionAfterMove.resolved && liveAcknowledgementPassed(liveAck, latestMutationId);
       currentPackage = {
         ...currentPackage,
         creativeReviews: [...currentPackage.creativeReviews, critique.review].slice(-24),
@@ -7446,7 +7541,7 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
       detail: `Browser-verified “${move.label}” on the same living artboard. ${move.observableOutcome}`,
     });
 
-    if (finalVerified && visibleMutationCount >= minimumMoves) {
+    if (finalVerified) {
       // The next autonomous inspection may still continue when it sees an important unresolved issue.
       // This flag records that the current exact surface already clears the professional floor.
     }
@@ -7459,11 +7554,29 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
   // so completion cannot fail because a final model call emitted an unsupported
   // operation or promised an unobservable geometry change.
   try {
-    const publicationBase = callbacks.getVisibleArtifact() ?? currentPackage;
-    const publicationDraft = buildDeterministicNorthstarPublicationDraft({
-      previous: publicationBase,
-      objective: intent.objective || message,
-    });
+    const publicationVisible = callbacks.getVisibleArtifact() ?? currentPackage;
+    const publicationBase = materializeNorthstarCanonicalPackage(publicationVisible, callbacks.getLastMutationAck?.());
+    const publicationCompletion = assessNorthstarArtifactCompletion(publicationBase, callbacks.getLastMutationAck?.());
+    const publicationBlockers = [
+      ...publicationCompletion.unresolved,
+      ...(blockingMoveFailure ? [`required visible transaction remains rejected: ${blockingMoveFailure}`] : []),
+    ];
+    if (publicationBlockers.length > 0) {
+      currentPackage = {
+        ...publicationBase,
+        provisional: true,
+        publicationState: "working",
+        diagnostics: [
+          ...publicationBase.diagnostics,
+          `Northstar withheld deterministic publication because the artboard is still unfinished: ${publicationCompletion.unresolved.join("; ")}.`,
+        ].slice(-60),
+      };
+      finalVerified = false;
+    } else {
+      const publicationDraft = prepareNorthstarEditorialPublicationDraft(buildDeterministicNorthstarPublicationDraft({
+        previous: publicationBase,
+        objective: intent.objective || message,
+      }));
     const publicationCandidate: NorthstarGeneratedCodeArtifactPackage = {
       ...appendNorthstarArtboardMutation({
         previous: publicationBase,
@@ -7502,6 +7615,7 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
       currentPackage = callbacks.getVisibleArtifact() ?? currentPackage;
       finalVerified = false;
     }
+    }
   } catch (error) {
     if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
     console.warn(
@@ -7517,7 +7631,7 @@ ${requireStructuralAnalysisLane ? "A prior analytical overlay collided with prot
     creativeDirection,
     diagnostics: [
       ...currentPackage.diagnostics,
-      `Northstar v0.5.3.2 accumulated ${visibleMutationCount} browser-acknowledged visible mutations on one continuously mounted artboard.`,
+      `Northstar v0.6.4.0 accumulated ${visibleMutationCount} browser-acknowledged visible mutations on one continuously mounted artboard.`,
       latestReviewSummary,
     ].slice(-60),
     provisional: !finalVerified,
@@ -9421,6 +9535,37 @@ function collectToolVisualCandidates(toolResults: ToolResult[]) {
   return candidates;
 }
 
+function extractCanonicalArtifactStateFromToolResults(toolResults: ToolResult[]): Record<string, unknown> | undefined {
+  const seen = new Set<unknown>();
+  const candidates: Record<string, unknown>[] = [];
+  const visit = (value: unknown, depth = 0) => {
+    if (depth > 9 || value === null || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    const row = value as Record<string, unknown>;
+    if (typeof row.artifactId === "string" && typeof row.revisionId === "string" && typeof row.title === "string") candidates.push(row);
+    Object.values(row).forEach((item) => visit(item, depth + 1));
+  };
+  visit(toolResults);
+  const artifact = candidates.at(-1);
+  if (!artifact) return undefined;
+  return {
+    artifactId: artifact.artifactId,
+    revisionId: artifact.revisionId,
+    title: artifact.title,
+    description: artifact.description,
+    visualStrategy: artifact.visualStrategy,
+    publicationState: artifact.publicationState,
+    provisional: artifact.provisional,
+    preferredWidth: artifact.preferredWidth,
+    preferredHeight: artifact.preferredHeight,
+    diagnostics: Array.isArray(artifact.diagnostics) ? artifact.diagnostics.slice(-8) : undefined,
+  };
+}
+
 function encodeSseEvent(event: string, data: unknown): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
@@ -10117,6 +10262,15 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             await yieldToStream(request.signal);
 
             if (compositionRequested && preparedCompositionArtifactId && !preparedSelectedArtifact) {
+              const foundationActivityId = "validate-live-artboard-foundation";
+              send("plan.extended", {
+                runId,
+                title: planner.title,
+                visualStrategy: "Northstar is validating the opening visual scene before grounded evidence enters.",
+                steps: [{ id: foundationActivityId, label: "Validate the opening visual scene", tool: "compose_visual_scene", icon: "write", status: "pending", objectIds: [] }],
+              });
+              send("step.started", { runId, stepId: foundationActivityId });
+              send("tool.started", { runId, stepId: foundationActivityId, tool: "compose_visual_scene", label: "Validate the opening visual scene" });
               const catalog = await getDataCatalog();
               const requestedApps = compositionCheckpoint?.requestedApps.length
                 ? compositionCheckpoint.requestedApps
@@ -10209,14 +10363,18 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   intrinsicBounds: initialAck.size?.contentBounds ?? dispatchedInitialPackage.intrinsicBounds,
                   runtimeReview: initialAck.review,
                 };
+                send("tool.completed", { runId, stepId: foundationActivityId, tool: "compose_visual_scene", detail: "The opening visual scene passed semantic, media, and browser validation." });
+                send("step.completed", { runId, stepId: foundationActivityId, detail: "Opening visual scene verified and ready for grounded evidence.", objectIds: [] });
               } catch (initialArtifactError) {
                 if (request.signal.aborted || (initialArtifactError instanceof DOMException && initialArtifactError.name === "AbortError")) {
                   throw initialArtifactError;
                 }
                 throwIfGeminiInfrastructureError(initialArtifactError);
-                // A malformed optional live-state revision must never cancel the grounded run.
-                // Research continues and the next checkpoint retries the same artifact with richer data.
-                console.warn("Northstar deferred the initial live artifact and continued the run:", initialArtifactError);
+                const foundationFailureDetail = initialArtifactError instanceof Error ? initialArtifactError.message : "The opening visual scene could not be verified.";
+                send("tool.failed", { runId, stepId: foundationActivityId, tool: "compose_visual_scene", detail: foundationFailureDetail });
+                send("step.failed", { runId, stepId: foundationActivityId, detail: foundationFailureDetail });
+                console.warn("Northstar rejected the invalid opening visual scene:", initialArtifactError);
+                throw new Error(`Northstar stopped before research because the opening visual scene was invalid: ${foundationFailureDetail}`);
               }
             }
 
@@ -10375,6 +10533,39 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             let liveLateAcknowledgementCount = 0;
             let liveQualityRejectionCount = 0;
 
+            const proposalPreservesSceneContinuity = (
+              packageValue: NorthstarGeneratedCodeArtifactPackage,
+            ): { ok: true } | { ok: false; reason: string } => {
+              const latest = packageValue.mutationJournal?.at(-1);
+              if (!latest) return { ok: true };
+              const protectedTargets = new Set(["artboard", "header", "evidence", "synthesis", "decision"]);
+              for (const operation of latest.operations) {
+                if (operation.op === "set-html" && protectedTargets.has(operation.targetId)) {
+                  return { ok: false, reason: `Blocked destructive replacement of ${operation.targetId}.` };
+                }
+                if (operation.op === "remove" && protectedTargets.has(operation.targetId)) {
+                  return { ok: false, reason: `Blocked removal of canonical scene region ${operation.targetId}.` };
+                }
+                if (operation.op === "set-css-layer" && /(?:data-ns-node-id=["']?artboard|\.ns-(?:artifact|visual-scene))[^{}]*\{[^{}]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$))/i.test(operation.css || "")) {
+                  return { ok: false, reason: "Blocked a CSS layer that would blank the live artboard." };
+                }
+                if (operation.op === "set-css-layer" && /\.working-flow__sequence[^{}]*\{[^{}]*(?:display\s*:\s*grid|flex-wrap\s*:\s*wrap)/i.test(operation.css || "")) {
+                  return { ok: false, reason: "Blocked a CSS layer that would collapse an ordered evidence journey into a wrapped or grid layout." };
+                }
+                if (operation.op === "set-css-layer" && /\.working-flow__sequence[^{}]*\{[^{}]*flex-direction\s*:\s*column/i.test(operation.css || "")) {
+                  const declaredTopologyChange = latest.operations.some((candidate) =>
+                    candidate.op === "set-attributes" &&
+                    candidate.targetId === "artboard" &&
+                    candidate.attributes?.["data-ns-approved-evidence-topology"] === "radical-reflow",
+                  );
+                  if (!declaredTopologyChange) {
+                    return { ok: false, reason: "Blocked an undeclared radical evidence-orientation change. Preserve the current topology or declare a rendered-study-approved reflow on the artboard." };
+                  }
+                }
+              }
+              return { ok: true };
+            };
+
             const dispatchLiveArtifactPackageInternal = async (
               packageValue: NorthstarGeneratedCodeArtifactPackage,
               stageIndex: number,
@@ -10382,6 +10573,24 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             ): Promise<boolean> => {
               const publicationProposal = /publish|publication/i.test(label);
               if (liveExecutionCircuitOpen && !publicationProposal) return false;
+
+              const activityStepId = `visual-update-${stageIndex}-${crypto.randomUUID()}`;
+              send("plan.extended", {
+                runId,
+                title: planner.title,
+                visualStrategy: `${NORTHSTAR_CANONICAL_EVIDENCE_SCENE_VERSION}: Northstar is updating the same canonical visual scene without clearing the artboard.`,
+                steps: [{ id: activityStepId, label, tool: "compose_visual_scene", icon: "write", status: "pending", objectIds: [] }],
+              });
+              send("step.started", { runId, stepId: activityStepId });
+              send("tool.started", { runId, stepId: activityStepId, tool: "compose_visual_scene", label });
+
+              const continuity = proposalPreservesSceneContinuity(packageValue);
+              if (!continuity.ok) {
+                send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail: continuity.reason });
+                send("step.failed", { runId, stepId: activityStepId, detail: continuity.reason });
+                console.warn("Northstar blocked a destructive scene proposal.", continuity.reason);
+                return false;
+              }
 
               const committed = liveArtboardActor.snapshot();
               let candidate: NorthstarGeneratedCodeArtifactPackage;
@@ -10391,6 +10600,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   candidate: packageValue,
                 });
               } catch (error) {
+                const detail = error instanceof Error ? error.message : String(error);
+                send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                send("step.failed", { runId, stepId: activityStepId, detail });
                 console.warn("Northstar blocked a proposal that was not based on the committed artboard.", error);
                 return false;
               }
@@ -10399,6 +10611,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               try {
                 proposal = liveArtboardActor.begin(candidate);
               } catch (error) {
+                const detail = error instanceof Error ? error.message : String(error);
+                send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                send("step.failed", { runId, stepId: activityStepId, detail });
                 console.warn("Northstar actor refused the proposal.", error);
                 return false;
               }
@@ -10453,6 +10668,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   liveArtboardActor.discard(proposal);
                   liveExecutionCircuitOpen = true;
                   liveExecutionFaultReason = `No terminal acknowledgement was recorded for proposal ${proposal.proposalId}.`;
+                  const detail = "Visual update could not be verified before the proposal deadline. The last coherent artboard was preserved.";
+                  send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                  send("step.failed", { runId, stepId: activityStepId, detail });
                   console.warn("Northstar stopped creative execution after an unresolved proposal deadline; the last committed artboard was preserved.");
                   return false;
                 }
@@ -10466,14 +10684,23 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   lastLiveMutationAck = acknowledgement;
                   if (isExpectedNorthstarQualityRejection(acknowledgement)) {
                     liveQualityRejectionCount += 1;
+                    const detail = acknowledgement.reason || "The browser rejected this visual update while preserving the last coherent scene.";
+                    send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                    send("step.failed", { runId, stepId: activityStepId, detail });
                     return false;
                   }
                   if (isNorthstarLineageFault(acknowledgement)) {
                     liveExecutionCircuitOpen = true;
                     liveExecutionFaultReason = acknowledgement.reason || "The browser and route revisions diverged.";
+                    const detail = acknowledgement.reason || "The browser and route revisions diverged. The last coherent artboard was preserved.";
+                    send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                    send("step.failed", { runId, stepId: activityStepId, detail });
                     console.warn("Northstar stopped creative execution after a revision reconciliation fault; the last committed artboard was preserved.");
                     return false;
                   }
+                  const detail = acknowledgement.reason || "Browser verification rejected this visual update. The last coherent artboard was preserved.";
+                  send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                  send("step.failed", { runId, stepId: activityStepId, detail });
                   console.warn("Northstar rejected a proposal because browser verification failed.", {
                     proposalId: proposal.proposalId,
                     status: acknowledgement.status,
@@ -10503,12 +10730,86 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   },
                   ok: true,
                 });
+                send("tool.completed", {
+                  runId,
+                  stepId: activityStepId,
+                  tool: "compose_visual_scene",
+                  detail: "The browser verified the canonical scene update without clearing the artboard.",
+                });
+                send("step.completed", {
+                  runId,
+                  stepId: activityStepId,
+                  detail: "Visual update verified and committed to the same living artboard.",
+                  objectIds: [],
+                });
                 return true;
               } catch (error) {
                 liveArtboardActor.discard(proposal);
-                if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+                if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+                  // A stop can arrive while the browser is showing an uncommitted candidate.
+                  // Re-publish the actor's committed snapshot before terminating so the
+                  // Canvas never serializes or leaves a provisional duplicate scene visible.
+                  const rollbackPackage = {
+                    ...liveArtboardActor.snapshot(),
+                    pendingAckToken: undefined,
+                    provisional: false,
+                    status: "ready" as const,
+                  };
+                  const rollbackStep: PlannerStep = {
+                    id: `rollback-live-artifact-${crypto.randomUUID()}`,
+                    label: "Restore the last verified artboard",
+                    tool: "compose_visual_scene",
+                    icon: "write",
+                    arguments: {
+                      artifactId: rollbackPackage.artifactId,
+                      artifactType: rollbackPackage.artifactType as ArtifactType,
+                      executionDepth: compositionDepth,
+                      workingVisibility: "hidden",
+                      audience: rollbackPackage.audience as ArtifactAudience,
+                      title: rollbackPackage.title,
+                      compositionJson: JSON.stringify({
+                        schema: NORTHSTAR_CODE_ARTIFACT_ACTION_SCHEMA,
+                        artifactId: rollbackPackage.artifactId,
+                        command: "create-or-update",
+                        stageIndex,
+                        package: rollbackPackage,
+                      }),
+                      resultKey: "live-generated-artifact",
+                      placement: "center",
+                      selectAfter: false,
+                    },
+                  };
+                  try {
+                    const rollbackAction = await buildCanvasActionRequest({
+                      step: rollbackStep,
+                      getDataCatalog,
+                      previousResults: toolResults,
+                      canvasContext: body.canvasContext,
+                      selectedCanvasContext: body.selectedCanvasContext,
+                      validObjectIds,
+                    });
+                    send("canvas.action.requested", { runId, action: rollbackAction });
+                    send("tool.failed", {
+                      runId,
+                      stepId: activityStepId,
+                      tool: "compose_visual_scene",
+                      detail: "Run stopped. The last browser-verified artboard was restored.",
+                    });
+                    send("step.failed", {
+                      runId,
+                      stepId: activityStepId,
+                      detail: "Run stopped. The last browser-verified artboard was restored.",
+                    });
+                  } catch (rollbackError) {
+                    console.warn("Northstar could not dispatch the stop-time visual rollback.", rollbackError);
+                  }
+                  throw error;
+                }
                 liveExecutionCircuitOpen = true;
                 liveExecutionFaultReason = error instanceof Error ? error.message : String(error);
+                const detail = `${liveExecutionFaultReason}. The last coherent artboard was preserved.`;
+                send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                send("step.failed", { runId, stepId: activityStepId, detail });
                 console.warn("Northstar stopped creative execution after an unrecovered proposal fault; the last committed artboard was preserved.");
                 return false;
               }
@@ -10946,6 +11247,11 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
                     throw error;
                   }
+                  const detail = error instanceof Error ? error.message : String(error ?? "Unknown checkpoint error");
+                  if (/duplicates the immediately previous mutation|did not visibly change enough semantic content|repeats a recent artistic decision/i.test(detail)) {
+                    console.info("Northstar skipped an idempotent live-artifact checkpoint because the current scene already expresses the intended change.");
+                    return;
+                  }
                   console.warn("Northstar skipped a non-critical live-artifact checkpoint and continued:", error);
                 }
               },
@@ -11312,6 +11618,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               title: planner.title,
               completedToolResults: toolResults,
             },
+            canonicalArtifactState: extractCanonicalArtifactStateFromToolResults(toolResults),
             executionGrounding: {
               intentKind: semanticIntent.kind,
               requiresTools: semanticIntent.requiresTools,
