@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-mutation-compiler.ts
-// Northstar v0.6.0.1.1 — compile-correct evidence-safe analytical placement and whole-board creative safety compiler.
+// Northstar v0.7.1.2 — compile-correct evidence-safe analytical placement and whole-board creative safety compiler.
 import {
   normalizeNorthstarRelationshipMarkup,
   relationshipInventory,
@@ -7,6 +7,7 @@ import {
 } from "@/lib/canvas-ai/northstar-semantic-relationships";
 import {
   repairNorthstarArtboardMutationDraft,
+  validateNorthstarStageMateriality,
   type NorthstarArtboardMutationDraft,
 } from "@/lib/canvas-ai/northstar-artboard-mutations";
 import type {
@@ -559,6 +560,14 @@ export function compileNorthstarMutationDraft(input: {
   const filtered = filterDeterministicNoOps(input.previous, operations, input.semanticSnapshot);
   if (filtered.skipped > 0) {
     repairs.push(`Skipped ${filtered.skipped} deterministic no-op operation${filtered.skipped === 1 ? "" : "s"} before browser dispatch.`);
+  }
+
+  const phaseMatch = `${initiallyRepaired.draft.title} ${initiallyRepaired.draft.description} ${initiallyRepaired.draft.visualStrategy}`.match(/\b(evidence|analysis|recommendation|refinement)\b/i);
+  const inferredPhase = (phaseMatch?.[1]?.toLowerCase() ?? "analysis") as "evidence" | "analysis" | "recommendation" | "refinement";
+  const materialityIssues = validateNorthstarStageMateriality({ phase: inferredPhase, operations: filtered.operations });
+  if (materialityIssues.length > 0) {
+    repairs.push(...materialityIssues);
+    return { draft: { ...initiallyRepaired.draft, operations: [] }, repairs };
   }
 
   return {

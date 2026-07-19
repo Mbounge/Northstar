@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-design-intelligence.ts
-// Northstar Design Intelligence v0.6.4.0 — universal model-led visual reasoning, Northstar taste, and non-template composition intelligence
+// Northstar Design Intelligence v0.7.0 — universal model-led visual reasoning, Northstar taste, and non-template composition intelligence
 import { createHash, randomUUID } from "node:crypto";
 import type {
   CanvasCodeArtifactRuntimeReview,
@@ -12,9 +12,14 @@ import type {
   NorthstarThinkingDepth,
   NorthstarWebArtifactDocument,
 } from "@/lib/canvas-artifacts/types";
+import type {
+  NorthstarEvidenceRole,
+  NorthstarObligationKey,
+  NorthstarVisualOperationKind,
+} from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
 
 
-export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.6.4.0" as const;
+export const NORTHSTAR_VISUAL_IDENTITY_VERSION = "northstar.visual-identity.v0.7.0" as const;
 
 export const NORTHSTAR_VISUAL_IDENTITY = `
 NORTHSTAR VISUAL IDENTITY — TASTE, NOT TEMPLATES
@@ -240,82 +245,149 @@ export interface NorthstarDynamicDesignMoveDraft {
   continueDesigning: boolean;
   label: string;
   phase: "analysis" | "recommendation" | "refinement";
+  obligation: NorthstarObligationKey;
+  operationKind: NorthstarVisualOperationKind;
   diagnosis: string;
   intent: string;
   observableOutcome: string;
+  expectedSemanticDelta: string;
+  affectedNodeIds: string[];
+  evidenceRoles: Array<{ evidenceId: string; role: NorthstarEvidenceRole; reason: string }>;
+  relationship?: {
+    sourceNodeId: string;
+    targetNodeId: string;
+    type: string;
+    meaning: string;
+    confidence: "observed" | "interpretive";
+  };
   successCriteria: string[];
   stopReason: string;
 }
+
+const NORTHSTAR_OBLIGATION_VALUES: NorthstarObligationKey[] = [
+  "visual-thesis", "first-evidence", "evidence-hierarchy", "reasoning-placement", "hypothesis-tested",
+  "relationship-visible", "synthesis", "contextual-resolution", "geometry", "process-settled",
+  "publication-cleanup", "final-response-grounding",
+];
+
+const NORTHSTAR_OPERATION_VALUES: NorthstarVisualOperationKind[] = [
+  "promote-focal-evidence", "compress-supporting-evidence", "establish-comparison-spine",
+  "establish-divergence-structure", "rank-evidence", "annotate-turning-point",
+  "connect-evidence-to-claim", "create-axis", "form-cluster", "create-continuum", "express-tension",
+  "route-connector", "introduce-semantic-zoom", "consolidate-redundancy",
+  "transform-reasoning-into-insight", "dissolve-temporary-reasoning", "rebalance-composition",
+  "establish-synthesis", "resolve-open-question", "recompose-scene",
+];
 
 export const NORTHSTAR_DYNAMIC_DESIGN_MOVE_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
     continueDesigning: { type: "boolean" },
-    label: { type: "string", minLength: 1, maxLength: 120 },
+    label: { type: "string", minLength: 1, maxLength: 140 },
     phase: { type: "string", enum: ["analysis", "recommendation", "refinement"] },
-    diagnosis: { type: "string", minLength: 1, maxLength: 900 },
-    intent: { type: "string", minLength: 1, maxLength: 900 },
-    observableOutcome: { type: "string", minLength: 1, maxLength: 700 },
-    successCriteria: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 360 } },
+    obligation: { type: "string", enum: NORTHSTAR_OBLIGATION_VALUES },
+    operationKind: { type: "string", enum: NORTHSTAR_OPERATION_VALUES },
+    diagnosis: { type: "string", minLength: 1, maxLength: 1200 },
+    intent: { type: "string", minLength: 1, maxLength: 1200 },
+    observableOutcome: { type: "string", minLength: 1, maxLength: 900 },
+    expectedSemanticDelta: { type: "string", minLength: 1, maxLength: 900 },
+    affectedNodeIds: { type: "array", minItems: 1, maxItems: 30, items: { type: "string", minLength: 1, maxLength: 120 } },
+    evidenceRoles: {
+      type: "array", maxItems: 36,
+      items: {
+        type: "object", additionalProperties: false, required: ["evidenceId", "role", "reason"],
+        properties: {
+          evidenceId: { type: "string", minLength: 1, maxLength: 160 },
+          role: { type: "string", enum: ["focal", "supporting", "contextual", "redundant", "unresolved"] },
+          reason: { type: "string", minLength: 1, maxLength: 360 },
+        },
+      },
+    },
+    relationship: {
+      type: "object", additionalProperties: false, nullable: true,
+      required: ["sourceNodeId", "targetNodeId", "type", "meaning", "confidence"],
+      properties: {
+        sourceNodeId: { type: "string", minLength: 1, maxLength: 120 },
+        targetNodeId: { type: "string", minLength: 1, maxLength: 120 },
+        type: { type: "string", minLength: 1, maxLength: 120 },
+        meaning: { type: "string", minLength: 1, maxLength: 500 },
+        confidence: { type: "string", enum: ["observed", "interpretive"] },
+      },
+    },
+    successCriteria: { type: "array", minItems: 1, maxItems: 10, items: { type: "string", minLength: 1, maxLength: 420 } },
     stopReason: { type: "string", maxLength: 700 },
   },
-  required: ["continueDesigning", "label", "phase", "diagnosis", "intent", "observableOutcome", "successCriteria", "stopReason"],
+  required: ["continueDesigning", "label", "phase", "obligation", "operationKind", "diagnosis", "intent", "observableOutcome", "expectedSemanticDelta", "affectedNodeIds", "evidenceRoles", "successCriteria", "stopReason"],
 } as const;
 
 export function buildNorthstarDynamicDesignMoveSystemInstruction(): string {
   return `
-You are Northstar's autonomous creative director working on one continuously mounted living artboard.
+You are Northstar's continuous visual author working on one continuously mounted canonical artboard.
 
-Decide the single most valuable visual move now by inspecting the exact current render. There is no fixed checklist, stage sequence, or required label. Never reuse canned labels such as “tune evidence scale”, “organize the key relationship”, “expose the central tension”, or “form the visual argument”. Name the move specifically for what this artwork needs now.
+Select the highest-priority OPEN OBLIGATION supplied in the model input and design one material visual operation that closes or measurably advances it. The operation vocabulary is expressive rather than templated: promote focal evidence, compress support, establish comparison or divergence, rank evidence, annotate a turning point, connect evidence to a claim, create an axis, cluster, continuum, or tension, route a semantic connector, introduce semantic zoom, consolidate redundancy, transform reasoning into insight, dissolve temporary reasoning, rebalance, synthesize, resolve, or recompose. Choose the form from the evidence and visual thesis, never from a request-category layout mapping.
 
-Think like an exceptional editorial product designer:
-- diagnose the largest unresolved visual weakness visible in the current pixels
-- choose one concrete, cumulative move on existing semantic nodes
-- make evidence hierarchy, rhythm, meaning, and beauty materially better
-- preserve the same artboard, iframe, document, and useful existing work
-- use the eight references as the gold-standard taste bar, never as templates
-- prefer spatial composition, scale, grouping, pacing, contrast, selective evidence, and integrated synthesis over generic cards
-- treat annotation as an explanatory instrument, never decoration: no free-floating dots, dotted lines, pulses, arrows, or connectors without a named meaning and anchored source and destination
-- before drawing any relationship, state its exact source node, target node, semantic type, meaning, confidence, and expected viewer takeaway
-- use the real app icon or grounded product identity as the actor in maps and diagrams when it improves recognition; avoid generic anonymous pills
-- connector geometry must avoid important screenshot content and text, and labels must sit beside their actual anchor rather than float in empty space
-- qualitative axes must be explicitly labeled interpretive and explained; never imply measured precision without grounded data
-- periodically transform the composition around one primary relationship system instead of accumulating disconnected charts, cards, and annotations
-- alternate additive moves with subtraction, compression, relocation, enlargement, merging, and removal; do not solve every insight by appending another section
-- classify the required intervention in reasoning as polish, hierarchy, recomposition, or concept recovery; never prescribe polish for a structural failure
-- periodically challenge the entire composition and substantially rearrange existing nodes when the current visual form has reached a local minimum
-- preserve creative intent when an unsupported drawing technique was normalized away: re-express it through supported semantic nodes, relationships, grouping, spacing, scale, or structure instead of silently abandoning it
-- verify that the focal event, evidence roles, comparison basis, and signature execution are visible in the exact current pixels
-- do not repeat the previous move, reinsert an existing node, or merely rewrite progress copy
-- do not stop while the surface is still an evidence dump, visually generic, sparse, unreadable, repetitive, or below premium editorial craft
-- do not stop while synthesis, implication, recommendation, or decision areas are visually unfinished, confusing, placeholder-like, or spatially detached from their evidence
-- before stopping, remove unexplained marks, redundant cards, repeated messages, weak decorations, and anything that does not improve comprehension within three seconds
+Required behaviour:
+- inspect the exact current render and materialized semantic scene
+- preserve the existing beginning and the intended publication ending
+- address one declared obligation with one atomic, presentation-ready transaction
+- specify the expected visible delta and the expected semantic delta
+- identify affected existing semantic nodes
+- rank relevant evidence as focal, supporting, contextual, redundant, or unresolved
+- define exact semantic endpoints for every relationship
+- keep the working hypothesis and “What Northstar is testing” side by side in one reserved two-column normal-flow region
+- never use absolute or fixed positioning for that reasoning region
+- never count status copy, animation, a pulse, or an ineffective styling-only change as material progress
+- never create an equal-weight screenshot wall when hierarchy is available
+- reserve space and reflow affected regions in the same transaction
+- preserve complete screenshot evidence and registered assets
+- leave the whole artboard contained, readable, non-overlapping, and free of internal scrolling
+- transform, compress, relocate, merge, or remove existing material when that communicates better than appending
+- do not stop while any supplied obligation is open
 
-Every move is one visible reversible transaction on the canonical artboard: creative thesis, affected semantic regions, rollback authority, operations, required geometry, and publication consequences must agree before it is proposed. Never rely on a later repair pass to make the current move fit. If the current artboard cannot safely support the intended move, choose a different topology, subtraction, compression, or explicit geometry expansion in the same revision.
-
-Set continueDesigning=false only when the current canonical surface is genuinely resolved and no blocking obligation or rejected required transaction remains. A comparative board is not resolved while its synthesis or closing implication remains empty, confusing, clipped, or visibly provisional. Do not continue merely to satisfy an iteration quota. Return only JSON.
+Set continueDesigning=false only when the input reports no open process obligation. Return JSON only.
 `.trim();
 }
 
 export function sanitizeNorthstarDynamicDesignMove(
   value: NorthstarDynamicDesignMoveDraft,
-  input: { moveIndex: number; minimumMoves: number; recentLabels: string[] },
+  input: { moveIndex: number; requiredObligation?: NorthstarObligationKey },
 ): NorthstarDynamicDesignMoveDraft {
-  const recent = new Set(input.recentLabels.map((label) => label.toLowerCase()));
-  const label = cleanText(value?.label, 120) || `Refine the living composition ${input.moveIndex + 1}`;
-  let continueDesigning = Boolean(value?.continueDesigning);
-  if (continueDesigning && recent.has(label.toLowerCase())) {
-    continueDesigning = false;
-  }
+  const label = cleanText(value?.label, 140) || `Advance ${input.requiredObligation ?? "the open visual obligation"}`;
+  const obligation = input.requiredObligation
+    ?? (NORTHSTAR_OBLIGATION_VALUES.includes(value?.obligation) ? value.obligation : "visual-thesis");
+  const operationKind = NORTHSTAR_OPERATION_VALUES.includes(value?.operationKind) ? value.operationKind : "recompose-scene";
+  const affectedNodeIds = cleanStringArray(value?.affectedNodeIds, 30, 120);
+  const evidenceRoles = Array.isArray(value?.evidenceRoles)
+    ? value.evidenceRoles.filter((entry) => entry && typeof entry === "object").map((entry) => ({
+        evidenceId: cleanText(entry.evidenceId, 160),
+        role: (["focal", "supporting", "contextual", "redundant", "unresolved"] as NorthstarEvidenceRole[]).includes(entry.role) ? entry.role : "unresolved",
+        reason: cleanText(entry.reason, 360),
+      })).filter((entry) => entry.evidenceId && entry.reason).slice(0, 36)
+    : [];
+  const relationship = value?.relationship && cleanText(value.relationship.sourceNodeId, 120) && cleanText(value.relationship.targetNodeId, 120)
+    ? {
+        sourceNodeId: cleanText(value.relationship.sourceNodeId, 120),
+        targetNodeId: cleanText(value.relationship.targetNodeId, 120),
+        type: cleanText(value.relationship.type, 120) || "relationship",
+        meaning: cleanText(value.relationship.meaning, 500),
+        confidence: value.relationship.confidence === "observed" ? "observed" as const : "interpretive" as const,
+      }
+    : undefined;
   return {
-    continueDesigning,
+    continueDesigning: Boolean(value?.continueDesigning),
     label,
     phase: ["analysis", "recommendation", "refinement"].includes(value?.phase) ? value.phase : "analysis",
-    diagnosis: cleanText(value?.diagnosis, 900) || "The current artboard still has an unresolved visual hierarchy problem.",
-    intent: cleanText(value?.intent, 900) || "Make one specific cumulative visual improvement on the existing artboard.",
-    observableOutcome: cleanText(value?.observableOutcome, 700) || "The improvement is clearly visible in the exact live surface.",
-    successCriteria: cleanStringArray(value?.successCriteria, 8, 360).slice(0, 8),
+    obligation,
+    operationKind,
+    diagnosis: cleanText(value?.diagnosis, 1200) || `The ${obligation} obligation is still open in the current materialized scene.`,
+    intent: cleanText(value?.intent, 1200) || `Use ${operationKind} to materially advance ${obligation}.`,
+    observableOutcome: cleanText(value?.observableOutcome, 900) || "The exact visible composition changes in a way the browser can verify.",
+    expectedSemanticDelta: cleanText(value?.expectedSemanticDelta, 900) || `The ${obligation} obligation becomes materially closer to verified.`,
+    affectedNodeIds: affectedNodeIds.length ? affectedNodeIds : ["artboard"],
+    evidenceRoles,
+    relationship,
+    successCriteria: cleanStringArray(value?.successCriteria, 10, 420),
     stopReason: cleanText(value?.stopReason, 700),
   };
 }
@@ -325,8 +397,6 @@ export function buildNorthstarDynamicDesignMoveModelInput(input: {
   audience: string;
   artifactType: string;
   moveIndex: number;
-  minimumMoves: number;
-  maximumMoves: number;
   visibleMutationCount: number;
   currentTitle: string;
   currentDescription: string;
@@ -336,17 +406,21 @@ export function buildNorthstarDynamicDesignMoveModelInput(input: {
   runtimeReview?: CanvasCodeArtifactRuntimeReview;
   creativeDirection: NorthstarCreativeDirection;
   evidenceSummary: unknown;
+  openObligations?: NorthstarObligationKey[];
+  requiredObligation?: NorthstarObligationKey;
+  cadence?: { visibleCommitCount: number; silenceMs: number; visibleCommitDue: boolean };
+  recentDesignChoices?: string[];
 }): unknown {
   return {
-    mode: "autonomous-next-best-visual-move",
+    mode: "continuous-next-material-visual-operation",
     objective: input.objective,
     audience: input.audience,
     artifactType: input.artifactType,
-    iteration: {
-      index: input.moveIndex + 1,
-      minimumMoves: input.minimumMoves,
-      maximumMoves: input.maximumMoves,
+    process: {
       visibleMutationCount: input.visibleMutationCount,
+      openObligations: input.openObligations ?? [],
+      requiredObligation: input.requiredObligation,
+      cadence: input.cadence,
     },
     currentSurface: {
       title: input.currentTitle,
@@ -354,17 +428,20 @@ export function buildNorthstarDynamicDesignMoveModelInput(input: {
       geometry: input.currentGeometry,
       runtimeReview: input.runtimeReview,
     },
-    recentSuccessfulMoves: input.recentSuccessfulMoves.slice(-6),
+    recentSuccessfulMoves: input.recentSuccessfulMoves.slice(-8),
+    recentDesignChoices: input.recentDesignChoices?.slice(-12) ?? [],
     priorCritique: input.priorCritique,
     creativeDirection: input.creativeDirection,
     evidenceSummary: input.evidenceSummary,
     decisionContract: {
-      noFixedChecklist: true,
-      oneSpecificMoveOnly: true,
-      mustBeVisiblyDifferentFromRecentMoves: true,
-      mustTargetTheExactCurrentSurface: true,
-      sameLivingArtboard: true,
-      goldStandardReferencesAreTasteConditioning: true,
+      oneCanonicalArtboard: true,
+      oneMaterialOperation: true,
+      obligationDriven: true,
+      browserVerified: true,
+      horizontalReasoningTheatre: true,
+      noStatusOnlyProgress: true,
+      noEqualWeightEvidenceDefault: true,
+      noHardcodedLayoutChoice: true,
     },
   };
 }
@@ -1107,7 +1184,7 @@ export function buildCreativeCritiqueModelInput(input: {
   direction: NorthstarCreativeDirection;
   evidenceSummary: unknown;
   pass: number;
-  totalPasses: number;
+  remainingObligationCount: number;
   priorReviews?: NorthstarCreativeReview[];
   runtimeReview?: CanvasCodeArtifactRuntimeReview;
   renderCapture?: { width: number; height: number; mimeType: string };
@@ -1116,7 +1193,11 @@ export function buildCreativeCritiqueModelInput(input: {
 }): unknown {
   return {
     pass: input.pass,
-    totalPasses: input.totalPasses,
+    progress: {
+      committedTransactions: input.pass,
+      remainingObligations: input.remainingObligationCount,
+      quotaGoverned: false,
+    },
     title: input.title,
     description: input.description,
     visualStrategy: input.visualStrategy,
@@ -1140,7 +1221,7 @@ export function buildCreativeCritiqueModelInput(input: {
     originalityChecks: [
       "No literal copy of any reference layout or module order",
       "Selected visual metaphor is visible in the pixels",
-      "No generic dashboard fallback",
+      "No generic dashboard recovery",
       "No clipped or ellipsized important text",
       "Referenced flows use app identity and preserve authoritative order without implying false synchronization",
       "One focal event visibly dominates",
@@ -1194,14 +1275,14 @@ export function sanitizeCreativeExploration(
     concepts.push(concept);
     if (concepts.length >= conceptCount) break;
   }
-  let fallbackIndex = 0;
+  let recoveryIndex = 0;
   while (concepts.length < conceptCount) {
-    const fallback = fallbackConcept(fallbackIndex);
-    fallbackIndex += 1;
-    const identity = conceptIdentity(fallback);
+    const recovery = recoveryConcept(recoveryIndex);
+    recoveryIndex += 1;
+    const identity = conceptIdentity(recovery);
     if (identities.has(identity)) continue;
     identities.add(identity);
-    concepts.push(fallback);
+    concepts.push(recovery);
   }
 
   return { brief, concepts: concepts.slice(0, conceptCount) };
@@ -1216,7 +1297,7 @@ export function buildCreativeDirection(input: {
   const selected =
     input.exploration.concepts.find((concept) => concept.id === input.selection.selectedConceptId) ??
     input.exploration.concepts[0] ??
-    fallbackConcept(0);
+    recoveryConcept(0);
   const rejectedById = new Map(
     (Array.isArray(input.selection.rejectedConcepts) ? input.selection.rejectedConcepts : []).map((item) => [
       cleanText(item.id),
@@ -1271,7 +1352,7 @@ export function deterministicCreativeDirection(input: {
         constraints: ["One bounded artifact", "No invented metrics", "No expanded view"],
         creativeOpportunity: "Use the evidence relationship itself as the composition rather than a generic dashboard.",
       },
-      concepts: Array.from({ length: conceptCount }, (_, index) => fallbackConcept(index)),
+      concepts: Array.from({ length: conceptCount }, (_, index) => recoveryConcept(index)),
     },
     conceptCount,
     input.objective,
@@ -1359,11 +1440,11 @@ function sanitizeConcept(value: NorthstarCreativeConcept, index: number): Norths
     colorLogic: cleanText(value?.colorLogic).slice(0, 300) || "Restrained semantic accents",
     signature: (() => {
       const signature = cleanStringArray(value?.signature, 10, 100).slice(0, 10);
-      return signature.length >= 3 ? signature : fallbackConcept(index).signature;
+      return signature.length >= 3 ? signature : recoveryConcept(index).signature;
     })(),
     risks: (() => {
       const risks = cleanStringArray(value?.risks, 6, 220);
-      return risks.length > 0 ? risks : fallbackConcept(index).risks;
+      return risks.length > 0 ? risks : recoveryConcept(index).risks;
     })(),
     study: sanitizeConceptStudy(value?.study, index),
     renderedStudyFingerprint: cleanText(value?.renderedStudyFingerprint).slice(0, 80) || undefined,
@@ -1372,29 +1453,29 @@ function sanitizeConcept(value: NorthstarCreativeConcept, index: number): Norths
 
 
 function sanitizeConceptStudy(value: NorthstarCreativeConcept["study"], index: number): NonNullable<NorthstarCreativeConcept["study"]> {
-  const fallback = fallbackStudy(index);
+  const recovery = recoveryStudy(index);
   const document = value?.document;
   return {
     document: {
       schema: "northstar.web-artifact-document.v1",
-      html: cleanSource(document?.html).slice(0, 36000) || fallback.document.html,
-      css: cleanSource(document?.css).slice(0, 32000) || fallback.document.css,
+      html: cleanSource(document?.html).slice(0, 36000) || recovery.document.html,
+      css: cleanSource(document?.css).slice(0, 32000) || recovery.document.css,
       javascript: cleanSource(document?.javascript).slice(0, 12000),
     },
-    preferredWidth: clampInteger(value?.preferredWidth, 960, 2600, fallback.preferredWidth),
-    preferredHeight: clampInteger(value?.preferredHeight, 600, 1800, fallback.preferredHeight),
-    visualIntent: cleanText(value?.visualIntent).slice(0, 500) || fallback.visualIntent,
-    evidencePlan: cleanText(value?.evidencePlan).slice(0, 700) || fallback.evidencePlan,
+    preferredWidth: clampInteger(value?.preferredWidth, 960, 2600, recovery.preferredWidth),
+    preferredHeight: clampInteger(value?.preferredHeight, 600, 1800, recovery.preferredHeight),
+    visualIntent: cleanText(value?.visualIntent).slice(0, 500) || recovery.visualIntent,
+    evidencePlan: cleanText(value?.evidencePlan).slice(0, 700) || recovery.evidencePlan,
   };
 }
 
-function fallbackStudy(index: number): NonNullable<NorthstarCreativeConcept["study"]> {
+function recoveryStudy(index: number): NonNullable<NorthstarCreativeConcept["study"]> {
   const ordinal = index + 1;
   return {
     preferredWidth: 1280,
     preferredHeight: 760,
     visualIntent: "A neutral recovery study that exposes unresolved creative reasoning without selecting a style or layout.",
-    evidencePlan: "Use only supplied grounded material. This fallback must trigger renewed model reasoning rather than become a publishable composition.",
+    evidencePlan: "Use only supplied grounded material. This recovery must trigger renewed model reasoning rather than become a publishable composition.",
     document: {
       schema: "northstar.web-artifact-document.v1",
       html: `<main class="ns-artifact ns-concept-study" data-ns-design-kernel="v1"><p>Northstar concept ${ordinal}</p><h1 class="ns-thesis">Visual thesis unresolved</h1><p>The creative model must originate a problem-specific viewer transformation, evidence hierarchy, governing visual idea, and signature move.</p></main>`,
@@ -1404,13 +1485,13 @@ function fallbackStudy(index: number): NonNullable<NorthstarCreativeConcept["stu
   };
 }
 
-function clampInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {
+function clampInteger(value: unknown, minimum: number, maximum: number, recovery: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(minimum, Math.min(maximum, Math.round(value)))
-    : fallback;
+    : recovery;
 }
 
-function fallbackConcept(index: number): NorthstarCreativeConcept {
+function recoveryConcept(index: number): NorthstarCreativeConcept {
   return {
     id: `concept-unresolved-${index + 1}`,
     name: `Unresolved visual thesis ${index + 1}`,
@@ -1444,10 +1525,10 @@ function sanitizeScorecard(value: Partial<NorthstarCreativeScorecard> | undefine
   };
 }
 
-function score(value: unknown, fallback: number): number {
+function score(value: unknown, recovery: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, Math.min(100, Math.round(value)))
-    : fallback;
+    : recovery;
 }
 
 function cleanStringArray(value: unknown, maxItems: number, maxLength: number): string[] {
@@ -1470,13 +1551,13 @@ function cleanSource(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeId(value: unknown, fallback: string): string {
+function normalizeId(value: unknown, recovery: string): string {
   const normalized = cleanText(value)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "")
     .slice(0, 60);
-  return normalized || fallback;
+  return normalized || recovery;
 }
 
 function synthesizeThesis(objective: string): string {

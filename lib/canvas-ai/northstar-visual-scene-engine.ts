@@ -1,5 +1,5 @@
 // lib/canvas-ai/northstar-visual-scene-engine.ts
-// Northstar v0.6.4.0 — centralized reasoning zone and state-bound identity rendering.
+// Northstar Canvas v0.7.0 — canonical opening scene with reserved horizontal reasoning geometry.
 
 import type { CanvasCodeArtifactDataBundle, NorthstarWebArtifactDocument } from "@/lib/canvas-artifacts/types";
 
@@ -94,7 +94,7 @@ Do not assume a header, sidebar, evidence bay, card grid, or fixed slots. Choose
 
 Express hierarchy and relationships through semantic objects, band, order, span, emphasis, and material. Never output x/y coordinates, pixel widths, CSS, HTML, or layout templates. The renderer owns collision-free geometry.
 
-The title must belong to the governing visual idea. Working objects must visibly distinguish provisional, contested, confirmed, and resolved thinking. Evidence-field is an invisible semantic anchor, not a giant placeholder card. Use it exactly once.
+The title must belong to the governing visual idea. Keep it editorial and compressed: no more than 7 words and 64 characters. Put explanation in the framing copy, never in the headline. Working objects must visibly distinguish provisional, contested, confirmed, and resolved thinking. Evidence-field is an invisible semantic anchor, not a giant placeholder card. Use it exactly once.
 
 The opening scene is the first frame of the one canonical visible artboard, not a disposable draft. The user should understand that Northstar is actively thinking from meaningful, calm, visibly evolving objects. The opening scene should already feel premium, problem-specific, intentionally composed, and materially light. Use typography, evidence, spacing, alignment, rhythm, and negative space before adding visual furniture. Working thoughts are living multimodal objects, not generic yellow cards. The natural artboard surface is the default; cards, panels, pills, and filled containers require a specific visual justification. A thought may use a grounded screenshot crop, app icon, metric, quote, or compact evidence pair when media materially clarifies the reasoning. Do not add media decoratively. Vary material language across problems while maintaining one coherent scene art direction. Give provisional thoughts a publicationPolicy of working-only unless they deserve deliberate promotion. Avoid generic slogans, filler, and invented claims unsupported by the supplied evidence. If synthesis or decision roles appear, they must be planned as meaningful authored objects rather than placeholder bands. Return JSON only.`;
 }
@@ -107,9 +107,22 @@ export function buildNorthstarVisualSceneModelInput(input: {
   return JSON.stringify({ objective: input.objective, audience: input.audience, artifactType: input.artifactType, currentMessage: input.message, coverageSummary: input.dataBundle.coverageSummary, apps, evidence }, null, 2);
 }
 
-const safeHex = (value: string, fallback: string) => /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim() : fallback;
-const safeId = (value: string, fallback: string) => value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 72) || fallback;
+const safeHex = (value: string, defaultValue: string) => /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim() : defaultValue;
+const safeId = (value: string, defaultValue: string) => value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 72) || defaultValue;
 const escapeHtml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+function compressNorthstarEditorialTitle(value: string): string {
+  const cleaned = value
+    .replace(/^(?:a comparative analysis of|an executive comparison of|a comparison of|comparative analysis of|build|create|design)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const source = cleaned || "Northstar analysis";
+  const words = source.split(" ").filter(Boolean).slice(0, 7);
+  const compressed = words.join(" ");
+  if (compressed.length <= 64) return compressed;
+  return `${compressed.slice(0, 63).trimEnd()}…`;
+}
 function hexToRgb(hex: string): [number, number, number] {
   const value = safeHex(hex, "#77798a").slice(1);
   return [Number.parseInt(value.slice(0,2),16), Number.parseInt(value.slice(2,4),16), Number.parseInt(value.slice(4,6),16)];
@@ -151,7 +164,7 @@ export function sanitizeNorthstarVisualScenePlan(raw: unknown, input: { objectiv
     const role = validRoles.has(row.role as NorthstarSceneRole) ? row.role as NorthstarSceneRole : "research-note";
     objects.push({
       id: safeId(String(row.id ?? `${role}-${index + 1}`), `${role}-${index + 1}`), role,
-      content: String(row.content ?? "").trim().slice(0, 900),
+      content: role === "title" ? compressNorthstarEditorialTitle(String(row.content ?? "")) : String(row.content ?? "").trim().slice(0, 900),
       band: validBands.has(row.band as NorthstarSceneBand) ? row.band as NorthstarSceneBand : "working",
       emphasis: validEmphasis.has(row.emphasis as NorthstarSceneEmphasis) ? row.emphasis as NorthstarSceneEmphasis : "supporting",
       material: validMaterials.has(row.material as NorthstarSceneMaterial) ? row.material as NorthstarSceneMaterial : "quiet",
@@ -167,13 +180,26 @@ export function sanitizeNorthstarVisualScenePlan(raw: unknown, input: { objectiv
     });
   }
   const title = objects.find((object) => object.role === "title");
-  if (!title) objects.push({ id: "title", role: "title", content: input.objective.split(/[.!?]/)[0].split(/\s+/).slice(0, 8).join(" ").slice(0, 72), band: "opening", emphasis: "hero", material: "ink", span: 8, order: 0 });
+  if (!title) objects.push({ id: "title", role: "title", content: compressNorthstarEditorialTitle(input.objective), band: "opening", emphasis: "hero", material: "ink", span: 8, order: 0 });
   if (!objects.some((object) => object.role === "evidence-field")) objects.push({ id: "evidence", role: "evidence-field", content: "", band: "evidence", emphasis: "primary", material: "quiet", span: 12, order: 70 });
-  if (!objects.some((object) => ["open-question", "hypothesis", "contradiction", "research-note"].includes(object.role))) {
-    objects.push({ id: "opening-question", role: "open-question", content: "What will the evidence force Northstar to reconsider?", headline: "Question in play", band: "working", emphasis: "supporting", material: "note", span: 5, order: 45, publicationPolicy: "working-only" });
-  }
+  const thoughtRoles = new Set(["open-question", "hypothesis", "contradiction", "research-note"]);
+  const existingThoughts = objects.filter((object) => thoughtRoles.has(object.role));
+  const hypothesis = existingThoughts.find((object) => object.role === "hypothesis") ?? {
+    id: "opening-hypothesis", role: "hypothesis" as const,
+    content: "The strongest grounded evidence will reveal the governing pattern behind this question.",
+    headline: "Working hypothesis", band: "working" as const, emphasis: "supporting" as const,
+    material: "note" as const, span: 6, order: 42, publicationPolicy: "working-only" as const,
+  };
+  const currentTest = existingThoughts.find((object) => object.role === "open-question") ?? {
+    id: "opening-question", role: "open-question" as const,
+    content: "Which evidence deserves focal weight, and what relationship will make the answer visible?",
+    headline: "What Northstar is testing", band: "working" as const, emphasis: "supporting" as const,
+    material: "outline" as const, span: 6, order: 43, publicationPolicy: "working-only" as const,
+  };
+  const withoutThoughts = objects.filter((object) => !thoughtRoles.has(object.role));
+  const normalizedObjects = [...withoutThoughts, hypothesis, currentTest];
   const seen = new Set<string>();
-  const unique = objects.filter((object) => !seen.has(object.id) && seen.add(object.id)).slice(0, 14);
+  const unique = normalizedObjects.filter((object) => !seen.has(object.id) && seen.add(object.id)).slice(0, 14);
   return {
     sceneId: safeId(String(source.sceneId ?? "opening-scene"), "opening-scene"),
     threeSecondRead: String(source.threeSecondRead ?? input.objective).slice(0, 420),
@@ -195,9 +221,11 @@ export function deterministicNorthstarVisualScenePlan(input: { objective: string
     sceneId: "grounded-opening", threeSecondRead: input.objective, governingIdea: "Begin with the central question and let the evidence reorganize the field.", emotionalRegister: "editorial, curious, exact", signatureMoveInProgress: "The board will progressively replace questions with evidence-backed claims.",
     artDirection: { background: "#fbfaff", ink: "#171820", accent: "#6b4dff", supporting: "#747787", radius: "mixed", density: "airy" },
     objects: [
-      { id: "title", role: "title", content: input.objective.replace(/^(build|create|make|design)\s+/i, "").split(/[.!?]/)[0].split(/\s+/).slice(0, 8).join(" ").slice(0, 72), band: "opening", emphasis: "hero", material: "ink", span: 8, order: 0 },
+      { id: "title", role: "title", content: compressNorthstarEditorialTitle(input.objective), band: "opening", emphasis: "hero", material: "ink", span: 8, order: 0 },
       ...apps.map((app, index) => ({ id: `identity-${index + 1}`, role: "identity", content: app.name, appName: app.name, band: "opening", emphasis: "supporting", material: "paper", span: 2, order: 10 + index })),
       { id: "current-act", role: "status", content: "Northstar is establishing the question, evidence, and provisional visual direction.", band: "working", emphasis: "peripheral", material: "quiet", span: 3, order: 25 },
+      { id: "opening-hypothesis", role: "hypothesis", content: "The strongest grounded evidence will reveal the governing pattern behind this question.", headline: "Working hypothesis", band: "working", emphasis: "supporting", material: "note", span: 6, order: 42, publicationPolicy: "working-only" },
+      { id: "opening-question", role: "open-question", content: "Which evidence deserves focal weight, and what relationship will make the answer visible?", headline: "What Northstar is testing", band: "working", emphasis: "supporting", material: "outline", span: 6, order: 43, publicationPolicy: "working-only" },
       { id: "evidence", role: "evidence-field", content: "", band: "evidence", emphasis: "primary", material: "quiet", span: 12, order: 70 },
     ],
   }, input);
@@ -207,7 +235,7 @@ function identityMarkup(object: NorthstarVisualSceneObject, dataBundle: CanvasCo
   const app = dataBundle.apps.find((candidate) => candidate.name.toLowerCase() === (object.appName || object.content).toLowerCase());
   const name = app?.name || object.content;
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  return `<article class="ns-scene-object ns-role-identity ns-material-${object.material}" data-ns-node-id="identity-${escapeHtml(slug)}" data-ns-working-role="identity" style="--span:${object.span}">${app?.iconUrl ? `<img src="${escapeHtml(app.iconUrl)}" alt="${escapeHtml(name)} icon">` : ""}<div><strong>${escapeHtml(name)}</strong><span data-ns-node-id="identity-${escapeHtml(slug)}-status" data-ns-identity-status="foundation">Preparing source context and grounded evidence.</span></div></article>`;
+  return `<article class="ns-scene-object ns-role-identity ns-material-${object.material}" data-ns-node-id="identity-${escapeHtml(slug)}" data-ns-working-role="identity" style="--span:${object.span}">${app?.iconUrl ? `<img src="${escapeHtml(app.iconUrl)}" alt="${escapeHtml(name)} icon">` : ""}<div><strong>${escapeHtml(name)}</strong><span data-ns-node-id="identity-${escapeHtml(slug)}-status" data-ns-identity-status="foundation">Establishing the grounded visual argument.</span></div></article>`;
 }
 type NorthstarCssDeclarationValue = string | number;
 type NorthstarCssRule = {
@@ -253,6 +281,12 @@ export function validateNorthstarVisualSceneDocument(document: NorthstarWebArtif
   if (/grid-template-columns:repeat\(auto-fit/i.test(document.css)) {
     issues.push("Ordered evidence sequences may not silently wrap into an auto-fit grid.");
   }
+  if (!/\.ns-reasoning-zone\{[^}]*position:relative[^}]*display:grid[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/i.test(document.css)) {
+    issues.push("The reasoning theatre must be a reserved two-column normal-flow region.");
+  }
+  if (/\.ns-reasoning-zone\{[^}]*position:(?:absolute|fixed)/i.test(document.css)) {
+    issues.push("The reasoning theatre may not overlay the artboard.");
+  }
   const nodeIds = [...document.html.matchAll(/data-ns-node-id=["\']([^"\']+)["\']/g)].map((match) => match[1]);
   const duplicateIds = [...new Set(nodeIds.filter((id, index) => nodeIds.indexOf(id) !== index))];
   if (duplicateIds.length) issues.push(`Scene HTML contains duplicate semantic node ids: ${duplicateIds.join(", ")}.`);
@@ -269,7 +303,7 @@ function isThoughtRole(role: NorthstarSceneRole): boolean {
 }
 
 function allocateThoughtNodeIds(objects: NorthstarVisualSceneObject[]): Map<string, string> {
-  const canonical = ["thought-primary", "thought-secondary", "thought-tertiary"];
+  const canonical = ["thought-primary", "thought-secondary"];
   const result = new Map<string, string>();
   let index = 0;
   for (const object of objects) {
@@ -324,7 +358,7 @@ export function renderNorthstarVisualSceneDocument(plan: NorthstarVisualScenePla
     return `<article class="ns-scene-object ns-role-${object.role} ns-material-${object.material} ns-emphasis-${object.emphasis}" data-ns-node-id="${escapeHtml(object.id)}" data-ns-working-role="${object.role}" data-ns-publication-policy="${escapeHtml(object.publicationPolicy || "retain")}" style="--span:${object.span}">${escapeHtml(object.content)}</article>`;
   };
   const mainObjects = plan.objects.filter((object) => !isThoughtRole(object.role)).map(renderObject).join("");
-  const thoughtObjects = plan.objects.filter((object) => isThoughtRole(object.role)).map(renderObject).join("");
+  const thoughtObjects = plan.objects.filter((object) => isThoughtRole(object.role)).slice(0, 2).map(renderObject).join("");
   const objects = `${mainObjects}${thoughtObjects ? `<aside class="ns-reasoning-zone" data-ns-node-id="reasoning-zone" data-ns-working-role="reasoning">${thoughtObjects}</aside>` : ""}`;
 
   const safeSupporting = contrastSafeSupportingColor(plan.artDirection.supporting, plan.artDirection.background, plan.artDirection.ink);
@@ -332,8 +366,9 @@ export function renderNorthstarVisualSceneDocument(plan: NorthstarVisualScenePla
     { selector: ".ns-visual-scene", declarations: { position: "relative", width: `${artboardWidth}px`, "min-width": "1180px", "min-height": "720px", "box-sizing": "border-box", padding: "48px 56px 64px", background: `radial-gradient(circle at 18% -8%,color-mix(in srgb,${plan.artDirection.accent} 13%,transparent),transparent 36%),${plan.artDirection.background}`, color: plan.artDirection.ink, "font-family": "Inter,ui-sans-serif,system-ui,sans-serif", overflow: "visible" } },
     { selector: ".ns-scene-grid", declarations: { display: "grid", "grid-template-columns": "repeat(12,minmax(0,1fr))", "grid-auto-flow": "row dense", gap: `${gap}px`, "align-items": "start" } },
     { selector: ".ns-scene-object", declarations: { "grid-column": "span min(var(--span,4),12)", "min-width": "0", "box-sizing": "border-box" } },
-    { selector: ".ns-reasoning-zone", declarations: { position: "absolute", top: "48px", right: "56px", width: "min(620px,32%)", display: "grid", gap: "14px", "z-index": "4" } },
-    { selector: ".ns-reasoning-zone .ns-thought", declarations: { width: "100%", margin: "0" } },
+    { selector: ".ns-role-title,.ns-role-framing", declarations: { "grid-column": "1/7" } },
+    { selector: ".ns-reasoning-zone", declarations: { position: "relative", inset: "auto", "grid-column": "7/-1", "grid-row": "1/span 3", width: "auto", display: "grid", "grid-template-columns": "repeat(2,minmax(0,1fr))", "align-items": "start", gap: "18px", "z-index": "auto", "min-width": "0" } },
+    { selector: ".ns-reasoning-zone .ns-thought", declarations: { "grid-column": "auto", width: "auto", "min-width": "0", margin: "0" } },
     { selector: ".ns-role-title", declarations: { margin: "0", "font-size": "clamp(42px,3.4vw,68px)", "line-height": ".96", "letter-spacing": "-.052em", "font-weight": "880", "text-wrap": "balance", "max-width": "15ch" } },
     { selector: ".ns-role-framing", declarations: { "font-size": "21px", "line-height": "1.42", "max-width": "72ch", color: safeSupporting } },
     { selector: ".ns-role-status", declarations: { "justify-self": "end", padding: "14px 16px", "border-left": `2px solid ${plan.artDirection.accent}`, "font-size": "14px", "line-height": "1.4", "max-width": "36ch" } },
@@ -358,13 +393,13 @@ export function renderNorthstarVisualSceneDocument(plan: NorthstarVisualScenePla
     { selector: ".ns-thought[data-ns-thought-state=\"resolved\"]", declarations: { opacity: ".58", transform: "scale(.985)", filter: "saturate(.72)" } },
     { selector: ".ns-thought[data-ns-thought-state=\"exiting\"]", declarations: { opacity: "0", transform: "translateY(8px) scale(.98)" } },
     { selector: ".ns-material-note", declarations: { background: "transparent", "box-shadow": "none", "border-left": `2px solid color-mix(in srgb,${plan.artDirection.accent} 46%,transparent)`, "padding-left": "12px" } },
-    { selector: ".ns-material-paper", declarations: { background: "transparent", "box-shadow": "none", "border-top": `1px solid color-mix(in srgb,${plan.artDirection.ink} 14%,transparent)` } },
+    { selector: ".ns-material-paper", declarations: { background: "transparent", "box-shadow": "none", border: "0" } },
     { selector: ".ns-material-outline", declarations: { border: "0", "border-left": `2px solid color-mix(in srgb,${plan.artDirection.accent} 72%,transparent)`, "padding-left": "12px" } },
     { selector: ".ns-material-signal", declarations: { background: "transparent", "border-left": `3px solid ${plan.artDirection.accent}`, "padding-left": "12px" } },
     { selector: ".ns-material-quiet", declarations: { color: safeSupporting } },
     { selector: ".ns-role-evidence", declarations: { "grid-column": "1/-1", display: "grid", gap: "30px", "min-height": "0", padding: "0", background: "none", border: "0", "min-width": "0" } },
     { selector: ".ns-role-evidence:empty", declarations: { display: "none" } },
-    { selector: ".working-flow", declarations: { display: "grid", "grid-template-columns": "170px minmax(0,1fr)", gap: "24px", "align-items": "center", padding: "22px 0", "border-top": `1px solid color-mix(in srgb,${plan.artDirection.ink} 11%,transparent)`, "min-width": "0" } },
+    { selector: ".working-flow", declarations: { display: "grid", "grid-template-columns": "170px minmax(0,1fr)", gap: "24px", "align-items": "center", padding: "22px 0", border: "0", "min-width": "0" } },
     { selector: ".working-flow__identity", declarations: { display: "flex", "align-items": "center", gap: "12px", "align-self": "center" } },
     { selector: ".working-flow__identity img", declarations: { width: "46px", height: "46px", "border-radius": "13px", "object-fit": "cover", flex: "0 0 auto" } },
     { selector: ".working-flow__identity strong", declarations: { display: "block", "font-size": "18px" } },
@@ -372,7 +407,8 @@ export function renderNorthstarVisualSceneDocument(plan: NorthstarVisualScenePla
     { selector: ".working-flow__sequence", declarations: { display: "flex", "flex-wrap": "nowrap", "align-items": "flex-end", gap: "18px", width: "max-content", "min-width": "0" } },
     { selector: ".working-flow figure", declarations: { margin: "0", width: "156px", "min-width": "156px", flex: "0 0 156px" } },
     { selector: ".working-flow figure img", declarations: { display: "block", width: "100%", height: "auto", "max-height": "286px", "object-fit": "contain", filter: "drop-shadow(0 12px 20px rgba(32,24,80,.09))" } },
-    { selector: "[data-ns-node-id=\"synthesis\"],[data-ns-node-id=\"decision\"]", declarations: { display: "grid", gap: "14px", "margin-top": "28px", "padding-top": "18px", "border-top": `1px solid color-mix(in srgb,${plan.artDirection.ink} 14%,transparent)` } },
+    { selector: "[data-ns-node-id=\"synthesis\"],[data-ns-node-id=\"decision\"]", declarations: { display: "grid", gap: "14px", "margin-top": "28px", "padding-top": "18px", border: "0" } },
+    { selector: "[data-ns-node-id=\"synthesis\"]:empty,[data-ns-node-id=\"decision\"]:empty", declarations: { display: "none", margin: "0", padding: "0", border: "0" } },
     { selector: ".ns-artifact [data-ns-node-id]", declarations: { transition: "transform 320ms cubic-bezier(.2,.8,.2,1),opacity 240ms ease,width 320ms ease,height 320ms ease,margin 320ms ease,padding 320ms ease" } },
   ]);
 
@@ -380,7 +416,7 @@ export function renderNorthstarVisualSceneDocument(plan: NorthstarVisualScenePla
 
   const document: NorthstarWebArtifactDocument = {
     schema: "northstar.web-artifact-document.v1",
-    html: `<main class="ns-artifact ns-visual-scene" data-ns-node-id="artboard" data-ns-design-kernel="scene-v1" data-ns-publication="working" data-ns-canonical-surface="true" data-ns-transaction-state="forming" data-ns-three-second-read="${escapeHtml(plan.threeSecondRead)}"><header data-ns-node-id="header" data-ns-stage="foundation"></header><div class="ns-scene-grid">${objects}</div><section data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
+    html: `<main class="ns-artifact ns-visual-scene" data-ns-node-id="artboard" data-ns-design-kernel="scene-v1" data-ns-publication="working" data-ns-canonical-surface="true" data-ns-transaction-state="visible" data-ns-three-second-read="${escapeHtml(plan.threeSecondRead)}"><header data-ns-node-id="header" data-ns-stage="foundation"></header><div class="ns-scene-grid">${objects}</div><section data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
     css: css + motionCss,
     javascript: "",
   };

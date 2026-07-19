@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-code-artifact.ts
-// Northstar Visual Web Artifact Authoring v0.6.4.0 — one mounted surface, stable semantic evidence nodes, authoritative ordering, and reference-conditioned craft
+// Northstar Visual Web Artifact Authoring v0.7.0 — one mounted surface, stable semantic evidence nodes, authoritative ordering, and reference-conditioned craft
 import { Script } from "node:vm";
 import { createHash } from "node:crypto";
 import {
@@ -198,9 +198,40 @@ export function prepareNorthstarArtboardRevisionForPublication(input: {
   candidate: NorthstarGeneratedCodeArtifactPackage;
 }): NorthstarGeneratedCodeArtifactPackage {
   const previous = input.previous;
-  const candidate: NorthstarGeneratedCodeArtifactPackage = previous
-    ? { ...input.candidate, artifactId: previous.artifactId, parentRevisionId: previous.revisionId }
-    : input.candidate;
+  if (!previous) return input.candidate;
+
+  const previousJournal = previous.mutationJournal ?? [];
+  const proposedJournal = input.candidate.mutationJournal ?? [];
+  const prefixMatches = previousJournal.every(
+    (batch, index) => proposedJournal[index]?.mutationId === batch.mutationId,
+  );
+  const appended = proposedJournal.slice(previousJournal.length);
+  const appendedMutation = appended[0];
+  if (!prefixMatches || appended.length !== 1 || !appendedMutation) {
+    throw new NorthstarArtifactSourceError("validation", [
+      "A post-mount revision must preserve the committed journal and append exactly one visible mutation.",
+    ]);
+  }
+
+  const candidate: NorthstarGeneratedCodeArtifactPackage = {
+    ...previous,
+    revisionId: input.candidate.revisionId,
+    parentRevisionId: previous.revisionId,
+    title: input.candidate.title,
+    description: input.candidate.description,
+    visualStrategy: input.candidate.visualStrategy,
+    dataBundle: input.candidate.dataBundle,
+    creativeDirection: input.candidate.creativeDirection ?? previous.creativeDirection,
+    creativeReviews: input.candidate.creativeReviews,
+    runtimeReview: input.candidate.runtimeReview,
+    diagnostics: input.candidate.diagnostics,
+    provisional: input.candidate.provisional,
+    publicationState: input.candidate.publicationState,
+    document: previous.document,
+    mutationJournal: [...previousJournal, appendedMutation],
+    surfaceId: previous.surfaceId ?? previous.artifactId,
+    pendingAckToken: undefined,
+  };
   const issues = getNorthstarArtboardContinuityDiagnostics({ previous, candidate });
   if (issues.length) throw new NorthstarArtifactSourceError("validation", issues);
   return candidate;
@@ -290,14 +321,14 @@ const DEFAULT_STAGES: Record<CanvasCodeArtifactStage["phase"], Omit<CanvasCodeAr
   },
 };
 
-function normalizeId(value: string, fallback: string): string {
+function normalizeId(value: string, defaultValue: string): string {
   const normalized = value
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "")
     .slice(0, 60);
-  return normalized || fallback;
+  return normalized || defaultValue;
 }
 
 function normalizeStages(input: CanvasCodeArtifactStage[]): CanvasCodeArtifactStage[] {
@@ -747,7 +778,7 @@ function groundedEvidenceAnnex(
   _html: string,
   _input: Pick<NorthstarCodeArtifactGenerationInput, "objective" | "artifactType" | "userRequest" | "dataBundle">,
 ): string {
-  // v0.4.4 never injects a fixed visual fallback into model-authored work. Missing
+  // v0.4.4 never injects a fixed visual substitute into model-authored work. Missing
   // grounding is repaired privately so the selected composition remains genuinely bespoke.
   return "";
 }
@@ -1091,7 +1122,7 @@ export function buildNorthstarCodeArtifactRepairModelInput(input: {
       standardHtmlCssSvgJavascript: true,
       preserveCreativeDirection: true,
       preserveGrounding: true,
-      noGenericFallback: true,
+      noGenericSubstitute: true,
       mustPassLocalSafetyAndSyntaxChecks: true,
       evolveTheSameVisibleArtboard: true,
       preserveCurrentGroundedStructure: true,
@@ -1335,6 +1366,17 @@ function workingIdentityMarkup(dataBundle: CanvasCodeArtifactDataBundle): string
 }
 
 
+
+function compressNorthstarWorkingTitle(value: string): string {
+  const cleaned = String(value ?? "")
+    .replace(/^(?:a|an|the)\s+(?:comparative|executive|strategic)\s+(?:analysis|comparison|review)\s+(?:of|between)\s+/i, "")
+    .replace(/^(?:build|create|make|design|develop|produce)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const compact = cleaned.split(" ").filter(Boolean).slice(0, 7).join(" ").replace(/[,:;.!?-]+$/g, "").trim();
+  return (compact || "Northstar visual analysis").slice(0, 64);
+}
+
 function estimateNorthstarFlowGeometry(dataBundle: CanvasCodeArtifactDataBundle): { width: number; height: number } {
   const flows = dataBundle.flows.slice(0, 4);
   const screenshotsById = new Map(dataBundle.screenshots.map((screen) => [screen.id, screen]));
@@ -1388,18 +1430,32 @@ export function createNorthstarWorkingArtifactPackage(input: {
   scenePlan?: NorthstarVisualScenePlan;
 }): NorthstarGeneratedCodeArtifactPackage {
   const phaseIndex = Math.max(0, REQUIRED_PHASES.indexOf(input.phase));
-  const title = input.creativeDirection?.brief.editorialThesis || provisionalWorkingTitle(input);
+  const title = compressNorthstarWorkingTitle(input.creativeDirection?.brief.editorialThesis || provisionalWorkingTitle(input));
   const designActs = input.creativeDirection?.selectedConcept.designActs ?? [];
   const activeAct = designActs[Math.min(phaseIndex, Math.max(0, designActs.length - 1))] || input.message || "Curating the strongest grounded material.";
   const appByName = new Map(input.dataBundle.apps.map((app) => [app.name.toLowerCase(), app]));
   const screensById = new Map(input.dataBundle.screenshots.map((screen) => [screen.id, screen]));
+  const rankedEvidence = [...input.dataBundle.screenshots].sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0));
+  const evidenceRoleById = new Map(rankedEvidence.map((screen, index) => [
+    screen.id,
+    index === 0 ? "focal" : index < 4 ? "supporting" : "contextual",
+  ] as const));
   const identities = workingIdentityMarkup(input.dataBundle);
   const flows = input.dataBundle.flows.slice(0, 4).map((flow) => {
     const app = appByName.get(flow.appName.toLowerCase());
-    const screens = flow.screenshotIds.map((id) => screensById.get(id)).filter(Boolean).slice(0, 12);
+    const screens = flow.screenshotIds
+      .map((id) => screensById.get(id))
+      .filter((screen): screen is NonNullable<typeof screen> => Boolean(screen))
+      .sort((a, b) => {
+        const aSignal = (a.frictionSignals?.length ?? 0) + (a.trustSignals?.length ?? 0);
+        const bSignal = (b.frictionSignals?.length ?? 0) + (b.trustSignals?.length ?? 0);
+        return (b.relevance ?? 0) - (a.relevance ?? 0) || bSignal - aSignal || (a.index ?? 0) - (b.index ?? 0);
+      })
+      .slice(0, 6)
+      .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
     const flowNodeId = `flow-${normalizeId(flow.id, "flow")}`;
     const identity = `<div class="working-flow__identity" data-ns-node-id="${flowNodeId}-identity">${app?.iconUrl ? `<img data-ns-node-id="${flowNodeId}-icon" src="${escapeWorkingHtml(app.iconUrl)}" alt="${escapeWorkingHtml(flow.appName)} icon">` : ""}<div><strong data-ns-node-id="${flowNodeId}-app-name">${escapeWorkingHtml(flow.appName)}</strong><span data-ns-node-id="${flowNodeId}-flow-name">${escapeWorkingHtml(flow.flowName)}</span></div></div>`;
-    const sequence = screens.map((screen, screenIndex) => { const screenNodeId = `${flowNodeId}-screen-${normalizeId(screen!.id, String(screen!.index ?? screenIndex))}`; return `<figure data-ns-node-id="${screenNodeId}" data-ns-evidence-id="${escapeWorkingHtml(screen!.id)}"><img data-ns-node-id="${screenNodeId}-image" src="${escapeWorkingHtml(screen!.imageUrl ?? "")}" alt="${escapeWorkingHtml(screen!.title)}"></figure>`; }).join("");
+    const sequence = screens.map((screen, screenIndex) => { const screenNodeId = `${flowNodeId}-screen-${normalizeId(screen!.id, String(screen!.index ?? screenIndex))}`; const evidenceRole = evidenceRoleById.get(screen!.id) ?? "contextual"; return `<figure data-ns-node-id="${screenNodeId}" data-ns-evidence-id="${escapeWorkingHtml(screen!.id)}" data-ns-evidence-role="${evidenceRole}"><img data-ns-node-id="${screenNodeId}-image" src="${escapeWorkingHtml(screen!.imageUrl ?? "")}" alt="${escapeWorkingHtml(screen!.title)}"></figure>`; }).join("");
     return `<section class="working-flow" data-ns-node-id="${flowNodeId}" data-ns-flow-id="${escapeWorkingHtml(flow.id)}" data-ns-stage="evidence">${identity}<div class="working-flow__sequence" data-ns-node-id="${flowNodeId}-sequence">${sequence || '<p class="working-empty">Grounded screens are arriving.</p>'}</div></section>`;
   }).join("");
   const requiredGeometry = estimateNorthstarFlowGeometry(input.dataBundle);
@@ -1411,8 +1467,8 @@ export function createNorthstarWorkingArtifactPackage(input: {
     ? renderNorthstarVisualSceneDocument(input.scenePlan, input.dataBundle)
     : {
       schema: NORTHSTAR_WEB_ARTIFACT_DOCUMENT_SCHEMA,
-      html: `<main class="ns-artifact ns-working-artifact" data-ns-node-id="artboard" data-ns-design-kernel="v1" data-ns-publication="working"><header data-ns-node-id="header" data-ns-stage="foundation"><p class="working-kicker" data-ns-node-id="kicker">Northstar · live artboard</p><h1 class="ns-thesis" data-ns-node-id="title">${escapeWorkingHtml(title)}</h1><p class="working-deck" data-ns-node-id="deck">${escapeWorkingHtml(input.message || input.dataBundle.coverageSummary || activeAct)}</p><div class="working-act" data-ns-node-id="current-act"><span>Current design act</span><strong data-ns-node-id="current-act-text">${escapeWorkingHtml(activeAct)}</strong></div></header><div class="working-evidence" data-ns-node-id="evidence">${flows || identities}</div><section class="working-synthesis" data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section class="working-decision" data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
-      css: `.ns-working-artifact{width:${width}px;max-width:none;min-width:1180px;min-height:${height}px;padding:44px 52px 104px;background:radial-gradient(circle at 30% -15%,rgba(107,77,255,.12),transparent 38%),linear-gradient(180deg,#fdfcff,#f6f4fb);color:#151620;font-family:Inter,ui-sans-serif,system-ui,sans-serif;display:grid;align-content:start;gap:30px}.ns-working-artifact header{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:32px;align-items:end}.working-kicker{grid-column:1/-1;margin:0;color:#6b4dff;font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.ns-working-artifact .ns-thesis{margin:0;font-size:56px;line-height:.97;letter-spacing:-.055em;max-width:1050px}.working-deck{margin:14px 0 0;color:#6b6e7d;font-size:16px;line-height:1.5;max-width:920px}.working-act{align-self:start;padding:16px 18px;border-left:2px solid #6b4dff;background:rgba(255,255,255,.72)}.working-act span{display:block;color:#8b8f9f;font-size:11px;text-transform:uppercase;letter-spacing:.12em}.working-act strong{display:block;margin-top:8px;font-size:17px;line-height:1.35}.working-evidence{display:grid;gap:24px}.working-evidence:empty{display:none}.working-identities{display:flex;flex-wrap:wrap;gap:14px;padding-top:20px;border-top:1px solid rgba(78,67,135,.13)}.working-identity{display:flex;align-items:center;gap:14px;min-width:300px;max-width:520px;padding:14px 18px;background:rgba(255,255,255,.66);border:1px solid rgba(78,67,135,.10);border-radius:18px}.working-identity img{width:52px;height:52px;border-radius:15px;object-fit:cover}.working-identity strong{display:block;font-size:18px}.working-identity span{display:block;margin-top:4px;color:#737686;font-size:13px;line-height:1.35}.working-flow{display:grid;grid-template-columns:180px minmax(0,1fr);gap:26px;align-items:start;padding:22px 0;border-top:1px solid rgba(78,67,135,.13)}.working-flow__sequence{display:flex;flex-wrap:nowrap;align-items:flex-end;gap:20px;width:max-content;min-width:0}.working-flow figure{margin:0;min-width:0}.working-flow figure img{width:100%;height:auto;max-height:286px;object-fit:contain}.working-synthesis:empty,.working-decision:empty{display:none}.working-synthesis,.working-decision{display:grid;gap:18px}`,
+      html: `<main class="ns-artifact ns-working-artifact" data-ns-node-id="artboard" data-ns-design-kernel="v1" data-ns-publication="working" data-ns-canonical-surface="true" data-ns-transaction-state="visible" data-ns-three-second-read="${escapeWorkingHtml(input.objective)}"><div class="working-opening-grid"><header data-ns-node-id="header" data-ns-stage="foundation"><p class="working-kicker" data-ns-node-id="kicker">Northstar · live artboard</p><h1 class="ns-thesis" data-ns-node-id="title">${escapeWorkingHtml(title)}</h1><p class="working-deck" data-ns-node-id="deck">${escapeWorkingHtml(input.message || input.dataBundle.coverageSummary || activeAct)}</p><div class="working-act" data-ns-node-id="current-act"><span>Current design act</span><strong data-ns-node-id="current-act-text">${escapeWorkingHtml(activeAct)}</strong></div></header><aside class="ns-reasoning-zone" data-ns-node-id="reasoning-zone" data-ns-working-role="reasoning"><article class="ns-thought" data-ns-node-id="thought-primary" data-ns-working-role="hypothesis" data-ns-thought-state="active" data-ns-publication-policy="working-only"><span class="ns-thought__eyebrow">Working hypothesis</span><figure class="ns-thought__media ns-thought__media--empty" data-ns-node-id="thought-primary-media" aria-hidden="true"></figure><div class="ns-thought__body" data-ns-node-id="thought-primary-body">The strongest grounded evidence will reveal the governing pattern behind this question.</div><div class="ns-thought__status" data-ns-node-id="thought-primary-status">Working hypothesis · evidence entering</div></article><article class="ns-thought" data-ns-node-id="thought-secondary" data-ns-working-role="open-question" data-ns-thought-state="active" data-ns-publication-policy="working-only"><span class="ns-thought__eyebrow">What Northstar is testing</span><figure class="ns-thought__media ns-thought__media--empty" data-ns-node-id="thought-secondary-media" aria-hidden="true"></figure><div class="ns-thought__body" data-ns-node-id="thought-secondary-body">Which evidence deserves focal weight, and what relationship will make the answer visible?</div><div class="ns-thought__status" data-ns-node-id="thought-secondary-status">What Northstar is testing · hierarchy</div></article></aside></div><div class="working-evidence" data-ns-node-id="evidence">${flows || identities}</div><section class="working-synthesis" data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section class="working-decision" data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
+      css: `.ns-working-artifact{width:${width}px;max-width:none;min-width:1180px;min-height:${height}px;padding:44px 52px 104px;background:radial-gradient(circle at 30% -15%,rgba(107,77,255,.12),transparent 38%),linear-gradient(180deg,#fdfcff,#f6f4fb);color:#151620;font-family:Inter,ui-sans-serif,system-ui,sans-serif;display:grid;align-content:start;gap:30px}.working-opening-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(520px,.82fr);gap:38px;align-items:start}.ns-working-artifact header{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:26px;align-items:end}.working-kicker{grid-column:1/-1;margin:0;color:#6b4dff;font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.ns-working-artifact .ns-thesis{margin:0;font-size:56px;line-height:.97;letter-spacing:-.055em;max-width:1050px}.working-deck{margin:14px 0 0;color:#6b6e7d;font-size:16px;line-height:1.5;max-width:920px}.working-act{align-self:start;padding:16px 18px;border-left:2px solid #6b4dff;background:rgba(255,255,255,.72)}.working-act span{display:block;color:#8b8f9f;font-size:11px;text-transform:uppercase;letter-spacing:.12em}.working-act strong{display:block;margin-top:8px;font-size:17px;line-height:1.35}.ns-reasoning-zone{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;min-width:0}.ns-reasoning-zone .ns-thought{min-width:0;padding:10px 0;border:0}.ns-thought__eyebrow{display:block;color:#6b4dff;font-size:10px;font-weight:850;letter-spacing:.11em;text-transform:uppercase}.ns-thought__body{margin-top:10px;font-size:15px;line-height:1.44;font-weight:620}.ns-thought__status{margin-top:10px;color:#7b7e8d;font-size:10px;line-height:1.35}.ns-thought__media{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:center;margin:10px 0 0}.ns-thought__media img{width:72px;height:54px;object-fit:cover;border-radius:8px}.ns-thought__media figcaption{font-size:10px;line-height:1.35;color:#77798a}.ns-thought__media--empty{display:none}.working-evidence{display:grid;gap:24px}.working-evidence:empty{display:none}.working-identities{display:flex;flex-wrap:wrap;gap:14px;padding-top:20px;border:0}.working-identity{display:flex;align-items:center;gap:14px;min-width:300px;max-width:520px;padding:14px 18px;background:rgba(255,255,255,.66);border:1px solid rgba(78,67,135,.10);border-radius:18px}.working-identity img{width:52px;height:52px;border-radius:15px;object-fit:cover}.working-identity strong{display:block;font-size:18px}.working-identity span{display:block;margin-top:4px;color:#737686;font-size:13px;line-height:1.35}.working-flow{display:grid;grid-template-columns:180px minmax(0,1fr);gap:26px;align-items:start;padding:22px 0;border:0}.working-flow__sequence{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));align-items:end;gap:18px;width:100%;min-width:0}.working-flow figure{margin:0;width:100%;min-width:0;transition:transform .24s ease,opacity .24s ease}.working-flow figure[data-ns-evidence-role="focal"]{transform:scale(1.08);transform-origin:50% 100%}.working-flow figure[data-ns-evidence-role="supporting"]{opacity:.92}.working-flow figure[data-ns-evidence-role="contextual"]{opacity:.7;transform:scale(.9);transform-origin:50% 100%}.working-flow figure img{width:100%;height:auto;max-height:286px;object-fit:contain}.working-synthesis:empty,.working-decision:empty{display:none;margin:0;padding:0;border:0}.working-synthesis,.working-decision{display:grid;gap:18px;border:0}`,
       javascript: "",
     };
   if (input.scenePlan) {
@@ -1466,9 +1522,14 @@ function alignDeterministicOperationsToDocument(
 ): NorthstarArtboardMutationOperation[] {
   const visible = northstarSemanticIdsFromHtml(html);
   const inserted = new Set<string>();
+  const duplicateInsertIds = new Set<string>();
   for (const operation of operations) {
     if (operation.op !== "insert-html") continue;
-    for (const match of operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)) inserted.add(match[1]);
+    for (const match of operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)) {
+      const nodeId = match[1];
+      if (visible.has(nodeId) || inserted.has(nodeId)) duplicateInsertIds.add(nodeId);
+      inserted.add(nodeId);
+    }
   }
   const available = new Set([...visible, ...inserted]);
   const protectedSceneTargets = new Set(["artboard", "header", "evidence", "synthesis", "decision"]);
@@ -1476,7 +1537,11 @@ function alignDeterministicOperationsToDocument(
     if (operation.op === "set-css-layer") return true;
     if (operation.op === "set-html" && protectedSceneTargets.has(operation.targetId)) return false;
     if (operation.op === "remove" && protectedSceneTargets.has(operation.targetId)) return false;
-    if (operation.op === "insert-html") return available.has(operation.targetId);
+    if (operation.op === "insert-html") {
+      const insertedIds = [...operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)].map((match) => match[1]);
+      if (insertedIds.some((nodeId) => duplicateInsertIds.has(nodeId))) return false;
+      return available.has(operation.targetId);
+    }
     if ("targetId" in operation && operation.targetId && !available.has(operation.targetId)) return false;
     if (operation.op === "move") {
       if (!available.has(operation.parentId)) return false;
@@ -1500,13 +1565,58 @@ export function createNorthstarWorkingMutationPackage(input: {
   const operations: NorthstarArtboardMutationOperation[] = [
     ...buildCanonicalEvidenceOperations({ currentHtml: input.previousPackage.document.html, currentJournal: input.previousPackage.mutationJournal, nextBundle: input.dataBundle }),
   ];
+  const sequence = (input.previousPackage.mutationJournal?.length ?? 0) + 1;
+  if (input.phase === "analysis") {
+    operations.push(
+      {
+        op: "set-attributes",
+        targetId: "artboard",
+        attributes: { "data-ns-analysis-sequence": String(sequence), "data-ns-transaction-state": "verifying" },
+      },
+      {
+        op: "set-text",
+        targetId: "thought-secondary-body",
+        text: input.message,
+      },
+      {
+        op: "set-attributes",
+        targetId: "thought-secondary",
+        attributes: { "data-ns-thought-state": "evolving", "data-ns-current-focus": "true" },
+      },
+    );
+  } else if (input.phase === "recommendation") {
+    operations.push(
+      {
+        op: "set-attributes",
+        targetId: "artboard",
+        attributes: { "data-ns-recommendation-sequence": String(sequence), "data-ns-transaction-state": "verifying" },
+      },
+      {
+        op: "set-text",
+        targetId: "thought-primary-body",
+        text: input.message,
+      },
+      {
+        op: "set-attributes",
+        targetId: "thought-primary",
+        attributes: { "data-ns-thought-state": "evolving", "data-ns-current-focus": "true" },
+      },
+    );
+  } else if (input.phase === "refinement") {
+    operations.push({
+      op: "set-attributes",
+      targetId: "artboard",
+      attributes: { "data-ns-refinement-sequence": String(sequence), "data-ns-transaction-state": "visible" },
+    });
+  }
+
   operations.push({
     op: "set-css-layer",
     layerId: "research-evolution",
     css: input.phase === "evidence"
-      ? `[data-ns-node-id="evidence"]{gap:30px}[data-ns-node-id="header"]{padding-bottom:10px}.working-flow{background:transparent;border-radius:0;box-shadow:none}`
+      ? `[data-ns-node-id="evidence"]{gap:30px}[data-ns-node-id="header"]{padding-bottom:10px}.working-flow{background:transparent;border-radius:0;box-shadow:none}.working-flow__sequence{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(118px,1fr))!important;width:100%!important;max-width:100%!important;gap:18px!important}.working-flow__sequence>figure{width:100%!important;min-width:0!important;max-width:156px!important}`
       : input.phase === "analysis"
-        ? `[data-ns-node-id="header"]{grid-template-columns:minmax(0,1fr) minmax(220px,300px)}[data-ns-node-id="evidence"]{gap:36px}.ns-role-identity{background:transparent;box-shadow:none;border-radius:0}`
+        ? `[data-ns-node-id="header"]{grid-template-columns:minmax(0,1fr) minmax(220px,300px)}[data-ns-node-id="evidence"]{gap:36px}.ns-role-identity{background:transparent;box-shadow:none;border-radius:0}.working-flow__sequence{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(118px,1fr))!important;width:100%!important;max-width:100%!important;gap:18px!important}.working-flow__sequence>figure{width:100%!important;min-width:0!important;max-width:156px!important}`
         : input.phase === "recommendation"
           ? `[data-ns-node-id="artboard"]{gap:38px}[data-ns-node-id="synthesis"],[data-ns-node-id="decision"]{background:transparent;box-shadow:none;border-radius:0}`
           : `[data-ns-node-id="artboard"]{letter-spacing:-.005em}`,
