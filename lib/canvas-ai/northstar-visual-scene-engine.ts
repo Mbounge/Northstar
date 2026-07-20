@@ -3,6 +3,8 @@
 
 import type { CanvasCodeArtifactDataBundle, NorthstarWebArtifactDocument } from "@/lib/canvas-artifacts/types";
 
+export const NORTHSTAR_CANONICAL_ARTBOARD_BACKGROUND = "#ffffff" as const;
+
 export type NorthstarSceneBand = "opening" | "working" | "evidence" | "resolution";
 export type NorthstarSceneEmphasis = "hero" | "primary" | "supporting" | "peripheral";
 export type NorthstarSceneMaterial = "ink" | "paper" | "note" | "outline" | "quiet" | "signal" | "image";
@@ -96,7 +98,7 @@ Express hierarchy and relationships through semantic objects, band, order, span,
 
 The title must belong to the governing visual idea. Keep it editorial and compressed: no more than 7 words and 64 characters. Put explanation in the framing copy, never in the headline. Working objects must visibly distinguish provisional, contested, confirmed, and resolved thinking. Evidence-field is an invisible semantic anchor, not a giant placeholder card. Use it exactly once.
 
-The opening scene is the first frame of the one canonical visible artboard, not a disposable draft. The user should understand that Northstar is actively thinking from meaningful, calm, visibly evolving objects. The opening scene should already feel premium, problem-specific, intentionally composed, and materially light. Use typography, evidence, spacing, alignment, rhythm, and negative space before adding visual furniture. Working thoughts are living multimodal objects, not generic yellow cards. The natural artboard surface is the default; cards, panels, pills, and filled containers require a specific visual justification. A thought may use a grounded screenshot crop, app icon, metric, quote, or compact evidence pair when media materially clarifies the reasoning. Do not add media decoratively. Vary material language across problems while maintaining one coherent scene art direction. Give provisional thoughts a publicationPolicy of working-only unless they deserve deliberate promotion. Avoid generic slogans, filler, and invented claims unsupported by the supplied evidence. If synthesis or decision roles appear, they must be planned as meaningful authored objects rather than placeholder bands. Return JSON only.`;
+The opening scene is the first frame of the one canonical visible artboard, not a disposable draft. The user should understand that Northstar is actively thinking from meaningful, calm, visibly evolving objects. The opening scene should already feel premium, problem-specific, intentionally composed, and materially light. Use typography, evidence, spacing, alignment, rhythm, and negative space before adding visual furniture. Working thoughts are living multimodal objects, not generic yellow cards. The natural clean-white artboard surface is canonical: return #ffffff for artDirection.background and express the problem-specific visual identity through composition, ink, accent, supporting color, evidence, and typography instead of tinting the entire artboard. Cards, panels, pills, and filled containers require a specific visual justification. A thought may use a grounded screenshot crop, app icon, metric, quote, or compact evidence pair when media materially clarifies the reasoning. Do not add media decoratively. Vary material language across problems while maintaining one coherent scene art direction. Give provisional thoughts a publicationPolicy of working-only unless they deserve deliberate promotion. Avoid generic slogans, filler, and invented claims unsupported by the supplied evidence. If synthesis or decision roles appear, they must be planned as meaningful authored objects rather than placeholder bands. Return JSON only.`;
 }
 
 export function buildNorthstarVisualSceneModelInput(input: {
@@ -207,7 +209,11 @@ export function sanitizeNorthstarVisualScenePlan(raw: unknown, input: { objectiv
     emotionalRegister: String(source.emotionalRegister ?? "precise, curious, editorial").slice(0, 240),
     signatureMoveInProgress: String(source.signatureMoveInProgress ?? "The visual hierarchy will change as evidence resolves the central tension.").slice(0, 500),
     artDirection: {
-      background: safeHex(String(direction.background ?? "#fbfaff"), "#fbfaff"), ink: safeHex(String(direction.ink ?? "#171820"), "#171820"),
+      // The artboard is a stable piece of Canvas UI, not a model-owned color
+      // field. Keeping this canonical prevents a single scene plan from washing
+      // the complete surface beige, gray, or dark while all other art direction
+      // remains expressive and task-specific.
+      background: NORTHSTAR_CANONICAL_ARTBOARD_BACKGROUND, ink: safeHex(String(direction.ink ?? "#171820"), "#171820"),
       accent: safeHex(String(direction.accent ?? "#6b4dff"), "#6b4dff"), supporting: safeHex(String(direction.supporting ?? "#77798a"), "#77798a"),
       radius: (["sharp","soft","mixed"] as const).includes(direction.radius as any) ? direction.radius as any : "mixed",
       density: (["airy","balanced","dense"] as const).includes(direction.density as any) ? direction.density as any : "balanced",
@@ -219,7 +225,7 @@ export function deterministicNorthstarVisualScenePlan(input: { objective: string
   const apps = input.dataBundle.apps.slice(0, 3);
   return sanitizeNorthstarVisualScenePlan({
     sceneId: "grounded-opening", threeSecondRead: input.objective, governingIdea: "Begin with the central question and let the evidence reorganize the field.", emotionalRegister: "editorial, curious, exact", signatureMoveInProgress: "The board will progressively replace questions with evidence-backed claims.",
-    artDirection: { background: "#fbfaff", ink: "#171820", accent: "#6b4dff", supporting: "#747787", radius: "mixed", density: "airy" },
+    artDirection: { background: NORTHSTAR_CANONICAL_ARTBOARD_BACKGROUND, ink: "#171820", accent: "#6b4dff", supporting: "#747787", radius: "mixed", density: "airy" },
     objects: [
       { id: "title", role: "title", content: compressNorthstarEditorialTitle(input.objective), band: "opening", emphasis: "hero", material: "ink", span: 8, order: 0 },
       ...apps.map((app, index) => ({ id: `identity-${index + 1}`, role: "identity", content: app.name, appName: app.name, band: "opening", emphasis: "supporting", material: "paper", span: 2, order: 10 + index })),

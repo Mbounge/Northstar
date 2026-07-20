@@ -1,7 +1,11 @@
-//app/api/canvas-ai/artifact-acl/route.ts
+// app/api/canvas-ai/artifact-ack/route.ts
 
 import { NextResponse } from "next/server";
-import { publishNorthstarArtifactAcknowledgement } from "@/lib/canvas-ai/northstar-artboard-ack";
+import { createClient } from "@/lib/supabase/server";
+import {
+  broadcastNorthstarArtifactAcknowledgement,
+  publishNorthstarArtifactAcknowledgement,
+} from "@/lib/canvas-ai/northstar-artboard-ack";
 import type { NorthstarArtifactMutationAcknowledgement } from "@/lib/canvas-artifacts/types";
 
 export const runtime = "nodejs";
@@ -28,6 +32,14 @@ function isAcknowledgement(value: unknown): value is NorthstarArtifactMutationAc
 }
 
 export async function POST(request: Request) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ ok: false, error: "You must be signed in." }, { status: 401 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -38,5 +50,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Invalid live-artboard acknowledgement." }, { status: 400 });
   }
   publishNorthstarArtifactAcknowledgement(body);
-  return NextResponse.json({ ok: true });
+  try {
+    await broadcastNorthstarArtifactAcknowledgement({
+      acknowledgement: body,
+      realtime: supabase,
+      signal: request.signal,
+    });
+    return NextResponse.json({ ok: true, transport: "local+realtime" });
+  } catch (error) {
+    // The local publication may already have resolved a same-instance waiter.
+    // Returning 503 makes the browser retry, covering a cross-instance waiter
+    // without ever persisting the acknowledgement.
+    return NextResponse.json(
+      {
+        ok: false,
+        error: error instanceof Error ? error.message : "Acknowledgement broadcast failed.",
+      },
+      { status: 503 },
+    );
+  }
 }

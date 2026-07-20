@@ -84,6 +84,10 @@ import {
   type CanvasCodeArtifactRuntimeReview,
 } from "@/lib/canvas-artifacts/types";
 import { createClient } from "@/lib/supabase/client";
+import {
+  materializeNorthstarBrowserCommit,
+  type NorthstarBrowserCommit,
+} from "@/lib/canvas-ai/northstar-transaction-kernel";
 import { cn } from "@/lib/utils";
 
 const unbounded = Unbounded({
@@ -1022,7 +1026,7 @@ interface CanvasAreaContext {
 }
 
 type CanvasAIContextMode = "canvas" | "selection";
-type CanvasAIRunStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
+type CanvasAIRunStatus = "idle" | "running" | "completed" | "blocked" | "failed" | "cancelled";
 
 interface CanvasAIReference {
   objectIds: string[];
@@ -1439,6 +1443,37 @@ function safeParseJson<T>(value: string | undefined): T | null {
   } catch {
     return null;
   }
+}
+
+function repairNorthstarDisplayEncoding(value: string): string {
+  let repaired = value;
+  const replacements: Array<[RegExp, string]> = [
+    [/Â /g, " "],
+    [/Â·/g, "·"],
+    [/â€”/g, "—"],
+    [/â€“/g, "–"],
+    [/â€œ/g, "“"],
+    [/â€[�]/g, "”"],
+    [/â€˜/g, "‘"],
+    [/â€™/g, "’"],
+    [/â€¦/g, "…"],
+  ];
+  // Some upstream text has been encoded twice, so run the finite replacement
+  // table twice. This is deterministic and leaves valid Unicode untouched.
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const [pattern, replacement] of replacements) repaired = repaired.replace(pattern, replacement);
+  }
+  return repaired;
+}
+
+function normalizeNorthstarDisplayPayload(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return repairNorthstarDisplayEncoding(value);
+  if (depth > 12 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((entry) => normalizeNorthstarDisplayPayload(entry, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => [key, normalizeNorthstarDisplayPayload(entry, depth + 1)]),
+  );
 }
 
 function stableVisualBoardId(parts: Array<string | number | undefined>) {
@@ -10392,7 +10427,10 @@ export function NorthStarCanvasWorkspace({
               ...current.filter(
                 (object) =>
                   object.id !== objectId &&
-                  object.semantic?.artifactId !== artifact.artifactId,
+                  !(
+                    object.semantic?.artifactId === artifact.artifactId &&
+                    object.semantic?.surfaceKind !== "working"
+                  ),
               ),
               nextObject,
             ]);
@@ -10713,7 +10751,6 @@ export function NorthStarCanvasWorkspace({
               object.semantic?.artifactId === artifactId &&
               object.semantic?.role === "working-frame",
           );
-          if (!existingFrame) throw new Error("North Star could not find the active research workspace.");
 
           const parsedSingle = safeParseJson<CanvasCompositionWorkingNote>(args.workingNoteJson);
           const parsedMany = safeParseJson<CanvasCompositionWorkingNote[]>(args.workingNotesJson);
@@ -10786,15 +10823,33 @@ export function NorthStarCanvasWorkspace({
             maxFlowsPerApp: 1,
           });
           const bundleScreens = action.assetBundle?.screenshots ?? [];
+          const presentationBounds = getArtifactSurfaceBounds(objectsRef.current, artifactId, "presentation");
+          const fallbackWidth = args.workingVisibility === "compact" ? 1320 : 1580;
+          const fallbackCenter = canvasCenter();
+          const fallbackRect: Rect = presentationBounds
+            ? {
+                x: presentationBounds.x + presentationBounds.w + NORTHSTAR_SURFACE_GAP,
+                y: presentationBounds.y,
+                w: fallbackWidth,
+                h: 900,
+              }
+            : {
+                x: fallbackCenter.x - fallbackWidth / 2,
+                y: fallbackCenter.y - 450,
+                w: fallbackWidth,
+                h: 900,
+              };
           const created = buildEditableResearchWorkspaceObjects({
             artifactId,
-            title: args.title?.trim() || existingFrame.semantic?.label || "North Star research workspace",
+            title: args.title?.trim() || existingFrame?.semantic?.label || "North Star research workspace",
             researchDigest: plan?.strategy,
             notes,
             apps: action.assetBundle?.apps ?? [],
             flows: bundleFlows,
             screenshots: bundleScreens,
-            rect: { x: existingFrame.x, y: existingFrame.y, w: existingFrame.w, h: existingFrame.h },
+            rect: existingFrame
+              ? { x: existingFrame.x, y: existingFrame.y, w: existingFrame.w, h: existingFrame.h }
+              : fallbackRect,
             visibility: args.workingVisibility ?? "visible",
           });
           mutateObjects((current) =>
@@ -10806,7 +10861,7 @@ export function NorthStarCanvasWorkspace({
           const ids = storeResult(created.map((object) => object.id));
           return {
             ok: true,
-            detail: `Updated the research workspace with ${notes.length} deduplicated research notes and ${bundleFlows.length} grounded reference ${bundleFlows.length === 1 ? "flow" : "flows"}.`,
+            detail: `${existingFrame ? "Updated" : "Recovered"} the research workspace with ${notes.length} deduplicated research notes and ${bundleFlows.length} grounded reference ${bundleFlows.length === 1 ? "flow" : "flows"}.`,
             objectIds: ids,
             targetLabel: "the North Star research workspace",
           };
@@ -14654,9 +14709,10 @@ export function NorthStarCanvasWorkspace({
                   beginObjectMoveAtPoint(object, { clientX, clientY });
                 }}
                 onArtifactContentSize={(size) => {
-                  // One monotonic live-layout clock per mounted artifact. Revision and
-                  // mutation identity govern data commits, but never gate visual sizing.
-                  const sequenceKey = size.artifactId;
+                  // One monotonic live-layout clock per mounted revision. A remounted
+                  // iframe starts its own sequence, so artifact-only clocks can reject
+                  // a valid clean terminal measurement from the next revision.
+                  const sequenceKey = `${size.artifactId}:${size.revisionId}`;
                   const previousSequence = artifactContentSizeSequenceRef.current.get(sequenceKey) ?? -1;
                   const nextSequence = size.sequence ?? previousSequence + 1;
                   if (nextSequence < previousSequence) return;
@@ -14679,7 +14735,10 @@ export function NorthStarCanvasWorkspace({
                     // The current live DOM may be provisional, committed, rolling back,
                     // loading assets, or animating. If it belongs to this mounted artifact,
                     // its complete bounds are authoritative for the visible Canvas object.
-                    if (candidate.codeArtifact.artifactId !== size.artifactId) return candidate;
+                    if (
+                      candidate.codeArtifact.artifactId !== size.artifactId
+                      || candidate.codeArtifact.revisionId !== size.revisionId
+                    ) return candidate;
 
                     const previousIntrinsicWidth = Math.max(
                       1,
@@ -14835,6 +14894,31 @@ export function NorthStarCanvasWorkspace({
                         };
                       });
                     });
+                  }
+                }}
+                onArtifactBrowserCommit={(commit) => {
+                  const current = objectsRef.current;
+                  const next = current.map((candidate) => {
+                    if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
+                      return candidate;
+                    }
+                    const committed = materializeNorthstarBrowserCommit(candidate.codeArtifact, commit);
+                    if (committed === candidate.codeArtifact) return candidate;
+                    return {
+                      ...candidate,
+                      source: candidate.source
+                        ? {
+                            ...candidate.source,
+                            originalWidth: committed.preferredWidth,
+                            originalHeight: committed.preferredHeight,
+                          }
+                        : candidate.source,
+                      codeArtifact: committed,
+                    };
+                  });
+                  if (next.some((candidate, index) => candidate !== current[index])) {
+                    objectsRef.current = next;
+                    setObjects(next);
                   }
                 }}
                 onArtifactRuntimeReview={(review) => {
@@ -16296,7 +16380,9 @@ function ChatActivityGroup({
   const summary =
     runStatus === "running"
       ? runningItem?.label ?? `${completedCount} of ${items.length} completed`
-      : failedCount > 0
+      : runStatus === "blocked"
+        ? "Run stopped at the last verified artboard"
+        : failedCount > 0
         ? `${failedCount} ${failedCount === 1 ? "step failed" : "steps failed"}`
         : runStatus === "cancelled" || cancelledCount > 0
           ? "Run stopped"
@@ -16316,7 +16402,7 @@ function ChatActivityGroup({
         <span className="mt-0.5 flex h-[18px] w-[18px] items-center justify-center">
           {runStatus === "running" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-[#6B5CFF] dark:text-[#BDB6FF]" />
-          ) : failedCount > 0 ? (
+          ) : runStatus === "blocked" || failedCount > 0 ? (
             <TriangleAlert className="h-3.5 w-3.5 text-red-500" />
           ) : runStatus === "cancelled" ? (
             <X className="h-3.5 w-3.5 text-zinc-400" />
@@ -17293,6 +17379,7 @@ function ChatWorkspacePanel({
       const decoder = new TextDecoder();
       let buffer = "";
       let receivedFinal = false;
+      let terminalBlockMessage: string | null = null;
 
       const handleStreamEvent = (eventName: string, data: unknown) => {
         if (!data || typeof data !== "object") return;
@@ -17384,14 +17471,31 @@ function ChatWorkspacePanel({
               tool: typeof step.tool === "string" ? step.tool : undefined,
               objectIds: [],
             }));
-          updateAssistantMessage((current) => ({
-            planTitle:
-              typeof payload.title === "string"
-                ? payload.title
-                : current.planTitle,
-            activity: [...(current.activity ?? []), ...appended],
-            runStatus: "running",
-          }));
+          updateAssistantMessage((current) => {
+            const merged = [...(current.activity ?? [])];
+            const indexById = new Map(merged.map((item, index) => [item.id, index]));
+            for (const item of appended) {
+              const existingIndex = indexById.get(item.id);
+              if (existingIndex === undefined) {
+                indexById.set(item.id, merged.length);
+                merged.push(item);
+                continue;
+              }
+              merged[existingIndex] = {
+                ...merged[existingIndex],
+                ...item,
+                status: merged[existingIndex]?.status ?? item.status,
+              };
+            }
+            return {
+              planTitle:
+                typeof payload.title === "string"
+                  ? payload.title
+                  : current.planTitle,
+              activity: merged,
+              runStatus: "running",
+            };
+          });
           return;
         }
 
@@ -17624,6 +17728,28 @@ function ChatWorkspacePanel({
           return;
         }
 
+        if (eventName === "run.blocked") {
+          terminalBlockMessage = typeof payload.error === "string"
+            ? payload.error
+            : "North Star stopped at the last verified artboard because the next operation could not be committed safely.";
+          receivedFinal = true;
+          updateAssistantMessage((current) => ({
+            content: terminalBlockMessage || current.content,
+            references: [],
+            suggestedActions: [],
+            showSuggestedActions: false,
+            runStatus: "blocked",
+            streaming: false,
+            error: true,
+            activity: (current.activity ?? []).map((item) =>
+              item.status === "pending" || item.status === "running"
+                ? { ...item, status: "cancelled" as const }
+                : item
+            ),
+          }));
+          return;
+        }
+
         if (eventName === "error") {
           throw new Error(
             typeof payload.error === "string"
@@ -17642,7 +17768,10 @@ function ChatWorkspacePanel({
           if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
         }
         if (dataLines.length === 0) return;
-        handleStreamEvent(eventName, JSON.parse(dataLines.join("\n")) as unknown);
+        handleStreamEvent(
+          eventName,
+          normalizeNorthstarDisplayPayload(JSON.parse(dataLines.join("\n")) as unknown),
+        );
       };
 
       while (true) {
@@ -17661,7 +17790,7 @@ function ChatWorkspacePanel({
       if (buffer.trim()) flushEvent(buffer);
       await actionExecutionChainRef.current;
 
-      if (actionRequestCountRef.current > 0 && !controller.signal.aborted) {
+      if (actionRequestCountRef.current > 0 && !controller.signal.aborted && !terminalBlockMessage) {
         const deferredConversationSummary = (
           deferredFinalPayloadRef.current as CanvasAIResponsePayload | null
         )?.conversationSummary;
@@ -19136,6 +19265,7 @@ function CanvasBoxObjectViewImpl({
   onArtifactDragStart,
   onArtifactRuntimeReview,
   onArtifactContentSize,
+  onArtifactBrowserCommit,
   onArtifactWheel,
   onResizeStart,
   onFreeformPointStart,
@@ -19161,6 +19291,7 @@ function CanvasBoxObjectViewImpl({
   onArtifactDragStart: (clientX: number, clientY: number) => void;
   onArtifactRuntimeReview: (review: CanvasCodeArtifactRuntimeReview) => void;
   onArtifactContentSize: (size: CanvasCodeArtifactContentSize) => void;
+  onArtifactBrowserCommit: (commit: NorthstarBrowserCommit) => void;
   onArtifactWheel: (input: {
     clientX: number;
     clientY: number;
@@ -19286,6 +19417,7 @@ function CanvasBoxObjectViewImpl({
             onCanvasDragStart={onArtifactDragStart}
             onRuntimeReview={onArtifactRuntimeReview}
             onContentSize={onArtifactContentSize}
+            onBrowserCommit={onArtifactBrowserCommit}
             onCanvasWheel={onArtifactWheel}
           />
         )}
@@ -19424,6 +19556,14 @@ const CanvasBoxObjectView = memo(
     previous.editingCell?.col === next.editingCell?.col,
 );
 
+function NorthStarVisualCard({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <section className={cn("rounded-[20px] border border-[#E8E7F1] bg-white shadow-[0_12px_36px_rgba(35,30,78,0.055)]", className)}>
+      {children}
+    </section>
+  );
+}
+
 function NorthStarVisualBoard({
   document,
   width,
@@ -19445,10 +19585,6 @@ function NorthStarVisualBoard({
   const accent = (value: string) => value === "orange" ? "#FF6B2C" : "#6B5CFF";
   const accentSoft = (value: string) => value === "orange" ? "#FFF0E8" : "#F1EEFF";
 
-  const Card = ({ children, className }: { children: ReactNode; className?: string }) => (
-    <section className={cn("rounded-[20px] border border-[#E8E7F1] bg-white shadow-[0_12px_36px_rgba(35,30,78,0.055)]", className)}>{children}</section>
-  );
-
   return (
     <div className="relative h-full w-full overflow-hidden bg-transparent">
       <div
@@ -19457,7 +19593,7 @@ function NorthStarVisualBoard({
       >
         <div className="grid h-full grid-cols-[1fr_340px] gap-5 p-5">
           <main className="flex min-w-0 flex-col gap-4 overflow-hidden">
-            <Card className="shrink-0 overflow-hidden p-4">
+            <NorthStarVisualCard className="shrink-0 overflow-hidden p-4">
               <div className="mb-3 flex items-start justify-between gap-6">
                 <div className="flex min-w-0 items-center gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] bg-[#EEEAFE] text-[#6758F5]"><BookOpen className="h-[19px] w-[19px]" /></div>
@@ -19511,10 +19647,10 @@ function NorthStarVisualBoard({
                   </div>
                 ))}
               </div>
-            </Card>
+            </NorthStarVisualCard>
 
             <div className="grid min-h-0 flex-1 grid-cols-[0.9fr_1.25fr_1fr] gap-4">
-              <Card className="flex min-h-0 flex-col p-4">
+              <NorthStarVisualCard className="flex min-h-0 flex-col p-4">
                 <div className="mb-3 flex items-center gap-2.5"><div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#EEEAFE] text-[#6557F5]"><Sparkles className="h-4 w-4" /></div><div><h3 className="text-[13px] font-[900] tracking-[-0.015em]">KEY PATTERNS</h3><p className="text-[9px] text-[#7A7F8B]">What the flows reveal</p></div></div>
                 <div className="space-y-2.5 overflow-hidden">
                   {document.keyPatterns.map((pattern) => (
@@ -19524,17 +19660,17 @@ function NorthStarVisualBoard({
                     </div>
                   ))}
                 </div>
-              </Card>
+              </NorthStarVisualCard>
 
-              <Card className="flex min-h-0 flex-col p-4">
+              <NorthStarVisualCard className="flex min-h-0 flex-col p-4">
                 <div className="mb-3 flex items-center gap-2.5"><div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#F0EDFF] text-[#6557F5]"><Table2 className="h-4 w-4" /></div><div><h3 className="text-[13px] font-[900] tracking-[-0.015em]">COMPARISON MATRIX</h3><p className="text-[9px] text-[#7A7F8B]">Equivalent dimensions across both journeys</p></div></div>
                 <div className="min-h-0 flex-1 overflow-hidden rounded-[12px] border border-[#E5E4ED]">
                   <div className="grid grid-cols-[0.78fr_1fr_1fr] bg-[#F5F4FA] text-[8.5px] font-[900] text-[#3F4451]"><div className="p-2.5">Dimension</div>{document.flows.map((flow) => <div key={flow.id} className="border-l border-[#E4E3EC] p-2.5">{flow.appName}</div>)}</div>
                   {document.matrixRows.map((row, rowIndex) => <div key={row.dimension} className={cn("grid grid-cols-[0.78fr_1fr_1fr] text-[8px] leading-[11px]", rowIndex % 2 === 1 && "bg-[#FCFCFE]")}><div className="border-t border-[#EAE9F1] p-2.5 font-[850] text-[#505562]">{row.dimension}</div>{row.values.map((value, index) => <div key={`${row.dimension}-${index}`} className="border-l border-t border-[#EAE9F1] p-2.5 text-[#474C58]">{value}</div>)}</div>)}
                 </div>
-              </Card>
+              </NorthStarVisualCard>
 
-              <Card className="flex min-h-0 flex-col p-4">
+              <NorthStarVisualCard className="flex min-h-0 flex-col p-4">
                 <div className="mb-3 flex items-center gap-2.5"><div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#F8ECFF] text-[#D247E7]"><GitBranch className="h-4 w-4" /></div><div><h3 className="text-[13px] font-[900] tracking-[-0.015em]">JOURNEY EMPHASIS</h3><p className="text-[9px] text-[#7A7F8B]">Observed screen-stage distribution</p></div></div>
                 <div className="space-y-3">
                   {document.stageSeries.map((series) => (
@@ -19545,24 +19681,24 @@ function NorthStarVisualBoard({
                   ))}
                 </div>
                 <div className="mt-auto rounded-[12px] border border-[#E7E3F8] bg-[#F8F6FF] p-3"><p className="text-[8px] font-[800] uppercase tracking-[0.08em] text-[#6B5CFF]">Interpretation</p><p className="mt-1 text-[9px] leading-[13px] text-[#4E5360]">The chart reflects the share of inspected screens assigned to each journey stage. It does not imply conversion rate.</p></div>
-              </Card>
+              </NorthStarVisualCard>
             </div>
 
             <div className="grid h-[205px] shrink-0 grid-cols-[1.45fr_1fr] gap-4">
-              <Card className="overflow-hidden p-4">
+              <NorthStarVisualCard className="overflow-hidden p-4">
                 <div className="mb-3 flex items-center gap-2.5"><div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#EEF4FF] text-[#4F7CFF]"><Eye className="h-4 w-4" /></div><div><h3 className="text-[13px] font-[900]">EVIDENCE NOTES</h3><p className="text-[9px] text-[#7A7F8B]">Specific screens supporting the analysis</p></div></div>
                 <div className="grid grid-cols-4 gap-2.5">{document.evidenceNotes.slice(0, 4).map((note) => <div key={note.id} className="grid grid-cols-[42px_1fr] gap-2 rounded-[12px] border border-[#E9E8F0] bg-[#FCFCFE] p-2.5">{note.imageUrl ? <div className="h-[64px] w-[36px] overflow-hidden rounded-[7px] border border-[#E3E2EA] bg-white"><img src={note.imageUrl} alt={note.title} className="h-full w-full object-contain" draggable={false} /></div> : <Info className="h-4 w-4 text-[#6B5CFF]" />}<div className="min-w-0"><p className="truncate text-[8px] font-[900]" style={{ color: note.accent === "orange" ? "#E85B20" : note.accent === "green" ? "#1B9A55" : note.accent === "blue" ? "#3C72E8" : "#6557F5" }}>{note.label}</p><p className="mt-1 line-clamp-2 text-[8px] font-[800] leading-[10px] text-[#393E4A]">{note.title}</p><p className="mt-1 line-clamp-3 text-[7.5px] leading-[10px] text-[#6C7180]">{note.body}</p></div></div>)}</div>
-              </Card>
+              </NorthStarVisualCard>
 
-              <Card className="overflow-hidden p-4">
+              <NorthStarVisualCard className="overflow-hidden p-4">
                 <div className="mb-3 flex items-center gap-2.5"><div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#F6EEFF] text-[#B34DDF]"><GitBranch className="h-4 w-4" /></div><div><h3 className="text-[13px] font-[900]">HYPOTHESES & DECISIONS</h3><p className="text-[9px] text-[#7A7F8B]">What was tested and retained</p></div></div>
                 <div className="grid grid-cols-2 gap-2">{document.hypotheses.slice(0, 6).map((item) => <div key={`${item.label}-${item.text}`} className="rounded-[11px] border border-[#E8E7EF] bg-[#FCFCFE] p-2.5"><div className="mb-1 flex items-center gap-1.5"><span className={cn("flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[7px] font-[900]", item.status === "supported" ? "bg-[#E8F8EF] text-[#18864B]" : item.status === "decided" ? "bg-[#EEEAFE] text-[#6557F5]" : "bg-[#FFF3E9] text-[#E8682D]")}>{item.label}</span><span className="text-[7px] font-[800] uppercase tracking-[0.08em] text-[#8A8E99]">{item.status}</span></div><p className="line-clamp-3 text-[8px] leading-[11px] text-[#4A4F5B]">{item.text}</p></div>)}</div>
-              </Card>
+              </NorthStarVisualCard>
             </div>
           </main>
 
           <aside className="flex min-h-0 flex-col gap-4">
-            <Card className="relative overflow-hidden p-5">
+            <NorthStarVisualCard className="relative overflow-hidden p-5">
               <div className="absolute right-0 top-0 h-28 w-28 rounded-bl-[80px] bg-gradient-to-bl from-[#ECE7FF] to-transparent opacity-80" />
               <div className="relative">
                 <div className="mb-4 flex items-center gap-2.5"><div className="flex h-9 w-9 items-center justify-center rounded-[12px] bg-[#EEEAFE] text-[#6557F5]"><Sparkles className="h-[18px] w-[18px]" /></div><div><p className="text-[9px] font-[850] uppercase tracking-[0.12em] text-[#6B5CFF]">Executive summary</p><p className="text-[9px] text-[#8A8E99]">Decision-ready synthesis</p></div></div>
@@ -19571,24 +19707,24 @@ function NorthStarVisualBoard({
                 <div className="my-4 h-px bg-[#E8E7EF]" />
                 <p className="text-[12px] font-[850] leading-[17px] text-[#262A35]">{document.executive.headline}</p>
               </div>
-            </Card>
+            </NorthStarVisualCard>
 
             <div className="grid grid-cols-1 gap-3">
               {document.executive.appSummaries.map((summary) => (
-                <Card key={summary.appName} className="p-4">
+                <NorthStarVisualCard key={summary.appName} className="p-4">
                   <div className="mb-2.5 flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2.5"><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-[11px] border border-black/5 bg-white shadow-sm">{summary.iconUrl ? <img src={summary.iconUrl} alt={summary.appName} className="h-full w-full object-cover" draggable={false} /> : <span className="font-[900]">{summary.appName.charAt(0)}</span>}</div><p className="truncate text-[15px] font-[900] tracking-[-0.02em]">{summary.appName}</p></div><span className="shrink-0 rounded-full px-2.5 py-1 text-[8px] font-[850]" style={{ background: accentSoft(summary.accent), color: accent(summary.accent) }}>{summary.badge}</span></div>
                   <p className="text-[9px] leading-[13px] text-[#5B606D]">{summary.text}</p>
-                </Card>
+                </NorthStarVisualCard>
               ))}
             </div>
 
-            <Card className="p-4"><div className="mb-2 flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-[#6557F5]" /><h3 className="text-[12px] font-[900]">KEY TAKEAWAY</h3></div><p className="text-[10px] font-[800] leading-[15px] text-[#343945]">{document.executive.keyTakeaway}</p></Card>
-            <Card className="p-4"><div className="mb-2 flex items-center gap-2"><Info className="h-4 w-4 text-[#4F7CFF]" /><h3 className="text-[12px] font-[900]">STRATEGIC IMPLICATION</h3></div><p className="text-[9px] leading-[14px] text-[#555B68]">{document.executive.strategicImplication}</p></Card>
+            <NorthStarVisualCard className="p-4"><div className="mb-2 flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-[#6557F5]" /><h3 className="text-[12px] font-[900]">KEY TAKEAWAY</h3></div><p className="text-[10px] font-[800] leading-[15px] text-[#343945]">{document.executive.keyTakeaway}</p></NorthStarVisualCard>
+            <NorthStarVisualCard className="p-4"><div className="mb-2 flex items-center gap-2"><Info className="h-4 w-4 text-[#4F7CFF]" /><h3 className="text-[12px] font-[900]">STRATEGIC IMPLICATION</h3></div><p className="text-[9px] leading-[14px] text-[#555B68]">{document.executive.strategicImplication}</p></NorthStarVisualCard>
 
-            <Card className="min-h-0 flex-1 p-4">
+            <NorthStarVisualCard className="min-h-0 flex-1 p-4">
               <div className="mb-3 flex items-center gap-2"><ListChecks className="h-4 w-4 text-[#6557F5]" /><h3 className="text-[12px] font-[900]">RECOMMENDATIONS</h3></div>
               <div className="space-y-2.5">{document.executive.recommendations.slice(0, 4).map((item, index) => <div key={`${item}-${index}`} className="flex gap-2.5 rounded-[11px] border border-[#E9E8F0] bg-[#FCFCFE] p-2.5"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#EEEAFE] text-[8px] font-[900] text-[#6557F5]">{index + 1}</span><p className="text-[8.5px] leading-[12px] text-[#4A4F5B]">{item}</p></div>)}</div>
-            </Card>
+            </NorthStarVisualCard>
 
             <div className="rounded-[20px] bg-gradient-to-br from-[#6B5CFF] to-[#5242E8] p-4 text-white shadow-[0_18px_36px_rgba(84,67,230,0.25)]">
               <div className="mb-2 flex items-center gap-2"><ArrowUp className="h-4 w-4" /><h3 className="text-[11px] font-[900]">NEXT STEPS</h3></div>

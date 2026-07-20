@@ -1,10 +1,16 @@
-// Northstar Canvas Live Web Artifact Host v0.5.4.2 — stable single-mount surface with exact proposal-owned acknowledgements.
+// Northstar Canvas Live Web Artifact Host v0.7.9 — persistent iframe transactions with an idempotent acknowledgement outbox.
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { GripHorizontal, Loader2, TriangleAlert } from "lucide-react";
 import { buildCanvasArtifactRuntimeDocument } from "@/lib/canvas-artifacts/runtime-document";
+import { createClient as createSupabaseClient } from "@/lib/supabase/client";
+import {
+  NORTHSTAR_ARTIFACT_ACK_EVENT,
+  northstarArtifactAcknowledgementChannelName,
+} from "@/lib/canvas-ai/northstar-artboard-ack";
+import type { NorthstarBrowserCommit } from "@/lib/canvas-ai/northstar-transaction-kernel";
 import type {
   CanvasCodeArtifactContentSize,
   CanvasCodeArtifactPayload,
@@ -26,6 +32,7 @@ interface ArtifactPointerMessage {
     | "northstar.artifact.runtime-error"
     | "northstar.artifact.runtime-review"
     | "northstar.artifact.content-size"
+    | "northstar.artifact.mutation-received"
     | "northstar.artifact.mutation-applied"
     | "northstar.artifact.mutation-rejected";
   artifactId: string;
@@ -55,6 +62,30 @@ interface ArtifactPointerMessage {
   snapshot?: NorthstarLiveSurfaceSnapshot;
 }
 
+let browserRealtimeClient: ReturnType<typeof createSupabaseClient> | undefined;
+
+function browserRealtime() {
+  browserRealtimeClient ??= createSupabaseClient();
+  return browserRealtimeClient;
+}
+
+async function broadcastBrowserAcknowledgement(
+  acknowledgement: NorthstarArtifactMutationAcknowledgement,
+): Promise<void> {
+  const client = browserRealtime();
+  const channel = client.channel(
+    northstarArtifactAcknowledgementChannelName(acknowledgement.artifactId),
+    { config: { broadcast: { self: false, ack: true } } },
+  );
+  try {
+    // Before subscribe, Supabase sends Broadcast over its REST transport. This
+    // reaches the long-running Vercel request without relying on API affinity.
+    await channel.httpSend(NORTHSTAR_ARTIFACT_ACK_EVENT, acknowledgement);
+  } finally {
+    await client.removeChannel(channel).catch(() => undefined);
+  }
+}
+
 interface CodeArtifactHostProps {
   artifact?: CanvasCodeArtifactPayload;
   selected: boolean;
@@ -65,6 +96,7 @@ interface CodeArtifactHostProps {
   onCanvasDragStart: (clientX: number, clientY: number) => void;
   onRuntimeReview: (review: CanvasCodeArtifactRuntimeReview) => void;
   onContentSize: (size: CanvasCodeArtifactContentSize) => void;
+  onBrowserCommit: (commit: NorthstarBrowserCommit) => void;
   onCanvasWheel: (input: {
     clientX: number;
     clientY: number;
@@ -117,6 +149,7 @@ function CodeArtifactHostImpl({
   onCanvasDragStart,
   onRuntimeReview,
   onContentSize,
+  onBrowserCommit,
   onCanvasWheel,
 }: CodeArtifactHostProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -130,8 +163,19 @@ function CodeArtifactHostImpl({
     baseRevisionId?: string;
     revisionId: string;
     mutationId: string;
+    received: boolean;
+    receivedAt?: number;
+    dispatchAttempts: number;
+    lastDispatchedAt: number;
   } | null>(null);
+  const pendingAcknowledgementDeliveriesRef = useRef<Map<string, {
+    acknowledgement: NorthstarArtifactMutationAcknowledgement;
+    attempts: number;
+    lastAttemptAt: number;
+    sending: boolean;
+  }>>(new Map());
   const readyRef = useRef(false);
+  const browserRevisionRef = useRef<string | undefined>(artifact?.revisionId);
   const latestSizeRef = useRef<CanvasCodeArtifactContentSize | undefined>(undefined);
   const latestReviewRef = useRef<CanvasCodeArtifactRuntimeReview | undefined>(undefined);
   const [mountedSurface, setMountedSurface] = useState<CanvasCodeArtifactPayload | undefined>(artifact);
@@ -148,6 +192,10 @@ function CodeArtifactHostImpl({
   useEffect(() => {
     latestArtifactRef.current = artifact;
     if (!artifact) return;
+    // A surface identity is a browser process boundary. Once mounted, package
+    // updates and recovery actions must travel through the mutation protocol;
+    // remounting the iframe would blank the board and discard its terminal
+    // result cache. Only a genuinely different surface may create a new frame.
     if (!mountedSurface || activeSurfaceId !== mountedSurfaceId) {
       mountedSurfaceRef.current = artifact;
       setMountedSurface(artifact);
@@ -155,6 +203,7 @@ function CodeArtifactHostImpl({
       failedMutationIdsRef.current = new Set();
       inFlightProposalRef.current = null;
       readyRef.current = false;
+      browserRevisionRef.current = artifact.revisionId;
       latestSizeRef.current = undefined;
       latestReviewRef.current = undefined;
       liveSizeSequenceRef.current = -1;
@@ -171,7 +220,7 @@ function CodeArtifactHostImpl({
 
   const runtimeDocument = useMemo(
     () => mountedSurface ? buildCanvasArtifactRuntimeDocument(mountedSurface) : undefined,
-    [mountedSurfaceId],
+    [mountedSurface],
   );
 
   const postCurrentContext = useCallback(() => {
@@ -194,11 +243,40 @@ function CodeArtifactHostImpl({
     }, "*");
   }, []);
 
-  const pumpNextMutation = useCallback(() => {
-    if (!readyRef.current || inFlightProposalRef.current) return;
-    const current = latestArtifactRef.current;
+  const dispatchMutationProposal = useCallback((input: {
+    proposal: NonNullable<typeof inFlightProposalRef.current>;
+    batch: NorthstarArtboardMutationBatch;
+    artifact: CanvasCodeArtifactPayload;
+  }) => {
     const frame = frameRef.current;
-    if (!current || !frame?.contentWindow) return;
+    if (!frame?.contentWindow) return false;
+    input.proposal.dispatchAttempts += 1;
+    input.proposal.lastDispatchedAt = Date.now();
+    frame.contentWindow.postMessage({
+      type: "northstar.artifact.apply-mutation",
+      artifactId: input.artifact.artifactId,
+      surfaceId: input.artifact.surfaceId ?? input.artifact.artifactId,
+      revisionId: input.artifact.revisionId,
+      baseRevisionId: input.artifact.parentRevisionId,
+      proposalId: input.proposal.proposalId,
+      ackToken: input.proposal.ackToken,
+      batch: input.batch,
+      assetUrls: input.artifact.dataBundle?.allowedAssetUrls ?? [],
+    }, "*");
+    return true;
+  }, []);
+
+  const pumpNextMutation = useCallback(() => {
+    if (!readyRef.current) return;
+    const current = latestArtifactRef.current;
+    if (!current || !frameRef.current?.contentWindow) return;
+    const activeProposal = inFlightProposalRef.current;
+    if (activeProposal) {
+      if (activeProposal.ackToken === current.pendingAckToken) return;
+      // An action can advance or roll back the authoritative package while an
+      // old callback is queued. Never retain a proposal for another token.
+      inFlightProposalRef.current = null;
+    }
     const journal = [...(current.mutationJournal ?? [])].sort((a, b) => a.sequence - b.sequence);
     const next = journal.find((batch) =>
       !appliedMutationIdsRef.current.has(batch.mutationId) &&
@@ -217,27 +295,45 @@ function CodeArtifactHostImpl({
       baseRevisionId: current.parentRevisionId,
       revisionId: current.revisionId,
       mutationId: next.mutationId,
+      received: false,
+      receivedAt: undefined,
+      dispatchAttempts: 0,
+      lastDispatchedAt: 0,
     };
     inFlightProposalRef.current = proposal;
     setVisibleMutationLabel(next.label);
-    frame.contentWindow.postMessage({
-      type: "northstar.artifact.apply-mutation",
-      artifactId: current.artifactId,
-      surfaceId: current.surfaceId ?? current.artifactId,
-      revisionId: current.revisionId,
-      baseRevisionId: current.parentRevisionId,
-      proposalId,
-      ackToken,
-      batch: next,
-      assetUrls: current.dataBundle?.allowedAssetUrls ?? [],
-    }, "*");
-  }, []);
+    dispatchMutationProposal({ proposal, batch: next, artifact: current });
+  }, [dispatchMutationProposal]);
 
   useEffect(() => {
     if (!artifact || activeSurfaceId !== mountedSurfaceId) return;
     postCurrentContext();
     pumpNextMutation();
   }, [activeSurfaceId, artifact, artifact?.activeStageIndex, artifact?.revisionId, artifact?.mutationJournal, mountedSurfaceId, postCurrentContext, pumpNextMutation]);
+
+  const deliverAcknowledgement = useCallback(async (
+    acknowledgement: NorthstarArtifactMutationAcknowledgement,
+  ): Promise<void> => {
+    const deliveries = await Promise.allSettled([
+      broadcastBrowserAcknowledgement(acknowledgement),
+      (async () => {
+        const response = await fetch("/api/canvas-ai/artifact-ack", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(acknowledgement),
+          cache: "no-store",
+          keepalive: true,
+        });
+        if (!response.ok) throw new Error(`Live artboard acknowledgement failed with ${response.status}.`);
+      })(),
+    ]);
+    if (deliveries.every((delivery) => delivery.status === "rejected")) {
+      const failure = deliveries.find((delivery) => delivery.status === "rejected");
+      throw failure?.status === "rejected" && failure.reason instanceof Error
+        ? failure.reason
+        : new Error("Live artboard acknowledgement transport failed.");
+    }
+  }, []);
 
   const postAcknowledgement = useCallback(async (input: {
     status: "applied" | "rejected" | "ready";
@@ -288,28 +384,74 @@ function CodeArtifactHostImpl({
       acknowledgedAt: new Date().toISOString(),
     };
 
-    const delays = [0, 180, 420, 900, 1_800, 3_000];
-    let lastError: unknown;
-    for (const delay of delays) {
-      if (delay > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
-      try {
-        const response = await fetch("/api/canvas-ai/artifact-ack", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(acknowledgement),
-          cache: "no-store",
-          keepalive: true,
-        });
-        if (response.ok) return;
-        lastError = new Error(`Live artboard acknowledgement failed with ${response.status}.`);
-      } catch (error) {
-        lastError = error;
-      }
+    // Broadcast is ephemeral. Retain the exact idempotent terminal message until
+    // React receives the committed package and clears this proposal token.
+    const delivery = {
+      acknowledgement,
+      attempts: 1,
+      lastAttemptAt: Date.now(),
+      sending: true,
+    };
+    pendingAcknowledgementDeliveriesRef.current.set(acknowledgement.ackToken, delivery);
+    if (pendingAcknowledgementDeliveriesRef.current.size > 80) {
+      const oldestToken = pendingAcknowledgementDeliveriesRef.current.keys().next().value;
+      if (oldestToken) pendingAcknowledgementDeliveriesRef.current.delete(oldestToken);
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Live artboard acknowledgement transport failed.");
-  }, []);
+    try {
+      await deliverAcknowledgement(acknowledgement);
+      pendingAcknowledgementDeliveriesRef.current.delete(acknowledgement.ackToken);
+    } finally {
+      const pending = pendingAcknowledgementDeliveriesRef.current.get(acknowledgement.ackToken);
+      if (pending) pending.sending = false;
+    }
+  }, [deliverAcknowledgement]);
+
+  useEffect(() => {
+    // A successful REST Broadcast response means accepted by the broker, not
+    // observed by the long-running route. Redeliver while the exact proposal is
+    // still pending so a brief Realtime reconnect cannot lose the only result.
+    const interval = window.setInterval(() => {
+      for (const [ackToken, pending] of pendingAcknowledgementDeliveriesRef.current) {
+        const retryDelay = Math.min(15_000, 500 * (2 ** Math.min(pending.attempts, 5)));
+        if (pending.sending || Date.now() - pending.lastAttemptAt < retryDelay) continue;
+        pending.sending = true;
+        pending.attempts += 1;
+        pending.lastAttemptAt = Date.now();
+        void deliverAcknowledgement(pending.acknowledgement)
+          .then(() => pendingAcknowledgementDeliveriesRef.current.delete(ackToken))
+          .catch((error: unknown) => console.warn("Northstar acknowledgement redelivery remains queued.", error))
+          .finally(() => {
+            const active = pendingAcknowledgementDeliveriesRef.current.get(ackToken);
+            if (active) active.sending = false;
+          });
+      }
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [deliverAcknowledgement]);
+
+  useEffect(() => {
+    // postMessage has no delivery guarantee. Retry the exact idempotent proposal
+    // until its token leaves the authoritative package. The iframe caches and
+    // replays terminal results, so this never needs to remount or blank the board.
+    const interval = window.setInterval(() => {
+      const proposal = inFlightProposalRef.current;
+      const current = latestArtifactRef.current;
+      if (!proposal || !current || !readyRef.current) return;
+      if (current.pendingAckToken !== proposal.ackToken) {
+        inFlightProposalRef.current = null;
+        pumpNextMutation();
+        return;
+      }
+      const retryInterval = proposal.received ? 900 : 400;
+      if (Date.now() - proposal.lastDispatchedAt < retryInterval) return;
+      const batch = (current.mutationJournal ?? []).find(
+        (candidate) => candidate.mutationId === proposal.mutationId,
+      );
+      if (!batch) return;
+      dispatchMutationProposal({ proposal, batch, artifact: current });
+    }, 200);
+    return () => window.clearInterval(interval);
+  }, [dispatchMutationProposal, postAcknowledgement, pumpNextMutation]);
 
   useEffect(() => {
     if (!dragShieldActive) return;
@@ -340,34 +482,72 @@ function CodeArtifactHostImpl({
         }
         if (event.data.review) latestReviewRef.current = event.data.review;
         readyRef.current = true;
+        browserRevisionRef.current = event.data.revisionId ?? current.revisionId;
         setSurfaceReady(true);
         setRuntimeError(null);
         postCurrentContext();
-        void postAcknowledgement({ status: "ready", message: event.data })
-          .then(() => window.setTimeout(pumpNextMutation, 40))
-          .catch((error: unknown) => {
-            console.warn("Northstar acknowledgement transport failed after retries; locking the mutation queue while preserving the mounted artboard.", error);
-            setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+        // Ready with a mutation id is provisional. Only mutation-applied or
+        // mutation-rejected may commit/clear that exact proposal token.
+        const hasPendingMutation = Boolean(
+          current.pendingAckToken
+          && (current.mutationJournal ?? []).some((batch) =>
+            !appliedMutationIdsRef.current.has(batch.mutationId)
+            && !failedMutationIdsRef.current.has(batch.mutationId),
+          ),
+        );
+        if (!event.data.mutationId && !hasPendingMutation) {
+          onBrowserCommit({
+            artifactId: event.data.artifactId,
+            revisionId: event.data.revisionId ?? current.revisionId,
+            size: event.data.size,
+            review: event.data.review,
+            snapshot: event.data.snapshot,
           });
+          void postAcknowledgement({ status: "ready", message: event.data })
+            .then(() => window.setTimeout(pumpNextMutation, 40))
+            .catch((error: unknown) => {
+              console.warn("Northstar foundation acknowledgement transport failed; the mounted artboard remains locally usable.", error);
+              setVisibleMutationLabel(null);
+            });
+        } else {
+          pumpNextMutation();
+        }
+        return;
+      }
+
+      if (event.data.type === "northstar.artifact.mutation-received") {
+        const proposal = inFlightProposalRef.current;
+        if (
+          proposal
+          && event.data.ackToken === proposal.ackToken
+          && event.data.proposalId === proposal.proposalId
+          && event.data.mutationId === proposal.mutationId
+        ) {
+          proposal.received = true;
+          proposal.receivedAt = Date.now();
+        }
         return;
       }
 
       if (event.data.type === "northstar.artifact.runtime-error") {
         if (event.data.mutationId) {
+          failedMutationIdsRef.current.add(event.data.mutationId);
+          if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
+            browserRevisionRef.current = inFlightProposalRef.current.baseRevisionId;
+            inFlightProposalRef.current = null;
+          }
           setVisibleMutationLabel("Repairing an invalid adjustment on this same artboard");
           void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "Runtime mutation error." })
-            .then(() => {
-              failedMutationIdsRef.current.add(event.data.mutationId!);
-              if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
-                inFlightProposalRef.current = null;
-              }
-            })
+            .then(() => setVisibleMutationLabel(null))
             .catch((error: unknown) => {
-              console.warn("Northstar could not report the rejected mutation; locking the queue while preserving the mounted artboard.", error);
-              setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+              console.warn("Northstar could not report the rejected mutation; the rolled-back artboard remains locally usable.", error);
+              setVisibleMutationLabel(null);
             });
         } else {
-          setRuntimeError(event.data.message || "The persistent artifact surface could not render.");
+          // Preserve the last painted DOM. Runtime telemetry must never cover a
+          // usable artboard with a fatal overlay or trigger an iframe remount.
+          console.warn("Northstar runtime reported a non-transaction fault; the last painted artboard remains visible.", event.data.message);
+          setSurfaceReady(true);
         }
         return;
       }
@@ -377,10 +557,9 @@ function CodeArtifactHostImpl({
         if (nextSequence < liveSizeSequenceRef.current) return;
         liveSizeSequenceRef.current = nextSequence;
         latestSizeRef.current = event.data.size;
-        // Resize the mounted iframe immediately from the current live DOM. This is
-        // deliberately independent of acknowledgement and commit state.
-        setLiveSize(event.data.size);
-        onContentSize(event.data.size);
+        // Provisional reflow, asset loading, and rollback never move or zoom the
+        // outer Canvas object. Ready and mutation-applied are the only events
+        // allowed to publish a settled size to the workspace.
         return;
       }
 
@@ -393,18 +572,19 @@ function CodeArtifactHostImpl({
       if (event.data.type === "northstar.artifact.mutation-rejected") {
         // The runtime has already rolled the DOM back. Never commit the rejected mutation's
         // transient geometry to the outer Canvas object.
+        if (event.data.mutationId) failedMutationIdsRef.current.add(event.data.mutationId);
+        const rejectedProposal = inFlightProposalRef.current;
+        if (rejectedProposal && event.data.mutationId && rejectedProposal.mutationId === event.data.mutationId) {
+          browserRevisionRef.current = rejectedProposal.baseRevisionId;
+          inFlightProposalRef.current = null;
+        }
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         setVisibleMutationLabel("Northstar is repairing this rejected adjustment");
         void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "The live runtime rejected the adjustment." })
-          .then(() => {
-            if (event.data.mutationId) failedMutationIdsRef.current.add(event.data.mutationId);
-            if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
-              inFlightProposalRef.current = null;
-            }
-          })
+          .then(() => setVisibleMutationLabel(null))
           .catch((error: unknown) => {
-            console.warn("Northstar acknowledgement transport failed; locking the queue while preserving the mounted artboard.", error);
-            setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+            console.warn("Northstar acknowledgement transport failed; the runtime rollback remains authoritative locally.", error);
+            setVisibleMutationLabel(null);
           });
         return;
       }
@@ -417,21 +597,31 @@ function CodeArtifactHostImpl({
           onContentSize(event.data.size);
         }
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
+        onBrowserCommit({
+          artifactId: event.data.artifactId,
+          revisionId: event.data.revisionId ?? current.revisionId,
+          mutationId: event.data.mutationId,
+          size: event.data.size,
+          review: event.data.review,
+          snapshot: event.data.snapshot,
+        });
+        if (event.data.mutationId) appliedMutationIdsRef.current.add(event.data.mutationId);
+        const appliedProposal = inFlightProposalRef.current;
+        if (appliedProposal && event.data.mutationId && appliedProposal.mutationId === event.data.mutationId) {
+          browserRevisionRef.current = event.data.revisionId ?? appliedProposal.revisionId;
+          inFlightProposalRef.current = null;
+        }
         setVisibleMutationLabel(event.data.visibleChange || null);
         void postAcknowledgement({ status: "applied", message: event.data })
           .then(() => {
-            if (event.data.mutationId) appliedMutationIdsRef.current.add(event.data.mutationId);
-            if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
-              inFlightProposalRef.current = null;
-            }
             window.setTimeout(() => {
               setVisibleMutationLabel(null);
               pumpNextMutation();
             }, 180);
           })
           .catch((error: unknown) => {
-            console.warn("Northstar acknowledgement transport failed; locking the queue while preserving the mounted artboard.", error);
-            setVisibleMutationLabel("Waiting to resynchronize the same artboard");
+            console.warn("Northstar acknowledgement transport failed; the accepted local artboard remains usable and recoverable.", error);
+            setVisibleMutationLabel(null);
           });
         return;
       }
@@ -468,7 +658,7 @@ function CodeArtifactHostImpl({
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [height, liveSize, onCanvasDragStart, onCanvasWheel, onContentSize, onRequestSelect, onRuntimeReview, postAcknowledgement, postCurrentContext, pumpNextMutation, width]);
+  }, [height, liveSize, onBrowserCommit, onCanvasDragStart, onCanvasWheel, onContentSize, onRequestSelect, onRuntimeReview, postAcknowledgement, postCurrentContext, pumpNextMutation, width]);
 
   if (!artifact && !mountedSurface) {
     return (
@@ -502,8 +692,10 @@ function CodeArtifactHostImpl({
           }}
         >
           <iframe
-            key={mountedSurfaceId}
+            key={mountedSurfaceId ?? "surface"}
             ref={frameRef}
+            data-testid="northstar-live-artboard-frame"
+            data-ns-surface-id={mountedSurfaceId}
             title={current?.title ?? mountedSurface.title}
             src={runtimeDocument ? undefined : mountedSurface.runtimeUrl}
             srcDoc={runtimeDocument}
@@ -517,14 +709,17 @@ function CodeArtifactHostImpl({
               height: geometry.intrinsicHeight,
               pointerEvents: liveInteractionEnabled && !dragShieldActive ? "auto" : "none",
             }}
-            onError={() => setRuntimeError("The persistent isolated surface did not load.")}
+            onError={() => {
+              console.warn("Northstar isolated surface emitted a load error; retaining the continuously mounted frame.");
+              setSurfaceReady(true);
+            }}
           />
         </div>
       )}
 
       {!surfaceReady && !runtimeError && (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#F8F8FC]">
-          <div className="flex items-center gap-2 text-xs font-bold text-zinc-500"><Loader2 className="h-4 w-4 animate-spin text-[#6B5CFF]" />Mounting the one live artboard…</div>
+        <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-center justify-center">
+          <div className="flex items-center gap-2 rounded-full border border-black/[0.06] bg-white/88 px-3 py-1.5 text-xs font-bold text-zinc-500 shadow-sm backdrop-blur-xl"><Loader2 className="h-4 w-4 animate-spin text-[#6B5CFF]" />Mounting the one live artboard…</div>
         </div>
       )}
 

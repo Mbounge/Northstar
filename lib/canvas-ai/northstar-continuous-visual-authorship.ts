@@ -1,5 +1,5 @@
 // lib/canvas-ai/northstar-continuous-visual-authorship.ts
-// Northstar Canvas v0.7.0 — obligation-led continuous visual authorship on one canonical artboard.
+// Northstar Canvas v0.7.5 â€” postcondition-led continuous visual authorship on one canonical artboard.
 
 import { createHash, randomUUID } from "node:crypto";
 import type { NorthstarArtboardMutationDraft } from "@/lib/canvas-ai/northstar-artboard-mutations";
@@ -9,7 +9,7 @@ import type {
   NorthstarWebArtifactDocument,
 } from "@/lib/canvas-artifacts/types";
 
-export const NORTHSTAR_CONTINUOUS_AUTHORSHIP_VERSION = "northstar.continuous-visual-authorship.v0.7.0" as const;
+export const NORTHSTAR_CONTINUOUS_AUTHORSHIP_VERSION = "northstar.continuous-visual-authorship.v0.7.5" as const;
 
 export const NORTHSTAR_FIRST_VISIBLE_COMMIT_DEADLINE_MS = 10_000;
 export const NORTHSTAR_VISIBLE_COMMIT_TARGET_MIN_MS = 3_000;
@@ -640,10 +640,25 @@ function insertedIds(draft: NorthstarArtboardMutationDraft): string[] {
 }
 
 export function fingerprintNorthstarMove(draft: NorthstarArtboardMutationDraft, contract?: Partial<NorthstarMoveContract>): string {
+  const operations = contract?.obligation === "evidence-hierarchy"
+    ? (draft.operations as Array<Record<string, unknown>>)
+        .filter((operation) => operation.op === "set-attributes")
+        .map((operation) => {
+          const attributes = operation.attributes && typeof operation.attributes === "object"
+            ? operation.attributes as Record<string, unknown>
+            : {};
+          return {
+            targetId: operation.targetId,
+            role: attributes["data-ns-evidence-role"],
+          };
+        })
+        .filter((operation) => typeof operation.targetId === "string" && typeof operation.role === "string")
+        .sort((a, b) => String(a.targetId).localeCompare(String(b.targetId)))
+    : draft.operations;
   const normalized = JSON.stringify({
     obligation: contract?.obligation,
     operationKind: contract?.operationKind,
-    operations: draft.operations,
+    operations,
   })
     .toLowerCase()
     .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
@@ -670,7 +685,71 @@ function draftTouchesNode(draft: NorthstarArtboardMutationDraft, nodeId: string)
   });
 }
 
-function operationSpecificIssues(contract: NorthstarMoveContract, draft: NorthstarArtboardMutationDraft): string[] {
+function markupAttribute(openingTag: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return openingTag.match(new RegExp(`\\b${escaped}=["']([^"']+)["']`, "i"))?.[1];
+}
+
+function evidenceRolePostconditionIssues(
+  artifact: NorthstarGeneratedCodeArtifactPackage,
+  contract: NorthstarMoveContract,
+  draft: NorthstarArtboardMutationDraft,
+): string[] {
+  const issues: string[] = [];
+  const evidenceNodes = new Map<string, { evidenceId: string; role?: NorthstarEvidenceRole }>();
+  const collect = (html: string) => {
+    for (const match of html.matchAll(/<[a-zA-Z][a-zA-Z0-9:-]*\b[^>]*>/g)) {
+      const opening = match[0];
+      const nodeId = markupAttribute(opening, "data-ns-node-id");
+      const evidenceId = markupAttribute(opening, "data-ns-evidence-id");
+      if (!nodeId || !evidenceId) continue;
+      const role = markupAttribute(opening, "data-ns-evidence-role") as NorthstarEvidenceRole | undefined;
+      evidenceNodes.set(nodeId, { evidenceId, role });
+    }
+  };
+  collect(artifact.document.html);
+  collect(insertedMarkup(draft));
+
+  for (const operation of draft.operations as Array<Record<string, unknown>>) {
+    if (operation.op !== "set-attributes" || typeof operation.targetId !== "string") continue;
+    const attributes = operation.attributes && typeof operation.attributes === "object"
+      ? operation.attributes as Record<string, unknown>
+      : {};
+    const role = attributes["data-ns-evidence-role"];
+    if (role === undefined) continue;
+    const node = evidenceNodes.get(operation.targetId);
+    if (!node) {
+      issues.push(`evidence role targets non-evidence node ${operation.targetId}`);
+      continue;
+    }
+    if (typeof role === "string") node.role = role as NorthstarEvidenceRole;
+    else if (role === null) node.role = undefined;
+  }
+
+  const roles = new Set([...evidenceNodes.values()].map((node) => node.role).filter(Boolean));
+  if (!roles.has("focal") || (!roles.has("supporting") && !roles.has("contextual"))) {
+    issues.push("evidence-hierarchy transaction does not leave one focal tier plus supporting or contextual proof");
+  }
+  for (const declared of contract.evidenceRoles) {
+    const visible = [...evidenceNodes.values()].find((node) => node.evidenceId === declared.evidenceId);
+    if (!visible || visible.role !== declared.role) {
+      issues.push(`declared evidence role ${declared.evidenceId}:${declared.role} is not encoded on its grounded node`);
+    }
+  }
+
+  const markup = insertedMarkup(draft);
+  if (/\b(?:trust anchor|friction point|conversion velocity)\b/i.test(stripTags(markup))
+    && !/data-ns-(?:annotation-id|evidence-id|source-node-id|target-node-id)=["'][^"']+["']/i.test(markup)) {
+    issues.push("hierarchy labels must be anchored semantic annotations, not anonymous repeated badges");
+  }
+  return issues;
+}
+
+function operationSpecificIssues(
+  artifact: NorthstarGeneratedCodeArtifactPackage,
+  contract: NorthstarMoveContract,
+  draft: NorthstarArtboardMutationDraft,
+): string[] {
   const issues: string[] = [];
   const operationsText = draftOperationText(draft);
   const markup = insertedMarkup(draft);
@@ -701,6 +780,9 @@ function operationSpecificIssues(contract: NorthstarMoveContract, draft: Northst
 
   if (hierarchyKinds.includes(contract.operationKind) && !evidenceRoleChange) {
     issues.push(`declared ${contract.operationKind} operation does not materially encode evidence roles`);
+  }
+  if (contract.obligation === "evidence-hierarchy") {
+    issues.push(...evidenceRolePostconditionIssues(artifact, contract, draft));
   }
   if (relationshipKinds.includes(contract.operationKind) && (!explicitRelationship || !analyticalStructure || !groundedStructure)) {
     issues.push(`declared ${contract.operationKind} operation lacks a grounded rendered relationship with exact endpoints`);
@@ -845,7 +927,7 @@ export function preflightNorthstarMove(input: {
     return /grid-template|font-size|width|height|transform|order|display|gap|padding|margin|border|background|position/i.test(operation.css);
   });
   if (!materiallyChangesScene) issues.push("move changes only status metadata or non-material styling");
-  issues.push(...operationSpecificIssues(input.contract, input.draft));
+  issues.push(...operationSpecificIssues(input.artifact, input.contract, input.draft));
   issues.push(...evidenceInventoryIssues(input.draft));
 
   return {
@@ -892,7 +974,7 @@ export function buildNorthstarCorrectionDirective(input: {
   const reason = input.acknowledgement?.reason ?? "";
   const directives = [
     `Continue the same unresolved obligation: ${input.contract.obligation}.`,
-    `Preserve the verified visual thesis while replacing the rejected structural approach for “${input.contract.label}”.`,
+    `Preserve the verified visual thesis while replacing the rejected structural approach for â€œ${input.contract.label}â€.`,
     "Rebase on the exact current materialized DOM and browser geometry.",
     "Produce a materially different visible and semantic delta; changing identifiers or wording alone is not a correction.",
     "Keep the working hypothesis and current test in the reserved two-column normal-flow reasoning region.",
@@ -1065,7 +1147,7 @@ export function verifyNorthstarFinalResponse(input: {
   if (titleWords.size && ![...titleWords].some((word) => words.has(word))) issues.push("response does not identify the actual artifact");
   const responseSpecificWords = [...words].filter((word) => !new Set(["artboard", "canvas", "northstar", "created", "built", "shows", "using", "with", "from", "that", "this"]).has(word));
   if (responseSpecificWords.length && !responseSpecificWords.some((word) => groundedVocabulary.has(word))) issues.push("response is not sufficiently grounded in the final-state brief");
-  const comparisonPhrase = response.match(/\b([A-Z][A-Za-z0-9&.'’ -]{1,48})\s*[×xX]\s*([A-Z][A-Za-z0-9&.'’ -]{1,48})\b/);
+  const comparisonPhrase = response.match(/\b([A-Z][A-Za-z0-9&.'â€™ -]{1,48})\s*[Ã—xX]\s*([A-Z][A-Za-z0-9&.'â€™ -]{1,48})\b/);
   if (comparisonPhrase) {
     const groundedComparisonText = `${input.brief.title} ${input.brief.objective}`.toLowerCase();
     const left = comparisonPhrase[1].trim().toLowerCase();

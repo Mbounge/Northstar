@@ -4,6 +4,17 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function proxy(request: NextRequest) {
+  // The browser transaction harness is compiled only for the explicit release
+  // gate. It must exercise the real iframe/runtime/ack route without depending
+  // on a developer's Supabase account or authentication cookies.
+  if (
+    process.env.NORTHSTAR_E2E === "1" &&
+    (request.nextUrl.pathname.startsWith("/__northstar-e2e") ||
+      request.nextUrl.pathname === "/api/canvas-ai/artifact-ack")
+  ) {
+    return NextResponse.next({ request })
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   })

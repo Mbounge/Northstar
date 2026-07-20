@@ -1,4 +1,4 @@
-// Northstar Canvas Artifact Runtime v0.5.4.2 — restored stable intrinsic sizing and persistent-surface geometry — convergent isolated spatial service — browser-authoritative transactional mutations, dynamic assets, exact acknowledgements, and live geometry
+// Northstar Canvas Artifact Runtime v0.7.9 â€” idempotent terminal replay on one continuously mounted surface.
 import type { CanvasCodeArtifactPayload } from "./types";
 import { NORTHSTAR_DESIGN_KERNEL_CSS } from "@/lib/canvas-ai/northstar-design-kernel";
 
@@ -33,7 +33,17 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const stages = artifact.stagePlan ?? [];
   const minimumWidth = Math.max(1, Math.round(artifact.minimumWidth));
   const minimumHeight = Math.max(1, Math.round(artifact.minimumHeight));
-  const initialJournal = artifact.mutationJournal ?? [];
+  const mutationJournal = artifact.mutationJournal ?? [];
+  // A package carrying pendingAckToken is a proposal, not committed browser
+  // state. Replaying its newest batch during iframe construction bypasses the
+  // receipt/apply/terminal-ack transaction entirely. Mount the committed prefix
+  // and let the host dispatch the final batch with its exact proposal identity.
+  const initialJournal = artifact.pendingAckToken
+    ? mutationJournal.slice(0, -1)
+    : mutationJournal;
+  const initialRevisionId = artifact.pendingAckToken
+    ? artifact.parentRevisionId ?? artifact.revisionId
+    : artifact.revisionId;
   const allowedAssetUrls = Array.from(new Set([
     ...(dataBundle.allowedAssetUrls ?? []),
     ...dataBundle.screenshots.map((screen) => screen.imageUrl).filter((value): value is string => Boolean(value)),
@@ -45,7 +55,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   "use strict";
   const ARTIFACT_ID = ${safeJson(artifact.artifactId)};
   const SURFACE_ID = ${safeJson(artifact.surfaceId ?? artifact.artifactId)};
-  let currentRevisionId = ${safeJson(artifact.revisionId)};
+  let currentRevisionId = ${safeJson(initialRevisionId)};
   let currentMutationId = null;
   let currentData = ${safeJson(dataBundle)};
   let currentCreative = ${safeJson(artifact.creativeDirection ?? null)};
@@ -62,6 +72,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const MINIMUM_WIDTH = ${minimumWidth};
   const MINIMUM_HEIGHT = ${minimumHeight};
   const appliedMutationIds = new Set();
+  const queuedMutationIds = new Set();
+  const terminalMutationMessages = new Map();
   const mutationQueue = [];
   let applyingMutation = false;
   let pendingAcknowledgement = null;
@@ -71,10 +83,25 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   let lastSpatialAudit = null;
   let solvingSpatialLayout = false;
 
+  const postTerminalMutation = (mutationId, message) => {
+    if (mutationId) {
+      terminalMutationMessages.set(mutationId, message);
+      if (terminalMutationMessages.size > 80) {
+        terminalMutationMessages.delete(terminalMutationMessages.keys().next().value);
+      }
+    }
+    parent.postMessage(message, "*");
+  };
+
   const stageSurface = document.getElementById("northstar-artifact-stage");
   const origin = document.getElementById("northstar-artifact-origin");
   const root = document.getElementById("northstar-artifact-root");
   if (!stageSurface || !origin || !root) return;
+
+  // Runtime-owned overlays are derived browser state. A historical snapshot may
+  // contain them, but a mount must always begin from one clean authored tree.
+  root.querySelectorAll('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+  document.querySelectorAll('style[data-ns-runtime-owned="true"],style[data-ns-runtime-spatial-style]').forEach((element) => element.remove());
 
   const cssEscape = (value) => window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replace(/[^a-zA-Z0-9:_-]/g, "");
   const LEGACY_NODE_SELECTORS = Object.freeze({
@@ -176,6 +203,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   const spatialStyle = document.createElement("style");
   spatialStyle.setAttribute("data-ns-runtime-spatial-style", "true");
+  spatialStyle.setAttribute("data-ns-runtime-owned", "true");
   spatialStyle.textContent = [
     "[data-ns-spatial-system]{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:40}",
     "[data-ns-relationship-layer]{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}",
@@ -191,6 +219,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   const spatialSystem = document.createElement("div");
   spatialSystem.setAttribute("data-ns-spatial-system", "true");
+  spatialSystem.setAttribute("data-ns-runtime-owned", "true");
   const relationshipLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   relationshipLayer.setAttribute("data-ns-relationship-layer", "true");
   relationshipLayer.setAttribute("aria-hidden", "true");
@@ -646,6 +675,58 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   };
 
   const PROGRESS_ONLY_NODE_IDS = new Set(["kicker", "current-act", "current-act-text"]);
+  const normalizeSemanticText = (value) => String(value || "").trim().replace(/\s+/g, " ").slice(0, 4000);
+  const semanticAttributes = (element) => Object.fromEntries(
+    Array.from(element.attributes || [])
+      .filter((attribute) => !["class", "style"].includes(attribute.name) && !/^data-ns-(?:mutating|runtime-owned|spatial)/.test(attribute.name))
+      .map((attribute) => [attribute.name, attribute.value])
+      .sort((a, b) => a[0].localeCompare(b[0])),
+  );
+  const semanticStyles = (element) => Object.fromEntries(
+    Array.from(element.style || [])
+      .map((name) => [name, element.style.getPropertyValue(name).trim()])
+      .filter((entry) => entry[1])
+      .sort((a, b) => a[0].localeCompare(b[0])),
+  );
+  const semanticFingerprint = (value) => {
+    let hash = 2166136261;
+    const source = String(value || "");
+    for (let index = 0; index < source.length; index += 1) {
+      hash ^= source.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  };
+  const captureCommittedSemanticNodes = () => Array.from(root.querySelectorAll("[data-ns-node-id]"))
+    .filter((element) => !element.closest('[data-ns-runtime-owned="true"],[data-ns-spatial-system]'))
+    .map((element) => {
+      const nodeId = element.getAttribute("data-ns-node-id") || "";
+      const parent = element.parentElement?.closest("[data-ns-node-id]");
+      const normalizedAttributes = semanticAttributes(element);
+      const normalizedClasses = Array.from(element.classList || []).sort();
+      const normalizedStyles = semanticStyles(element);
+      const normalizedText = normalizeSemanticText(element.textContent);
+      const childNodeIds = Array.from(element.children || [])
+        .map((child) => child.getAttribute?.("data-ns-node-id") || "")
+        .filter(Boolean);
+      return {
+        nodeId,
+        parentId: parent?.getAttribute("data-ns-node-id") || undefined,
+        normalizedText,
+        normalizedAttributes,
+        normalizedClasses,
+        normalizedStyles,
+        subtreeFingerprint: semanticFingerprint(JSON.stringify({
+          tagName: element.tagName.toLowerCase(),
+          normalizedText,
+          normalizedAttributes,
+          normalizedClasses,
+          normalizedStyles,
+          childNodeIds,
+        })),
+      };
+    })
+    .filter((node) => node.nodeId);
   const semanticSnapshot = () => {
     const snapshot = new Map();
     root.querySelectorAll("[data-ns-node-id]").forEach((element) => {
@@ -658,6 +739,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         text: (element.textContent || "").trim().replace(/\s+/g, " ").slice(0, 1200),
         className: element.getAttribute("class") || "",
         inlineStyle: element.getAttribute("style") || "",
+        attributes: semanticAttributes(element),
         display: style.display,
         opacity: style.opacity,
         fontSize: style.fontSize,
@@ -810,7 +892,17 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       width: rect.width,
       height: rect.height,
     });
-    const rootLocalBounds = { left: 0, top: 0, right: rootRect.width, bottom: rootRect.height };
+    // The canvas surface is sized from the complete measured content bounds,
+    // including deliberate negative origins and wide filmstrips. Auditing only
+    // against the root element's initial CSS box falsely rejected content that
+    // the runtime had already measured and exposed on the artboard.
+    const measuredArtboardBounds = getContentBounds();
+    const rootLocalBounds = {
+      left: measuredArtboardBounds.minX,
+      top: measuredArtboardBounds.minY,
+      right: measuredArtboardBounds.maxX,
+      bottom: measuredArtboardBounds.maxY,
+    };
     const meaningfulChildrenInside = (item) => {
       if (item.geometryRole === "content") return false;
       const children = Array.from(item.element.querySelectorAll("[data-ns-node-id]"))
@@ -896,7 +988,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       return "A major analytical region overlapped grounded evidence instead of receiving a complete atomic reflow: " + after.incoherentMajorRegionIds.join(", ");
     }
     if (after.majorRegionCollisionPairs?.length) {
-      return "Major analytical regions collided in the visible composition: " + after.majorRegionCollisionPairs.map((pair) => pair.join(" ↔ ")).join(", ");
+      return "Major analytical regions collided in the visible composition: " + after.majorRegionCollisionPairs.map((pair) => pair.join(" â†” ")).join(", ");
     }
     if (after.outOfBoundsNodeIds?.length) {
       const detail = (after.overflowDetails || []).slice(0, 6).map((item) => {
@@ -941,11 +1033,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       style.textContent = css;
     }
   };
-  const captureLiveSnapshot = () => ({
-    html: root.innerHTML,
-    css: Array.from(document.querySelectorAll("style")).map((style) => style.textContent || "").join("\n"),
-    capturedAt: new Date().toISOString(),
-  });
+  const captureLiveSnapshot = () => {
+    const authoredRoot = root.cloneNode(true);
+    authoredRoot.querySelectorAll?.('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+    return {
+      html: authoredRoot.innerHTML,
+      css: Array.from(document.querySelectorAll("style"))
+        .filter((style) => !style.hasAttribute("data-ns-runtime-owned") && !style.hasAttribute("data-ns-runtime-spatial-style"))
+        .map((style) => style.textContent || "")
+        .join("\n"),
+      capturedAt: new Date().toISOString(),
+      semanticNodes: captureCommittedSemanticNodes(),
+    };
+  };
   const loadedAssetUrls = () => Array.from(root.querySelectorAll("img[src]")).filter((image) => image.complete && image.naturalWidth > 0).map((image) => image.currentSrc || image.getAttribute("src") || "").filter(Boolean);
   const missingRequiredAssets = (required) => {
     const loaded = new Set(loadedAssetUrls());
@@ -1066,12 +1166,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     } else {
       appliedMutationIds.add(batch.mutationId);
     }
-    // The complete live DOM is the size authority. Report immediately after the
-    // mutation and again throughout the transition so the outer Canvas frame can
-    // follow every visible reflow before acknowledgement or commit.
+    // Report the complete live DOM throughout the transition for internal audit.
+    // The host buffers these provisional measurements and publishes outer Canvas
+    // geometry only from terminal ready/applied events.
     queueContentSize();
     const transitionWindow = Math.max(120, Math.min(1400, Number(batch.transitionMs) || 320));
-    [0, 40, 90, 160, 260, 420, 700, transitionWindow].forEach((delay) => {
+    // The acceptance gate below intentionally waits up to three seconds for
+    // layout stability and eight seconds for remote assets. Keep auditing at
+    // both deadlines; otherwise the last early audit can leave a received
+    // mutation pending forever when no later ResizeObserver/image event fires.
+    [0, 40, 90, 160, 260, 420, 700, transitionWindow, 1_600, 3_100, 8_100].forEach((delay) => {
       window.setTimeout(queueContentSize, delay);
     });
   };
@@ -1084,17 +1188,21 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const item = mutationQueue.shift();
         try { await applyMutationBatch(item.batch, item.revisionId, true, item.proposal); }
         catch (error) {
-          parent.postMessage({
+          const terminalMessage = {
             type: "northstar.artifact.runtime-error",
             artifactId: ARTIFACT_ID,
-            revisionId: item.revisionId,
+            surfaceId: SURFACE_ID,
+            revisionId: currentRevisionId,
             baseRevisionId: item.proposal?.baseRevisionId,
             proposalId: item.proposal?.proposalId,
             ackToken: item.proposal?.ackToken,
             mutationId: item.batch?.mutationId,
             message: error instanceof Error ? error.message : String(error),
-          }, "*");
+            snapshot: captureLiveSnapshot(),
+          };
+          postTerminalMutation(item.batch?.mutationId, terminalMessage);
         }
+        finally { if (item.batch?.mutationId) queuedMutationIds.delete(item.batch.mutationId); }
       }
     } finally { applyingMutation = false; }
   };
@@ -1174,7 +1282,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       (!document.fonts || document.fonts.status === "loaded") &&
       Array.from(document.images).every((image) => image.complete);
     const pendingAge = pendingAcknowledgement ? Date.now() - (pendingAcknowledgement.pendingSince || Date.now()) : 0;
-    const settled = resourcesSettled && (stableCount >= 3 || pendingAge >= 10_000);
+    // A remote image can remain in the browser's pending state indefinitely.
+    // The transaction audit already rejects missing required assets, so a
+    // resource must never prevent the runtime from returning a terminal result.
+    const resourceDeadlineReached = Boolean(pendingAcknowledgement) && pendingAge >= 8_000;
+    const settled = (resourcesSettled || resourceDeadlineReached) && (stableCount >= 3 || pendingAge >= 3_000);
     const verifiedDocumentWidth = Math.max(bounds.width, root.scrollWidth, root.getBoundingClientRect().width);
     const verifiedDocumentHeight = Math.max(bounds.height, root.scrollHeight, root.getBoundingClientRect().height);
     const size = {
@@ -1255,11 +1367,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           currentMutationId = acknowledgement.transaction.mutationId;
           enforceAssetPolicy(root);
           applyStage();
-          parent.postMessage({
+          const terminalMessage = {
             type: "northstar.artifact.mutation-rejected",
             artifactId: ARTIFACT_ID,
             surfaceId: SURFACE_ID,
-            revisionId: acknowledgement.revisionId,
+            revisionId: currentRevisionId,
             baseRevisionId: acknowledgement.proposal?.baseRevisionId,
             proposalId: acknowledgement.proposal?.proposalId,
             ackToken: acknowledgement.proposal?.ackToken,
@@ -1273,7 +1385,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             requiredAssetUrls: requiredAssets,
             loadedAssetUrls: loadedAssetUrls(),
             missingAssetUrls: missingAssets,
-          }, "*");
+            snapshot: captureLiveSnapshot(),
+          };
+          postTerminalMutation(acknowledgement.mutationId, terminalMessage);
           queueContentSize();
         } else {
           pendingAcknowledgement = null;
@@ -1282,6 +1396,26 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           // the browser has measured the accepted visible result, actual content
           // and resolved spatial extents become the sole sizing authority.
           requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
+          solveSpatialSystem();
+          const terminalBounds = getContentBounds();
+          const terminalDocumentWidth = Math.max(terminalBounds.width, root.scrollWidth, root.getBoundingClientRect().width);
+          const terminalDocumentHeight = Math.max(terminalBounds.height, root.scrollHeight, root.getBoundingClientRect().height);
+          const terminalSize = {
+            ...size,
+            measuredAt: new Date().toISOString(),
+            intrinsicWidth: Math.ceil(terminalDocumentWidth),
+            intrinsicHeight: Math.ceil(terminalDocumentHeight),
+            contentBounds: {
+              minX: terminalBounds.minX,
+              minY: terminalBounds.minY,
+              maxX: Math.max(terminalBounds.maxX, terminalBounds.minX + terminalDocumentWidth),
+              maxY: Math.max(terminalBounds.maxY, terminalBounds.minY + terminalDocumentHeight),
+            },
+            settled: true,
+          };
+          stageSurface.style.width = terminalBounds.width + "px";
+          stageSurface.style.height = terminalBounds.height + "px";
+          origin.style.transform = "translate(" + (-terminalBounds.minX) + "px," + (-terminalBounds.minY) + "px)";
           const changedRects = diff.meaningful.map((id) => nodeById(id)?.getBoundingClientRect()).filter(Boolean);
           const rootRect = root.getBoundingClientRect();
           const changedBounds = changedRects.length ? {
@@ -1289,9 +1423,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             minY: Math.floor(Math.min(...changedRects.map((rect) => rect.top - rootRect.top))),
             maxX: Math.ceil(Math.max(...changedRects.map((rect) => rect.right - rootRect.left))),
             maxY: Math.ceil(Math.max(...changedRects.map((rect) => rect.bottom - rootRect.top))),
-          } : size.contentBounds;
-          const acknowledgedSize = { ...size, changedBounds, changedNodeIds: diff.changed, meaningfulChangedNodeIds: diff.meaningful };
-          parent.postMessage({
+          } : terminalSize.contentBounds;
+          const acknowledgedSize = { ...terminalSize, changedBounds, changedNodeIds: diff.changed, meaningfulChangedNodeIds: diff.meaningful };
+          const terminalMessage = {
             type: "northstar.artifact.mutation-applied",
             artifactId: ARTIFACT_ID,
             surfaceId: SURFACE_ID,
@@ -1310,7 +1444,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             loadedAssetUrls: loadedAssetUrls(),
             missingAssetUrls: [],
             snapshot: captureLiveSnapshot(),
-          }, "*");
+          };
+          postTerminalMutation(acknowledgement.mutationId, terminalMessage);
           queueContentSize();
         }
       }
@@ -1366,6 +1501,50 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     if (message.type === "northstar.artifact.apply-mutation" && message.batch) {
       registerAssets(message.assetUrls || []);
+      const mutationId = message.batch.mutationId;
+      parent.postMessage({
+        type: "northstar.artifact.mutation-received",
+        artifactId: ARTIFACT_ID,
+        surfaceId: SURFACE_ID,
+        revisionId: message.revisionId,
+        baseRevisionId: message.baseRevisionId,
+        proposalId: message.proposalId,
+        ackToken: message.ackToken,
+        mutationId,
+      }, "*");
+      const terminalMessage = terminalMutationMessages.get(mutationId);
+      if (terminalMessage) {
+        parent.postMessage(terminalMessage, "*");
+        return;
+      }
+      if (
+        appliedMutationIds.has(mutationId) ||
+        queuedMutationIds.has(mutationId) ||
+        pendingAcknowledgement?.mutationId === mutationId
+      ) return;
+      if (message.baseRevisionId && message.baseRevisionId !== currentRevisionId) {
+        const lineageMessage = {
+          type: "northstar.artifact.mutation-rejected",
+          artifactId: ARTIFACT_ID,
+          surfaceId: SURFACE_ID,
+          revisionId: currentRevisionId,
+          baseRevisionId: message.baseRevisionId,
+          proposalId: message.proposalId,
+          ackToken: message.ackToken,
+          mutationId,
+          message: "The proposal base revision does not match the mounted browser revision.",
+          changedNodeIds: [],
+          meaningfulChangedNodeIds: [],
+          changeKinds: [],
+          requiredAssetUrls: [],
+          loadedAssetUrls: loadedAssetUrls(),
+          missingAssetUrls: [],
+          snapshot: captureLiveSnapshot(),
+        };
+        postTerminalMutation(mutationId, lineageMessage);
+        return;
+      }
+      queuedMutationIds.add(mutationId);
       mutationQueue.push({
         batch: message.batch,
         revisionId: message.revisionId,
@@ -1424,6 +1603,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     #northstar-artifact-root{display:flow-root;width:max-content;min-width:${minimumWidth}px;min-height:${minimumHeight}px;height:auto;overflow:visible}
     ${documentSource.css}
     #northstar-artifact-root,#northstar-artifact-root>.ns-artifact{max-width:none!important;max-height:none!important;overflow:visible!important}
+    #northstar-artifact-root>[data-ns-node-id="artboard"]{background-color:#fff!important}
     [data-ns-node-id]{will-change:transform,opacity}
     [data-ns-mutating="true"]{pointer-events:none}
     [data-ns-flow-id],[data-ns-reference-flow],[data-ns-flow-sequence],[data-ns-flow-id] [data-ns-evidence-id]{overflow:visible!important}
