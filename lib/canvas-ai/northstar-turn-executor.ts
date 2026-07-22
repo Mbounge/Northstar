@@ -5,6 +5,7 @@ import {
   NorthstarTurnToolError,
   type NorthstarAttemptResultKind,
   type NorthstarExecuteTaskAttemptRequest,
+  type NorthstarTurnEvidenceAsset,
   type NorthstarTurnModelAdapter,
   type NorthstarTurnRequest,
   type NorthstarTurnResponse,
@@ -23,6 +24,7 @@ import {
   parseNorthstarCorrectionModelOutput,
   parseNorthstarFinalizationModelOutput,
 } from "@/lib/canvas-ai/northstar-turn-validation";
+import { collectNorthstarTurnEvidenceAssets } from "@/lib/canvas-ai/northstar-turn-evidence-assets";
 
 export class NorthstarTurnProviderError extends Error {
   readonly code: string;
@@ -122,6 +124,7 @@ function attemptFailure(
     message: string;
     correctionContext?: NorthstarLedgerValue;
     retryAfterMs?: number;
+    evidence?: NorthstarLedgerValue;
   },
 ): NorthstarTurnResponse {
   return {
@@ -130,7 +133,12 @@ function attemptFailure(
     type: "attempt-failure",
     taskId: request.task.id,
     attemptId: request.attempt.id,
-    ...input,
+    failureKind: input.failureKind,
+    code: input.code,
+    message: input.message,
+    correctionContext: input.correctionContext,
+    retryAfterMs: input.retryAfterMs,
+    evidence: input.evidence,
   };
 }
 
@@ -172,6 +180,7 @@ async function generateOneModelResponse(
     maxOutputTokens: number;
     temperature: number;
     signal: AbortSignal;
+    evidenceAssets?: readonly NorthstarTurnEvidenceAsset[];
   },
 ): Promise<unknown> {
   return model.generateJSON(input);
@@ -229,6 +238,7 @@ export async function executeNorthstarTurn(
               code: error.code,
               message: error.message,
               correctionContext: error.correctionContext,
+              evidence: error.evidence,
             });
           }
           return attemptFailure(input.request, {
@@ -238,13 +248,24 @@ export async function executeNorthstarTurn(
           });
         }
       }
-      const prompt = buildNorthstarExecutionPrompt(input.request, toolContext);
+      const evidenceAssetLimit = input.request.task.kind === "analysis"
+        ? 16
+        : input.request.task.kind === "verification"
+          ? 8
+          : 12;
+      const evidenceAssets = collectNorthstarTurnEvidenceAssets({
+        toolContext,
+        ledgerContext: input.request.ledgerContext,
+        maximum: evidenceAssetLimit,
+      });
+      const prompt = buildNorthstarExecutionPrompt(input.request, toolContext, evidenceAssets);
       const raw = await generateOneModelResponse(input.model, {
         operation: input.request.type,
         ...prompt,
         maxOutputTokens: input.request.task.kind === "artboard-mutation" ? 8_000 : 4_000,
         temperature: 0.12,
         signal: timeout.signal,
+        evidenceAssets,
       });
       let output: ReturnType<typeof parseNorthstarAttemptModelOutput>;
       try {
@@ -261,7 +282,14 @@ export async function executeNorthstarTurn(
         throw error;
       }
       if (output.outcome === "failure") {
-        return attemptFailure(input.request, output);
+        return attemptFailure(input.request, {
+          failureKind: output.failureKind,
+          code: output.code,
+          message: output.message,
+          correctionContext: output.correctionContext,
+          retryAfterMs: output.retryAfterMs,
+          evidence: toolContext,
+        });
       }
       return {
         protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
@@ -271,6 +299,7 @@ export async function executeNorthstarTurn(
         attemptId: input.request.attempt.id,
         resultKind: resultKindForTask(input.request.task),
         result: output.result,
+        evidence: toolContext,
       };
     }
 

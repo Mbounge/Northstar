@@ -95,6 +95,10 @@ export type NorthStarToolArguments = {
   platform?: "mobile" | "web";
   sessionType?: "onboarding" | "browsing";
   limit?: number;
+  maxApps?: number;
+  maxFlowsPerApp?: number;
+  maxScreensPerFlow?: number;
+  selectionStrategy?: "representative" | "coverage" | "diverse";
 
   shape?: NorthStarShapeKind;
   componentPreset?: "section" | "flow-lane" | "reference-flow" | "insight-card" | "evidence-card" | "metric-card" | "decision-card" | "matrix" | "chart" | "timeline" | "research-region";
@@ -426,6 +430,10 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
         sessionType: { type: "string", enum: ["onboarding", "browsing"] },
         platform: { type: "string", enum: ["mobile", "web"] },
         limit: { type: "number" },
+        maxApps: { type: "number" },
+        maxFlowsPerApp: { type: "number" },
+        maxScreensPerFlow: { type: "number" },
+        selectionStrategy: { type: "string", enum: ["representative", "coverage", "diverse"] },
       },
       required: ["query"],
     },
@@ -1108,10 +1116,10 @@ const TOOL_DECISION_GUIDANCE: Partial<
   },
 
   prepare_composition_evidence: {
-    useWhen: "A multi-part composition needs a curated evidence set across one or more apps before North Star builds the final artifact.",
+    useWhen: "A prompt requires a curated, prompt-scoped evidence set across one or more apps before analysis or visual authorship. Set the requested breadth explicitly; do not assume one flow per app.",
     avoidWhen: "The user only wants to browse raw flow or screenshot results in Chat, or a single exact asset is already known.",
-    returns: "A diverse grounded bundle of candidate apps, flows, and representative screenshots suitable for comparison, journey, analysis, or strategy composition.",
-    usuallyFollowedBy: "create_working_surface, create_artifact_shell, and one add_artifact_section step per grounded subject.",
+    returns: "A grounded bundle of the requested apps, one or many selected flows per app, representative previews, complete bounded candidate sequences, and exact selected identities.",
+    usuallyFollowedBy: "an analysis round, another bounded research round when gaps remain, or progressive visual authorship when the evidence is sufficient.",
   },
   create_shape: {
     useWhen: "The intended outcome is a newly created shape on the canvas, regardless of whether the request is formal, indirect, abbreviated, or colloquial.",
@@ -1304,5 +1312,34 @@ export function getToolRegistryPromptSummary(): string {
       `\n${group.title}:`,
       ...group.names.map((name) => formatToolForPrompt(name)),
     ]),
+  ].join("\n");
+}
+
+
+export function getNorthstarDataToolPromptSummary(): string {
+  const researchRules = `Prompt-grounded Northstar research contract:
+- The user's prompt owns the subject, scope, quantities, comparison set, evidence depth, and whether the answer should change the artboard. Never hard-code apps, flows, counts, or a one-flow-per-app policy.
+- Research may require several bounded activities. Each activity should close one evidence gap and commit its grounded result before the next decision.
+- Use list/search tools to discover identities. Use exact get_* tools only when every required exact argument is present. Never use placeholders such as \"the requested flow\".
+- prepare_composition_evidence is a deterministic curator, not a fixed answer. Set maxApps, maxFlowsPerApp, maxScreensPerFlow, selectionStrategy, sessionType, platform, and limit from the prompt and current evidence needs.
+- selectionStrategy representative favors concise decisive flows; coverage preserves broader requested breadth; diverse favors variation across flow names, platforms, and session types.
+- Prior attempt evidence is authoritative. Exact identities live in attempts[].evidence.toolCalls[].result.data and selectedFlowIdentity. Use those exact values in later activities.
+- Visual research is bounded per model turn, not per user objective. If the prompt needs more screenshots than one turn can inspect, preserve the full candidateScreenshotIds set, schedule additional analysis activities using exact get_screenshot calls, and track analyzedScreenshotIds plus remainingScreenshotIds. Never silently narrow the user's requested coverage to the attachment limit.
+- An empty or failed exact lookup is a correctable research-plan error. Change strategy by listing/searching or broadening scope; do not repeat unchanged input.
+- For a non-artboard question, finish with a grounded answer and never create visual work. For an artboard objective, continue research and analysis only until the requested artifact can be authored truthfully, then schedule progressive artboard-mutation activities and verification.`;
+
+  return [
+    researchRules,
+    ...NORTHSTAR_DATA_TOOL_NAMES.map((name) => {
+      const tool = NORTHSTAR_TOOL_REGISTRY[name];
+      const guidance = TOOL_DECISION_GUIDANCE[name];
+      return [
+        `- ${name}: ${tool.description}`,
+        `  inputSchema: ${JSON.stringify(tool.inputSchema)}`,
+        guidance?.useWhen ? `  useWhen: ${guidance.useWhen}` : undefined,
+        guidance?.avoidWhen ? `  avoidWhen: ${guidance.avoidWhen}` : undefined,
+        guidance?.returns ? `  returns: ${guidance.returns}` : undefined,
+      ].filter(Boolean).join("\n");
+    }),
   ].join("\n");
 }

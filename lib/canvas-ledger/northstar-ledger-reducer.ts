@@ -66,6 +66,13 @@ export type NorthstarLedgerCommand =
       timestamp: number;
     }
   | {
+      type: "record-attempt-evidence";
+      taskId: string;
+      attemptId: string;
+      evidence: NorthstarLedgerValue;
+      timestamp: number;
+    }
+  | {
       type: "record-attempt-transport-uncertain";
       taskId: string;
       attemptId: string;
@@ -615,6 +622,30 @@ export function reduceNorthstarLedger(
           timestamp: command.timestamp,
         },
       );
+    }
+
+    case "record-attempt-evidence": {
+      requireActiveRun(state);
+      const task = requireTask(state, command.taskId);
+      const attempt = requireAttempt(state, task.id, command.attemptId);
+      if (task.currentAttemptId !== attempt.id) {
+        throw new NorthstarLedgerInvariantError(
+          `Attempt ${attempt.id} is not current for task ${task.id}.`,
+        );
+      }
+      if (attempt.evidence !== undefined) {
+        if (ledgerValuesEqual(attempt.evidence, command.evidence)) return state;
+        throw new NorthstarLedgerInvariantError(
+          `Attempt ${attempt.id} was redelivered with contradictory evidence.`,
+        );
+      }
+      return {
+        ...state,
+        attempts: replaceAttempt(state.attempts, attempt.id, (current) => ({
+          ...current,
+          evidence: cloneNorthstarLedgerValue(command.evidence),
+        })),
+      };
     }
 
     case "record-attempt-prepared": {

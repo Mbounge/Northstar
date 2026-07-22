@@ -1105,7 +1105,27 @@ function DirectCodeArtifactHostImpl({
 
   useEffect(() => {
     if (!artifact) return;
-    if (!mountedSurface || activeSurfaceId !== mountedSurfaceId) {
+    const promotingDisplayOnlySurface = Boolean(
+      mountedSurface
+      && activeSurfaceId === mountedSurfaceId
+      && !mountedSurface.document
+      && artifact.document
+      && artifact.dataBundle,
+    );
+    const promotingRepositorySurface = Boolean(
+      mountedSurface
+      && activeSurfaceId === mountedSurfaceId
+      && mountedSurface.headCommit
+      && !artifact.headCommit
+      && artifact.document
+      && artifact.dataBundle,
+    );
+    if (
+      !mountedSurface
+      || activeSurfaceId !== mountedSurfaceId
+      || promotingDisplayOnlySurface
+      || promotingRepositorySurface
+    ) {
       unregisterFrameRef.current?.();
       unregisterFrameRef.current = null;
       frameRef.current = null;
@@ -1260,12 +1280,34 @@ function DirectCodeArtifactHostImpl({
               }}
               onError={() => setRuntimeError("The isolated direct-projection frame failed to load.")}
             />
+          ) : mountedSurface.runtimeUrl ? (
+            <iframe
+              key={mountedSurfaceId ?? "legacy-readonly-surface"}
+              ref={registerFrame}
+              data-testid="northstar-legacy-artifact-frame"
+              data-ns-surface-id={mountedSurfaceId}
+              data-ns-writer="display-only"
+              title={current.title}
+              src={mountedSurface.runtimeUrl}
+              sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
+              referrerPolicy="no-referrer"
+              loading="eager"
+              tabIndex={liveInteractionEnabled ? 0 : -1}
+              className="block border-0 bg-white"
+              style={{
+                width: geometry.intrinsicWidth,
+                height: geometry.intrinsicHeight,
+                pointerEvents: liveInteractionEnabled && !dragShieldActive ? "auto" : "none",
+              }}
+              onLoad={() => setSurfaceReady(true)}
+              onError={() => setRuntimeError("The existing artifact frame failed to load.")}
+            />
           ) : (
             <div
               data-testid="northstar-direct-artifact-incompatible"
               className="grid h-full w-full place-items-center bg-amber-50 p-10 text-center text-sm font-bold text-amber-900"
             >
-              This legacy artifact has no canonical document for direct projection. Northstar has mounted a compatible artboard separately.
+              This artifact has no renderable document or runtime URL.
             </div>
           )}
         </div>
@@ -1296,7 +1338,7 @@ function DirectCodeArtifactHostImpl({
       <div className="absolute inset-y-0 left-0 z-30 w-3 cursor-grab active:cursor-grabbing" />
       <div className="absolute inset-y-0 right-0 z-30 w-3 cursor-grab active:cursor-grabbing" />
 
-      {selected && surfaceReady && !runtimeError && (
+      {runtimeDocument && selected && surfaceReady && !runtimeError && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-40 flex max-w-[70%] -translate-x-1/2 items-center gap-1.5 truncate rounded-full border border-black/[0.06] bg-white/88 px-2.5 py-1 text-[9px] font-[850] text-zinc-500 shadow-md backdrop-blur-xl">
           <GripHorizontal className="h-3.5 w-3.5 shrink-0 text-[#6B5CFF]" />
           <span className="truncate">Direct projection owns this artboard</span>
@@ -1322,7 +1364,12 @@ const DirectCodeArtifactHost = memo(
 
 function CodeArtifactHostSwitch(props: CodeArtifactHostProps) {
   const architecture = useNorthstarArchitecture();
-  return architecture.enabled
+  const directWriterOwnsArtifact = Boolean(
+    architecture.enabled
+    && props.artifact?.artifactId
+    && props.artifact.artifactId === architecture.directArtifactId,
+  );
+  return directWriterOwnsArtifact
     ? <DirectCodeArtifactHost {...props} />
     : <LegacyCodeArtifactHost {...props} />;
 }

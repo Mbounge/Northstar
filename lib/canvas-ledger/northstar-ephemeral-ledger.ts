@@ -59,6 +59,9 @@ function cloneAttempt(attempt: NorthstarLedgerTaskAttempt): NorthstarLedgerTaskA
     preparedResult: attempt.preparedResult === undefined
       ? undefined
       : cloneNorthstarLedgerValue(attempt.preparedResult),
+    evidence: attempt.evidence === undefined
+      ? undefined
+      : cloneNorthstarLedgerValue(attempt.evidence),
     result: attempt.result === undefined
       ? undefined
       : cloneNorthstarLedgerValue(attempt.result),
@@ -272,6 +275,16 @@ export function createNorthstarEphemeralLedger(
         taskId,
         attemptId,
         draft,
+        timestamp: readClock(),
+      });
+    },
+
+    recordAttemptEvidence(taskId, attemptId, evidence) {
+      dispatch({
+        type: "record-attempt-evidence",
+        taskId,
+        attemptId,
+        evidence,
         timestamp: readClock(),
       });
     },

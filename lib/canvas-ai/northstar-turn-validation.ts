@@ -292,6 +292,7 @@ function parseAttempt(value: unknown, path: string): NorthstarLedgerTaskAttempt 
     ["id", "runId", "taskId", "attemptNumber", "executionInput", "status", "startedAt"],
     [
       "preparedResult",
+      "evidence",
       "candidateCommitHash",
       "candidateStateHash",
       "result",
@@ -315,6 +316,7 @@ function parseAttempt(value: unknown, path: string): NorthstarLedgerTaskAttempt 
     executionInput: ledgerValue(input.executionInput, `${path}.executionInput`),
     status: enumValue(input.status, ATTEMPT_STATUSES, `${path}.status`),
     preparedResult: optionalLedgerValue(input.preparedResult, `${path}.preparedResult`),
+    evidence: optionalLedgerValue(input.evidence, `${path}.evidence`),
     candidateCommitHash: optionalString(input.candidateCommitHash, `${path}.candidateCommitHash`),
     candidateStateHash: optionalString(input.candidateStateHash, `${path}.candidateStateHash`),
     result: optionalLedgerValue(input.result, `${path}.result`),
@@ -713,7 +715,7 @@ export function parseNorthstarTurnResponse(value: unknown, request: NorthstarTur
     return { ...base, type, reason: stringValue(input.reason, "$.reason", { max: 20_000 }) };
   }
   if (type === "attempt-result") {
-    exactKeys(input, ["protocolVersion", "requestId", "type", "taskId", "attemptId", "resultKind", "result"], [], "$");
+    exactKeys(input, ["protocolVersion", "requestId", "type", "taskId", "attemptId", "resultKind", "result"], ["evidence"], "$");
     if (request.type !== "execute-task-attempt") fail("RESPONSE_TYPE_MISMATCH", "attempt-result only answers an execution request.");
     const taskId = stringValue(input.taskId, "$.taskId", { max: 256 });
     const attemptId = stringValue(input.attemptId, "$.attemptId", { max: 256 });
@@ -728,6 +730,8 @@ export function parseNorthstarTurnResponse(value: unknown, request: NorthstarTur
     }
     const result = ledgerValue(input.result, "$.result");
     assertNoNorthstarSystemIdentity(result, "$.result");
+    const evidence = optionalLedgerValue(input.evidence, "$.evidence");
+    if (evidence !== undefined) assertNoNorthstarSystemIdentity(evidence, "$.evidence");
     return {
       ...base,
       type,
@@ -735,19 +739,22 @@ export function parseNorthstarTurnResponse(value: unknown, request: NorthstarTur
       attemptId,
       resultKind,
       result,
+      evidence,
     } satisfies NorthstarAttemptResultResponse;
   }
   if (type === "attempt-failure") {
     exactKeys(
       input,
       ["protocolVersion", "requestId", "type", "taskId", "attemptId", "failureKind", "code", "message"],
-      ["correctionContext", "retryAfterMs"],
+      ["correctionContext", "retryAfterMs", "evidence"],
       "$",
     );
     if (request.type !== "execute-task-attempt") fail("RESPONSE_TYPE_MISMATCH", "attempt-failure only answers an execution request.");
     const taskId = stringValue(input.taskId, "$.taskId", { max: 256 });
     const attemptId = stringValue(input.attemptId, "$.attemptId", { max: 256 });
     if (taskId !== request.task.id || attemptId !== request.attempt.id) fail("STALE_RESPONSE", "Attempt failure identity does not match the request.");
+    const evidence = optionalLedgerValue(input.evidence, "$.evidence");
+    if (evidence !== undefined) assertNoNorthstarSystemIdentity(evidence, "$.evidence");
     return {
       ...base,
       type,
@@ -760,6 +767,7 @@ export function parseNorthstarTurnResponse(value: unknown, request: NorthstarTur
       retryAfterMs: input.retryAfterMs === undefined
         ? undefined
         : finiteNumber(input.retryAfterMs, "$.retryAfterMs", { integer: true, min: 0, max: 3_600_000 }),
+      evidence,
     } satisfies NorthstarAttemptFailureResponse;
   }
   if (type === "task-correction") {

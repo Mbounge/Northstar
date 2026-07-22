@@ -9,11 +9,14 @@ export interface NorthstarProjectionFrameRegistration {
 
 export interface NorthstarArchitectureContextValue {
   enabled: boolean;
+  /** Only this artifact is owned by the direct writer. All other artifacts keep the established host. */
+  directArtifactId: string | null;
   registerProjectionFrame(registration: NorthstarProjectionFrameRegistration): () => void;
 }
 
 const DISABLED_CONTEXT: NorthstarArchitectureContextValue = {
   enabled: false,
+  directArtifactId: null,
   registerProjectionFrame() {
     return () => undefined;
   },

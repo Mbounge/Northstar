@@ -25,10 +25,12 @@ export type NorthstarTaskExecutionOutcome =
       result: NorthstarLedgerValue;
       stateSnapshot: NorthstarLedgerValue;
       preparedResult?: NorthstarLedgerValue;
+      evidence?: NorthstarLedgerValue;
     }
   | {
       type: "failure";
       failure: NorthstarLedgerFailure;
+      evidence?: NorthstarLedgerValue;
     }
   | {
       type: "transport-uncertain";
@@ -512,6 +514,9 @@ export function createNorthstarTaskController(
     attempt: NorthstarLedgerTaskAttempt,
     outcome: Extract<NorthstarTaskExecutionOutcome, { type: "success" }>,
   ): Promise<NorthstarControllerStepResult> => {
+    if (outcome.evidence !== undefined) {
+      input.ledger.recordAttemptEvidence(task.id, attempt.id, outcome.evidence);
+    }
     if (task.kind === "artboard-mutation") {
       if (outcome.preparedResult === undefined) {
         try {
@@ -633,6 +638,9 @@ export function createNorthstarTaskController(
       }
 
       if (outcome.type === "failure") {
+        if (outcome.evidence !== undefined) {
+          input.ledger.recordAttemptEvidence(task.id, attempt.id, outcome.evidence);
+        }
         input.ledger.recordAttemptFailure(task.id, attempt.id, outcome.failure);
 
         if (
@@ -819,6 +827,9 @@ export function createNorthstarTaskController(
             };
           }
           if (outcome.type === "failure") {
+            if (outcome.evidence !== undefined) {
+              input.ledger.recordAttemptEvidence(task.id, latestAttempt.id, outcome.evidence);
+            }
             input.ledger.recordAttemptFailure(task.id, latestAttempt.id, outcome.failure);
             return { type: "task-blocked", taskId: task.id, failure: outcome.failure };
           }

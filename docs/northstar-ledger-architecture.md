@@ -450,109 +450,225 @@ apply(surface session, one operation) → acknowledgement
 
 It does not know about the LLM, tasks, attempts, retries, commits, progression, or ledger commands.
 
-## Phase 4 production architecture
+## Phase 4 production architecture and Phase 4R product repair
 
-Phase 4 installs the corrected Phase 1–3 architecture as one production-controlled browser path. It is enabled only when both sides of the stateless boundary are configured:
+Phase 4 installs the corrected Phase 1–3 authority path in the production workspace. Phase 4R repairs the product integration so that the new authority runs underneath the established North Star experience rather than replacing it with a visible ledger prototype.
+
+Both sides of the stateless authoring boundary remain feature-gated:
 
 ```env
 NEXT_PUBLIC_NORTHSTAR_TOTAL_ARCHITECTURE=true
 NORTHSTAR_STATELESS_TURNS=true
 ```
 
-The client flag selects the browser-owned ledger and direct writer. The server flag enables the stateless `/api/canvas-ai/turn` endpoint. The older `NEXT_PUBLIC_NORTHSTAR_LEDGER_FOUNDATION` harness is suppressed while the total architecture flag is enabled so two browser ledgers cannot exist in the same workspace.
+An optional developer-only inspector is enabled separately:
 
-The complete production sequence is:
-
-```text
-user submits one text objective
-→ workspace captures one compatible mounted artboard canonically
-→ workspace creates one ephemeral ledger from that exact capture
-→ workspace creates one corrected Phase 2 + Phase 3 controller
-→ controller requests one bounded model decision
-→ ledger creates task and attempt identity
-→ stateless API executes exactly that attempt
-→ non-visual work commits while preserving canonical artboard state
-→ visual work is drafted, prepared offscreen, projected primitively, and verified
-→ ledger advances HEAD and completes the task
-→ only then may another decision occur
-→ finalization completes the ledger run
+```env
+NEXT_PUBLIC_NORTHSTAR_DEBUG_INSPECTOR=true
 ```
 
-### Single-writer cutover
+The browser flag enables ledger-owned authoring and the direct writer. It does not redefine every chat message as an authoring objective. The server flag enables the stateless `/api/canvas-ai/turn` endpoint. The older foundation harness is suppressed while total architecture is enabled so two browser ledgers cannot exist in one workspace.
 
-`CodeArtifactHost` chooses exactly one implementation from the architecture context:
+### Product routing
 
-- flag disabled → legacy repository writer;
-- flag enabled → direct projection writer.
+The existing chat remains the product boundary. A message is routed before it is appended or assigned a run:
 
-The direct writer does not initialize a repository, deliver acknowledgements, activate or check out commits, pump proposals, or invoke legacy projection callbacks. The workspace chat checks the total-architecture flag before any legacy SSE call. If the new runtime is still mounting, the request is rejected locally; it never falls through to `/api/canvas-ai`.
+```text
+casual conversation, questions, attachments, or selection-scoped work
+→ established `/api/canvas-ai` streaming experience
+→ no ledger authoring run is created
 
-A direct projection target must have an authored `document` and `dataBundle`. Runtime-URL-only and compiled-only legacy artifacts cannot register as the direct surface. When no compatible artifact exists, the workspace inserts one canonical direct bootstrap artifact whose runtime document includes the Phase 3 capture, prepare, and apply bridge. Manual prototype insertion under the Phase 4 flag creates the same compatible kind of surface.
+clear text-only whole-canvas authoring objective
+→ bind one assistant message to one future run
+→ select or prepare one compatible working surface
+→ create one browser-owned ledger
+→ use stateless turns and direct verified projection
+```
+
+Examples such as `Hi`, `Thanks`, or `What do you think of this?` remain conversational. They must not create research tasks, modify the canvas, or inherit activity from a previous run.
+
+A ledger snapshot may update only the assistant message that owns its exact `runId`. Before the run ID exists, the snapshot objective must exactly match the submitted objective. An older Awin/Whop ledger therefore cannot attach Whop activity to a newer `Hi` message.
+
+### Authoritative authoring sequence
+
+```text
+user submits one explicit authoring objective
+→ workspace chooses the selected compatible artifact when possible
+→ otherwise chooses an existing compatible artifact
+→ otherwise promotes the latest committed legacy document on the same canvas object
+→ only as a last resort creates a product-oriented working surface
+→ workspace captures that mounted surface canonically
+→ workspace creates one ephemeral ledger from the exact capture
+→ stateless API decides one bounded activity
+→ ledger creates task and attempt identity
+→ stateless API executes that exact attempt
+→ retrieved tool evidence is recorded immutably on the attempt
+→ nonvisual work commits while preserving canonical artboard state
+→ visual work is drafted, prepared offscreen, projected primitively, and verified
+→ verified canonical state is serialized into the normal canvas artifact payload
+→ the canvas document model is updated before another model decision
+→ ledger advances through the remaining bounded activities
+→ finalization completes the run
+```
+
+The verified-state synchronization gate is part of progression. If the verified state cannot be written back to the canvas object model, the run fails and no later model decision is permitted.
+
+### Protocol repair
+
+Model execution output and wire protocol output are separate schemas. Response builders explicitly select permitted fields and never spread model output into an API response. In particular, the model-only discriminator `outcome` is not present on an `attempt-failure` response.
+
+Successful and failed attempts may carry read-only `evidence`. That evidence is validated at the browser boundary, recorded on the exact ledger attempt, and rendered with the existing app, flow, screenshot, and research-result components. Evidence does not create identity or advance HEAD.
+
+### Target-scoped single-writer cutover
+
+Enabling Phase 4R does not replace every mounted artifact host. Until an explicit ledger-authoring request binds a target, existing artifacts continue using the established legacy host and retain their previous interaction behavior.
+
+For each artifact, `CodeArtifactHost` chooses exactly one implementation:
+
+- total architecture disabled, or artifact is not the bound authoring target → established legacy repository host;
+- artifact ID equals the workspace's exact `directArtifactId` → direct projection host.
+
+The bound direct host never initializes the legacy repository, delivers acknowledgements, activates or checks out commits, pumps proposals, or invokes legacy projection callbacks. No artifact is controlled by both hosts at once. Other artifacts may continue rendering through their established host, but they have no authority over the ledger-owned target.
+
+This target-scoped cutover is separate from message routing. Conversational messages continue using the established streaming API. The legacy streaming route is not an alternative artboard writer for the bound ledger-owned authoring target.
+
+### Surface preservation
+
+Phase 4R does not insert an architecture demonstration surface on workspace mount. Surface preparation is lazy and occurs only after an explicit authoring request.
+
+Selection preference is:
+
+1. selected canonical artifact;
+2. another existing canonical artifact;
+3. selected or existing legacy artifact whose latest committed tree contains a canonical document and data bundle, promoted on the same canvas object;
+4. a new North Star working surface only when no usable artifact exists.
+
+Promotion preserves the existing canvas object identity, position, artifact ID, committed document, and committed geometry. Runtime-URL-only artifacts with no canonical committed document remain display-only.
+
+### Product activity and diagnostics
+
+The ordinary chat renders established product activity:
+
+- applications and flows;
+- screenshot previews;
+- research details;
+- task progress and human-readable failures;
+- final authoring summaries.
+
+Run, task, attempt, commit, receipt, and event internals remain available through the read-only inspector only when the developer inspector flag is enabled. Raw JSON paths and protocol validation messages are never ordinary user copy.
+
+### Recovery semantics
+
+Recovery controls are derived from the authoritative failure class:
+
+- ambiguous transport → **Resume exact request** with the same request, task, and attempt IDs;
+- correctable or transient task failure → **Retry this task** under the same task authority;
+- terminal failure → no misleading resume control; cancel the build or start a new one after closure;
+- cancellation or projection failure → preserve or restore the last exactly verified artboard.
+
+A blocked authoring run does not prevent ordinary conversation. A new authoring request is not accepted until the old authoring run is resolved or cancelled, and this is checked before the new request is appended as an active build.
 
 ### Workspace ownership and lifecycle
 
 One mounted workspace owns:
 
-- one frame registry and one selected projection target;
+- one frame registry and selected projection target;
 - one `NorthstarWindowProjectionSurface`;
 - one `NorthstarWorkspaceRuntime`;
-- at most one active ledger run;
-- one read-only production inspector.
+- at most one active authoring ledger;
+- exact run-to-message binding;
+- a developer-only read-only inspector.
 
-React renders do not recreate the runtime or iframe. The ledger is initialized once per user run from one canonical surface capture and is never reinitialized from visual appearance during that run. A surface remount after preparation is handled by Phase 3 as a terminal session contradiction.
+React renders do not recreate runtime authority. Unmount aborts current work, closes unresolved ledger authority where possible, disposes the runtime and surface, clears frame registrations, and prevents late async completion from overwriting disposed state.
 
-Unmount aborts current work, cancels unresolved authoritative task and attempt state when available, disposes the ledger, runtime, and projection surface, clears frame registrations, and prevents late asynchronous completion from changing disposed runtime state.
+### Phase 4R constraints
 
-### Production run control
+The ledger remains browser-session ephemeral. Phase 4R adds no Supabase ledger table, local storage, IndexedDB, filesystem ledger, or server-global run registry.
 
-The workspace runtime drives the controller until one of five legitimate outcomes exists:
+Attachments and selection-scoped requests continue through the established product path until the stateless authoring protocol intentionally supports those inputs. They are not silently discarded or misclassified as text-only ledger objectives.
 
-- `completed`: finalization committed;
-- `awaiting-recovery`: an ambiguous transport result must resume the exact request, task, and attempt;
-- `blocked`: an authoritative correctable or terminal obligation remains visible;
-- `cancelled`: the user or workspace teardown closed the active attempt, task, and run;
-- `failed`: an unexpected control failure closed the active task and failed the run.
+## Phase 4R acceptance criteria
 
-A bounded run may create no more than the configured task limit. Exceeding it fails the ledger rather than continuing recursively. Initial surface capture retries only transient mounting failures and creates no ledger until one valid canonical capture exists.
+Phase 4R is accepted only when:
 
-### Production observability
+- `Hi` and other casual messages receive normal conversational handling and create no authoring ledger;
+- an old run cannot attach activity to a new message;
+- explicit whole-canvas authoring starts one exact message-bound run;
+- valid model failure output produces a valid browser-parseable `attempt-failure` response with no leaked `outcome` field;
+- retrieved evidence survives success and failure and renders through the established product activity components;
+- raw schema paths are hidden from ordinary users;
+- recovery actions match transport, correctable, transient, and terminal failure classes;
+- no bootstrap artifact is inserted merely by opening the workspace;
+- a selected or existing compatible artifact is reused, and a committed legacy document is promoted on the same canvas object when possible;
+- exactly one writer controls the bound authoring artifact, while non-target artifacts retain the established host;
+- verified projection is serialized back into the normal artifact payload before another decision;
+- multiple visual commits preserve iframe and stable-node identity;
+- ambiguous transport and cancellation retain the Phase 1–3 authority guarantees;
+- the inspector is read-only and development-only;
+- corrected Phase 1, corrected Phase 2, Phase 3, Phase 4R unit tests, and both browser projection suites pass in an installed environment;
+- real-provider acceptance is performed before calling the cutover production-proven.
 
-The inspector reads the same runtime snapshot used by the controller and displays:
+## Phase 4R.2 prompt-grounded research and multimodal evidence
 
-```text
-Run
-→ Task
-→ Attempts
-→ Commits
-→ Events
-```
+Phase 4R.2 repairs the research handoff exposed by genuine provider testing. Deterministic code owns validation, identity resolution, bounded selection, and evidence transport; it does not own the user's answer or impose a fixed research shape.
 
-It performs no ledger mutations. The chat activity display is derived from ledger tasks rather than from legacy streaming progress events.
+The user's prompt remains authoritative for:
 
-### Phase 4 constraints
+- subject and comparison set;
+- whether the outcome is conversational, analytical, or artboard-based;
+- the number and diversity of flows that need representation;
+- the depth and number of bounded research rounds;
+- which screenshots must be understood before a claim or visual can be authored;
+- whether additional evidence is required before finalization.
 
-Phase 4 intentionally accepts text objectives only. Image attachment bytes are not silently routed through the legacy API because the corrected turn protocol does not yet carry them. The ledger remains browser-session ephemeral: no Supabase ledger tables, local storage, IndexedDB, filesystem history, or server-global run registry is introduced.
+The model may plan several bounded research and analysis tasks. Each task commits its exact evidence and conclusions before another decision. The browser ledger therefore supports arbitrary prompt-grounded progression without allowing the model to invent system identity or skip verification.
 
-## Phase 4 acceptance criteria
+### Tool contracts and exact identity
 
-Phase 4 is accepted only when:
+Every read-only tool call is validated at runtime against the exact registry schema. Required fields, enums, permitted properties, arrays, and positive integer bounds are enforced before tenant data is accessed. Exact tools such as `get_flow_details` and `get_flow_screenshots` may run only with exact identities returned by a prior list, search, or curation result.
 
-- a real user objective can run from the production chat through the stateless client and direct projection controller;
-- the browser ledger is the only authority over task identity, progression, HEAD, and run completion;
-- the legacy SSE route is unreachable while the total architecture flag is enabled;
-- exactly one writer controls each artifact host;
-- bridge-less legacy artifacts cannot become projection targets;
-- a canonical direct bootstrap surface is available before initial ledger capture;
-- multiple consecutive visual tasks produce multiple verified commits without iframe or stable-node replacement;
-- ambiguous transport resumes the exact request, task, and attempt;
-- cancellation closes unresolved attempts, tasks, and runs only after any partial live projection is restored to the exact committed base;
-- workspace disposal cannot be overwritten by late asynchronous completion;
-- the inspector reflects the authoritative production ledger;
-- corrected Phase 1, corrected Phase 2, Phase 3, Phase 4 unit tests, and both real-browser projection tests pass.
+An invalid or empty exact lookup is a correctable research-plan failure. Prior successful evidence remains attached to the same attempt, and correction must switch to discovery, search, or prompt-scoped curation rather than repeat a placeholder or unchanged lookup.
+
+### Prompt-scoped evidence breadth
+
+`prepare_composition_evidence` is a bounded curator, not a one-flow-per-app policy. Its caller explicitly supplies prompt-derived breadth and selection intent through `maxApps`, `maxFlowsPerApp`, `maxScreensPerFlow`, `limit`, and `selectionStrategy`.
+
+The deterministic selector:
+
+- never substitutes unrelated apps when explicitly requested apps are absent;
+- preserves requested app order where identities resolve;
+- can select one or many image-backed flows per app;
+- distributes a global screenshot limit across selected flows rather than starving later subjects;
+- reports missing apps, exact selected flow identities, candidate screenshot IDs, and truncation;
+- keeps safety limits separate from product semantics.
+
+### Screenshot understanding and multiple rounds
+
+Authoritative screenshot URLs are extracted only from tenant tool evidence. A bounded, balanced set of screenshots is fetched server-side and attached to the exact Gemini execution turn as labeled image parts. The model may claim visual observations only for attached evidence.
+
+A per-turn image bound never narrows the user's objective. When more screenshots are required, the ledger records the full candidate identity set and the model schedules additional bounded analysis tasks using exact screenshot IDs. Later artboard tasks can receive the committed visual evidence and analysis needed to author truthful progressive changes.
+
+### Artboard and non-artboard outcomes
+
+The research protocol itself is outcome-neutral. A non-artboard objective may complete with a grounded analytical answer and no projection task. An artboard objective continues from research and analysis into bounded mutation drafts, exact projection, verified commits, and normal canvas synchronization. Product routing may continue using the established conversation path for ordinary chat, but no data-retrieval component may hard-code a subject, app, flow count, or visual outcome.
+
+### Phase 4R.2 acceptance criteria
+
+- missing required flow identity is rejected before tenant lookup;
+- a failed exact lookup preserves prior evidence and recommends a discovery path;
+- explicit missing apps never fall back to unrelated catalog apps;
+- requested multi-flow breadth is honored within explicit safety bounds;
+- global screenshot limits are balanced across requested subjects and flows;
+- exact flow and screenshot identities survive into later ledger context;
+- screenshot pixels, not only URLs or filenames, reach the model as labeled evidence;
+- multiple visual-analysis rounds can be planned from remaining exact screenshot IDs;
+- non-artboard tasks can finish without fabricating an artboard mutation;
+- artboard tasks begin only after sufficient prompt-grounded evidence exists;
+- production code contains no Awin-, Whop-, or test-prompt-specific research policy.
 
 ## Phase 5 and Phase 6 boundary
 
-Phase 4 is the complete functional architecture. Phase 5 is reserved for production hardening, fault injection, performance, richer diagnostics, and defects discovered through full end-to-end use. Phase 6 removes the disabled repository, acknowledgement, activation, checkout, compatibility flags, and other legacy code after the new path has been proven in production-like testing.
+Phase 4R is the required product-integration correction before Phase 5. Phase 5 may harden provider behavior, fault injection, performance, diagnostics, and defects found during genuine provider use only after the Phase 4R criteria pass. Phase 6 removes the disabled repository, acknowledgement, activation, checkout, compatibility flags, and other legacy code only after the repaired direct path has demonstrated product parity and persistence in production-like testing.
 
 ### Historical Phase 3-to-Phase 4 handoff
 
@@ -586,3 +702,17 @@ Phase 3 is accepted only when:
 - remount or rollback failure is terminal;
 - the production workspace remains uncut-over;
 - Phase 1, corrected Phase 2, Phase 3 unit tests, and real-browser bridge tests pass.
+
+## Phase 4R.3 — adaptive intelligence restoration
+
+The turn architecture must preserve North Star's general creative-intelligence behavior rather than reduce the product to a fixed research or layout pipeline.
+
+- The user objective determines whether the outcome is written, visual, hybrid, or conversational.
+- Research breadth, subjects, flows, screenshots, metadata, and number of rounds are model-decided from the prompt and committed evidence gaps.
+- Deterministic tools validate authorization, schemas, exact identities, ordering, and bounds; they never choose a creative answer or fixed evidence count.
+- Research results add structured evidence-graph deltas and preserve exact app, flow, screenshot, icon, and asset identity.
+- Artboard objectives require a bounded design-intelligence analysis before the first visual mutation and whenever new evidence invalidates the current visual thesis.
+- Design intelligence originates the viewer job, editorial argument, three-second read, visual thesis, information topology, evidence hierarchy, governing visual idea, spatial logic, emotional register, signature move, alternatives, and next visible move.
+- The same prompt may produce materially different grounded concepts across runs. A run-specific diversity anchor encourages exploration but never maps request categories to layouts.
+- Visual authorship is cumulative on one canonical surface: provisional inquiry, evidence, analysis, synthesis, critique, reorganization, simplification, and publication occur through verified primitive commits.
+- Existing North Star design intelligence and continuous-authorship protocols remain the creative standard under the browser-owned ledger. The ledger protects integrity; it does not replace or template the intelligence.

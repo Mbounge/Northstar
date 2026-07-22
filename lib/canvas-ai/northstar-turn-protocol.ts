@@ -79,6 +79,8 @@ export interface NorthstarAttemptResultResponse extends NorthstarTurnResponseBas
   attemptId: string;
   resultKind: NorthstarAttemptResultKind;
   result: NorthstarLedgerValue;
+  /** Read-only tool evidence used to render the established product activity UI. */
+  evidence?: NorthstarLedgerValue;
 }
 
 export interface NorthstarAttemptFailureResponse extends NorthstarTurnResponseBase {
@@ -90,6 +92,8 @@ export interface NorthstarAttemptFailureResponse extends NorthstarTurnResponseBa
   message: string;
   correctionContext?: NorthstarLedgerValue;
   retryAfterMs?: number;
+  /** Evidence already retrieved before the model reported this task failure. */
+  evidence?: NorthstarLedgerValue;
 }
 
 export type NorthstarTaskCorrectionAction =
@@ -130,6 +134,16 @@ export type NorthstarTurnResponse =
   | NorthstarRunFinalizedResponse
   | NorthstarTurnErrorResponse;
 
+
+export interface NorthstarTurnEvidenceAsset {
+  id: string;
+  title: string;
+  imageUrl: string;
+  appName?: string;
+  flowName?: string;
+  screenshotIndex?: number;
+}
+
 export interface NorthstarTurnModelRequest {
   operation: NorthstarTurnRequestType;
   systemInstruction: string;
@@ -137,6 +151,8 @@ export interface NorthstarTurnModelRequest {
   responseSchema: NorthstarLedgerValue;
   maxOutputTokens: number;
   temperature: number;
+  /** Bounded authoritative screenshots supplied as multimodal evidence. */
+  evidenceAssets?: readonly NorthstarTurnEvidenceAsset[];
 }
 
 export interface NorthstarTurnModelAdapter {
@@ -148,18 +164,21 @@ export class NorthstarTurnToolError extends Error {
   readonly failureKind: NorthstarLedgerFailureKind;
   readonly code: string;
   readonly correctionContext?: NorthstarLedgerValue;
+  readonly evidence?: NorthstarLedgerValue;
 
   constructor(input: {
     failureKind: NorthstarLedgerFailureKind;
     code: string;
     message: string;
     correctionContext?: NorthstarLedgerValue;
+    evidence?: NorthstarLedgerValue;
   }) {
     super(input.message);
     this.name = "NorthstarTurnToolError";
     this.failureKind = input.failureKind;
     this.code = input.code;
     this.correctionContext = input.correctionContext;
+    this.evidence = input.evidence;
   }
 }
 

@@ -26,15 +26,17 @@ test("the production workspace owns one Phase 2 plus Phase 3 runtime behind the 
   assert.match(workspace, /projectionSurface\.dispose\(\)/);
 });
 
-test("Phase 4 never falls through to the legacy SSE route while its runtime is mounting", () => {
+test("Phase 4R routes conversation through the established SSE UX and gates only explicit ledger authoring", () => {
   const workspace = read("components/canvas/north-star-canvas-workspace.tsx");
   const send = between(workspace, "const sendMessage = async", "const resumeNorthstarRun = async");
-  const phase4Gate = send.indexOf("if (northstarTotalArchitectureEnabled)");
+  const route = send.indexOf("routeNorthstarProductMessage");
+  const authoringGate = send.indexOf('productRoute === "ledger-authoring"');
   const legacyFetch = send.indexOf('fetch("/api/canvas-ai"');
-  assert.ok(phase4Gate >= 0);
-  assert.ok(legacyFetch > phase4Gate);
-  assert.match(send.slice(phase4Gate, legacyFetch), /if \(!northstarWorkspaceRuntime\)/);
-  assert.match(send.slice(phase4Gate, legacyFetch), /return;/);
+  assert.ok(route >= 0);
+  assert.ok(authoringGate > route);
+  assert.ok(legacyFetch > authoringGate);
+  assert.match(send.slice(authoringGate, legacyFetch), /if \(!northstarWorkspaceRuntime\)/);
+  assert.match(send.slice(authoringGate, legacyFetch), /return;/);
 });
 
 test("the code artifact host chooses exactly one writer and the direct writer has no repository or acknowledgement behavior", () => {
@@ -43,6 +45,8 @@ test("the code artifact host chooses exactly one writer and the direct writer ha
   const writerSwitch = between(host, "function CodeArtifactHostSwitch", "export const CodeArtifactHost");
 
   assert.match(writerSwitch, /architecture\.enabled/);
+  assert.match(writerSwitch, /architecture\.directArtifactId/);
+  assert.match(writerSwitch, /props\.artifact\.artifactId === architecture\.directArtifactId/);
   assert.match(writerSwitch, /DirectCodeArtifactHost/);
   assert.match(writerSwitch, /LegacyCodeArtifactHost/);
   assert.match(direct, /data-northstar-writer="direct-projection"/);
@@ -139,15 +143,21 @@ test("the Phase 4 bootstrap is a canonical direct-projection document rather tha
   assert.match(runtimeDocument, /northstar\.projection\.apply/);
 });
 
-test("Phase 4 never registers or loads a bridge-less legacy runtime URL as the direct projection target", () => {
+test("Phase 4R keeps non-target artifacts on the established host and isolates the direct target", () => {
   const host = read("components/canvas/artifacts/code-artifact-host.tsx");
   const direct = between(host, "function DirectCodeArtifactHostImpl", "const DirectCodeArtifactHost = memo");
   assert.match(direct, /mountedSurface\?\.document && mountedSurface\.dataBundle/);
   assert.match(direct, /if \(!frame \|\| !mountedSurface \|\| !runtimeDocument\) return/);
-  assert.equal(direct.includes("src={runtimeDocument ? undefined : mountedSurface.runtimeUrl}"), false);
-  assert.match(direct, /northstar-direct-artifact-incompatible/);
+  assert.match(direct, /data-ns-writer="display-only"/);
+  assert.match(direct, /src=\{mountedSurface\.runtimeUrl\}/);
+
+  const switcher = between(host, "function CodeArtifactHostSwitch", "export const CodeArtifactHost");
+  assert.match(switcher, /props\.artifact\.artifactId === architecture\.directArtifactId/);
 
   const workspace = read("components/canvas/north-star-canvas-workspace.tsx");
-  assert.match(workspace, /createNorthstarDirectBootstrapArtifactPayload/);
-  assert.match(workspace, /object\.codeArtifact\?\.document && object\.codeArtifact\.dataBundle/);
+  assert.match(workspace, /ensureNorthstarProjectionTarget/);
+  assert.match(workspace, /createNorthstarDirectBootstrapArtifactPayload\(\{[\s\S]*objective/);
+  assert.match(workspace, /canPrepareNorthstarProductSurface\(object\.codeArtifact\)/);
+  assert.match(workspace, /prepareNorthstarProductSurface\(currentArtifact\)/);
+  assert.match(workspace, /syncVerifiedNorthstarCommit/);
 });

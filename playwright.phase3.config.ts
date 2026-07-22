@@ -1,4 +1,7 @@
 import { defineConfig } from "@playwright/test";
+import { resolveNorthstarChromiumExecutable } from "./e2e/northstar-playwright-browser";
+
+const executablePath = resolveNorthstarChromiumExecutable();
 
 export default defineConfig({
   testDir: "./e2e",
@@ -11,7 +14,7 @@ export default defineConfig({
     browserName: "chromium",
     headless: true,
     launchOptions: {
-      executablePath: process.env.NORTHSTAR_CHROMIUM_PATH ?? "/usr/bin/chromium",
+      ...(executablePath ? { executablePath } : {}),
       args: ["--no-sandbox"],
     },
     trace: "retain-on-failure",

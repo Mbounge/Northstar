@@ -325,3 +325,26 @@ test("the ledger rejects duplicate system IDs instead of aliasing a prior task",
     /duplicate ID/,
   );
 });
+
+test("attempt evidence is immutable, idempotent, and never advances HEAD", () => {
+  const ledger = deterministicLedger();
+  const originalHead = ledger.getSnapshot().run.headCommitHash;
+  const task = ledger.createTask({
+    kind: "research",
+    intent: "Find application flows",
+    expectedOutcome: "Flows are visible in product activity",
+    executionInput: { query: "Whop" },
+  });
+  const attempt = ledger.startAttempt(task.id);
+  const evidence = { toolCalls: [{ name: "list_flows", result: { detail: "Two flows" } }] };
+  ledger.recordAttemptEvidence(task.id, attempt.id, evidence);
+  ledger.recordAttemptEvidence(task.id, attempt.id, evidence);
+
+  const snapshot = ledger.getSnapshot();
+  assert.equal(snapshot.run.headCommitHash, originalHead);
+  assert.deepEqual(snapshot.attempts[0]?.evidence, evidence);
+  assert.throws(
+    () => ledger.recordAttemptEvidence(task.id, attempt.id, { toolCalls: [] }),
+    /contradictory evidence/,
+  );
+});

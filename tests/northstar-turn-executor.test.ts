@@ -3,13 +3,14 @@ import test from "node:test";
 import {
   NORTHSTAR_TURN_PROTOCOL_VERSION,
   NorthstarTurnToolError,
+  type NorthstarExecuteTaskAttemptRequest,
   type NorthstarTurnModelAdapter,
 } from "@/lib/canvas-ai/northstar-turn-protocol";
 import {
   executeNorthstarTurn,
   NorthstarTurnProviderError,
 } from "@/lib/canvas-ai/northstar-turn-executor";
-import { parseNorthstarTurnRequest } from "@/lib/canvas-ai/northstar-turn-validation";
+import { parseNorthstarTurnRequest, parseNorthstarTurnResponse } from "@/lib/canvas-ai/northstar-turn-validation";
 import { activeAttemptFixture, decisionFixture } from "./northstar-turn-fixtures";
 
 function requestForDecision() {
@@ -22,7 +23,7 @@ function requestForDecision() {
   });
 }
 
-function requestForAttempt(kind: "research" | "artboard-mutation" = "research") {
+function requestForAttempt(kind: "research" | "artboard-mutation" = "research"): NorthstarExecuteTaskAttemptRequest {
   const fixture = activeAttemptFixture(kind);
   return parseNorthstarTurnRequest({
     protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
@@ -31,7 +32,7 @@ function requestForAttempt(kind: "research" | "artboard-mutation" = "research") 
     ledgerContext: fixture.context,
     task: fixture.task,
     attempt: fixture.attempt,
-  });
+  }) as NorthstarExecuteTaskAttemptRequest;
 }
 
 test("one turn invokes the model exactly once and does not autonomously continue", async () => {
@@ -83,8 +84,38 @@ test("task-scoped tools run once for the exact task and are included before one 
   assert.equal(modelCalls, 1);
   assert.match(prompt, /evidenceIds/);
   assert.equal(response.type, "attempt-result");
+  if (response.type === "attempt-result") {
+    assert.deepEqual(response.evidence, { evidenceIds: ["e-1"] });
+  }
 });
 
+test("a valid model failure is wrapped with only wire-protocol fields", async () => {
+  const request = requestForAttempt("research");
+  assert.equal(request.type, "execute-task-attempt");
+  const response = await executeNorthstarTurn({
+    request,
+    toolExecutor: { async execute() { return { toolCalls: [{ name: "list_flows", result: { detail: "Found flows" } }] }; } },
+    model: {
+      async generateJSON() {
+        return {
+          outcome: "failure",
+          failureKind: "correctable",
+          code: "MORE_CONTEXT_NEEDED",
+          message: "Choose a representative flow.",
+          correctionContext: { missing: "flow" },
+        };
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-failure");
+  assert.equal("outcome" in response, false);
+  const parsed = parseNorthstarTurnResponse(response, request);
+  assert.equal(parsed.type, "attempt-failure");
+  if (parsed.type === "attempt-failure") {
+    assert.equal(parsed.failureKind, "correctable");
+    assert.deepEqual(parsed.evidence, { toolCalls: [{ name: "list_flows", result: { detail: "Found flows" } }] });
+  }
+});
 
 test("invalid tool instructions are correctable and do not reach the model", async () => {
   const request = requestForAttempt("research");
@@ -277,4 +308,115 @@ test("finalization summaries cannot invent ledger-owned identity", async () => {
   });
   assert.equal(response.type, "turn-error");
   if (response.type === "turn-error") assert.equal(response.code, "MODEL_OUTPUT_INVALID");
+});
+
+test("decision planning receives exact data-tool schemas and prompt-owned research rules", async () => {
+  let systemInstruction = "";
+  const response = await executeNorthstarTurn({
+    request: requestForDecision(),
+    model: {
+      async generateJSON(input) {
+        systemInstruction = input.systemInstruction;
+        return { decision: "ready-to-finalize", reason: "No more work" };
+      },
+    },
+  });
+  assert.equal(response.type, "run-ready-to-finalize");
+  assert.match(systemInstruction, /Never hard-code apps, flows, counts/);
+  assert.match(systemInstruction, /maxFlowsPerApp/);
+  assert.match(systemInstruction, /get_flow_details[\s\S]*required[\s\S]*flowName/);
+  assert.match(systemInstruction, /candidateScreenshotIds/);
+  assert.match(systemInstruction, /additional analysis activities/);
+  assert.match(systemInstruction, /non-artboard question/);
+});
+
+test("authoritative screenshot evidence is attached to the exact execution model turn", async () => {
+  const request = requestForAttempt("research");
+  let observedAssets: readonly import("@/lib/canvas-ai/northstar-turn-protocol").NorthstarTurnEvidenceAsset[] | undefined;
+  let observedPrompt = "";
+  const response = await executeNorthstarTurn({
+    request,
+    toolExecutor: {
+      async execute() {
+        return {
+          toolCalls: [{
+            name: "prepare_composition_evidence",
+            args: { query: "Compare activation" },
+            result: {
+              ok: true,
+              data: {
+                screens: [{
+                  id: "atlas-screen-1",
+                  name: "Welcome",
+                  imageUrl: "https://assets.example/atlas/welcome.png",
+                  appName: "Atlas",
+                  flowName: "Activation",
+                  index: 0,
+                }],
+              },
+              resultView: { kind: "screenshots", title: "Evidence", items: [] },
+              detail: "Prepared evidence",
+            },
+          }],
+        };
+      },
+    },
+    model: {
+      async generateJSON(input) {
+        observedAssets = input.evidenceAssets;
+        observedPrompt = input.userPrompt;
+        return {
+          outcome: "success",
+          result: {
+            findings: ["The attached welcome screen leads with a single primary action."],
+            selectedIdentities: [{ appName: "Atlas", flowName: "Activation", screenshotId: "atlas-screen-1" }],
+            evidenceGaps: [],
+            sufficientForNextStep: true,
+          },
+        };
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-result");
+  assert.equal(observedAssets?.length, 1);
+  assert.deepEqual(observedAssets?.[0], {
+    id: "atlas-screen-1",
+    title: "Welcome",
+    imageUrl: "https://assets.example/atlas/welcome.png",
+    appName: "Atlas",
+    flowName: "Activation",
+    screenshotIndex: 0,
+  });
+  assert.match(observedPrompt, /attachedEvidenceAssets/);
+  assert.match(observedPrompt, /atlas-screen-1/);
+});
+
+test("tool lookup failures preserve retrieved evidence in the wire response", async () => {
+  const request = requestForAttempt("research");
+  const response = await executeNorthstarTurn({
+    request,
+    toolExecutor: {
+      async execute() {
+        throw new NorthstarTurnToolError({
+          failureKind: "correctable",
+          code: "TOOL_LOOKUP_EMPTY",
+          message: "No exact flow matched.",
+          correctionContext: { recommendedNextTools: ["list_app_flows"] },
+          evidence: { toolCalls: [{ name: "list_available_apps", result: { ok: true } }] },
+        });
+      },
+    },
+    model: {
+      async generateJSON() {
+        throw new Error("model must not run after deterministic lookup failure");
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-failure");
+  if (response.type === "attempt-failure") {
+    assert.equal(response.code, "TOOL_LOOKUP_EMPTY");
+    assert.deepEqual(response.evidence, {
+      toolCalls: [{ name: "list_available_apps", result: { ok: true } }],
+    });
+  }
 });

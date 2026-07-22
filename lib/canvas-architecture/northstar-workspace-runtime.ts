@@ -2,7 +2,9 @@ import { createNorthstarTurnClient, type NorthstarTurnClient } from "@/lib/canva
 import { createNorthstarEphemeralLedger } from "@/lib/canvas-ledger/northstar-ephemeral-ledger";
 import type {
   NorthstarEphemeralLedger,
+  NorthstarLedgerCommit,
   NorthstarLedgerSnapshot,
+  NorthstarLedgerTask,
   NorthstarLedgerValue,
   NorthstarLedgerFailure,
 } from "@/lib/canvas-ledger/types";
@@ -54,6 +56,15 @@ export interface CreateNorthstarWorkspaceRuntimeInput {
   initialCaptureAttempts?: number;
   initialCaptureRetryMs?: number;
   createLedger?: typeof createNorthstarEphemeralLedger;
+  /**
+   * Runs after an artboard commit is verified and before the next LLM decision.
+   * Product state synchronization is therefore part of the progression gate.
+   */
+  onVerifiedArtboardCommit?(input: {
+    task: NorthstarLedgerTask;
+    commit: NorthstarLedgerCommit;
+    ledger: NorthstarLedgerSnapshot;
+  }): void | Promise<void>;
 }
 
 export interface NorthstarWorkspaceRuntime {
@@ -289,6 +300,27 @@ export function createNorthstarWorkspaceRuntime(
           failAuthoritativeLedger("WORKSPACE_TASK_LIMIT_EXCEEDED", error);
           publish({ status: "failed", error, recovery: undefined });
           return resultFromState();
+        }
+        const committedSnapshot = ledger.getSnapshot();
+        const committedTask = committedSnapshot.tasks.find((task) => task.id === step.taskId);
+        const committed = committedSnapshot.commits.find((commit) => commit.hash === step.commitHash);
+        if (committedTask?.kind === "artboard-mutation" && committed && input.onVerifiedArtboardCommit) {
+          try {
+            await input.onVerifiedArtboardCommit({
+              task: committedTask,
+              commit: committed,
+              ledger: committedSnapshot,
+            });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            failAuthoritativeLedger("ARTBOARD_MODEL_SYNC_FAILED", detail, "control");
+            publish({
+              status: "failed",
+              error: "The verified artboard could not be synchronized back into the canvas document.",
+              recovery: undefined,
+            });
+            return resultFromState();
+          }
         }
         continue;
       }

@@ -9,18 +9,18 @@ export const NORTHSTAR_DIRECT_BOOTSTRAP_VERSION = "1" as const;
 const BOOTSTRAP_HTML = String.raw`
 <main data-ns-node-id="northstar-artboard" class="northstar-bootstrap">
   <header data-ns-node-id="northstar-header" class="northstar-bootstrap__header">
-    <p data-ns-node-id="northstar-eyebrow" class="northstar-bootstrap__eyebrow">Northstar artboard</p>
-    <h1 data-ns-node-id="northstar-title" class="northstar-bootstrap__title">Ready to build a grounded visual story.</h1>
-    <p data-ns-node-id="northstar-deck" class="northstar-bootstrap__deck">Research, analysis, and visual authorship will appear here as verified commits.</p>
+    <p data-ns-node-id="northstar-eyebrow" class="northstar-bootstrap__eyebrow">North Star working surface</p>
+    <h1 data-ns-node-id="northstar-title" class="northstar-bootstrap__title">Building your visual story.</h1>
+    <p data-ns-node-id="northstar-deck" class="northstar-bootstrap__deck">Research and visual authorship will appear progressively on this same surface.</p>
   </header>
   <section data-ns-node-id="northstar-workspace" class="northstar-bootstrap__workspace" aria-label="Northstar working area">
     <article data-ns-node-id="northstar-status-card" class="northstar-bootstrap__card">
-      <span data-ns-node-id="northstar-status-label" class="northstar-bootstrap__label">Architecture status</span>
-      <strong data-ns-node-id="northstar-status-value" class="northstar-bootstrap__value">Awaiting the first bounded activity</strong>
+      <span data-ns-node-id="northstar-status-label" class="northstar-bootstrap__label">Current step</span>
+      <strong data-ns-node-id="northstar-status-value" class="northstar-bootstrap__value">Preparing the first grounded activity</strong>
     </article>
     <article data-ns-node-id="northstar-evidence-card" class="northstar-bootstrap__card northstar-bootstrap__card--muted">
       <span data-ns-node-id="northstar-evidence-label" class="northstar-bootstrap__label">Evidence trail</span>
-      <p data-ns-node-id="northstar-evidence-value" class="northstar-bootstrap__copy">Verified source material and conclusions will accumulate without replacing the mounted artboard.</p>
+      <p data-ns-node-id="northstar-evidence-value" class="northstar-bootstrap__copy">Source material and conclusions will accumulate here while the working surface remains visible.</p>
     </article>
   </section>
 </main>
@@ -96,6 +96,7 @@ body { padding: 0; }
 export interface CreateNorthstarDirectBootstrapOptions {
   artifactId?: string;
   now?: Date;
+  objective?: string;
 }
 
 function createArtifactId(now: Date): string {
@@ -124,8 +125,8 @@ export function createNorthstarDirectBootstrapArtifactPayload(
     artifactId,
     revisionId: `${artifactId}-root`,
     surfaceId: artifactId,
-    title: "Northstar — direct architecture artboard",
-    description: "Canonical bootstrap surface for ledger-owned direct projection.",
+    title: "North Star working surface",
+    description: "Working surface for progressive, verified North Star authorship.",
     document: {
       schema: NORTHSTAR_WEB_ARTIFACT_DOCUMENT_SCHEMA,
       html: BOOTSTRAP_HTML,
@@ -135,10 +136,10 @@ export function createNorthstarDirectBootstrapArtifactPayload(
     mutationJournal: [],
     dataBundle: {
       version: "northstar.artifact-data.v0.2",
-      objective: "Build a grounded visual artifact through verified Northstar commits.",
+      objective: options.objective?.trim() || "Build a grounded visual artifact.",
       audience: "Northstar workspace user",
       artifactType: "living-artboard",
-      coverageSummary: "Canonical empty artboard awaiting its first ledger-owned activity.",
+      coverageSummary: "Working surface awaiting its first grounded activity.",
       apps: [],
       flows: [],
       screenshots: [],
@@ -150,7 +151,7 @@ export function createNorthstarDirectBootstrapArtifactPayload(
     },
     stagePlan: [],
     activeStageIndex: 0,
-    visualStrategy: "Ledger-owned direct projection",
+    visualStrategy: "Progressive grounded authorship",
     artifactType: "living-artboard",
     audience: "Northstar workspace user",
     thinkingDepth: "high",
@@ -169,7 +170,7 @@ export function createNorthstarDirectBootstrapArtifactPayload(
       phase: "complete",
       completedSteps: 1,
       totalSteps: 1,
-      message: "Direct projection surface ready",
+      message: "Working surface ready",
       isBuilding: false,
     },
     diagnostics: [],

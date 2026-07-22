@@ -13,9 +13,16 @@ import {
   type NorthstarWorkspaceRuntimeSnapshot,
 } from "@/lib/canvas-architecture/northstar-workspace-runtime";
 import { createNorthstarDirectBootstrapArtifactPayload } from "@/lib/canvas-artifacts/northstar-direct-bootstrap";
+import { mergeNorthstarEvidenceIntoDataBundle } from "@/lib/canvas-ai/northstar-evidence-data-bundle";
 import type { NorthstarTurnClient } from "@/lib/canvas-ai/northstar-turn-client";
 import { NORTHSTAR_TURN_PROTOCOL_VERSION } from "@/lib/canvas-ai/northstar-turn-protocol";
-import type { NorthstarLedgerValue } from "@/lib/canvas-ledger/types";
+import type {
+  NorthstarLedgerCommit,
+  NorthstarLedgerSnapshot,
+  NorthstarLedgerTask,
+  NorthstarLedgerValue,
+} from "@/lib/canvas-ledger/types";
+import { serializeNorthstarProjectionState } from "@/lib/canvas-projection/serialize";
 import { createNorthstarWindowProjectionSurface } from "@/lib/canvas-projection/window-surface";
 import { NORTHSTAR_ARTBOARD_MUTATION_DRAFT_SCHEMA } from "@/lib/canvas-projection/types";
 import { parseNorthstarProjectionState } from "@/lib/canvas-projection/validation";
@@ -100,6 +107,37 @@ function createHarnessTurnClient(): NorthstarTurnClient {
             text: second ? "Second verified visual commit" : "First verified visual commit",
           }],
         } as NorthstarLedgerValue,
+        evidence: second ? undefined : {
+          toolCalls: [{
+            name: "get_flow_screenshots",
+            result: {
+              detail: "Retrieved one representative onboarding screenshot.",
+              data: {
+                screens: [{
+                  id: "phase4-screen-1",
+                  appName: "Example",
+                  flowName: "Onboarding",
+                  name: "Welcome",
+                  imageUrl: "https://assets.example/phase4-welcome.png",
+                  index: 0,
+                }],
+              },
+              resultView: {
+                kind: "screenshots",
+                title: "Onboarding screenshots",
+                items: [{
+                  id: "phase4-screen-1",
+                  kind: "screenshot",
+                  title: "Welcome",
+                  appName: "Example",
+                  flowName: "Onboarding",
+                  imageUrl: "https://assets.example/phase4-welcome.png",
+                }],
+              },
+              ok: true,
+            },
+          }],
+        },
       };
     },
 
@@ -125,18 +163,51 @@ function createHarnessTurnClient(): NorthstarTurnClient {
 }
 
 export function NorthstarPhase4E2EHarness() {
-  const artifact = useMemo(
+  const [artifact, setArtifact] = useState(
     () => createNorthstarDirectBootstrapArtifactPayload({
       artifactId: "phase4-browser-artifact",
       now: new Date("2026-07-21T00:00:00.000Z"),
     }),
-    [],
   );
+  const artifactRef = useRef(artifact);
   const targetFrameRef = useRef<HTMLIFrameElement | null>(null);
   const runtimeRef = useRef<NorthstarWorkspaceRuntime | null>(null);
   const [runtime, setRuntime] = useState<NorthstarWorkspaceRuntime | null>(null);
   const [snapshot, setSnapshot] = useState<NorthstarWorkspaceRuntimeSnapshot>(EMPTY_SNAPSHOT);
   const [error, setError] = useState<string | null>(null);
+  const [hostMounted, setHostMounted] = useState(true);
+
+  const syncVerifiedCommit = useCallback((input: {
+    task: NorthstarLedgerTask;
+    commit: NorthstarLedgerCommit;
+    ledger: NorthstarLedgerSnapshot;
+  }) => {
+    const current = artifactRef.current;
+    const state = parseNorthstarProjectionState(input.commit.stateSnapshot);
+    const serialized = serializeNorthstarProjectionState(state);
+    const next = {
+      ...current,
+      revisionId: input.commit.hash,
+      document: current.document ? {
+        ...current.document,
+        html: serialized.html,
+        css: serialized.css,
+      } : current.document,
+      dataBundle: current.dataBundle
+        ? mergeNorthstarEvidenceIntoDataBundle(current.dataBundle, input.ledger)
+        : current.dataBundle,
+      updatedAt: new Date().toISOString(),
+      buildState: {
+        phase: "complete" as const,
+        completedSteps: input.ledger.tasks.filter((task) => task.status === "completed").length,
+        totalSteps: input.ledger.tasks.length,
+        message: input.task.intent,
+        isBuilding: false,
+      },
+    };
+    artifactRef.current = next;
+    setArtifact(next);
+  }, []);
 
   const registerProjectionFrame = useCallback<NorthstarArchitectureContextValue["registerProjectionFrame"]>(
     ({ frame }) => {
@@ -151,8 +222,9 @@ export function NorthstarPhase4E2EHarness() {
 
   const architecture = useMemo<NorthstarArchitectureContextValue>(() => ({
     enabled: true,
+    directArtifactId: artifact.artifactId,
     registerProjectionFrame,
-  }), [registerProjectionFrame]);
+  }), [artifact.artifactId, registerProjectionFrame]);
 
   useEffect(() => {
     const surface = createNorthstarWindowProjectionSurface({
@@ -165,6 +237,7 @@ export function NorthstarPhase4E2EHarness() {
       turnClient: createHarnessTurnClient(),
       initialCaptureAttempts: 40,
       initialCaptureRetryMs: 25,
+      onVerifiedArtboardCommit: syncVerifiedCommit,
     });
     runtimeRef.current = nextRuntime;
     setRuntime(nextRuntime);
@@ -176,7 +249,7 @@ export function NorthstarPhase4E2EHarness() {
       surface.dispose();
       runtimeRef.current = null;
     };
-  }, []);
+  }, [syncVerifiedCommit]);
 
   const start = async () => {
     if (!runtimeRef.current) return;
@@ -186,6 +259,11 @@ export function NorthstarPhase4E2EHarness() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
+  };
+
+  const remountPersistedArtifact = () => {
+    setHostMounted(false);
+    window.requestAnimationFrame(() => setHostMounted(true));
   };
 
   return (
@@ -204,23 +282,35 @@ export function NorthstarPhase4E2EHarness() {
             </button>
             <output data-testid="phase4-status">{snapshot.status}</output>
             <output data-testid="phase4-commit-count">{snapshot.ledger?.commits.length ?? 0}</output>
+            <output data-testid="phase4-persisted-revision">{artifact.revisionId}</output>
+            <output data-testid="phase4-persisted-screenshot-count">{artifact.dataBundle?.screenshots.length ?? 0}</output>
+            <button
+              type="button"
+              data-testid="phase4-remount"
+              onClick={remountPersistedArtifact}
+              disabled={snapshot.status !== "completed"}
+            >
+              Remount persisted artifact
+            </button>
           </div>
           {error && <p data-testid="phase4-error">{error}</p>}
           <div className="h-[620px] overflow-hidden rounded-3xl border border-black/10 bg-white">
-            <CodeArtifactHost
-              artifact={artifact}
-              selected
-              width={960}
-              height={620}
-              viewportZoom={1}
-              onRequestSelect={() => undefined}
-              onCanvasDragStart={() => undefined}
-              onRuntimeReview={() => undefined}
-              onContentSize={() => undefined}
-              onProjectCommit={() => { throw new Error("Legacy projection callback must never run in Phase 4."); }}
-              onProposalSettled={() => { throw new Error("Legacy proposal callback must never run in Phase 4."); }}
-              onCanvasWheel={() => undefined}
-            />
+            {hostMounted && (
+              <CodeArtifactHost
+                artifact={artifact}
+                selected
+                width={960}
+                height={620}
+                viewportZoom={1}
+                onRequestSelect={() => undefined}
+                onCanvasDragStart={() => undefined}
+                onRuntimeReview={() => undefined}
+                onContentSize={() => undefined}
+                onProjectCommit={() => { throw new Error("Legacy projection callback must never run in Phase 4."); }}
+                onProposalSettled={() => { throw new Error("Legacy proposal callback must never run in Phase 4."); }}
+                onCanvasWheel={() => undefined}
+              />
+            )}
           </div>
           {snapshot.ledger && <NorthstarLedgerInspector snapshot={snapshot} />}
         </div>

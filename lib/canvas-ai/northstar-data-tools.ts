@@ -646,31 +646,89 @@ function emptyView(
 
 export type NorthStarReferenceFlowSelectionOptions = {
   appNames?: string[];
+  query?: string;
   sessionType?: "onboarding" | "browsing";
   platform?: "mobile" | "web";
   maxApps?: number;
+  maxFlowsPerApp?: number;
   maxScreensPerFlow?: number;
+  selectionStrategy?: "representative" | "coverage" | "diverse";
 };
 
+function flowDiversityScore(
+  flow: NorthStarDataFlow,
+  selected: readonly NorthStarDataFlow[],
+): number {
+  if (selected.length === 0) return 0;
+  const seenPlatforms = new Set(selected.map((entry) => entry.platform).filter(Boolean));
+  const seenSessions = new Set(selected.map((entry) => authoritativeFlowSessionType(entry)).filter(Boolean));
+  const selectedTokens = new Set(
+    selected.flatMap((entry) => normalizeToken(entry.name).split(" ").filter(Boolean)),
+  );
+  const tokens = normalizeToken(flow.name).split(" ").filter(Boolean);
+  const novelTokens = tokens.filter((token) => !selectedTokens.has(token)).length;
+  return (
+    (!flow.platform || seenPlatforms.has(flow.platform) ? 0 : 240) +
+    (!authoritativeFlowSessionType(flow) || seenSessions.has(authoritativeFlowSessionType(flow)) ? 0 : 180) +
+    novelTokens * 12
+  );
+}
+
+function takeBalancedScreens(
+  flows: readonly NorthStarDataFlow[],
+  maximum: number,
+): NorthStarDataScreen[] {
+  const queues = flows.map((flow) => [...flow.screens].sort((left, right) => left.index - right.index));
+  const selected: NorthStarDataScreen[] = [];
+  while (selected.length < maximum && queues.some((queue) => queue.length > 0)) {
+    for (const queue of queues) {
+      if (selected.length >= maximum) break;
+      const screen = queue.shift();
+      if (screen) selected.push(screen);
+    }
+  }
+  return selected;
+}
+
 /**
- * Selects one complete, ordered, image-backed reference flow per requested app.
- * This deliberately preserves app identity, flow identity and screenshot sequence
- * so batching never becomes the visual structure shown to the user.
+ * Selects a bounded, prompt-scoped set of complete, ordered, image-backed flows.
+ * The caller controls breadth. Defaults are merely safety fallbacks and never a
+ * fixed one-flow-per-app product policy.
  */
 export function selectNorthStarReferenceFlows(
   catalog: NorthStarDataCatalog,
   options: NorthStarReferenceFlowSelectionOptions = {},
 ): { apps: NorthStarDataApp[]; flows: NorthStarDataFlow[]; screens: NorthStarDataScreen[] } {
   const requested = new Set((options.appNames ?? []).map(normalizeToken).filter(Boolean));
-  const maxApps = Math.max(1, Math.min(6, options.maxApps ?? 2));
-  const maxScreens = Math.max(3, Math.min(18, options.maxScreensPerFlow ?? 10));
+  const maxApps = Math.max(
+    1,
+    Math.min(12, options.maxApps ?? (requested.size > 0 ? requested.size : 4)),
+  );
+  const maxFlowsPerApp = Math.max(1, Math.min(12, options.maxFlowsPerApp ?? 1));
+  const maxScreens = Math.max(3, Math.min(30, options.maxScreensPerFlow ?? 10));
+  const strategy = options.selectionStrategy ?? "representative";
   const selectedApps: NorthStarDataApp[] = [];
   const selectedFlows: NorthStarDataFlow[] = [];
   const selectedScreens: NorthStarDataScreen[] = [];
 
-  const candidateApps = catalog.apps.filter((app) =>
-    requested.size === 0 || requested.has(normalizeToken(app.name)) || requested.has(normalizeToken(app.id)),
-  );
+  const candidateApps = (() => {
+    if (requested.size === 0) return catalog.apps.slice(0, maxApps);
+    const byToken = new Map<string, NorthStarDataApp>();
+    for (const app of catalog.apps) {
+      byToken.set(normalizeToken(app.name), app);
+      byToken.set(normalizeToken(app.id), app);
+    }
+    const ordered: NorthStarDataApp[] = [];
+    const seen = new Set<string>();
+    for (const requestedName of options.appNames ?? []) {
+      const app = byToken.get(normalizeToken(requestedName));
+      if (!app || seen.has(app.id)) continue;
+      seen.add(app.id);
+      ordered.push(app);
+      if (ordered.length >= maxApps) break;
+    }
+    return ordered;
+  })();
 
   for (const app of candidateApps) {
     const candidates = app.flows
@@ -686,20 +744,50 @@ export function selectNorthStarReferenceFlows(
             seen.add(key);
             return true;
           });
-        const semanticBonus = options.sessionType && authoritativeFlowSessionType(flow) === options.sessionType ? 1000 : 0;
-        return { flow, screens, score: semanticBonus + screens.length };
+        const scopeBonus =
+          (options.sessionType && authoritativeFlowSessionType(flow) === options.sessionType ? 1_000 : 0) +
+          (options.platform && flow.platform === options.platform ? 500 : 0);
+        const queryScore = options.query
+          ? scoreText(
+              `${app.name} ${flow.name} ${flow.description ?? ""} ${flow.sessionType ?? ""} ${flow.platform ?? ""}`,
+              options.query,
+            )
+          : 1;
+        const coverageScore = Math.min(300, screens.length * 10);
+        return { flow, screens, score: scopeBonus + queryScore + coverageScore };
       })
-      .filter((entry) => entry.screens.length >= 3)
-      .sort((a, b) => b.score - a.score);
+      .filter((entry) => entry.screens.length > 0)
+      .sort((left, right) => right.score - left.score || left.flow.name.localeCompare(right.flow.name));
 
-    const best = candidates[0];
-    if (!best) continue;
-    const screens = best.screens.slice(0, maxScreens);
-    const flow: NorthStarDataFlow = { ...best.flow, screens };
-    selectedFlows.push(flow);
-    selectedScreens.push(...screens);
-    selectedApps.push({ ...app, flows: [flow] });
-    if (selectedApps.length >= maxApps) break;
+    const chosen: typeof candidates = [];
+    const remaining = [...candidates];
+    while (remaining.length > 0 && chosen.length < maxFlowsPerApp) {
+      let bestIndex = 0;
+      let bestScore = Number.NEGATIVE_INFINITY;
+      for (let index = 0; index < remaining.length; index += 1) {
+        const candidate = remaining[index];
+        const strategyScore = strategy === "diverse"
+          ? flowDiversityScore(candidate.flow, chosen.map((entry) => entry.flow))
+          : strategy === "coverage"
+            ? candidate.screens.length * 20
+            : 0;
+        const score = candidate.score + strategyScore;
+        if (score > bestScore) {
+          bestScore = score;
+          bestIndex = index;
+        }
+      }
+      chosen.push(remaining.splice(bestIndex, 1)[0]);
+    }
+
+    if (chosen.length === 0) continue;
+    const boundedFlows = chosen.map(({ flow, screens }) => ({
+      ...flow,
+      screens: screens.slice(0, maxScreens),
+    }));
+    selectedFlows.push(...boundedFlows);
+    selectedScreens.push(...boundedFlows.flatMap((flow) => flow.screens));
+    selectedApps.push({ ...app, flows: boundedFlows });
   }
 
   return { apps: selectedApps, flows: selectedFlows, screens: selectedScreens };
@@ -897,239 +985,142 @@ export async function executeNorthStarDataTool({
 
 
     case "prepare_composition_evidence": {
-      const limit = clampLimit(args.limit, 32, 160);
+      const limit = clampLimit(args.limit, 36, 160);
       const query = args.query ?? "";
       const queryToken = normalizeToken(query);
-      const explicitNames = Array.isArray(args.appNames)
-        ? args.appNames.map(normalizeToken).filter(Boolean)
-        : [];
-      if (args.appName) explicitNames.push(normalizeToken(args.appName));
-
+      const explicitAppNames = [
+        ...(Array.isArray(args.appNames) ? args.appNames : []),
+        ...(args.appName ? [args.appName] : []),
+      ].map((name) => name.trim()).filter(Boolean);
+      const explicitTokens = new Set(explicitAppNames.map(normalizeToken));
       const mentionedApps = catalog.apps.filter((app) => {
         const token = normalizeToken(app.name);
-        return explicitNames.includes(token) || (queryToken && queryToken.includes(token));
+        return explicitTokens.has(token) || (queryToken && queryToken.includes(token));
       });
-      const sourceApps = mentionedApps.length > 0 ? mentionedApps : catalog.apps;
+      const strategy = args.selectionStrategy ?? "representative";
+      const defaultFlowBreadth = strategy === "coverage" ? 3 : strategy === "diverse" ? 2 : 1;
+      const maxApps = Math.max(
+        1,
+        Math.min(12, args.maxApps ?? (explicitAppNames.length > 0 ? explicitAppNames.length : 4)),
+      );
+      const sourceApps = explicitAppNames.length > 0
+        ? mentionedApps.slice(0, maxApps)
+        : (mentionedApps.length > 0 ? mentionedApps : catalog.apps).slice(0, maxApps);
+      const maxFlowsPerApp = Math.max(1, Math.min(12, args.maxFlowsPerApp ?? defaultFlowBreadth));
+      const plannedFlowCount = Math.max(1, sourceApps.length * maxFlowsPerApp);
+      const maxScreensPerFlow = Math.max(
+        3,
+        Math.min(30, args.maxScreensPerFlow ?? Math.max(3, Math.floor(limit / plannedFlowCount))),
+      );
 
-      // v86: when the request names an authoritative mode, preserve one complete ordered
-      // flow per app before broader research batching. This prevents an onboarding request
-      // from silently drifting into browsing evidence merely because a browsing flow has
-      // more screens or stronger lexical similarity.
-      const exactReferenceSelection = selectNorthStarReferenceFlows(catalog, {
-        appNames: sourceApps.map((app) => app.name),
+      const selection = selectNorthStarReferenceFlows(catalog, {
+        appNames: explicitAppNames.length > 0
+          ? explicitAppNames
+          : sourceApps.map((app) => app.name),
+        query,
         sessionType: args.sessionType,
         platform: args.platform,
-        maxApps: sourceApps.length,
-        maxScreensPerFlow: Math.max(10, Math.min(18, Math.floor(limit / Math.max(1, sourceApps.length)))),
+        maxApps,
+        maxFlowsPerApp,
+        maxScreensPerFlow,
+        selectionStrategy: strategy,
       });
-      if (args.sessionType && exactReferenceSelection.apps.length === sourceApps.length) {
-        const exactScreens = exactReferenceSelection.screens;
-        const representativeScreens = exactReferenceSelection.flows.flatMap((flow) => {
-          const ordered = flow.screens.filter((screen) => Boolean(screen.imageUrl)).sort((a, b) => a.index - b.index);
-          return Array.from(new Set([0, Math.floor((ordered.length - 1) / 2), ordered.length - 1]))
-            .map((index) => ordered[index])
-            .filter((screen): screen is NorthStarDataScreen => Boolean(screen));
-        });
-        const evidenceGroups = exactReferenceSelection.apps.map((app) => {
-          const flow = app.flows[0];
-          return {
-            app: compactAppData(app),
-            flows: flow ? [compactFlowData(flow)] : [],
-            screens: representativeScreens.filter((screen) => screen.appName === app.name).map(compactScreenData),
-            candidateScreens: (flow?.screens ?? []).map(compactScreenData),
-          };
-        });
+
+      const candidateScreens = takeBalancedScreens(selection.flows, limit);
+      const selectedScreenIds = new Set(candidateScreens.map((screen) => screen.id));
+      const selectedFlows = selection.flows
+        .map((flow) => ({ ...flow, screens: flow.screens.filter((screen) => selectedScreenIds.has(screen.id)) }))
+        .filter((flow) => flow.screens.length > 0);
+      const selectedApps = selection.apps
+        .map((app) => ({
+          ...app,
+          flows: selectedFlows.filter((flow) => normalizeToken(flow.appName) === normalizeToken(app.name)),
+        }))
+        .filter((app) => app.flows.length > 0);
+
+      const representativeScreens = selectedFlows.flatMap((flow) => {
+        const ordered = [...flow.screens].sort((left, right) => left.index - right.index);
+        return Array.from(new Set([0, Math.floor((ordered.length - 1) / 2), ordered.length - 1]))
+          .map((index) => ordered[index])
+          .filter((screen): screen is NorthStarDataScreen => Boolean(screen));
+      });
+
+      const evidenceGroups = selectedApps.map((app) => {
+        const flows = app.flows;
+        const flowKeys = new Set(flows.map((flow) => `${normalizeToken(flow.appName)}::${normalizeToken(flow.name)}`));
         return {
-          detail: `Prepared ${exactScreens.length} ordered ${args.sessionType} screenshots across ${exactReferenceSelection.apps.length} requested ${exactReferenceSelection.apps.length === 1 ? "app" : "apps"}, preserving one authoritative reference flow per app.`,
-          data: {
-            apps: exactReferenceSelection.apps.map(compactAppData),
-            flows: exactReferenceSelection.flows.map((flow) => ({
-              app: compactAppData(exactReferenceSelection.apps.find((app) => app.name === flow.appName) ?? exactReferenceSelection.apps[0]),
-              flow: compactFlowData({ ...flow, sessionType: authoritativeFlowSessionType(flow) ?? flow.sessionType }),
-            })),
-            screens: representativeScreens.map(compactScreenData),
-            candidateScreens: exactScreens.map(compactScreenData),
-            evidenceGroups,
-            requestedApps: sourceApps.map((app) => app.name),
-            missingApps: [],
-            balanced: true,
-            candidateScreenCount: exactScreens.length,
-            representativeScreenCount: representativeScreens.length,
-            requestedSessionType: args.sessionType,
-            requestedPlatform: args.platform,
-            selectedFlowIdentity: exactReferenceSelection.flows.map((flow) => ({
-              appName: flow.appName,
-              flowId: flow.id,
-              flowName: flow.name,
-              platform: flow.platform,
-              sessionType: authoritativeFlowSessionType(flow) ?? flow.sessionType,
-              screenCount: flow.screens.length,
-              provenance: "tenant-flow-metadata",
-            })),
-          },
-          resultView: {
-            kind: "screenshots",
-            title: `${args.sessionType === "onboarding" ? "Onboarding" : "Browsing"} reference flows`,
-            items: representativeScreens.slice(0, 16).map(screenshotItem),
-            emptyMessage: "No authoritative reference-flow screenshots were available.",
-          },
-          ok: true,
+          app: compactAppData(app),
+          flows: flows.map(compactFlowData),
+          screens: representativeScreens
+            .filter((screen) => normalizeToken(screen.appName) === normalizeToken(app.name))
+            .map(compactScreenData),
+          candidateScreens: candidateScreens
+            .filter((screen) => flowKeys.has(`${normalizeToken(screen.appName)}::${normalizeToken(screen.flowName)}`))
+            .map(compactScreenData),
         };
-      }
+      });
 
-      const requestedAppCount = Math.max(1, sourceApps.length);
-      const perAppScreenBudget = Math.max(1, Math.floor(limit / requestedAppCount));
-      const remainder = Math.max(0, limit - perAppScreenBudget * requestedAppCount);
-
-      const evidenceGroups: Array<{
-        app: ReturnType<typeof compactAppData>;
-        flows: ReturnType<typeof compactFlowData>[];
-        screens: ReturnType<typeof compactScreenData>[];
-        candidateScreens: ReturnType<typeof compactScreenData>[];
-      }> = [];
-      const selectedApps: NorthStarDataApp[] = [];
-      const selectedFlowPairs: Array<{ app: NorthStarDataApp; flow: NorthStarDataFlow }> = [];
-      const representativeScreens: NorthStarDataScreen[] = [];
-      const candidateScreens: NorthStarDataScreen[] = [];
-
-      for (let appIndex = 0; appIndex < sourceApps.length; appIndex += 1) {
-        const app = sourceApps[appIndex];
-        const appBudget = perAppScreenBudget + (appIndex < remainder ? 1 : 0);
-        const candidates = app.flows
-          .filter((flow) => flowMatchesRequestedScope(flow, args.sessionType, args.platform))
-          .map((flow) => ({
-            flow,
-            score: Math.max(
-              1,
-              scoreText(
-                `${app.name} ${flow.name} ${flow.description ?? ""} ${flow.sessionType ?? ""} ${flow.platform ?? ""}`,
-                query,
-              ),
-            ),
-          }))
-          .sort((a, b) => b.score - a.score || b.flow.screens.length - a.flow.screens.length);
-
-        const appFlows: NorthStarDataFlow[] = [];
-        const appCandidateScreens: NorthStarDataScreen[] = [];
-        const appRepresentativeScreens: NorthStarDataScreen[] = [];
-        const maxFlowsForApp = Math.max(
-          1,
-          Math.min(
-            candidates.length,
-            limit >= 100 ? 12 : limit >= 48 ? 8 : limit >= 24 ? 5 : 3,
-          ),
-        );
-
-        for (const candidate of candidates) {
-          if (
-            appCandidateScreens.length >= appBudget ||
-            appFlows.length >= maxFlowsForApp
-          ) {
-            break;
-          }
-          const available = candidate.flow.screens.filter(
-            (screen) => Boolean(screen.imageUrl),
-          );
-          if (available.length === 0) continue;
-
-          const remaining = appBudget - appCandidateScreens.length;
-          const fullFlowSlice = available.slice(0, remaining);
-          const uniqueFlowScreens = fullFlowSlice.filter(
-            (screen) =>
-              !appCandidateScreens.some((item) => item.id === screen.id) &&
-              !candidateScreens.some((item) => item.id === screen.id),
-          );
-          if (uniqueFlowScreens.length === 0) continue;
-
-          appFlows.push(candidate.flow);
-          appCandidateScreens.push(...uniqueFlowScreens);
-          candidateScreens.push(...uniqueFlowScreens);
-          selectedFlowPairs.push({ app, flow: candidate.flow });
-
-          const representativeIndexes = Array.from(
-            new Set([
-              0,
-              Math.floor((uniqueFlowScreens.length - 1) / 2),
-              uniqueFlowScreens.length - 1,
-            ]),
-          );
-          for (const index of representativeIndexes) {
-            const screen = uniqueFlowScreens[index];
-            if (
-              screen &&
-              !appRepresentativeScreens.some((item) => item.id === screen.id)
-            ) {
-              appRepresentativeScreens.push(screen);
-            }
-          }
-        }
-
-        if (appCandidateScreens.length > 0) {
-          selectedApps.push(app);
-          representativeScreens.push(
-            ...appRepresentativeScreens.slice(
-              0,
-              Math.max(2, Math.min(6, Math.ceil(appBudget / 4))),
-            ),
-          );
-          evidenceGroups.push({
-            app: compactAppData(app),
-            flows: appFlows.map(compactFlowData),
-            screens: appRepresentativeScreens.map(compactScreenData),
-            candidateScreens: appCandidateScreens.map(compactScreenData),
-          });
-        }
-      }
-
-      const missingApps = sourceApps.filter(
-        (app) =>
-          !evidenceGroups.some(
-            (group) => normalizeToken(group.app.name) === normalizeToken(app.name),
-          ),
-      );
-      const balanced =
-        missingApps.length === 0 && evidenceGroups.length === sourceApps.length;
-      const detail = balanced
-        ? `Prepared ${candidateScreens.length} relevant screenshots for visual study across ${evidenceGroups.length} requested ${evidenceGroups.length === 1 ? "app" : "apps"}, plus ${representativeScreens.length} representative previews.`
-        : `Prepared ${candidateScreens.length} screenshots, but could not find valid evidence for ${missingApps.map((app) => app.name).join(", ") || "every requested app"}.`;
+      const foundTokens = new Set(selectedApps.map((app) => normalizeToken(app.name)));
+      const requestedNames = explicitAppNames.length > 0
+        ? explicitAppNames
+        : sourceApps.map((app) => app.name);
+      const missingApps = requestedNames.filter((name) => !foundTokens.has(normalizeToken(name)));
+      const balanced = missingApps.length === 0 && selectedApps.length > 0;
+      const detail = candidateScreens.length === 0
+        ? `No image-backed flows matched the requested evidence scope for “${query}”.`
+        : `Prepared ${candidateScreens.length} ordered screenshots from ${selectedFlows.length} ${selectedFlows.length === 1 ? "flow" : "flows"} across ${selectedApps.length} ${selectedApps.length === 1 ? "app" : "apps"} using the ${strategy} selection strategy${missingApps.length > 0 ? `; missing evidence for ${missingApps.join(", ")}` : ""}.`;
 
       return {
         detail,
         data: {
+          researchSpec: {
+            query,
+            requestedApps: requestedNames,
+            requestedSessionType: args.sessionType,
+            requestedPlatform: args.platform,
+            selectionStrategy: strategy,
+            maxApps,
+            maxFlowsPerApp,
+            maxScreensPerFlow,
+            totalScreenLimit: limit,
+          },
           apps: selectedApps.map(compactAppData),
-          flows: selectedFlowPairs.map(({ app, flow }) => ({
-            app: compactAppData(app),
-            flow: compactFlowData(flow),
+          flows: selectedFlows.map((flow) => ({
+            app: compactAppData(selectedApps.find((app) => normalizeToken(app.name) === normalizeToken(flow.appName)) ?? selectedApps[0]),
+            flow: compactFlowData({ ...flow, sessionType: authoritativeFlowSessionType(flow) ?? flow.sessionType }),
           })),
           screens: representativeScreens.map(compactScreenData),
           candidateScreens: candidateScreens.map(compactScreenData),
           evidenceGroups,
-          requestedApps: sourceApps.map((app) => app.name),
-          missingApps: missingApps.map((app) => app.name),
+          requestedApps: requestedNames,
+          missingApps,
           balanced,
           candidateScreenCount: candidateScreens.length,
           representativeScreenCount: representativeScreens.length,
+          candidateScreenshotIds: candidateScreens.map((screen) => screen.id),
+          selectionTruncated: selection.screens.length > candidateScreens.length,
+          unselectedScreenshotCount: Math.max(0, selection.screens.length - candidateScreens.length),
           requestedSessionType: args.sessionType,
           requestedPlatform: args.platform,
-          selectedFlowIdentity: selectedFlowPairs.map(({ app, flow }) => ({
-            appName: app.name,
+          selectedFlowIdentity: selectedFlows.map((flow) => ({
+            appName: flow.appName,
             flowId: flow.id,
             flowName: flow.name,
             platform: flow.platform,
             sessionType: authoritativeFlowSessionType(flow) ?? flow.sessionType,
             screenCount: flow.screens.length,
+            provenance: "tenant-flow-metadata",
           })),
         },
         resultView: {
           kind: "screenshots",
-          title: balanced
-            ? "Composition research candidates"
-            : "Partial composition evidence",
-          items: representativeScreens.slice(0, 16).map(screenshotItem),
-          emptyMessage:
-            "No relevant screenshots were available for this composition.",
+          title: candidateScreens.length > 0
+            ? "Prompt-grounded research evidence"
+            : "No matching composition evidence",
+          items: representativeScreens.slice(0, 24).map(screenshotItem),
+          emptyMessage: "No relevant image-backed flows were available for this research scope.",
         },
-        ok: candidateScreens.length > 0 && balanced,
+        ok: candidateScreens.length > 0,
       };
     }
 

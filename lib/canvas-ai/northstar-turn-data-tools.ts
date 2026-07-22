@@ -5,9 +5,14 @@ import {
 } from "@/lib/canvas-ai/northstar-data-tools";
 import {
   NORTHSTAR_DATA_TOOL_NAMES,
+  NORTHSTAR_TOOL_REGISTRY,
   type NorthStarDataToolName,
   type NorthStarToolArguments,
 } from "@/lib/canvas-ai/northstar-tool-registry";
+import {
+  NorthstarToolInputValidationError,
+  parseNorthstarDataToolArguments,
+} from "@/lib/canvas-ai/northstar-tool-input-validation";
 import {
   assertValidNorthstarLedgerValue,
   cloneNorthstarLedgerValue,
@@ -38,21 +43,33 @@ function isDataToolName(value: unknown): value is NorthStarDataToolName {
   return typeof value === "string" && (NORTHSTAR_DATA_TOOL_NAMES as readonly string[]).includes(value);
 }
 
-function correctableToolError(code: string, message: string, correctionContext?: NorthstarLedgerValue): never {
+function correctableToolError(
+  code: string,
+  message: string,
+  correctionContext?: NorthstarLedgerValue,
+  evidence?: NorthstarLedgerValue,
+): never {
   throw new NorthstarTurnToolError({
     failureKind: "correctable",
     code,
     message,
     correctionContext,
+    evidence,
   });
 }
 
-function terminalToolError(code: string, message: string, correctionContext?: NorthstarLedgerValue): never {
+function terminalToolError(
+  code: string,
+  message: string,
+  correctionContext?: NorthstarLedgerValue,
+  evidence?: NorthstarLedgerValue,
+): never {
   throw new NorthstarTurnToolError({
     failureKind: "terminal",
     code,
     message,
     correctionContext,
+    evidence,
   });
 }
 
@@ -159,13 +176,58 @@ function parseToolCalls(value: NorthstarLedgerValue): DataToolCall[] {
         { path: `${path}.args` },
       );
     }
-    const argsLedgerValue = toInputLedgerValue(args, `${path}.args`);
+    let parsedArgs: NorthStarToolArguments;
+    try {
+      parsedArgs = parseNorthstarDataToolArguments(rawCall.name, args, `${path}.args`);
+    } catch (error) {
+      if (error instanceof NorthstarToolInputValidationError) {
+        return correctableToolError(
+          "TOOL_ARGUMENTS_INVALID",
+          `${rawCall.name} received invalid arguments. ${error.message}`,
+          {
+            toolName: rawCall.name,
+            toolCallIndex: index,
+            issues: error.issues.map((issue) => ({
+              path: issue.path,
+              message: issue.message,
+              expected: issue.expected ?? null,
+              received: issue.received ?? null,
+            })),
+            inputSchema: NORTHSTAR_TOOL_REGISTRY[rawCall.name].inputSchema as NorthstarLedgerValue,
+          },
+        );
+      }
+      throw error;
+    }
+    const argsLedgerValue = toInputLedgerValue(parsedArgs, `${path}.args`);
     return {
       name: rawCall.name,
-      args: args as NorthStarToolArguments,
+      args: parsedArgs,
       argsLedgerValue,
     };
   });
+}
+
+const EXACT_LOOKUP_TOOLS = new Set<NorthStarDataToolName>([
+  "get_app_details",
+  "list_app_flows",
+  "get_flow_details",
+  "get_flow_screenshots",
+  "get_screenshot",
+  "get_app_icon",
+]);
+
+function recoveryToolsFor(tool: NorthStarDataToolName): NorthStarDataToolName[] {
+  if (tool === "get_flow_details" || tool === "get_flow_screenshots") {
+    return ["list_app_flows", "search_app_flows", "prepare_composition_evidence"];
+  }
+  if (tool === "get_screenshot") {
+    return ["get_flow_screenshots", "search_screenshots", "prepare_composition_evidence"];
+  }
+  if (tool === "get_app_details" || tool === "get_app_icon" || tool === "list_app_flows") {
+    return ["list_available_apps", "prepare_composition_evidence"];
+  }
+  return ["list_available_apps"];
 }
 
 export interface CreateNorthstarDataTurnToolExecutorInput {
@@ -209,11 +271,26 @@ export function createNorthstarDataTurnToolExecutor(
             correctionContext: { toolName: call.name, toolCallIndex: index },
           });
         }
+        const resultLedgerValue = toResultLedgerValue(result, `$.toolResults[${index}]`);
         results.push({
           name: call.name,
           args: call.argsLedgerValue,
-          result: toResultLedgerValue(result, `$.toolResults[${index}]`),
+          result: resultLedgerValue,
         });
+        if (!result.ok && EXACT_LOOKUP_TOOLS.has(call.name)) {
+          return correctableToolError(
+            "TOOL_LOOKUP_EMPTY",
+            result.detail || `${call.name} could not resolve the requested tenant data.`,
+            {
+              toolName: call.name,
+              toolCallIndex: index,
+              arguments: call.argsLedgerValue,
+              recommendedNextTools: recoveryToolsFor(call.name),
+              instruction: "Use a list/search/curation tool to ground an exact identity, then retry with the exact returned value. Do not repeat this lookup unchanged.",
+            },
+            { toolCalls: results },
+          );
+        }
       }
       return { toolCalls: results };
     },

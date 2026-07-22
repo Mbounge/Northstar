@@ -140,6 +140,7 @@ export function createNorthstarTurnTaskController(
           if (response.type === "attempt-failure") {
             return {
               type: "failure",
+              evidence: response.evidence,
               failure: {
                 kind: response.failureKind,
                 code: response.code,
@@ -156,6 +157,7 @@ export function createNorthstarTurnTaskController(
             type: "success",
             result: response.result,
             stateSnapshot,
+            evidence: response.evidence,
           };
         } catch (error) {
           if (error instanceof NorthstarTurnTransportError) {

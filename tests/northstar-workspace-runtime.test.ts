@@ -494,3 +494,56 @@ test("cancellation during a partial live projection restores the committed base 
   assert.deepEqual(memory.getState(), base);
   runtime.dispose();
 });
+
+test("verified artboard synchronization completes before the next model decision", async () => {
+  const surface = createNorthstarMemoryProjectionSurface({ initialState: projectionFixtureState() });
+  const order: string[] = [];
+  let decision = 0;
+  const client = successClient();
+  const wrapped: NorthstarTurnClient = {
+    ...client,
+    async decideNextActivity(context, options) {
+      decision += 1;
+      order.push(`decision:${decision}`);
+      return client.decideNextActivity(context, options);
+    },
+  };
+  const runtime = createNorthstarWorkspaceRuntime({
+    projectionSurface: surface,
+    turnClient: wrapped,
+    initialCaptureRetryMs: 1,
+    async onVerifiedArtboardCommit({ task, commit }) {
+      order.push(`sync:${task.id}:${commit.hash}`);
+      await Promise.resolve();
+    },
+  });
+
+  const result = await runtime.startRun("Build and synchronize a verified artboard");
+  assert.equal(result.status, "completed");
+  const syncIndex = order.findIndex((entry) => entry.startsWith("sync:"));
+  const finalDecisionIndex = order.lastIndexOf("decision:3");
+  assert.ok(syncIndex >= 0);
+  assert.ok(finalDecisionIndex > syncIndex);
+  runtime.dispose();
+});
+
+test("a verified-artboard synchronization failure prevents further model progression", async () => {
+  const surface = createNorthstarMemoryProjectionSurface({ initialState: projectionFixtureState() });
+  const decisionContexts: NorthstarLedgerLLMContext[] = [];
+  const runtime = createNorthstarWorkspaceRuntime({
+    projectionSurface: surface,
+    turnClient: successClient({ decisionContexts }),
+    initialCaptureRetryMs: 1,
+    onVerifiedArtboardCommit() {
+      throw new Error("canvas document write failed");
+    },
+  });
+
+  const result = await runtime.startRun("Build but fail the canvas model synchronization");
+  assert.equal(result.status, "failed");
+  assert.equal(result.ledger?.run.status, "failed");
+  assert.equal(result.ledger?.run.failure?.code, "ARTBOARD_MODEL_SYNC_FAILED");
+  assert.equal(decisionContexts.length, 2);
+  assert.match(result.error ?? "", /synchronized back into the canvas document/i);
+  runtime.dispose();
+});

@@ -130,6 +130,8 @@ export interface NorthstarLedgerTaskAttempt {
   executionInput: NorthstarLedgerValue;
   status: NorthstarLedgerAttemptStatus;
   preparedResult?: NorthstarLedgerValue;
+  /** Read-only evidence retrieved for this attempt and rendered by product UI. */
+  evidence?: NorthstarLedgerValue;
   candidateCommitHash?: string;
   candidateStateHash?: string;
   result?: NorthstarLedgerValue;
@@ -264,6 +266,7 @@ export interface NorthstarEphemeralLedger {
   createTask(activity: NorthstarActivityDraft): NorthstarLedgerTask;
   startAttempt(taskId: string, executionInput?: NorthstarLedgerValue): NorthstarLedgerTaskAttempt;
   recordArtboardDraft(taskId: string, attemptId: string, draft: NorthstarLedgerValue): void;
+  recordAttemptEvidence(taskId: string, attemptId: string, evidence: NorthstarLedgerValue): void;
   recordAttemptTransportUncertain(
     taskId: string,
     attemptId: string,

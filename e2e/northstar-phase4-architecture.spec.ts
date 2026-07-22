@@ -42,6 +42,8 @@ test("Phase 4 runs one browser-owned ledger through the direct writer without re
   await page.getByTestId("phase4-start").click();
   await expect(page.getByTestId("phase4-status")).toHaveText("completed", { timeout: 20_000 });
   await expect(page.getByTestId("phase4-commit-count")).toHaveText("3");
+  await expect(page.getByTestId("phase4-persisted-revision")).not.toHaveText("phase4-browser-artifact-root");
+  await expect(page.getByTestId("phase4-persisted-screenshot-count")).toHaveText("1");
   await expect(page.getByTestId("northstar-ledger-inspector")).toContainText("projection verified");
   await expect(frame.contentFrame().getByText("First verified visual commit", { exact: true })).toBeVisible();
   await expect(frame.contentFrame().getByText("Second verified visual commit", { exact: true })).toBeVisible();
@@ -62,4 +64,10 @@ test("Phase 4 runs one browser-owned ledger through the direct writer without re
   await expect(page.locator('[data-northstar-writer="direct-projection"]')).toHaveCount(1);
   await expect(page.locator('[data-northstar-writer="legacy-repository"]')).toHaveCount(0);
   await expect(page.getByTestId("phase4-error")).toHaveCount(0);
+
+  await page.getByTestId("phase4-remount").click();
+  const remountedFrame = page.getByTestId("northstar-live-artboard-frame");
+  await expect(remountedFrame).toBeVisible();
+  await expect(remountedFrame.contentFrame().getByText("First verified visual commit", { exact: true })).toBeVisible();
+  await expect(remountedFrame.contentFrame().getByText("Second verified visual commit", { exact: true })).toBeVisible();
 });

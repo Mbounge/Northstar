@@ -1,10 +1,94 @@
-import type { NorthstarTurnModelAdapter } from "@/lib/canvas-ai/northstar-turn-protocol";
+import type {
+  NorthstarTurnEvidenceAsset,
+  NorthstarTurnModelAdapter,
+} from "@/lib/canvas-ai/northstar-turn-protocol";
 import { NorthstarTurnProviderError } from "@/lib/canvas-ai/northstar-turn-executor";
 
 export interface CreateNorthstarGeminiTurnModelInput {
   apiKey: string;
   model?: string;
   fetchImpl?: typeof fetch;
+}
+
+const MAX_EVIDENCE_ASSETS = 16;
+const MAX_EVIDENCE_ASSET_BYTES = 4 * 1024 * 1024;
+const MAX_TOTAL_EVIDENCE_BYTES = 20 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+type GeminiPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function loadEvidenceParts(
+  assets: readonly NorthstarTurnEvidenceAsset[],
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<GeminiPart[]> {
+  const parts: GeminiPart[] = [];
+  let totalBytes = 0;
+  for (const asset of assets.slice(0, MAX_EVIDENCE_ASSETS)) {
+    if (signal.aborted) {
+      throw new DOMException("The Northstar evidence load was aborted.", "AbortError");
+    }
+    let url: URL;
+    try {
+      url = new URL(asset.imageUrl);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") continue;
+
+    try {
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers: { Accept: "image/png,image/jpeg,image/webp,image/gif" },
+        cache: "no-store",
+        redirect: "follow",
+        signal,
+      });
+      if (!response.ok) continue;
+      const mimeType = (response.headers.get("content-type") ?? "")
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase();
+      if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) continue;
+      const declaredLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_EVIDENCE_ASSET_BYTES) continue;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength === 0 || bytes.byteLength > MAX_EVIDENCE_ASSET_BYTES) continue;
+      if (totalBytes + bytes.byteLength > MAX_TOTAL_EVIDENCE_BYTES) break;
+      totalBytes += bytes.byteLength;
+
+      const label = [
+        `Attached evidence image ${asset.id}: ${asset.title}.`,
+        asset.appName ? `App: ${asset.appName}.` : "",
+        asset.flowName ? `Flow: ${asset.flowName}.` : "",
+        asset.screenshotIndex !== undefined
+          ? `Ordered screenshot index: ${asset.screenshotIndex}.`
+          : "",
+      ].filter(Boolean).join(" ");
+      parts.push({ text: label });
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: Buffer.from(bytes).toString("base64"),
+        },
+      });
+    } catch (error) {
+      if (isAbortError(error) || signal.aborted) throw error;
+      // One unavailable image must not erase otherwise valid grounded evidence.
+    }
+  }
+  return parts;
 }
 
 function extractText(payload: unknown): string {
@@ -35,7 +119,9 @@ function parseJSON(text: string): unknown {
 function retryAfterMs(value: string | null): number | undefined {
   if (!value) return undefined;
   const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(3_600_000, Math.ceil(seconds * 1_000));
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(3_600_000, Math.ceil(seconds * 1_000));
+  }
   const date = Date.parse(value);
   if (!Number.isFinite(date)) return undefined;
   return Math.max(0, Math.min(3_600_000, date - Date.now()));
@@ -50,6 +136,9 @@ export function createNorthstarGeminiTurnModel(
 
   return {
     async generateJSON(request) {
+      const evidenceParts = request.evidenceAssets?.length
+        ? await loadEvidenceParts(request.evidenceAssets, fetchImpl, request.signal)
+        : [];
       const response = await fetchImpl(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         {
@@ -61,10 +150,10 @@ export function createNorthstarGeminiTurnModel(
           body: JSON.stringify({
             systemInstruction: {
               parts: [{
-                text: `${request.systemInstruction}\n\nReturn JSON conforming to this response contract:\n${JSON.stringify(request.responseSchema)}`,
+                text: `${request.systemInstruction}\n\nAny attached evidence images are authoritative tenant screenshots. Inspect their visible content directly and keep every observation tied to its attached label.\n\nReturn JSON conforming to this response contract:\n${JSON.stringify(request.responseSchema)}`,
               }],
             },
-            contents: [{ role: "user", parts: [{ text: request.userPrompt }] }],
+            contents: [{ role: "user", parts: [{ text: request.userPrompt }, ...evidenceParts] }],
             generationConfig: {
               temperature: request.temperature,
               maxOutputTokens: request.maxOutputTokens,

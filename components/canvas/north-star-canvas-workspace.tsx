@@ -80,6 +80,10 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { createPrototypeCodeArtifactPayload } from "@/lib/canvas-artifacts/prototype";
 import { createNorthstarDirectBootstrapArtifactPayload } from "@/lib/canvas-artifacts/northstar-direct-bootstrap";
 import {
+  canPrepareNorthstarProductSurface,
+  prepareNorthstarProductSurface,
+} from "@/lib/canvas-artifacts/northstar-product-surface";
+import {
   applyCanvasCodeArtifactStage,
   createCanvasCodeArtifactPayloadFromPackage,
   isCanvasCodeArtifactActionEnvelope,
@@ -98,13 +102,29 @@ import type {
   NorthstarProjectionReceipt,
 } from "@/lib/canvas-artifacts/types";
 import { createNorthstarEphemeralLedger } from "@/lib/canvas-ledger/northstar-ephemeral-ledger";
-import type { NorthstarEphemeralLedger, NorthstarLedgerValue } from "@/lib/canvas-ledger/types";
+import type {
+  NorthstarEphemeralLedger,
+  NorthstarLedgerCommit,
+  NorthstarLedgerSnapshot,
+  NorthstarLedgerTask,
+  NorthstarLedgerValue,
+} from "@/lib/canvas-ledger/types";
 import {
   createNorthstarWorkspaceRuntime,
   type NorthstarWorkspaceRuntime,
   type NorthstarWorkspaceRuntimeSnapshot,
 } from "@/lib/canvas-architecture/northstar-workspace-runtime";
 import { createNorthstarTurnClient } from "@/lib/canvas-ai/northstar-turn-client";
+import { mergeNorthstarEvidenceIntoDataBundle } from "@/lib/canvas-ai/northstar-evidence-data-bundle";
+import {
+  northstarRecoveryKind,
+  northstarUserFacingRunMessage,
+  resolveNorthstarProductRunBinding,
+  routeNorthstarProductMessage,
+  type NorthstarProductRunBinding,
+} from "@/lib/canvas-ai/northstar-product-routing";
+import { serializeNorthstarProjectionState } from "@/lib/canvas-projection/serialize";
+import { parseNorthstarProjectionState } from "@/lib/canvas-projection/validation";
 import { createNorthstarWindowProjectionSurface } from "@/lib/canvas-projection/window-surface";
 import { cn } from "@/lib/utils";
 
@@ -8199,15 +8219,26 @@ export function NorthStarCanvasWorkspace({
   const northstarLedgerFoundationRunIdRef = useRef<string | null>(null);
   const northstarLedgerDisposalTimerRef = useRef<number | null>(null);
   const northstarProjectionFramesRef = useRef(new Map<string, HTMLIFrameElement>());
+  const northstarProjectionTargetArtifactIdRef = useRef<string | null>(null);
+  const [northstarProjectionTargetArtifactId, setNorthstarProjectionTargetArtifactId] = useState<string | null>(null);
   const northstarProjectionTargetFrameRef = useRef<HTMLIFrameElement | null>(null);
   const northstarBootstrapArtifactRef = useRef(false);
+  const northstarVerifiedCommitSyncRef = useRef<(input: {
+    task: NorthstarLedgerTask;
+    commit: NorthstarLedgerCommit;
+    ledger: NorthstarLedgerSnapshot;
+  }) => void | Promise<void>>(() => undefined);
   const [northstarWorkspaceRuntime, setNorthstarWorkspaceRuntime] =
     useState<NorthstarWorkspaceRuntime | null>(null);
 
   const registerNorthstarProjectionFrame = useCallback<NorthstarArchitectureContextValue["registerProjectionFrame"]>(
     ({ artifactId, frame }) => {
       northstarProjectionFramesRef.current.set(artifactId, frame);
-      if (!northstarProjectionTargetFrameRef.current) {
+      if (
+        northstarProjectionTargetArtifactIdRef.current === artifactId ||
+        (!northstarProjectionTargetArtifactIdRef.current && !northstarProjectionTargetFrameRef.current)
+      ) {
+        northstarProjectionTargetArtifactIdRef.current = artifactId;
         northstarProjectionTargetFrameRef.current = frame;
       }
       return () => {
@@ -8217,6 +8248,8 @@ export function NorthStarCanvasWorkspace({
         if (northstarProjectionTargetFrameRef.current === frame) {
           northstarProjectionTargetFrameRef.current =
             northstarProjectionFramesRef.current.values().next().value ?? null;
+          northstarProjectionTargetArtifactIdRef.current = [...northstarProjectionFramesRef.current.entries()]
+            .find(([, candidate]) => candidate === northstarProjectionTargetFrameRef.current)?.[0] ?? null;
         }
       };
     },
@@ -8225,8 +8258,9 @@ export function NorthStarCanvasWorkspace({
 
   const northstarArchitectureContext = useMemo<NorthstarArchitectureContextValue>(() => ({
     enabled: northstarTotalArchitectureEnabled,
+    directArtifactId: northstarProjectionTargetArtifactId,
     registerProjectionFrame: registerNorthstarProjectionFrame,
-  }), [northstarTotalArchitectureEnabled, registerNorthstarProjectionFrame]);
+  }), [northstarProjectionTargetArtifactId, northstarTotalArchitectureEnabled, registerNorthstarProjectionFrame]);
 
   useEffect(() => {
     if (!northstarTotalArchitectureEnabled) return;
@@ -8239,6 +8273,7 @@ export function NorthStarCanvasWorkspace({
     const runtime = createNorthstarWorkspaceRuntime({
       projectionSurface,
       turnClient: createNorthstarTurnClient(),
+      onVerifiedArtboardCommit: (commit) => northstarVerifiedCommitSyncRef.current(commit),
     });
     setNorthstarWorkspaceRuntime(runtime);
     return () => {
@@ -8247,6 +8282,8 @@ export function NorthStarCanvasWorkspace({
       projectionSurface.dispose();
       projectionFrames.clear();
       northstarProjectionTargetFrameRef.current = null;
+      northstarProjectionTargetArtifactIdRef.current = null;
+      setNorthstarProjectionTargetArtifactId(null);
     };
   }, [northstarTotalArchitectureEnabled]);
 
@@ -8332,6 +8369,79 @@ export function NorthStarCanvasWorkspace({
       return normalized;
     });
   }, []);
+  const syncVerifiedNorthstarCommit = useCallback((input: {
+    task: NorthstarLedgerTask;
+    commit: NorthstarLedgerCommit;
+    ledger: NorthstarLedgerSnapshot;
+  }) => {
+    const artifactId = northstarProjectionTargetArtifactIdRef.current;
+    if (!artifactId) {
+      throw new Error("North Star verified an artboard commit without a bound canvas artifact.");
+    }
+    const projectionState = parseNorthstarProjectionState(input.commit.stateSnapshot);
+    const serialized = serializeNorthstarProjectionState(projectionState);
+    const timestamp = new Date().toISOString();
+    const completedTaskCount = input.ledger.tasks.filter((task) => task.status === "completed").length;
+    let synchronized = false;
+    const nextObjects = normalizeCanvasScene(objectsRef.current.map((object) => {
+      if (
+        !isBoxObject(object)
+        || object.type !== "code-artifact"
+        || object.codeArtifact?.artifactId !== artifactId
+      ) {
+        return object;
+      }
+      synchronized = true;
+      const currentArtifact = object.codeArtifact;
+      const nextArtifact: CanvasCodeArtifactPayload = {
+        ...currentArtifact,
+        revisionId: input.commit.hash,
+        parentRevisionId: undefined,
+        document: {
+          ...(currentArtifact.document ?? {
+            schema: "northstar.web-artifact-document.v1" as const,
+            javascript: "",
+          }),
+          html: serialized.html,
+          css: serialized.css,
+        },
+        dataBundle: currentArtifact.dataBundle
+          ? mergeNorthstarEvidenceIntoDataBundle(currentArtifact.dataBundle, input.ledger)
+          : currentArtifact.dataBundle,
+        mutationJournal: [],
+        pendingAckToken: undefined,
+        pendingProposal: undefined,
+        headCommitHash: undefined,
+        commitSequence: undefined,
+        headCommit: undefined,
+        repositoryStatus: undefined,
+        surfaceSessionId: undefined,
+        runtimeUrl: undefined,
+        updatedAt: timestamp,
+        buildState: {
+          phase: "complete",
+          completedSteps: completedTaskCount,
+          totalSteps: Math.max(completedTaskCount, currentArtifact.buildState?.totalSteps ?? completedTaskCount),
+          message: input.task.intent,
+          isBuilding: false,
+        },
+        status: "ready",
+        publicationState: "working",
+      };
+      return { ...object, codeArtifact: nextArtifact, text: nextArtifact.title };
+    }));
+    if (!synchronized) {
+      throw new Error(`The projected canvas artifact ${artifactId} is no longer available.`);
+    }
+    // Update the normal canvas model synchronously before the runtime may ask
+    // the model for another activity; React rendering follows from the same array.
+    objectsRef.current = nextObjects;
+    setObjectsState(nextObjects);
+  }, []);
+
+  useEffect(() => {
+    northstarVerifiedCommitSyncRef.current = syncVerifiedNorthstarCommit;
+  }, [syncVerifiedNorthstarCommit]);
   const [draftConnector, setDraftConnector] = useState<DraftConnector | null>(null);
   const [draftBox, setDraftBox] = useState<DraftBox | null>(null);
   const [ghostPoint, setGhostPoint] = useState<{ x: number; y: number } | null>(null);
@@ -13265,19 +13375,49 @@ export function NorthStarCanvasWorkspace({
     );
   }, [insertCodeArtifactPayload, northstarTotalArchitectureEnabled]);
 
-  useEffect(() => {
-    if (!northstarTotalArchitectureEnabled || northstarBootstrapArtifactRef.current) return;
-    if (objects.some((object) =>
-      isBoxObject(object) &&
-      object.type === "code-artifact" &&
-      Boolean(object.codeArtifact?.document && object.codeArtifact.dataBundle)
-    )) {
-      northstarBootstrapArtifactRef.current = true;
-      return;
+  const ensureNorthstarProjectionTarget = useCallback((objective: string) => {
+    const codeArtifacts = objectsRef.current.filter(
+      (object): object is CanvasBoxObject =>
+        isBoxObject(object) && object.type === "code-artifact" && Boolean(object.codeArtifact),
+    );
+    const selectedArtifact = codeArtifacts.find((object) => selectedIdsRef.current.includes(object.id));
+    const targetObject = [
+      selectedArtifact,
+      ...codeArtifacts,
+    ].find((object): object is CanvasBoxObject => Boolean(
+      object?.codeArtifact && canPrepareNorthstarProductSurface(object.codeArtifact),
+    ));
+
+    if (targetObject?.codeArtifact) {
+      const currentArtifact = targetObject.codeArtifact;
+      const promotedArtifact = prepareNorthstarProductSurface(currentArtifact);
+      if (!promotedArtifact) {
+        throw new Error(`North Star could not prepare the selected artifact ${currentArtifact.artifactId}.`);
+      }
+      if (promotedArtifact !== currentArtifact) {
+        const nextObjects = normalizeCanvasScene(objectsRef.current.map((object) => object.id === targetObject.id
+          ? { ...targetObject, codeArtifact: promotedArtifact }
+          : object));
+        objectsRef.current = nextObjects;
+        setObjectsState(nextObjects);
+      }
+      const artifactId = promotedArtifact.artifactId;
+      northstarProjectionTargetArtifactIdRef.current = artifactId;
+      setNorthstarProjectionTargetArtifactId(artifactId);
+      northstarProjectionTargetFrameRef.current = promotedArtifact === currentArtifact
+        ? northstarProjectionFramesRef.current.get(artifactId) ?? null
+        : null;
+      return artifactId;
     }
+
+    const payload = createNorthstarDirectBootstrapArtifactPayload({ objective });
     northstarBootstrapArtifactRef.current = true;
-    insertCodeArtifactPayload(createNorthstarDirectBootstrapArtifactPayload());
-  }, [insertCodeArtifactPayload, northstarTotalArchitectureEnabled, objects]);
+    northstarProjectionTargetArtifactIdRef.current = payload.artifactId;
+    setNorthstarProjectionTargetArtifactId(payload.artifactId);
+    northstarProjectionTargetFrameRef.current = null;
+    insertCodeArtifactPayload(payload);
+    return payload.artifactId;
+  }, [insertCodeArtifactPayload]);
 
   const insertVisualComponentPreset = useCallback(
     (preset: CanvasComponentPreset) => {
@@ -14729,7 +14869,7 @@ export function NorthStarCanvasWorkspace({
       data-northstar-ledger-foundation={northstarLedgerFoundationEnabled ? "enabled" : "disabled"}
       data-northstar-ledger-run-id={northstarLedgerFoundationRunIdRef.current ?? undefined}
       data-northstar-total-architecture={northstarTotalArchitectureEnabled ? "enabled" : "disabled"}
-      data-northstar-writer={northstarTotalArchitectureEnabled ? "direct-projection" : "legacy-repository"}
+      data-northstar-writer={northstarProjectionTargetArtifactId ? "direct-projection" : "legacy-repository"}
       className="relative h-screen w-screen overflow-hidden bg-[#EEF0F8] text-zinc-950 dark:bg-[#050505] dark:text-white font-sans overscroll-none"
       onContextMenu={(event) => {
         event.preventDefault();
@@ -15197,6 +15337,7 @@ export function NorthStarCanvasWorkspace({
               onFinalizeCanvasActionRun={finalizeCanvasAIActionRun}
               northstarWorkspaceRuntime={northstarWorkspaceRuntime}
               northstarTotalArchitectureEnabled={northstarTotalArchitectureEnabled}
+              ensureNorthstarProjectionTarget={ensureNorthstarProjectionTarget}
             />
           )}
           {workspaceTab === "shapes" && (
@@ -16796,34 +16937,142 @@ const EMPTY_NORTHSTAR_RUNTIME_SNAPSHOT: NorthstarWorkspaceRuntimeSnapshot = {
   lastStep: null,
 };
 
+function northstarRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function northstarToolResultView(value: unknown): CanvasAIToolResultView | undefined {
+  const record = northstarRecord(value);
+  if (!record || typeof record.kind !== "string" || typeof record.title !== "string" || !Array.isArray(record.items)) {
+    return undefined;
+  }
+  if (!["apps", "app", "flows", "flow", "screenshots", "screenshot"].includes(record.kind)) {
+    return undefined;
+  }
+  const items = record.items.flatMap((item): CanvasAIToolResultItem[] => {
+    const candidate = northstarRecord(item);
+    if (!candidate || typeof candidate.id !== "string" || typeof candidate.kind !== "string" || typeof candidate.title !== "string") {
+      return [];
+    }
+    if (!["app", "flow", "screenshot"].includes(candidate.kind)) return [];
+
+    const normalized: CanvasAIToolResultItem = {
+      id: candidate.id,
+      kind: candidate.kind as CanvasAIToolResultItem["kind"],
+      title: candidate.title,
+    };
+    if (typeof candidate.subtitle === "string") normalized.subtitle = candidate.subtitle;
+    if (typeof candidate.imageUrl === "string") normalized.imageUrl = candidate.imageUrl;
+    if (typeof candidate.appName === "string") normalized.appName = candidate.appName;
+    if (typeof candidate.flowName === "string") normalized.flowName = candidate.flowName;
+    if (typeof candidate.category === "string") normalized.category = candidate.category;
+    if (typeof candidate.platform === "string") normalized.platform = candidate.platform;
+    if (typeof candidate.sessionType === "string") normalized.sessionType = candidate.sessionType;
+    if (typeof candidate.screenCount === "number" && Number.isFinite(candidate.screenCount)) {
+      normalized.screenCount = candidate.screenCount;
+    }
+    if (typeof candidate.screenshotIndex === "number" && Number.isFinite(candidate.screenshotIndex)) {
+      normalized.screenshotIndex = candidate.screenshotIndex;
+    }
+    if (Array.isArray(candidate.thumbnails)) {
+      normalized.thumbnails = candidate.thumbnails.flatMap((thumbnail) => {
+        const thumbnailRecord = northstarRecord(thumbnail);
+        if (!thumbnailRecord || typeof thumbnailRecord.id !== "string" || typeof thumbnailRecord.title !== "string") {
+          return [];
+        }
+        return [{
+          id: thumbnailRecord.id,
+          title: thumbnailRecord.title,
+          ...(typeof thumbnailRecord.imageUrl === "string" ? { imageUrl: thumbnailRecord.imageUrl } : {}),
+        }];
+      });
+    }
+    return [normalized];
+  });
+  return {
+    kind: record.kind as CanvasAIToolResultView["kind"],
+    title: record.title,
+    items,
+    emptyMessage: typeof record.emptyMessage === "string" ? record.emptyMessage : undefined,
+  };
+}
+
+function northstarTaskStatus(task: NorthstarLedgerSnapshot["tasks"][number]): CanvasAIActivityStatus {
+  if (task.status === "completed") return "completed";
+  if (task.status === "cancelled" || task.status === "superseded") return "cancelled";
+  if (task.status === "blocked" || task.status === "retryable-failure") return "failed";
+  if (task.status === "created") return "pending";
+  return "running";
+}
+
+function northstarTaskIcon(task: NorthstarLedgerSnapshot["tasks"][number]): CanvasAIActivityIcon {
+  if (task.kind === "research") return "search";
+  if (task.kind === "analysis") return "analyze";
+  if (task.kind === "artboard-mutation") return "write";
+  if (task.kind === "verification") return "verify";
+  return "inspect";
+}
+
+function northstarEvidenceActivity(
+  task: NorthstarLedgerSnapshot["tasks"][number],
+  attempts: readonly NorthstarLedgerSnapshot["attempts"][number][],
+): CanvasAIActivityItem[] {
+  const attempt = [...attempts].reverse().find((candidate) => candidate.evidence !== undefined);
+  const evidence = northstarRecord(attempt?.evidence);
+  const toolCalls = Array.isArray(evidence?.toolCalls) ? evidence.toolCalls : [];
+  const status = northstarTaskStatus(task);
+  const activities = toolCalls.flatMap((rawCall, index) => {
+    const call = northstarRecord(rawCall);
+    const result = northstarRecord(call?.result);
+    const resultView = northstarToolResultView(result?.resultView);
+    if (!call || !result || typeof call.name !== "string") return [];
+    const kind = resultView?.kind;
+    const icon: CanvasAIActivityIcon = kind === "apps" || kind === "app"
+      ? "app"
+      : kind === "flows" || kind === "flow"
+        ? "flow"
+        : kind === "screenshots" || kind === "screenshot"
+          ? "screenshot"
+          : northstarTaskIcon(task);
+    return [{
+      id: `${task.id}:evidence:${index}`,
+      kind: "tool" as const,
+      status,
+      icon,
+      label: index === 0 ? task.intent : resultView?.title ?? call.name.replaceAll("_", " "),
+      detail: typeof result.detail === "string" ? result.detail : task.expectedOutcome,
+      tool: call.name,
+      resultView,
+      objectIds: [],
+    }];
+  });
+  return activities;
+}
+
 function northstarRuntimeActivity(
   snapshot: NorthstarWorkspaceRuntimeSnapshot,
 ): CanvasAIActivityItem[] {
   const ledger = snapshot.ledger;
   if (!ledger) return [];
-  return ledger.tasks.map((task) => ({
-    id: task.id,
-    kind: "tool",
-    status:
-      task.status === "completed"
-        ? "completed"
-        : task.status === "cancelled" || task.status === "superseded"
-          ? "cancelled"
-          : task.status === "blocked" || task.status === "retryable-failure"
-            ? "failed"
-            : "running",
-    icon:
-      task.kind === "research"
-        ? "search"
-        : task.kind === "analysis"
-          ? "analyze"
-          : task.kind === "artboard-mutation"
-            ? "write"
-            : "inspect",
-    label: task.intent,
-    detail: task.expectedOutcome,
-    objectIds: [],
-  }));
+  return ledger.tasks.flatMap((task) => {
+    const attempts = ledger.attempts.filter((attempt) => attempt.taskId === task.id);
+    const evidence = northstarEvidenceActivity(task, attempts);
+    if (evidence.length > 0) return evidence;
+    const latestAttempt = attempts.at(-1);
+    return [{
+      id: task.id,
+      kind: "tool" as const,
+      status: northstarTaskStatus(task),
+      icon: northstarTaskIcon(task),
+      label: task.intent,
+      detail: latestAttempt?.failure
+        ? northstarUserFacingRunMessage(snapshot)
+        : task.expectedOutcome,
+      objectIds: [],
+    }];
+  });
 }
 
 function northstarSummaryText(value: NorthstarLedgerValue | undefined): string {
@@ -16856,6 +17105,7 @@ function ChatWorkspacePanel({
   onFinalizeCanvasActionRun,
   northstarWorkspaceRuntime,
   northstarTotalArchitectureEnabled,
+  ensureNorthstarProjectionTarget,
 }: {
   sessionId: string;
   canvasContext: CanvasContext;
@@ -16883,6 +17133,7 @@ function ChatWorkspacePanel({
   onFinalizeCanvasActionRun: (runId: string) => void;
   northstarWorkspaceRuntime: NorthstarWorkspaceRuntime | null;
   northstarTotalArchitectureEnabled: boolean;
+  ensureNorthstarProjectionTarget: (objective: string) => string;
 }) {
   const [messages, setMessages] = useState<CanvasAIChatMessage[]>([]);
   const [conversationSummary, setConversationSummary] = useState("");
@@ -16911,6 +17162,7 @@ function ChatWorkspacePanel({
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeAssistantIdRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
+  const northstarRunBindingRef = useRef<NorthstarProductRunBinding | null>(null);
   const actionExecutionChainRef = useRef<Promise<void>>(Promise.resolve());
   const actionExecutionResultsRef = useRef<CanvasAIActionExecutionRecord[]>([]);
   const actionRequestCountRef = useRef(0);
@@ -16938,8 +17190,13 @@ function ChatWorkspacePanel({
 
   useEffect(() => {
     if (!northstarWorkspaceRuntime) return;
-    const assistantId = activeAssistantIdRef.current;
-    if (!assistantId) return;
+    const binding = resolveNorthstarProductRunBinding(
+      northstarRunBindingRef.current,
+      northstarRuntimeSnapshot,
+    );
+    if (!binding || !northstarRuntimeSnapshot.ledger) return;
+    northstarRunBindingRef.current = binding;
+    const ledger = northstarRuntimeSnapshot.ledger;
     const runStatus: CanvasAIRunStatus =
       northstarRuntimeSnapshot.status === "completed"
         ? "completed"
@@ -16950,11 +17207,11 @@ function ChatWorkspacePanel({
             : northstarRuntimeSnapshot.status === "blocked" || northstarRuntimeSnapshot.status === "awaiting-recovery"
               ? "blocked"
               : "running";
-    setMessages((current) => current.map((message) => message.id === assistantId
+    setMessages((current) => current.map((message) => message.id === binding.assistantMessageId
       ? {
           ...message,
-          runId: northstarRuntimeSnapshot.ledger?.run.id,
-          planTitle: "Northstar ledger run",
+          runId: ledger.run.id,
+          planTitle: "North Star is working",
           activity: northstarRuntimeActivity(northstarRuntimeSnapshot),
           runStatus,
         }
@@ -17269,13 +17526,14 @@ function ChatWorkspacePanel({
   };
 
   const cancelRun = useCallback(() => {
-    const assistantId = activeAssistantIdRef.current;
+    const assistantId = activeAssistantIdRef.current ?? northstarRunBindingRef.current?.assistantMessageId ?? null;
     const runId = activeRunIdRef.current;
     northstarWorkspaceRuntime?.cancelRun("Cancelled by the user.");
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     activeAssistantIdRef.current = null;
     activeRunIdRef.current = null;
+    northstarRunBindingRef.current = null;
     if (runId) onFinalizeCanvasActionRun(runId);
     setLoading(false);
 
@@ -17332,6 +17590,42 @@ function ChatWorkspacePanel({
       runStatus: "running",
       streaming: true,
     };
+
+    const productRoute = northstarTotalArchitectureEnabled
+      ? routeNorthstarProductMessage({
+          message: modelMessage,
+          hasAttachments: outgoingAttachments.length > 0,
+          contextMode: activeMode,
+        })
+      : "legacy-conversation";
+
+    if (productRoute === "ledger-authoring") {
+      const runtimeSnapshot = northstarWorkspaceRuntime?.getSnapshot();
+      const unavailableMessage = !northstarWorkspaceRuntime
+        ? "North Star is still preparing the authoring runtime. Your request was not started; try again when the working surface is ready."
+        : runtimeSnapshot?.status === "initializing" || runtimeSnapshot?.status === "running"
+          ? "North Star is already building another visual. Let that build finish or cancel it before starting a new one."
+          : runtimeSnapshot?.status === "blocked" || runtimeSnapshot?.status === "awaiting-recovery"
+            ? "The previous visual build is paused at its last verified state. Resolve or cancel that build before starting a new authoring request."
+            : null;
+      if (unavailableMessage) {
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            ...assistantPlaceholder,
+            content: unavailableMessage,
+            runStatus: "blocked",
+            streaming: false,
+            error: false,
+          },
+        ]);
+        setInput("");
+        setAttachments([]);
+        setAttachmentError(null);
+        return;
+      }
+    }
 
     const conversationHistory = messages
       .filter(
@@ -17460,17 +17754,17 @@ function ChatWorkspacePanel({
       }));
     };
 
-    if (northstarTotalArchitectureEnabled) {
+    if (productRoute === "ledger-authoring") {
       try {
-        if (!northstarWorkspaceRuntime) {
-          throw new Error("Northstar is still mounting its ledger-controlled projection runtime. Try again when the artboard is ready.");
-        }
-        if (outgoingAttachments.length > 0) {
-          throw new Error(
-            "Image attachments are not yet part of the ledger turn protocol. Start this Phase 4 run with a text objective.",
-          );
-        }
+        if (!northstarWorkspaceRuntime) throw new Error("The authoring runtime is unavailable.");
+        ensureNorthstarProjectionTarget(modelMessage);
+        northstarRunBindingRef.current = {
+          assistantMessageId,
+          objective: modelMessage,
+          runId: null,
+        };
         const result = await northstarWorkspaceRuntime.startRun(modelMessage);
+        if (result.ledger) northstarRunBindingRef.current.runId = result.ledger.run.id;
         activeRunIdRef.current = result.ledger?.run.id ?? null;
         const activity = northstarRuntimeActivity(northstarWorkspaceRuntime.getSnapshot());
         if (result.status === "completed") {
@@ -17478,17 +17772,18 @@ function ChatWorkspacePanel({
           updateAssistantMessage({
             content: finalText,
             activity,
-            planTitle: "Northstar ledger run",
+            planTitle: "North Star built the visual",
             runId: result.ledger?.run.id,
             runStatus: "completed",
             streaming: false,
           });
           setConversationSummary(finalText);
         } else {
+          const currentSnapshot = northstarWorkspaceRuntime.getSnapshot();
           updateAssistantMessage({
-            content: result.error ?? "North Star stopped at the last confirmed ledger state.",
+            content: northstarUserFacingRunMessage(currentSnapshot, result.error),
             activity,
-            planTitle: "Northstar ledger run",
+            planTitle: "North Star paused the visual build",
             runId: result.ledger?.run.id,
             runStatus: result.status === "cancelled" ? "cancelled" : result.status === "failed" ? "failed" : "blocked",
             streaming: false,
@@ -17496,12 +17791,17 @@ function ChatWorkspacePanel({
           });
         }
       } catch (error) {
+        const currentSnapshot = northstarWorkspaceRuntime?.getSnapshot() ?? EMPTY_NORTHSTAR_RUNTIME_SNAPSHOT;
         updateAssistantMessage({
-          content: error instanceof Error ? error.message : "North Star could not start the ledger-controlled run.",
+          content: northstarUserFacingRunMessage(
+            currentSnapshot,
+            error instanceof Error ? error.message : "North Star could not start the visual build.",
+          ),
           runStatus: "failed",
           streaming: false,
           error: true,
         });
+        if (!currentSnapshot.ledger) northstarRunBindingRef.current = null;
       } finally {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
@@ -18050,7 +18350,7 @@ function ChatWorkspacePanel({
 
   const resumeNorthstarRun = async () => {
     if (!northstarWorkspaceRuntime || loading) return;
-    const assistantId = [...messages].reverse().find((message) => message.role === "assistant")?.id;
+    const assistantId = northstarRunBindingRef.current?.assistantMessageId;
     if (!assistantId) return;
     activeAssistantIdRef.current = assistantId;
     setLoading(true);
@@ -18065,19 +18365,23 @@ function ChatWorkspacePanel({
             ...message,
             content: result.status === "completed"
               ? northstarSummaryText(result.finalSummary)
-              : result.error ?? "North Star remains blocked at the last confirmed ledger state.",
+              : northstarUserFacingRunMessage(northstarWorkspaceRuntime.getSnapshot(), result.error),
             activity,
-            planTitle: "Northstar ledger run",
+            planTitle: result.status === "completed" ? "North Star built the visual" : "North Star paused the visual build",
             runStatus: result.status === "completed" ? "completed" : result.status === "cancelled" ? "cancelled" : result.status === "failed" ? "failed" : "blocked",
             streaming: false,
             error: result.status !== "completed" && result.status !== "cancelled",
           }
         : message));
     } catch (error) {
+      const snapshot = northstarWorkspaceRuntime.getSnapshot();
       setMessages((current) => current.map((message) => message.id === assistantId
         ? {
             ...message,
-            content: error instanceof Error ? error.message : "North Star could not resume this run.",
+            content: northstarUserFacingRunMessage(
+              snapshot,
+              error instanceof Error ? error.message : "North Star could not resume this build.",
+            ),
             runStatus: "failed",
             streaming: false,
             error: true,
@@ -18102,6 +18406,9 @@ function ChatWorkspacePanel({
       ];
 
   const composerExpanded = attachments.length > 0 || input.includes("\n") || input.length > 56;
+  const northstarDebugInspectorEnabled =
+    process.env.NEXT_PUBLIC_NORTHSTAR_DEBUG_INSPECTOR === "true";
+  const currentNorthstarRecoveryKind = northstarRecoveryKind(northstarRuntimeSnapshot);
 
   return (
     <div
@@ -18343,26 +18650,35 @@ function ChatWorkspacePanel({
         )}
 
         {northstarWorkspaceRuntime && northstarRuntimeSnapshot.ledger && (
-          <div className="mt-5">
-            <NorthstarLedgerInspector snapshot={northstarRuntimeSnapshot} />
+          <div className="mt-5 space-y-3">
+            {northstarDebugInspectorEnabled && (
+              <NorthstarLedgerInspector snapshot={northstarRuntimeSnapshot} />
+            )}
             {(northstarRuntimeSnapshot.status === "awaiting-recovery" || northstarRuntimeSnapshot.status === "blocked") && (
-              <div className="mt-2 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void resumeNorthstarRun()}
-                  disabled={loading}
-                  className="rounded-full bg-[#6B5CFF] px-3 py-2 text-[10px] font-[850] text-white disabled:opacity-40"
-                >
-                  Resume exact task
-                </button>
-                <button
-                  type="button"
-                  onClick={cancelRun}
-                  disabled={loading}
-                  className="rounded-full border border-black/10 px-3 py-2 text-[10px] font-[850] text-zinc-600 disabled:opacity-40 dark:border-white/10 dark:text-zinc-300"
-                >
-                  Cancel run
-                </button>
+              <div className="rounded-[18px] border border-black/[0.06] bg-white/55 p-3 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
+                <p className="text-[11px] leading-[17px] text-zinc-600 dark:text-zinc-300">
+                  {northstarUserFacingRunMessage(northstarRuntimeSnapshot)}
+                </p>
+                <div className="mt-3 flex items-center gap-2">
+                  {currentNorthstarRecoveryKind !== "none" && (
+                    <button
+                      type="button"
+                      onClick={() => void resumeNorthstarRun()}
+                      disabled={loading}
+                      className="rounded-full bg-[#6B5CFF] px-3 py-2 text-[10px] font-[850] text-white disabled:opacity-40"
+                    >
+                      {currentNorthstarRecoveryKind === "transport" ? "Resume exact request" : "Retry this task"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={cancelRun}
+                    disabled={loading}
+                    className="rounded-full border border-black/10 px-3 py-2 text-[10px] font-[850] text-zinc-600 disabled:opacity-40 dark:border-white/10 dark:text-zinc-300"
+                  >
+                    Cancel build
+                  </button>
+                </div>
               </div>
             )}
           </div>

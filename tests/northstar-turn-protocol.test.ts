@@ -342,3 +342,53 @@ test("an uncertain transport attempt is executable only with its original reques
     attempt,
   }), "ATTEMPT_NOT_EXECUTABLE");
 });
+
+test("attempt responses accept read-only evidence but reject model-only outcome fields", () => {
+  const fixture = activeAttemptFixture("research");
+  const request = parseNorthstarTurnRequest({
+    protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
+    requestId: "turnreq:evidence-response",
+    type: "execute-task-attempt",
+    ledgerContext: fixture.context,
+    task: fixture.task,
+    attempt: fixture.attempt,
+  });
+
+  const success = parseNorthstarTurnResponse({
+    protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    type: "attempt-result",
+    taskId: fixture.task.id,
+    attemptId: fixture.attempt.id,
+    resultKind: "research-result",
+    result: { answer: "done" },
+    evidence: { toolCalls: [{ name: "list_apps", result: { detail: "Apps found" } }] },
+  }, request);
+  assert.equal(success.type, "attempt-result");
+  if (success.type === "attempt-result") assert.ok(success.evidence);
+
+  const failure = parseNorthstarTurnResponse({
+    protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    type: "attempt-failure",
+    taskId: fixture.task.id,
+    attemptId: fixture.attempt.id,
+    failureKind: "correctable",
+    code: "FLOW_REQUIRED",
+    message: "Choose a flow",
+    evidence: { toolCalls: [] },
+  }, request);
+  assert.equal(failure.type, "attempt-failure");
+
+  expectValidationCode(() => parseNorthstarTurnResponse({
+    protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    type: "attempt-failure",
+    taskId: fixture.task.id,
+    attemptId: fixture.attempt.id,
+    failureKind: "correctable",
+    code: "FLOW_REQUIRED",
+    message: "Choose a flow",
+    outcome: "failure",
+  }, request), "UNKNOWN_FIELD");
+});
