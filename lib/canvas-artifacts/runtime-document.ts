@@ -1,6 +1,7 @@
 // Northstar Canvas Artifact Runtime v0.7.9 â€” idempotent terminal replay on one continuously mounted surface.
 import type { CanvasCodeArtifactPayload } from "./types";
 import { NORTHSTAR_DESIGN_KERNEL_CSS } from "@/lib/canvas-ai/northstar-design-kernel";
+import { buildNorthstarProjectionBridgeScript } from "@/lib/canvas-projection/bridge-script";
 
 function escapeHtml(value: string): string {
   return value
@@ -77,7 +78,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const mutationQueue = [];
   let applyingMutation = false;
   let pendingAcknowledgement = null;
-  let requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
+  let pendingActivation = null;
+  let committedRequestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
+  let requestedBounds = committedRequestedBounds;
+  let lastCommittedSize = null;
+  let lastCommittedReview = null;
   let spatialBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   let spatialLayoutVersion = 0;
   let lastSpatialAudit = null;
@@ -95,12 +100,21 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   const stageSurface = document.getElementById("northstar-artifact-stage");
   const origin = document.getElementById("northstar-artifact-origin");
-  const root = document.getElementById("northstar-artifact-root");
-  if (!stageSurface || !origin || !root) return;
+  const committedRoot = document.getElementById("northstar-artifact-root");
+  if (!stageSurface || !origin || !committedRoot) return;
+  let root = committedRoot;
+  let styleContainer = document.head;
+  let stagingHost = null;
+  let stagingShadow = null;
+  let stagingRoot = null;
+  let stagingMode = false;
+  let preparedCandidate = null;
+  let mutationObserver = null;
+  let resizeObserver = null;
 
   // Runtime-owned overlays are derived browser state. A historical snapshot may
   // contain them, but a mount must always begin from one clean authored tree.
-  root.querySelectorAll('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+  committedRoot.querySelectorAll('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
   document.querySelectorAll('style[data-ns-runtime-owned="true"],style[data-ns-runtime-spatial-style]').forEach((element) => element.remove());
 
   const cssEscape = (value) => window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replace(/[^a-zA-Z0-9:_-]/g, "");
@@ -158,6 +172,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     requestedBounds.minY = Math.min(requestedBounds.minY, -top);
     requestedBounds.maxX = Math.max(requestedBounds.maxX, MINIMUM_WIDTH + right);
     requestedBounds.maxY = Math.max(requestedBounds.maxY, MINIMUM_HEIGHT + bottom);
+    if (stagingMode && stagingHost) {
+      stagingHost.style.width = Math.max(MINIMUM_WIDTH, requestedBounds.maxX - requestedBounds.minX) + "px";
+      stagingHost.style.minHeight = Math.max(MINIMUM_HEIGHT, requestedBounds.maxY - requestedBounds.minY) + "px";
+    }
     queueContentSize();
   };
 
@@ -217,16 +235,23 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   ].join("\\n");
   document.head.appendChild(spatialStyle);
 
-  const spatialSystem = document.createElement("div");
-  spatialSystem.setAttribute("data-ns-spatial-system", "true");
-  spatialSystem.setAttribute("data-ns-runtime-owned", "true");
-  const relationshipLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  relationshipLayer.setAttribute("data-ns-relationship-layer", "true");
-  relationshipLayer.setAttribute("aria-hidden", "true");
-  const annotationLayer = document.createElement("div");
-  annotationLayer.setAttribute("data-ns-annotation-layer", "true");
-  spatialSystem.append(relationshipLayer, annotationLayer);
-  root.appendChild(spatialSystem);
+  let spatialSystem = null;
+  let relationshipLayer = null;
+  let annotationLayer = null;
+  const installSpatialSystem = (targetRoot) => {
+    targetRoot.querySelectorAll('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+    spatialSystem = document.createElement("div");
+    spatialSystem.setAttribute("data-ns-spatial-system", "true");
+    spatialSystem.setAttribute("data-ns-runtime-owned", "true");
+    relationshipLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    relationshipLayer.setAttribute("data-ns-relationship-layer", "true");
+    relationshipLayer.setAttribute("aria-hidden", "true");
+    annotationLayer = document.createElement("div");
+    annotationLayer.setAttribute("data-ns-annotation-layer", "true");
+    spatialSystem.append(relationshipLayer, annotationLayer);
+    targetRoot.appendChild(spatialSystem);
+  };
+  installSpatialSystem(root);
 
   const emptySpatialAudit = (runtimeError) => ({
     snapshotRevisionId: currentRevisionId,
@@ -1022,14 +1047,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (evidenceDestroyed) return "The proposed recomposition removed or collapsed too much grounded evidence at once.";
     return "";
   };
-  const captureStyleState = () => new Map(Array.from(document.querySelectorAll('style[id^="northstar-mutation-style-"]')).map((style) => [style.id, style.textContent || ""]));
+  const captureStyleState = () => new Map(Array.from(styleContainer.querySelectorAll('style[id^="northstar-mutation-style-"]')).map((style) => [style.id, style.textContent || ""]));
   const restoreStyleState = (state) => {
-    document.querySelectorAll('style[id^="northstar-mutation-style-"]').forEach((style) => {
+    styleContainer.querySelectorAll('style[id^="northstar-mutation-style-"]').forEach((style) => {
       if (!state.has(style.id)) style.remove();
     });
     for (const [id, css] of state) {
-      let style = document.getElementById(id);
-      if (!style) { style = document.createElement("style"); style.id = id; document.head.appendChild(style); }
+      let style = styleContainer.querySelector("#" + cssEscape(id));
+      if (!style) { style = document.createElement("style"); style.id = id; styleContainer.appendChild(style); }
       style.textContent = css;
     }
   };
@@ -1038,7 +1063,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     authoredRoot.querySelectorAll?.('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
     return {
       html: authoredRoot.innerHTML,
-      css: Array.from(document.querySelectorAll("style"))
+      css: Array.from(styleContainer.querySelectorAll("style"))
         .filter((style) => !style.hasAttribute("data-ns-runtime-owned") && !style.hasAttribute("data-ns-runtime-spatial-style"))
         .map((style) => style.textContent || "")
         .join("\n"),
@@ -1067,13 +1092,86 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     return Array.from(kinds);
   };
 
+  const authoredInnerHtml = (sourceRoot) => {
+    const clone = sourceRoot.cloneNode(true);
+    clone.querySelectorAll?.('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+    return clone.innerHTML;
+  };
+  const createStagingSurface = () => {
+    if (stagingHost) stagingHost.remove();
+    stagingHost = document.createElement("div");
+    stagingHost.setAttribute("data-ns-staging-host", "true");
+    stagingHost.setAttribute("aria-hidden", "true");
+    stagingHost.inert = true;
+    const stagingWidth = Math.max(
+      MINIMUM_WIDTH,
+      Number(lastCommittedSize?.intrinsicWidth) || (committedRequestedBounds.maxX - committedRequestedBounds.minX),
+    );
+    const stagingHeight = Math.max(
+      MINIMUM_HEIGHT,
+      Number(lastCommittedSize?.intrinsicHeight) || (committedRequestedBounds.maxY - committedRequestedBounds.minY),
+    );
+    Object.assign(stagingHost.style, {
+      position: "fixed",
+      left: "-100000px",
+      top: "0",
+      width: stagingWidth + "px",
+      minHeight: stagingHeight + "px",
+      height: "auto",
+      opacity: "0",
+      pointerEvents: "none",
+      overflow: "visible",
+      contain: "layout style paint",
+      zIndex: "-1",
+    });
+    document.body.appendChild(stagingHost);
+    stagingShadow = stagingHost.attachShadow({ mode: "open" });
+    for (const style of Array.from(document.head.querySelectorAll("style"))) {
+      const clone = style.cloneNode(true);
+      stagingShadow.appendChild(clone);
+    }
+    stagingRoot = document.createElement("div");
+    stagingRoot.id = "northstar-artifact-root";
+    stagingRoot.setAttribute("data-ns-buffer", "staging");
+    stagingRoot.setAttribute("aria-label", committedRoot.getAttribute("aria-label") || "Northstar staging artboard");
+    stagingRoot.innerHTML = authoredInnerHtml(committedRoot);
+    stagingShadow.appendChild(stagingRoot);
+    root = stagingRoot;
+    styleContainer = stagingShadow;
+    stagingMode = true;
+    requestedBounds = { ...committedRequestedBounds };
+    installSpatialSystem(root);
+    enforceAssetPolicy(root);
+    applyStage();
+    observeExecutionRoot();
+    return root;
+  };
+  const restoreCommittedExecutionContext = () => {
+    root = committedRoot;
+    styleContainer = document.head;
+    stagingMode = false;
+    requestedBounds = committedRequestedBounds;
+    installSpatialSystem(committedRoot);
+    enforceAssetPolicy(committedRoot);
+    applyStage();
+    observeExecutionRoot();
+  };
+  const discardStagingSurface = () => {
+    restoreCommittedExecutionContext();
+    stagingHost?.remove();
+    stagingHost = null;
+    stagingShadow = null;
+    stagingRoot = null;
+  };
+  const mutationStyleStateFrom = (container) => new Map(Array.from(container?.querySelectorAll?.('style[id^="northstar-mutation-style-"]') || []).map((style) => [style.id, style.textContent || ""]));
+
   const applyOperation = (operation) => {
     if (!operation || typeof operation.op !== "string") return;
     if (operation.op === "request-space") { requestSpace(operation); return; }
     if (operation.op === "set-css-layer") {
       const styleId = "northstar-mutation-style-" + String(operation.layerId || "layer").replace(/[^a-zA-Z0-9_-]/g, "-");
-      let style = document.getElementById(styleId);
-      if (!style) { style = document.createElement("style"); style.id = styleId; document.head.appendChild(style); }
+      let style = styleContainer.querySelector("#" + cssEscape(styleId));
+      if (!style) { style = document.createElement("style"); style.id = styleId; styleContainer.appendChild(style); }
       style.textContent = String(operation.css || "").replace(/@import|url\s*\([^)]*\)|expression\s*\([^)]*\)/gi, "");
       return;
     }
@@ -1124,22 +1222,38 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   const applyMutationBatch = async (batch, revisionId, acknowledge = true, proposal = null) => {
     if (!batch || appliedMutationIds.has(batch.mutationId)) return;
+    if (pendingAcknowledgement || preparedCandidate || pendingActivation) {
+      throw new Error("Another artboard transaction is still active.");
+    }
     if (proposal?.baseRevisionId && proposal.baseRevisionId !== currentRevisionId) {
-      throw new Error("Proposal base revision does not match the mounted browser revision.");
+      const error = new Error("Proposal base revision does not match the mounted browser revision.");
+      error.code = "SYNC_REQUIRED";
+      throw error;
     }
     const expectedParent = Array.from(appliedMutationIds).at(-1);
-    if (batch.parentMutationId && expectedParent && batch.parentMutationId !== expectedParent) throw new Error("Mutation lineage is discontinuous.");
+    if (batch.parentMutationId && expectedParent && batch.parentMutationId !== expectedParent) {
+      throw new Error("Mutation lineage is discontinuous.");
+    }
     registerAssets(batch.requiredAssetUrls || []);
+
+    // Capture the exact committed parent before switching execution into the
+    // hidden staging worktree. The visible root remains untouched until the
+    // host explicitly activates a content-addressed candidate commit.
+    root = committedRoot;
+    styleContainer = document.head;
+    requestedBounds = committedRequestedBounds;
     const transaction = {
-      html: root.innerHTML,
-      styles: captureStyleState(),
-      requestedBounds: { ...requestedBounds },
       revisionId: currentRevisionId,
       mutationId: currentMutationId,
       beforeSnapshot: semanticSnapshot(),
       beforeBounds: getContentBounds(),
       beforeVisualSafety: visualSafetySnapshot(),
+      committedSnapshot: captureLiveSnapshot(),
+      committedSize: lastCommittedSize,
+      committedReview: lastCommittedReview,
     };
+
+    createStagingSurface();
     if (batch.geometryIntent === "contract-after-refinement" || batch.geometryIntent === "recompose") {
       requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
     }
@@ -1148,34 +1262,38 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     for (const operation of batch.operations || []) applyOperation(operation);
     enforceAssetPolicy(root);
     applyStage();
-    currentRevisionId = revisionId || currentRevisionId;
-    currentMutationId = batch.mutationId;
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    animateMutation(before, Math.max(80, Math.min(1200, Number(batch.transitionMs) || 320)));
+    animateMutation(before, 0);
     root.removeAttribute("data-ns-mutating");
     if (acknowledge) {
       pendingAcknowledgement = {
         batch,
         transaction,
         mutationId: batch.mutationId,
-        revisionId: currentRevisionId,
+        revisionId: revisionId || currentRevisionId,
         visibleChange: batch.visibleChange,
         proposal,
         pendingSince: Date.now(),
       };
     } else {
+      // Historical journal replay is only used during initial mount. It is
+      // already canonical and can be applied directly to the committed root.
+      const stagedHtml = authoredInnerHtml(root);
+      const stagedStyleState = captureStyleState();
+      committedRoot.innerHTML = stagedHtml;
+      committedRequestedBounds = { ...requestedBounds };
+      restoreCommittedExecutionContext();
+      restoreStyleState(stagedStyleState);
+      currentRevisionId = revisionId || currentRevisionId;
+      currentMutationId = batch.mutationId;
       appliedMutationIds.add(batch.mutationId);
+      stagingHost?.remove();
+      stagingHost = null;
+      stagingShadow = null;
+      stagingRoot = null;
     }
-    // Report the complete live DOM throughout the transition for internal audit.
-    // The host buffers these provisional measurements and publishes outer Canvas
-    // geometry only from terminal ready/applied events.
     queueContentSize();
-    const transitionWindow = Math.max(120, Math.min(1400, Number(batch.transitionMs) || 320));
-    // The acceptance gate below intentionally waits up to three seconds for
-    // layout stability and eight seconds for remote assets. Keep auditing at
-    // both deadlines; otherwise the last early audit can leave a received
-    // mutation pending forever when no later ResizeObserver/image event fires.
-    [0, 40, 90, 160, 260, 420, 700, transitionWindow, 1_600, 3_100, 8_100].forEach((delay) => {
+    [0, 40, 90, 160, 260, 420, 700, 1_600, 3_100, 8_100].forEach((delay) => {
       window.setTimeout(queueContentSize, delay);
     });
   };
@@ -1188,8 +1306,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const item = mutationQueue.shift();
         try { await applyMutationBatch(item.batch, item.revisionId, true, item.proposal); }
         catch (error) {
+          discardStagingSurface();
+          const syncRequired = error?.code === "SYNC_REQUIRED";
           const terminalMessage = {
-            type: "northstar.artifact.runtime-error",
+            type: syncRequired ? "northstar.artifact.sync-required" : "northstar.artifact.mutation-rejected",
             artifactId: ARTIFACT_ID,
             surfaceId: SURFACE_ID,
             revisionId: currentRevisionId,
@@ -1198,6 +1318,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             ackToken: item.proposal?.ackToken,
             mutationId: item.batch?.mutationId,
             message: error instanceof Error ? error.message : String(error),
+            size: lastCommittedSize,
+            review: lastCommittedReview,
+            changedNodeIds: [],
+            meaningfulChangedNodeIds: [],
+            changeKinds: [],
+            requiredAssetUrls: item.batch?.requiredAssetUrls || [],
+            loadedAssetUrls: loadedAssetUrls(),
+            missingAssetUrls: [],
             snapshot: captureLiveSnapshot(),
           };
           postTerminalMutation(item.batch?.mutationId, terminalMessage);
@@ -1273,27 +1401,27 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   let sizeFrame = 0, lastSignature = "", stableCount = 0, sequence = 0, initialReady = false;
   const reportContentSize = () => {
     solveSpatialSystem();
-    const bounds = getContentBounds(), signature = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].join(":");
+    const bounds = getContentBounds(), signature = [stagingMode ? "staging" : "committed", bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].join(":");
     stableCount = signature === lastSignature ? stableCount + 1 : 1; lastSignature = signature; sequence += 1;
-    stageSurface.style.width = bounds.width + "px"; stageSurface.style.height = bounds.height + "px";
-    origin.style.transform = "translate(" + (-bounds.minX) + "px," + (-bounds.minY) + "px)";
-    const resourcesSettled =
-      document.readyState === "complete" &&
-      (!document.fonts || document.fonts.status === "loaded") &&
-      Array.from(document.images).every((image) => image.complete);
+    if (!stagingMode) {
+      stageSurface.style.width = bounds.width + "px";
+      stageSurface.style.height = bounds.height + "px";
+      origin.style.transform = "translate(" + (-bounds.minX) + "px," + (-bounds.minY) + "px)";
+    }
+    const rootImages = Array.from(root.querySelectorAll("img"));
+    const resourcesSettled = (!document.fonts || document.fonts.status === "loaded") && rootImages.every((image) => image.complete);
     const pendingAge = pendingAcknowledgement ? Date.now() - (pendingAcknowledgement.pendingSince || Date.now()) : 0;
-    // A remote image can remain in the browser's pending state indefinitely.
-    // The transaction audit already rejects missing required assets, so a
-    // resource must never prevent the runtime from returning a terminal result.
     const resourceDeadlineReached = Boolean(pendingAcknowledgement) && pendingAge >= 8_000;
     const settled = (resourcesSettled || resourceDeadlineReached) && (stableCount >= 3 || pendingAge >= 3_000);
     const verifiedDocumentWidth = Math.max(bounds.width, root.scrollWidth, root.getBoundingClientRect().width);
     const verifiedDocumentHeight = Math.max(bounds.height, root.scrollHeight, root.getBoundingClientRect().height);
+    const measuredRevisionId = pendingAcknowledgement?.revisionId || currentRevisionId;
+    const measuredMutationId = pendingAcknowledgement?.mutationId || currentMutationId;
     const size = {
       artifactId: ARTIFACT_ID,
       surfaceId: SURFACE_ID,
-      revisionId: currentRevisionId,
-      mutationId: currentMutationId,
+      revisionId: measuredRevisionId,
+      mutationId: measuredMutationId,
       measuredAt: new Date().toISOString(),
       intrinsicWidth: Math.ceil(verifiedDocumentWidth),
       intrinsicHeight: Math.ceil(verifiedDocumentHeight),
@@ -1303,167 +1431,219 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         maxX: Math.max(bounds.maxX, bounds.minX + verifiedDocumentWidth),
         maxY: Math.max(bounds.maxY, bounds.minY + verifiedDocumentHeight),
       },
-      // sequence is monotonic for the lifetime of the mounted iframe. The host and
-      // workspace use it as the live-layout clock, independent of proposal commit.
       sequence,
       layoutVersion: sequence,
       settled,
-      live: true,
+      live: !stagingMode,
     };
-    parent.postMessage({ type: "northstar.artifact.content-size", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, size }, "*");
-    if (settled) {
-      const review = audit();
-      if (!initialReady) {
-        initialReady = true;
-        parent.postMessage({ type: "northstar.artifact.ready", artifactId: ARTIFACT_ID, surfaceId: SURFACE_ID, revisionId: currentRevisionId, mutationId: currentMutationId, appliedMutationIds: Array.from(appliedMutationIds), size, review, changedNodeIds: [], meaningfulChangedNodeIds: [], changeKinds: [], requiredAssetUrls: [], loadedAssetUrls: loadedAssetUrls(), missingAssetUrls: [], snapshot: captureLiveSnapshot() }, "*");
-      }
-      if (pendingAcknowledgement) {
-        const acknowledgement = pendingAcknowledgement;
-        const afterSnapshot = semanticSnapshot();
-        const diff = diffSemanticSnapshots(acknowledgement.transaction.beforeSnapshot, afterSnapshot);
-        const requiredAssets = Array.from(new Set(acknowledgement.batch.requiredAssetUrls || []));
-        const missingAssets = missingRequiredAssets(requiredAssets);
-        const afterBounds = getContentBounds();
-        const changeKinds = classifyChangeKinds(acknowledgement.batch, diff, acknowledgement.transaction.beforeBounds, afterBounds);
-        const minimumMeaningful = Math.max(1, Number(acknowledgement.batch.minimumMeaningfulChangedNodes) || 1);
-        const textOnly = changeKinds.length === 1 && changeKinds[0] === "content";
-        const requiredKinds = acknowledgement.batch.requiredChangeKinds || [];
-        // Geometry remains browser-measured, but unchanged outer bounds must not
-        // roll back an otherwise meaningful and safe internal recomposition.
-        const missingRequiredKinds = requiredKinds.filter(
-          (kind) => kind !== "geometry" && !changeKinds.includes(kind),
-        );
-        const spatialMutation = acknowledgement.batch.operations.some((operation) =>
-          (operation.op === "insert-html" || operation.op === "set-html")
-          && /data-ns-(?:annotation-id|relationship-id)/i.test(operation.html || "")
-        );
-        const hardIssues =
-          review.overflowElementCount +
-          review.clippedTextCount +
-          review.missingImageCount +
-          (review.documentScrollRisk ? 1 : 0) +
-          (spatialMutation ? (review.spatialAudit?.hardFailureCount || 0) : 0);
-        const afterVisualSafety = visualSafetySnapshot();
-        const visualSafetyReason = visualSafetyFailure(acknowledgement.transaction.beforeVisualSafety || afterVisualSafety, afterVisualSafety);
-        const rejectedReason = visualSafetyReason
-          ? visualSafetyReason
-          : missingAssets.length
+    if (!stagingMode) {
+      parent.postMessage({ type: "northstar.artifact.content-size", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, size }, "*");
+    }
+    if (!settled) return;
+
+    const rawReview = audit();
+    const review = { ...rawReview, revisionId: measuredRevisionId, mutationId: measuredMutationId };
+
+    if (!initialReady && !stagingMode) {
+      initialReady = true;
+      lastCommittedSize = size;
+      lastCommittedReview = review;
+      parent.postMessage({
+        type: "northstar.artifact.ready",
+        artifactId: ARTIFACT_ID,
+        surfaceId: SURFACE_ID,
+        revisionId: currentRevisionId,
+        mutationId: currentMutationId,
+        appliedMutationIds: Array.from(appliedMutationIds),
+        size,
+        review,
+        changedNodeIds: [],
+        meaningfulChangedNodeIds: [],
+        changeKinds: [],
+        requiredAssetUrls: [],
+        loadedAssetUrls: loadedAssetUrls(),
+        missingAssetUrls: [],
+        snapshot: captureLiveSnapshot(),
+      }, "*");
+    }
+
+    if (pendingAcknowledgement && stagingMode) {
+      const acknowledgement = pendingAcknowledgement;
+      const afterSnapshot = semanticSnapshot();
+      const diff = diffSemanticSnapshots(acknowledgement.transaction.beforeSnapshot, afterSnapshot);
+      const requiredAssets = Array.from(new Set(acknowledgement.batch.requiredAssetUrls || []));
+      const missingAssets = missingRequiredAssets(requiredAssets);
+      const afterBounds = getContentBounds();
+      const changeKinds = classifyChangeKinds(acknowledgement.batch, diff, acknowledgement.transaction.beforeBounds, afterBounds);
+      const minimumMeaningful = Math.max(1, Number(acknowledgement.batch.minimumMeaningfulChangedNodes) || 1);
+      const textOnly = changeKinds.length === 1 && changeKinds[0] === "content";
+      const requiredKinds = acknowledgement.batch.requiredChangeKinds || [];
+      const missingRequiredKinds = requiredKinds.filter((kind) => kind !== "geometry" && !changeKinds.includes(kind));
+      const spatialMutation = acknowledgement.batch.operations.some((operation) =>
+        (operation.op === "insert-html" || operation.op === "set-html")
+        && /data-ns-(?:annotation-id|relationship-id)/i.test(operation.html || "")
+      );
+      const hardIssues =
+        review.overflowElementCount +
+        review.clippedTextCount +
+        review.missingImageCount +
+        (review.documentScrollRisk ? 1 : 0) +
+        (spatialMutation ? (review.spatialAudit?.hardFailureCount || 0) : 0);
+      const finiteGeometry = [size.intrinsicWidth, size.intrinsicHeight, size.contentBounds.minX, size.contentBounds.minY, size.contentBounds.maxX, size.contentBounds.maxY].every(Number.isFinite);
+      const technicalReason = !finiteGeometry
+        ? "The staged artboard produced invalid geometry."
+        : missingAssets.length
           ? "Required evidence assets did not load: " + missingAssets.join(", ")
-          : diff.meaningful.length < minimumMeaningful
-            ? "The proposed adjustment did not visibly change enough semantic content."
-            : textOnly && acknowledgement.batch.allowTextOnly !== true
-              ? "The proposed adjustment changed only copy or cosmetic styling when a compositional move was required."
-              : missingRequiredKinds.length
-                ? "The visible change did not satisfy the required design move: " + missingRequiredKinds.join(", ")
-                : hardIssues > 0
-                  ? "The live artboard audit rejected clipping, overflow, internal scrolling, or missing imagery."
-                  : "";
-        if (rejectedReason) {
-          pendingAcknowledgement = null;
-          root.innerHTML = acknowledgement.transaction.html;
-          restoreStyleState(acknowledgement.transaction.styles);
-          requestedBounds = { ...acknowledgement.transaction.requestedBounds };
-          currentRevisionId = acknowledgement.transaction.revisionId;
-          currentMutationId = acknowledgement.transaction.mutationId;
-          enforceAssetPolicy(root);
-          applyStage();
-          const terminalMessage = {
-            type: "northstar.artifact.mutation-rejected",
-            artifactId: ARTIFACT_ID,
-            surfaceId: SURFACE_ID,
-            revisionId: currentRevisionId,
-            baseRevisionId: acknowledgement.proposal?.baseRevisionId,
-            proposalId: acknowledgement.proposal?.proposalId,
-            ackToken: acknowledgement.proposal?.ackToken,
-            mutationId: acknowledgement.mutationId,
-            message: rejectedReason,
-            size,
-            review: { ...review, hardFailureCount: hardIssues, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: missingAssets.length, meaningfulChangedNodeCount: diff.meaningful.length },
-            changedNodeIds: diff.changed,
-            meaningfulChangedNodeIds: diff.meaningful,
-            changeKinds,
-            requiredAssetUrls: requiredAssets,
-            loadedAssetUrls: loadedAssetUrls(),
-            missingAssetUrls: missingAssets,
-            snapshot: captureLiveSnapshot(),
-          };
-          postTerminalMutation(acknowledgement.mutationId, terminalMessage);
-          queueContentSize();
-        } else {
-          pendingAcknowledgement = null;
-          appliedMutationIds.add(acknowledgement.mutationId);
-          // request-space is provisional room for composing the mutation. Once
-          // the browser has measured the accepted visible result, actual content
-          // and resolved spatial extents become the sole sizing authority.
-          requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
-          solveSpatialSystem();
-          const terminalBounds = getContentBounds();
-          const terminalDocumentWidth = Math.max(terminalBounds.width, root.scrollWidth, root.getBoundingClientRect().width);
-          const terminalDocumentHeight = Math.max(terminalBounds.height, root.scrollHeight, root.getBoundingClientRect().height);
-          const terminalSize = {
-            ...size,
-            measuredAt: new Date().toISOString(),
-            intrinsicWidth: Math.ceil(terminalDocumentWidth),
-            intrinsicHeight: Math.ceil(terminalDocumentHeight),
-            contentBounds: {
-              minX: terminalBounds.minX,
-              minY: terminalBounds.minY,
-              maxX: Math.max(terminalBounds.maxX, terminalBounds.minX + terminalDocumentWidth),
-              maxY: Math.max(terminalBounds.maxY, terminalBounds.minY + terminalDocumentHeight),
-            },
-            settled: true,
-          };
-          stageSurface.style.width = terminalBounds.width + "px";
-          stageSurface.style.height = terminalBounds.height + "px";
-          origin.style.transform = "translate(" + (-terminalBounds.minX) + "px," + (-terminalBounds.minY) + "px)";
-          const changedRects = diff.meaningful.map((id) => nodeById(id)?.getBoundingClientRect()).filter(Boolean);
-          const rootRect = root.getBoundingClientRect();
-          const changedBounds = changedRects.length ? {
-            minX: Math.floor(Math.min(...changedRects.map((rect) => rect.left - rootRect.left))),
-            minY: Math.floor(Math.min(...changedRects.map((rect) => rect.top - rootRect.top))),
-            maxX: Math.ceil(Math.max(...changedRects.map((rect) => rect.right - rootRect.left))),
-            maxY: Math.ceil(Math.max(...changedRects.map((rect) => rect.bottom - rootRect.top))),
-          } : terminalSize.contentBounds;
-          const acknowledgedSize = { ...terminalSize, changedBounds, changedNodeIds: diff.changed, meaningfulChangedNodeIds: diff.meaningful };
-          const terminalMessage = {
-            type: "northstar.artifact.mutation-applied",
-            artifactId: ARTIFACT_ID,
-            surfaceId: SURFACE_ID,
-            revisionId: acknowledgement.revisionId,
-            baseRevisionId: acknowledgement.proposal?.baseRevisionId,
-            proposalId: acknowledgement.proposal?.proposalId,
-            ackToken: acknowledgement.proposal?.ackToken,
-            mutationId: acknowledgement.mutationId,
-            visibleChange: acknowledgement.visibleChange,
-            size: acknowledgedSize,
-            review: { ...review, hardFailureCount: 0, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: 0, meaningfulChangedNodeCount: diff.meaningful.length },
-            changedNodeIds: diff.changed,
-            meaningfulChangedNodeIds: diff.meaningful,
-            changeKinds,
-            requiredAssetUrls: requiredAssets,
-            loadedAssetUrls: loadedAssetUrls(),
-            missingAssetUrls: [],
-            snapshot: captureLiveSnapshot(),
-          };
-          postTerminalMutation(acknowledgement.mutationId, terminalMessage);
-          queueContentSize();
-        }
+          : hardIssues > 0
+            ? "The staged artboard failed deterministic clipping, overflow, scrolling, spatial, or asset integrity checks."
+            : "";
+      const designObservations = [
+        diff.meaningful.length < minimumMeaningful ? "The proposed adjustment did not visibly change enough semantic content." : "",
+        textOnly && acknowledgement.batch.allowTextOnly !== true ? "The proposed adjustment changed only copy or cosmetic styling when a compositional move was requested." : "",
+        missingRequiredKinds.length ? "The visible change did not express the requested move kinds: " + missingRequiredKinds.join(", ") : "",
+        visualSafetyFailure(acknowledgement.transaction.beforeVisualSafety || visualSafetySnapshot(), visualSafetySnapshot()),
+      ].filter(Boolean);
+
+      if (technicalReason) {
+        pendingAcknowledgement = null;
+        discardStagingSurface();
+        const terminalMessage = {
+          type: "northstar.artifact.mutation-rejected",
+          artifactId: ARTIFACT_ID,
+          surfaceId: SURFACE_ID,
+          revisionId: currentRevisionId,
+          baseRevisionId: acknowledgement.proposal?.baseRevisionId,
+          proposalId: acknowledgement.proposal?.proposalId,
+          ackToken: acknowledgement.proposal?.ackToken,
+          mutationId: acknowledgement.mutationId,
+          message: technicalReason,
+          size: lastCommittedSize,
+          review: lastCommittedReview,
+          changedNodeIds: diff.changed,
+          meaningfulChangedNodeIds: diff.meaningful,
+          changeKinds,
+          requiredAssetUrls: requiredAssets,
+          loadedAssetUrls: loadedAssetUrls(),
+          missingAssetUrls: missingAssets,
+          snapshot: captureLiveSnapshot(),
+          designObservations,
+        };
+        postTerminalMutation(acknowledgement.mutationId, terminalMessage);
+        return;
       }
+
+      const stagedSnapshot = captureLiveSnapshot();
+      const stagedStyles = mutationStyleStateFrom(styleContainer);
+      preparedCandidate = {
+        transactionId: acknowledgement.proposal?.transactionId || acknowledgement.proposal?.proposalId,
+        proposalId: acknowledgement.proposal?.proposalId,
+        ackToken: acknowledgement.proposal?.ackToken,
+        baseRevisionId: acknowledgement.proposal?.baseRevisionId,
+        revisionId: acknowledgement.revisionId,
+        mutationId: acknowledgement.mutationId,
+        visibleChange: acknowledgement.visibleChange,
+        snapshot: stagedSnapshot,
+        size: { ...size, settled: true },
+        review: { ...review, hardFailureCount: 0, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: 0, meaningfulChangedNodeCount: diff.meaningful.length },
+        changedNodeIds: diff.changed,
+        meaningfulChangedNodeIds: diff.meaningful,
+        changeKinds,
+        requiredAssetUrls: requiredAssets,
+        loadedAssetUrls: loadedAssetUrls(),
+        missingAssetUrls: [],
+        requestedBounds: { ...requestedBounds },
+        styles: stagedStyles,
+        designObservations,
+      };
+      pendingAcknowledgement = null;
+      restoreCommittedExecutionContext();
+      parent.postMessage({
+        type: "northstar.artifact.proposal-prepared",
+        artifactId: ARTIFACT_ID,
+        surfaceId: SURFACE_ID,
+        ...preparedCandidate,
+      }, "*");
+      return;
+    }
+
+    if (pendingActivation && !stagingMode) {
+      const activation = pendingActivation;
+      pendingActivation = null;
+      lastCommittedSize = { ...size, revisionId: currentRevisionId, mutationId: currentMutationId, settled: true };
+      // Preserve the exact prepared review facts when the candidate becomes visible.
+      // A fresh post-activation audit can contain equivalent-but-different advisory
+      // telemetry; commit identity must attest to the tree that was actually prepared.
+      lastCommittedReview = {
+        ...(activation.review || review),
+        revisionId: currentRevisionId,
+        mutationId: currentMutationId,
+        evaluatedAt: review.evaluatedAt,
+      };
+      const terminalMessage = {
+        type: "northstar.artifact.commit-projected",
+        artifactId: ARTIFACT_ID,
+        surfaceId: SURFACE_ID,
+        surfaceSessionId: activation.surfaceSessionId,
+        transactionId: activation.transactionId,
+        proposalId: activation.proposalId,
+        ackToken: activation.ackToken,
+        commitHash: activation.commitHash,
+        parentCommitHash: activation.parentCommitHash,
+        commitSequence: activation.commitSequence,
+        documentHash: activation.documentHash,
+        geometryHash: activation.geometryHash,
+        revisionId: currentRevisionId,
+        baseRevisionId: activation.baseRevisionId,
+        mutationId: currentMutationId,
+        visibleChange: activation.visibleChange,
+        size: lastCommittedSize,
+        review: lastCommittedReview,
+        changedNodeIds: activation.changedNodeIds || [],
+        meaningfulChangedNodeIds: activation.meaningfulChangedNodeIds || [],
+        changeKinds: activation.changeKinds || [],
+        requiredAssetUrls: activation.requiredAssetUrls || [],
+        loadedAssetUrls: loadedAssetUrls(),
+        missingAssetUrls: [],
+        snapshot: captureLiveSnapshot(),
+        designObservations: activation.designObservations || [],
+      };
+      postTerminalMutation(currentMutationId, terminalMessage);
+      stagingHost?.remove();
+      stagingHost = null;
+      stagingShadow = null;
+      stagingRoot = null;
+      preparedCandidate = null;
     }
   };
   const queueContentSize = () => { cancelAnimationFrame(sizeFrame); sizeFrame = requestAnimationFrame(() => requestAnimationFrame(reportContentSize)); };
 
-  const observer = new MutationObserver((records) => {
+  const attachResourceSettlementListeners = (targetRoot) => {
+    for (const image of Array.from(targetRoot.querySelectorAll("img"))) {
+      if (image.complete || image.dataset.nsSettlementObserved === "true") continue;
+      image.dataset.nsSettlementObserved = "true";
+      image.addEventListener("load", queueContentSize, { once: true });
+      image.addEventListener("error", queueContentSize, { once: true });
+    }
+  };
+  mutationObserver = new MutationObserver((records) => {
     const externalChange = records.some((record) => {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
       return !target?.closest?.("[data-ns-spatial-system]");
     });
     if (!externalChange) return;
     enforceAssetPolicy(root);
+    attachResourceSettlementListeners(root);
     queueContentSize();
   });
-  observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
-  new ResizeObserver(queueContentSize).observe(root);
+  resizeObserver = new ResizeObserver(queueContentSize);
+  const observeExecutionRoot = () => {
+    mutationObserver?.disconnect();
+    resizeObserver?.disconnect();
+    mutationObserver?.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+    resizeObserver?.observe(root);
+    attachResourceSettlementListeners(root);
+  };
+  observeExecutionRoot();
   document.addEventListener("load", queueContentSize, true);
   document.fonts?.ready?.then(queueContentSize).catch(() => undefined);
   window.addEventListener("resize", queueContentSize);
@@ -1499,7 +1679,117 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       enforceAssetPolicy(root);
       return;
     }
-    if (message.type === "northstar.artifact.apply-mutation" && message.batch) {
+    if (message.type === "northstar.artifact.activate-commit") {
+      const cachedActivation = message.mutationId ? terminalMutationMessages.get(message.mutationId) : null;
+      if (cachedActivation?.type === "northstar.artifact.commit-projected") {
+        parent.postMessage(cachedActivation, "*");
+        return;
+      }
+      if (!preparedCandidate || preparedCandidate.transactionId !== message.transactionId) {
+        parent.postMessage({
+          type: "northstar.artifact.projection-dirty",
+          artifactId: ARTIFACT_ID,
+          surfaceId: SURFACE_ID,
+          surfaceSessionId: message.surfaceSessionId,
+          transactionId: message.transactionId,
+          revisionId: currentRevisionId,
+          commitHash: message.commitHash,
+          message: "The browser no longer has the prepared worktree for this candidate commit.",
+          snapshot: captureLiveSnapshot(),
+          size: lastCommittedSize,
+        }, "*");
+        return;
+      }
+      if (preparedCandidate.baseRevisionId && preparedCandidate.baseRevisionId !== currentRevisionId) {
+        parent.postMessage({
+          type: "northstar.artifact.sync-required",
+          artifactId: ARTIFACT_ID,
+          surfaceId: SURFACE_ID,
+          surfaceSessionId: message.surfaceSessionId,
+          transactionId: message.transactionId,
+          revisionId: currentRevisionId,
+          baseRevisionId: preparedCandidate.baseRevisionId,
+          commitHash: message.commitHash,
+          message: "Candidate activation parent does not match the mounted browser revision.",
+          snapshot: captureLiveSnapshot(),
+          size: lastCommittedSize,
+        }, "*");
+        return;
+      }
+      root = committedRoot;
+      styleContainer = document.head;
+      stagingMode = false;
+      committedRoot.innerHTML = preparedCandidate.snapshot.html;
+      restoreStyleState(preparedCandidate.styles);
+      committedRequestedBounds = { ...preparedCandidate.requestedBounds };
+      requestedBounds = committedRequestedBounds;
+      currentRevisionId = preparedCandidate.revisionId;
+      currentMutationId = preparedCandidate.mutationId;
+      appliedMutationIds.add(preparedCandidate.mutationId);
+      installSpatialSystem(committedRoot);
+      enforceAssetPolicy(committedRoot);
+      applyStage();
+      observeExecutionRoot();
+      pendingActivation = {
+        ...message,
+        ...preparedCandidate,
+        revisionId: currentRevisionId,
+        mutationId: currentMutationId,
+      };
+      stableCount = 0;
+      lastSignature = "";
+      [0, 40, 100, 220].forEach((delay) => window.setTimeout(queueContentSize, delay));
+      return;
+    }
+    if (message.type === "northstar.artifact.checkout-commit" && message.commit) {
+      const commit = message.commit;
+      root = committedRoot;
+      styleContainer = document.head;
+      stagingMode = false;
+      pendingAcknowledgement = null;
+      preparedCandidate = null;
+      stagingHost?.remove();
+      stagingHost = null;
+      stagingShadow = null;
+      stagingRoot = null;
+      committedRoot.innerHTML = commit.tree?.document?.html || "";
+      const authoredStyle = document.getElementById("northstar-artifact-authored-style");
+      if (authoredStyle && commit.tree?.document?.css) authoredStyle.textContent = commit.tree.document.css;
+      document.head.querySelectorAll('style[id^="northstar-mutation-style-"]').forEach((style) => style.remove());
+      committedRequestedBounds = {
+        minX: commit.tree?.geometry?.contentBounds?.minX || 0,
+        minY: commit.tree?.geometry?.contentBounds?.minY || 0,
+        maxX: commit.tree?.geometry?.contentBounds?.maxX || MINIMUM_WIDTH,
+        maxY: commit.tree?.geometry?.contentBounds?.maxY || MINIMUM_HEIGHT,
+      };
+      requestedBounds = committedRequestedBounds;
+      currentRevisionId = commit.revisionId || currentRevisionId;
+      currentMutationId = commit.mutationId || null;
+      installSpatialSystem(committedRoot);
+      enforceAssetPolicy(committedRoot);
+      applyStage();
+      observeExecutionRoot();
+      pendingActivation = {
+        ...message,
+        transactionId: message.transactionId || ("checkout:" + commit.commitHash),
+        proposalId: commit.proposalId,
+        commitHash: commit.commitHash,
+        parentCommitHash: commit.parentCommitHash,
+        commitSequence: commit.commitSequence,
+        documentHash: commit.hashes?.documentHash,
+        geometryHash: commit.hashes?.geometryHash,
+        revisionId: currentRevisionId,
+        mutationId: currentMutationId,
+        changedNodeIds: [],
+        meaningfulChangedNodeIds: [],
+        changeKinds: [],
+      };
+      stableCount = 0;
+      lastSignature = "";
+      [0, 40, 100, 220].forEach((delay) => window.setTimeout(queueContentSize, delay));
+      return;
+    }
+    if ((message.type === "northstar.artifact.stage-proposal" || message.type === "northstar.artifact.apply-mutation") && message.batch) {
       registerAssets(message.assetUrls || []);
       const mutationId = message.batch.mutationId;
       parent.postMessage({
@@ -1509,12 +1799,18 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         revisionId: message.revisionId,
         baseRevisionId: message.baseRevisionId,
         proposalId: message.proposalId,
+        transactionId: message.transactionId,
+        surfaceSessionId: message.surfaceSessionId,
         ackToken: message.ackToken,
         mutationId,
       }, "*");
       const terminalMessage = terminalMutationMessages.get(mutationId);
       if (terminalMessage) {
         parent.postMessage(terminalMessage, "*");
+        return;
+      }
+      if (preparedCandidate?.mutationId === mutationId && preparedCandidate.transactionId === message.transactionId) {
+        parent.postMessage({ type: "northstar.artifact.proposal-prepared", artifactId: ARTIFACT_ID, surfaceId: SURFACE_ID, ...preparedCandidate }, "*");
         return;
       }
       if (
@@ -1524,12 +1820,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       ) return;
       if (message.baseRevisionId && message.baseRevisionId !== currentRevisionId) {
         const lineageMessage = {
-          type: "northstar.artifact.mutation-rejected",
+          type: "northstar.artifact.sync-required",
           artifactId: ARTIFACT_ID,
           surfaceId: SURFACE_ID,
           revisionId: currentRevisionId,
           baseRevisionId: message.baseRevisionId,
           proposalId: message.proposalId,
+          transactionId: message.transactionId,
+          surfaceSessionId: message.surfaceSessionId,
           ackToken: message.ackToken,
           mutationId,
           message: "The proposal base revision does not match the mounted browser revision.",
@@ -1550,6 +1848,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         revisionId: message.revisionId,
         proposal: {
           proposalId: message.proposalId,
+          transactionId: message.transactionId,
+          surfaceSessionId: message.surfaceSessionId,
           ackToken: message.ackToken,
           baseRevisionId: message.baseRevisionId,
         },
@@ -1585,6 +1885,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 })();
 `;
 
+  const directProjectionBridge = buildNorthstarProjectionBridgeScript();
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1592,7 +1894,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'unsafe-eval'; font-src data:; connect-src 'none'; media-src data: blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>${escapeHtml(artifact.title)}</title>
-  <style>
+  <style id="northstar-artifact-authored-style">
     *,*::before,*::after{box-sizing:border-box}
     html,body{width:100%;min-height:100%;height:auto;margin:0;overflow:hidden}
     body{position:relative;background:#f7f7fd;color:#10121d;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -1612,6 +1914,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 <body>
   <div id="northstar-artifact-stage"><div id="northstar-artifact-origin"><div id="northstar-artifact-root" aria-label=${safeJson(artifact.title)}>${documentSource.html}</div></div></div>
   <script>${escapeScript(bridgeScript)}</script>
+  <script>${escapeScript(directProjectionBridge)}</script>
 </body>
 </html>`;
 }

@@ -81,3 +81,15 @@ test("the runtime schedules terminal audits at both stability and asset deadline
   assert.ok(runtime);
   assert.match(runtime, /3_100, 8_100/);
 });
+test("the browser runtime stages candidates offscreen and exposes explicit Git-like projection commands", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  assert.match(runtime, /data-ns-staging-host/);
+  assert.match(runtime, /northstar\.artifact\.stage-proposal/);
+  assert.match(runtime, /northstar\.artifact\.proposal-prepared/);
+  assert.match(runtime, /northstar\.artifact\.activate-commit/);
+  assert.match(runtime, /northstar\.artifact\.commit-projected/);
+  assert.match(runtime, /northstar\.artifact\.checkout-commit/);
+  assert.match(runtime, /opacity: "0"/);
+  assert.doesNotMatch(runtime, /visibility: "hidden"/);
+});

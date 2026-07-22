@@ -11,7 +11,15 @@
     "test": "node --import tsx --test tests/**/*.test.ts",
     "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=0 playwright test",
     "check": "npm run typecheck && npm run test && npm run lint && npm run test:e2e",
-    "check:release": "npm run check && npm run build"
+    "check:release": "npm run check && npm run build",
+    "test:ledger-foundation": "node --import tsx --test tests/northstar-architecture-boundaries.test.ts tests/northstar-ledger-value.test.ts tests/northstar-ledger-reducer.test.ts tests/northstar-ephemeral-ledger.test.ts tests/northstar-ledger-context.test.ts tests/northstar-task-controller.test.ts",
+    "test:e2e:legacy-baseline": "NORTHSTAR_RUN_LEGACY_BASELINE=1 PLAYWRIGHT_BROWSERS_PATH=0 playwright test e2e/northstar-existing-failures.spec.ts",
+    "test:phase2": "node --import tsx --test tests/northstar-turn-architecture-boundaries.test.ts tests/northstar-turn-protocol.test.ts tests/northstar-turn-executor.test.ts tests/northstar-turn-gemini.test.ts tests/northstar-turn-data-tools.test.ts tests/northstar-turn-client.test.ts tests/northstar-turn-task-adapter.test.ts tests/northstar-phase2-ledger-draft.test.ts",
+    "test:phase3": "node --import tsx --test tests/northstar-projection-architecture.test.ts tests/northstar-projection-validation.test.ts tests/northstar-projection-state.test.ts tests/northstar-projection-prepare.test.ts tests/northstar-projection-projector.test.ts tests/northstar-projection-window-surface.test.ts tests/northstar-phase3-controller.test.ts",
+    "test:e2e:phase3": "PLAYWRIGHT_BROWSERS_PATH=0 playwright test --config=playwright.phase3.config.ts e2e/northstar-projection-runtime.spec.ts",
+    "test:phase4": "node --import tsx --test tests/northstar-phase4-architecture.test.ts tests/northstar-workspace-runtime.test.ts",
+    "test:e2e:phase4": "npm run build:e2e:phase4 && PLAYWRIGHT_BROWSERS_PATH=0 playwright test --config=playwright.phase4.config.ts e2e/northstar-phase4-architecture.spec.ts; status=$?; rm -rf .northstar-e2e test-results; exit $status",
+    "build:e2e:phase4": "mkdir -p .northstar-e2e && esbuild e2e/northstar-phase4-browser-entry.tsx --bundle --platform=browser --format=iife --outfile=.northstar-e2e/phase4-browser-harness.js --alias:@=. --define:process.env.NODE_ENV=\\\"test\\\" --define:process.env.NEXT_PUBLIC_SUPABASE_URL=\\\"http://127.0.0.1:54321\\\" --define:process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY=\\\"northstar-e2e\\\""
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -45,6 +53,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "0.28.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",

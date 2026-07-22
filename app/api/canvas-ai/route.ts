@@ -72,6 +72,7 @@ import { sanitizeNorthstarLiveSnapshot } from "@/lib/canvas-ai/northstar-transac
 import {
   NorthstarBudgetExceededError,
   NorthstarRunLifecycle,
+  NorthstarVisualStageBlockedError,
   isNorthstarLineageRejection,
   isNorthstarVerifiedNoop,
   runNorthstarOperationWithTimeout,
@@ -152,8 +153,8 @@ const MAX_COMPOSITION_CHECKPOINT_SCREENS = 180;
 const MAX_COMPOSITION_RESEARCH_ROUNDS = 3;
 const MAX_COMPOSITION_BLUEPRINT_REVISIONS = 3;
 const NORTHSTAR_MODEL_CALL_TIMEOUT_MS = 75_000;
-const NORTHSTAR_BROWSER_ACK_TIMEOUT_MS = 4_000;
-const NORTHSTAR_ACK_RECONCILIATION_MS = 500;
+const NORTHSTAR_BROWSER_ACK_TIMEOUT_MS = 15_000;
+const NORTHSTAR_ACK_RECONCILIATION_MS = 2_000;
 
 type ContextMode = "canvas" | "selection";
 type AgentMode = "direct" | "agent";
@@ -6202,7 +6203,7 @@ function delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
 function prepareNorthstarAcknowledgementWithReconciliation(input: {
   ackToken: string;
   artifactId: string;
-  acceptedStatuses: readonly ("ready" | "applied" | "rejected")[];
+  acceptedStatuses: readonly NorthstarArtifactMutationAcknowledgement["status"][];
   signal?: AbortSignal;
   executionTimeoutMs?: number;
   reconciliationWindowMs?: number;
@@ -6359,79 +6360,6 @@ function liveAcknowledgementPassed(
     (expectedMutationId ? acknowledgement.meaningfulChangedNodeIds.length > 0 : true)
   );
 }
-
-function buildNorthstarDeliveryFallbackAcknowledgement(input: {
-  artifact: NorthstarGeneratedCodeArtifactPackage;
-  ackToken: string;
-  proposalId?: string;
-  baseRevisionId?: string;
-  mutation?: NorthstarArtboardMutationBatch;
-  changedNodeIds?: string[];
-  stageIndex?: number;
-}): NorthstarArtifactMutationAcknowledgement {
-  const changedNodeIds = [...new Set((input.changedNodeIds?.length
-    ? input.changedNodeIds
-    : input.mutation?.operations.flatMap((operation) => "targetId" in operation ? [operation.targetId] : [])
-      ?? ["artboard"]).filter(Boolean))];
-  const meaningfulChangedNodeIds = input.mutation ? (changedNodeIds.length ? changedNodeIds : ["artboard"]) : [];
-  const width = Math.max(1, input.artifact.preferredWidth);
-  const height = Math.max(1, input.artifact.preferredHeight);
-  const now = new Date().toISOString();
-  return {
-    schema: "northstar.artboard-ack.v1",
-    proposalId: input.proposalId,
-    ackToken: input.ackToken,
-    baseRevisionId: input.baseRevisionId,
-    artifactId: input.artifact.artifactId,
-    surfaceId: input.artifact.surfaceId ?? input.artifact.artifactId,
-    revisionId: input.artifact.revisionId,
-    mutationId: input.mutation?.mutationId,
-    status: input.mutation ? "applied" : "ready",
-    reason: "The action was delivered to the persistent browser queue; acknowledgement transport was reconciled locally without remounting the artboard.",
-    size: {
-      artifactId: input.artifact.artifactId,
-      revisionId: input.artifact.revisionId,
-      mutationId: input.mutation?.mutationId,
-      measuredAt: now,
-      intrinsicWidth: width,
-      intrinsicHeight: height,
-      contentBounds: { minX: 0, minY: 0, maxX: width, maxY: height },
-      settled: true,
-      changedNodeIds,
-      meaningfulChangedNodeIds,
-    },
-    review: {
-      revisionId: input.artifact.revisionId,
-      mutationId: input.mutation?.mutationId,
-      stageIndex: input.stageIndex ?? 0,
-      evaluatedAt: now,
-      rootWidth: width,
-      rootHeight: height,
-      elementCount: 1,
-      stageRegionCount: 1,
-      visibleStageRegionCount: 1,
-      overflowElementCount: 0,
-      clippedTextCount: 0,
-      smallTextCount: 0,
-      tinyInteractiveCount: 0,
-      missingImageCount: 0,
-      documentScrollRisk: false,
-      hardFailureCount: 0,
-      meaningfulChangedNodeCount: meaningfulChangedNodeIds.length,
-      summary: "Persistent client delivery accepted; final browser telemetry may arrive asynchronously.",
-    },
-    changedNodeIds,
-    meaningfulChangedNodeIds,
-    changeKinds: input.mutation?.requiredChangeKinds?.length
-      ? input.mutation.requiredChangeKinds
-      : input.mutation ? ["structure"] : [],
-    requiredAssetUrls: input.mutation?.requiredAssetUrls ?? [],
-    loadedAssetUrls: input.mutation?.requiredAssetUrls ?? [],
-    missingAssetUrls: [],
-    acknowledgedAt: now,
-  };
-}
-
 
 function compositionResearchSettings(depth: ExecutionDepth) {
 
@@ -10973,6 +10901,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             ? compositionCheckpoint?.artifactId ?? preparedSelectedArtifact?.artifactId ?? makeId("artifact")
             : undefined;
           let preparedInitialLivePackage: NorthstarGeneratedCodeArtifactPackage | undefined;
+          let preparedInitialLiveAcknowledgement: NorthstarArtifactMutationAcknowledgement | undefined;
 
           const wholeCanvasContext = isRecord(body.canvasContext)
             ? body.canvasContext
@@ -11185,7 +11114,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 const initialAcknowledgement = prepareNorthstarArtifactAcknowledgementWait({
                   ackToken: initialAckToken,
                   artifactId: dispatchedInitialPackage.artifactId,
-                  acceptedStatuses: ["ready", "rejected"],
+                  acceptedStatuses: ["ready", "rejected", "sync-required", "blocked"],
                   timeoutMs: NORTHSTAR_BROWSER_ACK_TIMEOUT_MS,
                   signal: request.signal,
                   realtime: supabase,
@@ -11193,56 +11122,43 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 await initialAcknowledgement.ready;
                 requestedCanvasActionCount += 1;
                 send("canvas.action.requested", { runId, action });
-                const reportedInitialAck = await initialAcknowledgement.result.catch((error: unknown) => {
-                  if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-                  console.info("Northstar continued from the persistent client delivery after foundation acknowledgement transport was delayed.");
-                  return undefined;
-                });
-                const initialAck = reportedInitialAck ?? buildNorthstarDeliveryFallbackAcknowledgement({
-                  artifact: dispatchedInitialPackage,
-                  ackToken: initialAckToken,
-                  proposalId: initialAckToken.split(":").at(-1),
-                  baseRevisionId: dispatchedInitialPackage.parentRevisionId,
-                  stageIndex: 0,
-                });
+                const initialAck = await initialAcknowledgement.result;
+                if (initialAck.status === "sync-required" || initialAck.status === "blocked") {
+                  throw new Error(initialAck.reason || "The live artboard repository could not establish a clean foundation HEAD.");
+                }
                 if (!liveAcknowledgementPassed(initialAck)) {
                   throw new Error(initialAck.reason || "The live artboard foundation did not pass its browser audit.");
                 }
+                preparedInitialLiveAcknowledgement = initialAck;
                 preparedInitialLivePackage = {
-                  ...dispatchedInitialPackage,
+                  ...materializeNorthstarCanonicalPackage(dispatchedInitialPackage, initialAck),
                   pendingAckToken: undefined,
-                  preferredWidth: initialAck.size?.intrinsicWidth ?? dispatchedInitialPackage.preferredWidth,
-                  preferredHeight: initialAck.size?.intrinsicHeight ?? dispatchedInitialPackage.preferredHeight,
-                  intrinsicBounds: initialAck.size?.contentBounds ?? dispatchedInitialPackage.intrinsicBounds,
-                  runtimeReview: initialAck.review,
+                  headCommitHash: initialAck.commitHash,
+                  commitSequence: initialAck.commitSequence,
+                  repositoryStatus: initialAck.repositoryStatus,
+                  surfaceSessionId: initialAck.surfaceSessionId,
                 };
-                send("tool.completed", { runId, stepId: foundationActivityId, tool: "compose_visual_scene", detail: "The opening visual scene passed semantic, media, and browser validation." });
-                send("step.completed", { runId, stepId: foundationActivityId, detail: "Opening visual scene verified and ready for grounded evidence.", objectIds: [] });
+                send("tool.completed", { runId, stepId: foundationActivityId, tool: "compose_visual_scene", detail: "The opening visual scene became the clean repository HEAD." });
+                send("step.completed", { runId, stepId: foundationActivityId, detail: "Opening visual scene committed and ready for grounded evidence.", objectIds: [] });
               } catch (initialArtifactError) {
                 if (request.signal.aborted || (initialArtifactError instanceof DOMException && initialArtifactError.name === "AbortError")) {
                   throw initialArtifactError;
                 }
-                const foundationFailureDetail = initialArtifactError instanceof Error ? initialArtifactError.message : "The opening visual scene could not be verified.";
-                // The first rendered package is still useful as a stable frame
-                // even when validation telemetry is delayed or conservative.
-                // Keep it mounted, clear only the speculative token, and let
-                // the first grounded checkpoint evolve that same surface.
-                if (preparedInitialLivePackage) {
-                  preparedInitialLivePackage = withoutPendingNorthstarAckToken(preparedInitialLivePackage);
-                }
-                send("tool.completed", {
+                const foundationFailureDetail = initialArtifactError instanceof Error
+                  ? initialArtifactError.message
+                  : "The opening visual scene could not be committed.";
+                send("tool.failed", {
                   runId,
                   stepId: foundationActivityId,
                   tool: "compose_visual_scene",
-                  detail: "The opening surface remained mounted and research continued on the same artboard.",
+                  detail: foundationFailureDetail,
                 });
-                send("step.completed", {
+                send("step.failed", {
                   runId,
                   stepId: foundationActivityId,
-                  detail: "Opening visual scene retained for grounded evidence.",
-                  objectIds: [],
+                  detail: foundationFailureDetail,
                 });
-                console.warn("Northstar retained the opening surface and continued after validation telemetry was unavailable:", foundationFailureDetail);
+                throw new NorthstarVisualStageBlockedError("foundation", foundationFailureDetail, initialArtifactError);
               }
             }
 
@@ -11398,8 +11314,11 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             });
             let lastLiveArtifactPackage = preparedInitialLivePackage ?? selectedLivePackage;
             let lastLiveArtifactRevisionId = lastLiveArtifactPackage?.revisionId;
-            let lastLiveMutationAck: NorthstarArtifactMutationAcknowledgement | undefined;
-            const liveArtboardActor = new NorthstarArtboardActor(lastLiveArtifactPackage);
+            let lastLiveMutationAck: NorthstarArtifactMutationAcknowledgement | undefined = preparedInitialLiveAcknowledgement;
+            const liveArtboardActor = new NorthstarArtboardActor(
+              lastLiveArtifactPackage,
+              preparedInitialLiveAcknowledgement,
+            );
             let liveArtifactDispatchQueue: Promise<boolean> = Promise.resolve(true);
             let liveLateAcknowledgementCount = 0;
             let liveQualityRejectionCount = 0;
@@ -11446,53 +11365,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 }
               }
               return { ok: true };
-            };
-
-            const retainCommittedLiveArtboard = async (stageIndex: number): Promise<void> => {
-              const snapshot = liveArtboardActor.snapshot();
-              if (!snapshot) {
-                throw new Error("Cannot retain the canonical artboard before a committed snapshot exists.");
-              }
-              const committedSnapshot = withoutPendingNorthstarAckToken(snapshot);
-              const restoreStep: PlannerStep = {
-                id: `restore-verified-artboard-${crypto.randomUUID()}`,
-                label: "Retain verified artboard state",
-                tool: "compose_visual_scene",
-                icon: "write",
-                arguments: {
-                  artifactId: committedSnapshot.artifactId,
-                  artifactType: committedSnapshot.artifactType as ArtifactType,
-                  executionDepth: compositionDepth,
-                  workingVisibility: "hidden",
-                  audience: committedSnapshot.audience as ArtifactAudience,
-                  title: committedSnapshot.title,
-                  compositionJson: JSON.stringify({
-                    schema: NORTHSTAR_CODE_ARTIFACT_ACTION_SCHEMA,
-                    artifactId: committedSnapshot.artifactId,
-                    command: "create-or-update",
-                    stageIndex,
-                    package: committedSnapshot,
-                  }),
-                  resultKey: "live-generated-artifact",
-                  placement: "center",
-                  selectAfter: false,
-                },
-              };
-              const restoreAction = await buildCanvasActionRequest({
-                step: restoreStep,
-                getDataCatalog,
-                previousResults: toolResults,
-                canvasContext: body.canvasContext,
-                selectedCanvasContext: body.selectedCanvasContext,
-                validObjectIds,
-              });
-              // This action only clears the speculative outer package. The
-              // iframe runtime already rolls a rejected DOM transaction back
-              // atomically, so requiring a second browser acknowledgement here
-              // creates a circular failure and forces a visible remount.
-              send("canvas.action.requested", { runId, action: restoreAction });
-              lastLiveArtifactPackage = committedSnapshot;
-              lastLiveArtifactRevisionId = committedSnapshot.revisionId;
             };
 
             const dispatchLiveArtifactPackageInternal = async (
@@ -11660,14 +11532,14 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 });
                 activityStarted = true;
 
-                // Register both the process-local and cross-instance listeners
-                // before the browser can publish a fast acknowledgement.
+                // Register the exact proposal waiter before dispatch. Realtime is
+                // only a delivery accelerator; no timeout may fabricate a commit.
                 const acknowledgementPromise = prepareNorthstarAcknowledgementWithReconciliation({
                   ackToken: proposal.ackToken,
                   artifactId: publishablePackage.artifactId,
                   acceptedStatuses: latestBatch
-                    ? ["applied", "rejected"]
-                    : ["ready", "rejected"],
+                    ? ["applied", "rejected", "sync-required", "blocked"]
+                    : ["ready", "rejected", "sync-required", "blocked"],
                   executionTimeoutMs: NORTHSTAR_BROWSER_ACK_TIMEOUT_MS,
                   reconciliationWindowMs: NORTHSTAR_ACK_RECONCILIATION_MS,
                   signal: request.signal,
@@ -11678,25 +11550,87 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 send("canvas.action.requested", { runId, action });
 
                 const acknowledgementWait = await acknowledgementPromise.result;
-                const browserReportedAcknowledgement = acknowledgementWait.acknowledgement;
-                const acknowledgement = browserReportedAcknowledgement
-                  ?? buildNorthstarDeliveryFallbackAcknowledgement({
-                    artifact: publishablePackage,
-                    ackToken: proposal.ackToken,
-                    proposalId: proposal.proposalId,
-                    baseRevisionId: proposal.baseRevisionId,
-                    mutation: latestBatch,
-                    changedNodeIds: expectedChangedNodeIds,
-                    stageIndex,
-                  });
+                const acknowledgement = acknowledgementWait.acknowledgement;
+                if (!acknowledgement) {
+                  liveArtboardActor.abandonUnacknowledged(proposal);
+                  const detail = "The artboard transaction did not return a terminal repository result. HEAD was not advanced.";
+                  send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                  send("step.failed", { runId, stepId: activityStepId, detail });
+                  return { status: "pending", detail, recoverable: false };
+                }
                 if (acknowledgementWait.deadlineExpired) {
                   liveLateAcknowledgementCount += 1;
-                  console.info("Northstar reconciled delayed acknowledgement transport from the persistent client delivery queue.", {
+                  console.info("Northstar received the real terminal repository result during reconciliation.", {
                     proposalId: proposal.proposalId,
                     revisionId: publishablePackage.revisionId,
                   });
                 }
 
+                if (acknowledgement.status === "sync-required" || isNorthstarLineageRejection(acknowledgement)) {
+                  liveArtboardActor.abandonUnacknowledged(proposal);
+                  lastLiveMutationAck = acknowledgement;
+                  const detail = acknowledgement.reason || "The browser and server no longer agree on repository HEAD.";
+                  send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                  send("step.failed", { runId, stepId: activityStepId, detail });
+                  return { status: "sync-required", detail, recoverable: false };
+                }
+                if (acknowledgement.status === "blocked") {
+                  liveArtboardActor.abandonUnacknowledged(proposal);
+                  lastLiveMutationAck = acknowledgement;
+                  const detail = acknowledgement.reason || "The artboard repository blocked a contradictory transaction result.";
+                  send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                  send("step.failed", { runId, stepId: activityStepId, detail });
+                  return { status: "blocked", detail, recoverable: false };
+                }
+
+                if (acknowledgement.status === "rejected") {
+                  liveArtboardActor.reject(proposal, acknowledgement);
+                  lastLiveMutationAck = acknowledgement;
+                  if (isNorthstarVerifiedNoop(acknowledgement)) {
+                    const detail = acknowledgement.reason || "The proposed update was already represented by repository HEAD.";
+                    send("tool.completed", {
+                      runId,
+                      stepId: activityStepId,
+                      tool: "compose_visual_scene",
+                      detail: "No new commit was needed; repository HEAD remained unchanged.",
+                    });
+                    send("step.completed", { runId, stepId: activityStepId, detail, objectIds: [] });
+                    return { status: "skipped", detail, recoverable: true };
+                  }
+
+                  const rejectionSignature = normalizeLiveRejectionSignature(acknowledgement);
+                  const repeatedCount = (liveRejectionSignatures.get(rejectionSignature) ?? 0) + 1;
+                  liveRejectionSignatures.set(rejectionSignature, repeatedCount);
+                  if (isExpectedNorthstarQualityRejection(acknowledgement)) liveQualityRejectionCount += 1;
+                  const detail = acknowledgement.reason || "The browser rejected the hidden staged worktree; repository HEAD remained unchanged.";
+                  console.info("Northstar rejected a hidden candidate without changing the visible artboard.", {
+                    proposalId: proposal.proposalId,
+                    rejectionSignature,
+                    repeatedCount,
+                  });
+                  retainVisualActivity(detail);
+                  return { status: "rejected", detail, recoverable: true };
+                }
+
+                if (!liveArtboardActor.matches(proposal, acknowledgement)) {
+                  liveArtboardActor.abandonUnacknowledged(proposal);
+                  const detail = acknowledgement.reason || "The committed browser result did not match the active proposal identity.";
+                  send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                  send("step.failed", { runId, stepId: activityStepId, detail });
+                  return { status: "blocked", detail, recoverable: false };
+                }
+
+                // The repository has already moved HEAD and both browser/workspace
+                // projections attest to this commit. Observe that exact state before
+                // applying any design-quality judgement to the next creative move.
+                const materializedPreview = materializeNorthstarCanonicalPackage(publishablePackage, acknowledgement);
+                proposal.candidate = materializedPreview;
+                const committedPackage = liveArtboardActor.commit(proposal, acknowledgement);
+                lastLiveArtifactPackage = committedPackage;
+                lastLiveArtifactRevisionId = committedPackage.revisionId;
+                lastLiveMutationAck = acknowledgement;
+
+                const technicalIntegrityPassed = liveAcknowledgementPassed(acknowledgement, latestBatch?.mutationId);
                 const contractReview = latestBatch
                   ? reviewNorthstarBrowserCommit({
                       acknowledgement,
@@ -11704,89 +11638,18 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                       expectedChangedNodeIds,
                     })
                   : undefined;
-                const materializedPreview = materializeNorthstarCanonicalPackage(publishablePackage, acknowledgement);
-                const semanticAcceptance = acceptMaterialized?.(materializedPreview, acknowledgement);
-                if (!liveArtboardActor.matches(proposal, acknowledgement)
-                  || !liveAcknowledgementPassed(acknowledgement, latestBatch?.mutationId)
-                  || (contractReview && !contractReview.accepted)
-                  || (semanticAcceptance && !semanticAcceptance.accepted)) {
-                  liveArtboardActor.discard(proposal);
-                  const browserRejected = acknowledgement.status === "rejected";
-                  const lineageRejected = isNorthstarLineageRejection(acknowledgement);
-                  if (!browserRejected) lastLiveMutationAck = acknowledgement;
-                  await retainCommittedLiveArtboard(stageIndex);
-
-                  if (isNorthstarVerifiedNoop(acknowledgement)) {
-                    const detail = acknowledgement.reason || "The proposed update was already represented by the verified artboard.";
-                    console.info("Northstar treated a browser-verified no-op as a completed checkpoint and retained the canonical artboard.", {
-                      proposalId: proposal.proposalId,
-                      detail,
-                    });
-                    send("tool.completed", {
-                      runId,
-                      stepId: activityStepId,
-                      tool: "compose_visual_scene",
-                      detail: "No additional visible change was needed; the verified artboard was retained.",
-                    });
-                    send("step.completed", {
-                      runId,
-                      stepId: activityStepId,
-                      detail: "The requested visual state was already present on the living artboard.",
-                      objectIds: [],
-                    });
-                    return { status: "skipped", detail, recoverable: true };
-                  }
-
-                  const rejectionSignature = normalizeLiveRejectionSignature(acknowledgement);
-                  const repeatedCount = (liveRejectionSignatures.get(rejectionSignature) ?? 0) + 1;
-                  liveRejectionSignatures.set(rejectionSignature, repeatedCount);
-
-                  if (isExpectedNorthstarQualityRejection(acknowledgement)) {
-                    liveQualityRejectionCount += 1;
-                    console.info("Northstar retained the last accepted artboard and will prepare a different compatible move.", {
-                      rejectionSignature,
-                      attempt: repeatedCount,
-                      totalQualityRejections: liveQualityRejectionCount,
-                    });
-                    const detail = acknowledgement.reason || "The browser rejected a non-material visual change.";
-                    retainVisualActivity(detail);
-                    return { status: "rejected", detail, recoverable: true };
-                  }
-                  if (lineageRejected) {
-                    console.warn("Northstar detected revision divergence and will rebase the next transaction on the exact actor snapshot.", acknowledgement.reason);
-                    const detail = acknowledgement.reason || "The browser reported revision divergence.";
-                    retainVisualActivity(detail);
-                    return { status: "rejected", detail, recoverable: true };
-                  }
-                  console.warn("Northstar rejected an uncommitted visual proposal and retained the last accepted artboard.", {
-                    proposalId: proposal.proposalId,
-                    rejectionSignature,
-                    repeatedCount,
-                    contractIssues: contractReview?.issues,
-                    semanticIssues: semanticAcceptance?.issues,
-                  });
-                  const detail = acknowledgement.reason
-                    || contractReview?.issues.join(" ")
-                    || semanticAcceptance?.issues.join(" ")
-                    || "The browser rejected the visual transaction.";
-                  retainVisualActivity(detail);
-                  return { status: "rejected", detail, recoverable: true };
-                }
-
-                // Commit the exact browser-materialized canonical scene, not the pre-render
-                // proposal. This keeps the actor snapshot, next mutation base, and visible DOM
-                // in lockstep and prevents later proposals from appearing to replace the document.
-                proposal.candidate = materializedPreview;
-                const committedPackage = liveArtboardActor.commit(proposal, acknowledgement);
-                lastLiveArtifactPackage = committedPackage;
-                lastLiveArtifactRevisionId = committedPackage.revisionId;
-                lastLiveMutationAck = acknowledgement;
+                const semanticAcceptance = acceptMaterialized?.(committedPackage, acknowledgement);
+                const designIssues = [
+                  ...(acknowledgement.designObservations ?? []),
+                  ...(contractReview?.issues ?? []),
+                  ...(semanticAcceptance?.issues ?? []),
+                ].filter(Boolean);
 
                 toolResults.push({
                   stepId: step.id,
                   tool: step.tool,
                   label: step.label,
-                  detail: "The browser committed the visible artboard proposal.",
+                  detail: "The repository committed and projected the exact browser artboard state.",
                   objectIds: [],
                   data: {
                     canvasAction: {
@@ -11794,107 +11657,72 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                       tool: action.tool,
                       arguments: action.arguments,
                       artifactId: committedPackage.artifactId,
+                      commitHash: acknowledgement.commitHash,
                     },
                   },
-                  ok: true,
+                  ok: technicalIntegrityPassed,
                 });
+
+                if (!technicalIntegrityPassed) {
+                  const detail = "Repository HEAD advanced, but the resulting commit failed a deterministic integrity review. Authorship is paused.";
+                  send("tool.failed", { runId, stepId: activityStepId, tool: "compose_visual_scene", detail });
+                  send("step.failed", { runId, stepId: activityStepId, detail });
+                  return { status: "blocked", detail, recoverable: false };
+                }
+
+                if ((contractReview && !contractReview.accepted) || (semanticAcceptance && !semanticAcceptance.accepted)) {
+                  const detail = designIssues.join(" ") || "The commit is valid, but the current design obligation remains unresolved.";
+                  send("tool.completed", {
+                    runId,
+                    stepId: activityStepId,
+                    tool: "compose_visual_scene",
+                    detail: "The artboard advanced to a new verified commit; design refinement remains open.",
+                  });
+                  send("step.completed", {
+                    runId,
+                    stepId: activityStepId,
+                    detail: "The same artboard evolved, and the next design move will begin from this committed state.",
+                    objectIds: [],
+                  });
+                  return {
+                    status: "committed",
+                    detail: `Repository HEAD advanced; design refinement remains open. ${detail}`,
+                  };
+                }
+
                 send("tool.completed", {
                   runId,
                   stepId: activityStepId,
                   tool: "compose_visual_scene",
-                  detail: browserReportedAcknowledgement
-                    ? "The browser verified the canonical scene update without clearing the artboard."
-                    : "The persistent client transaction was delivered; delayed acknowledgement telemetry will reconcile asynchronously.",
+                  detail: "The browser and workspace projected the same immutable artboard commit.",
                 });
                 send("step.completed", {
                   runId,
                   stepId: activityStepId,
-                  detail: browserReportedAcknowledgement
-                    ? "Visual update verified and committed to the same living artboard."
-                    : "Visual update committed to the same living artboard without blocking on delayed telemetry.",
+                  detail: "Visual update committed to the same living artboard.",
                   objectIds: [],
                 });
                 return {
                   status: "committed",
-                  detail: browserReportedAcknowledgement
-                    ? "The browser verified and committed the visual transaction."
-                    : "The visual transaction was delivered and committed while acknowledgement telemetry reconciles.",
+                  detail: "The repository advanced HEAD after matching browser and workspace projection receipts.",
                 };
               } catch (error) {
-                liveArtboardActor.discard(proposal);
+                liveArtboardActor.abandonUnacknowledged(proposal);
                 if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-                  // A stop can arrive while the browser is showing an uncommitted candidate.
-                  // Re-publish the actor's committed snapshot before terminating so the
-                  // Canvas never serializes or leaves a provisional duplicate scene visible.
-                  const rollbackSnapshot = liveArtboardActor.snapshot();
-                  if (!rollbackSnapshot) {
-                    console.warn("Northstar could not restore the last verified artboard because no committed snapshot exists.");
-                    throw error;
-                  }
-                  const rollbackPackage: NorthstarGeneratedCodeArtifactPackage = {
-                    ...withoutPendingNorthstarAckToken(rollbackSnapshot),
-                    provisional: false,
-                  };
-                  const rollbackStep: PlannerStep = {
-                    id: `rollback-live-artifact-${crypto.randomUUID()}`,
-                    label: "Restore the last verified artboard",
-                    tool: "compose_visual_scene",
-                    icon: "write",
-                    arguments: {
-                      artifactId: rollbackPackage.artifactId,
-                      artifactType: rollbackPackage.artifactType as ArtifactType,
-                      executionDepth: compositionDepth,
-                      workingVisibility: "hidden",
-                      audience: rollbackPackage.audience as ArtifactAudience,
-                      title: rollbackPackage.title,
-                      compositionJson: JSON.stringify({
-                        schema: NORTHSTAR_CODE_ARTIFACT_ACTION_SCHEMA,
-                        artifactId: rollbackPackage.artifactId,
-                        command: "create-or-update",
-                        stageIndex,
-                        package: rollbackPackage,
-                      }),
-                      resultKey: "live-generated-artifact",
-                      placement: "center",
-                      selectAfter: false,
-                    },
-                  };
-                  try {
-                    const rollbackAction = await buildCanvasActionRequest({
-                      step: rollbackStep,
-                      getDataCatalog,
-                      previousResults: toolResults,
-                      canvasContext: body.canvasContext,
-                      selectedCanvasContext: body.selectedCanvasContext,
-                      validObjectIds,
-                    });
-                    send("canvas.action.requested", { runId, action: rollbackAction });
-                    send("tool.completed", {
-                      runId,
-                      stepId: activityStepId,
-                      tool: "compose_visual_scene",
-                      detail: "Run stopped. The last browser-verified artboard was restored.",
-                    });
-                    send("step.completed", {
-                      runId,
-                      stepId: activityStepId,
-                      detail: "Run stopped. The last browser-verified artboard was restored.",
-                      objectIds: [],
-                    });
-                  } catch (rollbackError) {
-                    console.warn("Northstar could not dispatch the stop-time visual rollback.", rollbackError);
-                  }
+                  // Staged candidates are hidden and HEAD remains visible, so stopping
+                  // requires no speculative package replacement or destructive rollback.
                   throw error;
                 }
                 const internalDetail = error instanceof Error ? error.message : String(error);
-                try {
-                  await retainCommittedLiveArtboard(stageIndex);
-                } catch (restoreError) {
-                  console.warn("Northstar kept the actor snapshot after the outer speculative package could not be cleared.", restoreError);
-                }
-                console.warn("Northstar will rebase and correct the proposal after an execution fault.", internalDetail);
-                retainVisualActivity(internalDetail);
-                return { status: "rejected", detail: internalDetail, recoverable: true };
+                send("tool.failed", {
+                  runId,
+                  stepId: activityStepId,
+                  tool: "compose_visual_scene",
+                  detail: internalDetail,
+                });
+                send("step.failed", { runId, stepId: activityStepId, detail: internalDetail });
+                console.warn("Northstar paused authorship after a transaction execution fault; repository HEAD was not fabricated or replaced.", internalDetail);
+                return { status: "blocked", detail: internalDetail, recoverable: false };
               }
             };
 
@@ -11940,14 +11768,8 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 signal: request.signal,
               });
               const opened = await dispatchLiveArtifactPackage(initialLivePackage, 0, "Open the live Northstar artifact");
-              if (opened.status !== "committed") {
-                // A transport acknowledgement is never allowed to abort the
-                // user's research run. The actor retained the last visible
-                // revision; the next checkpoint will evolve from that exact
-                // canonical scene (or open the first scene if none exists).
-                console.warn("Northstar retained the visible surface and continued after the opening acknowledgement was delayed.", {
-                  detail: opened.detail,
-                });
+              if (opened.status !== "committed" && opened.status !== "skipped") {
+                throw new NorthstarVisualStageBlockedError("foundation", opened.detail);
               }
             }
 
@@ -12344,15 +12166,22 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                     console.info(`Northstar checkpoint ${stagePhase} was already materialized on the verified artboard.`);
                     return;
                   }
-                  if (committed.status !== "committed") {
-                    console.info("Northstar retained the monotonic artboard checkpoint and continued after an incompatible candidate.", {
+                  if (committed.status === "rejected") {
+                    console.info("Northstar kept repository HEAD unchanged after the hidden candidate was technically rejected.", {
                       stagePhase,
                       detail: committed.detail,
                     });
                     return;
                   }
+                  if (committed.status !== "committed") {
+                    throw new NorthstarVisualStageBlockedError(stagePhase, committed.detail);
+                  }
                 } catch (error) {
-                  if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+                  if (
+                    request.signal.aborted
+                    || (error instanceof DOMException && error.name === "AbortError")
+                    || error instanceof NorthstarVisualStageBlockedError
+                  ) {
                     throw error;
                   }
                   const detail = error instanceof Error ? error.message : String(error ?? "Unknown checkpoint error");
@@ -12377,7 +12206,10 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   expectedChangedNodeIds,
                   acceptMaterialized,
                 );
-                return result.status === "committed";
+                if (result.status === "committed" || result.status === "skipped") return true;
+                if (result.status === "rejected") return false;
+                const stage = (["foundation", "evidence", "analysis", "recommendation", "refinement"] as const)[stageIndex] ?? "refinement";
+                throw new NorthstarVisualStageBlockedError(stage, result.detail);
               },
               failStep(step) {
                 send("tool.failed", {
@@ -12523,14 +12355,17 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             const finalSceneAssessment = assessNorthstarCanonicalScene(finalCodeArtifactPackage, finalAcknowledgement);
             const finalOpenObligations = listNorthstarOpenObligations(finalSceneAssessment, true);
             if (
-              finalSceneAssessment.publicationState !== "verified" ||
-              !finalSceneAssessment.processSettled ||
-              !finalSceneAssessment.publicationClean
+              !liveArtboardActor.publicationIsComplete()
+              || finalSceneAssessment.publicationState !== "verified"
+              || !finalSceneAssessment.processSettled
+              || !finalSceneAssessment.publicationClean
+              || !finalSceneAssessment.geometryVerified
+              || finalSceneAssessment.duplicateSemanticIds.length > 0
             ) {
-              console.info("Northstar completed the run on the latest browser-committed scene while publication telemetry settles.", {
-                revisionId: finalCodeArtifactPackage.revisionId,
-                unresolved: finalSceneAssessment.unresolved,
-              });
+              const unresolved = finalSceneAssessment.unresolved.length
+                ? finalSceneAssessment.unresolved.join("; ")
+                : "the final repository commit has not reached a clean, fully projected publication state";
+              throw new NorthstarVisualStageBlockedError("publication", unresolved);
             }
             const finalStateBrief = buildNorthstarFinalStateBrief({
               artifact: finalCodeArtifactPackage,

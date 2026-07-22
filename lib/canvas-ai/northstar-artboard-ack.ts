@@ -86,7 +86,13 @@ function isAcknowledgement(value: unknown): value is NorthstarArtifactMutationAc
     && typeof candidate.proposalId === "string"
     && typeof candidate.artifactId === "string"
     && typeof candidate.revisionId === "string"
-    && (candidate.status === "applied" || candidate.status === "rejected" || candidate.status === "ready");
+    && (
+      candidate.status === "applied"
+      || candidate.status === "rejected"
+      || candidate.status === "ready"
+      || candidate.status === "sync-required"
+      || candidate.status === "blocked"
+    );
 }
 
 function registry(): Registry {
@@ -117,20 +123,50 @@ function isTerminalFor(
   return acceptedStatuses.has(acknowledgement.status);
 }
 
+function acknowledgementIdentity(value: NorthstarArtifactMutationAcknowledgement): string {
+  return JSON.stringify({
+    proposalId: value.proposalId,
+    ackToken: value.ackToken,
+    transactionId: value.transactionId,
+    artifactId: value.artifactId,
+    surfaceId: value.surfaceId,
+    surfaceSessionId: value.surfaceSessionId,
+    baseRevisionId: value.baseRevisionId,
+    revisionId: value.revisionId,
+    mutationId: value.mutationId,
+    status: value.status,
+    commitHash: value.commitHash,
+    parentCommitHash: value.parentCommitHash,
+    documentHash: value.documentHash,
+    geometryHash: value.geometryHash,
+    commitSequence: value.commitSequence,
+  });
+}
+
 function preferredAcknowledgement(
   existing: NorthstarArtifactMutationAcknowledgement | undefined,
   incoming: NorthstarArtifactMutationAcknowledgement,
 ): NorthstarArtifactMutationAcknowledgement {
   if (!existing) return incoming;
-  // A mutation runtime can emit a provisional ready event immediately before
-  // mutation-applied. Never let that weaker event overwrite a terminal result.
-  const rank = (status: AcknowledgementStatus) => status === "ready" ? 0 : 1;
-  return rank(incoming.status) >= rank(existing.status) ? incoming : existing;
+  if (acknowledgementIdentity(existing) === acknowledgementIdentity(incoming)) return incoming;
+
+  // A legacy/provisional ready signal may be followed by the one real terminal
+  // repository result. No other terminal transition is legal for one token.
+  if (existing.status === "ready" && incoming.status !== "ready") return incoming;
+  if (incoming.status === "ready" && existing.status !== "ready") return existing;
+
+  return {
+    ...existing,
+    status: "blocked",
+    reason: `Contradictory terminal acknowledgements were received for transaction ${existing.transactionId ?? existing.ackToken}.`,
+    repositoryStatus: "blocked",
+    acknowledgedAt: new Date().toISOString(),
+  };
 }
 
 export function publishNorthstarArtifactAcknowledgement(
   acknowledgement: NorthstarArtifactMutationAcknowledgement,
-): void {
+): NorthstarArtifactMutationAcknowledgement {
   const state = registry();
   prune(state);
 
@@ -144,15 +180,16 @@ export function publishNorthstarArtifactAcknowledgement(
   });
 
   const waiters = state.waiters.get(acknowledgement.ackToken);
-  if (!waiters) return;
+  if (!waiters) return stored;
   for (const waiter of [...waiters]) {
-    if (waiter.artifactId !== acknowledgement.artifactId) continue;
-    if (!isTerminalFor(acknowledgement, waiter.acceptedStatuses)) continue;
+    if (waiter.artifactId !== stored.artifactId) continue;
+    if (!isTerminalFor(stored, waiter.acceptedStatuses)) continue;
     waiters.delete(waiter);
     clearTimeout(waiter.timer);
-    waiter.resolve(acknowledgement);
+    waiter.resolve(stored);
   }
   if (waiters.size === 0) state.waiters.delete(acknowledgement.ackToken);
+  return stored;
 }
 
 export function getNorthstarArtifactAcknowledgement(
@@ -318,7 +355,9 @@ export function prepareNorthstarArtifactAcknowledgementWait(input: {
   prune(state);
   const artifactId = input.artifactId ?? artifactIdFromAckToken(input.ackToken);
   const acceptedStatuses = new Set<AcknowledgementStatus>(
-    input.acceptedStatuses?.length ? input.acceptedStatuses : ["ready", "applied", "rejected"],
+    input.acceptedStatuses?.length
+      ? input.acceptedStatuses
+      : ["ready", "applied", "rejected", "sync-required", "blocked"],
   );
   const existing = state.acknowledgements.get(input.ackToken)?.acknowledgement;
   if (existing && existing.artifactId === artifactId && isTerminalFor(existing, acceptedStatuses)) {

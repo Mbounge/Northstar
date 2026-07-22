@@ -71,8 +71,14 @@ import {
   X,
 } from "lucide-react";
 import { CodeArtifactHost } from "@/components/canvas/artifacts/code-artifact-host";
+import {
+  NorthstarArchitectureProvider,
+  type NorthstarArchitectureContextValue,
+} from "@/components/canvas/northstar-architecture-context";
+import { NorthstarLedgerInspector } from "@/components/canvas/northstar-ledger-inspector";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { createPrototypeCodeArtifactPayload } from "@/lib/canvas-artifacts/prototype";
+import { createNorthstarDirectBootstrapArtifactPayload } from "@/lib/canvas-artifacts/northstar-direct-bootstrap";
 import {
   applyCanvasCodeArtifactStage,
   createCanvasCodeArtifactPayloadFromPackage,
@@ -85,9 +91,21 @@ import {
 } from "@/lib/canvas-artifacts/types";
 import { createClient } from "@/lib/supabase/client";
 import {
-  materializeNorthstarBrowserCommit,
-  type NorthstarBrowserCommit,
+  projectNorthstarCommitIntoArtifact,
 } from "@/lib/canvas-ai/northstar-transaction-kernel";
+import type {
+  NorthstarArtboardCommit,
+  NorthstarProjectionReceipt,
+} from "@/lib/canvas-artifacts/types";
+import { createNorthstarEphemeralLedger } from "@/lib/canvas-ledger/northstar-ephemeral-ledger";
+import type { NorthstarEphemeralLedger, NorthstarLedgerValue } from "@/lib/canvas-ledger/types";
+import {
+  createNorthstarWorkspaceRuntime,
+  type NorthstarWorkspaceRuntime,
+  type NorthstarWorkspaceRuntimeSnapshot,
+} from "@/lib/canvas-architecture/northstar-workspace-runtime";
+import { createNorthstarTurnClient } from "@/lib/canvas-ai/northstar-turn-client";
+import { createNorthstarWindowProjectionSurface } from "@/lib/canvas-projection/window-surface";
 import { cn } from "@/lib/utils";
 
 const unbounded = Unbounded({
@@ -8172,6 +8190,97 @@ export function NorthStarCanvasWorkspace({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasSessionIdRef = useRef(makeId());
   const chatSessionIdRef = useRef(makeId());
+  const northstarTotalArchitectureEnabled =
+    process.env.NEXT_PUBLIC_NORTHSTAR_TOTAL_ARCHITECTURE === "true";
+  const northstarLedgerFoundationEnabled =
+    process.env.NEXT_PUBLIC_NORTHSTAR_LEDGER_FOUNDATION === "true" &&
+    !northstarTotalArchitectureEnabled;
+  const northstarLedgerFoundationRef = useRef<NorthstarEphemeralLedger | null>(null);
+  const northstarLedgerFoundationRunIdRef = useRef<string | null>(null);
+  const northstarLedgerDisposalTimerRef = useRef<number | null>(null);
+  const northstarProjectionFramesRef = useRef(new Map<string, HTMLIFrameElement>());
+  const northstarProjectionTargetFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const northstarBootstrapArtifactRef = useRef(false);
+  const [northstarWorkspaceRuntime, setNorthstarWorkspaceRuntime] =
+    useState<NorthstarWorkspaceRuntime | null>(null);
+
+  const registerNorthstarProjectionFrame = useCallback<NorthstarArchitectureContextValue["registerProjectionFrame"]>(
+    ({ artifactId, frame }) => {
+      northstarProjectionFramesRef.current.set(artifactId, frame);
+      if (!northstarProjectionTargetFrameRef.current) {
+        northstarProjectionTargetFrameRef.current = frame;
+      }
+      return () => {
+        const current = northstarProjectionFramesRef.current.get(artifactId);
+        if (current !== frame) return;
+        northstarProjectionFramesRef.current.delete(artifactId);
+        if (northstarProjectionTargetFrameRef.current === frame) {
+          northstarProjectionTargetFrameRef.current =
+            northstarProjectionFramesRef.current.values().next().value ?? null;
+        }
+      };
+    },
+    [],
+  );
+
+  const northstarArchitectureContext = useMemo<NorthstarArchitectureContextValue>(() => ({
+    enabled: northstarTotalArchitectureEnabled,
+    registerProjectionFrame: registerNorthstarProjectionFrame,
+  }), [northstarTotalArchitectureEnabled, registerNorthstarProjectionFrame]);
+
+  useEffect(() => {
+    if (!northstarTotalArchitectureEnabled) return;
+    const projectionFrames = northstarProjectionFramesRef.current;
+    const projectionSurface = createNorthstarWindowProjectionSurface({
+      ownerWindow: window,
+      getTargetWindow: () => northstarProjectionTargetFrameRef.current?.contentWindow ?? null,
+      timeoutMs: 12_000,
+    });
+    const runtime = createNorthstarWorkspaceRuntime({
+      projectionSurface,
+      turnClient: createNorthstarTurnClient(),
+    });
+    setNorthstarWorkspaceRuntime(runtime);
+    return () => {
+      setNorthstarWorkspaceRuntime(null);
+      runtime.dispose();
+      projectionSurface.dispose();
+      projectionFrames.clear();
+      northstarProjectionTargetFrameRef.current = null;
+    };
+  }, [northstarTotalArchitectureEnabled]);
+
+  if (northstarLedgerFoundationEnabled && northstarLedgerFoundationRef.current === null) {
+    const ledger = createNorthstarEphemeralLedger({
+      objective: "Northstar canvas session",
+      initialStateSnapshot: {
+        phase: "ledger-foundation",
+        canvasSessionId: canvasSessionIdRef.current,
+      },
+    });
+    northstarLedgerFoundationRef.current = ledger;
+    northstarLedgerFoundationRunIdRef.current = ledger.getSnapshot().run.id;
+  }
+
+  useEffect(() => {
+    if (northstarLedgerDisposalTimerRef.current !== null) {
+      window.clearTimeout(northstarLedgerDisposalTimerRef.current);
+      northstarLedgerDisposalTimerRef.current = null;
+    }
+
+    return () => {
+      const ledger = northstarLedgerFoundationRef.current;
+      if (!ledger) return;
+      northstarLedgerDisposalTimerRef.current = window.setTimeout(() => {
+        if (northstarLedgerFoundationRef.current === ledger) {
+          ledger.dispose();
+          northstarLedgerFoundationRef.current = null;
+          northstarLedgerFoundationRunIdRef.current = null;
+        }
+        northstarLedgerDisposalTimerRef.current = null;
+      }, 0);
+    };
+  }, []);
   const storageKey = `northstar-canvas:v78:${userEmail}:${canvasSessionIdRef.current}`;
   const objectsRef = useRef<CanvasObject[]>([]);
   const historyPastRef = useRef<CanvasObject[][]>([]);
@@ -10341,7 +10450,34 @@ export function NorthStarCanvasWorkspace({
                 object.type === "code-artifact" &&
                 object.codeArtifact?.artifactId === authoredArtifact.artifactId,
             );
-            const artifact = authoredArtifact;
+            const pendingMutation = authoredArtifact.mutationJournal?.at(-1);
+            const pendingAckToken = authoredArtifact.pendingAckToken;
+            const pendingProposal = existing?.codeArtifact && pendingMutation && pendingAckToken
+              ? {
+                  schema: "northstar.canvas-pending-proposal.v1" as const,
+                  proposalId: pendingAckToken.split(":").at(-1) || pendingAckToken,
+                  transactionId: pendingAckToken,
+                  ackToken: pendingAckToken,
+                  revisionId: authoredArtifact.revisionId,
+                  parentRevisionId: authoredArtifact.parentRevisionId,
+                  mutation: pendingMutation,
+                  stageIndex: codeArtifactAction.stageIndex,
+                  candidatePackage: artifactPackage,
+                }
+              : undefined;
+            // A later LLM proposal is metadata beside HEAD, never a speculative
+            // replacement for the canonical document, revision, or geometry.
+            const artifact = pendingProposal && existing?.codeArtifact
+              ? {
+                  ...existing.codeArtifact,
+                  pendingAckToken,
+                  pendingProposal,
+                  repositoryStatus: existing.codeArtifact.repositoryStatus ?? "clean",
+                  buildState: authoredArtifact.buildState,
+                  status: authoredArtifact.status,
+                  updatedAt: authoredArtifact.updatedAt,
+                }
+              : authoredArtifact;
             const center = canvasCenter();
             const preferredRect: Rect = existing?.codeArtifact
               ? {
@@ -13060,8 +13196,7 @@ export function NorthStarCanvasWorkspace({
     setColorPopover(null);
   };
 
-  const insertPrototypeCodeArtifact = useCallback(() => {
-    const artifact = createPrototypeCodeArtifactPayload();
+  const insertCodeArtifactPayload = useCallback((artifact: CanvasCodeArtifactPayload) => {
     const bounds = canvasRef.current?.getBoundingClientRect();
     const center = bounds
       ? screenToWorld(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
@@ -13121,6 +13256,28 @@ export function NorthStarCanvasWorkspace({
     setEditingCell(null);
     setColorPopover(null);
   }, [commitHistorySnapshot, screenToWorld]);
+
+  const insertPrototypeCodeArtifact = useCallback(() => {
+    insertCodeArtifactPayload(
+      northstarTotalArchitectureEnabled
+        ? createNorthstarDirectBootstrapArtifactPayload()
+        : createPrototypeCodeArtifactPayload(),
+    );
+  }, [insertCodeArtifactPayload, northstarTotalArchitectureEnabled]);
+
+  useEffect(() => {
+    if (!northstarTotalArchitectureEnabled || northstarBootstrapArtifactRef.current) return;
+    if (objects.some((object) =>
+      isBoxObject(object) &&
+      object.type === "code-artifact" &&
+      Boolean(object.codeArtifact?.document && object.codeArtifact.dataBundle)
+    )) {
+      northstarBootstrapArtifactRef.current = true;
+      return;
+    }
+    northstarBootstrapArtifactRef.current = true;
+    insertCodeArtifactPayload(createNorthstarDirectBootstrapArtifactPayload());
+  }, [insertCodeArtifactPayload, northstarTotalArchitectureEnabled, objects]);
 
   const insertVisualComponentPreset = useCallback(
     (preset: CanvasComponentPreset) => {
@@ -14567,7 +14724,12 @@ export function NorthStarCanvasWorkspace({
   };
 
   return (
+    <NorthstarArchitectureProvider value={northstarArchitectureContext}>
     <div
+      data-northstar-ledger-foundation={northstarLedgerFoundationEnabled ? "enabled" : "disabled"}
+      data-northstar-ledger-run-id={northstarLedgerFoundationRunIdRef.current ?? undefined}
+      data-northstar-total-architecture={northstarTotalArchitectureEnabled ? "enabled" : "disabled"}
+      data-northstar-writer={northstarTotalArchitectureEnabled ? "direct-projection" : "legacy-repository"}
       className="relative h-screen w-screen overflow-hidden bg-[#EEF0F8] text-zinc-950 dark:bg-[#050505] dark:text-white font-sans overscroll-none"
       onContextMenu={(event) => {
         event.preventDefault();
@@ -14709,37 +14871,28 @@ export function NorthStarCanvasWorkspace({
                   beginObjectMoveAtPoint(object, { clientX, clientY });
                 }}
                 onArtifactContentSize={(size) => {
-                  // One monotonic live-layout clock per mounted revision. A remounted
-                  // iframe starts its own sequence, so artifact-only clocks can reject
-                  // a valid clean terminal measurement from the next revision.
+                  // Browser size messages are diagnostics only. Geometry is versioned with
+                  // the immutable commit and may change only through onArtifactProjectCommit.
                   const sequenceKey = `${size.artifactId}:${size.revisionId}`;
                   const previousSequence = artifactContentSizeSequenceRef.current.get(sequenceKey) ?? -1;
                   const nextSequence = size.sequence ?? previousSequence + 1;
-                  if (nextSequence < previousSequence) return;
-                  artifactContentSizeSequenceRef.current.set(sequenceKey, nextSequence);
-
+                  if (nextSequence >= previousSequence) {
+                    artifactContentSizeSequenceRef.current.set(sequenceKey, nextSequence);
+                  }
+                }}
+                onArtifactProjectCommit={(commit, surfaceSessionId) => {
                   const current = objectsRef.current;
-                  // TypeScript does not propagate assignments made inside Array.map callbacks
-                  // into control-flow narrowing after the callback. Collect eligible follow
-                  // targets explicitly, then select the latest committed geometry below.
-                  const followTargets: Array<{
-                    object: CanvasBoxObject;
-                    displayScale: number;
-                    targetBounds: { minX: number; minY: number; maxX: number; maxY: number };
-                    changedBounds?: { minX: number; minY: number; maxX: number; maxY: number };
-                  }> = [];
+                  let receipt: NorthstarProjectionReceipt | undefined;
+                  let projected = false;
                   const next = current.map((candidate) => {
                     if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
                       return candidate;
                     }
-                    // The current live DOM may be provisional, committed, rolling back,
-                    // loading assets, or animating. If it belongs to this mounted artifact,
-                    // its complete bounds are authoritative for the visible Canvas object.
-                    if (
-                      candidate.codeArtifact.artifactId !== size.artifactId
-                      || candidate.codeArtifact.revisionId !== size.revisionId
-                    ) return candidate;
-
+                    const result = projectNorthstarCommitIntoArtifact(
+                      candidate.codeArtifact,
+                      commit,
+                      surfaceSessionId,
+                    );
                     const previousIntrinsicWidth = Math.max(
                       1,
                       candidate.source?.originalWidth ?? candidate.codeArtifact.preferredWidth,
@@ -14761,199 +14914,71 @@ export function NorthStarCanvasWorkspace({
                       maxX: previousIntrinsicWidth,
                       maxY: previousIntrinsicHeight,
                     };
-                    const reportedBounds = size.contentBounds ?? {
-                      minX: previousBounds.minX,
-                      minY: previousBounds.minY,
-                      maxX: previousBounds.minX + Math.max(1, size.intrinsicWidth),
-                      maxY: previousBounds.minY + Math.max(1, size.intrinsicHeight),
-                    };
-                    const reportedWidth = Math.max(1, reportedBounds.maxX - reportedBounds.minX);
-                    const reportedHeight = Math.max(1, reportedBounds.maxY - reportedBounds.minY);
-                    // Reject viewport/self-measurement echoes. A single settled report must not
-                    // inflate an artboard by orders of magnitude or preserve blank viewport bands.
-                    if (
-                      reportedWidth > 24000 || reportedHeight > 24000 ||
-                      reportedWidth > previousIntrinsicWidth * 6 ||
-                      reportedHeight > Math.max(previousIntrinsicHeight * 6, 12000)
-                    ) return candidate;
-                    const clampedReportedBounds = {
-                      minX: Math.max(-24000, Math.min(24000, Math.floor(reportedBounds.minX))),
-                      minY: Math.max(-24000, Math.min(24000, Math.floor(reportedBounds.minY))),
-                      maxX: Math.max(-24000, Math.min(24000, Math.ceil(reportedBounds.maxX))),
-                      maxY: Math.max(-24000, Math.min(24000, Math.ceil(reportedBounds.maxY))),
-                    };
-
-                    // Geometry follows the complete live DOM immediately. A later reflow,
-                    // rollback, image load, font load, or publication cleanup simply emits a
-                    // newer sequence and moves the same object to the new exact bounds.
-                    const targetBounds = clampedReportedBounds;
-                    const targetIntrinsicWidth = Math.max(
-                      candidate.codeArtifact.minimumWidth,
-                      Math.min(24000, targetBounds.maxX - targetBounds.minX),
-                    );
-                    const targetIntrinsicHeight = Math.max(
-                      candidate.codeArtifact.minimumHeight,
-                      Math.min(24000, targetBounds.maxY - targetBounds.minY),
-                    );
-                    const targetCanvasWidth = Math.max(
-                      candidate.codeArtifact.minimumWidth * displayScale,
-                      targetIntrinsicWidth * displayScale,
-                    );
-                    const targetCanvasHeight = Math.max(
-                      candidate.codeArtifact.minimumHeight * displayScale,
-                      targetIntrinsicHeight * displayScale,
-                    );
-                    const targetX = candidate.x + (targetBounds.minX - previousBounds.minX) * displayScale;
-                    const targetY = candidate.y + (targetBounds.minY - previousBounds.minY) * displayScale;
-
-                    if (
-                      Math.abs(targetIntrinsicWidth - previousIntrinsicWidth) < 2 &&
-                      Math.abs(targetIntrinsicHeight - previousIntrinsicHeight) < 2 &&
-                      Math.abs(targetCanvasWidth - candidate.w) < 1 &&
-                      Math.abs(targetCanvasHeight - candidate.h) < 1 &&
-                      Math.abs(targetX - candidate.x) < 1 &&
-                      Math.abs(targetY - candidate.y) < 1
-                    ) {
-                      return candidate;
-                    }
-
+                    const geometry = commit.tree.geometry;
                     const updated: CanvasBoxObject = {
                       ...candidate,
-                      x: targetX,
-                      y: targetY,
-                      w: targetCanvasWidth,
-                      h: targetCanvasHeight,
+                      x: candidate.x + (geometry.contentBounds.minX - previousBounds.minX) * displayScale,
+                      y: candidate.y + (geometry.contentBounds.minY - previousBounds.minY) * displayScale,
+                      w: geometry.intrinsicWidth * displayScale,
+                      h: geometry.intrinsicHeight * displayScale,
                       source: candidate.source
                         ? {
                             ...candidate.source,
-                            originalWidth: targetIntrinsicWidth,
-                            originalHeight: targetIntrinsicHeight,
+                            originalWidth: geometry.intrinsicWidth,
+                            originalHeight: geometry.intrinsicHeight,
                           }
                         : candidate.source,
-                      codeArtifact: {
-                        ...candidate.codeArtifact,
-                        preferredWidth: targetIntrinsicWidth,
-                        preferredHeight: targetIntrinsicHeight,
-                        intrinsicBounds: targetBounds,
-                      },
+                      codeArtifact: result.artifact,
                     };
-                    const geometryChanged =
-                      Math.abs(targetCanvasWidth - candidate.w) > 2 ||
-                      Math.abs(targetCanvasHeight - candidate.h) > 2 ||
-                      Math.abs(targetX - candidate.x) > 2 ||
-                      Math.abs(targetY - candidate.y) > 2;
-                    if (geometryChanged) {
-                      followTargets.push({
-                        object: updated,
-                        displayScale,
-                        targetBounds,
-                        changedBounds: size.changedBounds,
-                      });
-                    }
+                    receipt = result.receipt;
+                    projected = true;
                     return updated;
                   });
-
-                  if (next.some((candidate, index) => candidate !== current[index])) {
-                    objectsRef.current = next;
-                    setObjects(next);
+                  if (!projected || !receipt) {
+                    throw new Error(`Workspace could not project commit ${commit.commitHash}.`);
                   }
-
-                  const followTarget = followTargets.at(-1);
-                  if (
-                    followTarget &&
-                    selectedIdsRef.current.includes(followTarget.object.id) &&
-                    Date.now() >= artifactAutoFollowSuspendedUntilRef.current
-                  ) {
-                    window.requestAnimationFrame(() => {
-                      const canvasRect = canvasRef.current?.getBoundingClientRect();
-                      if (!canvasRect) return;
-                      const workspaceInset = workspaceOpen ? 520 : 0;
-                      const padding = 104;
-                      const availableWidth = Math.max(320, canvasRect.width - workspaceInset - padding * 2);
-                      const availableHeight = Math.max(240, canvasRect.height - padding * 2);
-                      const { object: target, displayScale, targetBounds, changedBounds } = followTarget;
-                      const focusBounds = changedBounds ?? targetBounds;
-                      const focusX = target.x + (focusBounds.minX - targetBounds.minX) * displayScale;
-                      const focusY = target.y + (focusBounds.minY - targetBounds.minY) * displayScale;
-                      const focusWidth = Math.max(240, (focusBounds.maxX - focusBounds.minX) * displayScale);
-                      const focusHeight = Math.max(180, (focusBounds.maxY - focusBounds.minY) * displayScale);
-                      setViewport((currentViewport) => {
-                        // Follow the area that actually changed. Do not repeatedly fit the entire
-                        // growing artboard and make the live design microscopic.
-                        const requiredZoom = Math.min(
-                          availableWidth / Math.max(1, focusWidth + 120),
-                          availableHeight / Math.max(1, focusHeight + 120),
-                        );
-                        const fitZoom = clampZoom(Math.min(currentViewport.zoom, requiredZoom));
-                        const visibleCenterX = workspaceInset + padding + availableWidth / 2;
-                        const visibleCenterY = padding + availableHeight / 2;
-                        return {
-                          x: visibleCenterX - (focusX + focusWidth / 2) * fitZoom,
-                          y: visibleCenterY - (focusY + focusHeight / 2) * fitZoom,
-                          zoom: fitZoom,
-                        };
-                      });
-                    });
-                  }
+                  objectsRef.current = next;
+                  setObjects(next);
+                  return receipt;
                 }}
-                onArtifactBrowserCommit={(commit) => {
+                onArtifactProposalSettled={(ackToken, status) => {
                   const current = objectsRef.current;
+                  let changed = false;
                   const next = current.map((candidate) => {
-                    if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
+                    if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) return candidate;
+                    if (candidate.codeArtifact.pendingProposal?.ackToken !== ackToken && candidate.codeArtifact.pendingAckToken !== ackToken) {
                       return candidate;
                     }
-                    const committed = materializeNorthstarBrowserCommit(candidate.codeArtifact, commit);
-                    if (committed === candidate.codeArtifact) return candidate;
-                    return {
-                      ...candidate,
-                      source: candidate.source
-                        ? {
-                            ...candidate.source,
-                            originalWidth: committed.preferredWidth,
-                            originalHeight: committed.preferredHeight,
-                          }
-                        : candidate.source,
-                      codeArtifact: committed,
-                    };
-                  });
-                  if (next.some((candidate, index) => candidate !== current[index])) {
-                    objectsRef.current = next;
-                    setObjects(next);
-                  }
-                }}
-                onArtifactRuntimeReview={(review) => {
-                  const current = objectsRef.current;
-                  const next = current.map((candidate) => {
-                    if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
-                      return candidate;
-                    }
-                    const previous = candidate.codeArtifact.runtimeReview;
-                    if (
-                      previous &&
-                      previous.revisionId === review.revisionId &&
-                      previous.stageIndex === review.stageIndex &&
-                      previous.summary === review.summary &&
-                      previous.overflowElementCount === review.overflowElementCount &&
-                      previous.clippedTextCount === review.clippedTextCount &&
-                      previous.smallTextCount === review.smallTextCount &&
-                      previous.tinyInteractiveCount === review.tinyInteractiveCount &&
-                      previous.missingImageCount === review.missingImageCount &&
-                      previous.documentScrollRisk === review.documentScrollRisk
-                    ) {
-                      return candidate;
-                    }
+                    changed = true;
+                    const repositoryStatus: CanvasCodeArtifactPayload["repositoryStatus"] =
+                      status === "rejected" || status === "recovered" ? "clean" : status;
                     return {
                       ...candidate,
                       codeArtifact: {
                         ...candidate.codeArtifact,
-                        runtimeReview: review,
+                        pendingAckToken: undefined,
+                        pendingProposal: undefined,
+                        repositoryStatus,
+                        buildState: {
+                          ...candidate.codeArtifact.buildState,
+                          isBuilding: false,
+                          message: status === "rejected"
+                            ? "Candidate rejected; repository HEAD is unchanged"
+                            : status === "recovered"
+                              ? "Repository HEAD was restored; the proposal was not committed"
+                              : "Artboard synchronization is required",
+                        },
                       },
                     };
                   });
-                  if (next.some((candidate, index) => candidate !== current[index])) {
+                  if (changed) {
                     objectsRef.current = next;
                     setObjects(next);
                   }
+                }}
+                onArtifactRuntimeReview={() => {
+                  // Runtime review is committed atomically with the artboard tree. Never
+                  // mutate canonical artifact state from out-of-band review telemetry.
                 }}
                 onArtifactWheel={applyCanvasWheel}
                 onResizeStart={(direction, event) => {
@@ -15170,6 +15195,8 @@ export function NorthStarCanvasWorkspace({
               onInsertFlow={insertWorkspaceFlow}
               onExecuteCanvasAction={executeCanvasAIAction}
               onFinalizeCanvasActionRun={finalizeCanvasAIActionRun}
+              northstarWorkspaceRuntime={northstarWorkspaceRuntime}
+              northstarTotalArchitectureEnabled={northstarTotalArchitectureEnabled}
             />
           )}
           {workspaceTab === "shapes" && (
@@ -15307,6 +15334,7 @@ export function NorthStarCanvasWorkspace({
         </button>
       </div>
     </div>
+    </NorthstarArchitectureProvider>
   );
 }
 
@@ -16762,6 +16790,55 @@ function ChatAppExplorer({
   );
 }
 
+const EMPTY_NORTHSTAR_RUNTIME_SNAPSHOT: NorthstarWorkspaceRuntimeSnapshot = {
+  status: "idle",
+  ledger: null,
+  lastStep: null,
+};
+
+function northstarRuntimeActivity(
+  snapshot: NorthstarWorkspaceRuntimeSnapshot,
+): CanvasAIActivityItem[] {
+  const ledger = snapshot.ledger;
+  if (!ledger) return [];
+  return ledger.tasks.map((task) => ({
+    id: task.id,
+    kind: "tool",
+    status:
+      task.status === "completed"
+        ? "completed"
+        : task.status === "cancelled" || task.status === "superseded"
+          ? "cancelled"
+          : task.status === "blocked" || task.status === "retryable-failure"
+            ? "failed"
+            : "running",
+    icon:
+      task.kind === "research"
+        ? "search"
+        : task.kind === "analysis"
+          ? "analyze"
+          : task.kind === "artboard-mutation"
+            ? "write"
+            : "inspect",
+    label: task.intent,
+    detail: task.expectedOutcome,
+    objectIds: [],
+  }));
+}
+
+function northstarSummaryText(value: NorthstarLedgerValue | undefined): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const answer = (value as Record<string, NorthstarLedgerValue>).answer;
+    if (typeof answer === "string") return answer;
+    const summary = (value as Record<string, NorthstarLedgerValue>).summary;
+    if (typeof summary === "string") return summary;
+  }
+  return value === undefined
+    ? "North Star completed the ledger-controlled run."
+    : JSON.stringify(value, null, 2);
+}
+
 
 function ChatWorkspacePanel({
   sessionId,
@@ -16777,6 +16854,8 @@ function ChatWorkspacePanel({
   onInsertFlow,
   onExecuteCanvasAction,
   onFinalizeCanvasActionRun,
+  northstarWorkspaceRuntime,
+  northstarTotalArchitectureEnabled,
 }: {
   sessionId: string;
   canvasContext: CanvasContext;
@@ -16802,6 +16881,8 @@ function ChatWorkspacePanel({
     action: CanvasAIActionRequest
   ) => Promise<CanvasAIActionExecutionResult>;
   onFinalizeCanvasActionRun: (runId: string) => void;
+  northstarWorkspaceRuntime: NorthstarWorkspaceRuntime | null;
+  northstarTotalArchitectureEnabled: boolean;
 }) {
   const [messages, setMessages] = useState<CanvasAIChatMessage[]>([]);
   const [conversationSummary, setConversationSummary] = useState("");
@@ -16819,6 +16900,10 @@ function ChatWorkspacePanel({
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
   const [compositionCheckpoint, setCompositionCheckpoint] =
     useState<CanvasAICompositionCheckpoint | null>(null);
+  const [northstarRuntimeSnapshot, setNorthstarRuntimeSnapshot] =
+    useState<NorthstarWorkspaceRuntimeSnapshot>(
+      () => northstarWorkspaceRuntime?.getSnapshot() ?? EMPTY_NORTHSTAR_RUNTIME_SNAPSHOT,
+    );
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatFileInputRef = useRef<HTMLInputElement>(null);
@@ -16840,6 +16925,41 @@ function ChatWorkspacePanel({
     () => workspaceApps.find((app) => app.id === explorerAppId) ?? null,
     [explorerAppId, workspaceApps]
   );
+
+  useEffect(() => {
+    if (!northstarWorkspaceRuntime) {
+      setNorthstarRuntimeSnapshot(EMPTY_NORTHSTAR_RUNTIME_SNAPSHOT);
+      return;
+    }
+    const update = () => setNorthstarRuntimeSnapshot(northstarWorkspaceRuntime.getSnapshot());
+    update();
+    return northstarWorkspaceRuntime.subscribe(update);
+  }, [northstarWorkspaceRuntime]);
+
+  useEffect(() => {
+    if (!northstarWorkspaceRuntime) return;
+    const assistantId = activeAssistantIdRef.current;
+    if (!assistantId) return;
+    const runStatus: CanvasAIRunStatus =
+      northstarRuntimeSnapshot.status === "completed"
+        ? "completed"
+        : northstarRuntimeSnapshot.status === "cancelled"
+          ? "cancelled"
+          : northstarRuntimeSnapshot.status === "failed"
+            ? "failed"
+            : northstarRuntimeSnapshot.status === "blocked" || northstarRuntimeSnapshot.status === "awaiting-recovery"
+              ? "blocked"
+              : "running";
+    setMessages((current) => current.map((message) => message.id === assistantId
+      ? {
+          ...message,
+          runId: northstarRuntimeSnapshot.ledger?.run.id,
+          planTitle: "Northstar ledger run",
+          activity: northstarRuntimeActivity(northstarRuntimeSnapshot),
+          runStatus,
+        }
+      : message));
+  }, [northstarRuntimeSnapshot, northstarWorkspaceRuntime]);
 
   const openAppExplorer = useCallback((app: WorkspaceApp) => {
     setExplorerAppId(app.id);
@@ -17151,6 +17271,7 @@ function ChatWorkspacePanel({
   const cancelRun = useCallback(() => {
     const assistantId = activeAssistantIdRef.current;
     const runId = activeRunIdRef.current;
+    northstarWorkspaceRuntime?.cancelRun("Cancelled by the user.");
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     activeAssistantIdRef.current = null;
@@ -17175,7 +17296,7 @@ function ChatWorkspacePanel({
         };
       })
     );
-  }, [onFinalizeCanvasActionRun]);
+  }, [northstarWorkspaceRuntime, onFinalizeCanvasActionRun]);
 
   const sendMessage = async (messageOverride?: string) => {
     const message = (messageOverride ?? input).trim();
@@ -17338,6 +17459,58 @@ function ChatWorkspacePanel({
         ),
       }));
     };
+
+    if (northstarTotalArchitectureEnabled) {
+      try {
+        if (!northstarWorkspaceRuntime) {
+          throw new Error("Northstar is still mounting its ledger-controlled projection runtime. Try again when the artboard is ready.");
+        }
+        if (outgoingAttachments.length > 0) {
+          throw new Error(
+            "Image attachments are not yet part of the ledger turn protocol. Start this Phase 4 run with a text objective.",
+          );
+        }
+        const result = await northstarWorkspaceRuntime.startRun(modelMessage);
+        activeRunIdRef.current = result.ledger?.run.id ?? null;
+        const activity = northstarRuntimeActivity(northstarWorkspaceRuntime.getSnapshot());
+        if (result.status === "completed") {
+          const finalText = northstarSummaryText(result.finalSummary);
+          updateAssistantMessage({
+            content: finalText,
+            activity,
+            planTitle: "Northstar ledger run",
+            runId: result.ledger?.run.id,
+            runStatus: "completed",
+            streaming: false,
+          });
+          setConversationSummary(finalText);
+        } else {
+          updateAssistantMessage({
+            content: result.error ?? "North Star stopped at the last confirmed ledger state.",
+            activity,
+            planTitle: "Northstar ledger run",
+            runId: result.ledger?.run.id,
+            runStatus: result.status === "cancelled" ? "cancelled" : result.status === "failed" ? "failed" : "blocked",
+            streaming: false,
+            error: result.status !== "cancelled",
+          });
+        }
+      } catch (error) {
+        updateAssistantMessage({
+          content: error instanceof Error ? error.message : "North Star could not start the ledger-controlled run.",
+          runStatus: "failed",
+          streaming: false,
+          error: true,
+        });
+      } finally {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+          activeAssistantIdRef.current = null;
+        }
+        setLoading(false);
+      }
+      return;
+    }
 
     try {
       const response = await fetch("/api/canvas-ai", {
@@ -17875,6 +18048,47 @@ function ChatWorkspacePanel({
     }
   };
 
+  const resumeNorthstarRun = async () => {
+    if (!northstarWorkspaceRuntime || loading) return;
+    const assistantId = [...messages].reverse().find((message) => message.role === "assistant")?.id;
+    if (!assistantId) return;
+    activeAssistantIdRef.current = assistantId;
+    setLoading(true);
+    setMessages((current) => current.map((message) => message.id === assistantId
+      ? { ...message, streaming: true, error: false, runStatus: "running" }
+      : message));
+    try {
+      const result = await northstarWorkspaceRuntime.resumeRun();
+      const activity = northstarRuntimeActivity(northstarWorkspaceRuntime.getSnapshot());
+      setMessages((current) => current.map((message) => message.id === assistantId
+        ? {
+            ...message,
+            content: result.status === "completed"
+              ? northstarSummaryText(result.finalSummary)
+              : result.error ?? "North Star remains blocked at the last confirmed ledger state.",
+            activity,
+            planTitle: "Northstar ledger run",
+            runStatus: result.status === "completed" ? "completed" : result.status === "cancelled" ? "cancelled" : result.status === "failed" ? "failed" : "blocked",
+            streaming: false,
+            error: result.status !== "completed" && result.status !== "cancelled",
+          }
+        : message));
+    } catch (error) {
+      setMessages((current) => current.map((message) => message.id === assistantId
+        ? {
+            ...message,
+            content: error instanceof Error ? error.message : "North Star could not resume this run.",
+            runStatus: "failed",
+            streaming: false,
+            error: true,
+          }
+        : message));
+    } finally {
+      activeAssistantIdRef.current = null;
+      setLoading(false);
+    }
+  };
+
   const starterPrompts = hasSelection
     ? [
         "Explain what these selected elements represent.",
@@ -18125,6 +18339,32 @@ function ChatWorkspacePanel({
                   North Star is preparing this run…
                 </div>
               )}
+          </div>
+        )}
+
+        {northstarWorkspaceRuntime && northstarRuntimeSnapshot.ledger && (
+          <div className="mt-5">
+            <NorthstarLedgerInspector snapshot={northstarRuntimeSnapshot} />
+            {(northstarRuntimeSnapshot.status === "awaiting-recovery" || northstarRuntimeSnapshot.status === "blocked") && (
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void resumeNorthstarRun()}
+                  disabled={loading}
+                  className="rounded-full bg-[#6B5CFF] px-3 py-2 text-[10px] font-[850] text-white disabled:opacity-40"
+                >
+                  Resume exact task
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelRun}
+                  disabled={loading}
+                  className="rounded-full border border-black/10 px-3 py-2 text-[10px] font-[850] text-zinc-600 disabled:opacity-40 dark:border-white/10 dark:text-zinc-300"
+                >
+                  Cancel run
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -19265,7 +19505,8 @@ function CanvasBoxObjectViewImpl({
   onArtifactDragStart,
   onArtifactRuntimeReview,
   onArtifactContentSize,
-  onArtifactBrowserCommit,
+  onArtifactProjectCommit,
+  onArtifactProposalSettled,
   onArtifactWheel,
   onResizeStart,
   onFreeformPointStart,
@@ -19291,7 +19532,14 @@ function CanvasBoxObjectViewImpl({
   onArtifactDragStart: (clientX: number, clientY: number) => void;
   onArtifactRuntimeReview: (review: CanvasCodeArtifactRuntimeReview) => void;
   onArtifactContentSize: (size: CanvasCodeArtifactContentSize) => void;
-  onArtifactBrowserCommit: (commit: NorthstarBrowserCommit) => void;
+  onArtifactProjectCommit: (
+    commit: NorthstarArtboardCommit,
+    surfaceSessionId: string,
+  ) => NorthstarProjectionReceipt;
+  onArtifactProposalSettled: (
+    ackToken: string,
+    status: "rejected" | "sync-required" | "blocked" | "recovered",
+  ) => void;
   onArtifactWheel: (input: {
     clientX: number;
     clientY: number;
@@ -19417,7 +19665,8 @@ function CanvasBoxObjectViewImpl({
             onCanvasDragStart={onArtifactDragStart}
             onRuntimeReview={onArtifactRuntimeReview}
             onContentSize={onArtifactContentSize}
-            onBrowserCommit={onArtifactBrowserCommit}
+            onProjectCommit={onArtifactProjectCommit}
+            onProposalSettled={onArtifactProposalSettled}
             onCanvasWheel={onArtifactWheel}
           />
         )}

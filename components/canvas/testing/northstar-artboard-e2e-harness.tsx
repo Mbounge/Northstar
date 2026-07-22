@@ -5,10 +5,12 @@
 
 import { useCallback, useRef, useState } from "react";
 import { CodeArtifactHost } from "@/components/canvas/artifacts/code-artifact-host";
-import { materializeNorthstarBrowserCommit, type NorthstarBrowserCommit } from "@/lib/canvas-ai/northstar-transaction-kernel";
+import { projectNorthstarCommitIntoArtifact } from "@/lib/canvas-ai/northstar-transaction-kernel";
 import type {
   CanvasCodeArtifactPayload,
+  NorthstarArtboardCommit,
   NorthstarArtboardMutationBatch,
+  NorthstarProjectionReceipt,
 } from "@/lib/canvas-artifacts/types";
 
 const ARTIFACT_ID = "northstar-e2e-artifact";
@@ -126,37 +128,52 @@ function candidate(
 
 export function NorthstarArtboardE2EHarness() {
   const [artifact, setArtifact] = useState<CanvasCodeArtifactPayload>(() => foundation());
+  const artifactRef = useRef(artifact);
   const [status, setStatus] = useState("mounting");
   const [commitCount, setCommitCount] = useState(0);
   const startedRef = useRef(false);
   const handledMutationIdsRef = useRef(new Set<string>());
 
-  const handleBrowserCommit = useCallback((commit: NorthstarBrowserCommit) => {
-    setArtifact((current) => {
-      const materialized = materializeNorthstarBrowserCommit(current, commit);
-      if (!commit.mutationId) {
-        if (!startedRef.current) {
-          startedRef.current = true;
-          window.setTimeout(() => {
-            setStatus("mutation-1-pending");
-            setArtifact((latest) => candidate(latest, 1));
-          }, 350);
-        }
-        return materialized;
+  const handleProjectCommit = useCallback((
+    commit: NorthstarArtboardCommit,
+    surfaceSessionId: string,
+  ): NorthstarProjectionReceipt => {
+    const result = projectNorthstarCommitIntoArtifact(artifactRef.current, commit, surfaceSessionId);
+    artifactRef.current = result.artifact;
+    setArtifact(result.artifact);
+
+    if (!commit.mutationId) {
+      if (!startedRef.current) {
+        startedRef.current = true;
+        window.setTimeout(() => {
+          setStatus("mutation-1-pending");
+          setArtifact((latest) => {
+            const next = candidate(latest, 1);
+            artifactRef.current = next;
+            return next;
+          });
+        }, 350);
       }
-      if (handledMutationIdsRef.current.has(commit.mutationId)) return materialized;
+      return result.receipt;
+    }
+
+    if (!handledMutationIdsRef.current.has(commit.mutationId)) {
       handledMutationIdsRef.current.add(commit.mutationId);
       setCommitCount((count) => count + 1);
       if (commit.mutationId === "northstar-e2e-mutation-1") {
         window.setTimeout(() => {
           setStatus("mutation-2-pending");
-          setArtifact((latest) => candidate(latest, 2));
+          setArtifact((latest) => {
+            const next = candidate(latest, 2);
+            artifactRef.current = next;
+            return next;
+          });
         }, 250);
       } else {
         setStatus("complete");
       }
-      return materialized;
-    });
+    }
+    return result.receipt;
   }, []);
 
   return (
@@ -177,7 +194,20 @@ export function NorthstarArtboardE2EHarness() {
           onCanvasDragStart={() => undefined}
           onRuntimeReview={() => undefined}
           onContentSize={() => undefined}
-          onBrowserCommit={handleBrowserCommit}
+          onProjectCommit={handleProjectCommit}
+          onProposalSettled={(ackToken, status) => {
+            setArtifact((current) => {
+              if (current.pendingProposal?.ackToken !== ackToken && current.pendingAckToken !== ackToken) return current;
+              const next = {
+                ...current,
+                pendingAckToken: undefined,
+                pendingProposal: undefined,
+                repositoryStatus: status === "rejected" || status === "recovered" ? "clean" as const : status,
+              };
+              artifactRef.current = next;
+              return next;
+            });
+          }}
           onCanvasWheel={() => undefined}
         />
       </div>

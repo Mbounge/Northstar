@@ -244,3 +244,44 @@ test("multiple proposals for one artboard reuse one subscribed channel", async (
   assert.deepEqual(await firstWait.result, first);
   assert.deepEqual(await secondWait.result, second);
 });
+test("contradictory terminal results block the transaction deterministically", async () => {
+  const applied = acknowledgement(acknowledgementToken("contradictory"));
+  const rejected: NorthstarArtifactMutationAcknowledgement = {
+    ...applied,
+    status: "rejected",
+    reason: "A different terminal result arrived.",
+    acknowledgedAt: new Date(Date.now() + 1).toISOString(),
+  };
+  publishNorthstarArtifactAcknowledgement(applied);
+  const waiting = waitForNorthstarArtifactAcknowledgement({
+    ackToken: applied.ackToken,
+    artifactId: applied.artifactId,
+    acceptedStatuses: ["blocked"],
+    timeoutMs: 1_000,
+  });
+  const canonical = publishNorthstarArtifactAcknowledgement(rejected);
+  assert.equal(canonical.status, "blocked");
+  assert.equal(canonical.repositoryStatus, "blocked");
+  assert.equal((await waiting).status, "blocked");
+});
+
+test("sync-required is a real terminal state and never becomes applied", async () => {
+  const applied = acknowledgement(acknowledgementToken("sync-required"));
+  const syncRequired: NorthstarArtifactMutationAcknowledgement = {
+    ...applied,
+    status: "sync-required",
+    reason: "Proposal base does not match HEAD.",
+    commitHash: "head-current",
+    repositoryStatus: "sync-required",
+  };
+  const waiting = waitForNorthstarArtifactAcknowledgement({
+    ackToken: syncRequired.ackToken,
+    artifactId: syncRequired.artifactId,
+    acceptedStatuses: ["sync-required", "blocked"],
+    timeoutMs: 1_000,
+  });
+  publishNorthstarArtifactAcknowledgement(syncRequired);
+  const result = await waiting;
+  assert.equal(result.status, "sync-required");
+  assert.notEqual(result.status, "applied");
+});

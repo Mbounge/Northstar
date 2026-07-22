@@ -347,6 +347,160 @@ export interface NorthstarLiveSurfaceSnapshot {
   semanticNodes?: NorthstarCommittedSemanticNode[];
 }
 
+
+
+// Git-like in-memory artboard repository protocol. The LLM authors proposals;
+// only the deterministic repository may advance HEAD.
+export type NorthstarRepositoryStatus =
+  | "empty"
+  | "clean"
+  | "indexed"
+  | "staging"
+  | "prepared"
+  | "activating"
+  | "recovering"
+  | "sync-required"
+  | "blocked";
+
+export interface NorthstarCommittedGeometry {
+  intrinsicWidth: number;
+  intrinsicHeight: number;
+  contentBounds: CanvasCodeArtifactIntrinsicBounds;
+  /** Interaction minimum; never confused with authored content bounds. */
+  viewportFloor: { width: number; height: number };
+}
+
+export interface NorthstarCommitHashes {
+  documentHash: string;
+  semanticHash: string;
+  geometryHash: string;
+  runtimeReviewHash: string;
+  treeHash: string;
+}
+
+export interface NorthstarArtboardCommit {
+  schema: "northstar.artboard-commit.v1";
+  artifactId: string;
+  surfaceId: string;
+  commitHash: string;
+  parentCommitHash: string | null;
+  commitSequence: number;
+  revisionId: string;
+  proposalId: string | null;
+  mutationId: string | null;
+  tree: {
+    document: NorthstarWebArtifactDocument;
+    semanticNodes: NorthstarCommittedSemanticNode[];
+    geometry: NorthstarCommittedGeometry;
+    runtimeReview?: CanvasCodeArtifactRuntimeReview;
+  };
+  hashes: NorthstarCommitHashes;
+}
+
+export interface NorthstarRepositoryProposal {
+  schema: "northstar.repository-proposal.v1";
+  transactionId: string;
+  proposalId: string;
+  ackToken: string;
+  artifactId: string;
+  surfaceId: string;
+  surfaceSessionId: string;
+  baseCommitHash: string;
+  revisionId: string;
+  mutation: NorthstarArtboardMutationBatch;
+  assetUrls: string[];
+  createdAt: string;
+}
+
+export interface NorthstarPreparedArtboardTree {
+  schema: "northstar.prepared-artboard-tree.v1";
+  artifactId: string;
+  surfaceId: string;
+  transactionId: string;
+  proposalId: string;
+  baseCommitHash: string;
+  revisionId: string;
+  mutationId: string;
+  document: NorthstarWebArtifactDocument;
+  semanticNodes: NorthstarCommittedSemanticNode[];
+  geometry: NorthstarCommittedGeometry;
+  runtimeReview?: CanvasCodeArtifactRuntimeReview;
+  hashes: NorthstarCommitHashes;
+}
+
+export interface NorthstarProjectionReceipt {
+  schema: "northstar.projection-receipt.v1";
+  projection: "browser" | "workspace";
+  artifactId: string;
+  surfaceId: string;
+  surfaceSessionId: string;
+  transactionId: string;
+  commitHash: string;
+  documentHash: string;
+  semanticHash: string;
+  geometryHash: string;
+  runtimeReviewHash: string;
+  treeHash: string;
+  projectedAt: string;
+}
+
+export interface NorthstarReflogEntry {
+  previousCommitHash: string | null;
+  nextCommitHash: string;
+  transactionId: string | null;
+  reason: string;
+  recordedAt: string;
+}
+
+export interface NorthstarRepositoryMachineState {
+  status: NorthstarRepositoryStatus;
+  headCommitHash: string | null;
+  candidateCommitHash: string | null;
+  activeTransactionId: string | null;
+  activeProposalId: string | null;
+  browserReceipt: NorthstarProjectionReceipt | null;
+  workspaceReceipt: NorthstarProjectionReceipt | null;
+  blockedReason?: string;
+}
+
+export type NorthstarRepositoryEvent =
+  | { type: "initialize"; headCommitHash: string }
+  | { type: "index-proposal"; transactionId: string; proposalId: string; baseCommitHash: string }
+  | { type: "begin-staging"; transactionId: string }
+  | { type: "prepared"; transactionId: string }
+  | { type: "candidate-created"; transactionId: string; candidateCommitHash: string }
+  | { type: "projection-receipt"; receipt: NorthstarProjectionReceipt }
+  | { type: "advance-head"; candidateCommitHash: string }
+  | { type: "reject"; transactionId: string; reason: string }
+  | { type: "sync-required"; reason: string }
+  | { type: "begin-recovery"; reason: string }
+  | {
+      type: "reset-to-head";
+      headCommitHash: string;
+      browserReceipt?: NorthstarProjectionReceipt;
+      workspaceReceipt?: NorthstarProjectionReceipt;
+    };
+
+export interface NorthstarRepositorySnapshot {
+  surfaceId: string;
+  surfaceSessionId: string | null;
+  status: NorthstarRepositoryStatus;
+  headCommitHash: string | null;
+  candidateCommitHash: string | null;
+  activeTransactionId: string | null;
+  activeProposalId: string | null;
+  browserReceipt: NorthstarProjectionReceipt | null;
+  workspaceReceipt: NorthstarProjectionReceipt | null;
+  blockedReason?: string;
+  reflog: NorthstarReflogEntry[];
+}
+
+export type NorthstarRepositoryTransactionResult =
+  | { status: "committed"; headCommit: NorthstarArtboardCommit }
+  | { status: "rejected"; headCommit: NorthstarArtboardCommit; reason: string }
+  | { status: "sync-required"; headCommit: NorthstarArtboardCommit; reason: string }
+  | { status: "blocked"; headCommit?: NorthstarArtboardCommit; reason: string };
+
 export interface NorthstarArtifactMutationAcknowledgement {
   schema: "northstar.artboard-ack.v1";
   /** Stable identity for a speculative proposal. It never becomes lineage by itself. */
@@ -359,7 +513,7 @@ export interface NorthstarArtifactMutationAcknowledgement {
   surfaceId: string;
   revisionId: string;
   mutationId?: string;
-  status: "applied" | "rejected" | "ready";
+  status: "applied" | "rejected" | "ready" | "sync-required" | "blocked";
   reason?: string;
   size?: CanvasCodeArtifactContentSize;
   review?: CanvasCodeArtifactRuntimeReview;
@@ -371,6 +525,17 @@ export interface NorthstarArtifactMutationAcknowledgement {
   missingAssetUrls: string[];
   snapshot?: NorthstarLiveSurfaceSnapshot;
   acknowledgedAt: string;
+  /** Repository protocol identities. Optional for legacy artifacts only. */
+  transactionId?: string;
+  surfaceSessionId?: string;
+  commitHash?: string;
+  parentCommitHash?: string | null;
+  documentHash?: string;
+  geometryHash?: string;
+  commitSequence?: number;
+  repositoryStatus?: NorthstarRepositoryStatus;
+  /** Advisory design feedback; never a technical rollback reason. */
+  designObservations?: string[];
 }
 
 export interface CanvasCodeArtifactRuntimeReview {
@@ -415,6 +580,11 @@ export interface NorthstarGeneratedCodeArtifactPackage {
   surfaceId?: string;
   /** Unique token for the browser acknowledgement required before the server may advance. */
   pendingAckToken?: string;
+  headCommitHash?: string;
+  commitSequence?: number;
+  headCommit?: NorthstarArtboardCommit;
+  repositoryStatus?: NorthstarRepositoryStatus;
+  surfaceSessionId?: string;
   /** Legacy fields are retained only so artifacts created by v0.2/v0.3 can still be loaded. */
   sourceTsx?: string;
   compiledJs?: string;
@@ -445,6 +615,18 @@ export interface CanvasCodeArtifactActionEnvelope {
   package?: NorthstarGeneratedCodeArtifactPackage;
 }
 
+export interface CanvasCodeArtifactPendingProposal {
+  schema: "northstar.canvas-pending-proposal.v1";
+  proposalId: string;
+  transactionId: string;
+  ackToken: string;
+  revisionId: string;
+  parentRevisionId?: string;
+  mutation: NorthstarArtboardMutationBatch;
+  stageIndex: number;
+  candidatePackage: NorthstarGeneratedCodeArtifactPackage;
+}
+
 export interface CanvasCodeArtifactPayload {
   schema: typeof NORTHSTAR_CODE_ARTIFACT_SCHEMA;
   artifactId: string;
@@ -457,6 +639,14 @@ export interface CanvasCodeArtifactPayload {
   mutationJournal?: NorthstarArtboardMutationBatch[];
   surfaceId?: string;
   pendingAckToken?: string;
+  /** Candidate metadata is isolated from the canonical document and geometry until HEAD advances. */
+  pendingProposal?: CanvasCodeArtifactPendingProposal;
+  /** Current content-addressed repository HEAD. */
+  headCommitHash?: string;
+  commitSequence?: number;
+  headCommit?: NorthstarArtboardCommit;
+  repositoryStatus?: NorthstarRepositoryStatus;
+  surfaceSessionId?: string;
   sourceTsx?: string;
   compiledJs?: string;
   dataBundle?: CanvasCodeArtifactDataBundle;
@@ -494,6 +684,13 @@ export interface CanvasCodeArtifactRevisionPatch {
   mutationJournal?: NorthstarArtboardMutationBatch[];
   surfaceId?: string;
   pendingAckToken?: string;
+  pendingProposal?: CanvasCodeArtifactPendingProposal;
+  /** Current content-addressed repository HEAD. */
+  headCommitHash?: string;
+  commitSequence?: number;
+  headCommit?: NorthstarArtboardCommit;
+  repositoryStatus?: NorthstarRepositoryStatus;
+  surfaceSessionId?: string;
   sourceTsx?: string;
   compiledJs?: string;
   dataBundle?: CanvasCodeArtifactDataBundle;
@@ -561,6 +758,11 @@ export function createCanvasCodeArtifactPayloadFromPackage(
     mutationJournal: packageValue.mutationJournal ?? [],
     surfaceId: packageValue.surfaceId ?? packageValue.artifactId,
     pendingAckToken: packageValue.pendingAckToken,
+    headCommitHash: packageValue.headCommitHash,
+    commitSequence: packageValue.commitSequence,
+    headCommit: packageValue.headCommit,
+    repositoryStatus: packageValue.repositoryStatus,
+    surfaceSessionId: packageValue.surfaceSessionId,
     sourceTsx: packageValue.sourceTsx,
     compiledJs: packageValue.compiledJs,
     dataBundle: packageValue.dataBundle,

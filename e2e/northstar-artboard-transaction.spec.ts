@@ -29,7 +29,7 @@ test("lost terminal and acknowledgement delivery recover without remounting or b
     const originalPostMessage = window.postMessage.bind(window);
     window.postMessage = ((message: unknown, targetOrigin: string, transfer?: Transferable[]) => {
       const candidate = message as { type?: string } | null;
-      if (candidate?.type === "northstar.artifact.mutation-applied" && !releaseWindow.__northstarDroppedTerminal) {
+      if (candidate?.type === "northstar.artifact.commit-projected" && !releaseWindow.__northstarDroppedTerminal) {
         releaseWindow.__northstarDroppedTerminal = true;
         return;
       }

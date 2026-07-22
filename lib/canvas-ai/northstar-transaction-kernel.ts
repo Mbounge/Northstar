@@ -1,10 +1,17 @@
-// Northstar v0.7.5 â€” deterministic browser-commit helpers for one living artboard.
+// Northstar deterministic transaction helpers — canonical snapshots, commit projection, and exact geometry.
+import {
+  hashNorthstarContent,
+  normalizeNorthstarBounds,
+} from "@/lib/canvas-artifacts/northstar-commit";
+import { createCanvasCodeArtifactPayloadFromPackage } from "@/lib/canvas-artifacts/types";
 import type {
   CanvasCodeArtifactContentSize,
   CanvasCodeArtifactIntrinsicBounds,
   CanvasCodeArtifactPayload,
   CanvasCodeArtifactRuntimeReview,
+  NorthstarArtboardCommit,
   NorthstarLiveSurfaceSnapshot,
+  NorthstarProjectionReceipt,
 } from "@/lib/canvas-artifacts/types";
 
 const RUNTIME_ELEMENT_ATTRIBUTES = [
@@ -30,14 +37,10 @@ function removeBalancedElementAt(html: string, start: number): string {
     end = tokenPattern.lastIndex;
     if (depth === 0) return `${html.slice(0, start)}${html.slice(end)}`;
   }
-  // A malformed runtime node must never poison the canonical snapshot.
   return html.slice(0, start);
 }
 
-/**
- * Runtime overlays are derived browser state. They are recreated on mount and
- * must never become part of the authored document or multiply across revisions.
- */
+/** Runtime overlays are derived browser state and never enter repository history. */
 export function stripNorthstarRuntimeScaffolding(html: string): string {
   let result = String(html ?? "");
   for (const attribute of RUNTIME_ELEMENT_ATTRIBUTES) {
@@ -67,35 +70,32 @@ export function sanitizeNorthstarLiveSnapshot(
   };
 }
 
+/** Exact authored content bounds. Minimum interaction size is intentionally separate. */
 export function exactNorthstarContentBounds(
   size: CanvasCodeArtifactContentSize,
-  minimumWidth: number,
-  minimumHeight: number,
+  fallbackWidth: number,
+  fallbackHeight: number,
 ): CanvasCodeArtifactIntrinsicBounds {
-  const source = size.contentBounds;
-  const minX = Number.isFinite(source?.minX) ? Math.floor(source!.minX) : 0;
-  const minY = Number.isFinite(source?.minY) ? Math.floor(source!.minY) : 0;
-  const measuredWidth = Math.max(minimumWidth, Math.ceil(size.intrinsicWidth || minimumWidth));
-  const measuredHeight = Math.max(minimumHeight, Math.ceil(size.intrinsicHeight || minimumHeight));
-  const maxX = Number.isFinite(source?.maxX)
-    ? Math.max(minX + minimumWidth, Math.ceil(source!.maxX))
-    : minX + measuredWidth;
-  const maxY = Number.isFinite(source?.maxY)
-    ? Math.max(minY + minimumHeight, Math.ceil(source!.maxY))
-    : minY + measuredHeight;
-  return { minX, minY, maxX, maxY };
+  return normalizeNorthstarBounds(size.contentBounds, size.intrinsicWidth || fallbackWidth, size.intrinsicHeight || fallbackHeight);
 }
 
 export type NorthstarBrowserCommit = {
   artifactId: string;
   revisionId: string;
   mutationId?: string;
+  transactionId?: string;
+  commitHash?: string;
+  parentCommitHash?: string | null;
+  commitSequence?: number;
+  documentHash?: string;
+  geometryHash?: string;
+  surfaceSessionId?: string;
   size?: CanvasCodeArtifactContentSize;
   review?: CanvasCodeArtifactRuntimeReview;
   snapshot?: NorthstarLiveSurfaceSnapshot;
 };
 
-/** Materialize the browser's exact accepted DOM and geometry into the Canvas object. */
+/** Legacy bridge. New code projects a complete repository commit instead. */
 export function materializeNorthstarBrowserCommit(
   artifact: CanvasCodeArtifactPayload,
   commit: NorthstarBrowserCommit,
@@ -104,26 +104,16 @@ export function materializeNorthstarBrowserCommit(
   if (commit.revisionId !== artifact.revisionId) return artifact;
 
   const snapshot = sanitizeNorthstarLiveSnapshot(commit.snapshot);
-  const size = commit.size;
-  const bounds = size
-    ? exactNorthstarContentBounds(size, artifact.minimumWidth, artifact.minimumHeight)
+  const bounds = commit.size
+    ? exactNorthstarContentBounds(commit.size, artifact.preferredWidth, artifact.preferredHeight)
     : artifact.intrinsicBounds;
-  const preferredWidth = bounds
-    ? Math.max(artifact.minimumWidth, bounds.maxX - bounds.minX)
-    : artifact.preferredWidth;
-  const preferredHeight = bounds
-    ? Math.max(artifact.minimumHeight, bounds.maxY - bounds.minY)
-    : artifact.preferredHeight;
+  const preferredWidth = bounds ? Math.max(1, bounds.maxX - bounds.minX) : artifact.preferredWidth;
+  const preferredHeight = bounds ? Math.max(1, bounds.maxY - bounds.minY) : artifact.preferredHeight;
 
   return {
     ...artifact,
     document: snapshot
-      ? {
-          schema: "northstar.web-artifact-document.v1",
-          html: snapshot.html,
-          css: snapshot.css,
-          javascript: "",
-        }
+      ? { schema: "northstar.web-artifact-document.v1", html: snapshot.html, css: snapshot.css, javascript: "" }
       : artifact.document,
     mutationJournal: snapshot ? [] : artifact.mutationJournal,
     pendingAckToken: undefined,
@@ -131,6 +121,73 @@ export function materializeNorthstarBrowserCommit(
     preferredHeight,
     intrinsicBounds: bounds,
     runtimeReview: commit.review ?? artifact.runtimeReview,
+    headCommitHash: commit.commitHash ?? artifact.headCommitHash,
+    commitSequence: commit.commitSequence ?? artifact.commitSequence,
+    repositoryStatus: commit.commitHash ? "clean" : artifact.repositoryStatus,
+    surfaceSessionId: commit.surfaceSessionId ?? artifact.surfaceSessionId,
+  };
+}
+
+export function projectNorthstarCommitIntoArtifact(
+  artifact: CanvasCodeArtifactPayload,
+  commit: NorthstarArtboardCommit,
+  surfaceSessionId: string,
+): { artifact: CanvasCodeArtifactPayload; receipt: NorthstarProjectionReceipt } {
+  if (artifact.artifactId !== commit.artifactId) throw new Error("Commit targets a different artifact.");
+  if ((artifact.surfaceId ?? artifact.artifactId) !== commit.surfaceId) throw new Error("Commit targets a different surface.");
+
+  const geometry = commit.tree.geometry;
+  const pending = artifact.pendingProposal;
+  const candidateBase = pending && pending.proposalId === commit.proposalId
+    ? createCanvasCodeArtifactPayloadFromPackage(pending.candidatePackage, pending.stageIndex)
+    : artifact;
+  const next: CanvasCodeArtifactPayload = {
+    ...candidateBase,
+    createdAt: artifact.createdAt,
+    revisionId: commit.revisionId,
+    parentRevisionId: commit.parentCommitHash ?? undefined,
+    document: commit.tree.document,
+    mutationJournal: [],
+    pendingAckToken: undefined,
+    pendingProposal: undefined,
+    headCommitHash: commit.commitHash,
+    commitSequence: commit.commitSequence,
+    headCommit: commit,
+    repositoryStatus: "clean",
+    surfaceSessionId,
+    preferredWidth: geometry.intrinsicWidth,
+    preferredHeight: geometry.intrinsicHeight,
+    intrinsicBounds: geometry.contentBounds,
+    runtimeReview: commit.tree.runtimeReview ?? candidateBase.runtimeReview,
+    updatedAt: new Date().toISOString(),
+  };
+  const projectedDocumentHash = hashNorthstarContent(next.document);
+  const projectedGeometryHash = hashNorthstarContent({
+    intrinsicWidth: next.preferredWidth,
+    intrinsicHeight: next.preferredHeight,
+    contentBounds: next.intrinsicBounds,
+    viewportFloor: geometry.viewportFloor,
+  });
+  if (projectedDocumentHash !== commit.hashes.documentHash || projectedGeometryHash !== commit.hashes.geometryHash) {
+    throw new Error("Workspace projection did not reproduce the candidate commit tree.");
+  }
+  return {
+    artifact: next,
+    receipt: {
+      schema: "northstar.projection-receipt.v1",
+      projection: "workspace",
+      artifactId: commit.artifactId,
+      surfaceId: commit.surfaceId,
+      surfaceSessionId,
+      transactionId: commit.proposalId ?? `root:${commit.commitHash}`,
+      commitHash: commit.commitHash,
+      documentHash: commit.hashes.documentHash,
+      semanticHash: commit.hashes.semanticHash,
+      geometryHash: commit.hashes.geometryHash,
+      runtimeReviewHash: commit.hashes.runtimeReviewHash,
+      treeHash: commit.hashes.treeHash,
+      projectedAt: new Date().toISOString(),
+    },
   };
 }
 

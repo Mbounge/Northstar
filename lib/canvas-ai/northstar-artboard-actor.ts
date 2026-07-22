@@ -1,5 +1,5 @@
-//lib/canvas-ai/northstar-artboard-actor.ts
-// Northstar v0.4.9.0 — single-owner actor for one browser-authoritative living artboard.
+// Northstar server-side orchestration mirror.
+// The browser repository owns HEAD; this actor can only observe an acknowledged commit.
 import type {
   NorthstarArtifactMutationAcknowledgement,
   NorthstarGeneratedCodeArtifactPackage,
@@ -9,6 +9,7 @@ export type NorthstarArtboardProposal = {
   proposalId: string;
   ackToken: string;
   baseRevisionId?: string;
+  baseCommitHash?: string;
   candidate: NorthstarGeneratedCodeArtifactPackage;
   mutationId?: string;
 };
@@ -22,8 +23,12 @@ export class NorthstarArtboardActor {
   private committedAck?: NorthstarArtifactMutationAcknowledgement;
   private inFlight?: NorthstarArtboardProposal;
 
-  constructor(initial?: NorthstarGeneratedCodeArtifactPackage) {
+  constructor(
+    initial?: NorthstarGeneratedCodeArtifactPackage,
+    initialAcknowledgement?: NorthstarArtifactMutationAcknowledgement,
+  ) {
     this.committed = initial;
+    this.committedAck = initialAcknowledgement;
   }
 
   snapshot(): NorthstarGeneratedCodeArtifactPackage | undefined {
@@ -32,6 +37,10 @@ export class NorthstarArtboardActor {
 
   lastAcknowledgement(): NorthstarArtifactMutationAcknowledgement | undefined {
     return this.committedAck;
+  }
+
+  activeProposal(): NorthstarArtboardProposal | undefined {
+    return this.inFlight;
   }
 
   begin(candidate: NorthstarGeneratedCodeArtifactPackage): NorthstarArtboardProposal {
@@ -46,7 +55,10 @@ export class NorthstarArtboardActor {
       );
     }
 
-    const committedSequence = latestMutation(this.committed)?.sequence ?? 0;
+    const committedSequence = this.committed?.commitSequence
+      ?? this.committedAck?.commitSequence
+      ?? latestMutation(this.committed)?.sequence
+      ?? 0;
     const candidateMutation = latestMutation(candidate);
     if (candidateMutation && candidateMutation.sequence !== committedSequence + 1) {
       throw new Error(
@@ -56,13 +68,17 @@ export class NorthstarArtboardActor {
 
     const proposalId = crypto.randomUUID();
     const ackToken = `${candidate.artifactId}:${proposalId}`;
-    const proposal = {
+    const proposal: NorthstarArtboardProposal = {
       proposalId,
       ackToken,
       baseRevisionId,
+      baseCommitHash: this.committed?.headCommitHash ?? this.committedAck?.commitHash,
       candidate: {
         ...candidate,
         pendingAckToken: ackToken,
+        headCommitHash: this.committed?.headCommitHash ?? this.committedAck?.commitHash,
+        commitSequence: committedSequence,
+        repositoryStatus: "clean",
       },
       mutationId: candidateMutation?.mutationId,
     };
@@ -81,7 +97,18 @@ export class NorthstarArtboardActor {
       && acknowledgement.baseRevisionId === proposal.baseRevisionId
       && acknowledgement.revisionId === proposal.candidate.revisionId
       && (!proposal.mutationId || acknowledgement.mutationId === proposal.mutationId)
-      && acknowledgement.status === expectedStatus;
+      && acknowledgement.status === expectedStatus
+      && acknowledgement.repositoryStatus === "clean"
+      && typeof acknowledgement.commitHash === "string"
+      && acknowledgement.commitHash.length > 0
+      && typeof acknowledgement.documentHash === "string"
+      && acknowledgement.documentHash.length > 0
+      && typeof acknowledgement.geometryHash === "string"
+      && acknowledgement.geometryHash.length > 0
+      && typeof acknowledgement.commitSequence === "number"
+      && Number.isInteger(acknowledgement.commitSequence)
+      && Boolean(acknowledgement.snapshot)
+      && Boolean(acknowledgement.size?.settled);
   }
 
   commit(
@@ -92,7 +119,7 @@ export class NorthstarArtboardActor {
       throw new Error("Proposal is no longer the active in-flight proposal.");
     }
     if (!this.matches(proposal, acknowledgement)) {
-      throw new Error(acknowledgement.reason || "Browser acknowledgement did not match the proposal.");
+      throw new Error(acknowledgement.reason || "Repository acknowledgement did not match the proposal.");
     }
 
     const committed: NorthstarGeneratedCodeArtifactPackage = {
@@ -102,9 +129,13 @@ export class NorthstarArtboardActor {
       preferredHeight: acknowledgement.size?.intrinsicHeight ?? proposal.candidate.preferredHeight,
       intrinsicBounds: acknowledgement.size?.contentBounds ?? proposal.candidate.intrinsicBounds,
       runtimeReview: acknowledgement.review,
+      headCommitHash: acknowledgement.commitHash,
+      commitSequence: acknowledgement.commitSequence,
+      repositoryStatus: "clean",
+      surfaceSessionId: acknowledgement.surfaceSessionId,
       diagnostics: [
         ...proposal.candidate.diagnostics,
-        `Committed proposal ${proposal.proposalId} on browser revision ${acknowledgement.revisionId}.`,
+        `Observed repository HEAD ${acknowledgement.commitHash} for browser revision ${acknowledgement.revisionId}.`,
       ].slice(-60),
     };
 
@@ -114,7 +145,18 @@ export class NorthstarArtboardActor {
     return committed;
   }
 
-  discard(proposal: NorthstarArtboardProposal): void {
+  reject(
+    proposal: NorthstarArtboardProposal,
+    acknowledgement: NorthstarArtifactMutationAcknowledgement,
+  ): void {
+    if (this.inFlight?.proposalId !== proposal.proposalId) return;
+    if (acknowledgement.status !== "rejected") {
+      throw new Error("Only an explicit browser rejection may clear an uncommitted proposal.");
+    }
+    this.inFlight = undefined;
+  }
+
+  abandonUnacknowledged(proposal: NorthstarArtboardProposal): void {
     if (this.inFlight?.proposalId === proposal.proposalId) this.inFlight = undefined;
   }
 
@@ -125,6 +167,10 @@ export class NorthstarArtboardActor {
     return committed.publicationState === "verified"
       && committed.provisional === false
       && acknowledgement.status !== "rejected"
-      && acknowledgement.revisionId === committed.revisionId;
+      && acknowledgement.repositoryStatus === "clean"
+      && acknowledgement.revisionId === committed.revisionId
+      && acknowledgement.commitHash === committed.headCommitHash
+      && typeof acknowledgement.documentHash === "string"
+      && typeof acknowledgement.geometryHash === "string";
   }
 }

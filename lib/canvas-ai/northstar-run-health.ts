@@ -126,6 +126,8 @@ export type NorthstarVisualDispatchResult =
   | { status: "committed"; detail: string }
   | { status: "skipped"; detail: string; recoverable: true }
   | { status: "rejected"; detail: string; recoverable: true }
+  | { status: "sync-required"; detail: string; recoverable: false }
+  | { status: "pending"; detail: string; recoverable: false }
   | { status: "blocked"; detail: string; recoverable: false }
   | { status: "timed-out"; detail: string; recoverable: false };
 
@@ -146,7 +148,9 @@ export function isNorthstarVerifiedNoop(
 export function isNorthstarLineageRejection(
   acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined,
 ): boolean {
-  if (acknowledgement?.status !== "rejected") return false;
+  if (!acknowledgement) return false;
+  if (acknowledgement.status === "sync-required") return true;
+  if (acknowledgement.status !== "rejected") return false;
   const reason = acknowledgement.reason || "";
   return /base revision does not match|lineage is discontinuous|proposal identity/i.test(reason);
 }
