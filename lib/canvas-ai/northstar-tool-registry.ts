@@ -87,8 +87,10 @@ export type NorthStarShapeKind =
   | "frame";
 
 export type NorthStarToolArguments = {
+  appId?: string;
   appName?: string;
   appNames?: string[];
+  flowId?: string;
   flowName?: string;
   query?: string;
   screenshotId?: string;
@@ -168,7 +170,9 @@ export type NorthStarToolResultItem = {
   title: string;
   subtitle?: string;
   imageUrl?: string;
+  appId?: string;
   appName?: string;
+  flowId?: string;
   flowName?: string;
   category?: string;
   platform?: string;
@@ -295,8 +299,7 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
     description: "Retrieve one app's icon, category, metadata, flow count, and screen count.",
     inputSchema: {
       type: "object",
-      properties: { appName: { type: "string" } },
-      required: ["appName"],
+      properties: { appId: { type: "string" }, appName: { type: "string" } },
     },
     riskLevel: "read-only",
     executionType: "server-data",
@@ -309,12 +312,12 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
     inputSchema: {
       type: "object",
       properties: {
+        appId: { type: "string" },
         appName: { type: "string" },
         sessionType: { type: "string", enum: ["onboarding", "browsing"] },
         platform: { type: "string", enum: ["mobile", "web"] },
         limit: { type: "number" },
       },
-      required: ["appName"],
     },
     riskLevel: "read-only",
     executionType: "server-data",
@@ -328,6 +331,7 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
       type: "object",
       properties: {
         query: { type: "string" },
+        appId: { type: "string" },
         appName: { type: "string" },
         sessionType: { type: "string", enum: ["onboarding", "browsing"] },
         limit: { type: "number" },
@@ -344,8 +348,12 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
     description: "Retrieve one captured flow with its metadata and representative screenshots.",
     inputSchema: {
       type: "object",
-      properties: { appName: { type: "string" }, flowName: { type: "string" } },
-      required: ["appName", "flowName"],
+      properties: {
+        appId: { type: "string" },
+        appName: { type: "string" },
+        flowId: { type: "string" },
+        flowName: { type: "string" },
+      },
     },
     riskLevel: "read-only",
     executionType: "server-data",
@@ -358,11 +366,12 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
     inputSchema: {
       type: "object",
       properties: {
+        appId: { type: "string" },
         appName: { type: "string" },
+        flowId: { type: "string" },
         flowName: { type: "string" },
         limit: { type: "number" },
       },
-      required: ["appName", "flowName"],
     },
     riskLevel: "read-only",
     executionType: "server-data",
@@ -409,8 +418,7 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
     description: "Retrieve the icon for a specific app available in the account.",
     inputSchema: {
       type: "object",
-      properties: { appName: { type: "string" } },
-      required: ["appName"],
+      properties: { appId: { type: "string" }, appName: { type: "string" } },
     },
     riskLevel: "read-only",
     executionType: "server-data",

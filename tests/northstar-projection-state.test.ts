@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyNorthstarProjectionOperation,
   applyNorthstarProjectionOperations,
+  diagnoseNorthstarProjectionStateDifference,
   diffNorthstarProjectionStates,
   hashNorthstarProjectionState,
   northstarProjectionStatesEqual,
@@ -195,4 +196,19 @@ test("diff preserves a wholly new large subtree as one bounded insertion", () =>
     ),
     true,
   );
+});
+
+
+test("projection diagnostics report the first exact canonical difference", () => {
+  const expected = projectionFixtureState();
+  const actual = structuredClone(expected);
+  actual.root.attributes = { ...actual.root.attributes, "data-runtime-drift": "settled" };
+
+  const difference = diagnoseNorthstarProjectionStateDifference(expected, actual);
+  if (!difference) throw new Error("Expected a projection-state difference.");
+  assert.equal(difference.path, "$state.root.attributes.data-runtime-drift");
+  assert.equal(difference.kind, "missing");
+  assert.equal(difference.expected, null);
+  assert.equal(difference.actual, "settled");
+  assert.equal(difference.expectedNodeCount, difference.actualNodeCount);
 });

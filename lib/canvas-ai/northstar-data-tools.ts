@@ -1,5 +1,7 @@
 // lib/canvas-ai/northstar-data-tools.ts
-// Northstar v87.3 — canonical evidence identity and resumable composition data layer
+// Agent-facing read tools over the same canonical tenant catalog used by the
+// human Apps tab. Discovery may use text; every follow-up lookup should retain
+// the exact app, flow, and screenshot identities returned by this catalog.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
@@ -8,51 +10,24 @@ import type {
   NorthStarToolResultItem,
   NorthStarToolResultView,
 } from "./northstar-tool-registry";
+import {
+  NORTHSTAR_TENANT_CATALOG_SELECT,
+  authoritativeNorthStarFlowSessionType,
+  normalizeNorthStarDataCatalogRows,
+  normalizeNorthStarToken,
+  northStarFlowMatchesRequestedScope,
+  type NorthStarDataApp,
+  type NorthStarDataCatalog,
+  type NorthStarDataFlow,
+  type NorthStarDataScreen,
+} from "@/lib/northstar-data/catalog";
 
-type UnknownRecord = Record<string, unknown>;
-
-export type NorthStarDataScreen = {
-  id: string;
-  name: string;
-  imageUrl?: string;
-  sourceUrl?: string;
-  appName: string;
-  flowName: string;
-  platform?: string;
-  sessionType?: string;
-  index: number;
-};
-
-export type NorthStarDataFlow = {
-  id: string;
-  name: string;
-  description?: string;
-  appName: string;
-  appId: string;
-  platform?: string;
-  sessionType?: string;
-  screens: NorthStarDataScreen[];
-};
-
-export type NorthStarDataApp = {
-  id: string;
-  name: string;
-  tenantId: string;
-  domain?: string;
-  iconUrl?: string;
-  description?: string;
-  category?: string;
-  rank?: string;
-  revenue?: string;
-  employees?: string;
-  totalScreens: number;
-  flows: NorthStarDataFlow[];
-};
-
-export type NorthStarDataCatalog = {
-  tenantId: string;
-  apps: NorthStarDataApp[];
-};
+export type {
+  NorthStarDataApp,
+  NorthStarDataCatalog,
+  NorthStarDataFlow,
+  NorthStarDataScreen,
+} from "@/lib/northstar-data/catalog";
 
 export type NorthStarDataToolResult = {
   detail: string;
@@ -61,394 +36,9 @@ export type NorthStarDataToolResult = {
   ok: boolean;
 };
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function getArray(value: unknown): UnknownRecord[] {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-function pickString(record: UnknownRecord, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return undefined;
-}
-
-function maybeImageUrl(value?: string): string | undefined {
-  if (!value) return undefined;
-  if (value.startsWith("data:image/")) return value;
-  if (/^https?:\/\//i.test(value)) return value;
-  return undefined;
-}
-
-function normalizeToken(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-
-function canonicalSessionType(value?: string): "onboarding" | "browsing" | undefined {
-  const normalized = normalizeToken(value ?? "");
-  if (!normalized) return undefined;
-  if (/onboard|activation|registration|sign up|signup|account creation|first login/.test(normalized)) return "onboarding";
-  if (/brows|discover|explore|navigation|usage|session/.test(normalized)) return "browsing";
-  return undefined;
-}
-
-function authoritativeFlowSessionType(flow: Pick<NorthStarDataFlow, "sessionType" | "name" | "description">): "onboarding" | "browsing" | undefined {
-  return canonicalSessionType(flow.sessionType) ?? canonicalSessionType(`${flow.name} ${flow.description ?? ""}`);
-}
-
-function flowMatchesRequestedScope(
-  flow: NorthStarDataFlow,
-  sessionType?: "onboarding" | "browsing",
-  platform?: "mobile" | "web",
-): boolean {
-  if (sessionType && authoritativeFlowSessionType(flow) !== sessionType) return false;
-  if (platform && normalizeToken(flow.platform ?? "") !== normalizeToken(platform)) return false;
-  return true;
-}
-
-function safeId(...parts: Array<string | number | undefined>): string {
-  return parts
-    .filter((part) => part !== undefined && String(part).trim())
-    .map((part) => encodeURIComponent(String(part).trim().toLowerCase()))
-    .join(":");
-}
-
-function encodeStorageSegment(value: string): string {
-  return value
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-}
-
-function screenshotBaseUrl(
-  tenantId: string,
-  appName: string,
-  platform?: string,
-  sessionType?: string,
-): string | undefined {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl || !tenantId || !appName || !sessionType) return undefined;
-  const platformPrefix = platform === "web" ? "web/" : "";
-  return `${supabaseUrl}/storage/v1/object/public/reviews/${encodeStorageSegment(tenantId)}/${encodeStorageSegment(appName)}/${platformPrefix}${encodeStorageSegment(sessionType)}/screenshots`;
-}
-
-function getScreenshotUrl(
-  screen: UnknownRecord,
-  tenantId: string,
-  appName: string,
-  platform?: string,
-  sessionType?: string,
-): string | undefined {
-  const direct = pickString(screen, [
-    "image_url",
-    "imageUrl",
-    "imagePath",
-    "screenshot_url",
-    "screenshotUrl",
-    "screenshot_file",
-    "screenshot",
-    "path",
-    "public_url",
-    "publicUrl",
-    "storage_url",
-    "storageUrl",
-  ]);
-  const normalizedDirect = maybeImageUrl(direct);
-  if (normalizedDirect) return normalizedDirect;
-
-  const base = screenshotBaseUrl(tenantId, appName, platform, sessionType);
-  const fileName = direct?.split("/").pop();
-  return base && fileName ? `${base}/${encodeURIComponent(fileName)}` : undefined;
-}
-
-function getScreenName(screen: UnknownRecord, index: number): string {
-  return (
-    pickString(screen, [
-      "display_label",
-      "screen_type",
-      "screen_name",
-      "step_name",
-      "name",
-      "title",
-      "label",
-      "page_title",
-    ]) ?? `Screen ${index + 1}`
-  );
-}
-
-function getScreenSourceRecords(session: UnknownRecord): UnknownRecord[] {
-  const steps = getArray(session.steps_data);
-  if (steps.length) return steps;
-
-  const flowsData = isRecord(session.flows_data) ? session.flows_data : undefined;
-  const catalog = getArray(flowsData?.screen_catalog);
-  if (catalog.length) return catalog;
-  return getArray(flowsData?.screens);
-}
-
-function getFileKey(value?: string): string {
-  return value?.split("/").pop()?.toLowerCase() ?? "";
-}
-
-function buildCatalogIndex(catalog: UnknownRecord[]) {
-  const byStep = new Map<number, UnknownRecord>();
-  const byFile = new Map<string, UnknownRecord>();
-  catalog.forEach((screen, index) => {
-    const step = Number(screen.timeline_step ?? screen.step ?? screen.screen_index ?? index + 1);
-    if (Number.isFinite(step)) byStep.set(step, screen);
-    const file = getFileKey(
-      pickString(screen, ["screenshot_file", "imagePath", "screenshot", "path"]),
-    );
-    if (file) byFile.set(file, screen);
-  });
-  return { byStep, byFile };
-}
-
-function getNumberArray(value: unknown): number[] {
-  return Array.isArray(value)
-    ? value.map(Number).filter((entry) => Number.isFinite(entry))
-    : [];
-}
-
-function getStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
-    : [];
-}
-
-function makeScreen(
-  raw: UnknownRecord,
-  app: NorthStarDataApp,
-  flowName: string,
-  flowId: string,
-  platform: string | undefined,
-  sessionType: string | undefined,
-  index: number,
-): NorthStarDataScreen {
-  return {
-    id: safeId(app.id, flowId, raw.id as string | undefined, raw.step as number | undefined, index),
-    name: getScreenName(raw, index),
-    imageUrl: getScreenshotUrl(raw, app.tenantId, app.name, platform, sessionType),
-    sourceUrl: pickString(raw, ["page_url", "source_url", "url", "href"]),
-    appName: app.name,
-    flowName,
-    platform,
-    sessionType,
-    index,
-  };
-}
-
-function resolveTaxonomyScreens(
-  node: UnknownRecord,
-  catalog: UnknownRecord[],
-  app: NorthStarDataApp,
-  flowName: string,
-  flowId: string,
-  platform?: string,
-  sessionType?: string,
-): NorthStarDataScreen[] {
-  const index = buildCatalogIndex(catalog);
-  const rawScreens: UnknownRecord[] = [];
-  const seen = new Set<string>();
-
-  const add = (screen?: UnknownRecord) => {
-    if (!screen) return;
-    const file = getFileKey(
-      pickString(screen, ["screenshot_file", "imagePath", "screenshot", "path"]),
-    );
-    const key = file || String(screen.id ?? screen.step ?? rawScreens.length);
-    if (seen.has(key)) return;
-    seen.add(key);
-    rawScreens.push(screen);
-  };
-
-  getNumberArray(node.screens).forEach((step) => add(index.byStep.get(step)));
-  getStringArray(node.spine).forEach((file) => add(index.byFile.get(getFileKey(file))));
-  getArray(node.branches).forEach((branch) => {
-    getStringArray(branch.screenshots).forEach((file) => add(index.byFile.get(getFileKey(file))));
-  });
-
-  return rawScreens.map((screen, screenIndex) =>
-    makeScreen(screen, app, flowName, flowId, platform, sessionType, screenIndex),
-  );
-}
-
-function collectTaxonomyFlows(
-  nodes: UnknownRecord[],
-  catalog: UnknownRecord[],
-  app: NorthStarDataApp,
-  sessionId: string,
-  platform?: string,
-  sessionType?: string,
-): NorthStarDataFlow[] {
-  const flows: NorthStarDataFlow[] = [];
-
-  const walk = (node: UnknownRecord, depth: number) => {
-    const name = pickString(node, ["label", "name", "title", "id"]) ?? "Captured flow";
-    const rawId = pickString(node, ["id"]) ?? `${name}-${depth}-${flows.length}`;
-    const id = safeId(app.id, sessionId, rawId);
-    const explicitNodeSessionType = pickString(node, ["session_type", "flow_type", "mode"]);
-    const nodeSessionType =
-      canonicalSessionType(explicitNodeSessionType) ??
-      canonicalSessionType(sessionType) ??
-      canonicalSessionType(name);
-    const screens = resolveTaxonomyScreens(
-      node,
-      catalog,
-      app,
-      name,
-      id,
-      platform,
-      nodeSessionType,
-    );
-    if (screens.length) {
-      flows.push({
-        id,
-        name,
-        description: pickString(node, ["description", "summary"]),
-        appName: app.name,
-        appId: app.id,
-        platform,
-        sessionType: nodeSessionType,
-        screens,
-      });
-    }
-    getArray(node.children).forEach((child) => walk(child, depth + 1));
-  };
-
-  nodes.forEach((node) => walk(node, 0));
-  return flows;
-}
-
-function catalogFromSteps(steps: UnknownRecord[]): UnknownRecord[] {
-  return steps.map((step, index) => ({
-    ...step,
-    timeline_step: step.step ?? step.timeline_step ?? step.screen_index ?? index + 1,
-    screenshot_file: step.imagePath ?? step.screenshot_file ?? step.screenshot ?? step.path,
-    display_label:
-      step.screen_type ?? step.display_label ?? step.name ?? `Screen ${index + 1}`,
-  }));
-}
-
-function normalizeApps(rows: UnknownRecord[], tenantId: string): NorthStarDataApp[] {
-  const apps = new Map<string, NorthStarDataApp>();
-
-  for (const row of rows) {
-    const name = pickString(row, ["app_name", "name", "title"]) ?? "Untitled app";
-    const key = normalizeToken(name);
-    const current = apps.get(key);
-    const app: NorthStarDataApp = current ?? {
-      id: safeId(tenantId, name),
-      name,
-      tenantId,
-      domain: pickString(row, ["domain", "website", "url"]),
-      iconUrl: maybeImageUrl(
-        pickString(row, ["icon_url", "logo_url", "logo", "icon", "app_icon_url"]),
-      ),
-      description: pickString(row, ["description", "summary", "category"]),
-      category: pickString(row, ["category", "app_type"]),
-      rank: pickString(row, ["rank"]),
-      revenue: pickString(row, ["revenue"]),
-      employees: pickString(row, ["employees"]),
-      totalScreens: 0,
-      flows: [],
-    };
-
-    if (!current) apps.set(key, app);
-    app.iconUrl = app.iconUrl ?? maybeImageUrl(pickString(row, ["icon_url", "logo_url", "logo", "icon"]));
-
-    for (const session of getArray(row.app_sessions)) {
-      const platform = pickString(session, ["platform"]);
-      const rawSessionType = pickString(session, ["session_type", "flow_type", "type", "mode"]);
-      const sessionType = canonicalSessionType(rawSessionType) ?? rawSessionType;
-      const sessionId = String(session.id ?? `${platform ?? "session"}-${sessionType ?? "captured"}`);
-      const flowsData = isRecord(session.flows_data) ? session.flows_data : undefined;
-      const taxonomy = getArray(flowsData?.taxonomy);
-      const steps = getArray(session.steps_data);
-      const catalog = getArray(flowsData?.screen_catalog);
-      const effectiveCatalog = catalog.length ? catalog : catalogFromSteps(steps);
-
-      const taxonomyFlows = collectTaxonomyFlows(
-        taxonomy,
-        effectiveCatalog,
-        app,
-        sessionId,
-        platform,
-        sessionType,
-      );
-
-      for (const flow of taxonomyFlows) {
-        if (!app.flows.some((existing) => existing.id === flow.id)) app.flows.push(flow);
-      }
-
-      const sourceScreens = getScreenSourceRecords(session);
-      if (sourceScreens.length) {
-        const sessionName = [platform, sessionType]
-          .filter(Boolean)
-          .map((value) => String(value).replace(/[_-]+/g, " "))
-          .join(" ") || "Captured flow";
-        const flowId = safeId(app.id, sessionId, sessionName);
-        if (!app.flows.some((flow) => flow.id === flowId)) {
-          const flow: NorthStarDataFlow = {
-            id: flowId,
-            name: sessionName.replace(/\b\w/g, (char) => char.toUpperCase()),
-            description:
-              pickString(session, ["summary", "description"]) ??
-              (isRecord(session.session_intel)
-                ? pickString(session.session_intel, ["summary", "overview", "caption"])
-                : undefined),
-            appName: app.name,
-            appId: app.id,
-            platform,
-            sessionType,
-            screens: sourceScreens.map((screen, index) =>
-              makeScreen(screen, app, sessionName, flowId, platform, sessionType, index),
-            ),
-          };
-          app.flows.push(flow);
-        }
-      }
-
-      const totalScreens = Number(session.total_screens ?? sourceScreens.length ?? 0);
-      if (Number.isFinite(totalScreens)) app.totalScreens = Math.max(app.totalScreens, totalScreens);
-    }
-
-    app.flows = dedupeFlows(app.flows);
-    app.totalScreens = Math.max(
-      app.totalScreens,
-      app.flows.reduce((total, flow) => total + flow.screens.length, 0),
-    );
-  }
-
-  return Array.from(apps.values()).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function dedupeFlows(flows: NorthStarDataFlow[]): NorthStarDataFlow[] {
-  const result = new Map<string, NorthStarDataFlow>();
-  for (const flow of flows) {
-    const key = `${normalizeToken(flow.name)}:${flow.platform ?? ""}:${flow.sessionType ?? ""}`;
-    const existing = result.get(key);
-    if (!existing) {
-      result.set(key, flow);
-      continue;
-    }
-    const seen = new Set(existing.screens.map((screen) => screen.imageUrl || screen.id));
-    for (const screen of flow.screens) {
-      const screenKey = screen.imageUrl || screen.id;
-      if (!seen.has(screenKey)) {
-        existing.screens.push(screen);
-        seen.add(screenKey);
-      }
-    }
-  }
-  return Array.from(result.values()).sort((a, b) => a.name.localeCompare(b.name));
-}
+const normalizeToken = normalizeNorthStarToken;
+const authoritativeFlowSessionType = authoritativeNorthStarFlowSessionType;
+const flowMatchesRequestedScope = northStarFlowMatchesRequestedScope;
 
 export async function resolveNorthStarTenantId(
   supabase: SupabaseClient,
@@ -460,11 +50,14 @@ export async function resolveNorthStarTenantId(
     .eq("id", userId)
     .maybeSingle();
   if (error) throw new Error("North Star could not resolve this account workspace.");
-  const tenantId = isRecord(data)
-    ? pickString(data, ["customer_id", "tenant_id", "tenantId"])
+  const tenantId = data && typeof data === "object" && !Array.isArray(data)
+    ? Object.entries(data as Record<string, unknown>)
+        .find(([key, value]) => ["customer_id", "tenant_id", "tenantId"].includes(key) && typeof value === "string" && value.trim())?.[1]
     : undefined;
-  if (!tenantId) throw new Error("No North Star account workspace was found for this user.");
-  return tenantId;
+  if (typeof tenantId !== "string" || !tenantId.trim()) {
+    throw new Error("No North Star account workspace was found for this user.");
+  }
+  return tenantId.trim();
 }
 
 export async function loadNorthStarDataCatalog(
@@ -473,31 +66,16 @@ export async function loadNorthStarDataCatalog(
 ): Promise<NorthStarDataCatalog> {
   const { data, error } = await supabase
     .from("target_apps")
-    .select(`
-      app_name,
-      category,
-      icon_url,
-      rank,
-      revenue,
-      employees,
-      app_sessions (
-        app_name,
-        platform,
-        session_type,
-        ux_grade,
-        total_screens,
-        session_intel,
-        steps_data,
-        flows_data
-      )
-    `)
+    .select(NORTHSTAR_TENANT_CATALOG_SELECT)
     .eq("tenant_id", tenantId)
     .order("app_name", { ascending: true });
 
   if (error) throw new Error("North Star could not load the apps in this account.");
-  return { tenantId, apps: normalizeApps((data ?? []) as UnknownRecord[], tenantId) };
+  return normalizeNorthStarDataCatalogRows(
+    (data ?? []) as Array<Record<string, unknown>>,
+    tenantId,
+  );
 }
-
 function clampLimit(value: number | undefined, fallback: number, max: number): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(1, Math.min(max, Math.round(value!)));
@@ -514,16 +92,32 @@ function scoreText(haystack: string, query: string): number {
   return terms.reduce((score, term) => score + (normalizedHaystack.includes(term) ? 8 : 0), 0);
 }
 
-function findApp(catalog: NorthStarDataCatalog, appName?: string): NorthStarDataApp | undefined {
+function findApp(
+  catalog: NorthStarDataCatalog,
+  appName?: string,
+  appId?: string,
+): NorthStarDataApp | undefined {
+  if (appId) {
+    const exact = catalog.apps.find((app) => app.id === appId);
+    if (exact) return exact;
+  }
   if (!appName) return undefined;
+  const exactName = catalog.apps.find((app) => normalizeToken(app.name) === normalizeToken(appName));
+  if (exactName) return exactName;
   const match = catalog.apps
     .map((app) => ({ app, score: scoreText(`${app.name} ${app.category ?? ""}`, appName) }))
     .sort((a, b) => b.score - a.score)[0];
   return match && match.score > 0 ? match.app : undefined;
 }
 
-function findFlow(app: NorthStarDataApp, flowName?: string): NorthStarDataFlow | undefined {
+function findFlow(app: NorthStarDataApp, flowName?: string, flowId?: string): NorthStarDataFlow | undefined {
+  if (flowId) {
+    const exact = app.flows.find((flow) => flow.id === flowId);
+    if (exact) return exact;
+  }
   if (!flowName) return undefined;
+  const exactName = app.flows.find((flow) => normalizeToken(flow.name) === normalizeToken(flowName));
+  if (exactName) return exactName;
   const match = app.flows
     .map((flow) => ({
       flow,
@@ -531,6 +125,28 @@ function findFlow(app: NorthStarDataApp, flowName?: string): NorthStarDataFlow |
     }))
     .sort((a, b) => b.score - a.score)[0];
   return match && match.score > 0 ? match.flow : undefined;
+}
+
+function resolveFlowIdentity(
+  catalog: NorthStarDataCatalog,
+  args: Pick<NorthStarToolArguments, "appId" | "appName" | "flowId" | "flowName">,
+): { app: NorthStarDataApp; flow: NorthStarDataFlow } | undefined {
+  if (args.flowId) {
+    const preferredApp = args.appId || args.appName
+      ? findApp(catalog, args.appName, args.appId)
+      : undefined;
+    const candidateApps = preferredApp
+      ? [preferredApp, ...catalog.apps.filter((app) => app.id !== preferredApp.id)]
+      : catalog.apps;
+    for (const app of candidateApps) {
+      const flow = findFlow(app, undefined, args.flowId);
+      if (flow) return { app, flow };
+    }
+    return undefined;
+  }
+  const app = findApp(catalog, args.appName, args.appId);
+  const flow = app ? findFlow(app, args.flowName) : undefined;
+  return app && flow ? { app, flow } : undefined;
 }
 
 function appItem(app: NorthStarDataApp): NorthStarToolResultItem {
@@ -542,6 +158,7 @@ function appItem(app: NorthStarDataApp): NorthStarToolResultItem {
       .filter(Boolean)
       .join(" · "),
     imageUrl: app.iconUrl,
+    appId: app.id,
     appName: app.name,
     category: app.category,
     screenCount: app.totalScreens,
@@ -557,7 +174,9 @@ function flowItem(flow: NorthStarDataFlow, app?: NorthStarDataApp): NorthStarToo
       .filter(Boolean)
       .join(" · "),
     imageUrl: app?.iconUrl,
+    appId: flow.appId,
     appName: flow.appName,
+    flowId: flow.id,
     flowName: flow.name,
     platform: flow.platform,
     sessionType: flow.sessionType,
@@ -577,7 +196,9 @@ function screenshotItem(screen: NorthStarDataScreen): NorthStarToolResultItem {
     title: screen.name,
     subtitle: `${screen.appName} · ${screen.flowName}`,
     imageUrl: screen.imageUrl,
+    appId: screen.appId,
     appName: screen.appName,
+    flowId: screen.flowId,
     flowName: screen.flowName,
     platform: screen.platform,
     sessionType: screen.sessionType,
@@ -589,6 +210,8 @@ function compactScreenData(screen: NorthStarDataScreen) {
   return {
     id: screen.id,
     name: screen.name,
+    appId: screen.appId,
+    flowId: screen.flowId,
     imageUrl: screen.imageUrl,
     sourceUrl: screen.sourceUrl,
     appName: screen.appName,
@@ -604,6 +227,7 @@ function compactFlowData(flow: NorthStarDataFlow) {
     id: flow.id,
     name: flow.name,
     description: flow.description,
+    appId: flow.appId,
     appName: flow.appName,
     platform: flow.platform,
     sessionType: flow.sessionType,
@@ -627,6 +251,8 @@ function compactAppData(app: NorthStarDataApp) {
     flows: app.flows.slice(0, 20).map((flow) => ({
       id: flow.id,
       name: flow.name,
+      appId: flow.appId,
+      appName: flow.appName,
       description: flow.description,
       platform: flow.platform,
       sessionType: flow.sessionType,
@@ -823,7 +449,7 @@ export async function executeNorthStarDataTool({
 
     case "get_app_details":
     case "get_app_icon": {
-      const app = findApp(catalog, args.appName);
+      const app = findApp(catalog, args.appName, args.appId);
       if (!app) {
         return {
           detail: `No app matched “${args.appName ?? "the requested app"}”.`,
@@ -848,7 +474,7 @@ export async function executeNorthStarDataTool({
     }
 
     case "list_app_flows": {
-      const app = findApp(catalog, args.appName);
+      const app = findApp(catalog, args.appName, args.appId);
       if (!app) {
         return {
           detail: `No app matched “${args.appName ?? "the requested app"}”.`,
@@ -877,7 +503,7 @@ export async function executeNorthStarDataTool({
 
     case "search_app_flows": {
       const limit = clampLimit(args.limit, 8, 20);
-      const appFilter = args.appName ? findApp(catalog, args.appName) : undefined;
+      const appFilter = args.appId || args.appName ? findApp(catalog, args.appName, args.appId) : undefined;
       const candidates = (appFilter ? [appFilter] : catalog.apps).flatMap((app) =>
         app.flows.map((flow) => ({
           app,
@@ -908,11 +534,12 @@ export async function executeNorthStarDataTool({
 
     case "get_flow_details":
     case "get_flow_screenshots": {
-      const app = findApp(catalog, args.appName);
-      const flow = app ? findFlow(app, args.flowName) : undefined;
+      const resolved = resolveFlowIdentity(catalog, args);
+      const app = resolved?.app;
+      const flow = resolved?.flow;
       if (!app || !flow) {
         return {
-          detail: `No flow matched “${args.flowName ?? "the requested flow"}”${args.appName ? ` for ${args.appName}` : ""}.`,
+          detail: `No flow matched ${args.flowId ? `flowId “${args.flowId}”` : `“${args.flowName ?? "the requested flow"}”`}${args.appName || args.appId ? ` for ${args.appName ?? args.appId}` : ""}.`,
           data: null,
           resultView: emptyView(
             tool === "get_flow_details" ? "flow" : "screenshots",
@@ -951,7 +578,7 @@ export async function executeNorthStarDataTool({
 
     case "search_screenshots": {
       const limit = clampLimit(args.limit, 8, 20);
-      const appFilter = args.appName ? findApp(catalog, args.appName) : undefined;
+      const appFilter = args.appId || args.appName ? findApp(catalog, args.appName, args.appId) : undefined;
       const flowQuery = args.flowName ? normalizeToken(args.flowName) : "";
       const matches = (appFilter ? [appFilter] : catalog.apps)
         .flatMap((app) =>
@@ -1103,6 +730,7 @@ export async function executeNorthStarDataTool({
           requestedSessionType: args.sessionType,
           requestedPlatform: args.platform,
           selectedFlowIdentity: selectedFlows.map((flow) => ({
+            appId: flow.appId,
             appName: flow.appName,
             flowId: flow.id,
             flowName: flow.name,
@@ -1131,12 +759,13 @@ export async function executeNorthStarDataTool({
         : undefined;
       if (!match) {
         const query = [args.query, args.appName, args.flowName].filter(Boolean).join(" ");
-        match = allScreens
+        const scored = allScreens
           .map((screen) => ({
             screen,
             score: scoreText(`${screen.name} ${screen.appName} ${screen.flowName}`, query),
           }))
-          .sort((a, b) => b.score - a.score)[0]?.screen;
+          .sort((a, b) => b.score - a.score)[0];
+        match = scored && scored.score > 0 ? scored.screen : undefined;
       }
       if (!match) {
         return {

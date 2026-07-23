@@ -58,6 +58,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const SURFACE_ID = ${safeJson(artifact.surfaceId ?? artifact.artifactId)};
   let currentRevisionId = ${safeJson(initialRevisionId)};
   let currentMutationId = null;
+  let currentCommitHash = ${safeJson(artifact.headCommitHash ?? artifact.headCommit?.commitHash ?? null)};
+  let writerMode = "legacy-repository";
   let currentData = ${safeJson(dataBundle)};
   let currentCreative = ${safeJson(artifact.creativeDirection ?? null)};
   let currentReviews = ${safeJson(artifact.creativeReviews ?? [])};
@@ -70,6 +72,12 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       if (typeof value === "string" && /^(?:https?:|data:|blob:)/i.test(value)) ALLOWED_ASSETS.add(value);
     }
   };
+  // Direct projection must authorize the exact asset URLs it is about to
+  // insert before the mutation observer enforces the runtime allow-list. The
+  // authoritative data bundle is synchronized only after verification, so
+  // relying on that later sync creates a circular failure: the image src is
+  // removed before the first commit can ever verify.
+  window.__northstarRegisterDirectProjectionAssets = registerAssets;
   const MINIMUM_WIDTH = ${minimumWidth};
   const MINIMUM_HEIGHT = ${minimumHeight};
   const appliedMutationIds = new Set();
@@ -111,6 +119,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   let preparedCandidate = null;
   let mutationObserver = null;
   let resizeObserver = null;
+  const settlementObservedImages = new WeakSet();
 
   // Runtime-owned overlays are derived browser state. A historical snapshot may
   // contain them, but a mount must always begin from one clean authored tree.
@@ -1619,8 +1628,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   const attachResourceSettlementListeners = (targetRoot) => {
     for (const image of Array.from(targetRoot.querySelectorAll("img"))) {
-      if (image.complete || image.dataset.nsSettlementObserved === "true") continue;
-      image.dataset.nsSettlementObserved = "true";
+      if (image.complete || settlementObservedImages.has(image)) continue;
+      // Runtime bookkeeping must never be serialized into canonical authored
+      // state. A DOM data attribute here changes the projection hash while an
+      // image is loading and makes every image-bearing commit unverifiable.
+      settlementObservedImages.add(image);
       image.addEventListener("load", queueContentSize, { once: true });
       image.addEventListener("error", queueContentSize, { once: true });
     }
@@ -1664,6 +1676,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   window.addEventListener("message", (event) => {
     const message = event.data;
     if (!message || message.artifactId !== ARTIFACT_ID) return;
+    if (message.type === "northstar.artifact.set-writer") {
+      writerMode = message.writer === "direct-projection" ? "direct-projection" : "legacy-repository";
+      // Writer ownership is runtime state, never authored artboard state. Keep
+      // it outside the canonical projection root so readiness cannot drift HEAD.
+      document.documentElement.setAttribute("data-ns-runtime-writer", writerMode);
+      return;
+    }
+    const legacyRepositoryMutation = message.type === "northstar.artifact.set-stage"
+      || message.type === "northstar.artifact.update-context"
+      || message.type === "northstar.artifact.activate-commit"
+      || message.type === "northstar.artifact.checkout-commit"
+      || message.type === "northstar.artifact.stage-proposal"
+      || message.type === "northstar.artifact.apply-mutation";
+    if (writerMode === "direct-projection" && legacyRepositoryMutation) return;
     if (message.type === "northstar.artifact.set-stage") {
       activeStageIndex = Math.max(0, Math.min(STAGES.length - 1, Number(message.stageIndex) || 0)); applyStage(); queueContentSize(); return;
     }
@@ -1725,6 +1751,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       requestedBounds = committedRequestedBounds;
       currentRevisionId = preparedCandidate.revisionId;
       currentMutationId = preparedCandidate.mutationId;
+      currentCommitHash = message.commitHash || currentCommitHash;
       appliedMutationIds.add(preparedCandidate.mutationId);
       installSpatialSystem(committedRoot);
       enforceAssetPolicy(committedRoot);
@@ -1743,6 +1770,36 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     if (message.type === "northstar.artifact.checkout-commit" && message.commit) {
       const commit = message.commit;
+      if (commit.commitHash && currentCommitHash === commit.commitHash) {
+        parent.postMessage({
+          type: "northstar.artifact.commit-projected",
+          artifactId: ARTIFACT_ID,
+          surfaceId: SURFACE_ID,
+          surfaceSessionId: message.surfaceSessionId,
+          transactionId: message.transactionId || ("checkout:" + commit.commitHash),
+          proposalId: commit.proposalId || null,
+          ackToken: message.ackToken,
+          commitHash: commit.commitHash,
+          parentCommitHash: commit.parentCommitHash || null,
+          commitSequence: commit.commitSequence,
+          documentHash: commit.hashes?.documentHash,
+          geometryHash: commit.hashes?.geometryHash,
+          revisionId: currentRevisionId,
+          mutationId: currentMutationId,
+          visibleChange: false,
+          size: lastCommittedSize,
+          review: lastCommittedReview,
+          changedNodeIds: [],
+          meaningfulChangedNodeIds: [],
+          changeKinds: [],
+          requiredAssetUrls: [],
+          loadedAssetUrls: loadedAssetUrls(),
+          missingAssetUrls: [],
+          snapshot: captureLiveSnapshot(),
+          designObservations: [],
+        }, "*");
+        return;
+      }
       root = committedRoot;
       styleContainer = document.head;
       stagingMode = false;
@@ -1765,6 +1822,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       requestedBounds = committedRequestedBounds;
       currentRevisionId = commit.revisionId || currentRevisionId;
       currentMutationId = commit.mutationId || null;
+      currentCommitHash = commit.commitHash || currentCommitHash;
       installSpatialSystem(committedRoot);
       enforceAssetPolicy(committedRoot);
       applyStage();

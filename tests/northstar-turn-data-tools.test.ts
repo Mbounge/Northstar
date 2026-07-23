@@ -201,8 +201,9 @@ test("required exact-flow identity is rejected before any tenant lookup", async 
       if (!(error instanceof NorthstarTurnToolError)) return false;
       assert.equal(error.failureKind, "correctable");
       assert.equal(error.code, "TOOL_ARGUMENTS_INVALID");
+      assert.match(error.message, /flowId/);
+      assert.match(error.message, /appId\/appName/);
       assert.match(error.message, /flowName/);
-      assert.match(JSON.stringify(error.correctionContext), /"required":\["appName","flowName"\]/);
       return true;
     },
   );
@@ -276,13 +277,16 @@ function promptGroundedCatalog(): NorthStarDataCatalog {
     description: `A distinct onboarding path ${index}`,
     appName,
     appId,
+    sessionId: `${appId}-session-${index}`,
     platform: index % 2 === 0 ? "web" : "mobile",
     sessionType: "onboarding",
     screens: Array.from({ length: 5 }, (_, screenIndex) => ({
       id: `${appId}-flow-${index}-screen-${screenIndex}`,
       name: `Screen ${screenIndex + 1}`,
       imageUrl: `https://assets.example/${appId}/${index}/${screenIndex}.png`,
+      appId,
       appName,
+      flowId: `${appId}-flow-${index}`,
       flowName: `Activation path ${index}`,
       platform: index % 2 === 0 ? "web" : "mobile",
       sessionType: "onboarding",
@@ -397,4 +401,90 @@ test("a global screenshot limit is distributed across selected flows instead of 
   assert.equal(data.candidateScreenshotIds.length, 8);
   assert.equal(data.selectionTruncated, true);
   assert.equal(data.unselectedScreenshotCount, 12);
+});
+
+test("exact flow retrieval uses flowId even when a stale human name is supplied", async () => {
+  const catalog = promptGroundedCatalog();
+  const result = await executeNorthStarDataTool({
+    tool: "get_flow_screenshots",
+    args: {
+      appId: "stale-app-id",
+      appName: "Stale app name",
+      flowId: "atlas-flow-1",
+      flowName: "Publisher Registration",
+      limit: 3,
+    },
+    async getCatalog() { return catalog; },
+  });
+  assert.equal(result.ok, true);
+  const data = result.data as {
+    app: { id: string; name: string };
+    flow: { id: string; name: string };
+    screens: Array<{ id: string; appId: string; flowId: string }>;
+  };
+  assert.equal(data.app.id, "atlas");
+  assert.equal(data.flow.id, "atlas-flow-1");
+  assert.equal(data.flow.name, "Activation path 1");
+  assert.equal(data.screens.length, 3);
+  assert.ok(data.screens.every((screen) => screen.appId === "atlas" && screen.flowId === "atlas-flow-1"));
+});
+
+test("a later exact lookup is grounded to the sole committed flow identity", async () => {
+  const fixture = activeAttemptFixture("research");
+  const executionInput: NorthstarLedgerValue = {
+    toolCalls: [{
+      name: "get_flow_screenshots",
+      args: { appName: "Atlas", flowName: "Publisher Registration", limit: 4 },
+    }],
+  };
+  const task = { ...fixture.task, initialExecutionInput: executionInput };
+  const attempt = {
+    ...fixture.attempt,
+    executionInput,
+    evidence: {
+      committedEvidence: [{
+        kind: "flow",
+        appId: "atlas",
+        appName: "Atlas",
+        flowId: "atlas-flow-1",
+        flowName: "Activation path 1",
+      }],
+    },
+  };
+  const context = structuredClone(fixture.context);
+  if (!context.activeTask) throw new Error("expected active task");
+  context.tasks = context.tasks.map((entry) => entry.id === task.id ? task : entry);
+  context.attempts = context.attempts.map((entry) => entry.id === attempt.id ? attempt : entry);
+  context.activeTask = { task, attempts: [attempt] };
+  const request = parseNorthstarTurnRequest({
+    protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
+    requestId: "turnreq:ground-known-flow",
+    type: "execute-task-attempt",
+    ledgerContext: context,
+    task,
+    attempt,
+  });
+  if (request.type !== "execute-task-attempt") throw new Error("expected execution request");
+
+  const seen: unknown[] = [];
+  const executor = createNorthstarDataTurnToolExecutor({
+    async getCatalog() { return promptGroundedCatalog(); },
+    async executeTool({ args }) {
+      seen.push(args);
+      return executeNorthStarDataTool({
+        tool: "get_flow_screenshots",
+        args,
+        async getCatalog() { return promptGroundedCatalog(); },
+      });
+    },
+  });
+  const result = await executor.execute({ request, signal: new AbortController().signal });
+  assert.deepEqual(seen, [{
+    appId: "atlas",
+    appName: "Atlas",
+    flowId: "atlas-flow-1",
+    flowName: "Activation path 1",
+    limit: 4,
+  }]);
+  assert.ok(result);
 });

@@ -16,7 +16,7 @@ export function buildNorthstarProjectionBridgeScript(): string {
   const SVG_NS = "http://www.w3.org/2000/svg";
   const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
   const FORBIDDEN_TAGS = new Set(["script","iframe","object","embed","base","meta","link","form","input","textarea","select","option","button","style","template"]);
-  const RESERVED_ATTRIBUTES = new Set(["class","style","data-ns-node-id","data-ns-runtime-owned","data-ns-projection-layer","data-ns-projection-space"]);
+  const RESERVED_ATTRIBUTES = new Set(["class","style","data-ns-node-id","data-ns-runtime-owned","data-ns-projection-layer","data-ns-projection-space","data-ns-writer"]);
   const URL_ATTRIBUTES = new Set(["src","href","xlink:href","poster"]);
   const surfaceSessionId = "projection-surface:" + (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
   const nodeIdentity = new WeakMap();
@@ -415,9 +415,36 @@ export function buildNorthstarProjectionBridgeScript(): string {
     return output;
   };
 
+  const directProjectionAssetUrls = (operation) => {
+    const urls = [];
+    const visit = (node) => {
+      if (!node || node.kind !== "element") return;
+      ["src", "href", "xlink:href", "poster"].forEach((name) => {
+        const value = node.attributes && node.attributes[name];
+        if (typeof value === "string" && /^(?:https?:|data:|blob:)/i.test(value)) urls.push(value);
+      });
+      node.children.forEach(visit);
+    };
+    if (operation && operation.type === "insert-node") visit(operation.node);
+    if (operation && operation.type === "set-attributes") {
+      ["src", "href", "xlink:href", "poster"].forEach((name) => {
+        const value = operation.attributes && operation.attributes[name];
+        if (typeof value === "string" && /^(?:https?:|data:|blob:)/i.test(value)) urls.push(value);
+      });
+    }
+    return Array.from(new Set(urls));
+  };
+
+  const authorizeDirectProjectionAssets = (operation) => {
+    const register = window.__northstarRegisterDirectProjectionAssets;
+    if (typeof register !== "function") return;
+    register(directProjectionAssetUrls(operation));
+  };
+
   const applyOperation = (context, rawOperation) => {
     refreshContext(context);
     const operation = parseOperation(rawOperation, "operation");
+    if (context.live) authorizeDirectProjectionAssets(operation);
     switch (operation.type) {
       case "insert-node": {
         const parent = requireElement(context, operation.parentId, "Insertion parent");

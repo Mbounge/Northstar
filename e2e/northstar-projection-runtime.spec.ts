@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { expect, test, type Page } from "@playwright/test";
 import { buildNorthstarProjectionBridgeScript } from "../lib/canvas-projection/bridge-script";
 import { NORTHSTAR_PROJECTION_PROTOCOL_VERSION } from "../lib/canvas-projection/types";
+import { buildCanvasArtifactRuntimeDocument } from "../lib/canvas-artifacts/runtime-document";
+import { createNorthstarDirectBootstrapArtifactPayload } from "../lib/canvas-artifacts/northstar-direct-bootstrap";
 
 type BridgeResponse = {
   protocolVersion: number;
@@ -231,4 +233,112 @@ test("direct projection prepares detached state and mutates one stable live surf
     return observed;
   });
   assert.equal(attackerResult, false);
+});
+
+
+test("the full direct runtime preserves newly projected image assets without polluting canonical state", async ({ page }) => {
+  const artifact = createNorthstarDirectBootstrapArtifactPayload({ artifactId: "projection-image-runtime" });
+  const runtime = buildCanvasArtifactRuntimeDocument(artifact);
+  assert.ok(runtime);
+  const imageUrl = "https://assets.northstar.test/evidence.png";
+  await page.route(imageUrl, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=", "base64"),
+    });
+  });
+  await page.setContent('<iframe id="surface"></iframe>');
+  await page.locator("#surface").evaluate((iframe, source) => {
+    (iframe as HTMLIFrameElement).srcdoc = source;
+  }, runtime);
+  const surfaceFrame = page.frameLocator("#surface");
+  await expect(surfaceFrame.locator("#northstar-artifact-root")).toBeVisible();
+  await page.locator("#surface").evaluate((iframe, artifactId) => {
+    (iframe as HTMLIFrameElement).contentWindow?.postMessage({
+      type: "northstar.artifact.set-writer",
+      artifactId,
+      writer: "direct-projection",
+    }, "*");
+  }, artifact.artifactId);
+
+  const captured = await sendBridgeRequest(page, request("northstar.projection.capture", "image-capture-base"));
+  assert.equal(captured.ok, true);
+  const base = captured.state as {
+    root: { children: Array<{ kind: string; id: string; children?: Array<unknown> }> };
+  };
+  const artboard = base.root.children.find((node) => node.id === "northstar-artboard");
+  assert.ok(artboard && Array.isArray(artboard.children));
+  const operation = {
+    type: "insert-node",
+    parentId: "northstar-artboard",
+    index: artboard.children.length,
+    node: {
+      kind: "element",
+      id: "live-evidence-image",
+      tag: "img",
+      namespace: "html",
+      attributes: {
+        src: imageUrl,
+        alt: "Grounded evidence",
+        loading: "eager",
+        decoding: "async",
+      },
+      classes: [],
+      styles: { width: { value: "320px", priority: "" } },
+      children: [],
+    },
+  };
+  const prepared = await sendBridgeRequest(page, request("northstar.projection.prepare", "image-prepare", {
+    surfaceSessionId: captured.surfaceSessionId,
+    baseState: captured.state,
+    operations: [operation],
+  }));
+  assert.equal(prepared.ok, true, prepared.message);
+  const applied = await sendBridgeRequest(page, request("northstar.projection.apply", "image-apply", {
+    surfaceSessionId: captured.surfaceSessionId,
+    operationIndex: 0,
+    operation,
+  }));
+  assert.equal(applied.ok, true, applied.message);
+  await page.waitForTimeout(100);
+  const verified = await sendBridgeRequest(page, request("northstar.projection.capture", "image-capture-target", {
+    surfaceSessionId: captured.surfaceSessionId,
+  }));
+  assert.equal(verified.ok, true, verified.message);
+  assert.deepEqual(verified.state, prepared.state);
+  await expect(surfaceFrame.locator('[data-ns-node-id="live-evidence-image"]')).toHaveAttribute("src", imageUrl);
+  await expect(surfaceFrame.locator('[data-ns-node-id="live-evidence-image"]')).not.toHaveAttribute("data-ns-settlement-observed", /.+/);
+});
+
+
+test("direct writer readiness never changes the canonical authored projection state", async ({ page }) => {
+  const artifact = createNorthstarDirectBootstrapArtifactPayload({ artifactId: "projection-writer-readiness" });
+  const runtime = buildCanvasArtifactRuntimeDocument(artifact);
+  assert.ok(runtime);
+  await page.setContent('<iframe id="surface"></iframe>');
+  await page.locator("#surface").evaluate((iframe, source) => {
+    (iframe as HTMLIFrameElement).srcdoc = source;
+  }, runtime);
+  const surfaceFrame = page.frameLocator("#surface");
+  await expect(surfaceFrame.locator("#northstar-artifact-root")).toBeVisible();
+
+  const before = await sendBridgeRequest(page, request("northstar.projection.capture", "writer-before"));
+  assert.equal(before.ok, true, before.message);
+  await page.locator("#surface").evaluate((iframe, artifactId) => {
+    (iframe as HTMLIFrameElement).contentWindow?.postMessage({
+      type: "northstar.artifact.set-writer",
+      artifactId,
+      writer: "direct-projection",
+    }, "*");
+  }, artifact.artifactId);
+  await expect(surfaceFrame.locator("html")).toHaveAttribute("data-ns-runtime-writer", "direct-projection");
+
+  const after = await sendBridgeRequest(page, request("northstar.projection.capture", "writer-after", {
+    surfaceSessionId: before.surfaceSessionId,
+  }));
+  assert.equal(after.ok, true, after.message);
+  assert.deepEqual(after.state, before.state);
+  await expect(surfaceFrame.locator("#northstar-artifact-root")).not.toHaveAttribute("data-ns-writer", /.+/);
 });

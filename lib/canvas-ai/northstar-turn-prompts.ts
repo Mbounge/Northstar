@@ -5,7 +5,14 @@ import {
   buildNorthstarArtboardExecutionProtocol,
   buildNorthstarDesignIntelligenceExecutionProtocol,
   buildNorthstarResearchExecutionProtocol,
+  buildNorthstarVerificationExecutionProtocol,
 } from "@/lib/canvas-ai/northstar-turn-intelligence";
+import {
+  NORTHSTAR_CORRECTION_JSON_SCHEMA,
+  NORTHSTAR_DECISION_JSON_SCHEMA,
+  NORTHSTAR_FINALIZATION_JSON_SCHEMA,
+  northstarAttemptJSONSchema,
+} from "@/lib/canvas-ai/northstar-turn-schemas";
 import type {
   NorthstarCorrectActiveTaskRequest,
   NorthstarDecideNextActivityRequest,
@@ -27,57 +34,11 @@ function json(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export const NORTHSTAR_DECISION_MODEL_SCHEMA: NorthstarLedgerValue = {
-  oneOf: [
-    {
-      decision: "activity",
-      activity: {
-        kind: "research | analysis | artboard-mutation | verification",
-        intent: "string",
-        expectedOutcome: "string",
-        executionInput: "deterministic JSON value",
-      },
-    },
-    {
-      decision: "ready-to-finalize",
-      reason: "string",
-    },
-  ],
-};
+export const NORTHSTAR_DECISION_MODEL_SCHEMA: NorthstarLedgerValue = NORTHSTAR_DECISION_JSON_SCHEMA;
 
-export const NORTHSTAR_ATTEMPT_MODEL_SCHEMA: NorthstarLedgerValue = {
-  oneOf: [
-    {
-      outcome: "success",
-      result: "deterministic JSON value",
-    },
-    {
-      outcome: "failure",
-      failureKind: "transient | correctable | terminal",
-      code: "string",
-      message: "string",
-      correctionContext: "optional deterministic JSON value",
-      retryAfterMs: "optional non-negative integer",
-    },
-  ],
-};
+export const NORTHSTAR_CORRECTION_MODEL_SCHEMA: NorthstarLedgerValue = NORTHSTAR_CORRECTION_JSON_SCHEMA;
 
-export const NORTHSTAR_CORRECTION_MODEL_SCHEMA: NorthstarLedgerValue = {
-  oneOf: [
-    {
-      action: "retry",
-      executionInput: "corrected deterministic JSON value",
-    },
-    {
-      action: "cancel | supersede",
-      reason: "string",
-    },
-  ],
-};
-
-export const NORTHSTAR_FINALIZATION_MODEL_SCHEMA: NorthstarLedgerValue = {
-  summary: "deterministic JSON value containing the final user-facing answer and any concise completion metadata",
-};
+export const NORTHSTAR_FINALIZATION_MODEL_SCHEMA: NorthstarLedgerValue = NORTHSTAR_FINALIZATION_JSON_SCHEMA;
 
 export function buildNorthstarDecisionPrompt(request: NorthstarDecideNextActivityRequest): {
   systemInstruction: string;
@@ -125,6 +86,7 @@ If a tool result is partial, report the gap truthfully and let the next ledger d
 ${request.task.kind === "research" ? buildNorthstarResearchExecutionProtocol() : ""}
 ${request.task.kind === "analysis" ? buildNorthstarDesignIntelligenceExecutionProtocol(request.ledgerContext) : ""}
 ${request.task.kind === "artboard-mutation" ? buildNorthstarArtboardExecutionProtocol(request.ledgerContext) : ""}
+${request.task.kind === "verification" ? buildNorthstarVerificationExecutionProtocol() : ""}
 ${DATA_TOOL_CONTRACT}`,
     userPrompt: json({
       responsibility: "execute-task-attempt",
@@ -140,7 +102,7 @@ ${DATA_TOOL_CONTRACT}`,
         screenshotIndex: asset.screenshotIndex,
       })),
     }),
-    responseSchema: NORTHSTAR_ATTEMPT_MODEL_SCHEMA,
+    responseSchema: northstarAttemptJSONSchema(request.task.kind),
   };
 }
 
@@ -153,9 +115,11 @@ export function buildNorthstarCorrectionPrompt(request: NorthstarCorrectActiveTa
     systemInstruction: `${SHARED_RULES}
 Correct the same unresolved task. Do not propose a different next task.
 Return retry with corrected executionInput, cancel when the requested outcome should be abandoned, or supersede only when the original obligation has been explicitly replaced.
-Do not repeat unchanged input that is already known to be invalid.
+Do not repeat unchanged input only when the failure proves that input itself is invalid or empty.
 For TOOL_ARGUMENTS_INVALID, rebuild every tool call from the exact registry schema.
 For TOOL_LOOKUP_EMPTY, follow recommendedNextTools and change from exact lookup to discovery/curation before retrying.
+For EVIDENCE_ASSETS_UNAVAILABLE, choose another accessible screenshot batch.
+For MODEL_OUTPUT_INVALID, preserve the same successful tool/evidence input when it is still valid and correct the result contract instead of rediscovering tenant data.
 Preserve the user's requested scope and quantity; correction may change strategy but may not silently narrow the objective.
 ${DATA_TOOL_CONTRACT}`,
     userPrompt: json({

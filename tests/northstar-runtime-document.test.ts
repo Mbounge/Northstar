@@ -93,3 +93,43 @@ test("the browser runtime stages candidates offscreen and exposes explicit Git-l
   assert.match(runtime, /opacity: "0"/);
   assert.doesNotMatch(runtime, /visibility: "hidden"/);
 });
+test("direct projection ownership disables every legacy repository mutation message", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  assert.match(runtime, /northstar\.artifact\.set-writer/);
+  assert.match(runtime, /writerMode === "direct-projection" && legacyRepositoryMutation/);
+  assert.match(runtime, /northstar\.artifact\.activate-commit/);
+  assert.match(runtime, /northstar\.artifact\.checkout-commit/);
+  assert.match(runtime, /northstar\.artifact\.stage-proposal/);
+  assert.match(runtime, /northstar\.artifact\.apply-mutation/);
+});
+
+test("checking out the commit already visible is a strict DOM no-op", () => {
+  const artifact = pendingArtifact();
+  artifact.headCommitHash = "commit-visible";
+  const runtime = buildCanvasArtifactRuntimeDocument(artifact);
+  assert.ok(runtime);
+  assert.match(runtime, /let currentCommitHash = "commit-visible";/);
+  const noOpIndex = runtime.indexOf("currentCommitHash === commit.commitHash");
+  const writeIndex = runtime.indexOf("committedRoot.innerHTML = commit.tree?.document?.html", noOpIndex);
+  assert.ok(noOpIndex >= 0);
+  assert.ok(writeIndex > noOpIndex);
+  assert.match(runtime.slice(noOpIndex, writeIndex), /return;/);
+});
+
+test("direct projection asset authorization and settlement tracking stay outside canonical authored state", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  assert.match(runtime, /__northstarRegisterDirectProjectionAssets = registerAssets/);
+  assert.match(runtime, /const settlementObservedImages = new WeakSet\(\)/);
+  assert.match(runtime, /settlementObservedImages\.add\(image\)/);
+  assert.doesNotMatch(runtime, /dataset\.nsSettlementObserved/);
+});
+
+test("direct writer ownership never mutates the canonical authored root", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  assert.match(runtime, /data-ns-runtime-writer/);
+  assert.doesNotMatch(runtime, /committedRoot\.setAttribute\("data-ns-writer"/);
+  assert.doesNotMatch(runtime, /document\.documentElement\.setAttribute\("data-ns-writer"/);
+});

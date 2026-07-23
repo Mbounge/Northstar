@@ -40,10 +40,37 @@ function safeImageUrl(value: unknown): string | undefined {
   }
 }
 
+function collectRequestedScreenshotIds(value: NorthstarLedgerValue | undefined): Set<string> {
+  const ids = new Set<string>();
+  const stack: unknown[] = value === undefined ? [] : [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      current.forEach((entry) => stack.push(entry));
+      continue;
+    }
+    if (!isRecord(current)) continue;
+    for (const key of ["screenshotId", "screenshot_id"]) {
+      const id = current[key];
+      if (typeof id === "string" && id.trim()) ids.add(id.trim());
+    }
+    for (const key of ["screenshotIds", "screenshot_ids", "candidateScreenshotIds"]) {
+      const values = current[key];
+      if (Array.isArray(values)) {
+        values.forEach((id) => {
+          if (typeof id === "string" && id.trim()) ids.add(id.trim());
+        });
+      }
+    }
+    Object.values(current).forEach((entry) => stack.push(entry));
+  }
+  return ids;
+}
+
 function collectFromValue(
   value: NorthstarLedgerValue | undefined,
   candidates: Candidate[],
-  seenUrls: Set<string>,
+  seenIds: Set<string>,
   orderOffset: number,
 ): void {
   if (value === undefined) return;
@@ -59,15 +86,14 @@ function collectFromValue(
     if (!isRecord(current)) continue;
 
     const imageUrl = safeImageUrl(current.imageUrl);
-    if (imageUrl && !seenUrls.has(imageUrl)) {
-      seenUrls.add(imageUrl);
+    const id = stringField(current, "screenshotId", "screenshot_id", "id");
+    if (imageUrl && id && !seenIds.has(id)) {
+      seenIds.add(id);
       const appName = stringField(current, "appName", "app_name");
       const flowName = stringField(current, "flowName", "flow_name");
       const contextualTitle = [appName, flowName].filter(Boolean).join(" · ");
       const title = stringField(current, "title", "name", "displayLabel", "display_label")
         ?? (contextualTitle || "Northstar evidence screenshot");
-      const id = stringField(current, "id", "screenshotId", "screenshot_id")
-        ?? `evidence-${orderOffset + candidates.length + 1}`;
       const screenshotIndex = numberField(current, "screenshotIndex", "index", "screenIndex", "screen_index");
       candidates.push({
         id,
@@ -85,9 +111,20 @@ function collectFromValue(
   }
 }
 
-function balancedSelection(candidates: Candidate[], maximum: number): NorthstarTurnEvidenceAsset[] {
+function balancedSelection(
+  candidates: Candidate[],
+  maximum: number,
+  requestedIds: Set<string>,
+): NorthstarTurnEvidenceAsset[] {
+  const ordered = [...candidates].sort((left, right) => {
+    const leftRequested = requestedIds.has(left.id) ? 0 : 1;
+    const rightRequested = requestedIds.has(right.id) ? 0 : 1;
+    return leftRequested - rightRequested
+      || (left.screenshotIndex ?? Number.MAX_SAFE_INTEGER) - (right.screenshotIndex ?? Number.MAX_SAFE_INTEGER)
+      || left.order - right.order;
+  });
   const groups = new Map<string, Candidate[]>();
-  for (const candidate of candidates.sort((left, right) => left.order - right.order)) {
+  for (const candidate of ordered) {
     const group = groups.get(candidate.group) ?? [];
     group.push(candidate);
     groups.set(candidate.group, group);
@@ -107,25 +144,31 @@ function balancedSelection(candidates: Candidate[], maximum: number): NorthstarT
 }
 
 /**
- * Extracts a balanced bounded set of screenshot assets from authoritative tool
- * evidence. Current-attempt evidence is prioritized, followed by recent ledger
- * evidence. Model-authored result values are intentionally not trusted as asset
- * sources.
+ * Builds an explicit, identity-stable visual evidence manifest. Current task
+ * evidence is authoritative. Previous attempts are consulted only when the
+ * task intentionally reuses committed evidence or the current tool call did not
+ * produce image-backed records.
  */
 export function collectNorthstarTurnEvidenceAssets(input: {
   toolContext?: NorthstarLedgerValue;
   ledgerContext: NorthstarLedgerLLMContext;
+  executionInput?: NorthstarLedgerValue;
   maximum?: number;
 }): NorthstarTurnEvidenceAsset[] {
   const maximum = Math.max(1, Math.min(24, input.maximum ?? DEFAULT_MAX_ASSETS));
   const candidates: Candidate[] = [];
-  const seenUrls = new Set<string>();
+  const seenIds = new Set<string>();
+  const requestedIds = collectRequestedScreenshotIds(input.executionInput);
 
-  collectFromValue(input.toolContext, candidates, seenUrls, 0);
-  const recentAttempts = [...input.ledgerContext.attempts].reverse();
-  recentAttempts.forEach((attempt, index) => {
-    collectFromValue(attempt.evidence, candidates, seenUrls, (index + 1) * 100_000);
-  });
+  collectFromValue(input.toolContext, candidates, seenIds, 0);
+  const reuseCommittedEvidence = isRecord(input.executionInput)
+    && input.executionInput.reuseCommittedEvidence === true;
+  if (candidates.length === 0 || reuseCommittedEvidence) {
+    const recentAttempts = [...input.ledgerContext.attempts].reverse();
+    recentAttempts.forEach((attempt, index) => {
+      collectFromValue(attempt.evidence, candidates, seenIds, (index + 1) * 100_000);
+    });
+  }
 
-  return balancedSelection(candidates, maximum);
+  return balancedSelection(candidates, maximum, requestedIds);
 }

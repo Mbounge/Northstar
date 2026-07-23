@@ -95,6 +95,11 @@ import {
 } from "@/lib/canvas-artifacts/types";
 import { createClient } from "@/lib/supabase/client";
 import {
+  NORTHSTAR_TENANT_CATALOG_SELECT,
+  canonicalNorthStarSessionType,
+  normalizeNorthStarDataCatalogRows,
+} from "@/lib/northstar-data/catalog";
+import {
   projectNorthstarCommitIntoArtifact,
 } from "@/lib/canvas-ai/northstar-transaction-kernel";
 import type {
@@ -362,9 +367,12 @@ type CanvasSemanticRole =
 
 interface CanvasObjectSource {
   kind: CanvasObjectSourceKind;
+  appId?: string;
   appName?: string;
   appIconUrl?: string;
+  flowId?: string;
   flowName?: string;
+  screenshotId?: string;
   flowType?: CanvasFlowType;
   screenLabel?: string;
   screenshotFile?: string;
@@ -747,15 +755,24 @@ type UnknownRecord = Record<string, unknown>;
 interface WorkspaceAppScreen {
   id: string;
   name: string;
+  appId?: string;
+  flowId?: string;
   imageUrl?: string;
   sourceUrl?: string;
+  screenshotFile?: string;
+  platform?: string;
+  sessionType?: string;
+  index?: number;
   createdAt?: string;
 }
 
 interface WorkspaceAppFlow {
   id: string;
   name: string;
+  appId?: string;
   description?: string;
+  platform?: string;
+  sessionType?: string;
   screens: WorkspaceAppScreen[];
 }
 
@@ -1107,7 +1124,9 @@ interface CanvasAIToolResultItem {
   title: string;
   subtitle?: string;
   imageUrl?: string;
+  appId?: string;
   appName?: string;
+  flowId?: string;
   flowName?: string;
   category?: string;
   platform?: string;
@@ -5312,21 +5331,6 @@ function pickString(record: UnknownRecord, keys: string[]) {
   return undefined;
 }
 
-function maybeImageUrl(value: string | undefined) {
-  if (!value) return undefined;
-  if (value.startsWith("data:image/")) return value;
-  if (!/^https?:\/\//i.test(value)) return undefined;
-  if (/\.(png|jpe?g|webp|gif|avif|svg)(\?.*)?$/i.test(value)) return value;
-  if (/screenshot|image|thumbnail|logo|favicon|icon/i.test(value)) return value;
-  return undefined;
-}
-
-function faviconUrlForDomain(domain: string | undefined) {
-  if (!domain) return undefined;
-  const cleaned = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
-  return cleaned ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(cleaned)}&sz=128` : undefined;
-}
-
 async function getNorthStarTenantId(supabase: ReturnType<typeof createClient>) {
   const {
     data: { user },
@@ -5352,388 +5356,82 @@ function normalizeWorkspaceName(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function normalizeWorkspaceApp(row: UnknownRecord): WorkspaceApp {
-  const id = String(row.id ?? row.target_app_id ?? row.app_id ?? makeId());
-  const rawDomain = pickString(row, ["domain", "host", "website", "website_url", "app_url", "url"]);
-  const domain = rawDomain?.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
-  const name =
-    pickString(row, ["app_name", "name", "title", "display_name", "company_name", "brand_name"]) ??
-    domain ??
-    "Untitled app";
-  const logoUrl =
-    maybeImageUrl(pickString(row, ["icon_url", "logo_url", "logo", "icon", "app_icon_url", "favicon_url", "image_url", "thumbnail_url"])) ??
-    faviconUrlForDomain(domain);
-  const totalScreens = Number(row.total_screens ?? row.screen_count ?? row.screens ?? 0);
-
-  return {
-    id,
-    name,
-    tenantId: pickString(row, ["tenant_id", "tenantId", "company_id", "companyId"]),
-    domain,
-    logoUrl,
-    description: pickString(row, ["description", "summary", "category"]),
-    category: pickString(row, ["category", "app_type", "appType"]),
-    rank: pickString(row, ["rank"]),
-    revenue: pickString(row, ["revenue"]),
-    employees: pickString(row, ["employees"]),
-    totalScreens: Number.isFinite(totalScreens) ? totalScreens : 0,
-    flows: [],
-  };
-}
-
-function getWorkspaceAppDedupeKey(app: WorkspaceApp) {
-  const tenantPart = app.tenantId ? `${app.tenantId.toLowerCase()}:` : "";
-  if (app.domain) return `${tenantPart}domain:${app.domain.toLowerCase()}`;
-  return `${tenantPart}name:${normalizeWorkspaceName(app.name)}`;
-}
-
-function normalizeFlowName(name: string) {
-  return name.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function titleCaseToken(value: string | undefined) {
-  if (!value) return "";
-  return value
-    .replace(/[_-]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function encodeStorageSegment(value: string) {
-  return value
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-}
-
-function reviewsScreenshotBaseUrl(app: WorkspaceApp, platform: string | undefined, sessionType: string | undefined) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl || !app.tenantId || !app.name || !sessionType) return undefined;
-
-  const platformPrefix = platform === "web" ? "web/" : "";
-  return `${supabaseUrl}/storage/v1/object/public/reviews/${encodeStorageSegment(app.tenantId)}/${encodeStorageSegment(app.name)}/${platformPrefix}${encodeStorageSegment(sessionType)}/screenshots`;
-}
-
-function getNestedRecord(value: unknown): UnknownRecord | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as UnknownRecord;
-}
-
 function getArrayValue(value: unknown): UnknownRecord[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is UnknownRecord => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry));
 }
 
-function getFlowSourceScreens(sessionRow: UnknownRecord) {
-  const steps = getArrayValue(sessionRow.steps_data);
-  if (steps.length > 0) return steps;
-
-  const flowsData = getNestedRecord(sessionRow.flows_data);
-  const catalog = getArrayValue(flowsData?.screen_catalog);
-  if (catalog.length > 0) return catalog;
-
-  const screens = getArrayValue(flowsData?.screens);
-  if (screens.length > 0) return screens;
-
-  return [];
-}
-
-function getWorkspaceScreenImageUrl(rawScreen: UnknownRecord, app: WorkspaceApp, platform: string | undefined, sessionType: string | undefined) {
-  const direct = maybeImageUrl(
-    pickString(rawScreen, [
-      "image_url",
-      "imageUrl",
-      "imagePath",
-      "screenshot_url",
-      "screenshotUrl",
-      "screenshot_file",
-      "screenshot",
-      "path",
-      "public_url",
-      "publicUrl",
-      "storage_url",
-      "storageUrl",
-    ])
-  );
-
-  if (direct?.startsWith("http")) return direct;
-
-  const screenshotSource = pickString(rawScreen, ["imagePath", "screenshot_file", "screenshot", "path"]);
-  const base = reviewsScreenshotBaseUrl(app, platform, sessionType);
-  if (!screenshotSource || !base) return direct;
-
-  const fileName = screenshotSource.split("/").pop();
-  return fileName ? `${base}/${encodeURIComponent(fileName)}` : direct;
-}
-
-function getWorkspaceScreenName(rawScreen: UnknownRecord, index: number) {
-  return (
-    pickString(rawScreen, ["display_label", "screen_type", "screen_name", "step_name", "name", "title", "label", "page_title"]) ??
-    `Screen ${index + 1}`
-  );
-}
-
-function getWorkspaceScreenId(rawScreen: UnknownRecord, flowId: string, index: number) {
-  return String(rawScreen.id ?? rawScreen.step ?? rawScreen.timeline_step ?? rawScreen.screen_index ?? `${flowId}:screen:${index}`);
-}
-
-function getWorkspaceFlowDescription(sessionRow: UnknownRecord) {
-  const intelligence = getNestedRecord(sessionRow.session_intel);
-  return (
-    pickString(sessionRow, ["summary", "description"]) ??
-    pickString(intelligence ?? {}, ["summary", "overview", "caption"])
-  );
-}
-
-function getFileKey(value?: string | null) {
-  if (!value || typeof value !== "string") return "";
-  return value.split("/").pop()?.toLowerCase() || value.toLowerCase();
-}
-
-function getNumberArrayValue(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => Number(entry))
-    .filter((entry) => Number.isFinite(entry));
-}
-
-function getStringArrayValue(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
-}
-
-function buildWorkspaceCatalogIndex(catalog: UnknownRecord[]) {
-  const byStep = new Map<number, UnknownRecord>();
-  const byFile = new Map<string, UnknownRecord>();
-
-  catalog.forEach((screen, index) => {
-    const step = Number(screen.timeline_step ?? screen.step ?? screen.screen_index ?? index + 1);
-    if (Number.isFinite(step)) byStep.set(step, screen);
-
-    const file = getFileKey(pickString(screen, ["screenshot_file", "imagePath", "screenshot", "path"]));
-    if (file) byFile.set(file, screen);
-  });
-
-  return { byStep, byFile };
-}
-
-function workspaceScreenFromRaw(
-  rawScreen: UnknownRecord,
-  app: WorkspaceApp,
-  platform: string | undefined,
-  sessionType: string | undefined,
-  flowId: string,
-  index: number
-): WorkspaceAppScreen {
-  const imageUrl = getWorkspaceScreenImageUrl(rawScreen, app, platform, sessionType);
-
-  return {
-    id: getWorkspaceScreenId(rawScreen, flowId, index),
-    name: getWorkspaceScreenName(rawScreen, index),
-    imageUrl,
-    sourceUrl: pickString(rawScreen, ["page_url", "source_url", "url", "href"]),
-  };
-}
-
-function resolveFlowNodeScreens(
-  node: UnknownRecord,
-  catalogIndex: ReturnType<typeof buildWorkspaceCatalogIndex>,
-  app: WorkspaceApp,
-  platform: string | undefined,
-  sessionType: string | undefined,
-  flowId: string
-) {
-  const resolved: WorkspaceAppScreen[] = [];
-  const seen = new Set<string>();
-
-  const addScreen = (screen: UnknownRecord | undefined, fallbackIndex: number) => {
-    if (!screen) return;
-    const nextScreen = workspaceScreenFromRaw(screen, app, platform, sessionType, flowId, fallbackIndex);
-    const key = nextScreen.imageUrl || nextScreen.id;
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    resolved.push(nextScreen);
-  };
-
-  getNumberArrayValue(node.screens).forEach((step, index) => addScreen(catalogIndex.byStep.get(step), index));
-
-  getStringArrayValue(node.spine).forEach((file, index) => {
-    const byFile = catalogIndex.byFile.get(getFileKey(file));
-    if (byFile) addScreen(byFile, resolved.length + index);
-  });
-
-  getArrayValue(node.branches).forEach((branch, branchIndex) => {
-    getStringArrayValue(branch.screenshots).forEach((file, index) => {
-      const byFile = catalogIndex.byFile.get(getFileKey(file));
-      if (byFile) addScreen(byFile, resolved.length + branchIndex + index);
-    });
-  });
-
-  return resolved;
-}
-
-function collectTaxonomyWorkspaceFlows(
-  nodes: UnknownRecord[],
-  catalogIndex: ReturnType<typeof buildWorkspaceCatalogIndex>,
-  app: WorkspaceApp,
-  platform: string | undefined,
-  sessionType: string | undefined,
-  sessionId: string
-) {
-  const flows: WorkspaceAppFlow[] = [];
-
-  const walk = (node: UnknownRecord, depth: number) => {
-    const label = pickString(node, ["label", "name", "title", "id"]) ?? "Captured flow";
-    const rawId = pickString(node, ["id"]) ?? `${label}:${depth}:${flows.length}`;
-    const flowId = `${app.id}:${sessionId}:${rawId}`;
-    const screens = resolveFlowNodeScreens(node, catalogIndex, app, platform, sessionType, flowId);
-    const children = getArrayValue(node.children);
-
-    if (screens.length > 0) {
-      flows.push({
-        id: flowId,
-        name: label,
-        description: pickString(node, ["description", "summary"]),
-        screens,
-      });
-    }
-
-    children.forEach((child) => walk(child, depth + 1));
-  };
-
-  nodes.forEach((node) => walk(node, 0));
-  return flows;
-}
-
 function normalizeWorkspaceApps(appRows: UnknownRecord[], sessionRows: UnknownRecord[] = []) {
-  const appsByKey = new Map<string, WorkspaceApp>();
-  const appIdToKey = new Map<string, string>();
-  const appNameToKey = new Map<string, string>();
-  const flowsByAppKey = new Map<string, Map<string, WorkspaceAppFlow>>();
-  const normalizedSessionRows: UnknownRecord[] = [...sessionRows];
+  const tenantId = [
+    ...appRows,
+    ...sessionRows,
+  ].map((row) => pickString(row, ["tenant_id", "tenantId", "customer_id"]))
+    .find((value): value is string => Boolean(value)) ?? "";
 
+  const rowsByApp = new Map<string, UnknownRecord>();
   for (const row of appRows) {
-    const app = normalizeWorkspaceApp(row);
-    const key = getWorkspaceAppDedupeKey(app);
-    const existing = appsByKey.get(key);
-
-    if (existing) {
-      appsByKey.set(key, {
-        ...existing,
-        id: existing.id || app.id,
-        logoUrl: existing.logoUrl ?? app.logoUrl,
-        domain: existing.domain ?? app.domain,
-        description: existing.description ?? app.description,
-        category: existing.category ?? app.category,
-        rank: existing.rank ?? app.rank,
-        revenue: existing.revenue ?? app.revenue,
-        employees: existing.employees ?? app.employees,
-        totalScreens: Math.max(existing.totalScreens ?? 0, app.totalScreens ?? 0),
-      });
-    } else {
-      appsByKey.set(key, app);
-      flowsByAppKey.set(key, new Map());
-    }
-
-    appIdToKey.set(app.id, key);
-    appNameToKey.set(normalizeWorkspaceName(app.name), key);
-
-    getArrayValue(row.app_sessions).forEach((sessionRow) => {
-      normalizedSessionRows.push({
-        ...sessionRow,
-        target_app_id: app.id,
-        app_name: app.name,
-        tenant_id: app.tenantId,
-      });
+    const appName = pickString(row, ["app_name", "name", "title"]);
+    if (!appName) continue;
+    rowsByApp.set(normalizeWorkspaceName(appName), {
+      ...row,
+      tenant_id: pickString(row, ["tenant_id", "tenantId", "customer_id"]) ?? tenantId,
+      app_sessions: [...getArrayValue(row.app_sessions)],
     });
   }
 
-  for (const row of normalizedSessionRows) {
-    const appId = String(row.target_app_id ?? row.app_id ?? row.appId ?? "");
-    const appName = pickString(row, ["app_name", "name", "target_app_name", "appName"]);
-    const appKey = (appId && appIdToKey.get(appId)) || (appName ? appNameToKey.get(normalizeWorkspaceName(appName)) : undefined);
-    if (!appKey) continue;
-
-    const app = appsByKey.get(appKey);
-    const appFlows = flowsByAppKey.get(appKey);
-    if (!app || !appFlows) continue;
-
-    const platform = pickString(row, ["platform"]);
-    const sessionType = pickString(row, ["session_type", "flow_type", "type"]);
-    const sessionId = String(row.id ?? `${platform ?? "session"}:${sessionType ?? "captured"}`);
-    const flowsData = getNestedRecord(row.flows_data);
-    const taxonomy = getArrayValue(flowsData?.taxonomy);
-    const catalog = getArrayValue(flowsData?.screen_catalog);
-    const steps = getArrayValue(row.steps_data);
-
-    if (taxonomy.length > 0) {
-      const catalogIndex = buildWorkspaceCatalogIndex(catalog.length > 0 ? catalog : catalogFromSessionSteps(steps));
-      collectTaxonomyWorkspaceFlows(taxonomy, catalogIndex, app, platform, sessionType, sessionId).forEach((flow) => {
-        const existing = appFlows.get(flow.id);
-        if (existing) {
-          flow.screens.forEach((screen) => {
-            if (!existing.screens.some((existingScreen) => existingScreen.id === screen.id || (screen.imageUrl && existingScreen.imageUrl === screen.imageUrl))) {
-              existing.screens.push(screen);
-            }
-          });
-        } else {
-          appFlows.set(flow.id, flow);
-        }
-      });
-    }
-
-    const sessionLabel = [titleCaseToken(platform), titleCaseToken(sessionType || "captured flow")].filter(Boolean).join(" ") || "Captured flow";
-    const sessionFlowId = `${app.id}:${sessionId}:${normalizeFlowName(sessionLabel)}`;
-    const rawScreens = getFlowSourceScreens(row);
-
-    if (rawScreens.length > 0 && !appFlows.has(sessionFlowId)) {
-      appFlows.set(sessionFlowId, {
-        id: sessionFlowId,
-        name: sessionLabel,
-        description: getWorkspaceFlowDescription(row),
-        screens: [],
-      });
-    }
-
-    const sessionFlow = appFlows.get(sessionFlowId);
-    if (sessionFlow) {
-      rawScreens.forEach((rawScreen, index) => {
-        const imageUrl = getWorkspaceScreenImageUrl(rawScreen, app, platform, sessionType);
-        const screenId = getWorkspaceScreenId(rawScreen, sessionFlowId, index);
-        if (sessionFlow.screens.some((screen) => screen.id === screenId || (imageUrl && screen.imageUrl === imageUrl))) return;
-
-        sessionFlow.screens.push({
-          id: screenId,
-          name: getWorkspaceScreenName(rawScreen, index),
-          imageUrl,
-          sourceUrl: pickString(rawScreen, ["page_url", "source_url", "url", "href"]),
-          createdAt: pickString(row, ["created_at", "captured_at", "updated_at"]),
-        });
-      });
-    }
-
-    const totalScreens = Number(row.total_screens ?? sessionFlow?.screens.length ?? 0);
-    app.totalScreens = Math.max(app.totalScreens ?? 0, Number.isFinite(totalScreens) ? totalScreens : sessionFlow?.screens.length ?? 0);
+  for (const session of sessionRows) {
+    const appName = pickString(session, ["app_name", "name", "target_app_name", "appName"]);
+    if (!appName) continue;
+    const key = normalizeWorkspaceName(appName);
+    const existing = rowsByApp.get(key) ?? {
+      tenant_id: pickString(session, ["tenant_id", "tenantId", "customer_id"]) ?? tenantId,
+      app_name: appName,
+      app_sessions: [],
+    };
+    rowsByApp.set(key, {
+      ...existing,
+      app_sessions: [...getArrayValue(existing.app_sessions), session],
+    });
   }
 
-  return Array.from(appsByKey.entries())
-    .map(([key, app]) => ({
-      ...app,
-      flows: Array.from(flowsByAppKey.get(key)?.values() ?? [])
-        .filter((flow) => flow.screens.length > 0)
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
+  const catalog = normalizeNorthStarDataCatalogRows(
+    Array.from(rowsByApp.values()),
+    tenantId,
+  );
 
-function catalogFromSessionSteps(steps: UnknownRecord[]) {
-  return steps.map((step, index) => ({
-    ...step,
-    timeline_step: step.step ?? step.timeline_step ?? step.screen_index ?? index + 1,
-    screenshot_file: step.imagePath ?? step.screenshot_file ?? step.screenshot ?? step.path,
-    display_label: step.screen_type ?? step.display_label ?? step.name ?? `Screen ${index + 1}`,
+  return catalog.apps.map((app) => ({
+    id: app.id,
+    name: app.name,
+    tenantId: app.tenantId,
+    domain: app.domain,
+    logoUrl: app.iconUrl,
+    description: app.description,
+    category: app.category,
+    rank: app.rank,
+    revenue: app.revenue,
+    employees: app.employees,
+    totalScreens: app.totalScreens,
+    flows: app.flows.map((flow) => ({
+      id: flow.id,
+      name: flow.name,
+      appId: flow.appId,
+      description: flow.description,
+      platform: flow.platform,
+      sessionType: flow.sessionType,
+      screens: flow.screens.map((screen) => ({
+        id: screen.id,
+        name: screen.name,
+        appId: screen.appId,
+        flowId: screen.flowId,
+        imageUrl: screen.imageUrl,
+        sourceUrl: screen.sourceUrl,
+        screenshotFile: screen.screenshotFile,
+        platform: screen.platform,
+        sessionType: screen.sessionType,
+        index: screen.index,
+        createdAt: screen.createdAt,
+      })),
+    })),
   }));
 }
 
@@ -6114,6 +5812,14 @@ function isConnectorObject(
 
 function isBoxObject(object: CanvasObject): object is CanvasBoxObject {
   return object.type !== "connector";
+}
+
+const NORTHSTAR_PROJECTION_HOST_VARIANT = "northstar-projection-host";
+
+function isNorthstarProjectionHostObject(object: CanvasObject): object is CanvasBoxObject {
+  return isBoxObject(object)
+    && object.type === "code-artifact"
+    && object.semantic?.structureVariant === NORTHSTAR_PROJECTION_HOST_VARIANT;
 }
 
 function normalizeRect(a: { x: number; y: number }, b: { x: number; y: number }) {
@@ -7548,7 +7254,11 @@ function buildCanvasContext({
   viewport: Viewport;
   title?: string;
 }): CanvasContext {
-  const resolvedObjects = resolveConnectorBindings(objects);
+  // Internal projection hosts remain mounted for iframe authority but are not
+  // user-authored canvas content and must not affect AI context or counts.
+  const resolvedObjects = resolveConnectorBindings(
+    objects.filter((object) => !isNorthstarProjectionHostObject(object)),
+  );
   const connectedToByObject = buildConnectedToIndex(resolvedObjects);
   const contextObjects = resolvedObjects.map((object, index) =>
     normalizeObjectForContext(object, index, resolvedObjects, {
@@ -7748,6 +7458,8 @@ function buildSelectedContextSummary(
 }
 
 function detectWorkspaceFlowType(flow: WorkspaceAppFlow): CanvasFlowType {
+  const authoritative = canonicalNorthStarSessionType(flow.sessionType);
+  if (authoritative) return authoritative;
   const text = `${flow.name} ${flow.description ?? ""}`.toLowerCase();
   if (/onboard|signup|sign up|first login|activation|registration|welcome|get started/.test(text)) return "onboarding";
   if (/browse|discover|search|marketplace|catalog|explore|listing|feed/.test(text)) return "browsing";
@@ -8222,7 +7934,7 @@ export function NorthStarCanvasWorkspace({
   const northstarProjectionTargetArtifactIdRef = useRef<string | null>(null);
   const [northstarProjectionTargetArtifactId, setNorthstarProjectionTargetArtifactId] = useState<string | null>(null);
   const northstarProjectionTargetFrameRef = useRef<HTMLIFrameElement | null>(null);
-  const northstarBootstrapArtifactRef = useRef(false);
+  const northstarBootstrapArtifactRef = useRef<string | null>(null);
   const northstarVerifiedCommitSyncRef = useRef<(input: {
     task: NorthstarLedgerTask;
     commit: NorthstarLedgerCommit;
@@ -8318,7 +8030,9 @@ export function NorthStarCanvasWorkspace({
       }, 0);
     };
   }, []);
-  const storageKey = `northstar-canvas:v78:${userEmail}:${canvasSessionIdRef.current}`;
+  const storageKey = `northstar-canvas:v79:${userEmail}:primary`;
+  const [canvasPersistenceHydrated, setCanvasPersistenceHydrated] = useState(false);
+  const canvasPersistenceSaveTimerRef = useRef<number | null>(null);
   const objectsRef = useRef<CanvasObject[]>([]);
   const historyPastRef = useRef<CanvasObject[][]>([]);
   const historyFutureRef = useRef<CanvasObject[][]>([]);
@@ -8428,7 +8142,20 @@ export function NorthStarCanvasWorkspace({
         status: "ready",
         publicationState: "working",
       };
-      return { ...object, codeArtifact: nextArtifact, text: nextArtifact.title };
+      const wasProjectionHost = isNorthstarProjectionHostObject(object);
+      if (wasProjectionHost) northstarBootstrapArtifactRef.current = null;
+      return {
+        ...object,
+        hidden: wasProjectionHost ? false : object.hidden,
+        semantic: wasProjectionHost
+          ? { ...object.semantic, structureVariant: undefined }
+          : object.semantic,
+        style: wasProjectionHost
+          ? { ...object.style, opacity: 1 }
+          : object.style,
+        codeArtifact: { ...nextArtifact, provisional: false },
+        text: nextArtifact.title,
+      };
     }));
     if (!synchronized) {
       throw new Error(`The projected canvas artifact ${artifactId} is no longer available.`);
@@ -8514,7 +8241,9 @@ export function NorthStarCanvasWorkspace({
     };
 
     return stableObjects.filter(
-      (object) => selectedIdSet.has(object.id) || rectsIntersect(visibleBounds, getObjectBounds(object))
+      (object) => isNorthstarProjectionHostObject(object)
+        || selectedIdSet.has(object.id)
+        || rectsIntersect(visibleBounds, getObjectBounds(object))
     );
   }, [objects, selectedIdSet, viewport.x, viewport.y, viewport.zoom]);
 
@@ -8581,25 +8310,7 @@ export function NorthStarCanvasWorkspace({
 
         const { data: appRows, error: appError } = await supabase
           .from("target_apps")
-          .select(`
-            tenant_id,
-            app_name,
-            category,
-            icon_url,
-            rank,
-            revenue,
-            employees,
-            app_sessions (
-              app_name,
-              platform,
-              session_type,
-              ux_grade,
-              total_screens,
-              session_intel,
-              steps_data,
-              flows_data
-            )
-          `)
+          .select(NORTHSTAR_TENANT_CATALOG_SELECT)
           .eq("tenant_id", tenantId)
           .order("app_name", { ascending: true });
 
@@ -8657,23 +8368,71 @@ export function NorthStarCanvasWorkspace({
     return () => observer.disconnect();
   }, []);
 
-  // Prototype sessions intentionally begin clean after a full page refresh.
-  // The live React state still survives workspace tab changes and panel minimization.
+  // Restore the last verified canvas document after refresh. The mounted code
+  // artifact contains the synchronized browser-verified HTML/CSS state, so
+  // persistence is part of the architecture acceptance contract rather than a
+  // prototype-only convenience.
   useEffect(() => {
     try {
-      for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
-        const key = window.localStorage.key(index);
-        if (key?.startsWith("northstar-canvas:")) window.localStorage.removeItem(key);
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          version?: unknown;
+          objects?: unknown;
+          viewport?: unknown;
+        };
+        if (Array.isArray(parsed.objects)) {
+          // Never restore an unverified internal projection host as authored canvas content.
+          setObjectsState(normalizeCanvasScene(parsed.objects as CanvasObject[])
+            .filter((object) => !isNorthstarProjectionHostObject(object)));
+        }
+        if (parsed.viewport && typeof parsed.viewport === "object" && !Array.isArray(parsed.viewport)) {
+          const candidate = parsed.viewport as Partial<Viewport>;
+          if (
+            typeof candidate.x === "number" && Number.isFinite(candidate.x)
+            && typeof candidate.y === "number" && Number.isFinite(candidate.y)
+            && typeof candidate.zoom === "number" && Number.isFinite(candidate.zoom)
+          ) {
+            setViewport({
+              x: candidate.x,
+              y: candidate.y,
+              zoom: clampZoom(candidate.zoom),
+            });
+          }
+        }
       }
-
-      for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
-        const key = window.sessionStorage.key(index);
-        if (key?.startsWith("northstar-chat:")) window.sessionStorage.removeItem(key);
-      }
-    } catch {
-      // Storage cleanup is best effort and must never block the canvas.
+    } catch (error) {
+      console.warn("North Star could not restore the persisted canvas.", error);
+    } finally {
+      setCanvasPersistenceHydrated(true);
     }
-  }, []);
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!canvasPersistenceHydrated) return;
+    if (canvasPersistenceSaveTimerRef.current !== null) {
+      window.clearTimeout(canvasPersistenceSaveTimerRef.current);
+    }
+    canvasPersistenceSaveTimerRef.current = window.setTimeout(() => {
+      canvasPersistenceSaveTimerRef.current = null;
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify({
+          version: 1,
+          savedAt: Date.now(),
+          objects: objects.filter((object) => !isNorthstarProjectionHostObject(object)),
+          viewport,
+        }));
+      } catch (error) {
+        console.warn("North Star could not persist the canvas.", error);
+      }
+    }, 250);
+    return () => {
+      if (canvasPersistenceSaveTimerRef.current !== null) {
+        window.clearTimeout(canvasPersistenceSaveTimerRef.current);
+        canvasPersistenceSaveTimerRef.current = null;
+      }
+    };
+  }, [canvasPersistenceHydrated, objects, storageKey, viewport]);
 
   const resetTransientEditingState = useCallback(() => {
     setEditingTextId(null);
@@ -9415,8 +9174,10 @@ export function NorthStarCanvasWorkspace({
           imageUrl: app.logoUrl,
           source: {
             kind: "northstar-flow",
+            appId: app.id,
             appName: app.name,
             appIconUrl: app.logoUrl,
+            flowId: flow.id,
             flowName: flow.name,
             flowType,
           },
@@ -9446,8 +9207,10 @@ export function NorthStarCanvasWorkspace({
           textHtml: htmlFromPlainText(app.name.charAt(0).toUpperCase()),
           source: {
             kind: "northstar-flow",
+            appId: app.id,
             appName: app.name,
             appIconUrl: app.logoUrl,
+            flowId: flow.id,
             flowName: flow.name,
             flowType,
           },
@@ -9482,8 +9245,10 @@ export function NorthStarCanvasWorkspace({
         textHtml: htmlFromPlainText(app.name),
         source: {
           kind: "northstar-flow",
+          appId: app.id,
           appName: app.name,
           appIconUrl: app.logoUrl,
+          flowId: flow.id,
           flowName: flow.name,
           flowType,
         },
@@ -9517,8 +9282,10 @@ export function NorthStarCanvasWorkspace({
         textHtml: htmlFromPlainText(flow.name),
         source: {
           kind: "northstar-flow",
+          appId: app.id,
           appName: app.name,
           appIconUrl: app.logoUrl,
+          flowId: flow.id,
           flowName: flow.name,
           flowType,
         },
@@ -9557,14 +9324,17 @@ export function NorthStarCanvasWorkspace({
             imageUrl: screen.imageUrl,
             source: {
               kind: "northstar-screenshot",
+              appId: app.id,
               appName: app.name,
               appIconUrl: app.logoUrl,
+              flowId: flow.id,
               flowName: flow.name,
               flowType,
+              screenshotId: screen.id,
               screenLabel: screen.name,
               screenshotUrl: screen.imageUrl,
-              screenshotFile: screen.sourceUrl,
-              stepIndex: index,
+              screenshotFile: screen.screenshotFile ?? screen.sourceUrl,
+              stepIndex: screen.index ?? index,
               originalWidth: size.w,
               originalHeight: size.h,
             },
@@ -9596,8 +9366,10 @@ export function NorthStarCanvasWorkspace({
           textHtml: htmlFromPlainText("No captured screens found for this flow yet."),
           source: {
             kind: "northstar-flow",
+            appId: app.id,
             appName: app.name,
             appIconUrl: app.logoUrl,
+            flowId: flow.id,
             flowName: flow.name,
             flowType,
           },
@@ -9665,14 +9437,17 @@ export function NorthStarCanvasWorkspace({
         style: { ...image.style, stroke: "rgba(0,0,0,0.10)", strokeWidth: 1 },
         source: {
           kind: "northstar-screenshot",
+          appId: app.id,
           appName: app.name,
           appIconUrl: app.logoUrl,
+          flowId: flow.id,
           flowName: flow.name,
           flowType: detectWorkspaceFlowType(flow),
+          screenshotId: screen.id,
           screenLabel: screen.name,
           screenshotUrl: screen.imageUrl,
-          screenshotFile: screen.sourceUrl,
-          stepIndex: flow.screens.findIndex((item) => item.id === screen.id),
+          screenshotFile: screen.screenshotFile ?? screen.sourceUrl,
+          stepIndex: screen.index ?? flow.screens.findIndex((item) => item.id === screen.id),
           originalWidth: imageW,
           originalHeight: imageH,
         },
@@ -13410,14 +13185,97 @@ export function NorthStarCanvasWorkspace({
       return artifactId;
     }
 
-    const payload = createNorthstarDirectBootstrapArtifactPayload({ objective });
-    northstarBootstrapArtifactRef.current = true;
+    const payload = {
+      ...createNorthstarDirectBootstrapArtifactPayload({ objective }),
+      provisional: true,
+    };
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    const center = bounds
+      ? screenToWorld(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
+      : {
+          x: -viewportRef.current.x / Math.max(viewportRef.current.zoom, 0.01),
+          y: -viewportRef.current.y / Math.max(viewportRef.current.zoom, 0.01),
+        };
+    const hostObject: CanvasBoxObject = {
+      id: makeId(),
+      type: "code-artifact",
+      x: center.x - payload.preferredWidth / 2,
+      y: center.y - payload.preferredHeight / 2,
+      w: payload.preferredWidth,
+      h: payload.preferredHeight,
+      rotation: 0,
+      text: payload.title,
+      hidden: true,
+      codeArtifact: payload,
+      source: {
+        kind: "northstar-code-artifact",
+        originalWidth: payload.preferredWidth,
+        originalHeight: payload.preferredHeight,
+      },
+      semantic: {
+        artifactId: payload.artifactId,
+        role: "artifact-frame",
+        label: payload.title,
+        componentId: payload.artifactId,
+        componentType: "code-artifact",
+        layoutRole: "container",
+        editable: true,
+        detachable: true,
+        surfaceKind: "presentation",
+        surfaceRootId: payload.artifactId,
+        structureVariant: NORTHSTAR_PROJECTION_HOST_VARIANT,
+      },
+      style: {
+        fill: "#FFFFFF",
+        stroke: "rgba(107,92,255,0.26)",
+        strokeWidth: 1.25,
+        textColor: "#171820",
+        fontSize: 14,
+        fontWeight: 700,
+        textAlign: "left",
+        radius: 24,
+        shadow: "0 30px 90px rgba(36,29,91,0.18)",
+        opacity: 0,
+      },
+    };
+    northstarBootstrapArtifactRef.current = payload.artifactId;
     northstarProjectionTargetArtifactIdRef.current = payload.artifactId;
     setNorthstarProjectionTargetArtifactId(payload.artifactId);
     northstarProjectionTargetFrameRef.current = null;
-    insertCodeArtifactPayload(payload);
+    const nextObjects = normalizeCanvasScene([...objectsRef.current, hostObject]);
+    objectsRef.current = nextObjects;
+    setObjectsState(nextObjects);
     return payload.artifactId;
-  }, [insertCodeArtifactPayload]);
+  }, [screenToWorld]);
+
+  const discardUnverifiedNorthstarBootstrap = useCallback(() => {
+    const artifactId = northstarBootstrapArtifactRef.current;
+    if (!artifactId) return;
+    northstarBootstrapArtifactRef.current = null;
+
+    const removedIds = new Set<string>();
+    const nextObjects = normalizeCanvasScene(objectsRef.current.filter((object) => {
+      const remove = isNorthstarProjectionHostObject(object)
+        && object.codeArtifact?.artifactId === artifactId;
+      if (remove) removedIds.add(object.id);
+      return !remove;
+    }));
+    objectsRef.current = nextObjects;
+    setObjectsState(nextObjects);
+    if (removedIds.size > 0) {
+      setSelectedIds((current) => current.filter((id) => !removedIds.has(id)));
+    }
+
+    const frame = northstarProjectionFramesRef.current.get(artifactId) ?? null;
+    northstarProjectionFramesRef.current.delete(artifactId);
+    if (northstarProjectionTargetArtifactIdRef.current === artifactId) {
+      northstarProjectionTargetArtifactIdRef.current = null;
+      setNorthstarProjectionTargetArtifactId(null);
+    }
+    if (frame && northstarProjectionTargetFrameRef.current === frame) {
+      northstarProjectionTargetFrameRef.current = null;
+    }
+  }, []);
 
   const insertVisualComponentPreset = useCallback(
     (preset: CanvasComponentPreset) => {
@@ -15338,6 +15196,7 @@ export function NorthStarCanvasWorkspace({
               northstarWorkspaceRuntime={northstarWorkspaceRuntime}
               northstarTotalArchitectureEnabled={northstarTotalArchitectureEnabled}
               ensureNorthstarProjectionTarget={ensureNorthstarProjectionTarget}
+              discardUnverifiedNorthstarBootstrap={discardUnverifiedNorthstarBootstrap}
             />
           )}
           {workspaceTab === "shapes" && (
@@ -16965,7 +16824,9 @@ function northstarToolResultView(value: unknown): CanvasAIToolResultView | undef
     };
     if (typeof candidate.subtitle === "string") normalized.subtitle = candidate.subtitle;
     if (typeof candidate.imageUrl === "string") normalized.imageUrl = candidate.imageUrl;
+    if (typeof candidate.appId === "string") normalized.appId = candidate.appId;
     if (typeof candidate.appName === "string") normalized.appName = candidate.appName;
+    if (typeof candidate.flowId === "string") normalized.flowId = candidate.flowId;
     if (typeof candidate.flowName === "string") normalized.flowName = candidate.flowName;
     if (typeof candidate.category === "string") normalized.category = candidate.category;
     if (typeof candidate.platform === "string") normalized.platform = candidate.platform;
@@ -17029,6 +16890,12 @@ function northstarEvidenceActivity(
     const resultView = northstarToolResultView(result?.resultView);
     if (!call || !result || typeof call.name !== "string") return [];
     const kind = resultView?.kind;
+    const callStatus: CanvasAIActivityStatus = result.ok === false
+      ? "failed"
+      : result.ok === true
+        ? "completed"
+        : status;
+    const argsText = call?.args === undefined ? "" : JSON.stringify(call.args);
     const icon: CanvasAIActivityIcon = kind === "apps" || kind === "app"
       ? "app"
       : kind === "flows" || kind === "flow"
@@ -17039,10 +16906,12 @@ function northstarEvidenceActivity(
     return [{
       id: `${task.id}:evidence:${index}`,
       kind: "tool" as const,
-      status,
+      status: callStatus,
       icon,
       label: index === 0 ? task.intent : resultView?.title ?? call.name.replaceAll("_", " "),
-      detail: typeof result.detail === "string" ? result.detail : task.expectedOutcome,
+      detail: typeof result.detail === "string"
+        ? `${result.detail}${result.ok === false && argsText ? ` Requested ${call.name} ${argsText}.` : ""}`
+        : task.expectedOutcome,
       tool: call.name,
       resultView,
       objectIds: [],
@@ -17106,6 +16975,7 @@ function ChatWorkspacePanel({
   northstarWorkspaceRuntime,
   northstarTotalArchitectureEnabled,
   ensureNorthstarProjectionTarget,
+  discardUnverifiedNorthstarBootstrap,
 }: {
   sessionId: string;
   canvasContext: CanvasContext;
@@ -17134,6 +17004,7 @@ function ChatWorkspacePanel({
   northstarWorkspaceRuntime: NorthstarWorkspaceRuntime | null;
   northstarTotalArchitectureEnabled: boolean;
   ensureNorthstarProjectionTarget: (objective: string) => string;
+  discardUnverifiedNorthstarBootstrap: () => void;
 }) {
   const [messages, setMessages] = useState<CanvasAIChatMessage[]>([]);
   const [conversationSummary, setConversationSummary] = useState("");
@@ -17529,6 +17400,7 @@ function ChatWorkspacePanel({
     const assistantId = activeAssistantIdRef.current ?? northstarRunBindingRef.current?.assistantMessageId ?? null;
     const runId = activeRunIdRef.current;
     northstarWorkspaceRuntime?.cancelRun("Cancelled by the user.");
+    discardUnverifiedNorthstarBootstrap();
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     activeAssistantIdRef.current = null;
@@ -17554,7 +17426,7 @@ function ChatWorkspacePanel({
         };
       })
     );
-  }, [northstarWorkspaceRuntime, onFinalizeCanvasActionRun]);
+  }, [discardUnverifiedNorthstarBootstrap, northstarWorkspaceRuntime, onFinalizeCanvasActionRun]);
 
   const sendMessage = async (messageOverride?: string) => {
     const message = (messageOverride ?? input).trim();
@@ -17768,6 +17640,8 @@ function ChatWorkspacePanel({
         activeRunIdRef.current = result.ledger?.run.id ?? null;
         const activity = northstarRuntimeActivity(northstarWorkspaceRuntime.getSnapshot());
         if (result.status === "completed") {
+          // A completed non-visual run may not publish its infrastructure-only host.
+          discardUnverifiedNorthstarBootstrap();
           const finalText = northstarSummaryText(result.finalSummary);
           updateAssistantMessage({
             content: finalText,
@@ -17780,6 +17654,9 @@ function ChatWorkspacePanel({
           setConversationSummary(finalText);
         } else {
           const currentSnapshot = northstarWorkspaceRuntime.getSnapshot();
+          if (result.status === "failed" || result.status === "cancelled") {
+            discardUnverifiedNorthstarBootstrap();
+          }
           updateAssistantMessage({
             content: northstarUserFacingRunMessage(currentSnapshot, result.error),
             activity,
@@ -17792,6 +17669,9 @@ function ChatWorkspacePanel({
         }
       } catch (error) {
         const currentSnapshot = northstarWorkspaceRuntime?.getSnapshot() ?? EMPTY_NORTHSTAR_RUNTIME_SNAPSHOT;
+        if (currentSnapshot.status !== "blocked" && currentSnapshot.status !== "awaiting-recovery") {
+          discardUnverifiedNorthstarBootstrap();
+        }
         updateAssistantMessage({
           content: northstarUserFacingRunMessage(
             currentSnapshot,
@@ -18359,6 +18239,9 @@ function ChatWorkspacePanel({
       : message));
     try {
       const result = await northstarWorkspaceRuntime.resumeRun();
+      if (result.status === "completed" || result.status === "failed" || result.status === "cancelled") {
+        discardUnverifiedNorthstarBootstrap();
+      }
       const activity = northstarRuntimeActivity(northstarWorkspaceRuntime.getSnapshot());
       setMessages((current) => current.map((message) => message.id === assistantId
         ? {
@@ -18375,6 +18258,9 @@ function ChatWorkspacePanel({
         : message));
     } catch (error) {
       const snapshot = northstarWorkspaceRuntime.getSnapshot();
+      if (snapshot.status !== "blocked" && snapshot.status !== "awaiting-recovery") {
+        discardUnverifiedNorthstarBootstrap();
+      }
       setMessages((current) => current.map((message) => message.id === assistantId
         ? {
             ...message,
@@ -19387,6 +19273,16 @@ function bucketWorkspaceFlows(flows: WorkspaceAppFlow[]) {
   const browsing: WorkspaceAppFlow[] = [];
 
   flows.forEach((flow) => {
+    const authoritative = canonicalNorthStarSessionType(flow.sessionType);
+    if (authoritative === "onboarding") {
+      onboarding.push(flow);
+      return;
+    }
+    if (authoritative === "browsing") {
+      browsing.push(flow);
+      return;
+    }
+
     const haystack = `${flow.name} ${flow.description ?? ""}`.toLowerCase();
     if (onboardingTerms.some((term) => haystack.includes(term))) {
       onboarding.push(flow);
@@ -19439,6 +19335,7 @@ function FlowModeTabs({
 }
 
 function isWorkspaceScreenWeb(screen: WorkspaceAppScreen) {
+  if (screen.platform?.toLowerCase() === "web") return true;
   const haystack = `${screen.imageUrl ?? ""} ${screen.sourceUrl ?? ""} ${screen.name}`.toLowerCase();
   return haystack.includes("/web/") || haystack.includes("desktop") || haystack.includes("browser") || haystack.includes("web");
 }
@@ -19950,6 +19847,8 @@ function CanvasBoxObjectViewImpl({
         willChange: object.type === "code-artifact" ? "transform" : undefined,
         contain: object.type === "code-artifact" ? "layout paint style" : undefined,
         isolation: object.type === "code-artifact" ? "isolate" : undefined,
+        visibility: isNorthstarProjectionHostObject(object) ? "hidden" : undefined,
+        pointerEvents: isNorthstarProjectionHostObject(object) ? "none" : undefined,
       }}
       onPointerDown={(event) => {
         if ((event.target as HTMLElement).closest('[data-freeform-point-handle="true"]')) return;

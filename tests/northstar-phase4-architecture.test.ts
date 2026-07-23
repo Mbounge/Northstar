@@ -95,6 +95,10 @@ test("the production ledger inspector is read-only", () => {
   assert.match(inspector, /Task/);
   assert.match(inspector, /Commits/);
   assert.match(inspector, /Events/);
+  assert.match(inspector, /Copy run JSON/);
+  assert.match(inspector, /serializeNorthstarRunDiagnosticBundle/);
+  assert.match(inspector, /verified visual commits/);
+  assert.match(inspector, /Failure correction context/);
   for (const mutation of [
     ".createTask(",
     ".startAttempt(",

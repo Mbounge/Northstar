@@ -1,6 +1,7 @@
-import type {
-  NorthstarTurnEvidenceAsset,
-  NorthstarTurnModelAdapter,
+import {
+  attachNorthstarTurnModelEvidenceMetadata,
+  type NorthstarTurnEvidenceAsset,
+  type NorthstarTurnModelAdapter,
 } from "@/lib/canvas-ai/northstar-turn-protocol";
 import { NorthstarTurnProviderError } from "@/lib/canvas-ai/northstar-turn-executor";
 
@@ -32,8 +33,14 @@ async function loadEvidenceParts(
   assets: readonly NorthstarTurnEvidenceAsset[],
   fetchImpl: typeof fetch,
   signal: AbortSignal,
-): Promise<GeminiPart[]> {
+): Promise<{
+  parts: GeminiPart[];
+  loadedAssetIds: string[];
+  unavailableAssets: Array<{ id: string; reason: string }>;
+}> {
   const parts: GeminiPart[] = [];
+  const loadedAssetIds: string[] = [];
+  const unavailableAssets: Array<{ id: string; reason: string }> = [];
   let totalBytes = 0;
   for (const asset of assets.slice(0, MAX_EVIDENCE_ASSETS)) {
     if (signal.aborted) {
@@ -43,9 +50,13 @@ async function loadEvidenceParts(
     try {
       url = new URL(asset.imageUrl);
     } catch {
+      unavailableAssets.push({ id: asset.id, reason: "invalid-url" });
       continue;
     }
-    if (url.protocol !== "https:" && url.protocol !== "http:") continue;
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      unavailableAssets.push({ id: asset.id, reason: "unsupported-url-protocol" });
+      continue;
+    }
 
     try {
       const response = await fetchImpl(url, {
@@ -55,17 +66,36 @@ async function loadEvidenceParts(
         redirect: "follow",
         signal,
       });
-      if (!response.ok) continue;
+      if (!response.ok) {
+        unavailableAssets.push({ id: asset.id, reason: `http-${response.status}` });
+        continue;
+      }
       const mimeType = (response.headers.get("content-type") ?? "")
         .split(";", 1)[0]
         .trim()
         .toLowerCase();
-      if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) continue;
+      if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) {
+        unavailableAssets.push({ id: asset.id, reason: `unsupported-content-type:${mimeType || "missing"}` });
+        continue;
+      }
       const declaredLength = Number(response.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_EVIDENCE_ASSET_BYTES) continue;
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_EVIDENCE_ASSET_BYTES) {
+        unavailableAssets.push({ id: asset.id, reason: "declared-size-limit" });
+        continue;
+      }
       const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength === 0 || bytes.byteLength > MAX_EVIDENCE_ASSET_BYTES) continue;
-      if (totalBytes + bytes.byteLength > MAX_TOTAL_EVIDENCE_BYTES) break;
+      if (bytes.byteLength === 0) {
+        unavailableAssets.push({ id: asset.id, reason: "empty-image" });
+        continue;
+      }
+      if (bytes.byteLength > MAX_EVIDENCE_ASSET_BYTES) {
+        unavailableAssets.push({ id: asset.id, reason: "decoded-size-limit" });
+        continue;
+      }
+      if (totalBytes + bytes.byteLength > MAX_TOTAL_EVIDENCE_BYTES) {
+        unavailableAssets.push({ id: asset.id, reason: "batch-size-limit" });
+        continue;
+      }
       totalBytes += bytes.byteLength;
 
       const label = [
@@ -83,12 +113,16 @@ async function loadEvidenceParts(
           data: Buffer.from(bytes).toString("base64"),
         },
       });
+      loadedAssetIds.push(asset.id);
     } catch (error) {
       if (isAbortError(error) || signal.aborted) throw error;
-      // One unavailable image must not erase otherwise valid grounded evidence.
+      unavailableAssets.push({
+        id: asset.id,
+        reason: error instanceof Error ? `fetch-error:${error.name}` : "fetch-error",
+      });
     }
   }
-  return parts;
+  return { parts, loadedAssetIds, unavailableAssets };
 }
 
 function extractText(payload: unknown): string {
@@ -136,9 +170,22 @@ export function createNorthstarGeminiTurnModel(
 
   return {
     async generateJSON(request) {
-      const evidenceParts = request.evidenceAssets?.length
+      const evidenceLoad = request.evidenceAssets?.length
         ? await loadEvidenceParts(request.evidenceAssets, fetchImpl, request.signal)
-        : [];
+        : { parts: [], loadedAssetIds: [], unavailableAssets: [] };
+      const evidenceAttachmentReport = {
+        requestedAssetIds: request.evidenceAssets?.map((asset) => asset.id) ?? [],
+        loadedAssetIds: evidenceLoad.loadedAssetIds,
+        unavailableAssets: evidenceLoad.unavailableAssets,
+      };
+      const evidenceParts = [
+        ...evidenceLoad.parts,
+        ...(evidenceLoad.unavailableAssets.length > 0
+          ? [{
+              text: `Evidence attachment report: loaded ${evidenceLoad.loadedAssetIds.length} of ${request.evidenceAssets?.length ?? 0}. Unavailable IDs: ${evidenceLoad.unavailableAssets.map((entry) => `${entry.id} (${entry.reason})`).join(", ")}. Do not claim visual observations for unavailable IDs.`,
+            } satisfies GeminiPart]
+          : []),
+      ];
       const response = await fetchImpl(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         {
@@ -158,6 +205,7 @@ export function createNorthstarGeminiTurnModel(
               temperature: request.temperature,
               maxOutputTokens: request.maxOutputTokens,
               responseMimeType: "application/json",
+              responseJsonSchema: request.responseSchema,
             },
           }),
           cache: "no-store",
@@ -182,6 +230,7 @@ export function createNorthstarGeminiTurnModel(
           message,
           retryable: response.status === 408 || response.status === 429 || response.status >= 500,
           retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
+          evidence: { evidenceAttachmentReport },
         });
       }
 
@@ -192,15 +241,26 @@ export function createNorthstarGeminiTurnModel(
           code: "EMPTY_MODEL_RESPONSE",
           message: "Gemini returned no structured response text.",
           retryable: true,
+          evidence: { evidenceAttachmentReport },
         });
       }
       try {
-        return parseJSON(text);
+        const parsed = parseJSON(text);
+        return attachNorthstarTurnModelEvidenceMetadata(parsed, {
+          attachedEvidenceAssetIds: evidenceLoad.loadedAssetIds,
+          evidenceAttachmentReport,
+        });
       } catch (error) {
         throw new NorthstarTurnProviderError({
           code: "INVALID_MODEL_JSON",
           message: error instanceof Error ? error.message : "Gemini returned invalid JSON.",
           retryable: false,
+          failureKind: "correctable",
+          correctionContext: {
+            rawOutputExcerpt: text.slice(0, 4_000),
+            instruction: "Regenerate only the structured result. Reuse successful tenant evidence and do not repeat data discovery.",
+          },
+          evidence: { evidenceAttachmentReport },
         });
       }
     },

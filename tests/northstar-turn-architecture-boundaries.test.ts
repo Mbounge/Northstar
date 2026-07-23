@@ -70,3 +70,12 @@ test("the turn executor performs one model generation call site and never recurs
   assert.equal(generationCalls.length, 1);
   assert.doesNotMatch(executor, /decideNextActivity|runNextTask|resumeActiveTask|createTask\(/);
 });
+
+test("ambiguous transport retries are reconciled by exact request identity without creating server ledger authority", async () => {
+  const route = await contents("app/api/canvas-ai/turn/route.ts");
+  assert.match(route, /hashTurnRequest/);
+  assert.match(route, /REQUEST_ID_REUSED_WITH_DIFFERENT_BODY/);
+  assert.match(route, /turnRequestCache/);
+  assert.match(route, /signal:\s*undefined/);
+  assert.doesNotMatch(route, /createNorthstarEphemeralLedger|globalThis\s+as/);
+});

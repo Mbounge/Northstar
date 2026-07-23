@@ -1177,6 +1177,11 @@ function DirectCodeArtifactHostImpl({
       const message = event.data;
 
       if (message.type === "northstar.artifact.ready") {
+        frameRef.current?.contentWindow?.postMessage({
+          type: "northstar.artifact.set-writer",
+          artifactId: current.artifactId,
+          writer: "direct-projection",
+        }, "*");
         setSurfaceReady(true);
         setRuntimeError(null);
         return;

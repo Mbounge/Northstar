@@ -1,5 +1,5 @@
 import type { NorthstarWorkspaceRuntimeSnapshot } from "@/lib/canvas-architecture/northstar-workspace-runtime";
-import type { NorthstarLedgerFailure } from "@/lib/canvas-ledger/types";
+import type { NorthstarLedgerFailure, NorthstarLedgerValue } from "@/lib/canvas-ledger/types";
 
 export type NorthstarProductMessageRoute = "legacy-conversation" | "ledger-authoring";
 
@@ -62,10 +62,42 @@ export function resolveNorthstarProductRunBinding(
 export function latestNorthstarFailure(
   snapshot: NorthstarWorkspaceRuntimeSnapshot,
 ): NorthstarLedgerFailure | undefined {
+  if (
+    snapshot.lastStep?.type === "task-blocked" ||
+    snapshot.lastStep?.type === "control-blocked"
+  ) {
+    return snapshot.lastStep.failure;
+  }
   const attempts = snapshot.ledger?.attempts ?? [];
   return [...attempts]
     .reverse()
     .find((attempt) => attempt.failure)?.failure;
+}
+
+function northstarFailureTarget(failure: NorthstarLedgerFailure): string | null {
+  const context = failure.correctionContext;
+  if (!context || typeof context !== "object" || Array.isArray(context)) return null;
+  const record = context as Record<string, NorthstarLedgerValue>;
+  const toolName = typeof record.toolName === "string" ? record.toolName : null;
+  const argumentsValue = record.arguments;
+  if (!toolName) return null;
+  const argumentsText = argumentsValue === undefined ? "" : ` with ${JSON.stringify(argumentsValue)}`;
+  return `${toolName}${argumentsText}`;
+}
+
+
+function northstarSafeFailureDetail(failure: NorthstarLedgerFailure): string {
+  if (failure.code === "MODEL_OUTPUT_INVALID" || /\$\.[A-Za-z0-9_.\[\]]+/.test(failure.detail)) {
+    const context = failure.correctionContext;
+    const validationCode = context && typeof context === "object" && !Array.isArray(context)
+      && typeof (context as Record<string, NorthstarLedgerValue>).validationCode === "string"
+      ? (context as Record<string, NorthstarLedgerValue>).validationCode as string
+      : null;
+    return validationCode
+      ? `The structured model result failed ${validationCode}. The successful tenant evidence remains retained for result-only recovery.`
+      : "The structured model result was invalid. Successful tenant evidence remains retained for result-only recovery.";
+  }
+  return failure.detail;
 }
 
 export function northstarUserFacingRunMessage(
@@ -83,10 +115,14 @@ export function northstarUserFacingRunMessage(
     return "North Star could not verify the latest visual change, so it restored the last verified artboard. No unverified change was kept.";
   }
   if (failure?.kind === "correctable") {
-    return "North Star could not use the latest task result. The same task can be corrected without starting the build over.";
+    const target = northstarFailureTarget(failure);
+    return `North Star paused on ${target ?? "the latest bounded task"}. ${failure.code}: ${northstarSafeFailureDetail(failure)} The last verified artboard is unchanged, and this task can be corrected without restarting the build.`;
   }
   if (failure?.kind === "transient") {
-    return "North Star hit a temporary problem while completing the latest task. The verified work completed so far is still safe.";
+    return `North Star hit a temporary problem (${failure.code}): ${northstarSafeFailureDetail(failure)} The verified work completed so far is still safe.`;
+  }
+  if (failure) {
+    return `North Star stopped at the last verified artboard. ${failure.code}: ${northstarSafeFailureDetail(failure)}`;
   }
   if (snapshot.status === "blocked" || snapshot.status === "failed") {
     return "North Star stopped because of an internal authoring error. No unverified visual changes were kept. Cancel this build before starting another authoring request.";

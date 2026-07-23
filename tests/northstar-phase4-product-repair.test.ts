@@ -113,7 +113,7 @@ test("recovery actions match the authoritative failure classification", () => {
   assert.equal(northstarRecoveryKind(runtimeSnapshot({ status: "blocked", failureKind: "terminal" })), "none");
 });
 
-test("raw protocol paths are never exposed as the user-facing build error", () => {
+test("raw protocol paths stay hidden while the actionable validation class remains visible", () => {
   const snapshot = runtimeSnapshot({
     status: "blocked",
     failureKind: "terminal",
@@ -121,7 +121,8 @@ test("raw protocol paths are never exposed as the user-facing build error", () =
   });
   const message = northstarUserFacingRunMessage(snapshot);
   assert.equal(message.includes("$.outcome"), false);
-  assert.match(message, /internal authoring error/i);
+  assert.match(message, /MODEL_OUTPUT_INVALID/);
+  assert.match(message, /structured model result/i);
 });
 
 test("the workspace preserves legacy chat, binds ledger activity to one message, and creates a surface lazily", () => {
@@ -134,6 +135,13 @@ test("the workspace preserves legacy chat, binds ledger activity to one message,
   assert.match(workspace, /binding\.assistantMessageId/);
   assert.match(workspace, /latestAttempt\?\.failure[\s\S]{0,120}northstarUserFacingRunMessage\(snapshot\)/);
   assert.match(workspace, /ensureNorthstarProjectionTarget\(modelMessage\)/);
+  assert.match(workspace, /NORTHSTAR_PROJECTION_HOST_VARIANT/);
+  assert.match(workspace, /visibility: isNorthstarProjectionHostObject\(object\) \? "hidden"/);
+  assert.match(workspace, /provisional: true/);
+  assert.match(workspace, /northstarBootstrapArtifactRef = useRef<string \| null>\(null\)/);
+  assert.match(workspace, /discardUnverifiedNorthstarBootstrap/);
+  assert.match(workspace, /objects: objects\.filter\(\(object\) => !isNorthstarProjectionHostObject\(object\)\)/);
+  assert.match(workspace, /wasProjectionHost[\s\S]{0,180}northstarBootstrapArtifactRef\.current = null/);
   assert.match(workspace, /canPrepareNorthstarProductSurface/);
   assert.match(workspace, /prepareNorthstarProductSurface/);
   assert.match(workspace, /object\.id === targetObject\.id/);
@@ -149,9 +157,20 @@ test("only the bound authoring artifact switches writers while the rest of the l
   assert.match(host, /props\.artifact\.artifactId === architecture\.directArtifactId/);
   assert.match(host, /directWriterOwnsArtifact[\s\S]{0,180}DirectCodeArtifactHost[\s\S]{0,80}LegacyCodeArtifactHost/);
   assert.match(host, /data-ns-writer="display-only"/);
+  assert.match(host, /northstar\.artifact\.set-writer/);
+  assert.match(host, /writer: "direct-projection"/);
   assert.match(host, /mountedSurface\.runtimeUrl/);
   assert.match(host, /promotingDisplayOnlySurface/);
   assert.match(host, /promotingRepositorySurface/);
   const context = read("components/canvas/northstar-architecture-context.tsx");
   assert.match(context, /directArtifactId: string \| null/);
+});
+
+test("the synchronized canvas artifact survives a full refresh instead of being intentionally erased", () => {
+  const workspace = read("components/canvas/north-star-canvas-workspace.tsx");
+  assert.match(workspace, /northstar-canvas:v79:\$\{userEmail\}:primary/);
+  assert.match(workspace, /localStorage\.getItem\(storageKey\)/);
+  assert.match(workspace, /localStorage\.setItem\(storageKey/);
+  assert.doesNotMatch(workspace, /startsWith\("northstar-canvas:"\).*removeItem/);
+  assert.doesNotMatch(workspace, /Prototype sessions intentionally begin clean/);
 });

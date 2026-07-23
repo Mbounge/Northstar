@@ -146,7 +146,7 @@ test("a production run flows from stateless turns through direct projection and 
     initialCaptureRetryMs: 1,
   });
 
-  const result = await runtime.startRun("Build a verified competitive evidence board");
+  const result = await runtime.startRun("Complete verified competitive evidence work");
 
   assert.equal(result.status, "completed");
   assert.ok(result.ledger);
@@ -518,7 +518,7 @@ test("verified artboard synchronization completes before the next model decision
     },
   });
 
-  const result = await runtime.startRun("Build and synchronize a verified artboard");
+  const result = await runtime.startRun("Complete and synchronize verified work");
   assert.equal(result.status, "completed");
   const syncIndex = order.findIndex((entry) => entry.startsWith("sync:"));
   const finalDecisionIndex = order.lastIndexOf("decision:3");
@@ -539,11 +539,47 @@ test("a verified-artboard synchronization failure prevents further model progres
     },
   });
 
-  const result = await runtime.startRun("Build but fail the canvas model synchronization");
+  const result = await runtime.startRun("Complete but fail model synchronization");
   assert.equal(result.status, "failed");
   assert.equal(result.ledger?.run.status, "failed");
   assert.equal(result.ledger?.run.failure?.code, "ARTBOARD_MODEL_SYNC_FAILED");
   assert.equal(decisionContexts.length, 2);
   assert.match(result.error ?? "", /synchronized back into the canvas document/i);
+  runtime.dispose();
+});
+
+test("initial canonical capture waits for two stable captures from one surface session", async () => {
+  const initial = projectionFixtureState();
+  const drifted = structuredClone(initial);
+  drifted.root.attributes = { ...drifted.root.attributes, "data-runtime-drift": "settled" };
+  const memory = createNorthstarMemoryProjectionSurface({ initialState: drifted });
+  let captures = 0;
+  const surface: NorthstarProjectionSurface = {
+    prepare: (input) => memory.prepare(input),
+    apply: (input) => memory.apply(input),
+    async capture(signal) {
+      captures += 1;
+      if (captures === 1) {
+        return {
+          surfaceSessionId: "surface-session-memory-1",
+          state: initial,
+        };
+      }
+      return memory.capture(signal);
+    },
+  };
+  const runtime = createNorthstarWorkspaceRuntime({
+    projectionSurface: surface,
+    turnClient: successClient(),
+    initialCaptureAttempts: 3,
+    initialCaptureRetryMs: 1,
+  });
+
+  const result = await runtime.startRun("Wait for runtime-owned initialization to settle");
+  assert.equal(result.status, "completed");
+  assert.equal(captures >= 4, true);
+  assert.equal(runtime.getSnapshot().projectionHost?.status, "stable");
+  assert.equal(runtime.getSnapshot().projectionHost?.stableCaptureCount, 2);
+  assert.equal(runtime.getSnapshot().projectionHost?.stateHash, result.ledger?.commits[0]?.stateHash);
   runtime.dispose();
 });

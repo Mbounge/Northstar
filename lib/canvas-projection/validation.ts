@@ -54,6 +54,7 @@ const RESERVED_ATTRIBUTES = new Set([
   "data-ns-runtime-owned",
   "data-ns-projection-layer",
   "data-ns-projection-space",
+  "data-ns-writer",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -406,6 +406,124 @@ export function diffNorthstarProjectionStates(
   return operations;
 }
 
+
+export interface NorthstarProjectionStateDifference {
+  path: string;
+  kind: "missing" | "type" | "value" | "length";
+  expected: NorthstarLedgerValue;
+  actual: NorthstarLedgerValue;
+  expectedNodeCount: number;
+  actualNodeCount: number;
+}
+
+function projectionNodeCount(node: NorthstarProjectionNode): number {
+  if (node.kind === "text") return 1;
+  return 1 + node.children.reduce((total, child) => total + projectionNodeCount(child), 0);
+}
+
+function diagnosticValue(value: unknown): NorthstarLedgerValue {
+  if (value === undefined) return null;
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length <= 12) return value.map(diagnosticValue);
+    return [
+      ...value.slice(0, 10).map(diagnosticValue),
+      `… ${value.length - 10} more items`,
+    ];
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const limited = entries.slice(0, 20).map(([key, entry]) => [key, diagnosticValue(entry)] as const);
+    if (entries.length > 20) limited.push(["…", `${entries.length - 20} more keys`]);
+    return Object.fromEntries(limited);
+  }
+  return String(value);
+}
+
+function firstProjectionValueDifference(
+  expected: unknown,
+  actual: unknown,
+  path: string,
+): Omit<NorthstarProjectionStateDifference, "expectedNodeCount" | "actualNodeCount"> | null {
+  if (expected === actual) return null;
+  if (expected === undefined || actual === undefined) {
+    return {
+      path,
+      kind: "missing",
+      expected: diagnosticValue(expected),
+      actual: diagnosticValue(actual),
+    };
+  }
+  if (expected === null || actual === null || typeof expected !== typeof actual) {
+    return {
+      path,
+      kind: "type",
+      expected: diagnosticValue(expected),
+      actual: diagnosticValue(actual),
+    };
+  }
+  if (Array.isArray(expected) || Array.isArray(actual)) {
+    if (!Array.isArray(expected) || !Array.isArray(actual)) {
+      return { path, kind: "type", expected: diagnosticValue(expected), actual: diagnosticValue(actual) };
+    }
+    if (expected.length !== actual.length) {
+      return {
+        path: `${path}.length`,
+        kind: "length",
+        expected: expected.length,
+        actual: actual.length,
+      };
+    }
+    for (let index = 0; index < expected.length; index += 1) {
+      const difference = firstProjectionValueDifference(expected[index], actual[index], `${path}[${index}]`);
+      if (difference) return difference;
+    }
+    return null;
+  }
+  if (typeof expected === "object" && typeof actual === "object") {
+    const expectedRecord = expected as Record<string, unknown>;
+    const actualRecord = actual as Record<string, unknown>;
+    const keys = [...new Set([...Object.keys(expectedRecord), ...Object.keys(actualRecord)])]
+      .sort((left, right) => left.localeCompare(right));
+    for (const key of keys) {
+      const difference = firstProjectionValueDifference(
+        expectedRecord[key],
+        actualRecord[key],
+        `${path}.${key}`,
+      );
+      if (difference) return difference;
+    }
+    return null;
+  }
+  return {
+    path,
+    kind: "value",
+    expected: diagnosticValue(expected),
+    actual: diagnosticValue(actual),
+  };
+}
+
+/**
+ * Produces a bounded, copy-safe first structural difference for projection
+ * failures. This is diagnostics only and never participates in authority.
+ */
+export function diagnoseNorthstarProjectionStateDifference(
+  inputExpected: NorthstarProjectionState,
+  inputActual: NorthstarProjectionState,
+): NorthstarProjectionStateDifference | null {
+  const expected = parseNorthstarProjectionState(inputExpected);
+  const actual = parseNorthstarProjectionState(inputActual);
+  const difference = firstProjectionValueDifference(expected, actual, "$state");
+  if (!difference) return null;
+  return {
+    ...difference,
+    expectedNodeCount: projectionNodeCount(expected.root),
+    actualNodeCount: projectionNodeCount(actual.root),
+  };
+}
+
 export function hashNorthstarProjectionState(state: NorthstarProjectionState): string {
   const parsed = parseNorthstarProjectionState(state);
   return createNorthstarLedgerHash(parsed as unknown as NorthstarLedgerValue);

@@ -141,6 +141,9 @@ test("projector refuses to mutate a live surface that diverged from ledger HEAD"
   if (outcome.type === "failure") {
     assert.equal(outcome.failure.kind, "terminal");
     assert.equal(outcome.failure.code, "PROJECTION_LIVE_BASE_MISMATCH");
+    const firstDifference = correctionValue(outcome.failure, "firstDifferenceFromBase");
+    assert.ok(firstDifference && typeof firstDifference === "object" && !Array.isArray(firstDifference));
+    assert.equal((firstDifference as { path?: unknown }).path, "$state.space.right");
   }
   assert.equal(surface.getAppliedOperations().length, 0);
 });

@@ -733,3 +733,156 @@ test("invalid controller retry limits are rejected at construction", () => {
     /maximumProjectionAttempts/,
   );
 });
+
+test("a correction cannot repeat an execution input that already failed correctably", async () => {
+  const ledger = createLedger();
+  let executionCalls = 0;
+  let correctionCalls = 0;
+  const controller = createNorthstarTaskController({
+    ledger,
+    decisionProvider: {
+      async decideNext() {
+        return {
+          type: "activity",
+          activity: {
+            kind: "research",
+            intent: "Resolve an exact flow",
+            expectedOutcome: "The exact flow is loaded",
+            executionInput: { toolCalls: [{ name: "get_flow_details", args: { appName: "Atlas", flowName: "Unknown" } }] },
+          },
+        };
+      },
+      async correctActiveTask(_context, _task, failure) {
+        correctionCalls += 1;
+        assert.equal(failure.kind, "correctable");
+        return {
+          type: "retry",
+          executionInput: { toolCalls: [{ name: "get_flow_details", args: { appName: "Atlas", flowName: "Unknown" } }] },
+        };
+      },
+    },
+    executor: {
+      async executeAttempt() {
+        executionCalls += 1;
+        return {
+          type: "failure",
+          failure: {
+            kind: "correctable",
+            code: "TOOL_LOOKUP_EMPTY",
+            detail: "No exact flow matched.",
+            phase: "execution",
+          },
+        };
+      },
+    },
+  });
+
+  const result = await controller.runNextTask();
+  assert.equal(result.type, "task-blocked");
+  if (result.type === "task-blocked") {
+    assert.equal(result.failure.code, "CORRECTION_REPEATED_INVALID_INPUT");
+  }
+  assert.equal(executionCalls, 1);
+  assert.equal(correctionCalls, 1);
+});
+
+test("a model-output correction may reuse the same valid data-tool input", async () => {
+  const ledger = createLedger();
+  let executionCalls = 0;
+  let correctionCalls = 0;
+  const executionInput = {
+    toolCalls: [{
+      name: "prepare_composition_evidence",
+      args: { appNames: ["Awin", "Whop"], sessionType: "onboarding" },
+    }],
+  };
+  const controller = createNorthstarTaskController({
+    ledger,
+    decisionProvider: {
+      async decideNext() {
+        return {
+          type: "activity",
+          activity: {
+            kind: "research",
+            intent: "Select representative onboarding evidence",
+            expectedOutcome: "Exact flows and screenshots are committed",
+            executionInput,
+          },
+        };
+      },
+      async correctActiveTask(_context, _task, failure) {
+        correctionCalls += 1;
+        assert.equal(failure.code, "MODEL_OUTPUT_INVALID");
+        return { type: "retry", executionInput };
+      },
+    },
+    executor: {
+      async executeAttempt({ attempt }) {
+        executionCalls += 1;
+        assert.deepEqual(attempt.executionInput, executionInput);
+        if (executionCalls === 1) {
+          return {
+            type: "failure",
+            failure: {
+              kind: "correctable",
+              code: "MODEL_OUTPUT_INVALID",
+              detail: "The evidence loaded, but the model response did not match the research contract.",
+              phase: "execution",
+            },
+          };
+        }
+        return {
+          type: "success",
+          result: { evidenceIds: ["awin-flow", "whop-flow"] },
+          stateSnapshot: { artboard: "H0", research: ["awin-flow", "whop-flow"] },
+        };
+      },
+    },
+  });
+
+  const result = await controller.runNextTask();
+  assert.equal(result.type, "task-completed");
+  assert.equal(executionCalls, 2);
+  assert.equal(correctionCalls, 1);
+});
+
+test("manual resume cannot reset an exhausted transient retry budget", async () => {
+  const ledger = createLedger();
+  let executionCalls = 0;
+  const controller = createNorthstarTaskController({
+    ledger,
+    maximumTransientAttempts: 2,
+    decisionProvider: {
+      async decideNext() {
+        return {
+          type: "activity",
+          activity: {
+            kind: "research",
+            intent: "Load tenant evidence",
+            expectedOutcome: "Evidence loaded",
+            executionInput: { query: "activation" },
+          },
+        };
+      },
+    },
+    executor: {
+      async executeAttempt() {
+        executionCalls += 1;
+        return {
+          type: "failure",
+          failure: {
+            kind: "transient",
+            code: "CATALOG_UNAVAILABLE",
+            detail: "Temporary catalog failure.",
+            phase: "execution",
+          },
+        };
+      },
+    },
+  });
+
+  assert.equal((await controller.runNextTask()).type, "task-blocked");
+  assert.equal(executionCalls, 2);
+  assert.equal((await controller.resumeActiveTask()).type, "task-blocked");
+  assert.equal(executionCalls, 2);
+});

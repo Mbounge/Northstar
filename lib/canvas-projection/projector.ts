@@ -15,6 +15,7 @@ import type {
 } from "@/lib/canvas-projection/types";
 import {
   applyNorthstarProjectionOperations,
+  diagnoseNorthstarProjectionStateDifference,
   diffNorthstarProjectionStates,
   hashNorthstarProjectionState,
   northstarProjectionStatesEqual,
@@ -470,6 +471,8 @@ export function createNorthstarDirectArtboardProjector(
               expectedTargetStateHash: authoritativeTargetHash,
               actualStateHash: hashNorthstarProjectionState(initial.state),
               surfaceSessionId: initial.surfaceSessionId,
+              firstDifferenceFromBase: diagnoseNorthstarProjectionStateDifference(base, initial.state) as unknown as NorthstarLedgerValue,
+              firstDifferenceFromTarget: diagnoseNorthstarProjectionStateDifference(target, initial.state) as unknown as NorthstarLedgerValue,
             },
           );
         }

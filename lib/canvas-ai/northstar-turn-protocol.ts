@@ -155,6 +155,38 @@ export interface NorthstarTurnModelRequest {
   evidenceAssets?: readonly NorthstarTurnEvidenceAsset[];
 }
 
+export interface NorthstarTurnModelEvidenceMetadata {
+  attachedEvidenceAssetIds: readonly string[];
+  evidenceAttachmentReport?: NorthstarLedgerValue;
+}
+
+export const NORTHSTAR_TURN_MODEL_EVIDENCE_METADATA = Symbol(
+  "northstar.turn-model-evidence-metadata",
+);
+
+export function attachNorthstarTurnModelEvidenceMetadata(
+  output: unknown,
+  metadata: NorthstarTurnModelEvidenceMetadata,
+): unknown {
+  if (output === null || typeof output !== "object") return output;
+  Object.defineProperty(output, NORTHSTAR_TURN_MODEL_EVIDENCE_METADATA, {
+    value: metadata,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return output;
+}
+
+export function readNorthstarTurnModelEvidenceMetadata(
+  output: unknown,
+): NorthstarTurnModelEvidenceMetadata | undefined {
+  if (output === null || typeof output !== "object") return undefined;
+  return (output as {
+    [NORTHSTAR_TURN_MODEL_EVIDENCE_METADATA]?: NorthstarTurnModelEvidenceMetadata;
+  })[NORTHSTAR_TURN_MODEL_EVIDENCE_METADATA];
+}
+
 export interface NorthstarTurnModelAdapter {
   generateJSON(input: NorthstarTurnModelRequest & { signal: AbortSignal }): Promise<unknown>;
 }

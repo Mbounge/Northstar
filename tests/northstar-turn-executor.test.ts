@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  attachNorthstarTurnModelEvidenceMetadata,
   NORTHSTAR_TURN_PROTOCOL_VERSION,
   NorthstarTurnToolError,
   type NorthstarExecuteTaskAttemptRequest,
@@ -13,6 +14,21 @@ import {
 import { parseNorthstarTurnRequest, parseNorthstarTurnResponse } from "@/lib/canvas-ai/northstar-turn-validation";
 import { activeAttemptFixture, decisionFixture } from "./northstar-turn-fixtures";
 
+
+function validResearchResult(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "northstar.research-result.v1",
+    findings: [],
+    exactIdentities: [],
+    evidenceGraphDelta: [],
+    visualObservations: [],
+    remainingGaps: [],
+    sufficientForNextStep: true,
+    suggestedNextEvidenceActivities: [],
+    ...overrides,
+  };
+}
+
 function requestForDecision() {
   const fixture = decisionFixture();
   return parseNorthstarTurnRequest({
@@ -23,7 +39,7 @@ function requestForDecision() {
   });
 }
 
-function requestForAttempt(kind: "research" | "artboard-mutation" = "research"): NorthstarExecuteTaskAttemptRequest {
+function requestForAttempt(kind: "research" | "analysis" | "artboard-mutation" | "verification" = "research"): NorthstarExecuteTaskAttemptRequest {
   const fixture = activeAttemptFixture(kind);
   return parseNorthstarTurnRequest({
     protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
@@ -76,7 +92,7 @@ test("task-scoped tools run once for the exact task and are included before one 
       async generateJSON(input) {
         modelCalls += 1;
         prompt = input.userPrompt;
-        return { outcome: "success", result: { evidenceIds: ["e-1"] } };
+        return { outcome: "success", result: validResearchResult({ findings: [{ evidenceIds: ["e-1"] }] }) };
       },
     },
   });
@@ -259,6 +275,7 @@ test("artboard work returns a mutation draft and never claims projection or comm
         return {
           outcome: "success",
           result: {
+            schema: "northstar.artboard-mutation-draft.v1",
             operations: [{ type: "set-text", target: "headline", text: "Trust vs speed" }],
           },
         };
@@ -324,7 +341,8 @@ test("decision planning receives exact data-tool schemas and prompt-owned resear
   assert.equal(response.type, "run-ready-to-finalize");
   assert.match(systemInstruction, /Never hard-code apps, flows, counts/);
   assert.match(systemInstruction, /maxFlowsPerApp/);
-  assert.match(systemInstruction, /get_flow_details[\s\S]*required[\s\S]*flowName/);
+  assert.match(systemInstruction, /get_flow_details[\s\S]*(?:flowId|flowName)/);
+  assert.match(systemInstruction, /appId/);
   assert.match(systemInstruction, /candidateScreenshotIds/);
   assert.match(systemInstruction, /additional analysis activities/);
   assert.match(systemInstruction, /non-artboard question/);
@@ -349,7 +367,9 @@ test("authoritative screenshot evidence is attached to the exact execution model
                   id: "atlas-screen-1",
                   name: "Welcome",
                   imageUrl: "https://assets.example/atlas/welcome.png",
+                  appId: "atlas",
                   appName: "Atlas",
+                  flowId: "activation",
                   flowName: "Activation",
                   index: 0,
                 }],
@@ -367,12 +387,20 @@ test("authoritative screenshot evidence is attached to the exact execution model
         observedPrompt = input.userPrompt;
         return {
           outcome: "success",
-          result: {
+          result: validResearchResult({
             findings: ["The attached welcome screen leads with a single primary action."],
-            selectedIdentities: [{ appName: "Atlas", flowName: "Activation", screenshotId: "atlas-screen-1" }],
-            evidenceGaps: [],
-            sufficientForNextStep: true,
-          },
+            exactIdentities: [{
+              appId: "atlas",
+              appName: "Atlas",
+              flowId: "activation",
+              flowName: "Activation",
+              screenshotId: "atlas-screen-1",
+            }],
+            visualObservations: [{
+              screenshotId: "atlas-screen-1",
+              observation: "The welcome screen leads with a single primary action.",
+            }],
+          }),
         };
       },
     },
@@ -419,4 +447,289 @@ test("tool lookup failures preserve retrieved evidence in the wire response", as
       toolCalls: [{ name: "list_available_apps", result: { ok: true } }],
     });
   }
+});
+
+test("research success is rejected when the structured evidence contract is missing", async () => {
+  const request = requestForAttempt("research");
+  const response = await executeNorthstarTurn({
+    request,
+    model: {
+      async generateJSON() {
+        return { outcome: "success", result: { findings: ["Narrative only"] } };
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-failure");
+  if (response.type === "attempt-failure") {
+    assert.equal(response.code, "MODEL_OUTPUT_INVALID");
+    assert.match(JSON.stringify(response.correctionContext), /RESEARCH_RESULT_SCHEMA_INVALID/);
+  }
+});
+
+test("deterministic tool identities are merged into the authoritative research result", async () => {
+  const request = requestForAttempt("research");
+  const response = await executeNorthstarTurn({
+    request,
+    toolExecutor: {
+      async execute() {
+        return {
+          toolCalls: [{
+            name: "prepare_composition_evidence",
+            args: { query: "Atlas onboarding" },
+            result: {
+              ok: true,
+              detail: "Prepared exact evidence",
+              data: {
+                app: { id: "atlas", name: "Atlas", flowCount: 1 },
+                flow: {
+                  id: "atlas-activation",
+                  appId: "atlas",
+                  appName: "Atlas",
+                  name: "Account activation",
+                  screenCount: 1,
+                },
+                screens: [{
+                  id: "atlas-screen-1",
+                  appId: "atlas",
+                  appName: "Atlas",
+                  flowId: "atlas-activation",
+                  flowName: "Account activation",
+                  name: "Welcome",
+                  imageUrl: "https://assets.example/atlas-screen-1.png",
+                  index: 0,
+                }],
+              },
+              resultView: { kind: "screenshots", title: "Evidence", items: [] },
+            },
+          }],
+        };
+      },
+    },
+    model: {
+      async generateJSON() {
+        return { outcome: "success", result: validResearchResult() };
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-result");
+  if (response.type === "attempt-result") {
+    const result = response.result as { exactIdentities: Array<Record<string, unknown>> };
+    assert.ok(result.exactIdentities.some((identity) => identity.kind === "app" && identity.appId === "atlas"));
+    assert.ok(result.exactIdentities.some((identity) => identity.kind === "flow" && identity.flowId === "atlas-activation"));
+    assert.ok(result.exactIdentities.some((identity) => identity.kind === "screenshot" && identity.screenshotId === "atlas-screen-1"));
+  }
+});
+
+test("analysis success is rejected unless the complete design-intelligence contract is present", async () => {
+  const request = requestForAttempt("analysis");
+  const response = await executeNorthstarTurn({
+    request,
+    model: {
+      async generateJSON() {
+        return {
+          outcome: "success",
+          result: { schema: "northstar.design-intelligence-result.v1", visualThesis: "Too shallow" },
+        };
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-failure");
+  if (response.type === "attempt-failure") {
+    assert.equal(response.code, "MODEL_OUTPUT_INVALID");
+    assert.match(response.message, /nextVisibleMove/);
+  }
+});
+
+test("visual observations must cite screenshot IDs attached to that exact model turn", async () => {
+  const request = requestForAttempt("research");
+  const response = await executeNorthstarTurn({
+    request,
+    toolExecutor: {
+      async execute() {
+        return {
+          toolCalls: [{
+            name: "get_screenshot",
+            args: { screenshotId: "attached-screen" },
+            result: {
+              ok: true,
+              detail: "Retrieved screenshot",
+              data: {
+                id: "attached-screen",
+                appId: "atlas",
+                appName: "Atlas",
+                flowId: "activation",
+                flowName: "Activation",
+                name: "Welcome",
+                imageUrl: "https://assets.example/attached.png",
+                index: 0,
+              },
+              resultView: { kind: "screenshot", title: "Welcome", items: [] },
+            },
+          }],
+        };
+      },
+    },
+    model: {
+      async generateJSON() {
+        return {
+          outcome: "success",
+          result: validResearchResult({
+            visualObservations: [{ screenshotId: "different-screen", observation: "Unsupported" }],
+          }),
+        };
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-failure");
+  if (response.type === "attempt-failure") {
+    assert.equal(response.code, "MODEL_OUTPUT_INVALID");
+    assert.match(response.message, /unattached screenshot different-screen/);
+  }
+});
+
+
+test("visual observations cannot cite a screenshot the provider failed to attach", async () => {
+  const request = requestForAttempt("research");
+  const response = await executeNorthstarTurn({
+    request,
+    toolExecutor: {
+      async execute() {
+        return {
+          toolCalls: [{
+            name: "get_flow_screenshots",
+            args: { flowId: "activation" },
+            result: {
+              ok: true,
+              detail: "Retrieved screenshots",
+              data: {
+                screens: [
+                  {
+                    id: "loaded-screen",
+                    appId: "atlas",
+                    appName: "Atlas",
+                    flowId: "activation",
+                    flowName: "Activation",
+                    name: "Welcome",
+                    imageUrl: "https://assets.example/loaded.png",
+                    index: 0,
+                  },
+                  {
+                    id: "missing-screen",
+                    appId: "atlas",
+                    appName: "Atlas",
+                    flowId: "activation",
+                    flowName: "Activation",
+                    name: "Verify",
+                    imageUrl: "https://assets.example/missing.png",
+                    index: 1,
+                  },
+                ],
+              },
+              resultView: { kind: "screenshots", title: "Activation", items: [] },
+            },
+          }],
+        };
+      },
+    },
+    model: {
+      async generateJSON() {
+        return attachNorthstarTurnModelEvidenceMetadata({
+          outcome: "success",
+          result: validResearchResult({
+            visualObservations: [{ screenshotId: "missing-screen", observation: "Unsupported" }],
+          }),
+        }, {
+          attachedEvidenceAssetIds: ["loaded-screen"],
+          evidenceAttachmentReport: {
+            requestedAssetIds: ["loaded-screen", "missing-screen"],
+            loadedAssetIds: ["loaded-screen"],
+            unavailableAssets: [{ id: "missing-screen", reason: "http-403" }],
+          },
+        });
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-failure");
+  if (response.type === "attempt-failure") {
+    assert.equal(response.code, "MODEL_OUTPUT_INVALID");
+    assert.match(response.message, /unattached screenshot missing-screen/);
+    assert.match(JSON.stringify(response.evidence), /http-403/);
+  }
+});
+
+
+test("model-authored tenant identities are rejected unless committed evidence returned them", async () => {
+  const request = requestForAttempt("research");
+  const response = await executeNorthstarTurn({
+    request,
+    model: {
+      async generateJSON() {
+        return {
+          outcome: "success",
+          result: validResearchResult({
+            exactIdentities: [{
+              appId: "invented-app",
+              appName: "Invented",
+              flowId: "invented-flow",
+              flowName: "Invented flow",
+            }],
+          }),
+        };
+      },
+    },
+  });
+  assert.equal(response.type, "attempt-failure");
+  if (response.type === "attempt-failure") {
+    assert.equal(response.code, "MODEL_OUTPUT_INVALID");
+    assert.match(JSON.stringify(response.correctionContext), /EXACT_IDENTITY_UNGROUNDED/);
+  }
+});
+
+
+test("verification results must be internally consistent before they can gate finalization", async () => {
+  const request = requestForAttempt("verification");
+  const invalid = await executeNorthstarTurn({
+    request,
+    model: {
+      async generateJSON() {
+        return {
+          outcome: "success",
+          result: {
+            schema: "northstar.verification-result.v1",
+            objectiveSatisfied: false,
+            evidenceGrounded: true,
+            artboardStable: true,
+            readingPathClear: true,
+            issues: ["The comparison does not yet answer the executive question."],
+            recommendation: "finalize",
+          },
+        };
+      },
+    },
+  });
+  assert.equal(invalid.type, "attempt-failure");
+  if (invalid.type === "attempt-failure") {
+    assert.match(JSON.stringify(invalid.correctionContext), /VERIFICATION_RESULT_INCONSISTENT/);
+  }
+
+  const valid = await executeNorthstarTurn({
+    request,
+    model: {
+      async generateJSON() {
+        return {
+          outcome: "success",
+          result: {
+            schema: "northstar.verification-result.v1",
+            objectiveSatisfied: true,
+            evidenceGrounded: true,
+            artboardStable: true,
+            readingPathClear: true,
+            issues: [],
+            recommendation: "finalize",
+          },
+        };
+      },
+    },
+  });
+  assert.equal(valid.type, "attempt-result");
 });

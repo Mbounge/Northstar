@@ -22,6 +22,11 @@ import {
   NorthstarTurnToolError,
   type NorthstarTurnToolExecutor,
 } from "@/lib/canvas-ai/northstar-turn-protocol";
+import {
+  collectNorthstarKnownEvidenceIdentities,
+  groundNorthstarExactLookupArguments,
+  mergeNorthstarKnownEvidenceIdentities,
+} from "@/lib/canvas-ai/northstar-evidence-identities";
 
 const MAX_TOOL_CALLS_PER_ATTEMPT = 8;
 
@@ -243,6 +248,7 @@ export function createNorthstarDataTurnToolExecutor(
     async execute({ request, signal }) {
       const calls = parseToolCalls(request.attempt.executionInput);
       if (calls.length === 0) return undefined;
+      const knownIdentities = collectNorthstarKnownEvidenceIdentities(request.ledgerContext);
       const results: Array<{
         name: NorthStarDataToolName;
         args: NorthstarLedgerValue;
@@ -252,11 +258,13 @@ export function createNorthstarDataTurnToolExecutor(
         if (signal.aborted) {
           throw new DOMException("The task-scoped tool execution was aborted.", "AbortError");
         }
+        const groundedArgs = groundNorthstarExactLookupArguments(call.name, call.args, knownIdentities);
+        const groundedArgsLedgerValue = toInputLedgerValue(groundedArgs, `$.toolCalls[${index}].args`);
         let result: NorthStarDataToolResult;
         try {
           result = await executeTool({
             tool: call.name,
-            args: call.args,
+            args: groundedArgs,
             getCatalog: input.getCatalog,
           });
         } catch (error) {
@@ -274,9 +282,13 @@ export function createNorthstarDataTurnToolExecutor(
         const resultLedgerValue = toResultLedgerValue(result, `$.toolResults[${index}]`);
         results.push({
           name: call.name,
-          args: call.argsLedgerValue,
+          args: groundedArgsLedgerValue,
           result: resultLedgerValue,
         });
+        mergeNorthstarKnownEvidenceIdentities(
+          knownIdentities,
+          collectNorthstarKnownEvidenceIdentities(resultLedgerValue),
+        );
         if (!result.ok && EXACT_LOOKUP_TOOLS.has(call.name)) {
           return correctableToolError(
             "TOOL_LOOKUP_EMPTY",
@@ -284,7 +296,7 @@ export function createNorthstarDataTurnToolExecutor(
             {
               toolName: call.name,
               toolCallIndex: index,
-              arguments: call.argsLedgerValue,
+              arguments: groundedArgsLedgerValue,
               recommendedNextTools: recoveryToolsFor(call.name),
               instruction: "Use a list/search/curation tool to ground an exact identity, then retry with the exact returned value. Do not repeat this lookup unchanged.",
             },

@@ -158,6 +158,32 @@ function semanticIssues(
 ): NorthstarToolInputValidationIssue[] {
   const issues: NorthstarToolInputValidationIssue[] = [];
 
+  if (
+    (toolName === "get_app_details" || toolName === "list_app_flows" || toolName === "get_app_icon") &&
+    !nonEmptyString(args.appId) &&
+    !nonEmptyString(args.appName)
+  ) {
+    issues.push({
+      path,
+      message: "must include appId or appName so the app can be resolved.",
+      expected: "appId | appName",
+      received: "neither",
+    });
+  }
+
+  if (toolName === "get_flow_details" || toolName === "get_flow_screenshots") {
+    const hasFlowId = nonEmptyString(args.flowId);
+    const hasNamedIdentity = (nonEmptyString(args.appId) || nonEmptyString(args.appName)) && nonEmptyString(args.flowName);
+    if (!hasFlowId && !hasNamedIdentity) {
+      issues.push({
+        path,
+        message: "must include flowId, or an appId/appName together with flowName.",
+        expected: "flowId | ((appId | appName) + flowName)",
+        received: "incomplete flow identity",
+      });
+    }
+  }
+
   if (toolName === "get_screenshot" && !nonEmptyString(args.screenshotId) && !nonEmptyString(args.query)) {
     issues.push({
       path,

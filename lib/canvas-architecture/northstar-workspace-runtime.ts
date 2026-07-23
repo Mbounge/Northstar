@@ -13,6 +13,13 @@ import {
 } from "@/lib/canvas-projection/controller";
 import { NorthstarProjectionSurfaceError } from "@/lib/canvas-projection/surface";
 import type { NorthstarProjectionSurface } from "@/lib/canvas-projection/types";
+import {
+  diagnoseNorthstarProjectionStateDifference,
+  hashNorthstarProjectionState,
+  northstarProjectionStatesEqual,
+  projectionStateAsLedgerValue,
+} from "@/lib/canvas-projection/state";
+import { parseNorthstarProjectionState } from "@/lib/canvas-projection/validation";
 import type {
   NorthstarControllerStepResult,
   NorthstarTaskController,
@@ -29,10 +36,23 @@ export type NorthstarWorkspaceRuntimeStatus =
   | "failed"
   | "disposed";
 
+export interface NorthstarProjectionHostDiagnostics {
+  status: "idle" | "capturing" | "stable" | "unstable" | "failed";
+  captureAttempt?: number;
+  stableCaptureCount?: number;
+  surfaceSessionId?: string;
+  stateHash?: string;
+  previousSurfaceSessionId?: string;
+  previousStateHash?: string;
+  firstDifference?: NorthstarLedgerValue;
+  observedAt?: number;
+}
+
 export interface NorthstarWorkspaceRuntimeSnapshot {
   status: NorthstarWorkspaceRuntimeStatus;
   ledger: NorthstarLedgerSnapshot | null;
   lastStep: NorthstarControllerStepResult | null;
+  projectionHost?: NorthstarProjectionHostDiagnostics;
   finalSummary?: NorthstarLedgerValue;
   error?: string;
   recovery?: {
@@ -163,9 +183,61 @@ export function createNorthstarWorkspaceRuntime(
   const captureInitialState = async (signal: AbortSignal): Promise<NorthstarLedgerValue> => {
     let lastError: unknown;
     for (let attempt = 1; attempt <= initialCaptureAttempts; attempt += 1) {
+      publish({
+        projectionHost: {
+          status: "capturing",
+          captureAttempt: attempt,
+          observedAt: Date.now(),
+        },
+      });
       try {
-        const capture = await input.projectionSurface.capture(signal);
-        return capture.state as unknown as NorthstarLedgerValue;
+        const firstCapture = await input.projectionSurface.capture(signal);
+        const firstState = parseNorthstarProjectionState(firstCapture.state);
+        const firstHash = hashNorthstarProjectionState(firstState);
+        // Let queued runtime initialization messages settle before HEAD is
+        // created. A projection host is authoritative only after consecutive
+        // captures from the same surface session are canonically identical.
+        await wait(Math.min(32, initialCaptureRetryMs), signal);
+        const secondCapture = await input.projectionSurface.capture(signal);
+        const secondState = parseNorthstarProjectionState(secondCapture.state);
+        const secondHash = hashNorthstarProjectionState(secondState);
+        if (
+          firstCapture.surfaceSessionId === secondCapture.surfaceSessionId
+          && northstarProjectionStatesEqual(firstState, secondState)
+        ) {
+          publish({
+            projectionHost: {
+              status: "stable",
+              captureAttempt: attempt,
+              stableCaptureCount: 2,
+              surfaceSessionId: secondCapture.surfaceSessionId,
+              stateHash: secondHash,
+              observedAt: Date.now(),
+            },
+          });
+          return projectionStateAsLedgerValue(secondState);
+        }
+        publish({
+          projectionHost: {
+            status: "unstable",
+            captureAttempt: attempt,
+            stableCaptureCount: 0,
+            surfaceSessionId: secondCapture.surfaceSessionId,
+            stateHash: secondHash,
+            previousSurfaceSessionId: firstCapture.surfaceSessionId,
+            previousStateHash: firstHash,
+            firstDifference: firstCapture.surfaceSessionId === secondCapture.surfaceSessionId
+              ? diagnoseNorthstarProjectionStateDifference(firstState, secondState) as unknown as NorthstarLedgerValue
+              : {
+                  path: "$surfaceSessionId",
+                  kind: "value",
+                  expected: firstCapture.surfaceSessionId,
+                  actual: secondCapture.surfaceSessionId,
+                },
+            observedAt: Date.now(),
+          },
+        });
+        lastError = new Error("Northstar projection host changed during initial canonical capture.");
       } catch (error) {
         if (isAbortError(error) || signal.aborted) throw error;
         lastError = error;
@@ -173,12 +245,19 @@ export function createNorthstarWorkspaceRuntime(
           ? error.failureKind === "transient"
           : true;
         if (!retryable || attempt === initialCaptureAttempts) break;
-        await wait(initialCaptureRetryMs, signal);
       }
+      if (attempt < initialCaptureAttempts) await wait(initialCaptureRetryMs, signal);
     }
+    publish({
+      projectionHost: {
+        status: "failed",
+        captureAttempt: initialCaptureAttempts,
+        observedAt: Date.now(),
+      },
+    });
     throw lastError instanceof Error
       ? lastError
-      : new Error("Northstar could not capture the mounted artboard.");
+      : new Error("Northstar could not capture a stable mounted artboard.");
   };
 
   const cancelAuthoritativeLedger = (reason: string): void => {
@@ -392,7 +471,7 @@ export function createNorthstarWorkspaceRuntime(
       runAbort?.abort();
       runAbort = new AbortController();
       cancellationReason = null;
-      state = { status: "initializing", ledger: null, lastStep: null };
+      state = { status: "initializing", ledger: null, lastStep: null, projectionHost: { status: "idle" } };
       publish();
 
       try {
@@ -442,9 +521,9 @@ export function createNorthstarWorkspaceRuntime(
       if (state.status !== "awaiting-recovery" && state.status !== "blocked") {
         throw new Error(`A ${state.status} Northstar run cannot be resumed.`);
       }
-      if (!ledger.getSnapshot().activeTask) {
-        throw new Error("Northstar has no unresolved task to resume.");
-      }
+      // Control-stage failures can occur before a task exists (decision) or
+      // after the final task completes (finalization). Resume must therefore
+      // be able to re-enter the decision loop even without an active task.
       cancellationReason = null;
       publish({ status: "running", error: undefined, recovery: undefined });
       return beginDrive();

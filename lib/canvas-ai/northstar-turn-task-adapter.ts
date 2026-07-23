@@ -14,6 +14,13 @@ import {
   NorthstarTurnTransportError,
   type NorthstarTurnClient,
 } from "@/lib/canvas-ai/northstar-turn-client";
+import { northstarAuthoringQualityObligations } from "@/lib/canvas-ai/northstar-turn-intelligence";
+import {
+  deterministicNorthstarFinalSummary,
+  northstarObjectiveNeedsResilientVisualPipeline,
+  requiredNorthstarActivity,
+} from "@/lib/canvas-ai/northstar-turn-resilience";
+import { compactNorthstarLedgerContextForTurn } from "@/lib/canvas-ai/northstar-turn-context";
 
 export interface CreateNorthstarTurnTaskControllerInput {
   ledger: NorthstarEphemeralLedger;
@@ -69,14 +76,50 @@ export function createNorthstarTurnTaskController(
     artboardProjector: input.artboardProjector,
     decisionProvider: {
       async decideNext(context) {
-        const response = await input.client.decideNextActivity(context, { signal: input.signal });
-        ensureDecisionStillCurrent(input.ledger, context);
-        if (response.type === "activity-draft") {
-          return { type: "activity", activity: response.activity };
+        const requiredActivity = requiredNorthstarActivity(context);
+        if (requiredActivity) return { type: "activity", activity: requiredActivity };
+
+        const qualityObligations = northstarAuthoringQualityObligations(context);
+        const objectiveIsVisual = northstarObjectiveNeedsResilientVisualPipeline(context.run.objective);
+        if (objectiveIsVisual && qualityObligations.length === 0) {
+          return { type: "complete", summary: deterministicNorthstarFinalSummary(context) };
         }
-        const finalized = await input.client.finalizeRun(context, { signal: input.signal });
-        ensureDecisionStillCurrent(input.ledger, context);
-        return { type: "complete", summary: finalized.summary };
+
+        const decisionContext = compactNorthstarLedgerContextForTurn(qualityObligations.length > 0
+          ? {
+              ...context,
+              outstandingObligations: [
+                ...context.outstandingObligations,
+                ...qualityObligations,
+              ],
+            }
+          : context);
+        try {
+          const response = await input.client.decideNextActivity(decisionContext, { signal: input.signal });
+          ensureDecisionStillCurrent(input.ledger, context);
+          if (response.type === "activity-draft") {
+            return { type: "activity", activity: response.activity };
+          }
+          if (qualityObligations.length > 0) {
+            const fallback = requiredNorthstarActivity(decisionContext);
+            if (fallback) return { type: "activity", activity: fallback };
+            throw new Error(`North Star attempted to finalize before satisfying: ${qualityObligations.join(" ")}`);
+          }
+          try {
+            const finalized = await input.client.finalizeRun(compactNorthstarLedgerContextForTurn(context), { signal: input.signal });
+            ensureDecisionStillCurrent(input.ledger, context);
+            return { type: "complete", summary: finalized.summary };
+          } catch {
+            return { type: "complete", summary: deterministicNorthstarFinalSummary(context) };
+          }
+        } catch (error) {
+          const fallback = requiredNorthstarActivity(decisionContext);
+          if (fallback) return { type: "activity", activity: fallback };
+          if (qualityObligations.length === 0) {
+            return { type: "complete", summary: deterministicNorthstarFinalSummary(context) };
+          }
+          throw error;
+        }
       },
 
       async correctActiveTask(context, task, lastFailure) {
@@ -88,7 +131,7 @@ export function createNorthstarTurnTaskController(
           throw new Error(`Task ${task.id} correction context is stale.`);
         }
         const response = await input.client.correctActiveTask(
-          context,
+          compactNorthstarLedgerContextForTurn(context),
           task,
           latestAttempt,
           { signal: input.signal },
@@ -120,7 +163,7 @@ export function createNorthstarTurnTaskController(
         const requestId = attempt.transportUncertainty?.requestId ?? createRequestId();
         try {
           const response = await input.client.executeTaskAttempt(
-            context,
+            compactNorthstarLedgerContextForTurn(context),
             task,
             attempt,
             { signal: input.signal, requestId },

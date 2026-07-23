@@ -1,4 +1,5 @@
 import { createNorthstarLedgerLLMContext } from "@/lib/canvas-ledger/northstar-ledger-context";
+import { stableStringifyNorthstarLedgerValue } from "@/lib/canvas-ledger/northstar-ledger-value";
 import type {
   NorthstarActivityDraft,
   NorthstarEphemeralLedger,
@@ -146,6 +147,38 @@ function latestAttemptForTask(
 ): NorthstarLedgerTaskAttempt | null {
   return attemptsForTask(ledger, taskId).at(-1) ?? null;
 }
+function failedAttemptCount(
+  ledger: NorthstarEphemeralLedger,
+  taskId: string,
+  kind: NorthstarLedgerFailure["kind"],
+): number {
+  return attemptsForTask(ledger, taskId).filter((attempt) => attempt.failure?.kind === kind).length;
+}
+
+const NON_REPEATABLE_CORRECTABLE_FAILURE_CODES = new Set([
+  "TOOL_ARGUMENTS_INVALID",
+  "TOOL_CALLS_INVALID",
+  "TOOL_CALL_LIMIT_EXCEEDED",
+  "TOOL_CALL_INVALID",
+  "TOOL_NOT_ALLOWED",
+  "TOOL_LOOKUP_EMPTY",
+  "EVIDENCE_ASSETS_UNAVAILABLE",
+]);
+
+function repeatedInvalidInputFailure(
+  ledger: NorthstarEphemeralLedger,
+  taskId: string,
+  executionInput: NorthstarLedgerValue,
+): NorthstarLedgerFailure | null {
+  const next = stableStringifyNorthstarLedgerValue(executionInput);
+  const repeatedAttempt = attemptsForTask(ledger, taskId).find((attempt) =>
+    attempt.failure?.kind === "correctable"
+    && NON_REPEATABLE_CORRECTABLE_FAILURE_CODES.has(attempt.failure.code)
+    && stableStringifyNorthstarLedgerValue(attempt.executionInput) === next
+  );
+  return repeatedAttempt?.failure ?? null;
+}
+
 
 function thrownFailure(
   error: unknown,
@@ -274,6 +307,29 @@ export function createNorthstarTaskController(
         phase: "decision",
         detailPrefix: `Correction provider threw for task ${task.id}`,
       });
+      input.ledger.recordControlFailure(controlFailure, task.id);
+      return { type: "task-blocked", taskId: task.id, failure: controlFailure };
+    }
+
+    const repeatedFailure = correction.type === "retry"
+      ? repeatedInvalidInputFailure(input.ledger, task.id, correction.executionInput)
+      : null;
+    if (correction.type === "retry" && repeatedFailure) {
+      const controlFailure: NorthstarLedgerFailure = {
+        kind: "terminal",
+        code: "CORRECTION_REPEATED_INVALID_INPUT",
+        detail: `Correction for task ${task.id} repeated execution input rejected by ${repeatedFailure.code}.`,
+        phase: "decision",
+        correctionContext: {
+          taskId: task.id,
+          repeatedFailureCode: repeatedFailure.code,
+          instruction: repeatedFailure.code === "TOOL_LOOKUP_EMPTY"
+            ? "Use a discovery or curation tool, retain the exact returned identity, and change the lookup input before retrying."
+            : repeatedFailure.code === "EVIDENCE_ASSETS_UNAVAILABLE"
+              ? "Choose a different accessible screenshot batch before retrying."
+              : "Correct the invalid tool call or arguments before retrying.",
+        },
+      };
       input.ledger.recordControlFailure(controlFailure, task.id);
       return { type: "task-blocked", taskId: task.id, failure: controlFailure };
     }
@@ -598,8 +654,8 @@ export function createNorthstarTaskController(
     initialExecutionInput?: NorthstarLedgerValue,
   ): Promise<NorthstarControllerStepResult> => {
     let executionInput = initialExecutionInput;
-    let transientAttemptCount = 0;
-    let correctiveAttemptCount = 0;
+    let transientAttemptCount = failedAttemptCount(input.ledger, findActiveTask(input.ledger).id, "transient");
+    let correctiveAttemptCount = failedAttemptCount(input.ledger, findActiveTask(input.ledger).id, "correctable");
 
     while (true) {
       const task = findActiveTask(input.ledger);
@@ -855,6 +911,9 @@ export function createNorthstarTaskController(
           return { type: "task-blocked", taskId: task.id, failure };
         }
         if (failure.kind === "correctable") {
+          if (failedAttemptCount(input.ledger, task.id, "correctable") >= maximumCorrectiveAttempts) {
+            return { type: "task-blocked", taskId: task.id, failure };
+          }
           const correction = await handleCorrection(task, failure);
           if (correction.type === "task-blocked") return correction;
           if (correction.type === "cancel") {
@@ -868,6 +927,9 @@ export function createNorthstarTaskController(
           return executeActiveTask(correction.executionInput);
         }
 
+        if (failedAttemptCount(input.ledger, task.id, "transient") >= maximumTransientAttempts) {
+          return { type: "task-blocked", taskId: task.id, failure };
+        }
         return executeActiveTask(latestAttempt.executionInput);
       });
     },

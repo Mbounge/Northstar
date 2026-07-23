@@ -3,6 +3,7 @@ import {
   NORTHSTAR_TURN_DEFAULT_TIMEOUT_MS,
   NORTHSTAR_TURN_PROTOCOL_VERSION,
   NorthstarTurnToolError,
+  readNorthstarTurnModelEvidenceMetadata,
   type NorthstarAttemptResultKind,
   type NorthstarExecuteTaskAttemptRequest,
   type NorthstarTurnEvidenceAsset,
@@ -25,23 +26,38 @@ import {
   parseNorthstarFinalizationModelOutput,
 } from "@/lib/canvas-ai/northstar-turn-validation";
 import { collectNorthstarTurnEvidenceAssets } from "@/lib/canvas-ai/northstar-turn-evidence-assets";
+import { validateNorthstarTaskResultContract } from "@/lib/canvas-ai/northstar-turn-result-contracts";
+import {
+  buildNorthstarFallbackTaskResult,
+  deterministicNorthstarFinalSummary,
+  northstarObjectiveNeedsResilientVisualPipeline,
+} from "@/lib/canvas-ai/northstar-turn-resilience";
 
 export class NorthstarTurnProviderError extends Error {
   readonly code: string;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
+  readonly failureKind?: "transient" | "correctable" | "terminal";
+  readonly correctionContext?: NorthstarLedgerValue;
+  readonly evidence?: NorthstarLedgerValue;
 
   constructor(input: {
     code: string;
     message: string;
     retryable: boolean;
     retryAfterMs?: number;
+    failureKind?: "transient" | "correctable" | "terminal";
+    correctionContext?: NorthstarLedgerValue;
+    evidence?: NorthstarLedgerValue;
   }) {
     super(input.message);
     this.name = "NorthstarTurnProviderError";
     this.code = input.code;
     this.retryable = input.retryable;
     this.retryAfterMs = input.retryAfterMs;
+    this.failureKind = input.failureKind;
+    this.correctionContext = input.correctionContext;
+    this.evidence = input.evidence;
   }
 }
 
@@ -161,13 +177,49 @@ function providerFailureResponse(
 
   if (request.type === "execute-task-attempt") {
     return attemptFailure(request, {
-      failureKind: retryable ? "transient" : "terminal",
+      failureKind: providerError?.failureKind ?? (retryable ? "transient" : "terminal"),
       code,
       message,
       retryAfterMs,
+      correctionContext: providerError?.correctionContext,
+      evidence: providerError?.evidence,
     });
   }
   return genericTurnError(request, { code, message, retryable, retryAfterMs });
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function providerAttachmentReport(error: NorthstarTurnProviderError | null): NorthstarLedgerValue | undefined {
+  const evidence = recordValue(error?.evidence);
+  return evidence?.evidenceAttachmentReport as NorthstarLedgerValue | undefined;
+}
+
+function loadedAssetIdsFromReport(report: NorthstarLedgerValue | undefined): string[] | undefined {
+  const record = recordValue(report);
+  if (!Array.isArray(record?.loadedAssetIds)) return undefined;
+  return record.loadedAssetIds.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()));
+}
+
+function mergeNorthstarAttemptEvidence(
+  toolContext: NorthstarLedgerValue | undefined,
+  evidenceAttachmentReport: NorthstarLedgerValue | undefined,
+): NorthstarLedgerValue | undefined {
+  if (evidenceAttachmentReport === undefined) return toolContext;
+  if (toolContext && typeof toolContext === "object" && !Array.isArray(toolContext)) {
+    return {
+      ...toolContext,
+      evidenceAttachmentReport,
+    };
+  }
+  return {
+    ...(toolContext === undefined ? {} : { toolContext }),
+    evidenceAttachmentReport,
+  };
 }
 
 async function generateOneModelResponse(
@@ -223,6 +275,9 @@ export async function executeNorthstarTurn(
     }
 
     if (input.request.type === "execute-task-attempt") {
+      const resilientVisualRun = northstarObjectiveNeedsResilientVisualPipeline(
+        input.request.ledgerContext.run.objective,
+      );
       let toolContext: NorthstarLedgerValue | undefined;
       if (input.toolExecutor) {
         try {
@@ -256,41 +311,155 @@ export async function executeNorthstarTurn(
       const evidenceAssets = collectNorthstarTurnEvidenceAssets({
         toolContext,
         ledgerContext: input.request.ledgerContext,
+        executionInput: input.request.attempt.executionInput,
         maximum: evidenceAssetLimit,
       });
       const prompt = buildNorthstarExecutionPrompt(input.request, toolContext, evidenceAssets);
-      const raw = await generateOneModelResponse(input.model, {
-        operation: input.request.type,
-        ...prompt,
-        maxOutputTokens: input.request.task.kind === "artboard-mutation" ? 8_000 : 4_000,
-        temperature: 0.12,
-        signal: timeout.signal,
-        evidenceAssets,
-      });
-      let output: ReturnType<typeof parseNorthstarAttemptModelOutput>;
+      let raw: unknown = {};
+      let modelDiagnostic: NorthstarLedgerValue | undefined;
+      let recoveredAttachmentReport: NorthstarLedgerValue | undefined;
+      let recoveredLoadedAssetIds: string[] | undefined;
       try {
-        output = parseNorthstarAttemptModelOutput(raw);
+        raw = await generateOneModelResponse(input.model, {
+          operation: input.request.type,
+          ...prompt,
+          maxOutputTokens: input.request.task.kind === "artboard-mutation" ? 8_000 : 4_000,
+          temperature: 0.12,
+          signal: timeout.signal,
+          evidenceAssets,
+        });
       } catch (error) {
-        if (error instanceof NorthstarTurnValidationError) {
+        if ((input.signal?.aborted || isAbortError(error)) && !timeout.didTimeout()) throw error;
+        if (!resilientVisualRun) {
+          return providerFailureResponse(input.request, error, timeout.didTimeout());
+        }
+        const providerError = error instanceof NorthstarTurnProviderError ? error : null;
+        recoveredAttachmentReport = providerAttachmentReport(providerError);
+        recoveredLoadedAssetIds = loadedAssetIdsFromReport(recoveredAttachmentReport);
+        modelDiagnostic = {
+          phase: "model-generation",
+          code: providerError?.code ?? "TURN_PROVIDER_ERROR",
+          message: error instanceof Error ? error.message : String(error),
+          recoveredDeterministically: true,
+          ...(providerError?.correctionContext !== undefined
+            ? { correctionContext: providerError.correctionContext }
+            : {}),
+        };
+      }
+      const modelEvidenceMetadata = readNorthstarTurnModelEvidenceMetadata(raw);
+      const attachedAssetIds = modelEvidenceMetadata?.attachedEvidenceAssetIds
+        ?? recoveredLoadedAssetIds;
+      const attachedEvidenceAssets = attachedAssetIds
+        ? evidenceAssets.filter((asset) => attachedAssetIds.includes(asset.id))
+        : modelDiagnostic === undefined ? evidenceAssets : [];
+      const evidenceAttachmentReport = modelEvidenceMetadata?.evidenceAttachmentReport
+        ?? recoveredAttachmentReport;
+      let candidateResult: NorthstarLedgerValue = {};
+      if (modelDiagnostic === undefined) {
+        try {
+          const output = parseNorthstarAttemptModelOutput(raw);
+          if (output.outcome === "failure") {
+            if (!resilientVisualRun) {
+              return attemptFailure(input.request, {
+                failureKind: output.failureKind,
+                code: output.code,
+                message: output.message,
+                correctionContext: output.correctionContext,
+                evidence: toolContext,
+              });
+            }
+            modelDiagnostic = {
+              phase: "model-reported-failure",
+              code: output.code,
+              message: output.message,
+              failureKind: output.failureKind,
+              recoveredDeterministically: true,
+              ...(output.correctionContext !== undefined
+                ? { correctionContext: output.correctionContext }
+                : {}),
+            };
+          } else {
+            candidateResult = output.result;
+          }
+        } catch (error) {
+          if (error instanceof NorthstarTurnValidationError) {
+            if (!resilientVisualRun) {
+              return attemptFailure(input.request, {
+                failureKind: "correctable",
+                code: "MODEL_OUTPUT_INVALID",
+                message: error.message,
+                correctionContext: { validationCode: error.code },
+                evidence: mergeNorthstarAttemptEvidence(toolContext, evidenceAttachmentReport),
+              });
+            }
+            const directResult = raw && typeof raw === "object" && !Array.isArray(raw)
+              && typeof (raw as { schema?: unknown }).schema === "string"
+              ? raw as NorthstarLedgerValue
+              : {};
+            candidateResult = directResult;
+            modelDiagnostic = {
+              phase: "model-validation",
+              code: error.code,
+              message: error.message,
+              recoveredDeterministically: true,
+            };
+          } else {
+            throw error;
+          }
+        }
+      }
+      let validatedResult: NorthstarLedgerValue;
+      try {
+        validatedResult = validateNorthstarTaskResultContract({
+          task: input.request.task,
+          result: candidateResult,
+          toolContext,
+          ledgerContext: input.request.ledgerContext,
+          evidenceAssets: attachedEvidenceAssets,
+          evidenceAttachmentReport,
+        });
+      } catch (error) {
+        if (!(error instanceof NorthstarTurnValidationError) && !(error instanceof TypeError)) throw error;
+        if (!resilientVisualRun) {
           return attemptFailure(input.request, {
             failureKind: "correctable",
             code: "MODEL_OUTPUT_INVALID",
-            message: error.message,
-            correctionContext: { validationCode: error.code },
+            message: error instanceof Error ? error.message : String(error),
+            correctionContext: {
+              validationCode: error instanceof NorthstarTurnValidationError
+                ? error.code
+                : "RESULT_CONTRACT_INVALID",
+            },
+            evidence: mergeNorthstarAttemptEvidence(toolContext, evidenceAttachmentReport),
           });
         }
-        throw error;
-      }
-      if (output.outcome === "failure") {
-        return attemptFailure(input.request, {
-          failureKind: output.failureKind,
-          code: output.code,
-          message: output.message,
-          correctionContext: output.correctionContext,
-          retryAfterMs: output.retryAfterMs,
-          evidence: toolContext,
+        modelDiagnostic = {
+          phase: "result-contract",
+          code: error instanceof NorthstarTurnValidationError ? error.code : "RESULT_CONTRACT_INVALID",
+          message: error instanceof Error ? error.message : String(error),
+          recoveredDeterministically: true,
+        };
+        validatedResult = buildNorthstarFallbackTaskResult({
+          task: input.request.task,
+          modelResult: candidateResult,
+          toolContext,
+          ledgerContext: input.request.ledgerContext,
+          evidenceAssets: attachedEvidenceAssets.length > 0 ? attachedEvidenceAssets : evidenceAssets,
+          attachmentReport: evidenceAttachmentReport,
         });
       }
+      const attemptEvidence = mergeNorthstarAttemptEvidence(
+        toolContext,
+        evidenceAttachmentReport,
+      );
+      const evidence = modelDiagnostic === undefined
+        ? attemptEvidence
+        : {
+            ...(attemptEvidence && typeof attemptEvidence === "object" && !Array.isArray(attemptEvidence)
+              ? attemptEvidence
+              : attemptEvidence === undefined ? {} : { toolContext: attemptEvidence }),
+            modelDiagnostic,
+          } as NorthstarLedgerValue;
       return {
         protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
         requestId: input.request.requestId,
@@ -298,8 +467,8 @@ export async function executeNorthstarTurn(
         taskId: input.request.task.id,
         attemptId: input.request.attempt.id,
         resultKind: resultKindForTask(input.request.task),
-        result: output.result,
-        evidence: toolContext,
+        result: validatedResult,
+        evidence,
       };
     }
 
@@ -323,19 +492,28 @@ export async function executeNorthstarTurn(
     }
 
     const prompt = buildNorthstarFinalizationPrompt(input.request);
-    const raw = await generateOneModelResponse(input.model, {
-      operation: input.request.type,
-      ...prompt,
-      maxOutputTokens: 4_000,
-      temperature: 0.1,
-      signal: timeout.signal,
-    });
-    const output = parseNorthstarFinalizationModelOutput(raw);
+    let summary: NorthstarLedgerValue;
+    try {
+      const raw = await generateOneModelResponse(input.model, {
+        operation: input.request.type,
+        ...prompt,
+        maxOutputTokens: 4_000,
+        temperature: 0.1,
+        signal: timeout.signal,
+      });
+      summary = parseNorthstarFinalizationModelOutput(raw).summary;
+    } catch (error) {
+      if ((input.signal?.aborted || isAbortError(error)) && !timeout.didTimeout()) throw error;
+      if (!northstarObjectiveNeedsResilientVisualPipeline(input.request.ledgerContext.run.objective)) {
+        throw error;
+      }
+      summary = deterministicNorthstarFinalSummary(input.request.ledgerContext);
+    }
     return {
       protocolVersion: NORTHSTAR_TURN_PROTOCOL_VERSION,
       requestId: input.request.requestId,
       type: "run-finalized",
-      summary: output.summary,
+      summary,
     };
   } catch (error) {
     if (input.signal?.aborted && !timeout.didTimeout()) throw abortError();

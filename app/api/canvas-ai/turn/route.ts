@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { executeNorthstarTurn } from "@/lib/canvas-ai/northstar-turn-executor";
@@ -17,6 +18,27 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
+
+interface CachedTurnResult {
+  bodyHash: string;
+  expiresAt: number;
+  promise: Promise<{ response: Awaited<ReturnType<typeof executeNorthstarTurn>>; status: number }>;
+}
+
+// Bounded request reconciliation only. This cache stores no ledger or run
+// authority and is scoped to one route worker.
+const turnRequestCache = new Map<string, CachedTurnResult>();
+const TURN_REQUEST_CACHE_TTL_MS = 5 * 60 * 1_000;
+
+function hashTurnRequest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function cleanupTurnRequestCache(now = Date.now()): void {
+  for (const [key, entry] of turnRequestCache) {
+    if (entry.expiresAt <= now) turnRequestCache.delete(key);
+  }
+}
 function errorResponse(input: {
   requestId?: string;
   code: string;
@@ -107,25 +129,53 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  let catalogPromise: ReturnType<typeof loadNorthStarDataCatalog> | undefined;
-  const response = await executeNorthstarTurn({
-    request: turnRequest,
-    model: createNorthstarGeminiTurnModel({ apiKey }),
-    toolExecutor: createNorthstarDataTurnToolExecutor({
-      getCatalog() {
-        if (!catalogPromise) {
-          catalogPromise = resolveNorthStarTenantId(supabase, user.id).then((tenantId) =>
-            loadNorthStarDataCatalog(supabase, tenantId),
-          );
-        }
-        return catalogPromise;
-      },
-    }),
-    signal: request.signal,
-  });
+  cleanupTurnRequestCache();
+  const cacheKey = `${user.id}:${turnRequest.requestId}`;
+  const bodyHash = hashTurnRequest(turnRequest);
+  const existing = turnRequestCache.get(cacheKey);
+  if (existing && existing.bodyHash !== bodyHash) {
+    return errorResponse({
+      requestId: turnRequest.requestId,
+      code: "REQUEST_ID_REUSED_WITH_DIFFERENT_BODY",
+      message: "A Northstar request ID may only be reused for the exact same stateless turn payload.",
+      retryable: false,
+      status: 409,
+    });
+  }
 
-  const status = response.type === "turn-error"
-    ? response.retryable ? 503 : 422
-    : 200;
-  return NextResponse.json(response, { status });
+  const cachedPromise = existing?.promise ?? (async () => {
+    let catalogPromise: ReturnType<typeof loadNorthStarDataCatalog> | undefined;
+    const response = await executeNorthstarTurn({
+      request: turnRequest,
+      model: createNorthstarGeminiTurnModel({ apiKey }),
+      toolExecutor: createNorthstarDataTurnToolExecutor({
+        getCatalog() {
+          if (!catalogPromise) {
+            catalogPromise = resolveNorthStarTenantId(supabase, user.id).then((tenantId) =>
+              loadNorthStarDataCatalog(supabase, tenantId),
+            );
+          }
+          return catalogPromise;
+        },
+      }),
+      // The authoritative request result must survive a client disconnect so
+      // an ambiguous transport retry can recover the same cached response.
+      signal: undefined,
+    });
+    const status = response.type === "turn-error"
+      ? response.retryable ? 503 : 422
+      : 200;
+    return { response, status };
+  })();
+
+  if (!existing) {
+    turnRequestCache.set(cacheKey, {
+      bodyHash,
+      expiresAt: Date.now() + TURN_REQUEST_CACHE_TTL_MS,
+      promise: cachedPromise,
+    });
+  }
+
+  const cached = await cachedPromise;
+  return NextResponse.json(cached.response, { status: cached.status });
 }
