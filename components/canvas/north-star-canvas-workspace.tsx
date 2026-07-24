@@ -68,9 +68,12 @@ import {
   TriangleAlert,
   Type,
   Wrench,
+  Bug,
+  Download,
+  Trash2,
   X,
 } from "lucide-react";
-import { CodeArtifactHost } from "@/components/canvas/artifacts/code-artifact-host";
+import { CodeArtifactHost, type NorthstarArtifactLifecycleEvent } from "@/components/canvas/artifacts/code-artifact-host";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { createPrototypeCodeArtifactPayload } from "@/lib/canvas-artifacts/prototype";
 import {
@@ -84,6 +87,17 @@ import {
   type CanvasCodeArtifactRuntimeReview,
 } from "@/lib/canvas-artifacts/types";
 import { createClient } from "@/lib/supabase/client";
+import {
+  clearCanvasDiagnostics,
+  exportCanvasDiagnostics,
+  getCanvasDiagnostics,
+  getCanvasRunTelemetry,
+  recordCanvasDiagnostic,
+  subscribeCanvasDiagnostics,
+  type CanvasDiagnosticEvent,
+} from "@/lib/canvas-ai/canvas-diagnostics";
+import { NORTHSTAR_HEALTH_POLICY } from "@/lib/canvas-ai/northstar-health-policy";
+import { applyNorthstarFault, consumeNorthstarFault } from "@/lib/canvas-ai/northstar-fault-injection";
 import {
   materializeNorthstarBrowserCommit,
   type NorthstarBrowserCommit,
@@ -1266,13 +1280,72 @@ interface CanvasAIActionRequest {
   };
 }
 
+type CanvasAIActionOutcomeStatus =
+  | "succeeded"
+  | "skipped"
+  | "rejected"
+  | "superseded"
+  | "failed"
+  | "timed_out";
+
 interface CanvasAIActionExecutionResult {
+  /** @deprecated Prefer status. Kept temporarily for executor compatibility. */
   ok: boolean;
+  status?: CanvasAIActionOutcomeStatus;
   detail: string;
   objectIds: string[];
+  reasonCode?: string;
+  retrySafe?: boolean;
   targetLabel?: string;
   fromLabel?: string;
   toLabel?: string;
+}
+
+function normalizeCanvasAIActionOutcome(
+  result: CanvasAIActionExecutionResult,
+): CanvasAIActionExecutionResult & { status: CanvasAIActionOutcomeStatus } {
+  return {
+    ...result,
+    status: result.status ?? (result.ok ? "succeeded" : "failed"),
+  };
+}
+
+function isCanvasAIActionHardFailure(
+  result: Pick<CanvasAIActionExecutionResult, "ok" | "status">,
+) {
+  const status = result.status ?? (result.ok ? "succeeded" : "failed");
+  return status === "failed" || status === "timed_out";
+}
+
+const CANVAS_ACTION_TIMEOUT_MS = NORTHSTAR_HEALTH_POLICY.action.timeoutMs;
+const CANVAS_ACTION_MAX_ATTEMPTS = NORTHSTAR_HEALTH_POLICY.action.maxAttempts;
+
+function waitForCanvasActionRetry(attempt: number) {
+  const delayMs = Math.min(
+    NORTHSTAR_HEALTH_POLICY.action.retryMaxDelayMs,
+    NORTHSTAR_HEALTH_POLICY.action.retryBaseDelayMs * 2 ** Math.max(0, attempt - 1),
+  );
+  return new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
+}
+
+async function withCanvasActionTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error("CANVAS_ACTION_TIMEOUT"));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timeoutId !== null) if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
+  }
 }
 
 interface CanvasAIActionExecutionRecord extends CanvasAIActionExecutionResult {
@@ -8160,6 +8233,42 @@ function snapResizeBox(
   };
 }
 
+type CanvasPersistenceHealth = {
+  healthy: boolean;
+  key: string;
+  objectCount: number;
+  restoredObjectCount: number;
+  savedAt?: number;
+  reason?: string;
+};
+
+type PersistedCanvasSnapshot = {
+  schema: "northstar.canvas-snapshot.v1";
+  savedAt: number;
+  objects: CanvasObject[];
+  viewport: Viewport;
+};
+
+type PersistedCanvasRunRecovery = {
+  schema: "northstar.canvas-run-recovery.v1";
+  runId?: string;
+  assistantMessageId: string;
+  prompt: string;
+  startedAt: number;
+  updatedAt: number;
+  status: "starting" | "running" | "interrupted";
+  checkpoint?: CanvasAICompositionCheckpoint;
+};
+
+const CANVAS_RUN_RECOVERY_MAX_AGE_MS = NORTHSTAR_HEALTH_POLICY.recovery.maxJournalAgeMs;
+
+function canvasSnapshotFingerprint(snapshot: Pick<PersistedCanvasSnapshot, "objects" | "viewport">) {
+  return JSON.stringify({
+    objects: normalizeCanvasScene(snapshot.objects),
+    viewport: snapshot.viewport,
+  });
+}
+
 export function NorthStarCanvasWorkspace({
   userEmail,
   initialWorkspaceApps = [],
@@ -8173,6 +8282,7 @@ export function NorthStarCanvasWorkspace({
   const canvasSessionIdRef = useRef(makeId());
   const chatSessionIdRef = useRef(makeId());
   const storageKey = `northstar-canvas:v78:${userEmail}:${canvasSessionIdRef.current}`;
+  const canonicalPersistenceKey = `northstar-canvas:canonical:v1:${userEmail}`;
   const objectsRef = useRef<CanvasObject[]>([]);
   const historyPastRef = useRef<CanvasObject[][]>([]);
   const historyFutureRef = useRef<CanvasObject[][]>([]);
@@ -8210,6 +8320,8 @@ export function NorthStarCanvasWorkspace({
   const [activeConnectorKind, setActiveConnectorKind] = useState<ConnectorKind>("straight");
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [aiHighlightedIds, setAiHighlightedIds] = useState<string[]>([]);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [diagnosticEvents, setDiagnosticEvents] = useState<CanvasDiagnosticEvent[]>([]);
 
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: DEFAULT_CANVAS_ZOOM });
   const [objects, setObjectsState] = useState<CanvasObject[]>([]);
@@ -8438,23 +8550,107 @@ export function NorthStarCanvasWorkspace({
     return () => observer.disconnect();
   }, []);
 
-  // Prototype sessions intentionally begin clean after a full page refresh.
-  // The live React state still survives workspace tab changes and panel minimization.
+  // Restore the last verified canonical canvas before accepting new mutations.
   useEffect(() => {
     try {
-      for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
-        const key = window.localStorage.key(index);
-        if (key?.startsWith("northstar-canvas:")) window.localStorage.removeItem(key);
+      const raw = window.localStorage.getItem(canonicalPersistenceKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PersistedCanvasSnapshot>;
+        if (
+          parsed.schema === "northstar.canvas-snapshot.v1" &&
+          Array.isArray(parsed.objects) &&
+          parsed.viewport &&
+          typeof parsed.viewport.x === "number" &&
+          typeof parsed.viewport.y === "number" &&
+          typeof parsed.viewport.zoom === "number"
+        ) {
+          const restoredObjects = normalizeCanvasScene(parsed.objects as CanvasObject[]);
+          objectsRef.current = restoredObjects;
+          setObjectsState(restoredObjects);
+          setViewport(parsed.viewport as Viewport);
+          recordCanvasDiagnostic({
+            phase: "persistence",
+            name: "persistence.restored",
+            detail: "Restored the last verified canonical canvas snapshot.",
+            data: {
+              key: canonicalPersistenceKey,
+              objectCount: restoredObjects.length,
+              savedAt: parsed.savedAt,
+            },
+          });
+        }
       }
 
       for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
         const key = window.sessionStorage.key(index);
         if (key?.startsWith("northstar-chat:")) window.sessionStorage.removeItem(key);
       }
-    } catch {
-      // Storage cleanup is best effort and must never block the canvas.
+    } catch (error) {
+      recordCanvasDiagnostic({
+        phase: "persistence",
+        name: "persistence.restore_failed",
+        detail: "The canonical canvas snapshot could not be restored.",
+        data: { reason: error instanceof Error ? error.message : String(error) },
+      });
     }
-  }, []);
+  }, [canonicalPersistenceKey]);
+
+  const verifyCanonicalPersistence = useCallback(async (): Promise<CanvasPersistenceHealth> => {
+    const snapshot: PersistedCanvasSnapshot = {
+      schema: "northstar.canvas-snapshot.v1",
+      savedAt: Date.now(),
+      objects: cloneCanvasObjects(objectsRef.current),
+      viewport: viewportRef.current,
+    };
+
+    try {
+      const persistenceFault = await applyNorthstarFault("persistence.before_write");
+      if (persistenceFault === "drop") {
+        throw new Error("Injected persistence write drop.");
+      }
+      const serialized = JSON.stringify(snapshot);
+      window.localStorage.setItem(canonicalPersistenceKey, serialized);
+      const stored = window.localStorage.getItem(canonicalPersistenceKey);
+      if (!stored) throw new Error("Snapshot was not readable after persistence.");
+
+      const restored = JSON.parse(stored) as PersistedCanvasSnapshot;
+      const healthy =
+        restored.schema === snapshot.schema &&
+        canvasSnapshotFingerprint(restored) === canvasSnapshotFingerprint(snapshot);
+      const result: CanvasPersistenceHealth = {
+        healthy,
+        key: canonicalPersistenceKey,
+        objectCount: snapshot.objects.length,
+        restoredObjectCount: Array.isArray(restored.objects) ? restored.objects.length : 0,
+        savedAt: restored.savedAt,
+        reason: healthy ? undefined : "Persisted snapshot did not match the canonical in-memory canvas.",
+      };
+      recordCanvasDiagnostic({
+        phase: "persistence",
+        name: healthy ? "persistence.verified" : "persistence.mismatch",
+        detail: healthy
+          ? "The canonical canvas snapshot was saved and verified by an immediate readback."
+          : "The persisted canvas snapshot did not match the canonical in-memory state.",
+        data: result,
+      });
+      return result;
+    } catch (error) {
+      const result: CanvasPersistenceHealth = {
+        healthy: false,
+        key: canonicalPersistenceKey,
+        objectCount: snapshot.objects.length,
+        restoredObjectCount: 0,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+      recordCanvasDiagnostic({
+        phase: "persistence",
+        name: "persistence.failed",
+        detail: "The canonical canvas snapshot could not be saved and verified.",
+        data: result,
+      });
+      return result;
+    }
+  }, [canonicalPersistenceKey]);
 
   const resetTransientEditingState = useCallback(() => {
     setEditingTextId(null);
@@ -9496,6 +9692,7 @@ export function NorthStarCanvasWorkspace({
     aiRunResultIdsRef.current.delete(runId);
     aiRunCreatedIdsRef.current.delete(runId);
     aiRunActionIndexRef.current.delete(runId);
+    artifactLifecycleByRunRef.current.delete(runId);
     setAiHighlightedIds([]);
   }, []);
 
@@ -9510,12 +9707,53 @@ export function NorthStarCanvasWorkspace({
     return normalized < 0 ? normalized + 360 : normalized;
   };
 
+  useEffect(() => subscribeCanvasDiagnostics(() => {
+    setDiagnosticEvents(getCanvasDiagnostics());
+  }), []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        setDiagnosticsOpen((current) => !current);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const legacyIds = objectsRef.current
+      .filter((object) => object.semantic?.surfaceKind === "working" || object.semantic?.role === "working-frame")
+      .map((object) => object.id);
+    if (legacyIds.length === 0) return;
+    const legacySet = new Set(legacyIds);
+    const next = objectsRef.current.filter((object) => !legacySet.has(object.id));
+    objectsRef.current = next;
+    setObjects(next);
+    recordCanvasDiagnostic({
+      phase: "cleanup",
+      name: "legacy-working-surface.removed",
+      detail: `Removed ${legacyIds.length} legacy parallel-workspace objects.`,
+      data: { objectIds: legacyIds },
+    });
+  }, []);
+
   const executeCanvasAIAction = useCallback(
     async (
       runId: string,
       action: CanvasAIActionRequest
     ): Promise<CanvasAIActionExecutionResult> => {
       const args = action.arguments ?? {};
+      recordCanvasDiagnostic({
+        phase: "action",
+        name: "action.started",
+        runId,
+        actionId: action.actionId,
+        stepId: action.stepId,
+        detail: action.label,
+        data: { tool: action.tool, arguments: args, objectCount: objectsRef.current.length },
+      });
       const isMutating = !["select_objects", "focus_objects"].includes(action.tool);
       if (isMutating) commitAIActionRunHistory(runId);
 
@@ -9526,12 +9764,40 @@ export function NorthStarCanvasWorkspace({
       const actionIndex = aiRunActionIndexRef.current.get(runId) ?? 0;
       aiRunActionIndexRef.current.set(runId, actionIndex + 1);
 
-      const setSelection = (ids: string[]) => {
+      const interactionMutationRequested =
+        action.tool === "select_objects" ||
+        action.tool === "focus_objects" ||
+        args.selectAfter === true;
+
+      const setSelection = (ids: string[], options?: { force?: boolean }) => {
+        if (!options?.force && !interactionMutationRequested) {
+          const preserved = selectedIdsRef.current.filter((id) =>
+            objectsRef.current.some((object) => object.id === id),
+          );
+          recordCanvasDiagnostic({
+            phase: "selection",
+            name: "selection.preserved",
+            runId,
+            actionId: action.actionId,
+            stepId: action.stepId,
+            detail: "Automated canvas mutation preserved the user's selection.",
+            data: { objectIds: preserved },
+          });
+          return preserved;
+        }
         const valid = Array.from(new Set(ids)).filter((id) =>
           objectsRef.current.some((object) => object.id === id)
         );
         selectedIdsRef.current = valid;
         setSelectedIds(valid);
+        recordCanvasDiagnostic({
+          phase: "selection",
+          name: "selection.changed",
+          runId,
+          actionId: action.actionId,
+          stepId: action.stepId,
+          data: { objectIds: valid },
+        });
         return valid;
       };
 
@@ -9546,8 +9812,16 @@ export function NorthStarCanvasWorkspace({
         if (unique.length > 0) {
           const merged = Array.from(new Set([...runCreated, ...unique]));
           aiRunCreatedIdsRef.current.set(runId, merged);
-          if (args.selectAfter !== false) setSelection(merged);
+          if (args.selectAfter === true) setSelection(merged);
         }
+        recordCanvasDiagnostic({
+          phase: "action",
+          name: "action.result",
+          runId,
+          actionId: action.actionId,
+          stepId: action.stepId,
+          data: { tool: action.tool, objectIds: unique, objectCount: objectsRef.current.length },
+        });
         return unique;
       };
 
@@ -9574,9 +9848,35 @@ export function NorthStarCanvasWorkspace({
       const mutateObjects = (
         updater: (current: CanvasObject[]) => CanvasObject[]
       ) => {
-        const next = normalizeCanvasScene(updater(objectsRef.current));
+        const previous = objectsRef.current;
+        const next = normalizeCanvasScene(updater(previous));
+        const previousById = new Map(previous.map((object) => [object.id, object]));
+        const nextById = new Map(next.map((object) => [object.id, object]));
+        const created = next.filter((object) => !previousById.has(object.id)).map((object) => object.id);
+        const removed = previous.filter((object) => !nextById.has(object.id)).map((object) => object.id);
+        const changed = next.filter((object) => {
+          const before = previousById.get(object.id);
+          return before && JSON.stringify(before) !== JSON.stringify(object);
+        }).map((object) => object.id);
         objectsRef.current = next;
         setObjects(next);
+        recordCanvasDiagnostic({
+          phase: "mutation",
+          name: "objects.committed",
+          runId,
+          actionId: action.actionId,
+          stepId: action.stepId,
+          detail: action.label,
+          data: {
+            tool: action.tool,
+            beforeCount: previous.length,
+            afterCount: next.length,
+            created,
+            changed,
+            removed,
+            bounds: next.filter((object) => created.includes(object.id) || changed.includes(object.id)).map((object) => ({ id: object.id, ...getObjectBounds(object) })),
+          },
+        });
         return next;
       };
 
@@ -10434,10 +10734,13 @@ export function NorthStarCanvasWorkspace({
               ),
               nextObject,
             ]);
-            resetTransientEditingState();
-            setSelection([objectId]);
+            if (interactionMutationRequested) {
+              resetTransientEditingState();
+              setSelection([objectId]);
+            }
 
             if (
+              interactionMutationRequested &&
               geometryExpanded &&
               artifact.buildState.isBuilding &&
               Date.now() >= artifactAutoFollowSuspendedUntilRef.current
@@ -10672,198 +10975,25 @@ export function NorthStarCanvasWorkspace({
         }
 
 
-        if (action.tool === "create_working_surface") {
-          const artifactId = args.artifactId?.trim() || `artifact-${makeId()}`;
-          const blueprint = safeParseJson<CanvasCompositionBlueprint>(args.compositionJson);
-          const notes = normalizeWorkingSurfaceNotes(
-            safeParseJson<CanvasCompositionWorkingNote[]>(args.workingNotesJson) ??
-              blueprint?.workingNotes ??
-              [],
-          );
-          const visibility = args.workingVisibility ?? blueprint?.workingVisibility ?? "visible";
-          const bundleFlows = selectCanonicalAssetFlows(action.assetBundle, {
-            requestedSession: args.sessionType,
-            requestedApps: args.appNames,
-            explicitFlowNames: blueprint?.sections.map((section) => section.flowName).filter((value): value is string => Boolean(value)),
-            maxFlowsPerApp: 1,
-          });
-          const bundleScreens = action.assetBundle?.screenshots ?? [];
-          const existingFrame = objectsRef.current.find(
-            (object): object is CanvasBoxObject =>
-              isBoxObject(object) &&
-              object.semantic?.artifactId === artifactId &&
-              object.semantic?.role === "working-frame",
-          );
-          const baseCenter = canvasCenter();
-          const presentationBounds = getArtifactSurfaceBounds(objectsRef.current, artifactId, "presentation");
-          const frameW = visibility === "compact" ? 1320 : 1580;
-          const preferred: Rect = existingFrame
-            ? { x: existingFrame.x, y: existingFrame.y, w: frameW, h: Math.max(760, existingFrame.h) }
-            : presentationBounds
-              ? { x: presentationBounds.x + presentationBounds.w + NORTHSTAR_SURFACE_GAP, y: presentationBounds.y, w: frameW, h: 900 }
-              : { x: baseCenter.x - frameW / 2, y: baseCenter.y - 450, w: frameW, h: 900 };
-          const occupied = objectsRef.current
-            .filter(
-              (object) =>
-                object.semantic?.artifactId !== artifactId &&
-                !object.hidden &&
-                !isConnectorObject(object),
-            )
-            .map(getObjectBounds);
-          const rect = existingFrame
-            ? preferred
-            : findFreeRect(preferred, occupied, {
-                margin: NORTHSTAR_SURFACE_GAP,
-                step: Math.max(460, frameW * 0.28),
-              });
-          const created = buildEditableResearchWorkspaceObjects({
-            artifactId,
-            title: args.title?.trim() || `${blueprint?.title || "North Star"} — working surface`,
-            researchDigest: blueprint?.researchDigest,
-            notes,
-            apps: action.assetBundle?.apps ?? [],
-            flows: bundleFlows,
-            screenshots: bundleScreens,
-            rect,
-            visibility,
-          });
-          mutateObjects((current) =>
-            replaceArtifactSurface(current, artifactId, "working", stableVisualBoardId([artifactId, "research-workspace"]), created),
-          );
-          resetTransientEditingState();
-          setSelection([]);
-          setAiHighlightedIds([]);
-          const ids = storeResult(created.map((object) => object.id));
-          return {
-            ok: true,
-            detail: `Created a structured research workspace with ${bundleFlows.length} named reference ${bundleFlows.length === 1 ? "flow" : "flows"}, ${bundleScreens.filter((screen) => Boolean(screen.imageUrl)).length} available screenshots, and ${notes.length} organized research ${notes.length === 1 ? "note" : "notes"}.`,
-            objectIds: ids,
-            targetLabel: "the North Star research workspace",
-          };
-        }
-
-        if (action.tool === "update_working_surface") {
+        // Parallel research workspaces were retired. Old clients may still send these
+        // actions, so clean up any legacy surface instead of materializing another board.
+        if ((action.tool as string) === "create_working_surface" || (action.tool as string) === "update_working_surface") {
           const artifactId = args.artifactId?.trim();
-          if (!artifactId) throw new Error("North Star could not identify the active research workspace.");
-          const existingFrame = objectsRef.current.find(
-            (object): object is CanvasBoxObject =>
-              isBoxObject(object) &&
-              object.semantic?.artifactId === artifactId &&
-              object.semantic?.role === "working-frame",
-          );
-
-          const parsedSingle = safeParseJson<CanvasCompositionWorkingNote>(args.workingNoteJson);
-          const parsedMany = safeParseJson<CanvasCompositionWorkingNote[]>(args.workingNotesJson);
-          const plan = safeParseJson<CanvasResearchWorkspacePlan>(args.workspacePlanJson);
-          const existingNotes: CanvasCompositionWorkingNote[] = objectsRef.current
-            .filter(
-              (object): object is CanvasBoxObject =>
-                isBoxObject(object) &&
-                object.semantic?.artifactId === artifactId &&
-                object.semantic?.role === "working-note" &&
-                object.semantic?.componentType?.startsWith("research-") === true &&
-                Boolean(object.text?.trim()),
-            )
-            .flatMap((object) => {
-              const raw = object.text?.trim() ?? "";
-              const [first, ...rest] = raw.split("\n");
-              const body = rest.join("\n").trim() || raw;
-              if (!body) return [];
-              const componentKind = object.semantic?.componentType?.replace(/^research-/, "") ?? "evidence";
-              const kind = [
-                "objective",
-                "constraint",
-                "evidence",
-                "hypothesis",
-                "decision",
-                "question",
-                "correction",
-                "rejected",
-                "check",
-              ].includes(componentKind)
-                ? (componentKind as CanvasCompositionWorkingNote["kind"])
-                : "evidence";
-              return [{ label: first?.trim() || object.semantic?.label || "Research note", text: body, kind }];
-            });
-          const planNotes: CanvasCompositionWorkingNote[] = (plan?.regions ?? []).flatMap((region) => {
-            const labels = Array.isArray(region.noteLabels) ? region.noteLabels.filter(Boolean) : [];
-            if (labels.length === 0) return [];
-            return [{
-              label: region.title || "Research region",
-              text: labels.join(" · "),
-              kind:
-                region.purpose === "decisions"
-                  ? "decision"
-                  : region.purpose === "hypotheses"
-                    ? "hypothesis"
-                    : region.purpose === "questions"
-                      ? "question"
-                      : region.purpose === "objective"
-                        ? "objective"
-                        : "evidence",
-              evidenceIds: Array.isArray(region.evidenceIds) ? region.evidenceIds : [],
-            } satisfies CanvasCompositionWorkingNote];
-          });
-          const incoming = normalizeWorkingSurfaceNotes([
-            ...(parsedMany ?? []),
-            ...(parsedSingle ? [parsedSingle] : []),
-            ...planNotes,
-          ]);
-          const deduped = new Map<string, CanvasCompositionWorkingNote>();
-          [...existingNotes, ...incoming].forEach((note) => {
-            const key = `${note.kind}:${note.label.trim().toLowerCase()}:${note.text.trim().toLowerCase()}`;
-            if (!deduped.has(key)) deduped.set(key, note);
-          });
-          const notes = [...deduped.values()].slice(0, args.executionDepth === "deep" ? 24 : 16);
-          const updateBlueprint = safeParseJson<CanvasCompositionBlueprint>(args.compositionJson);
-          const bundleFlows = selectCanonicalAssetFlows(action.assetBundle, {
-            requestedSession: args.sessionType,
-            requestedApps: args.appNames,
-            explicitFlowNames: updateBlueprint?.sections.map((section) => section.flowName).filter((value): value is string => Boolean(value)),
-            maxFlowsPerApp: 1,
-          });
-          const bundleScreens = action.assetBundle?.screenshots ?? [];
-          const presentationBounds = getArtifactSurfaceBounds(objectsRef.current, artifactId, "presentation");
-          const fallbackWidth = args.workingVisibility === "compact" ? 1320 : 1580;
-          const fallbackCenter = canvasCenter();
-          const fallbackRect: Rect = presentationBounds
-            ? {
-                x: presentationBounds.x + presentationBounds.w + NORTHSTAR_SURFACE_GAP,
-                y: presentationBounds.y,
-                w: fallbackWidth,
-                h: 900,
-              }
-            : {
-                x: fallbackCenter.x - fallbackWidth / 2,
-                y: fallbackCenter.y - 450,
-                w: fallbackWidth,
-                h: 900,
-              };
-          const created = buildEditableResearchWorkspaceObjects({
-            artifactId,
-            title: args.title?.trim() || existingFrame?.semantic?.label || "North Star research workspace",
-            researchDigest: plan?.strategy,
-            notes,
-            apps: action.assetBundle?.apps ?? [],
-            flows: bundleFlows,
-            screenshots: bundleScreens,
-            rect: existingFrame
-              ? { x: existingFrame.x, y: existingFrame.y, w: existingFrame.w, h: existingFrame.h }
-              : fallbackRect,
-            visibility: args.workingVisibility ?? "visible",
-          });
-          mutateObjects((current) =>
-            replaceArtifactSurface(current, artifactId, "working", stableVisualBoardId([artifactId, "research-workspace"]), created),
-          );
-          resetTransientEditingState();
-          setSelection([]);
-          setAiHighlightedIds([]);
-          const ids = storeResult(created.map((object) => object.id));
+          const removedIds = objectsRef.current
+            .filter((object) => (!artifactId || object.semantic?.artifactId === artifactId) &&
+              (object.semantic?.surfaceKind === "working" || object.semantic?.role === "working-frame"))
+            .map((object) => object.id);
+          if (removedIds.length > 0) {
+            const removed = new Set(removedIds);
+            mutateObjects((current) => current.filter((object) => !removed.has(object.id)));
+          }
           return {
             ok: true,
-            detail: `${existingFrame ? "Updated" : "Recovered"} the research workspace with ${notes.length} deduplicated research notes and ${bundleFlows.length} grounded reference ${bundleFlows.length === 1 ? "flow" : "flows"}.`,
-            objectIds: ids,
-            targetLabel: "the North Star research workspace",
+            detail: removedIds.length > 0
+              ? `Removed ${removedIds.length} legacy parallel-workspace objects. Research remains inside the canonical artboard.`
+              : "Skipped the retired parallel research workspace. Research remains inside the canonical artboard.",
+            objectIds: [],
+            targetLabel: "the canonical artboard",
           };
         }
 
@@ -12526,8 +12656,10 @@ export function NorthStarCanvasWorkspace({
                   : object,
               ),
             );
-            resetTransientEditingState();
-            setSelection([codeArtifactObject.id]);
+            if (interactionMutationRequested) {
+              resetTransientEditingState();
+              setSelection([codeArtifactObject.id]);
+            }
             const ids = storeResult([codeArtifactObject.id]);
             const stage = updatedArtifact.stagePlan?.[updatedArtifact.activeStageIndex ?? 0];
             return {
@@ -12757,7 +12889,7 @@ export function NorthStarCanvasWorkspace({
 
         if (action.tool === "select_objects") {
           const ids = resolveIds();
-          const selected = ids.length > 0 ? setSelection(ids) : setSelection(runCreated);
+          const selected = ids.length > 0 ? setSelection(ids, { force: true }) : setSelection(runCreated, { force: true });
           if (selected.length === 0) throw new Error("North Star could not find those canvas objects.");
           return {
             ok: true,
@@ -14896,6 +15028,42 @@ export function NorthStarCanvasWorkspace({
                     });
                   }
                 }}
+                onArtifactLifecycleEvent={(event) => {
+                  const injectedLifecycleFault = consumeNorthstarFault("runtime.lifecycle.before_record");
+                  if (injectedLifecycleFault?.mode === "drop") return;
+                  if (injectedLifecycleFault?.mode === "throw") {
+                    recordCanvasDiagnostic({
+                      phase: "runtime",
+                      name: "fault.injected",
+                      detail: injectedLifecycleFault.reason ?? "A runtime lifecycle event was rejected by fault injection.",
+                      data: { point: injectedLifecycleFault.point, eventName: event.name },
+                    });
+                    return;
+                  }
+                  const runId = activeArtifactLifecycleRunId;
+                  if (!runId) return;
+                  const runEvents = artifactLifecycleByRunRef.current.get(runId) ?? new Map<string, NorthstarArtifactLifecycleEvent>();
+                  artifactLifecycleByRunRef.current.set(runId, runEvents);
+                  const key = event.name === "render.health"
+                    ? `${event.artifactId}:${event.revisionId}:render-health`
+                    : event.ackToken ?? `${event.artifactId}:${event.revisionId}`;
+                  runEvents.set(key, event);
+                  recordCanvasDiagnostic({
+                    phase: "runtime",
+                    name: event.name,
+                    runId,
+                    detail: event.detail,
+                    data: {
+                      artifactId: event.artifactId,
+                      revisionId: event.revisionId,
+                      browserRevisionId: event.browserRevisionId,
+                      ackToken: event.ackToken,
+                      proposalId: event.proposalId,
+                      mutationId: event.mutationId,
+                      renderHealth: event.renderHealth,
+                    },
+                  });
+                }}
                 onArtifactBrowserCommit={(commit) => {
                   const current = objectsRef.current;
                   const next = current.map((candidate) => {
@@ -15140,6 +15308,25 @@ export function NorthStarCanvasWorkspace({
         </div>
       </div>
 
+      <button
+        type="button"
+        onClick={() => setDiagnosticsOpen((current) => !current)}
+        className="absolute bottom-9 right-[188px] z-50 flex h-11 items-center gap-2 rounded-xl border border-white/60 bg-white/70 px-3 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/70 dark:text-zinc-200"
+        title="Canvas diagnostics (⌘⇧D)"
+      >
+        <Bug className="h-4 w-4" />
+        Diagnostics
+        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] dark:bg-zinc-800">{diagnosticEvents.length}</span>
+      </button>
+
+      {diagnosticsOpen && (
+        <CanvasDiagnosticsPanel
+          events={diagnosticEvents}
+          onClose={() => setDiagnosticsOpen(false)}
+          onClear={() => clearCanvasDiagnostics()}
+        />
+      )}
+
       <input
         ref={imageInputRef}
         type="file"
@@ -15158,6 +15345,7 @@ export function NorthStarCanvasWorkspace({
           {workspaceTab === "chat" && (
             <ChatWorkspacePanel
               sessionId={chatSessionIdRef.current}
+              recoveryKey={`${canonicalPersistenceKey}:active-run`}
               canvasContext={canvasContext}
               selectedCanvasContext={selectedCanvasContext}
               onReferenceHover={highlightAIReference}
@@ -15170,6 +15358,7 @@ export function NorthStarCanvasWorkspace({
               onInsertFlow={insertWorkspaceFlow}
               onExecuteCanvasAction={executeCanvasAIAction}
               onFinalizeCanvasActionRun={finalizeCanvasAIActionRun}
+              onVerifyCanonicalPersistence={verifyCanonicalPersistence}
             />
           )}
           {workspaceTab === "shapes" && (
@@ -16763,8 +16952,60 @@ function ChatAppExplorer({
 }
 
 
+const artifactLifecycleByRunRef = {
+  current: new Map<string, Map<string, NorthstarArtifactLifecycleEvent>>(),
+};
+
+let activeArtifactLifecycleRunId: string | null = null;
+
+type CanvasActionLifecycleSettlement =
+  | { kind: "acknowledged"; event: NorthstarArtifactLifecycleEvent }
+  | { kind: "rejected"; event: NorthstarArtifactLifecycleEvent }
+  | { kind: "timed_out"; event?: NorthstarArtifactLifecycleEvent }
+  | { kind: "cancelled" };
+
+function canvasActionLifecycleProposalId(action: CanvasAIActionRequest): string | null {
+  if (
+    action.tool !== "compose_visual_scene" &&
+    action.tool !== "compose_visual_board" &&
+    action.tool !== "compose_artifact"
+  ) {
+    return null;
+  }
+  const prefix = "live-artifact-";
+  return action.stepId.startsWith(prefix) ? action.stepId.slice(prefix.length) : null;
+}
+
+async function waitForCanvasActionLifecycleSettlement(
+  runId: string,
+  proposalId: string,
+  timeoutMs: number,
+): Promise<CanvasActionLifecycleSettlement> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (activeArtifactLifecycleRunId !== runId) return { kind: "cancelled" };
+    const event = [...(artifactLifecycleByRunRef.current.get(runId)?.values() ?? [])]
+      .filter((candidate) => candidate.proposalId === proposalId)
+      .sort((left, right) => right.timestamp - left.timestamp)
+      .find((candidate) =>
+        candidate.name === "revision.acknowledged" ||
+        candidate.name === "revision.rejected" ||
+        candidate.name === "revision.timed_out" ||
+        candidate.name === "ack.delivery_failed"
+      );
+    if (event?.name === "revision.acknowledged") return { kind: "acknowledged", event };
+    if (event?.name === "revision.rejected") return { kind: "rejected", event };
+    if (event?.name === "revision.timed_out" || event?.name === "ack.delivery_failed") {
+      return { kind: "timed_out", event };
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
+  }
+  return { kind: "timed_out" };
+}
+
 function ChatWorkspacePanel({
   sessionId,
+  recoveryKey,
   canvasContext,
   selectedCanvasContext,
   onReferenceHover,
@@ -16777,8 +17018,10 @@ function ChatWorkspacePanel({
   onInsertFlow,
   onExecuteCanvasAction,
   onFinalizeCanvasActionRun,
+  onVerifyCanonicalPersistence,
 }: {
   sessionId: string;
+  recoveryKey: string;
   canvasContext: CanvasContext;
   selectedCanvasContext: SelectedCanvasContext;
   onReferenceHover: (objectIds: string[]) => void;
@@ -16802,6 +17045,7 @@ function ChatWorkspacePanel({
     action: CanvasAIActionRequest
   ) => Promise<CanvasAIActionExecutionResult>;
   onFinalizeCanvasActionRun: (runId: string) => void;
+  onVerifyCanonicalPersistence: () => Promise<CanvasPersistenceHealth>;
 }) {
   const [messages, setMessages] = useState<CanvasAIChatMessage[]>([]);
   const [conversationSummary, setConversationSummary] = useState("");
@@ -16810,6 +17054,7 @@ function ChatWorkspacePanel({
   const [attachments, setAttachments] = useState<CanvasAIChatAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [recoverableRun, setRecoverableRun] = useState<PersistedCanvasRunRecovery | null>(null);
   const [explorerAppId, setExplorerAppId] = useState<string | null>(null);
   const [lightboxImage, setLightboxImage] = useState<ChatImageLightboxState | null>(null);
   const [contextMode, setContextMode] = useState<CanvasAIContextMode>(
@@ -16828,6 +17073,7 @@ function ChatWorkspacePanel({
   const activeRunIdRef = useRef<string | null>(null);
   const actionExecutionChainRef = useRef<Promise<void>>(Promise.resolve());
   const actionExecutionResultsRef = useRef<CanvasAIActionExecutionRecord[]>([]);
+  const actionOutcomeByIdempotencyKeyRef = useRef<Map<string, CanvasAIActionExecutionResult>>(new Map());
   const actionRequestCountRef = useRef(0);
   const actionFailureCountRef = useRef(0);
   const groundedDataResultCountRef = useRef(0);
@@ -16875,6 +17121,68 @@ function ChatWorkspacePanel({
   useEffect(() => {
     compositionCheckpointRef.current = compositionCheckpoint;
   }, [compositionCheckpoint]);
+
+  const persistRunRecovery = useCallback((next: PersistedCanvasRunRecovery | null) => {
+    try {
+      if (!next) {
+        window.localStorage.removeItem(recoveryKey);
+        setRecoverableRun(null);
+        return;
+      }
+      window.localStorage.setItem(recoveryKey, JSON.stringify(next));
+    } catch (error) {
+      recordCanvasDiagnostic({
+        phase: "persistence",
+        name: "run.recovery_persistence_failed",
+        runId: next?.runId,
+        detail: "The active run recovery journal could not be persisted.",
+        data: { reason: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }, [recoveryKey]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(recoveryKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<PersistedCanvasRunRecovery>;
+      const valid =
+        parsed.schema === "northstar.canvas-run-recovery.v1" &&
+        typeof parsed.prompt === "string" &&
+        typeof parsed.assistantMessageId === "string" &&
+        typeof parsed.startedAt === "number" &&
+        typeof parsed.updatedAt === "number" &&
+        Date.now() - parsed.updatedAt <= CANVAS_RUN_RECOVERY_MAX_AGE_MS;
+      if (!valid) {
+        window.localStorage.removeItem(recoveryKey);
+        return;
+      }
+      const recovered = {
+        ...parsed,
+        status: "interrupted",
+      } as PersistedCanvasRunRecovery;
+      setRecoverableRun(recovered);
+      if (recovered.checkpoint) {
+        compositionCheckpointRef.current = recovered.checkpoint;
+        setCompositionCheckpoint(recovered.checkpoint);
+      }
+      recordCanvasDiagnostic({
+        phase: "run",
+        name: "run.recovery_available",
+        runId: recovered.runId,
+        detail: "An interrupted run can resume from the last verified canvas and composition checkpoint.",
+        data: { startedAt: recovered.startedAt, updatedAt: recovered.updatedAt },
+      });
+    } catch (error) {
+      window.localStorage.removeItem(recoveryKey);
+      recordCanvasDiagnostic({
+        phase: "persistence",
+        name: "run.recovery_restore_failed",
+        detail: "The active run recovery journal was invalid and has been discarded.",
+        data: { reason: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }, [recoveryKey]);
 
   useEffect(() => {
     const storageKey = `northstar-chat:v67:${sessionId}`;
@@ -17151,10 +17459,33 @@ function ChatWorkspacePanel({
   const cancelRun = useCallback(() => {
     const assistantId = activeAssistantIdRef.current;
     const runId = activeRunIdRef.current;
+    if (runId) {
+      const diagnostics = getCanvasDiagnostics();
+      if (!diagnostics.some((event) => event.runId === runId && event.name === "run.cancel_requested")) {
+        recordCanvasDiagnostic({
+          phase: "run",
+          name: "run.cancel_requested",
+          runId,
+          detail: "The user requested cancellation of the active North Star run.",
+          data: { cancelled: true },
+        });
+      }
+      if (!diagnostics.some((event) => event.runId === runId && event.name === "run.cancelled")) {
+        recordCanvasDiagnostic({
+          phase: "run",
+          name: "run.cancelled",
+          runId,
+          detail: "The user stopped the run. Pending visual work was cancelled and the last verified artboard was preserved.",
+          data: { cancelled: true, source: "local-stop-control" },
+        });
+      }
+      persistRunRecovery(null);
+    }
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     activeAssistantIdRef.current = null;
     activeRunIdRef.current = null;
+    activeArtifactLifecycleRunId = null;
     if (runId) onFinalizeCanvasActionRun(runId);
     setLoading(false);
 
@@ -17175,7 +17506,7 @@ function ChatWorkspacePanel({
         };
       })
     );
-  }, [onFinalizeCanvasActionRun]);
+  }, [onFinalizeCanvasActionRun, persistRunRecovery]);
 
   const sendMessage = async (messageOverride?: string) => {
     const message = (messageOverride ?? input).trim();
@@ -17211,6 +17542,18 @@ function ChatWorkspacePanel({
       runStatus: "running",
       streaming: true,
     };
+
+    const recoveryJournal: PersistedCanvasRunRecovery = {
+      schema: "northstar.canvas-run-recovery.v1",
+      assistantMessageId,
+      prompt: modelMessage,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      status: "starting",
+      checkpoint: compositionCheckpointRef.current ?? undefined,
+    };
+    persistRunRecovery(recoveryJournal);
+    setRecoverableRun(null);
 
     const conversationHistory = messages
       .filter(
@@ -17307,6 +17650,7 @@ function ChatWorkspacePanel({
     activeRunIdRef.current = null;
     actionExecutionChainRef.current = Promise.resolve();
     actionExecutionResultsRef.current = [];
+    actionOutcomeByIdempotencyKeyRef.current.clear();
     actionRequestCountRef.current = 0;
     actionFailureCountRef.current = 0;
     groundedDataResultCountRef.current = 0;
@@ -17379,6 +17723,7 @@ function ChatWorkspacePanel({
       const decoder = new TextDecoder();
       let buffer = "";
       let receivedFinal = false;
+      let serverRunCompleted = false;
       let terminalBlockMessage: string | null = null;
 
       const handleStreamEvent = (eventName: string, data: unknown) => {
@@ -17388,6 +17733,13 @@ function ChatWorkspacePanel({
         if (eventName === "run.started") {
           const runId = typeof payload.runId === "string" ? payload.runId : undefined;
           activeRunIdRef.current = runId ?? null;
+          activeArtifactLifecycleRunId = activeRunIdRef.current;
+          persistRunRecovery({
+            ...recoveryJournal,
+            runId,
+            updatedAt: Date.now(),
+            status: "running",
+          });
           updateAssistantMessage({
             runId,
             runStatus: "running",
@@ -17409,6 +17761,13 @@ function ChatWorkspacePanel({
             compositionCheckpointRef.current = nextCheckpoint;
             setCompositionCheckpoint(nextCheckpoint);
             checkpointUpdatedThisRunRef.current = true;
+            persistRunRecovery({
+              ...recoveryJournal,
+              runId: activeRunIdRef.current ?? recoveryJournal.runId,
+              updatedAt: Date.now(),
+              status: "running",
+              checkpoint: nextCheckpoint,
+            });
           }
           return;
         }
@@ -17599,25 +17958,190 @@ function ChatWorkspacePanel({
                 "focus_objects",
               ]).has(action.tool);
               const blockedByCriticalFailure = Boolean(criticalFailure && isDownstreamPresentationAction);
-              const rawResult = blockedByCriticalFailure
-                ? {
-                    ok: false,
-                    detail: `Not run because “${criticalFailure?.label ?? "the required composition step"}” did not complete successfully. The last valid canvas state was preserved.`,
-                    objectIds: [],
-                  }
-                : await onExecuteCanvasAction(runId, action);
-              const requiresObjects = true;
-              const result: CanvasAIActionExecutionResult =
-                rawResult.ok &&
-                requiresObjects &&
-                rawResult.objectIds.length === 0
-                  ? {
+              const idempotencyKey = `${runId}:${action.actionId}`;
+              const priorOutcome = actionOutcomeByIdempotencyKeyRef.current.get(idempotencyKey);
+              let rawResult: CanvasAIActionExecutionResult;
+
+              if (priorOutcome) {
+                rawResult = {
+                  ...priorOutcome,
+                  ok: true,
+                  status: "superseded",
+                  reasonCode: "DUPLICATE_ACTION_SUPPRESSED",
+                  detail: "A duplicate canvas action was suppressed; the previously verified outcome was reused.",
+                };
+                recordCanvasDiagnostic({
+                  phase: "action",
+                  name: "action.duplicate_suppressed",
+                  runId,
+                  actionId: action.actionId,
+                  stepId: action.stepId,
+                  detail: rawResult.detail,
+                  data: { idempotencyKey, priorStatus: priorOutcome.status },
+                });
+              } else if (activeRunIdRef.current !== runId) {
+                rawResult = {
+                  ok: true,
+                  status: "superseded",
+                  reasonCode: "STALE_RUN_ACTION",
+                  detail: "The action belonged to a run that is no longer active and was not executed.",
+                  objectIds: [],
+                };
+              } else if (blockedByCriticalFailure) {
+                rawResult = {
+                  ok: false,
+                  status: "skipped",
+                  reasonCode: "BLOCKED_BY_CRITICAL_FAILURE",
+                  detail: `Not run because “${criticalFailure?.label ?? "the required composition step"}” did not complete successfully. The last valid canvas state was preserved.`,
+                  objectIds: [],
+                };
+              } else {
+                let attempt = 0;
+                while (true) {
+                  attempt += 1;
+                  try {
+                    const injectedActionFault = await applyNorthstarFault("action.before_execute");
+                    if (injectedActionFault === "drop") {
+                      rawResult = {
+                        ok: false,
+                        status: "timed_out",
+                        reasonCode: "INJECTED_ACTION_DROP",
+                        retrySafe: true,
+                        detail: "Fault injection dropped the action before execution.",
+                        objectIds: [],
+                      };
+                    } else {
+                      rawResult = await withCanvasActionTimeout(
+                        onExecuteCanvasAction(runId, action),
+                        CANVAS_ACTION_TIMEOUT_MS,
+                      );
+                    }
+                  } catch (error) {
+                    const timedOut = error instanceof Error && error.message === "CANVAS_ACTION_TIMEOUT";
+                    rawResult = {
                       ok: false,
+                      status: timedOut ? "timed_out" : "failed",
+                      reasonCode: timedOut ? "ACTION_EXECUTION_TIMEOUT" : "ACTION_EXECUTION_EXCEPTION",
+                      detail: timedOut
+                        ? `Canvas action exceeded ${CANVAS_ACTION_TIMEOUT_MS}ms and was terminated.`
+                        : error instanceof Error
+                          ? error.message
+                          : "Canvas action execution failed.",
+                      objectIds: [],
+                    };
+                  }
+
+                  const normalizedAttempt = normalizeCanvasAIActionOutcome(rawResult);
+                  const canRetry =
+                    normalizedAttempt.status === "failed" &&
+                    normalizedAttempt.retrySafe === true &&
+                    attempt < CANVAS_ACTION_MAX_ATTEMPTS &&
+                    activeRunIdRef.current === runId;
+                  if (!canRetry) break;
+
+                  recordCanvasDiagnostic({
+                    phase: "action",
+                    name: "action.retry_scheduled",
+                    runId,
+                    actionId: action.actionId,
+                    stepId: action.stepId,
+                    detail: `Retrying a retry-safe canvas action after attempt ${attempt}.`,
+                    data: { attempt, maxAttempts: CANVAS_ACTION_MAX_ATTEMPTS, reasonCode: normalizedAttempt.reasonCode },
+                  });
+                  await waitForCanvasActionRetry(attempt);
+                }
+              }
+
+              const lifecycleProposalId = canvasActionLifecycleProposalId(action);
+              if (
+                !priorOutcome &&
+                lifecycleProposalId &&
+                normalizeCanvasAIActionOutcome(rawResult).status === "succeeded"
+              ) {
+                const settlement = await waitForCanvasActionLifecycleSettlement(
+                  runId,
+                  lifecycleProposalId,
+                  CANVAS_ACTION_TIMEOUT_MS,
+                );
+                if (settlement.kind === "rejected") {
+                  rawResult = {
+                    ...rawResult,
+                    ok: false,
+                    status: "rejected",
+                    reasonCode: "RUNTIME_REVISION_REJECTED",
+                    retrySafe: false,
+                    detail: settlement.event.detail ?? "The artifact runtime rejected the proposed revision.",
+                  };
+                } else if (settlement.kind === "timed_out") {
+                  rawResult = {
+                    ...rawResult,
+                    ok: false,
+                    status: "timed_out",
+                    reasonCode: settlement.event?.name === "ack.delivery_failed"
+                      ? "RUNTIME_ACK_DELIVERY_FAILED"
+                      : "RUNTIME_SETTLEMENT_TIMEOUT",
+                    retrySafe: false,
+                    detail: settlement.event?.detail ??
+                      `The artifact runtime did not settle proposal ${lifecycleProposalId} within ${CANVAS_ACTION_TIMEOUT_MS}ms.`,
+                  };
+                } else if (settlement.kind === "cancelled") {
+                  rawResult = {
+                    ...rawResult,
+                    ok: true,
+                    status: "superseded",
+                    reasonCode: "RUN_CANCELLED_DURING_RUNTIME_SETTLEMENT",
+                    retrySafe: false,
+                    detail: "The run was cancelled before the artifact runtime settled this proposal.",
+                  };
+                }
+              }
+
+              if (
+                action.stepId.startsWith("restore-verified-artboard-") &&
+                normalizeCanvasAIActionOutcome(rawResult).status === "succeeded"
+              ) {
+                rawResult = {
+                  ...rawResult,
+                  ok: true,
+                  status: "superseded",
+                  reasonCode: "VERIFIED_STATE_RESTORED",
+                  retrySafe: false,
+                  detail: "The last verified artboard was restored. The rejected semantic obligation remains unresolved.",
+                };
+              }
+
+              const normalizedResult = normalizeCanvasAIActionOutcome(rawResult);
+              if (!priorOutcome) {
+                actionOutcomeByIdempotencyKeyRef.current.set(idempotencyKey, normalizedResult);
+              }
+              const requiresObjects = normalizedResult.status === "succeeded";
+              const result: CanvasAIActionExecutionResult & { status: CanvasAIActionOutcomeStatus } =
+                requiresObjects && normalizedResult.objectIds.length === 0
+                  ? {
+                      ...normalizedResult,
+                      ok: false,
+                      status: "failed",
+                      reasonCode: "NO_VERIFIABLE_CANVAS_OBJECTS",
                       detail:
                         "The canvas action returned no verifiable canvas objects.",
                       objectIds: [],
                     }
-                  : rawResult;
+                  : normalizedResult;
+
+              recordCanvasDiagnostic({
+                phase: "action",
+                name: "action.outcome",
+                runId,
+                actionId: action.actionId,
+                stepId: action.stepId,
+                detail: result.detail,
+                data: {
+                  tool: action.tool,
+                  status: result.status,
+                  reasonCode: result.reasonCode,
+                  objectIds: result.objectIds,
+                },
+              });
 
               actionExecutionResultsRef.current.push({
                 ...result,
@@ -17628,19 +18152,19 @@ function ChatWorkspacePanel({
                 asset: action.asset,
               });
 
-              if (result.ok) {
+              if (!isCanvasAIActionHardFailure(result)) {
                 updateStep(action.stepId, {
-                  status: "completed",
+                  status: result.status === "succeeded" ? "completed" : "cancelled",
                   detail: result.detail,
                   objectIds: result.objectIds,
                 });
               } else {
-                if (!blockedByCriticalFailure && !failedActionStepIdsRef.current.has(action.stepId)) {
+                if (!failedActionStepIdsRef.current.has(action.stepId)) {
                   failedActionStepIdsRef.current.add(action.stepId);
                   actionFailureCountRef.current += 1;
                 }
                 updateStep(action.stepId, {
-                  status: blockedByCriticalFailure ? "cancelled" : "failed",
+                  status: "failed",
                   icon: "warning",
                   detail: result.detail,
                   objectIds: result.objectIds,
@@ -17700,6 +18224,7 @@ function ChatWorkspacePanel({
         }
 
         if (eventName === "run.completed") {
+          serverRunCompleted = true;
           if (actionRequestCountRef.current === 0) {
             updateAssistantMessage({
               runStatus: "completed",
@@ -17710,6 +18235,21 @@ function ChatWorkspacePanel({
         }
 
         if (eventName === "run.cancelled") {
+          const cancelledRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          if (cancelledRunId) {
+            const existingTerminal = getCanvasDiagnostics().some(
+              (event) => event.runId === cancelledRunId && event.name === "run.cancelled",
+            );
+            if (!existingTerminal) {
+              recordCanvasDiagnostic({
+                phase: "run",
+                name: "run.cancelled",
+                runId: cancelledRunId,
+                detail: "The user stopped the run. Pending visual work was cancelled and the last verified artboard was preserved.",
+                data: { cancelled: true },
+              });
+            }
+          }
           updateAssistantMessage((current) => ({
             content: current.content || "North Star stopped this run.",
             runStatus: "cancelled",
@@ -17805,9 +18345,16 @@ function ChatWorkspacePanel({
               record.tool === "compose_artifact"),
         );
         const hardFailureCount = actionExecutionResultsRef.current.filter(
-          (record) => !record.ok && (!hasCompletedScene || !recoverableTools.has(record.tool)),
+          (record) =>
+            isCanvasAIActionHardFailure(record) &&
+            (!hasCompletedScene || !recoverableTools.has(record.tool)),
         ).length;
-        const failed = hardFailureCount > 0;
+        const unresolvedVisualRejection = actionExecutionResultsRef.current.some(
+          (record) =>
+            record.tool === "compose_visual_scene" &&
+            normalizeCanvasAIActionOutcome(record).status === "rejected",
+        );
+        const failed = hardFailureCount > 0 || unresolvedVisualRejection;
         updateAssistantMessage({
           content: buildCanvasAIActionOutcomeMessage(
             actionExecutionResultsRef.current,
@@ -17829,11 +18376,163 @@ function ChatWorkspacePanel({
         }
       }
 
+      const completedRunId = activeRunIdRef.current;
+      if (completedRunId && !controller.signal.aborted && !terminalBlockMessage) {
+        const outcomes = actionExecutionResultsRef.current.map((record) => ({
+          ...normalizeCanvasAIActionOutcome(record),
+          tool: record.tool,
+        }));
+        const hardFailures = outcomes.filter(isCanvasAIActionHardFailure);
+        const lifecycleEvents = [...(artifactLifecycleByRunRef.current.get(completedRunId)?.values() ?? [])];
+        const unresolvedAcknowledgements = lifecycleEvents.filter((event) =>
+          event.name === "revision.sent" || event.name === "revision.received" || event.name === "ack.delivery_failed",
+        );
+        const acknowledgementFailures = lifecycleEvents.filter((event) =>
+          event.name === "revision.timed_out" || event.name === "ack.delivery_failed",
+        );
+        const revisionRejections = lifecycleEvents.filter((event) =>
+          event.name === "revision.rejected",
+        );
+        const revisionParityFailures = lifecycleEvents.filter((event) =>
+          event.name === "revision.acknowledged"
+          && Boolean(event.browserRevisionId)
+          && event.browserRevisionId !== event.revisionId,
+        );
+        const acknowledgedRevisionKeys = new Set(
+          lifecycleEvents
+            .filter((event) => event.name === "revision.acknowledged")
+            .map((event) => `${event.artifactId}:${event.revisionId}`),
+        );
+        const renderHealthEvents = lifecycleEvents.filter((event) => event.name === "render.health");
+        const latestRenderHealthByRevision = new Map<string, NorthstarArtifactLifecycleEvent>();
+        for (const event of renderHealthEvents) {
+          latestRenderHealthByRevision.set(`${event.artifactId}:${event.revisionId}`, event);
+        }
+        const operationallyHealthyRenderRevisionKeys = new Set(
+          [...latestRenderHealthByRevision.entries()]
+            .filter(([, event]) => event.renderHealth?.operationallyHealthy === true || event.renderHealth?.healthy === true)
+            .map(([revisionKey]) => revisionKey),
+        );
+        const fatalRenderHealthFailures = [...latestRenderHealthByRevision.values()].filter((event) =>
+          event.renderHealth?.severity === "fatal"
+          || (event.renderHealth?.operationallyHealthy === false)
+        );
+        const renderHealthWarnings = [...latestRenderHealthByRevision.values()].filter((event) =>
+          event.renderHealth?.severity === "warning"
+        );
+        const missingRenderHealthRevisions = [...acknowledgedRevisionKeys].filter(
+          (revisionKey) => !operationallyHealthyRenderRevisionKeys.has(revisionKey),
+        );
+        const persistenceHealth = await onVerifyCanonicalPersistence();
+        const successfulVisualOutcomes = outcomes.filter(
+          (outcome) =>
+            outcome.status === "succeeded" &&
+            (outcome.tool === "compose_visual_scene" ||
+              outcome.tool === "compose_visual_board" ||
+              outcome.tool === "compose_artifact"),
+        );
+        const rejectedVisualOutcomes = outcomes.filter(
+          (outcome) =>
+            outcome.status === "rejected" &&
+            (outcome.tool === "compose_visual_scene" ||
+              outcome.tool === "compose_visual_board" ||
+              outcome.tool === "compose_artifact"),
+        );
+        const finalEditableCompositionExists = successfulVisualOutcomes.length > 0;
+        const deliverableHealthy =
+          finalEditableCompositionExists &&
+          rejectedVisualOutcomes.length === 0 &&
+          revisionRejections.length === 0;
+        const healthy =
+          receivedFinal &&
+          serverRunCompleted &&
+          hardFailures.length === 0 &&
+          outcomes.length === actionRequestCountRef.current &&
+          unresolvedAcknowledgements.length === 0 &&
+          acknowledgementFailures.length === 0 &&
+          revisionParityFailures.length === 0 &&
+          fatalRenderHealthFailures.length === 0 &&
+          missingRenderHealthRevisions.length === 0 &&
+          persistenceHealth.healthy &&
+          deliverableHealthy;
+        recordCanvasDiagnostic({
+          phase: "run",
+          name: healthy ? "run.completed" : "run.incomplete",
+          runId: completedRunId,
+          detail: healthy
+            ? "The server stream and all requested client canvas actions reached terminal healthy outcomes."
+            : "The run ended without satisfying the complete end-to-end health contract.",
+          data: {
+            healthy,
+            receivedFinal,
+            serverRunCompleted,
+            requestedActionCount: actionRequestCountRef.current,
+            terminalActionCount: outcomes.length,
+            hardFailureCount: hardFailures.length,
+            unresolvedAcknowledgementCount: unresolvedAcknowledgements.length,
+            acknowledgementFailureCount: acknowledgementFailures.length,
+            revisionRejectionCount: revisionRejections.length,
+            rejectedVisualOutcomeCount: rejectedVisualOutcomes.length,
+            finalEditableCompositionExists,
+            pipelineSettled: outcomes.length === actionRequestCountRef.current && unresolvedAcknowledgements.length === 0,
+            deliverableHealthy,
+            revisionParityFailureCount: revisionParityFailures.length,
+            renderHealthFailureCount: fatalRenderHealthFailures.length,
+            renderHealthWarningCount: renderHealthWarnings.length,
+            missingRenderHealthRevisionCount: missingRenderHealthRevisions.length,
+            missingRenderHealthRevisions,
+            lifecycleEventCount: lifecycleEvents.length,
+            outcomeCounts: outcomes.reduce<Record<string, number>>((counts, outcome) => {
+              counts[outcome.status] = (counts[outcome.status] ?? 0) + 1;
+              return counts;
+            }, {}),
+          },
+        });
+        if (healthy) {
+          persistRunRecovery(null);
+        } else {
+          persistRunRecovery({
+            ...recoveryJournal,
+            runId: completedRunId,
+            updatedAt: Date.now(),
+            status: "interrupted",
+            checkpoint: compositionCheckpointRef.current ?? recoveryJournal.checkpoint,
+          });
+        }
+      }
+
       if (!receivedFinal && !controller.signal.aborted) {
         throw new Error("North Star's streamed response ended before completion.");
       }
     } catch (error) {
-      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+      const wasCancelled = controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+      if (wasCancelled) {
+        persistRunRecovery(null);
+      } else {
+        persistRunRecovery({
+          ...recoveryJournal,
+          runId: activeRunIdRef.current ?? recoveryJournal.runId,
+          updatedAt: Date.now(),
+          status: "interrupted",
+          checkpoint: compositionCheckpointRef.current ?? recoveryJournal.checkpoint,
+        });
+      }
+      if (wasCancelled) {
+        const cancelledRunId = activeRunIdRef.current;
+        if (cancelledRunId) {
+          const existingTerminal = getCanvasDiagnostics().some(
+            (event) => event.runId === cancelledRunId && event.name === "run.cancelled",
+          );
+          if (!existingTerminal) {
+            recordCanvasDiagnostic({
+              phase: "run",
+              name: "run.cancelled",
+              runId: cancelledRunId,
+              detail: "The user stopped the run. Pending visual work was cancelled and the last verified artboard was preserved.",
+              data: { cancelled: true },
+            });
+          }
+        }
         updateAssistantMessage((current) => ({
           content: current.content || "North Star stopped this run.",
           runStatus: "cancelled",
@@ -17874,6 +18573,34 @@ function ChatWorkspacePanel({
       setLoading(false);
     }
   };
+
+  const resumeInterruptedRun = useCallback(() => {
+    if (!recoverableRun || loading) return;
+    const prompt = recoverableRun.prompt;
+    if (recoverableRun.checkpoint) {
+      compositionCheckpointRef.current = recoverableRun.checkpoint;
+      setCompositionCheckpoint(recoverableRun.checkpoint);
+    }
+    recordCanvasDiagnostic({
+      phase: "run",
+      name: "run.recovery_resumed",
+      runId: recoverableRun.runId,
+      detail: "The interrupted run was resumed from the last verified canvas state.",
+    });
+    setRecoverableRun(null);
+    void sendMessage(prompt);
+  }, [loading, recoverableRun]);
+
+  const discardInterruptedRun = useCallback(() => {
+    const runId = recoverableRun?.runId;
+    persistRunRecovery(null);
+    recordCanvasDiagnostic({
+      phase: "run",
+      name: "run.recovery_discarded",
+      runId,
+      detail: "The interrupted run recovery journal was discarded while preserving the verified canvas snapshot.",
+    });
+  }, [persistRunRecovery, recoverableRun?.runId]);
 
   const starterPrompts = hasSelection
     ? [
@@ -18130,6 +18857,18 @@ function ChatWorkspacePanel({
       </div>
 
       <div className="shrink-0 border-t border-black/5 pt-3 dark:border-white/10">
+        {recoverableRun && !loading && (
+          <div className="mb-3 border border-amber-300/60 bg-amber-50/85 p-3 text-amber-950 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-100">
+            <p className="text-[11px] font-[850]">Interrupted run available</p>
+            <p className="mt-1 text-[10px] leading-[15px] opacity-75">
+              Resume from the last verified artboard and composition checkpoint, or discard the run journal without changing the canvas.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button type="button" onClick={resumeInterruptedRun} className="bg-amber-950 px-3 py-1.5 text-[10px] font-[850] text-white dark:bg-amber-200 dark:text-amber-950">Resume</button>
+              <button type="button" onClick={discardInterruptedRun} className="px-3 py-1.5 text-[10px] font-[800] opacity-70 hover:opacity-100">Discard</button>
+            </div>
+          </div>
+        )}
         <input
           ref={chatFileInputRef}
           type="file"
@@ -19266,6 +20005,7 @@ function CanvasBoxObjectViewImpl({
   onArtifactRuntimeReview,
   onArtifactContentSize,
   onArtifactBrowserCommit,
+  onArtifactLifecycleEvent,
   onArtifactWheel,
   onResizeStart,
   onFreeformPointStart,
@@ -19292,6 +20032,7 @@ function CanvasBoxObjectViewImpl({
   onArtifactRuntimeReview: (review: CanvasCodeArtifactRuntimeReview) => void;
   onArtifactContentSize: (size: CanvasCodeArtifactContentSize) => void;
   onArtifactBrowserCommit: (commit: NorthstarBrowserCommit) => void;
+  onArtifactLifecycleEvent: (event: NorthstarArtifactLifecycleEvent) => void;
   onArtifactWheel: (input: {
     clientX: number;
     clientY: number;
@@ -19418,6 +20159,7 @@ function CanvasBoxObjectViewImpl({
             onRuntimeReview={onArtifactRuntimeReview}
             onContentSize={onArtifactContentSize}
             onBrowserCommit={onArtifactBrowserCommit}
+            onLifecycleEvent={onArtifactLifecycleEvent}
             onCanvasWheel={onArtifactWheel}
           />
         )}
@@ -22340,6 +23082,159 @@ function CanvasDiamondIcon() {
     <svg className="h-7 w-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
       <path d="M16 4.8L27.2 16L16 27.2L4.8 16L16 4.8Z" stroke="currentColor" strokeWidth="2.1" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+function CanvasDiagnosticsPanel({
+  events,
+  onClose,
+  onClear,
+}: {
+  events: CanvasDiagnosticEvent[];
+  onClose: () => void;
+  onClear: () => void;
+}) {
+  const [selectedRunId, setSelectedRunId] = useState<string>("all");
+  const [phaseFilter, setPhaseFilter] = useState<string>("all");
+  const [onlyProblems, setOnlyProblems] = useState(false);
+
+  const download = () => {
+    const blob = new Blob([exportCanvasDiagnostics()], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `northstar-canvas-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const runIds = useMemo(
+    () => Array.from(new Set(events.map((event) => event.runId).filter((value): value is string => Boolean(value)))).reverse(),
+    [events],
+  );
+
+  const isProblemEvent = (event: CanvasDiagnosticEvent) => {
+    const haystack = `${event.phase} ${event.name} ${event.detail ?? ""}`.toLowerCase();
+    const status = typeof event.data?.status === "string" ? event.data.status.toLowerCase() : "";
+    const healthy = event.data?.healthy;
+    return (
+      event.phase === "error" ||
+      healthy === false ||
+      ["failed", "timed_out", "rejected", "incomplete", "mismatch"].includes(status) ||
+      /failed|timed_out|timeout|rejected|incomplete|mismatch|unhealthy|missing|stale/.test(haystack)
+    );
+  };
+
+  const visibleEvents = useMemo(
+    () => events.filter((event) => {
+      if (selectedRunId !== "all" && event.runId !== selectedRunId) return false;
+      if (phaseFilter !== "all" && event.phase !== phaseFilter) return false;
+      if (onlyProblems && !isProblemEvent(event)) return false;
+      return true;
+    }),
+    [events, selectedRunId, phaseFilter, onlyProblems],
+  );
+
+  const summary = useMemo(() => {
+    const scoped = selectedRunId === "all" ? events : events.filter((event) => event.runId === selectedRunId);
+    const started = scoped.find((event) => event.name === "run.started");
+    const terminal = [...scoped].reverse().find((event) => event.name === "run.completed" || event.name === "run.incomplete");
+    const firstTime = started?.timestamp ?? scoped[0]?.timestamp;
+    const lastTime = terminal?.timestamp ?? scoped[scoped.length - 1]?.timestamp;
+    const durationMs = firstTime && lastTime ? Math.max(0, Date.parse(lastTime) - Date.parse(firstTime)) : null;
+    const problems = scoped.filter(isProblemEvent);
+    const outcomeEvents = scoped.filter((event) => event.name === "action.outcome");
+    const hardFailures = outcomeEvents.filter((event) => {
+      const status = event.data?.status;
+      return status === "failed" || status === "timed_out";
+    });
+    const pendingAcks = terminal && typeof terminal.data?.unresolvedAcknowledgementCount === "number"
+      ? terminal.data.unresolvedAcknowledgementCount
+      : null;
+    const health = terminal?.name === "run.completed" ? "healthy" : terminal?.name === "run.incomplete" ? "incomplete" : scoped.length ? "running" : "idle";
+    return { scoped, durationMs, problems, hardFailures, pendingAcks, health };
+  }, [events, selectedRunId]);
+
+  const phases = useMemo(
+    () => Array.from(new Set(events.map((event) => event.phase))).sort(),
+    [events],
+  );
+
+  const telemetry = useMemo(() => getCanvasRunTelemetry(events), [events]);
+
+  return (
+    <aside className="absolute bottom-24 right-8 top-24 z-[90] flex w-[560px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-950/95">
+      <header className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-bold text-zinc-950 dark:text-white">Canvas diagnostics</div>
+            <div className="text-[11px] text-zinc-500">Run health, lifecycle timing, and exact event trace</div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={download} className="rounded-lg p-2 hover:bg-zinc-100 dark:hover:bg-zinc-900" title="Export JSON"><Download className="h-4 w-4" /></button>
+            <button onClick={onClear} className="rounded-lg p-2 hover:bg-zinc-100 dark:hover:bg-zinc-900" title="Clear"><Trash2 className="h-4 w-4" /></button>
+            <button onClick={onClose} className="rounded-lg p-2 hover:bg-zinc-100 dark:hover:bg-zinc-900" title="Close"><X className="h-4 w-4" /></button>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-4 gap-2 text-[10px]">
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-zinc-400">Health</div>
+            <div className={cn("font-bold", summary.health === "healthy" ? "text-emerald-600" : summary.health === "incomplete" ? "text-red-600" : "text-amber-600")}>{summary.health}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-zinc-400">Duration</div>
+            <div className="font-bold text-zinc-800 dark:text-zinc-100">{summary.durationMs === null ? "—" : `${(summary.durationMs / 1000).toFixed(1)}s`}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-zinc-400">Problems</div>
+            <div className={cn("font-bold", summary.problems.length ? "text-red-600" : "text-emerald-600")}>{summary.problems.length}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-zinc-400">Pending acks</div>
+            <div className="font-bold text-zinc-800 dark:text-zinc-100">{summary.pendingAcks ?? "—"}</div>
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"><div className="text-zinc-400">Runs</div><div className="font-bold">{telemetry.totalRuns}</div></div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"><div className="text-zinc-400">Completion</div><div className="font-bold">{telemetry.completionRate === null ? "—" : `${Math.round(telemetry.completionRate * 100)}%`}</div></div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"><div className="text-zinc-400">p95 duration</div><div className="font-bold">{telemetry.durationMs.p95 === null ? "—" : `${(telemetry.durationMs.p95 / 1000).toFixed(1)}s`}</div></div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"><div className="text-zinc-400">Unhealthy runs</div><div className="font-bold">{telemetry.incompleteRuns}</div></div>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <select value={selectedRunId} onChange={(event) => setSelectedRunId(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-[11px] dark:border-zinc-800 dark:bg-zinc-950">
+            <option value="all">All runs</option>
+            {runIds.map((runId) => <option key={runId} value={runId}>{runId}</option>)}
+          </select>
+          <select value={phaseFilter} onChange={(event) => setPhaseFilter(event.target.value)} className="rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-[11px] dark:border-zinc-800 dark:bg-zinc-950">
+            <option value="all">All phases</option>
+            {phases.map((phase) => <option key={phase} value={phase}>{phase}</option>)}
+          </select>
+          <button onClick={() => setOnlyProblems((value) => !value)} className={cn("rounded-lg border px-2 py-1.5 text-[11px] font-semibold", onlyProblems ? "border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300" : "border-zinc-200 text-zinc-600 dark:border-zinc-800 dark:text-zinc-300")}>Problems only</button>
+        </div>
+      </header>
+      <div className="flex-1 overflow-auto p-3 font-mono text-[11px]">
+        {visibleEvents.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-zinc-300 p-4 text-zinc-500 dark:border-zinc-700">No diagnostic events match the current filters.</div>
+        ) : [...visibleEvents].reverse().map((event) => {
+          const problem = isProblemEvent(event);
+          return (
+            <details key={event.id} className={cn("mb-2 rounded-xl border p-2", problem ? "border-red-200 bg-red-50/70 dark:border-red-900 dark:bg-red-950/20" : "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/70")}>
+              <summary className="cursor-pointer list-none">
+                <div className="flex items-center justify-between gap-3">
+                  <span className={cn("font-semibold", problem ? "text-red-700 dark:text-red-300" : "text-zinc-900 dark:text-zinc-100")}>{event.name}</span>
+                  <span className="text-[10px] text-zinc-400">{event.timestamp.slice(11, 23)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-2 text-zinc-500">
+                  <span>{event.phase}{event.detail ? ` · ${event.detail}` : ""}</span>
+                  {event.stepId ? <span className="max-w-[190px] truncate text-[9px]">{event.stepId}</span> : null}
+                </div>
+              </summary>
+              <pre className="mt-2 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 text-[10px] text-zinc-700 dark:bg-black dark:text-zinc-300">{JSON.stringify({ runId: event.runId, actionId: event.actionId, stepId: event.stepId, ...(event.data ?? {}) }, null, 2)}</pre>
+            </details>
+          );
+        })}
+      </div>
+    </aside>
   );
 }
 

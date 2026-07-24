@@ -16,6 +16,11 @@ import {
   type NorthStarToolResultView,
 } from "@/lib/canvas-ai/northstar-tool-registry";
 import {
+  NORTHSTAR_CANVAS_CAPABILITIES,
+  normalizeNorthstarCapabilityStep,
+  validateNorthstarCapabilityPlan,
+} from "@/lib/canvas-ai/northstar-capabilities";
+import {
   getNorthstarArtifactSourceDiagnostics,
   createNorthstarWorkingArtifactPackage,
   createNorthstarWorkingMutationPackage,
@@ -1279,7 +1284,7 @@ Non-negotiable classifications:
 - A request to build a complete comparison, journey map, analysis board, strategy board, product concept, research wall, roadmap, systems map, presentation-ready visual, or other multi-part canvas solution is a compose action. The composer may supply a Low, Medium, or High thinking-depth preference; treat that preference as the execution budget. Only infer depth from wording when no explicit preference is supplied.
 - When the selection contains a generated code artifact and the user asks to rethink, revise, restyle, simplify, intensify, make more provocative, change emphasis, explore a different direction, or otherwise creatively alter it, classify the request as a compose action targeted at the selection. This means revise the same artifact rather than editing primitive children or creating a second board.
 - North Star is a general business problem-solving environment, not an executive-summary generator. The model chooses the most useful visual deliverable for the objective and audience. Executive summaries, matrices, charts, timelines, maps, storyboards, recommendations, and evidence lanes are optional vocabularyâ€”not a mandatory template.
-- Compose work creates or updates one live artifact immediately. Research and proof remain inspectable inside that artifact; do not create a separate working surface unless the user explicitly asks for a scratchpad.
+- Compose work creates or updates one canonical live artifact immediately. Research and proof remain inspectable inside that artifact. Never create a parallel research workspace or working surface; even scratchpad-style material must be represented inside the canonical artifact or kept in diagnostics.
 - Existing objects may be described semantically (for example, "the circle", "the named-app screenshot", "these two", or "the last thing added"). Capture those references in targetQuery, or in fromQuery/toQuery for connector endpoints.
 - targetQuery, fromQuery, and toQuery must be concise human noun phrases such as "the circle" or "the named-app screenshot". Never copy the full user command into a target field.
 - If activeCompositionCheckpoint describes an unfinished run and the user asks to continue, resume, finish, or proceed with that work, set resumeActiveRun true and classify the outcome as compose. Preserve the checkpoint objective unless the user clearly redirects it.
@@ -1430,7 +1435,7 @@ Decide whether the current evidence is sufficient to support a high-quality solu
 
 When evidence is incomplete, request a small number of precise additional searches. Do not request more research merely to appear thorough. When evidence is sufficient, say so and consolidate supported, challenged, and rejected hypotheses.
 
-Also design an organized working-surface plan from the actual research structure. The plan must keep evidence easy to follow as it grows, but must not use a fixed template. Choose regions, spatial relationships, evidence groupings, and layouts that fit this exact objective, apps, flows, questions, and discoveries. Keep ordered screens from the same flow together, separate onboarding from browsing unless the research explicitly justifies mixing them, and reserve space for hypotheses, corrections, decisions, and rejected evidence when useful.
+Keep research state internal to the run. Do not create, request, or plan a separate working surface, research workspace, scratchpad, or parallel canvas artifact. Research may inform the single canonical artboard only.
 
 Return only the required JSON.
 `.trim();
@@ -1484,7 +1489,7 @@ Rules:
 17. Use a stable artifactId beginning with "artifact-".
 18. Treat the solution and research trail as one unified code artifact. Do not plan a second floating working surface.
 19. Record research changes only when new evidence, a changed hypothesis, a correction, or a decision materially changes the story. Never emit duplicate checkpoint writes.
-20. Use section kind "reference-flow" when an ordered captured flow is central to the explanation. Give it appName, flowName, every ordered evidence ID that belongs to that flow, and evidenceLayout "filmstrip". The renderer will show complete screenshots directly, without generic screenshot cards or permanent captions.
+20. Use section kind "reference-flow" when an ordered captured flow is central to the explanation. Give it appName, flowName, every ordered evidence ID that belongs to that flow, and evidenceLayout "filmstrip". Ordered flow screenshots must always remain a single horizontal, non-wrapping sequence. Never convert an ordered flow to a column, vertical lane, wrapped grid, or stacked sequence. The renderer will show complete screenshots directly, without generic screenshot cards or permanent captions.
 21. Use "matrix" or "table" only when row-by-row comparison materially clarifies the decision. Encode each criteria row as pipe-delimited cells, for example "Dimension | App A | App B". Do not force a table into unrelated work.
 22. Use "chart" only for observed or supplied values. For qualitative screenshot evidence, use observed stage distribution rather than invented conversion rates.
 23. Research and final communication evolve inside one artifact. Distill the research as understanding improves; do not switch into a separate fixed dashboard template.
@@ -1499,7 +1504,7 @@ You are writing the final user-facing response from the ACTUAL canonical Canvas 
 NON-NEGOTIABLE STATE GROUNDING
 - Never use a canned artifact-completion sentence or a hardcoded product/title phrase.
 - Read canonicalArtifactState from the final context.
-- Use the actual artifact title, publication state, visible thesis, and working-surface status.
+- Use the actual artifact title, publication state, and visible thesis from the single canonical artboard.
 - If publicationState is not verified, explicitly say the artboard remains in progress and do not claim completion.
 - Do not claim a move, relationship, synthesis, or visual form that the canonical state does not contain.
 - Keep the wording natural and model-authored; deterministic state constrains facts, not prose.
@@ -3797,8 +3802,6 @@ async function buildCanvasActionRequest({
   }
 
   if (
-    step.tool === "create_working_surface" ||
-    step.tool === "update_working_surface" ||
     step.tool === "compose_artifact" ||
     step.tool === "compose_visual_board" ||
     step.tool === "compose_visual_scene" ||
@@ -5277,6 +5280,31 @@ function enforceSemanticIntentPlan(
   return recovery;
 }
 
+function enforceCapabilityManifest(planner: PlannerResponse): PlannerResponse {
+  const violations = validateNorthstarCapabilityPlan(planner.steps);
+  if (violations.length === 0) return planner;
+
+  const steps = planner.steps
+    .map((step) => normalizeNorthstarCapabilityStep(step))
+    .filter((step): step is PlannerStep => step !== null);
+
+  if (planner.mode === "agent" && steps.length === 0) {
+    const summary = violations
+      .map((violation) => `${violation.stepId}:${violation.code}`)
+      .join(", ");
+    throw new Error(
+      `North Star rejected a plan that violated the active canvas capability contract (${summary}). Nothing was changed.`,
+    );
+  }
+
+  const remainingViolations = validateNorthstarCapabilityPlan(steps);
+  if (remainingViolations.length > 0) {
+    throw new Error("North Star could not repair a plan to the active canvas capability contract. Nothing was changed.");
+  }
+
+  return { ...planner, steps };
+}
+
 function sanitizePlanner(
   value: PlannerResponse,
   validObjectIds: Set<string>,
@@ -5710,11 +5738,14 @@ function sanitizeCompositionBlueprint(
         y,
         w,
         h,
-        evidenceLayout: evidenceLayouts.includes(region.evidenceLayout)
-          ? region.evidenceLayout
-          : "grid",
-        columns:
-          typeof region.columns === "number" && Number.isFinite(region.columns)
+        evidenceLayout: sections.find((section) => section.id === sectionId)?.kind === "reference-flow"
+          ? "filmstrip"
+          : evidenceLayouts.includes(region.evidenceLayout)
+            ? region.evidenceLayout
+            : "grid",
+        columns: sections.find((section) => section.id === sectionId)?.kind === "reference-flow"
+          ? Math.max(1, Math.min(24, sections.find((section) => section.id === sectionId)?.evidenceIds.length ?? 1))
+          : typeof region.columns === "number" && Number.isFinite(region.columns)
             ? Math.max(1, Math.min(6, Math.round(region.columns)))
             : undefined,
         emphasis:
@@ -6253,12 +6284,37 @@ function prepareNorthstarAcknowledgementWithReconciliation(input: {
   return { ready: prepared.ready, result };
 }
 
+function normalizeNorthstarRejectionFamily(reasonValue: unknown): string {
+  const reason = String(reasonValue ?? "").toLowerCase();
+  if (/flow_topology_violation|vertical or wrapped sequence|must remain a single horizontal/i.test(reason)) {
+    return "flow-topology";
+  }
+  if (/did not visibly change enough semantic content/i.test(reason)) return "insufficient-semantic-change";
+  if (/whole-artboard utilization failed|occupied only a thin strip/i.test(reason)) return "whole-artboard-utilization";
+  if (/protected evidence screenshot/i.test(reason)) return "protected-evidence-overlap";
+  if (/unsafe edge-weighted|mostly empty layout/i.test(reason)) return "unsafe-layout-collapse";
+  if (/duplicate semantic node id/i.test(reason)) return "duplicate-semantic-node";
+  return reason
+    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
+    .replace(/artifact-[a-z0-9-]+/g, "artifact-#")
+    .replace(/fallback-[a-z0-9_-]+/g, "fallback-#")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180) || "browser-rejected";
+}
+
 function isExpectedNorthstarQualityRejection(
   acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined,
 ): boolean {
   if (acknowledgement?.status !== "rejected") return false;
-  const reason = acknowledgement.reason || "";
-  return /duplicate semantic node id/i.test(reason);
+  return new Set([
+    "flow-topology",
+    "insufficient-semantic-change",
+    "whole-artboard-utilization",
+    "protected-evidence-overlap",
+    "unsafe-layout-collapse",
+    "duplicate-semantic-node",
+  ]).has(normalizeNorthstarRejectionFamily(acknowledgement.reason));
 }
 
 function captureDocumentFromLiveAcknowledgement(
@@ -8018,6 +8074,26 @@ async function buildGeneratedCodeArtifactPackage({
   };
 
   const maximumAuthorshipIterations = thinkingDepth === "high" ? 18 : thinkingDepth === "low" ? 10 : 14;
+  const rejectionCountsByObligation = new Map<string, number>();
+  const maximumRejectionsPerObligationFamily = 2;
+  const registerObligationRejection = (
+    obligation: NorthstarObligationKey,
+    acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined,
+  ): void => {
+    const family = normalizeNorthstarRejectionFamily(
+      acknowledgement?.reason ?? acknowledgement?.review?.summary,
+    );
+    const key = `${obligation}:${family}`;
+    const count = (rejectionCountsByObligation.get(key) ?? 0) + 1;
+    rejectionCountsByObligation.set(key, count);
+    if (count >= maximumRejectionsPerObligationFamily) {
+      throw new NorthstarBudgetExceededError(
+        `obligation-rejection:${key}`,
+        maximumRejectionsPerObligationFamily,
+        `Required visual obligation ${obligation} remained unresolved after ${count} ${family} rejections. The verified horizontal artboard was preserved.`,
+      );
+    }
+  };
   let readyForPublication = false;
   for (let authorshipIteration = 0; authorshipIteration < maximumAuthorshipIterations; authorshipIteration += 1) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -8100,16 +8176,22 @@ async function buildGeneratedCodeArtifactPackage({
     if (!dispatched) {
       const rejectedAck = callbacks.getLastMutationAck?.();
       rejectedMoveFingerprints.add(prepared.fingerprint);
+      registerObligationRejection(prepared.contract.obligation, rejectedAck);
       authorship.advanceTransaction("rejected", candidate.revisionId);
       authorship.advanceTransaction("restored", canonical.revisionId);
       authorship.recordRejectedMove(prepared.fingerprint);
       priorCritique = {
         critique: rejectedAck?.reason || rejectedAck?.review?.summary || "The browser rejected the candidate transaction.",
-        requiredChanges: buildNorthstarCorrectionDirective({
+        requiredChanges: [
+          ...(normalizeNorthstarRejectionFamily(rejectedAck?.reason) === "flow-topology"
+            ? ["Preserve the current screenshot x-order and horizontal sequence axes. Do not change flex direction, wrapping, grid tracks, or global flow positions. Use emphasis, scale, labels, annotations, connectors, or selective visibility instead."]
+            : []),
+          ...buildNorthstarCorrectionDirective({
           contract: prepared.contract,
           acknowledgement: rejectedAck,
           browserIssues: rejectedAck?.reason ? [rejectedAck.reason] : [],
-        }),
+          }),
+        ],
       };
       currentPackage = callbacks.getVisibleArtifact() ?? canonical;
       preparedMoves.discardStale(currentPackage.revisionId);
@@ -8125,6 +8207,7 @@ async function buildGeneratedCodeArtifactPackage({
     });
     if (!browserReview.accepted) {
       rejectedMoveFingerprints.add(prepared.fingerprint);
+      registerObligationRejection(prepared.contract.obligation, committedAck);
       authorship.advanceTransaction("rejected", committed.revisionId);
       authorship.advanceTransaction("restored", canonical.revisionId);
       authorship.recordRejectedMove(prepared.fingerprint);
@@ -10523,6 +10606,7 @@ export async function POST(request: NextRequest) {
   };
 
   const runId = makeId("run");
+  const traceId = makeId("trace");
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false;
@@ -10548,6 +10632,24 @@ export async function POST(request: NextRequest) {
           closed = true;
         }
       };
+      const traceStartedAt = performance.now();
+      const sendServerTrace = (
+        stage: string,
+        status: "started" | "completed" | "failed",
+        startedAt: number,
+        detail?: Record<string, unknown>,
+      ) => {
+        send("server.trace", {
+          runId,
+          traceId,
+          stage,
+          status,
+          durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          elapsedMs: Math.max(0, Math.round(performance.now() - traceStartedAt)),
+          ...detail,
+        });
+      };
+
       const close = () => {
         if (closed) return;
         closed = true;
@@ -10560,7 +10662,8 @@ export async function POST(request: NextRequest) {
 
       void (async () => {
         try {
-          send("run.started", { runId, model: GEMINI_MODEL, contextMode });
+          send("run.started", { runId, traceId, model: GEMINI_MODEL, contextMode });
+          sendServerTrace("request", "started", traceStartedAt, { contextMode });
 
           const plannerContext = {
             userRequest: message,
@@ -10598,6 +10701,7 @@ export async function POST(request: NextRequest) {
               : undefined,
           };
 
+          const intentStartedAt = performance.now();
           const deterministicIntent = inferDeterministicSemanticIntent({
             message,
             history,
@@ -10755,9 +10859,17 @@ Act as an adversarial grounding verifier. The initial decision said no tools wer
             }
           }
 
+          sendServerTrace("intent", "completed", intentStartedAt, {
+            intentKind: semanticIntent.kind,
+            requiresTools: semanticIntent.requiresTools,
+            source: semanticIntentSource,
+          });
+
+          const plannerStartedAt = performance.now();
           const plannerContextWithIntent = {
             ...plannerContext,
             intentDecision: semanticIntent,
+            canvasCapabilities: NORTHSTAR_CANVAS_CAPABILITIES,
           };
 
           let planner: PlannerResponse;
@@ -10831,6 +10943,11 @@ The semantic intent gate requires grounded tool execution. You must return an ag
           }
 
           planner = enforceSemanticIntentPlan(planner, semanticIntent);
+          sendServerTrace("planning", "completed", plannerStartedAt, {
+            mode: planner.mode,
+            focus: planner.focus,
+            stepCount: planner.steps.length,
+          });
 
           const plannerHasCanvasAction = planner.steps.some((step) =>
             isCanvasActionTool(step.tool),
@@ -10870,6 +10987,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             validObjectIds,
           );
           planner = enforceSemanticIntentPlan(planner, semanticIntent);
+          planner = enforceCapabilityManifest(planner);
 
           const compositionRequested = isCompositionIntent(semanticIntent);
           if (compositionRequested) {
@@ -11373,22 +11491,13 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             const compositionArtifactId =
               preparedCompositionArtifactId ?? activeResumeCheckpoint?.artifactId ?? selectedCodeArtifact?.artifactId ?? makeId("artifact");
             const compositionDepth = preferredExecutionDepth;
-            const compositionWorkingVisibility: WorkingVisibility =
-              activeResumeCheckpoint?.workingVisibility
-              ?? semanticIntent.canvas?.workingVisibility
-              ?? (/\b(?:working|research) surface\b|\bshow (?:me )?(?:your|the) work\b|\bleave (?:your|the) work/i.test(message)
-                ? "visible"
-                : "hidden");
+            // North Star has one canonical artboard. Research and reasoning remain internal
+            // and may be expressed only inside that artifact, never as a parallel canvas surface.
+            const compositionWorkingVisibility: WorkingVisibility = "hidden";
             const compositionAudience = activeResumeCheckpoint?.audience ?? semanticIntent.canvas?.audience ?? "general";
             const compositionArtifactType = activeResumeCheckpoint?.artifactType ?? semanticIntent.canvas?.artifactType ?? "freeform";
             const liveArtifactCatalog = await getDataCatalog();
-            let liveWorkingSurfaceCreated = canvasHasArtifactRole(
-              body.canvasContext,
-              compositionArtifactId,
-              "working-frame",
-            );
             let lastWorkspacePlanSignature = "";
-            const workingSurfaceUpdateSignatures = new Set<string>();
             const selectedLivePackage = generatedPackageFromSelectedArtifact({
               selected: selectedCodeArtifact,
               objective: semanticIntent.objective || message,
@@ -11401,11 +11510,22 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             let lastLiveMutationAck: NorthstarArtifactMutationAcknowledgement | undefined;
             const liveArtboardActor = new NorthstarArtboardActor(lastLiveArtifactPackage);
             let liveArtifactDispatchQueue: Promise<boolean> = Promise.resolve(true);
+            let researchVisualCheckpointQueue: Promise<void> = Promise.resolve();
+            let lastResearchVisualCheckpointSignature = "";
             let liveLateAcknowledgementCount = 0;
             let liveQualityRejectionCount = 0;
             let lastLiveDispatchStartedAt = 0;
             const liveRejectionSignatures = new Map<string, number>();
+            const skippedLiveObligations = new Set<string>();
             const LIVE_MIN_COMMIT_INTERVAL_MS = 900;
+
+            const normalizeLiveObligationKey = (label: string): string =>
+              label
+                .toLowerCase()
+                .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 300);
 
             const normalizeLiveRejectionSignature = (acknowledgement: NorthstarArtifactMutationAcknowledgement): string => {
               const reason = String(acknowledgement.reason ?? "browser-rejected")
@@ -11413,6 +11533,8 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 .replace(/[0-9]+(?:\.[0-9]+)?px/g, "#px")
                 .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
                 .replace(/artifact-[a-z0-9-]+/g, "artifact-#")
+                .replace(/fallback-[a-z0-9_-]+/g, "fallback-#")
+                .replace(/(node|annotation|synthesis)-[a-z0-9_-]+/g, "$1-#")
                 .replace(/\s+/g, " ")
                 .trim();
               return `${acknowledgement.status}:${reason}`.slice(0, 800);
@@ -11434,14 +11556,15 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 if (operation.op === "set-css-layer" && /(?:data-ns-node-id=["']?artboard|\.ns-(?:artifact|visual-scene))[^{}]*\{[^{}]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$))/i.test(operation.css || "")) {
                   return { ok: false, reason: "Blocked a CSS layer that would blank the live artboard." };
                 }
-                if (operation.op === "set-css-layer" && /\.working-flow__sequence[^{}]*\{[^{}]*flex-direction\s*:\s*column/i.test(operation.css || "")) {
-                  const declaredTopologyChange = latest.operations.some((candidate) =>
-                    candidate.op === "set-attributes" &&
-                    candidate.targetId === "artboard" &&
-                    candidate.attributes?.["data-ns-approved-evidence-topology"] === "radical-reflow",
-                  );
-                  if (!declaredTopologyChange) {
-                    return { ok: false, reason: "Blocked an undeclared radical evidence-orientation change. Preserve the current topology or declare a rendered-study-approved reflow on the artboard." };
+                if (operation.op === "set-css-layer") {
+                  const css = operation.css || "";
+                  const targetsOrderedFlow = /(?:working-flow__sequence|data-ns-flow-sequence|data-ns-reference-flow|data-ns-flow-id)/i.test(css);
+                  const makesFlowVertical =
+  /flex-direction\s*:\s*column|grid-auto-flow\s*:\s*row|grid-template-columns\s*:\s*(?:1fr|repeat\(1\s*,|minmax\([^)]*\))|flex-wrap\s*:\s*wrap/i.test(
+    css,
+  );
+                  if (targetsOrderedFlow && makesFlowVertical) {
+                    return { ok: false, reason: "FLOW_TOPOLOGY_VIOLATION: Ordered flow evidence must remain a single horizontal, non-wrapping sequence." };
                   }
                 }
               }
@@ -11505,6 +11628,22 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 acknowledgement: NorthstarArtifactMutationAcknowledgement,
               ) => { accepted: boolean; issues: string[] },
             ): Promise<NorthstarVisualDispatchResult> => {
+              const obligationKey = normalizeLiveObligationKey(label);
+              if (skippedLiveObligations.has(obligationKey)) {
+                send("server.trace", {
+                  runId,
+                  traceId,
+                  name: "composition.visual.obligation_already_skipped",
+                  obligationKey,
+                  detail: `Skipped another equivalent “${label}” proposal after the browser had already rejected that obligation.`,
+                });
+                return {
+                  status: "skipped",
+                  detail: `The equivalent visual obligation “${label}” was already rejected and will not be dispatched again in this run.`,
+                  recoverable: true,
+                };
+              }
+
               const elapsedSinceLastDispatch = Date.now() - lastLiveDispatchStartedAt;
               if (elapsedSinceLastDispatch < LIVE_MIN_COMMIT_INTERVAL_MS) {
                 await delayWithSignal(LIVE_MIN_COMMIT_INTERVAL_MS - elapsedSinceLastDispatch, request.signal);
@@ -11743,14 +11882,43 @@ The semantic intent gate requires grounded tool execution. You must return an ag
 
                   if (isExpectedNorthstarQualityRejection(acknowledgement)) {
                     liveQualityRejectionCount += 1;
-                    console.info("Northstar retained the last accepted artboard and will prepare a different compatible move.", {
+                    const detail = acknowledgement.reason || "The browser rejected a non-material visual change.";
+                    skippedLiveObligations.add(obligationKey);
+                    send("server.trace", {
+                      runId,
+                      traceId,
+                      name: "composition.visual.obligation_skipped",
+                      proposalId: proposal.proposalId,
+                      obligationKey,
                       rejectionSignature,
-                      attempt: repeatedCount,
+                      attempts: repeatedCount,
+                      detail,
+                    });
+                    console.warn("Northstar skipped a browser-rejected visual obligation for the remainder of this run and continued from the last verified artboard.", {
+                      obligationKey,
+                      rejectionSignature,
+                      attempts: repeatedCount,
                       totalQualityRejections: liveQualityRejectionCount,
                     });
-                    const detail = acknowledgement.reason || "The browser rejected a non-material visual change.";
-                    retainVisualActivity(detail);
-                    return { status: "rejected", detail, recoverable: true };
+                    if (activityStarted) {
+                      send("tool.completed", {
+                        runId,
+                        stepId: activityStepId,
+                        tool: "compose_visual_scene",
+                        detail: "The browser rejected this visual obligation; Northstar retained the last verified artboard and disabled equivalent proposals for this run.",
+                      });
+                      send("step.completed", {
+                        runId,
+                        stepId: activityStepId,
+                        detail: "The rejected visual obligation was skipped without retrying an equivalent proposal.",
+                        objectIds: [],
+                      });
+                    }
+                    return {
+                      status: "skipped",
+                      detail: `Browser-rejected visual obligation skipped for this run. ${detail}`,
+                      recoverable: true,
+                    };
                   }
                   if (lineageRejected) {
                     console.warn("Northstar detected revision divergence and will rebase the next transaction on the exact actor snapshot.", acknowledgement.reason);
@@ -11951,6 +12119,90 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               }
             }
 
+            const scheduleResearchVisualCheckpoint = (
+              phase: CompositionRunCheckpoint["phase"],
+              ledger: CompositionResearchLedger,
+              currentToolResults: ToolResult[],
+            ): void => {
+              if (phase !== "research" && phase !== "review") return;
+              const candidateScreens = compositionScreensFromToolResults(currentToolResults);
+              const signature = JSON.stringify({
+                phase,
+                observations: ledger.observations.length,
+                flows: ledger.flowSyntheses.length,
+                apps: ledger.appSyntheses.length,
+                screens: candidateScreens.length,
+              });
+              if (signature === lastResearchVisualCheckpointSignature) return;
+              lastResearchVisualCheckpointSignature = signature;
+
+              send("server.trace", {
+                runId,
+                traceId,
+                name: "composition.checkpoint.visual_scheduled",
+                phase,
+                observations: ledger.observations.length,
+                screens: candidateScreens.length,
+              });
+
+              researchVisualCheckpointQueue = researchVisualCheckpointQueue.then(async () => {
+                if (request.signal.aborted) return;
+                const checkpointBundle = buildProvisionalCanvasCodeArtifactDataBundle({
+                  objective: semanticIntent.objective || message,
+                  audience: compositionAudience,
+                  artifactType: compositionArtifactType,
+                  toolResults: currentToolResults,
+                  catalog: liveArtifactCatalog,
+                  coverageSummary: ledger.coverageSummary ||
+                    `Northstar has studied ${ledger.observations.length} grounded screens across ${ledger.flowSyntheses.length || candidateScreens.length} evidence groups.`,
+                  requestedApps: activeResumeCheckpoint?.requestedApps ?? [],
+                });
+                const checkpointPackage = await buildPolishedLiveArtifactPackage({
+                  apiKey,
+                  artifactId: compositionArtifactId,
+                  objective: semanticIntent.objective || message,
+                  audience: compositionAudience,
+                  artifactType: compositionArtifactType,
+                  thinkingDepth,
+                  dataBundle: checkpointBundle,
+                  phase: phase === "review" ? "analysis" : "evidence",
+                  message: phase === "review"
+                    ? "Update the canonical artboard with the latest grounded synthesis while research continues."
+                    : "Bring the latest grounded screenshot evidence into the canonical artboard while research continues.",
+                  parentRevisionId: lastLiveArtifactRevisionId,
+                  previousPackage: lastLiveArtifactPackage,
+                  signal: request.signal,
+                });
+                const result = await dispatchLiveArtifactPackage(
+                  checkpointPackage,
+                  phase === "review" ? 2 : 1,
+                  phase === "review"
+                    ? "Update the live artifact with research synthesis"
+                    : "Update the live artifact with grounded evidence",
+                );
+                send("server.trace", {
+                  runId,
+                  traceId,
+                  name: result.status === "committed"
+                    ? "composition.checkpoint.visual_published"
+                    : "composition.checkpoint.visual_not_committed",
+                  phase,
+                  status: result.status,
+                  detail: result.detail,
+                });
+              }).catch((error) => {
+                if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+                send("server.trace", {
+                  runId,
+                  traceId,
+                  name: "composition.checkpoint.visual_failed",
+                  phase,
+                  detail: error instanceof Error ? error.message : String(error),
+                });
+                console.warn("Northstar continued research after a non-fatal visual checkpoint could not be published.", error);
+              });
+            };
+
             const emitCompositionCheckpoint = (
               phase: CompositionRunCheckpoint["phase"],
               ledger: CompositionResearchLedger,
@@ -11994,222 +12246,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               }
             };
 
-            const makeLiveWorkingCompositionJson = (
-              evidenceIds: string[] = [],
-              notes: CompositionWorkingNote[] = [],
-              workspacePlan?: ResearchWorkspacePlan,
-            ) =>
-              JSON.stringify({
-                artifactId: compositionArtifactId,
-                artifactType: compositionArtifactType,
-                executionDepth: compositionDepth,
-                workingVisibility: compositionWorkingVisibility,
-                audience: compositionAudience,
-                title: `${semanticIntent.objective || message} â€” working surface`,
-                subtitle: "North Star research, hypotheses, corrections, and evidence",
-                summary: "",
-                visualStrategy: "An evolving inspectable workbench used while North Star researches and solves the problem.",
-                researchDigest: "Research is in progress. This surface will evolve as screenshots are studied and the plan changes.",
-                workingNotes: notes,
-                workingEvidenceIds: evidenceIds,
-                workingSurfacePlan: workspacePlan,
-                sections: [],
-                layout: {
-                  direction: "mixed",
-                  columns: 1,
-                  gap: 24,
-                  evidenceScale: "balanced",
-                  canvasWidth: 1520,
-                  canvasHeight: 1200,
-                  regions: [],
-                },
-              } satisfies CompositionBlueprint);
-
-            const dispatchLiveWorkingSurfaceAction = async ({
-              stepId,
-              label,
-              note,
-              evidenceIds = [],
-              create = false,
-              workspacePlan,
-              replaceExisting = false,
-            }: {
-              stepId: string;
-              label: string;
-              note: CompositionWorkingNote;
-              evidenceIds?: string[];
-              create?: boolean;
-              workspacePlan?: ResearchWorkspacePlan;
-              replaceExisting?: boolean;
-            }): Promise<boolean> => {
-              if (compositionWorkingVisibility === "hidden") return false;
-
-              let updateSignature: string | null = null;
-              let activityStarted = false;
-              try {
-                const normalizedEvidenceIds = Array.from(new Set(evidenceIds)).sort();
-                const normalizedNote = {
-                  kind: note.kind,
-                  label: note.label.trim().toLowerCase().replace(/\s+/g, " "),
-                  text: note.text.trim().toLowerCase().replace(/\s+/g, " "),
-                  evidenceIds: Array.from(new Set(note.evidenceIds ?? normalizedEvidenceIds)).sort(),
-                };
-                updateSignature = JSON.stringify({
-                  create,
-                  note: normalizedNote,
-                  evidenceIds: normalizedEvidenceIds,
-                  workspacePlan,
-                });
-                if (!create && workingSurfaceUpdateSignatures.has(updateSignature)) return false;
-                workingSurfaceUpdateSignatures.add(updateSignature);
-
-                const actionStep: PlannerStep = {
-                  id: stepId,
-                  label,
-                  tool: create ? "create_working_surface" : "update_working_surface",
-                  icon: create ? "plan" : "write",
-                  arguments: create
-                    ? {
-                        artifactId: compositionArtifactId,
-                        artifactType: compositionArtifactType,
-                        executionDepth: compositionDepth,
-                        workingVisibility: compositionWorkingVisibility,
-                        audience: compositionAudience,
-                        title: `${semanticIntent.objective || message} â€” working surface`,
-                        workingNotesJson: JSON.stringify([{ ...note, evidenceIds: normalizedEvidenceIds }]),
-                        compositionJson: makeLiveWorkingCompositionJson(normalizedEvidenceIds, [note], workspacePlan),
-                        workspacePlanJson: workspacePlan ? JSON.stringify(workspacePlan) : undefined,
-                        replaceExisting,
-                        resultKey: "working-surface",
-                        placement: "right-of-selection",
-                        selectAfter: false,
-                      }
-                    : {
-                        artifactId: compositionArtifactId,
-                        artifactType: compositionArtifactType,
-                        executionDepth: compositionDepth,
-                        workingVisibility: compositionWorkingVisibility,
-                        audience: compositionAudience,
-                        workingNoteJson: JSON.stringify({ ...note, evidenceIds: normalizedEvidenceIds }),
-                        compositionJson: makeLiveWorkingCompositionJson(normalizedEvidenceIds, [note], workspacePlan),
-                        workspacePlanJson: workspacePlan ? JSON.stringify(workspacePlan) : undefined,
-                        replaceExisting,
-                        resultKeys: ["working-surface"],
-                        resultKey: stepId,
-                        selectAfter: false,
-                      },
-                };
-
-                send("plan.extended", {
-                  runId,
-                  title: planner.title,
-                  visualStrategy: "North Star is externalizing its evolving research and decisions on the inspectable working surface.",
-                  steps: [{
-                    id: actionStep.id,
-                    label: actionStep.label,
-                    tool: actionStep.tool,
-                    icon: actionStep.icon,
-                    status: "pending",
-                    objectIds: [],
-                  }],
-                });
-                send("step.started", { runId, stepId: actionStep.id });
-                send("tool.started", {
-                  runId,
-                  stepId: actionStep.id,
-                  tool: actionStep.tool,
-                  label: actionStep.label,
-                });
-                activityStarted = true;
-
-                const action = await buildCanvasActionRequest({
-                  step: actionStep,
-                  getDataCatalog,
-                  previousResults: toolResults,
-                  canvasContext: body.canvasContext,
-                  selectedCanvasContext: body.selectedCanvasContext,
-                  validObjectIds,
-                });
-                toolResults.push({
-                  stepId: actionStep.id,
-                  tool: actionStep.tool,
-                  label: actionStep.label,
-                  detail: "The working-surface update was dispatched and is awaiting client-side verification.",
-                  objectIds: [],
-                  data: {
-                    canvasAction: {
-                      status: "requested",
-                      tool: action.tool,
-                      arguments: action.arguments,
-                      artifactId: compositionArtifactId,
-                    },
-                  },
-                  ok: false,
-                });
-                requestedCanvasActionCount += 1;
-                send("canvas.action.requested", { runId, action });
-                liveWorkingSurfaceCreated = true;
-                await new Promise<void>((resolve, reject) => {
-                  const timeout = setTimeout(resolve, create ? 900 : 560);
-                  const abort = () => {
-                    clearTimeout(timeout);
-                    reject(new DOMException("Aborted", "AbortError"));
-                  };
-                  request.signal.addEventListener("abort", abort, { once: true });
-                  setTimeout(
-                    () => request.signal.removeEventListener("abort", abort),
-                    create ? 960 : 620,
-                  );
-                });
-                return true;
-              } catch (error) {
-                if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-                  throw error;
-                }
-                if (updateSignature) workingSurfaceUpdateSignatures.delete(updateSignature);
-                console.warn("North Star deferred a non-critical working-surface update and continued:", error);
-                if (activityStarted) {
-                  const detail = create
-                    ? "North Star kept the current canvas state and continued the core solution."
-                    : "North Star kept the current working surface and continued the core solution.";
-                  send("tool.completed", {
-                    runId,
-                    stepId,
-                    tool: create ? "create_working_surface" : "update_working_surface",
-                    detail,
-                    objectIds: [],
-                    ok: true,
-                  });
-                  send("step.completed", {
-                    runId,
-                    stepId,
-                    detail,
-                    objectIds: [],
-                  });
-                }
-                return false;
-              }
-            };
-
-            if (compositionWorkingVisibility !== "hidden" && !liveWorkingSurfaceCreated) {
-              const initialScreens = compositionScreensFromToolResults(toolResults).slice(
-                0,
-                compositionDepth === "deep" ? 12 : compositionDepth === "quick" ? 4 : 8,
-              );
-              await dispatchLiveWorkingSurfaceAction({
-                stepId: "create-live-working-surface",
-                label: "Open North Star's inspectable working surface",
-                create: true,
-                evidenceIds: initialScreens.map((screen) => screen.id),
-                note: {
-                  label: "Objective",
-                  text: semanticIntent.objective || message,
-                  kind: "objective",
-                  evidenceIds: initialScreens.map((screen) => screen.id),
-                },
-              });
-            }
-
             const researchCallbacks: CompositionResearchCallbacks = {
               extendPlan(steps, visualStrategy) {
                 send("plan.extended", {
@@ -12248,136 +12284,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   detail: step.detail,
                   objectIds: [],
                 });
-
-                if (!liveWorkingSurfaceCreated || compositionWorkingVisibility === "hidden") return;
-                const evidenceIds = Array.from(
-                  new Set(
-                    (step.resultView?.items ?? []).flatMap((item) => [
-                      item.kind === "screenshot" ? item.id : "",
-                      ...(item.thumbnails ?? []).map((thumbnail) => thumbnail.id),
-                    ]),
-                  ),
-                ).filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, 15);
-                const isStudy = step.id.startsWith("study-evidence");
-                const isCoverage = step.id.startsWith("review-research-coverage");
-                const isCritique = step.id.startsWith("critique-blueprint");
-                const isAdditionalResearch = step.id.startsWith("additional-research");
-                if (!isStudy && !isCoverage && !isCritique && !isAdditionalResearch) return;
-                await dispatchLiveWorkingSurfaceAction({
-                  stepId: `${step.id}-working-update`,
-                  label: isStudy
-                    ? "Record the studied screenshot batch"
-                    : isCritique
-                      ? "Record the visual-solution critique"
-                      : isCoverage
-                        ? "Record the research checkpoint"
-                        : "Record the additional research",
-                  evidenceIds,
-                  note: {
-                    label: isStudy
-                      ? "Screenshot study"
-                      : isCritique
-                        ? "Presentation critique"
-                        : isCoverage
-                          ? "Research checkpoint"
-                          : "Additional research",
-                    text: step.detail,
-                    kind: isCritique
-                      ? "correction"
-                      : isCoverage
-                        ? "check"
-                        : "evidence",
-                    evidenceIds,
-                  },
-                });
-              },
-              async checkpoint(phase, ledger, currentToolResults) {
-                try {
-                  emitCompositionCheckpoint(phase, ledger, currentToolResults);
-                  if (selectedCodeArtifact) return;
-                  const provisional = buildProvisionalCanvasCodeArtifactDataBundle({
-                    objective: semanticIntent.objective || message,
-                    audience: compositionAudience,
-                    artifactType: compositionArtifactType,
-                    toolResults: currentToolResults,
-                    catalog: liveArtifactCatalog,
-                    coverageSummary: ledger.coverageSummary,
-                  });
-                  const grounded = ledger.observations.length > 0
-                    ? buildCanvasCodeArtifactDataBundle({
-                        objective: semanticIntent.objective || message,
-                        audience: compositionAudience,
-                        artifactType: compositionArtifactType,
-                        ledger,
-                        toolResults: currentToolResults,
-                        catalog: liveArtifactCatalog,
-                      })
-                    : provisional;
-                  const dataBundle: CanvasCodeArtifactDataBundle = {
-                    ...grounded,
-                    apps: grounded.apps.length ? grounded.apps : provisional.apps,
-                    flows: grounded.flows.length ? grounded.flows : provisional.flows,
-                    screenshots: grounded.screenshots.length ? grounded.screenshots : provisional.screenshots,
-                    allowedAssetUrls: Array.from(new Set([...grounded.allowedAssetUrls, ...provisional.allowedAssetUrls])),
-                  };
-                  const stagePhase: CanvasCodeArtifactStage["phase"] =
-                    phase === "research" ? "evidence" :
-                    phase === "review" || phase === "blueprint" ? "analysis" :
-                    phase === "building" ? "recommendation" : "refinement";
-                  const stageIndex = Math.max(0, ["foundation", "evidence", "analysis", "recommendation", "refinement"].indexOf(stagePhase));
-                  const livePackage = await buildPolishedLiveArtifactPackage({
-                    apiKey,
-                    artifactId: compositionArtifactId,
-                    objective: semanticIntent.objective || message,
-                    audience: compositionAudience,
-                    artifactType: compositionArtifactType,
-                    thinkingDepth,
-                    dataBundle,
-                    phase: stagePhase,
-                    message: ledger.coverageSummary || `Evolve the composition through the ${stagePhase} stage using the newly grounded evidence.`,
-                    parentRevisionId: lastLiveArtifactRevisionId,
-                    previousPackage: lastLiveArtifactPackage,
-                    signal: request.signal,
-                  });
-                  const committed = await dispatchLiveArtifactPackage(livePackage, stageIndex, `Update the live artifact with ${stagePhase}`);
-                  if (committed.status === "skipped") {
-                    console.info(`Northstar checkpoint ${stagePhase} was already materialized on the verified artboard.`);
-                    return;
-                  }
-                  if (committed.status !== "committed") {
-                    console.info("Northstar retained the monotonic artboard checkpoint and continued after an incompatible candidate.", {
-                      stagePhase,
-                      detail: committed.detail,
-                    });
-                    return;
-                  }
-                } catch (error) {
-                  if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-                    throw error;
-                  }
-                  const detail = error instanceof Error ? error.message : String(error ?? "Unknown checkpoint error");
-                  if (/duplicates the immediately previous mutation|did not produce an observable material delta|repeats a recent artistic decision/i.test(detail)) {
-                    console.info("Northstar confirmed that the checkpoint was already materialized and continued with the next open obligation.");
-                    return;
-                  }
-                  console.warn("Northstar retained the verified scene and continued to the next open obligation after a checkpoint could not be committed:", error);
-                }
-              },
-              getVisibleArtifact() {
-                return liveArtboardActor.snapshot();
-              },
-              getLastMutationAck() {
-                return liveArtboardActor.lastAcknowledgement() ?? lastLiveMutationAck;
-              },
-              async publishArtifact(packageValue, stageIndex, label, expectedChangedNodeIds, acceptMaterialized) {
-                const result = await dispatchLiveArtifactPackage(
-                  packageValue,
-                  stageIndex,
-                  label,
-                  expectedChangedNodeIds,
-                  acceptMaterialized,
-                );
-                return result.status === "committed";
               },
               failStep(step) {
                 send("tool.failed", {
@@ -12391,6 +12297,26 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   stepId: step.id,
                   detail: step.detail,
                 });
+              },
+              getVisibleArtifact() {
+                return lastLiveArtifactPackage;
+              },
+              async publishArtifact(packageValue, stageIndex, label, expectedChangedNodeIds, acceptMaterialized) {
+                const result = await dispatchLiveArtifactPackage(
+                  packageValue,
+                  stageIndex,
+                  label,
+                  expectedChangedNodeIds,
+                  acceptMaterialized,
+                );
+                return result.status === "committed";
+              },
+              checkpoint(phase, ledger, currentToolResults) {
+                emitCompositionCheckpoint(phase, ledger, currentToolResults);
+                scheduleResearchVisualCheckpoint(phase, ledger, currentToolResults);
+              },
+              getLastMutationAck() {
+                return liveArtboardActor.lastAcknowledgement() ?? lastLiveMutationAck;
               },
             };
 
@@ -12460,6 +12386,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 };
             compositionResearchLedger = research.ledger;
             toolResults.splice(0, toolResults.length, ...research.toolResults);
+            await researchVisualCheckpointQueue;
 
             if (compositionResearchLedger.observations.length === 0) {
               throw new Error(
@@ -12558,8 +12485,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 alreadyMaterialized: liveArtboardActor.publicationIsComplete(),
                 finalStateBrief: compositionFinalStateBrief ?? undefined,
               },
-            ).filter(
-              (step) => !(liveWorkingSurfaceCreated && step.tool === "create_working_surface"),
             );
             send("plan.extended", {
               runId,
@@ -12696,6 +12621,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                     : 0,
               },
             });
+            sendServerTrace("request", "completed", traceStartedAt, { outcome: "completed" });
             send("run.completed", {
               runId,
               mode: planner.mode,
@@ -12916,11 +12842,13 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               plannedStepCount: planner.steps.length,
             },
           });
-          send("run.completed", { runId, mode: planner.mode });
+          sendServerTrace("request", "completed", traceStartedAt, { outcome: "completed", mode: planner.mode });
+          send("run.completed", { runId, traceId, mode: planner.mode });
           close();
         } catch (error) {
           if (request.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-            send("run.cancelled", { runId });
+            sendServerTrace("request", "failed", traceStartedAt, { outcome: "cancelled" });
+            send("run.cancelled", { runId, traceId });
             close();
             return;
           }
@@ -12943,7 +12871,8 @@ ${error instanceof Error ? error.message : "The run could not be completed."}`;
             close();
             return;
           }
-          send("run.failed", { runId, error: safeMessage });
+          sendServerTrace("request", "failed", traceStartedAt, { outcome: "failed", error: safeMessage });
+          send("run.failed", { runId, traceId, error: safeMessage });
           send("error", { runId, error: safeMessage });
           close();
         }

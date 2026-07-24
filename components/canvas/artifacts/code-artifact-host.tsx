@@ -11,6 +11,7 @@ import {
   northstarArtifactAcknowledgementChannelName,
 } from "@/lib/canvas-ai/northstar-artboard-ack";
 import type { NorthstarBrowserCommit } from "@/lib/canvas-ai/northstar-transaction-kernel";
+import { NORTHSTAR_HEALTH_POLICY } from "@/lib/canvas-ai/northstar-health-policy";
 import type {
   CanvasCodeArtifactContentSize,
   CanvasCodeArtifactPayload,
@@ -86,6 +87,39 @@ async function broadcastBrowserAcknowledgement(
   }
 }
 
+export interface NorthstarArtifactLifecycleEvent {
+  name:
+    | "revision.sent"
+    | "revision.received"
+    | "revision.acknowledged"
+    | "revision.rejected"
+    | "revision.timed_out"
+    | "ack.delivery_failed"
+    | "render.health";
+  artifactId: string;
+  revisionId: string;
+  ackToken?: string;
+  proposalId?: string;
+  mutationId?: string;
+  browserRevisionId?: string;
+  detail?: string;
+  renderHealth?: {
+    /** Operational health only. Creative-review warnings must never block construction. */
+    healthy: boolean;
+    operationallyHealthy: boolean;
+    severity: "pass" | "warning" | "fatal";
+    creativeIssueCount: number;
+    visible: boolean;
+    pendingImageCount: number;
+    failedAssetUrls: string[];
+    missingRequiredNodeIds: string[];
+    overflowX: number;
+    overflowY: number;
+    extremeGrowth: boolean;
+  };
+  timestamp: number;
+}
+
 interface CodeArtifactHostProps {
   artifact?: CanvasCodeArtifactPayload;
   selected: boolean;
@@ -97,6 +131,7 @@ interface CodeArtifactHostProps {
   onRuntimeReview: (review: CanvasCodeArtifactRuntimeReview) => void;
   onContentSize: (size: CanvasCodeArtifactContentSize) => void;
   onBrowserCommit: (commit: NorthstarBrowserCommit) => void;
+  onLifecycleEvent?: (event: NorthstarArtifactLifecycleEvent) => void;
   onCanvasWheel: (input: {
     clientX: number;
     clientY: number;
@@ -150,6 +185,7 @@ function CodeArtifactHostImpl({
   onRuntimeReview,
   onContentSize,
   onBrowserCommit,
+  onLifecycleEvent = () => undefined,
   onCanvasWheel,
 }: CodeArtifactHostProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -178,6 +214,7 @@ function CodeArtifactHostImpl({
   const browserRevisionRef = useRef<string | undefined>(artifact?.revisionId);
   const latestSizeRef = useRef<CanvasCodeArtifactContentSize | undefined>(undefined);
   const latestReviewRef = useRef<CanvasCodeArtifactRuntimeReview | undefined>(undefined);
+  const lastRenderHealthFingerprintRef = useRef<string | null>(null);
   const [mountedSurface, setMountedSurface] = useState<CanvasCodeArtifactPayload | undefined>(artifact);
   const [surfaceReady, setSurfaceReady] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
@@ -252,6 +289,16 @@ function CodeArtifactHostImpl({
     if (!frame?.contentWindow) return false;
     input.proposal.dispatchAttempts += 1;
     input.proposal.lastDispatchedAt = Date.now();
+    onLifecycleEvent({
+      name: "revision.sent",
+      artifactId: input.artifact.artifactId,
+      revisionId: input.proposal.revisionId,
+      ackToken: input.proposal.ackToken,
+      proposalId: input.proposal.proposalId,
+      mutationId: input.proposal.mutationId,
+      browserRevisionId: browserRevisionRef.current,
+      timestamp: input.proposal.lastDispatchedAt,
+    });
     frame.contentWindow.postMessage({
       type: "northstar.artifact.apply-mutation",
       artifactId: input.artifact.artifactId,
@@ -264,7 +311,7 @@ function CodeArtifactHostImpl({
       assetUrls: input.artifact.dataBundle?.allowedAssetUrls ?? [],
     }, "*");
     return true;
-  }, []);
+  }, [onLifecycleEvent]);
 
   const pumpNextMutation = useCallback(() => {
     if (!readyRef.current) return;
@@ -400,11 +447,35 @@ function CodeArtifactHostImpl({
     try {
       await deliverAcknowledgement(acknowledgement);
       pendingAcknowledgementDeliveriesRef.current.delete(acknowledgement.ackToken);
+      onLifecycleEvent({
+        name: acknowledgement.status === "rejected" ? "revision.rejected" : "revision.acknowledged",
+        artifactId: acknowledgement.artifactId,
+        revisionId: acknowledgement.revisionId,
+        ackToken: acknowledgement.ackToken,
+        proposalId: acknowledgement.proposalId,
+        mutationId: acknowledgement.mutationId,
+        browserRevisionId: browserRevisionRef.current,
+        detail: acknowledgement.reason,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      onLifecycleEvent({
+        name: "ack.delivery_failed",
+        artifactId: acknowledgement.artifactId,
+        revisionId: acknowledgement.revisionId,
+        ackToken: acknowledgement.ackToken,
+        proposalId: acknowledgement.proposalId,
+        mutationId: acknowledgement.mutationId,
+        browserRevisionId: browserRevisionRef.current,
+        detail: error instanceof Error ? error.message : "Acknowledgement delivery failed.",
+        timestamp: Date.now(),
+      });
+      throw error;
     } finally {
       const pending = pendingAcknowledgementDeliveriesRef.current.get(acknowledgement.ackToken);
       if (pending) pending.sending = false;
     }
-  }, [deliverAcknowledgement]);
+  }, [deliverAcknowledgement, onLifecycleEvent]);
 
   useEffect(() => {
     // A successful REST Broadcast response means accepted by the broker, not
@@ -442,16 +513,38 @@ function CodeArtifactHostImpl({
         pumpNextMutation();
         return;
       }
-      const retryInterval = proposal.received ? 900 : 400;
-      if (Date.now() - proposal.lastDispatchedAt < retryInterval) return;
+      const now = Date.now();
+      const proposalAge = now - (proposal.receivedAt ?? proposal.lastDispatchedAt);
+      if (proposal.dispatchAttempts >= NORTHSTAR_HEALTH_POLICY.acknowledgement.maxDispatchAttempts ||
+        proposalAge > NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs) {
+        onLifecycleEvent({
+          name: "revision.timed_out",
+          artifactId: current.artifactId,
+          revisionId: proposal.revisionId,
+          ackToken: proposal.ackToken,
+          proposalId: proposal.proposalId,
+          mutationId: proposal.mutationId,
+          browserRevisionId: browserRevisionRef.current,
+          detail: `The live artifact did not reach a terminal browser acknowledgement within ${NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs}ms.`,
+          timestamp: now,
+        });
+        failedMutationIdsRef.current.add(proposal.mutationId);
+        inFlightProposalRef.current = null;
+        setVisibleMutationLabel("Northstar stopped an unacknowledged adjustment");
+        return;
+      }
+      const retryInterval = proposal.received
+        ? NORTHSTAR_HEALTH_POLICY.acknowledgement.retryAfterReceiptMs
+        : NORTHSTAR_HEALTH_POLICY.acknowledgement.retryBeforeReceiptMs;
+      if (now - proposal.lastDispatchedAt < retryInterval) return;
       const batch = (current.mutationJournal ?? []).find(
         (candidate) => candidate.mutationId === proposal.mutationId,
       );
       if (!batch) return;
       dispatchMutationProposal({ proposal, batch, artifact: current });
-    }, 200);
+    }, NORTHSTAR_HEALTH_POLICY.acknowledgement.pumpIntervalMs);
     return () => window.clearInterval(interval);
-  }, [dispatchMutationProposal, postAcknowledgement, pumpNextMutation]);
+  }, [dispatchMutationProposal, onLifecycleEvent, postAcknowledgement, pumpNextMutation]);
 
   useEffect(() => {
     if (!dragShieldActive) return;
@@ -525,6 +618,16 @@ function CodeArtifactHostImpl({
         ) {
           proposal.received = true;
           proposal.receivedAt = Date.now();
+          onLifecycleEvent({
+            name: "revision.received",
+            artifactId: current.artifactId,
+            revisionId: proposal.revisionId,
+            ackToken: proposal.ackToken,
+            proposalId: proposal.proposalId,
+            mutationId: proposal.mutationId,
+            browserRevisionId: browserRevisionRef.current,
+            timestamp: proposal.receivedAt,
+          });
         }
         return;
       }
@@ -566,6 +669,72 @@ function CodeArtifactHostImpl({
       if (event.data.type === "northstar.artifact.runtime-review" && event.data.review) {
         latestReviewRef.current = event.data.review;
         onRuntimeReview(event.data.review);
+        const review = event.data.review;
+        const pendingImageCount = review.pendingImageCount ?? 0;
+        const failedAssetUrls = review.failedAssetUrls ?? [];
+        const missingRequiredNodeIds = review.missingRequiredNodeIds ?? [];
+        const visible = review.visible !== false;
+        const extremeGrowth = review.extremeGrowth === true;
+        const operationallyHealthy = review.healthy ?? (
+          visible
+          && pendingImageCount === 0
+          && failedAssetUrls.length === 0
+          && (review.missingImageCount ?? 0) === 0
+          && missingRequiredNodeIds.length === 0
+          && extremeGrowth === false
+          && (review.hardFailureCount ?? 0) === 0
+          && (review.missingRequiredAssetCount ?? 0) === 0
+        );
+        const creativeIssueCount =
+          (review.overflowElementCount ?? 0)
+          + (review.clippedTextCount ?? 0)
+          + (review.smallTextCount ?? 0)
+          + (review.tinyInteractiveCount ?? 0)
+          + (review.documentScrollRisk ? 1 : 0);
+        const severity = operationallyHealthy
+          ? (creativeIssueCount > 0 ? "warning" : "pass")
+          : "fatal";
+        const revisionId = review.revisionId || browserRevisionRef.current || current.revisionId;
+        const fingerprint = JSON.stringify({
+          artifactId: current.artifactId,
+          revisionId,
+          operationallyHealthy,
+          severity,
+          creativeIssueCount,
+          visible,
+          pendingImageCount,
+          failedAssetUrls,
+          missingRequiredNodeIds,
+          overflowX: review.overflowX ?? 0,
+          overflowY: review.overflowY ?? 0,
+          extremeGrowth,
+        });
+        if (lastRenderHealthFingerprintRef.current !== fingerprint) {
+          lastRenderHealthFingerprintRef.current = fingerprint;
+          onLifecycleEvent({
+            name: "render.health",
+            artifactId: current.artifactId,
+            revisionId,
+            browserRevisionId: browserRevisionRef.current,
+            detail: operationallyHealthy && creativeIssueCount > 0
+              ? `${review.summary} Construction may continue; these are refinement warnings.`
+              : review.summary,
+            renderHealth: {
+              healthy: operationallyHealthy,
+              operationallyHealthy,
+              severity,
+              creativeIssueCount,
+              visible,
+              pendingImageCount,
+              failedAssetUrls,
+              missingRequiredNodeIds,
+              overflowX: review.overflowX ?? 0,
+              overflowY: review.overflowY ?? 0,
+              extremeGrowth,
+            },
+            timestamp: Date.now(),
+          });
+        }
         return;
       }
 
@@ -658,7 +827,7 @@ function CodeArtifactHostImpl({
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [height, liveSize, onBrowserCommit, onCanvasDragStart, onCanvasWheel, onContentSize, onRequestSelect, onRuntimeReview, postAcknowledgement, postCurrentContext, pumpNextMutation, width]);
+  }, [height, liveSize, onBrowserCommit, onCanvasDragStart, onCanvasWheel, onContentSize, onRequestSelect, onRuntimeReview, onLifecycleEvent, postAcknowledgement, postCurrentContext, pumpNextMutation, width]);
 
   if (!artifact && !mountedSurface) {
     return (

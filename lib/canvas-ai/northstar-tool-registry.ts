@@ -42,8 +42,6 @@ export const CANVAS_ACTION_TOOL_NAMES = [
   "duplicate_objects",
   "delete_objects",
   "arrange_objects",
-  "create_working_surface",
-  "update_working_surface",
   "create_artifact_shell",
   "add_artifact_section",
   "add_artifact_summary",
@@ -721,45 +719,6 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
     ...canvasActionBase,
   },
 
-  create_working_surface: {
-    name: "create_working_surface",
-    description: "Create an inspectable North Star working surface containing objectives, questions, hypotheses, corrections, rejected directions, decisions, and the real screenshots studied during research.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        artifactId: { type: "string" },
-        title: { type: "string" },
-        workingNotesJson: { type: "string" },
-        compositionJson: { type: "string" },
-        workspacePlanJson: { type: "string" },
-        replaceExisting: { type: "boolean" },
-        workingVisibility: { type: "string", enum: ["visible", "compact", "hidden"] },
-        executionDepth: { type: "string", enum: ["quick", "balanced", "deep"] },
-        resultKey: { type: "string" },
-        placement: { type: "string", enum: ["center", "right-of-selection", "below-selection", "at-cursor"] },
-      },
-      required: ["title", "workingNotesJson", "compositionJson"],
-    },
-    ...canvasActionBase,
-  },
-  update_working_surface: {
-    name: "update_working_surface",
-    description: "Evolve an inspectable North Star working surface by adding grounded evidence or by reorganizing the existing research according to a model-authored workspace plan. The model chooses the spatial structure; the tool reliably reconciles objects without duplicating evidence.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        artifactId: { type: "string" },
-        workingNoteJson: { type: "string" },
-        compositionJson: { type: "string" },
-        workspacePlanJson: { type: "string" },
-        replaceExisting: { type: "boolean" },
-        resultKeys: { type: "array", items: { type: "string" } },
-        resultKey: { type: "string" },
-      },
-      required: ["artifactId", "workingNoteJson"],
-    },
-    ...canvasActionBase,
-  },
   create_artifact_shell: {
     name: "create_artifact_shell",
     description: "Create only the adaptive artifact frame, title, subtitle, and model-defined canvas bounds so the solution can be built visibly in later steps.",
@@ -1111,7 +1070,7 @@ const TOOL_DECISION_GUIDANCE: Partial<
     useWhen: "A multi-part composition needs a curated evidence set across one or more apps before North Star builds the final artifact.",
     avoidWhen: "The user only wants to browse raw flow or screenshot results in Chat, or a single exact asset is already known.",
     returns: "A diverse grounded bundle of candidate apps, flows, and representative screenshots suitable for comparison, journey, analysis, or strategy composition.",
-    usuallyFollowedBy: "create_working_surface, create_artifact_shell, and one add_artifact_section step per grounded subject.",
+    usuallyFollowedBy: "create_artifact_shell and one add_artifact_section step per grounded subject.",
   },
   create_shape: {
     useWhen: "The intended outcome is a newly created shape on the canvas, regardless of whether the request is formal, indirect, abbreviated, or colloquial.",
@@ -1181,19 +1140,9 @@ const TOOL_DECISION_GUIDANCE: Partial<
     useWhen: "The user asks to organize existing objects into a row, stack, or grid.",
     returns: "The resolved objects repositioned into the requested layout.",
   },
-  create_working_surface: {
-    useWhen: "A complex multi-step composition benefits from visible research, assumptions, evidence, checkpoints, or alternative ideas that the user can inspect.",
-    avoidWhen: "The request is a simple atomic canvas edit or a short factual lookup.",
-    returns: "An inspectable working surface placed in a reserved non-overlapping canvas region and linked to the run's artifactId.",
-    usuallyFollowedBy: "create_artifact_shell after enough grounded evidence has been gathered.",
-  },
-  update_working_surface: {
-    useWhen: "A long-running composition reaches a meaningful discovery or when the model decides the research workspace should be reorganized as its understanding changes.",
-    returns: "An evolved, model-authored research surface whose regions remain spatially separated, readable, and distinct from the final presentation.",
-  },
   create_artifact_shell: {
     useWhen: "A complex artifact should appear progressively rather than as one bulk canvas mutation.",
-    returns: "The empty presentation frame, title, subtitle, and a reserved presentation region that cannot collide with the working surface or existing canvas work.",
+    returns: "The empty presentation frame, title, subtitle, and a reserved region inside the single canonical artboard that cannot collide with existing canvas work.",
     usuallyFollowedBy: "one add_artifact_section action per model-defined region.",
   },
   add_artifact_section: {

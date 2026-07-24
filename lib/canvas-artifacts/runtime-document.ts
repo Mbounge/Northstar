@@ -1,6 +1,7 @@
 // Northstar Canvas Artifact Runtime v0.7.9 â€” idempotent terminal replay on one continuously mounted surface.
 import type { CanvasCodeArtifactPayload } from "./types";
 import { NORTHSTAR_DESIGN_KERNEL_CSS } from "@/lib/canvas-ai/northstar-design-kernel";
+import { NORTHSTAR_HEALTH_POLICY } from "@/lib/canvas-ai/northstar-health-policy";
 
 function escapeHtml(value: string): string {
   return value
@@ -877,6 +878,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       comparisonEntityCount: root.querySelectorAll("[data-ns-flow-id], [data-ns-comparison-entity]").length,
       declaredStructureFailures: [],
       duplicateSingletonRoles,
+      flowTopologyViolations: [],
       contentBounds: { left: rootRect.left, top: rootRect.top, right: rootRect.right, bottom: rootRect.bottom },
     };
     const left = Math.min(...semantic.map((item) => item.rect.left));
@@ -948,6 +950,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       })
       .map((item) => item.id || "semantic-node");
     const comparisonEntityCount = root.querySelectorAll("[data-ns-flow-id], [data-ns-comparison-entity]").length;
+    const flowTopologyViolations = Array.from(root.querySelectorAll("[data-ns-flow-id], [data-ns-reference-flow], [data-ns-flow-sequence]"))
+      .map((flow) => {
+        const evidence = Array.from(flow.querySelectorAll("[data-ns-evidence-id], img[data-ns-node-id]"))
+          .map((element) => ({ id: element.getAttribute("data-ns-evidence-id") || element.getAttribute("data-ns-node-id") || "flow-screen", rect: element.getBoundingClientRect() }))
+          .filter((item) => item.rect.width > 8 && item.rect.height > 8);
+        if (evidence.length < 3) return null;
+        const centers = evidence.map((item) => ({ id: item.id, x: item.rect.left + item.rect.width / 2, y: item.rect.top + item.rect.height / 2 }));
+        const xSpread = Math.max(...centers.map((item) => item.x)) - Math.min(...centers.map((item) => item.x));
+        const ySpread = Math.max(...centers.map((item) => item.y)) - Math.min(...centers.map((item) => item.y));
+        const verticallySequenced = ySpread > Math.max(80, xSpread * 1.15);
+        return verticallySequenced ? (flow.getAttribute("data-ns-flow-id") || flow.getAttribute("data-ns-node-id") || "ordered-flow") : null;
+      })
+      .filter(Boolean);
     const currentActText = (root.querySelector('[data-ns-node-id="current-act-text"]')?.textContent || "").toLowerCase();
     const declaredStructureFailures = [];
     if (/implemented|completed|finalized/.test(currentActText)) {
@@ -974,6 +989,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       comparisonEntityCount,
       declaredStructureFailures,
       duplicateSingletonRoles,
+      flowTopologyViolations: Array.from(new Set(flowTopologyViolations)),
       contentBounds: { left, top, right, bottom },
     };
   };
@@ -1008,6 +1024,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     if (before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
       return "Comparison completeness failed; a required comparison entity or evidence lane disappeared.";
+    }
+    if (after.flowTopologyViolations?.length) {
+      return "FLOW_TOPOLOGY_VIOLATION: Ordered flow evidence was converted into a vertical or wrapped sequence: " + after.flowTopologyViolations.join(", ");
     }
     const excessiveVerticalVoid = after.occupiedHeightRatio < .42 && after.occupiedWidthRatio > .55 && after.centroidYRatio < .42;
     const excessiveHorizontalVoid = after.occupiedWidthRatio < .48 && after.occupiedHeightRatio > .42;
@@ -2092,6 +2111,8 @@ function buildLegacyCanvasArtifactRuntimeDocument(
     let smallTextCount = 0;
     let tinyInteractiveCount = 0;
     let missingImageCount = 0;
+    let pendingImageCount = 0;
+    const failedAssetUrls = [];
 
     for (const element of visible) {
       const rect = element.getBoundingClientRect();
@@ -2113,8 +2134,13 @@ function buildLegacyCanvasArtifactRuntimeDocument(
       if (element.matches('button, a, input, textarea, select, summary, [role="button"], [role="slider"], [role="tab"], [data-ns-interactive="true"]')) {
         if (rect.width < 24 || rect.height < 24) tinyInteractiveCount += 1;
       }
-      if (element instanceof HTMLImageElement && element.complete && element.naturalWidth === 0) {
-        missingImageCount += 1;
+      if (element instanceof HTMLImageElement) {
+        if (!element.complete) {
+          pendingImageCount += 1;
+        } else if (element.naturalWidth === 0) {
+          missingImageCount += 1;
+          if (element.currentSrc || element.src) failedAssetUrls.push(element.currentSrc || element.src);
+        }
       }
     }
 
@@ -2129,7 +2155,22 @@ function buildLegacyCanvasArtifactRuntimeDocument(
     }).length;
     const contentBounds = getContentBounds();
     const documentScrollRisk = internalScrollElementCount > 0;
-    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0);
+    const viewportWidth = Math.max(1, document.documentElement.clientWidth || rootRect.width);
+    const viewportHeight = Math.max(1, document.documentElement.clientHeight || rootRect.height);
+    const overflowX = Math.max(0, contentBounds.width - viewportWidth);
+    const overflowY = Math.max(0, contentBounds.height - viewportHeight);
+    const visibleRoot = rootRect.width > ${NORTHSTAR_HEALTH_POLICY.render.minimumVisibleDimensionPx} && rootRect.height > ${NORTHSTAR_HEALTH_POLICY.render.minimumVisibleDimensionPx} && isVisibleElement(root);
+    const requiredNodeIds = ${JSON.stringify(NORTHSTAR_HEALTH_POLICY.render.requiredNodeIds)};
+    const missingRequiredNodeIds = requiredNodeIds.filter((nodeId) =>
+      !root.querySelector('[data-ns-node-id="' + nodeId + '"]')
+    );
+    const growthBaselineWidth = Math.max(1, Number.parseFloat(root.dataset.nsPreferredWidth || "0") || viewportWidth);
+    const growthBaselineHeight = Math.max(1, Number.parseFloat(root.dataset.nsPreferredHeight || "0") || viewportHeight);
+    const extremeGrowth = contentBounds.width > growthBaselineWidth * ${NORTHSTAR_HEALTH_POLICY.render.maxWidthGrowthRatio} || contentBounds.height > growthBaselineHeight * ${NORTHSTAR_HEALTH_POLICY.render.maxHeightGrowthRatio};
+    const healthy = visibleRoot && pendingImageCount === 0 && failedAssetUrls.length === 0 &&
+      missingRequiredNodeIds.length === 0 && !extremeGrowth;
+    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount +
+      pendingImageCount + missingRequiredNodeIds.length + (documentScrollRisk ? 1 : 0) + (extremeGrowth ? 1 : 0) + (visibleRoot ? 0 : 1);
 
     parent.postMessage({
       type: "northstar.artifact.runtime-review",
@@ -2148,6 +2189,14 @@ function buildLegacyCanvasArtifactRuntimeDocument(
         smallTextCount,
         tinyInteractiveCount,
         missingImageCount,
+        pendingImageCount,
+        failedAssetUrls: Array.from(new Set(failedAssetUrls)),
+        missingRequiredNodeIds,
+        visible: visibleRoot,
+        overflowX,
+        overflowY,
+        extremeGrowth,
+        healthy,
         documentScrollRisk,
         summary: issueCount === 0
           ? "Runtime layout audit passed with no detected overflow, clipped text, tiny controls, or missing images."

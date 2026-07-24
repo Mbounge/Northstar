@@ -387,6 +387,14 @@ export interface CanvasCodeArtifactRuntimeReview {
   smallTextCount: number;
   tinyInteractiveCount: number;
   missingImageCount: number;
+  pendingImageCount?: number;
+  failedAssetUrls?: string[];
+  missingRequiredNodeIds?: string[];
+  visible?: boolean;
+  overflowX?: number;
+  overflowY?: number;
+  extremeGrowth?: boolean;
+  healthy?: boolean;
   documentScrollRisk: boolean;
   summary: string;
   mutationId?: string;
