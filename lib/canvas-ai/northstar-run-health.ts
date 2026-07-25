@@ -189,12 +189,21 @@ export type NorthstarVisualDispatchResult =
  * is not enough: lineage, transport, and runtime failures also report no
  * changed nodes and must be retried or reconciled instead of marked complete.
  */
+export function isNorthstarVerifiedNoopReason(reason: string | undefined): boolean {
+  return /did not produce an observable material delta|did not visibly change enough semantic content|requested visual state was already present|already represented by the verified artboard/i.test(reason || "");
+}
+
+export function isNorthstarNonMaterialCompositionalDeltaReason(
+  reason: string | undefined,
+): boolean {
+  return /did not produce a palpable compositional delta|changed area\s+[0-9.]+%\s*<\s*[0-9.]+%/i.test(reason || "");
+}
+
 export function isNorthstarVerifiedNoop(
   acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined,
 ): boolean {
-  if (acknowledgement?.status !== "rejected") return false;
-  const reason = acknowledgement.reason || "";
-  return /did not produce an observable material delta|did not visibly change enough semantic content|requested visual state was already present|already represented by the verified artboard/i.test(reason);
+  return acknowledgement?.status === "rejected"
+    && isNorthstarVerifiedNoopReason(acknowledgement.reason);
 }
 
 export function isNorthstarLineageRejection(

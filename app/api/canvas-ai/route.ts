@@ -55,6 +55,7 @@ import {
   NorthstarBudgetExceededError,
   NorthstarRunLifecycle,
   isNorthstarLineageRejection,
+  isNorthstarNonMaterialCompositionalDeltaReason,
   isNorthstarVerifiedNoop,
   runNorthstarOperationWithTimeout,
   type NorthstarVisualDispatchResult,
@@ -6319,6 +6320,7 @@ function normalizeNorthstarRejectionFamily(reasonValue: unknown): string {
     return "flow-topology";
   }
   if (/did not visibly change enough semantic content/i.test(reason)) return "insufficient-semantic-change";
+  if (isNorthstarNonMaterialCompositionalDeltaReason(reason)) return "non-material-compositional-delta";
   if (/whole-artboard utilization failed|occupied only a thin strip/i.test(reason)) return "whole-artboard-utilization";
   if (/major analytical region overlapped|complete atomic reflow|analysis lane.*overlap|analytical region collision/i.test(reason)) {
     return "analysis-lane-overlap";
@@ -6348,6 +6350,7 @@ function isExpectedNorthstarQualityRejection(
   return new Set([
     "flow-topology",
     "insufficient-semantic-change",
+    "non-material-compositional-delta",
     "whole-artboard-utilization",
     "analysis-lane-overlap",
     "protected-evidence-overlap",
@@ -11642,6 +11645,15 @@ The semantic intent gate requires grounded tool execution. You must return an ag
 
                   if (isNorthstarVerifiedNoop(acknowledgement)) {
                     const detail = acknowledgement.reason || "The proposed update was already represented by the verified artboard.";
+                    send("server.trace", {
+                      runId,
+                      traceId,
+                      name: "composition.checkpoint.already_present",
+                      proposalId: proposal.proposalId,
+                      baseRevisionId: proposal.baseRevisionId,
+                      candidateRevisionId: publishablePackage.revisionId,
+                      detail,
+                    });
                     console.info("Northstar treated a browser-verified no-op as a completed checkpoint and retained the canonical artboard.", {
                       proposalId: proposal.proposalId,
                       detail,
@@ -11702,7 +11714,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                       status: "rejected",
                       detail,
                       stage: "browser",
-                      reasonCode: "BROWSER_QUALITY_REJECTED",
+                      reasonCode: isNorthstarNonMaterialCompositionalDeltaReason(detail)
+                        ? "BROWSER_NON_MATERIAL_DELTA"
+                        : "BROWSER_QUALITY_REJECTED",
                       browserDispatched: true,
                       recoverable: true,
                       acknowledgement,
@@ -11735,22 +11749,24 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                     || contractReview?.issues.join(" ")
                     || semanticAcceptance?.issues.join(" ")
                     || "The browser rejected the visual transaction.";
-                  const actorMatched = liveArtboardActor.matches(proposal, acknowledgement);
+                  const actorIdentityMatched = liveArtboardActor.matchesIdentity(proposal, acknowledgement);
                   const browserAccepted = liveAcknowledgementPassed(acknowledgement, latestBatch?.mutationId);
-                  const rejectionStage = !actorMatched
+                  const rejectionStage = !actorIdentityMatched
                     ? "actor"
                     : !browserAccepted
                       ? "browser"
                       : contractReview && !contractReview.accepted
                         ? "contract-review"
                         : "semantic-review";
-                  const reasonCode = !actorMatched
+                  const reasonCode = !actorIdentityMatched
                     ? "ACK_PROPOSAL_MISMATCH"
-                    : !browserAccepted
-                      ? "BROWSER_ACK_REJECTED"
-                      : contractReview && !contractReview.accepted
-                        ? "CONTRACT_REVIEW_REJECTED"
-                        : "SEMANTIC_REVIEW_REJECTED";
+                    : isNorthstarNonMaterialCompositionalDeltaReason(detail)
+                      ? "BROWSER_NON_MATERIAL_DELTA"
+                      : !browserAccepted
+                        ? "BROWSER_ACK_REJECTED"
+                        : contractReview && !contractReview.accepted
+                          ? "CONTRACT_REVIEW_REJECTED"
+                          : "SEMANTIC_REVIEW_REJECTED";
                   retainVisualActivity(detail);
                   return {
                     status: "rejected",

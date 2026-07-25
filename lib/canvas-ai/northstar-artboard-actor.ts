@@ -70,17 +70,24 @@ export class NorthstarArtboardActor {
     return proposal;
   }
 
-  matches(
+  matchesIdentity(
     proposal: NorthstarArtboardProposal,
     acknowledgement: NorthstarArtifactMutationAcknowledgement,
   ): boolean {
-    const expectedStatus = proposal.mutationId ? "applied" : "ready";
     return acknowledgement.proposalId === proposal.proposalId
       && acknowledgement.ackToken === proposal.ackToken
       && acknowledgement.artifactId === proposal.candidate.artifactId
       && acknowledgement.baseRevisionId === proposal.baseRevisionId
       && acknowledgement.revisionId === proposal.candidate.revisionId
-      && (!proposal.mutationId || acknowledgement.mutationId === proposal.mutationId)
+      && (!proposal.mutationId || acknowledgement.mutationId === proposal.mutationId);
+  }
+
+  matches(
+    proposal: NorthstarArtboardProposal,
+    acknowledgement: NorthstarArtifactMutationAcknowledgement,
+  ): boolean {
+    const expectedStatus = proposal.mutationId ? "applied" : "ready";
+    return this.matchesIdentity(proposal, acknowledgement)
       && acknowledgement.status === expectedStatus;
   }
 

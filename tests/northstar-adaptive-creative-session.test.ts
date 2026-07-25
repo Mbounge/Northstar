@@ -98,3 +98,39 @@ test("repeated unchanged failures are counted against the exact committed revisi
   assert.equal(first, 1);
   assert.equal(second, 2);
 });
+
+
+test("low thinking settles after two optional rejected refinements following an accepted act", () => {
+  const session = new NorthstarAdaptiveCreativeSession("low");
+  session.recordAcceptedAct({
+    revisionId: "revision-accepted",
+    fingerprint: "accepted",
+    intention: "Create the decisive comparison",
+    viewerUnderstanding: "The trade-off is clear",
+    visibleChange: "The board now has a strategic synthesis",
+    affectedNodeIds: ["synthesis"],
+  });
+  session.recordRejectedAct({ revisionId: "revision-accepted", reason: "First optional refinement was not material" });
+  session.assertCanAttempt();
+  session.recordRejectedAct({ revisionId: "revision-accepted", reason: "Second optional refinement was not material" });
+  assert.throws(
+    () => session.assertCanAttempt(),
+    /optional-refinement plateau after 2 consecutive rejected acts/,
+  );
+});
+
+test("deeper thinking levels preserve a larger optional refinement budget", () => {
+  const medium = new NorthstarAdaptiveCreativeSession("medium");
+  medium.recordAcceptedAct({
+    revisionId: "revision-accepted", fingerprint: "accepted", intention: "Improve",
+    viewerUnderstanding: "Clearer", visibleChange: "Changed", affectedNodeIds: ["synthesis"],
+  });
+  medium.recordRejectedAct({ revisionId: "revision-accepted", reason: "one" });
+  medium.recordRejectedAct({ revisionId: "revision-accepted", reason: "two" });
+  medium.assertCanAttempt();
+  medium.recordRejectedAct({ revisionId: "revision-accepted", reason: "three" });
+  assert.throws(() => medium.assertCanAttempt(), /optional-refinement plateau after 3/);
+
+  const high = northstarAdaptiveCreativeBudget("high");
+  assert.equal(high.maximumOptionalConsecutiveRejectionsAfterAccepted, 4);
+});

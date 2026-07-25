@@ -144,6 +144,83 @@ export function getCanvasDiagnostics() {
   return events.slice();
 }
 
+export type CanvasDiagnosticSeverity = "problem" | "warning" | "recovered" | "info";
+
+function terminalEventForDiagnosticRun(
+  event: CanvasDiagnosticEvent,
+  sourceEvents: readonly CanvasDiagnosticEvent[],
+): CanvasDiagnosticEvent | undefined {
+  if (!event.runId) return undefined;
+  return [...sourceEvents].reverse().find((candidate) =>
+    candidate.runId === event.runId
+    && (candidate.name === "run.completed"
+      || candidate.name === "run.incomplete"
+      || candidate.name === "run.failed"
+      || candidate.name === "run.cancelled")
+  );
+}
+
+export function classifyCanvasDiagnosticEvent(
+  event: CanvasDiagnosticEvent,
+  sourceEvents: readonly CanvasDiagnosticEvent[] = events,
+): CanvasDiagnosticSeverity {
+  const status = typeof event.data?.status === "string"
+    ? event.data.status.toLowerCase()
+    : "";
+  const terminal = terminalEventForDiagnosticRun(event, sourceEvents);
+  const runCompleted = terminal?.name === "run.completed";
+  const name = event.name.toLowerCase();
+  const detail = (event.detail ?? "").toLowerCase();
+  const renderSeverity = typeof event.data?.severity === "string"
+    ? event.data.severity.toLowerCase()
+    : undefined;
+
+  if (event.name === "run.incomplete" || event.name === "run.failed") return "problem";
+  if (event.name === "run.cancelled" || event.name === "run.completed") return "info";
+
+  if (
+    event.name === "render.health"
+    && (renderSeverity === "warning" || /refinement warning/.test(detail))
+  ) {
+    return "warning";
+  }
+
+  const recoverableCandidateEvent =
+    status === "rejected"
+    || status === "superseded"
+    || status === "skipped"
+    || /(?:^|\.)(?:rejected|restored|not_committed|already_present|stale_restore_suppressed|candidate_rejected|continuation_abandoned)$/.test(name)
+    || name.includes("preflight_rejected")
+    || name.includes("dispatch_rejected");
+  if (recoverableCandidateEvent) return runCompleted ? "recovered" : "warning";
+
+  const explicitProblem =
+    event.phase === "error"
+    || event.data?.healthy === false
+    || status === "failed"
+    || status === "timed_out"
+    || name === "revision.timed_out"
+    || name === "ack.delivery_failed"
+    || (event.phase === "persistence" && /failed|mismatch/.test(name));
+  if (explicitProblem) return "problem";
+
+  return "info";
+}
+
+export function summarizeCanvasDiagnosticSeverities(
+  scopedEvents: readonly CanvasDiagnosticEvent[],
+  sourceEvents: readonly CanvasDiagnosticEvent[] = scopedEvents,
+): Record<CanvasDiagnosticSeverity, number> {
+  const counts: Record<CanvasDiagnosticSeverity, number> = {
+    problem: 0,
+    warning: 0,
+    recovered: 0,
+    info: 0,
+  };
+  for (const event of scopedEvents) counts[classifyCanvasDiagnosticEvent(event, sourceEvents)] += 1;
+  return counts;
+}
+
 export function clearCanvasDiagnostics() {
   events.length = 0;
   listeners.forEach((listener) => listener());

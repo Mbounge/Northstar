@@ -18,6 +18,7 @@ export interface NorthstarAdaptiveCreativeBudget {
   maximumAcceptedActs: number;
   maximumTotalAttempts: number;
   maximumConsecutiveRejections: number;
+  maximumOptionalConsecutiveRejectionsAfterAccepted: number;
   maximumRepeatedFailureFingerprints: number;
   maximumElapsedMs: number;
   authoringTimeoutMs: number;
@@ -117,6 +118,7 @@ export function northstarAdaptiveCreativeBudget(
       maximumAcceptedActs: 5,
       maximumTotalAttempts: 9,
       maximumConsecutiveRejections: 3,
+      maximumOptionalConsecutiveRejectionsAfterAccepted: 2,
       maximumRepeatedFailureFingerprints: 2,
       maximumElapsedMs: 4 * 60_000,
       authoringTimeoutMs: 48_000,
@@ -135,6 +137,7 @@ export function northstarAdaptiveCreativeBudget(
       maximumAcceptedActs: 14,
       maximumTotalAttempts: 24,
       maximumConsecutiveRejections: 5,
+      maximumOptionalConsecutiveRejectionsAfterAccepted: 4,
       maximumRepeatedFailureFingerprints: 2,
       maximumElapsedMs: 12 * 60_000,
       authoringTimeoutMs: 95_000,
@@ -152,6 +155,7 @@ export function northstarAdaptiveCreativeBudget(
     maximumAcceptedActs: 9,
     maximumTotalAttempts: 16,
     maximumConsecutiveRejections: 4,
+    maximumOptionalConsecutiveRejectionsAfterAccepted: 3,
     maximumRepeatedFailureFingerprints: 2,
     maximumElapsedMs: 8 * 60_000,
     authoringTimeoutMs: 72_000,
@@ -347,6 +351,15 @@ export class NorthstarAdaptiveCreativeSession {
   }
 
   assertCanAttempt(now = Date.now()): void {
+    if (
+      this.acceptedActsValue.length > 0
+      && this.consecutiveRejectionCountValue
+        >= this.budget.maximumOptionalConsecutiveRejectionsAfterAccepted
+    ) {
+      throw new Error(
+        `The adaptive creative session reached an optional-refinement plateau after ${this.consecutiveRejectionCountValue} consecutive rejected acts following a verified creative improvement.`,
+      );
+    }
     if (this.totalAttemptCountValue >= this.budget.maximumTotalAttempts) {
       throw new Error(
         `The adaptive creative session exhausted its ${this.budget.maximumTotalAttempts} total-attempt safety budget.`,

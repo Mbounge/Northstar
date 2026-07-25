@@ -7,7 +7,9 @@ import {
   NorthstarRunHealthError,
   NorthstarRunLifecycle,
   isNorthstarLineageRejection,
+  isNorthstarNonMaterialCompositionalDeltaReason,
   isNorthstarVerifiedNoop,
+  isNorthstarVerifiedNoopReason,
   runNorthstarOperationWithTimeout,
 } from "@/lib/canvas-ai/northstar-run-health";
 import type { NorthstarArtifactMutationAcknowledgement } from "@/lib/canvas-artifacts/types";
@@ -114,4 +116,24 @@ test("only an explicit material-delta rejection completes as a verified no-op", 
   );
   assert.equal(isNorthstarVerifiedNoop(acknowledgement), true);
   assert.equal(isNorthstarLineageRejection(acknowledgement), false);
+});
+
+test("verified no-op reasons can be classified before constructing an acknowledgement", () => {
+  assert.equal(
+    isNorthstarVerifiedNoopReason("The requested visual state was already present on the living artboard."),
+    true,
+  );
+  assert.equal(
+    isNorthstarVerifiedNoopReason("The proposal base revision does not match the browser."),
+    false,
+  );
+});
+
+test("a zero-area creative candidate is a non-material delta, not an acknowledgement mismatch", () => {
+  assert.equal(
+    isNorthstarNonMaterialCompositionalDeltaReason(
+      "The visual design stage did not produce a palpable compositional delta: changed area 0% < 1.5%",
+    ),
+    true,
+  );
 });
