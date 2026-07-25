@@ -1141,6 +1141,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       if (operation.op === "set-styles" || operation.op === "set-classes" || operation.op === "set-css-layer") kinds.add("style");
       if (operation.op === "request-space") kinds.add("geometry");
       if (operation.op === "set-styles" && Object.keys(operation.styles || {}).some((key) => /width|height|flex-basis|font-size|transform|scale/i.test(key))) kinds.add("scale");
+      if (operation.op === "set-css-layer" && /(?:width|height|flex-basis|font-size|transform|scale)\s*:/i.test(operation.css || "")) kinds.add("scale");
     }
     if (Math.abs(afterBounds.width - beforeBounds.width) > 2 || Math.abs(afterBounds.height - beforeBounds.height) > 2 || afterBounds.minX !== beforeBounds.minX || afterBounds.minY !== beforeBounds.minY) kinds.add("geometry");
     if ((batch.requiredAssetUrls || []).length) kinds.add("assets");
@@ -1452,11 +1453,13 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
                   ? "The live artboard audit rejected clipping, overflow, internal scrolling, or missing imagery."
                   : "";
         if (rejectedReason) {
+          const rejectedRevisionId = acknowledgement.revisionId;
+          const rollbackRevisionId = acknowledgement.transaction.revisionId;
           pendingAcknowledgement = null;
           root.innerHTML = acknowledgement.transaction.html;
           restoreStyleState(acknowledgement.transaction.styles);
           requestedBounds = { ...acknowledgement.transaction.requestedBounds };
-          currentRevisionId = acknowledgement.transaction.revisionId;
+          currentRevisionId = rollbackRevisionId;
           currentMutationId = acknowledgement.transaction.mutationId;
           enforceAssetPolicy(root);
           applyStage();
@@ -1464,7 +1467,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             type: "northstar.artifact.mutation-rejected",
             artifactId: ARTIFACT_ID,
             surfaceId: SURFACE_ID,
-            revisionId: currentRevisionId,
+            revisionId: rejectedRevisionId,
+            browserRevisionId: currentRevisionId,
             baseRevisionId: acknowledgement.proposal?.baseRevisionId,
             proposalId: acknowledgement.proposal?.proposalId,
             ackToken: acknowledgement.proposal?.ackToken,

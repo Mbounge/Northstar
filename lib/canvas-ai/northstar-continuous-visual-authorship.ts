@@ -3,6 +3,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { NorthstarArtboardMutationDraft } from "@/lib/canvas-ai/northstar-artboard-mutations";
+import type { NorthstarArtboardMutationBatch } from "@/lib/canvas-artifacts/types";
 import type {
   NorthstarArtifactMutationAcknowledgement,
   NorthstarGeneratedCodeArtifactPackage,
@@ -136,6 +137,17 @@ export type NorthstarMoveContract = {
 export type NorthstarPreparedMove = {
   contract: NorthstarMoveContract;
   draft: NorthstarArtboardMutationDraft;
+  impactRequirements?: Pick<
+    NorthstarArtboardMutationBatch,
+    | "minimumMeaningfulChangedNodes"
+    | "allowTextOnly"
+    | "requiredChangeKinds"
+    | "minimumChangedAreaRatio"
+    | "minimumSpatiallyChangedNodes"
+    | "minimumMovedNodes"
+    | "minimumResizedNodes"
+  >;
+  diagnostics?: string[];
   preparedAt: number;
   baseRevisionId: string;
   fingerprint: string;
@@ -878,6 +890,28 @@ function evidenceInventoryIssues(draft: NorthstarArtboardMutationDraft): string[
   return issues;
 }
 
+
+export function northstarCssHidesCanonicalArtboard(css: string): boolean {
+  for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const declarations = match[2] ?? "";
+    const hides = /(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\s*!important)?(?:\s*;|\s*$))/i.test(declarations);
+    if (!hides) continue;
+    for (const selector of (match[1] ?? "").split(",")) {
+      const trimmed = selector.trim();
+      // Decide which element the selector ultimately targets. An ancestor-qualified root
+      // selector such as `.canvas .ns-artifact` still hides the canonical root, while
+      // `.ns-artifact [data-ns-working-role="status"]` hides only a descendant.
+      const structuralSelector = trimmed
+        .replace(/\[data-ns-node-id\s*=\s*["']?artboard["']?\]/gi, "__NORTHSTAR_ROOT__")
+        .replace(/\.ns-(?:artifact|visual-scene)\b/gi, "__NORTHSTAR_ROOT__")
+        .replace(/\[[^\]]+\]/g, "x");
+      const compounds = structuralSelector.split(/(?:\s+|[>+~])+/).filter(Boolean);
+      if (compounds.at(-1)?.includes("__NORTHSTAR_ROOT__")) return true;
+    }
+  }
+  return false;
+}
+
 export function preflightNorthstarMove(input: {
   artifact: NorthstarGeneratedCodeArtifactPackage;
   contract: NorthstarMoveContract;
@@ -941,7 +975,7 @@ export function preflightNorthstarMove(input: {
       const css = operation.css;
       if (/\.ns-reasoning-zone[^{}]*\{[^{}]*position\s*:\s*(?:absolute|fixed)/i.test(css)) issues.push("move takes the reasoning theatre out of normal flow");
       if (/\.ns-reasoning-zone[^{}]*\{[^{}]*grid-template-columns\s*:\s*1fr(?:\s*;|\s*$)/i.test(css)) issues.push("move vertically stacks the required reasoning pair");
-      if (/data-ns-node-id=["']?artboard|\.ns-(?:artifact|visual-scene)[^{}]*\{[^{}]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$))/i.test(css)) issues.push("move hides the canonical artboard");
+      if (northstarCssHidesCanonicalArtboard(css)) issues.push("move hides the canonical artboard");
     }
   }
 

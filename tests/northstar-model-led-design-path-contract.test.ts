@@ -5,27 +5,29 @@ import test from "node:test";
 import { fingerprintNorthstarMove } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
 import type { NorthstarArtboardMutationDraft } from "@/lib/canvas-ai/northstar-artboard-mutations";
 
-const route = fs.readFileSync(path.join(process.cwd(), "app/api/canvas-ai/route.ts"), "utf8");
+const root = process.cwd();
+const route = fs.readFileSync(path.join(root, "app/api/canvas-ai/route.ts"), "utf8");
+const engine = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-presentation-engine.ts"), "utf8");
+const diagnostics = fs.readFileSync(path.join(root, "lib/canvas-ai/canvas-diagnostics.ts"), "utf8");
+const workspace = fs.readFileSync(path.join(root, "components/canvas/north-star-canvas-workspace.tsx"), "utf8");
 
-test("visual authorship has no deterministic design fallback", () => {
-  assert.equal(route.includes("buildExecutionIntegrityFallbackMove"), false);
-  assert.equal(route.includes("deterministicHierarchy"), false);
-  assert.equal(route.includes("deterministicCreativeDirection({"), false);
-  assert.equal(route.includes("buildNorthstarDeliveryFallbackAcknowledgement"), false);
-  assert.equal(route.includes("No synthetic acknowledgement was created"), true);
-  assert.equal(route.includes("Deterministic visual fallback is disabled"), true);
-  assert.equal(route.includes("There is no deterministic visual fallback"), true);
+test("visual authorship always has an evidence-grounded executable path", () => {
+  assert.equal(route.includes("buildNorthstarFallbackPresentationDecision"), true);
+  assert.equal(route.includes("decisionSource = \"evidence-grounded-fallback\""), true);
+  assert.equal(route.includes("Typed presentation preflight failed"), true);
+  assert.equal(engine.includes("compileNorthstarPresentationPass"), true);
+  assert.equal(engine.includes("variant?: number"), true);
 });
 
-test("browser rejection becomes a model critique packet and stale critique is cleared after success", () => {
+test("browser rejection becomes decision critique and changes the next evidence ranking", () => {
   assert.equal(route.includes("const buildRejectedDesignCritique"), true);
-  assert.equal(route.includes("rejectedStrategy"), true);
-  assert.equal(route.includes("browserResult"), true);
-  assert.equal(route.includes("Do not repeat rejected strategy fingerprint"), true);
+  assert.equal(route.includes("BROWSER CRITIQUE FROM THE PREVIOUS CANDIDATE"), true);
+  assert.equal(route.includes("presentationAttemptsByObligation"), true);
+  assert.equal(route.includes("variant: attemptIndex - 1"), true);
   assert.equal(route.includes("priorCritique = undefined;"), true);
 });
 
-test("equivalent model strategies share a fingerprint despite regenerated identities", () => {
+test("equivalent generated identities share a fingerprint", () => {
   const makeDraft = (suffix: string): NorthstarArtboardMutationDraft => ({
     title: "Test hypothesis",
     description: "Make the hypothesis structurally evaluable",
@@ -59,7 +61,7 @@ test("equivalent model strategies share a fingerprint despite regenerated identi
   assert.equal(first, second);
 });
 
-test("materially different authored strategies retain different fingerprints", () => {
+test("materially different strategies retain different fingerprints", () => {
   const base: NorthstarArtboardMutationDraft = {
     title: "Test hypothesis",
     description: "Make the hypothesis structurally evaluable",
@@ -81,21 +83,17 @@ test("materially different authored strategies retain different fingerprints", (
   );
 });
 
-test("model-led design generation is observable and bounded before an artifact action exists", () => {
-  assert.equal(route.includes("class NorthstarModelStageTimeoutError"), true);
-  assert.equal(route.includes("runNorthstarModelStageWithTimeout"), true);
-  assert.equal(route.includes("Author the next visible ${obligation} design move"), true);
-  assert.equal(route.includes("Revise the ${obligation} design move from browser critique"), true);
-  assert.equal(route.includes("await callbacks.startStep(authorshipStep)"), true);
-  assert.equal(route.includes("await callbacks.completeStep({"), true);
-  assert.equal(route.includes("await callbacks.failStep({"), true);
-  assert.equal(route.includes("if (error instanceof NorthstarBudgetExceededError) throw error;"), true);
+test("design decisions and preflight outcomes enter the canonical diagnostic stream", () => {
+  assert.equal(route.includes('callbacks.trace?.("design.attempt.started"'), true);
+  assert.equal(route.includes('callbacks.trace?.("design.decision.received"'), true);
+  assert.equal(route.includes('callbacks.trace?.("design.preflight.rejected"'), true);
+  assert.equal(route.includes('callbacks.trace?.("design.preflight.accepted"'), true);
+  assert.equal(workspace.includes('eventName === "server.trace"'), true);
 });
 
-test("model-stage timeout aborts the provider request without dispatching a fallback design", () => {
-  assert.equal(route.includes("controller.abort(new NorthstarModelStageTimeoutError"), true);
-  assert.equal(route.includes('stage: "select-creative-direction"'), true);
-  assert.equal(route.includes("parentSignal: signal"), true);
-  assert.equal(route.includes("signal: stageSignal"), true);
-  assert.equal(route.includes("buildExecutionIntegrityFallbackMove"), false);
+test("failed and cancelled runs are terminal in telemetry and the diagnostics panel", () => {
+  assert.equal(diagnostics.includes('event.name === "run.failed"'), true);
+  assert.equal(workspace.includes('event.name === "run.failed"'), true);
+  assert.equal(workspace.includes('event.name === "run.cancelled"'), true);
+  assert.equal(workspace.includes("unresolvedRevisionRejections"), true);
 });

@@ -39,6 +39,7 @@ interface ArtifactPointerMessage {
   artifactId: string;
   surfaceId?: string;
   revisionId?: string;
+  browserRevisionId?: string;
   baseRevisionId?: string;
   proposalId?: string;
   ackToken?: string;
@@ -386,10 +387,12 @@ function CodeArtifactHostImpl({
     status: "applied" | "rejected" | "ready";
     message: ArtifactPointerMessage;
     reason?: string;
+    proposal?: NonNullable<typeof inFlightProposalRef.current>;
+    browserRevisionId?: string;
   }) => {
     const latest = latestArtifactRef.current;
     const mounted = mountedSurfaceRef.current;
-    const inFlight = inFlightProposalRef.current;
+    const inFlight = input.proposal ?? inFlightProposalRef.current;
     const isFoundationReady = input.status === "ready" && !input.message.mutationId;
 
     // The acknowledgement belongs to the exact mounted browser event. Later
@@ -406,11 +409,21 @@ function CodeArtifactHostImpl({
 
     if (!current || !ackToken || !proposalId || !revisionId) return;
 
-    // A terminal browser report is authoritative only for the exact revision
-    // currently mounted in the iframe. Old resize/review callbacks can arrive
-    // after React has dispatched the next proposal; treating those callbacks as
-    // current would reject a new revision using the previous revision's DOM.
-    if (!isFoundationReady && browserRevisionRef.current !== revisionId) {
+    // Applied events must be emitted by the exact candidate revision currently
+    // mounted. Rejected events are different: the runtime atomically rolls the
+    // DOM back before posting its terminal receipt, so the browser revision is
+    // expected to be the proposal base while the receipt revision remains the
+    // rejected candidate.
+    const observedBrowserRevision = input.browserRevisionId
+      ?? input.message.browserRevisionId
+      ?? browserRevisionRef.current;
+    const rejectedEnvelopeIsExact = input.status === "rejected"
+      && Boolean(inFlight)
+      && revisionId === inFlight?.revisionId
+      && (input.message.mutationId ?? inFlight?.mutationId) === inFlight?.mutationId
+      && (observedBrowserRevision === inFlight?.baseRevisionId || observedBrowserRevision === inFlight?.revisionId);
+    const appliedEnvelopeIsExact = input.status !== "rejected" && observedBrowserRevision === revisionId;
+    if (!isFoundationReady && !rejectedEnvelopeIsExact && !appliedEnvelopeIsExact) {
       onLifecycleEvent({
         name: "revision.received",
         artifactId: current.artifactId,
@@ -418,8 +431,8 @@ function CodeArtifactHostImpl({
         ackToken,
         proposalId,
         mutationId: input.message.mutationId ?? inFlight?.mutationId,
-        browserRevisionId: browserRevisionRef.current,
-        detail: `Ignored stale terminal browser report for ${revisionId}; mounted browser revision is ${browserRevisionRef.current ?? "unknown"}.`,
+        browserRevisionId: observedBrowserRevision,
+        detail: `Ignored stale terminal browser report for ${revisionId}; mounted browser revision is ${observedBrowserRevision ?? "unknown"}.`,
         timestamp: Date.now(),
       });
       return;
@@ -473,7 +486,7 @@ function CodeArtifactHostImpl({
         ackToken: acknowledgement.ackToken,
         proposalId: acknowledgement.proposalId,
         mutationId: acknowledgement.mutationId,
-        browserRevisionId: browserRevisionRef.current,
+        browserRevisionId: observedBrowserRevision,
         detail: acknowledgement.reason,
         timestamp: Date.now(),
       });
@@ -654,15 +667,38 @@ function CodeArtifactHostImpl({
       if (event.data.type === "northstar.artifact.runtime-error") {
         if (event.data.mutationId) {
           failedMutationIdsRef.current.add(event.data.mutationId);
-          if (inFlightProposalRef.current?.mutationId === event.data.mutationId) {
-            browserRevisionRef.current = inFlightProposalRef.current.baseRevisionId;
-            inFlightProposalRef.current = null;
-          }
+          const failedProposal = inFlightProposalRef.current?.mutationId === event.data.mutationId
+            ? inFlightProposalRef.current
+            : undefined;
+          const rollbackRevisionId = failedProposal?.baseRevisionId ?? event.data.browserRevisionId;
+          if (rollbackRevisionId) browserRevisionRef.current = rollbackRevisionId;
           setVisibleMutationLabel("Repairing an invalid adjustment on this same artboard");
-          void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "Runtime mutation error." })
-            .then(() => setVisibleMutationLabel(null))
+          void postAcknowledgement({
+            status: "rejected",
+            message: {
+              ...event.data,
+              revisionId: failedProposal?.revisionId ?? event.data.revisionId,
+              baseRevisionId: failedProposal?.baseRevisionId ?? event.data.baseRevisionId,
+              proposalId: failedProposal?.proposalId ?? event.data.proposalId,
+              ackToken: failedProposal?.ackToken ?? event.data.ackToken,
+              mutationId: failedProposal?.mutationId ?? event.data.mutationId,
+              browserRevisionId: rollbackRevisionId,
+            },
+            proposal: failedProposal,
+            browserRevisionId: rollbackRevisionId,
+            reason: event.data.message || "Runtime mutation error.",
+          })
+            .then(() => {
+              if (failedProposal && inFlightProposalRef.current?.ackToken === failedProposal.ackToken) {
+                inFlightProposalRef.current = null;
+              }
+              setVisibleMutationLabel(null);
+            })
             .catch((error: unknown) => {
               console.warn("Northstar could not report the rejected mutation; the rolled-back artboard remains locally usable.", error);
+              if (failedProposal && inFlightProposalRef.current?.ackToken === failedProposal.ackToken) {
+                inFlightProposalRef.current = null;
+              }
               setVisibleMutationLabel(null);
             });
         } else {
@@ -758,20 +794,43 @@ function CodeArtifactHostImpl({
       }
 
       if (event.data.type === "northstar.artifact.mutation-rejected") {
-        // The runtime has already rolled the DOM back. Never commit the rejected mutation's
-        // transient geometry to the outer Canvas object.
+        // The runtime has already rolled the DOM back, but the terminal receipt
+        // must retain the rejected candidate identity. Capture the proposal
+        // before clearing it and acknowledge the candidate revision while
+        // reporting the rolled-back browser revision separately.
         if (event.data.mutationId) failedMutationIdsRef.current.add(event.data.mutationId);
         const rejectedProposal = inFlightProposalRef.current;
-        if (rejectedProposal && event.data.mutationId && rejectedProposal.mutationId === event.data.mutationId) {
-          browserRevisionRef.current = rejectedProposal.baseRevisionId;
-          inFlightProposalRef.current = null;
-        }
+        const rollbackRevisionId = event.data.browserRevisionId ?? rejectedProposal?.baseRevisionId;
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         setVisibleMutationLabel("Northstar is repairing this rejected adjustment");
-        void postAcknowledgement({ status: "rejected", message: event.data, reason: event.data.message || "The live runtime rejected the adjustment." })
-          .then(() => setVisibleMutationLabel(null))
+        void postAcknowledgement({
+          status: "rejected",
+          message: {
+            ...event.data,
+            revisionId: rejectedProposal?.revisionId ?? event.data.revisionId,
+            baseRevisionId: rejectedProposal?.baseRevisionId ?? event.data.baseRevisionId,
+            proposalId: rejectedProposal?.proposalId ?? event.data.proposalId,
+            ackToken: rejectedProposal?.ackToken ?? event.data.ackToken,
+            mutationId: rejectedProposal?.mutationId ?? event.data.mutationId,
+            browserRevisionId: rollbackRevisionId,
+          },
+          proposal: rejectedProposal ?? undefined,
+          browserRevisionId: rollbackRevisionId,
+          reason: event.data.message || "The live runtime rejected the adjustment.",
+        })
+          .then(() => {
+            if (rejectedProposal && inFlightProposalRef.current?.ackToken === rejectedProposal.ackToken) {
+              browserRevisionRef.current = rejectedProposal.baseRevisionId;
+              inFlightProposalRef.current = null;
+            }
+            setVisibleMutationLabel(null);
+          })
           .catch((error: unknown) => {
             console.warn("Northstar acknowledgement transport failed; the runtime rollback remains authoritative locally.", error);
+            if (rejectedProposal && inFlightProposalRef.current?.ackToken === rejectedProposal.ackToken) {
+              browserRevisionRef.current = rejectedProposal.baseRevisionId;
+              inFlightProposalRef.current = null;
+            }
             setVisibleMutationLabel(null);
           });
         return;

@@ -16967,6 +16967,7 @@ type CanvasActionLifecycleSettlement =
 type CanvasActionLifecycleIdentity = {
   proposalId: string;
   revisionId?: string;
+  baseRevisionId?: string;
   mutationId?: string;
   ackToken?: string;
 };
@@ -16983,22 +16984,24 @@ function canvasActionLifecycleIdentity(action: CanvasAIActionRequest): CanvasAct
   if (!action.stepId.startsWith(prefix)) return null;
   const proposalId = action.stepId.slice(prefix.length);
   let revisionId: string | undefined;
+  let baseRevisionId: string | undefined;
   let mutationId: string | undefined;
   let ackToken: string | undefined;
   const rawComposition = action.arguments?.compositionJson;
   try {
     const parsed = typeof rawComposition === "string" ? JSON.parse(rawComposition) : rawComposition;
     const packageValue = parsed && typeof parsed === "object" && "package" in parsed
-      ? (parsed as { package?: { revisionId?: unknown; pendingAckToken?: unknown; mutationJournal?: Array<{ mutationId?: unknown }> } }).package
+      ? (parsed as { package?: { revisionId?: unknown; parentRevisionId?: unknown; pendingAckToken?: unknown; mutationJournal?: Array<{ mutationId?: unknown }> } }).package
       : undefined;
     revisionId = typeof packageValue?.revisionId === "string" ? packageValue.revisionId : undefined;
+    baseRevisionId = typeof packageValue?.parentRevisionId === "string" ? packageValue.parentRevisionId : undefined;
     ackToken = typeof packageValue?.pendingAckToken === "string" ? packageValue.pendingAckToken : undefined;
     const lastMutation = packageValue?.mutationJournal?.at(-1);
     mutationId = typeof lastMutation?.mutationId === "string" ? lastMutation.mutationId : undefined;
   } catch {
     // Settlement still correlates by proposal id when a legacy action omitted a parseable package.
   }
-  return { proposalId, revisionId, mutationId, ackToken };
+  return { proposalId, revisionId, baseRevisionId, mutationId, ackToken };
 }
 
 async function waitForCanvasActionLifecycleSettlement(
@@ -17019,11 +17022,18 @@ async function waitForCanvasActionLifecycleSettlement(
       candidate.name === "ack.delivery_failed"
     );
     if (event) {
+      const browserRevisionMatches = event.name === "revision.rejected"
+        ? Boolean(
+            !identity.revisionId
+            || event.browserRevisionId === identity.revisionId
+            || (identity.baseRevisionId && event.browserRevisionId === identity.baseRevisionId),
+          )
+        : Boolean(!identity.revisionId || event.browserRevisionId === identity.revisionId);
       const mismatches = [
         identity.revisionId && event.revisionId !== identity.revisionId ? `revision ${event.revisionId ?? "missing"} != ${identity.revisionId}` : "",
         identity.mutationId && event.mutationId !== identity.mutationId ? `mutation ${event.mutationId ?? "missing"} != ${identity.mutationId}` : "",
         identity.ackToken && event.ackToken !== identity.ackToken ? `ack token ${event.ackToken ?? "missing"} != ${identity.ackToken}` : "",
-        identity.revisionId && event.browserRevisionId !== identity.revisionId ? `browser revision ${event.browserRevisionId ?? "missing"} != ${identity.revisionId}` : "",
+        !browserRevisionMatches ? `browser revision ${event.browserRevisionId ?? "missing"} is neither candidate ${identity.revisionId ?? "unknown"} nor rollback base ${identity.baseRevisionId ?? "unknown"}` : "",
       ].filter(Boolean);
       if (mismatches.length) {
         recordCanvasDiagnostic({
@@ -17830,6 +17840,20 @@ function ChatWorkspacePanel({
           return;
         }
 
+        if (eventName === "server.trace") {
+          const traceName = typeof payload.name === "string" ? payload.name : "server.trace";
+          recordCanvasDiagnostic({
+            phase: traceName.startsWith("design.") || traceName.startsWith("creative-direction.") ? "action" : "run",
+            name: traceName,
+            runId: typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current ?? undefined,
+            detail: typeof payload.detail === "string" ? payload.detail : undefined,
+            data: payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+              ? payload.data as Record<string, unknown>
+              : undefined,
+          });
+          return;
+        }
+
         if (eventName === "plan.created") {
           const rawSteps = Array.isArray(payload.steps) ? payload.steps : [];
           const activity: CanvasAIActivityItem[] = rawSteps
@@ -18322,6 +18346,16 @@ function ChatWorkspacePanel({
         }
 
         if (eventName === "run.failed") {
+          const failedRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          if (failedRunId && !getCanvasDiagnostics().some((event) => event.runId === failedRunId && event.name === "run.failed")) {
+            recordCanvasDiagnostic({
+              phase: "run",
+              name: "run.failed",
+              runId: failedRunId,
+              detail: typeof payload.error === "string" ? payload.error : "The server run failed.",
+              data: { terminal: true },
+            });
+          }
           updateAssistantMessage({ runStatus: "failed" });
           return;
         }
@@ -18496,11 +18530,18 @@ function ChatWorkspacePanel({
               outcome.tool === "compose_visual_board" ||
               outcome.tool === "compose_artifact"),
         );
+        const latestAcknowledgedAt = lifecycleEvents
+          .filter((event) => event.name === "revision.acknowledged")
+          .reduce((latest, event) => Math.max(latest, event.timestamp), 0);
+        const unresolvedRevisionRejections = revisionRejections.filter(
+          (event) => event.timestamp > latestAcknowledgedAt,
+        );
         const finalEditableCompositionExists = successfulVisualOutcomes.length > 0;
+        // A rejected candidate is an expected part of iterative design. It only makes the
+        // deliverable unhealthy when no later browser-acknowledged revision recovered it.
         const deliverableHealthy =
           finalEditableCompositionExists &&
-          rejectedVisualOutcomes.length === 0 &&
-          revisionRejections.length === 0;
+          unresolvedRevisionRejections.length === 0;
         const healthy =
           receivedFinal &&
           serverRunCompleted &&
@@ -18530,6 +18571,8 @@ function ChatWorkspacePanel({
             unresolvedAcknowledgementCount: unresolvedAcknowledgements.length,
             acknowledgementFailureCount: acknowledgementFailures.length,
             revisionRejectionCount: revisionRejections.length,
+            unresolvedRevisionRejectionCount: unresolvedRevisionRejections.length,
+            recoveredRevisionRejectionCount: Math.max(0, revisionRejections.length - unresolvedRevisionRejections.length),
             rejectedVisualOutcomeCount: rejectedVisualOutcomes.length,
             finalEditableCompositionExists,
             pipelineSettled: outcomes.length === actionRequestCountRef.current && unresolvedAcknowledgements.length === 0,
@@ -18602,6 +18645,16 @@ function ChatWorkspacePanel({
           ),
         }));
       } else {
+        const failedRunId = activeRunIdRef.current ?? recoveryJournal.runId;
+        if (failedRunId && !getCanvasDiagnostics().some((event) => event.runId === failedRunId && event.name === "run.failed")) {
+          recordCanvasDiagnostic({
+            phase: "run",
+            name: "run.failed",
+            runId: failedRunId,
+            detail: error instanceof Error ? error.message : "North Star could not complete that request.",
+            data: { terminal: true, clientCaught: true },
+          });
+        }
         updateAssistantMessage((current) => ({
           content:
             error instanceof Error
@@ -23196,7 +23249,12 @@ function CanvasDiagnosticsPanel({
   const summary = useMemo(() => {
     const scoped = selectedRunId === "all" ? events : events.filter((event) => event.runId === selectedRunId);
     const started = scoped.find((event) => event.name === "run.started");
-    const terminal = [...scoped].reverse().find((event) => event.name === "run.completed" || event.name === "run.incomplete");
+    const terminal = [...scoped].reverse().find((event) =>
+      event.name === "run.completed" ||
+      event.name === "run.incomplete" ||
+      event.name === "run.failed" ||
+      event.name === "run.cancelled"
+    );
     const firstTime = started?.timestamp ?? scoped[0]?.timestamp;
     const lastTime = terminal?.timestamp ?? scoped[scoped.length - 1]?.timestamp;
     const durationMs = firstTime && lastTime ? Math.max(0, Date.parse(lastTime) - Date.parse(firstTime)) : null;
@@ -23209,7 +23267,15 @@ function CanvasDiagnosticsPanel({
     const pendingAcks = terminal && typeof terminal.data?.unresolvedAcknowledgementCount === "number"
       ? terminal.data.unresolvedAcknowledgementCount
       : null;
-    const health = terminal?.name === "run.completed" ? "healthy" : terminal?.name === "run.incomplete" ? "incomplete" : scoped.length ? "running" : "idle";
+    const health = terminal?.name === "run.completed"
+      ? "healthy"
+      : terminal?.name === "run.cancelled"
+        ? "cancelled"
+        : terminal?.name === "run.incomplete" || terminal?.name === "run.failed"
+          ? "incomplete"
+          : scoped.length
+            ? "running"
+            : "idle";
     return { scoped, durationMs, problems, hardFailures, pendingAcks, health };
   }, [events, selectedRunId]);
 

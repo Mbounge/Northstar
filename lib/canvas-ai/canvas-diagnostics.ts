@@ -196,10 +196,10 @@ export function getCanvasRunTelemetry(sourceEvents: CanvasDiagnosticEvent[] = ev
   for (const runEvents of runs.values()) {
     const started = runEvents.find((event) => event.name === "run.started") ?? runEvents[0];
     const terminal = [...runEvents].reverse().find((event) =>
-      event.name === "run.completed" || event.name === "run.incomplete" || event.name === "run.cancelled",
+      event.name === "run.completed" || event.name === "run.incomplete" || event.name === "run.failed" || event.name === "run.cancelled",
     );
     if (terminal?.name === "run.completed") completedRuns += 1;
-    if (terminal?.name === "run.incomplete" || terminal?.name === "run.cancelled") incompleteRuns += 1;
+    if (terminal?.name === "run.incomplete" || terminal?.name === "run.failed" || terminal?.name === "run.cancelled") incompleteRuns += 1;
     if (started && terminal) durations.push(Math.max(0, Date.parse(terminal.timestamp) - Date.parse(started.timestamp)));
 
     if (runEvents.some((event) => event.name === "action.outcome" && (event.data?.status === "failed" || event.data?.status === "timed_out"))) hardFailureRuns += 1;
