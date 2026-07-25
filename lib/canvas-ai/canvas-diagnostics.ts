@@ -98,7 +98,8 @@ function sanitizeDiagnosticValue(
       return limited;
     }
 
-    const entries = Object.entries(value as Record<string, unknown>);
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, childValue]) => typeof childValue !== "undefined");
     const output: Record<string, unknown> = {};
     for (const [childKey, childValue] of entries.slice(0, policy.maxObjectKeys)) {
       output[childKey] = sanitizeDiagnosticValue(childValue, stats, seen, depth + 1, childKey);

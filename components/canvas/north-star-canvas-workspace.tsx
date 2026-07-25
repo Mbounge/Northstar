@@ -17841,14 +17841,26 @@ function ChatWorkspacePanel({
 
         if (eventName === "server.trace") {
           const traceName = typeof payload.name === "string" ? payload.name : "server.trace";
+          const traceData = payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+            ? payload.data as Record<string, unknown>
+            : undefined;
+          const traceDetail = typeof payload.detail === "string" && payload.detail.trim()
+            ? payload.detail
+            : typeof traceData?.reason === "string" && traceData.reason.trim()
+              ? traceData.reason
+              : typeof traceData?.intention === "string" && traceData.intention.trim()
+                ? traceData.intention
+                : traceName.replace(/[._-]+/g, " ");
           recordCanvasDiagnostic({
-            phase: traceName.startsWith("design.") || traceName.startsWith("creative-direction.") ? "action" : "run",
+            phase: traceName.startsWith("design.")
+              || traceName.startsWith("creative-direction.")
+              || traceName.startsWith("creative.act.")
+              ? "action"
+              : "run",
             name: traceName,
             runId: typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current ?? undefined,
-            detail: typeof payload.detail === "string" ? payload.detail : undefined,
-            data: payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
-              ? payload.data as Record<string, unknown>
-              : undefined,
+            detail: traceDetail,
+            data: traceData,
           });
           return;
         }

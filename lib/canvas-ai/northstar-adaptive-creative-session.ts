@@ -101,8 +101,11 @@ export interface NorthstarAdaptiveContinuationDecision {
   continueWorking: boolean;
   readyForPublication: boolean;
   reason: string;
+  reasonCode: import("@/lib/canvas-ai/northstar-creative-convergence").NorthstarCreativeConvergenceReasonCode;
   readiness: NorthstarAdaptiveReadiness;
   knownLimitations: string[];
+  authorRequestedContinuation?: boolean;
+  reviewerRequestedContinuation?: boolean;
 }
 
 export function northstarAdaptiveCreativeBudget(
@@ -370,6 +373,7 @@ export class NorthstarAdaptiveCreativeSession {
     const acceptedCount = this.acceptedActsValue.length;
     const convergence = decideNorthstarCreativeConvergence({
       readiness,
+      thinkingDepth: this.thinkingDepth,
       acceptedActCount: acceptedCount,
       reachedMaximumAcceptedActs: acceptedCount >= this.budget.maximumAcceptedActs,
       authorCritique: critique,
@@ -380,8 +384,11 @@ export class NorthstarAdaptiveCreativeSession {
       continueWorking: convergence.continueWorking,
       readyForPublication: convergence.readyForPublication,
       reason: convergence.reason,
+      reasonCode: convergence.reasonCode,
       readiness,
       knownLimitations: convergence.knownLimitations,
+      authorRequestedContinuation: convergence.authorRequestedContinuation,
+      reviewerRequestedContinuation: convergence.reviewerRequestedContinuation,
     };
   }
 

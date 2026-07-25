@@ -122,12 +122,66 @@ export class NorthstarRunLifecycle {
   }
 }
 
+export type NorthstarVisualDispatchStage =
+  | "continuity"
+  | "publication-preparation"
+  | "actor"
+  | "candidate-deduplication"
+  | "action-build"
+  | "browser"
+  | "contract-review"
+  | "semantic-review"
+  | "commit";
+
 export type NorthstarVisualDispatchResult =
-  | { status: "committed"; detail: string }
-  | { status: "skipped"; detail: string; recoverable: true }
-  | { status: "rejected"; detail: string; recoverable: true }
-  | { status: "blocked"; detail: string; recoverable: false }
-  | { status: "timed-out"; detail: string; recoverable: false };
+  | {
+      status: "committed";
+      detail: string;
+      stage: "commit";
+      reasonCode: "COMMITTED";
+      browserDispatched: true;
+      recoverable: false;
+      acknowledgement: NorthstarArtifactMutationAcknowledgement;
+    }
+  | {
+      status: "skipped";
+      detail: string;
+      stage: NorthstarVisualDispatchStage;
+      reasonCode: string;
+      browserDispatched: boolean;
+      recoverable: true;
+      acknowledgement?: NorthstarArtifactMutationAcknowledgement;
+    }
+  | {
+      status: "rejected";
+      detail: string;
+      stage: NorthstarVisualDispatchStage;
+      reasonCode: string;
+      browserDispatched: boolean;
+      recoverable: true;
+      acknowledgement?: NorthstarArtifactMutationAcknowledgement;
+      operationIndex?: number;
+      operation?: string;
+      targetId?: string;
+    }
+  | {
+      status: "blocked";
+      detail: string;
+      stage: NorthstarVisualDispatchStage;
+      reasonCode: string;
+      browserDispatched: boolean;
+      recoverable: false;
+      acknowledgement?: NorthstarArtifactMutationAcknowledgement;
+    }
+  | {
+      status: "timed-out";
+      detail: string;
+      stage: NorthstarVisualDispatchStage;
+      reasonCode: string;
+      browserDispatched: boolean;
+      recoverable: false;
+      acknowledgement?: NorthstarArtifactMutationAcknowledgement;
+    };
 
 /**
  * A rejected mutation is a completed no-op only when the browser explicitly

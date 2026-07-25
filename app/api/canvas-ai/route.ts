@@ -68,9 +68,10 @@ import {
   buildNorthstarFinalResponseInstruction,
   buildNorthstarFinalStateBrief,
   buildNorthstarMoveContract,
-  northstarCssHidesCanonicalArtboard,
   preflightNorthstarMove,
+  validateNorthstarDispatchSceneContinuity,
   reviewNorthstarBrowserCommit,
+  summarizeNorthstarMoveOperations,
   verifyNorthstarFinalResponse,
   type NorthstarFinalStateBrief,
   type NorthstarMoveContract,
@@ -6185,7 +6186,7 @@ type CompositionResearchCallbacks = {
       artifact: NorthstarGeneratedCodeArtifactPackage,
       acknowledgement: NorthstarArtifactMutationAcknowledgement,
     ) => { accepted: boolean; issues: string[] },
-  ) => boolean | Promise<boolean>;
+  ) => NorthstarVisualDispatchResult | Promise<NorthstarVisualDispatchResult>;
   getLastMutationAck?: () => NorthstarArtifactMutationAcknowledgement | undefined;
   getLastRejectedMutationAck?: () => NorthstarArtifactMutationAcknowledgement | undefined;
 };
@@ -7126,6 +7127,7 @@ async function buildGeneratedCodeArtifactPackage({
   const buildRejectedDesignCritique = (input: {
     prepared: NorthstarPreparedMove;
     acknowledgement?: NorthstarArtifactMutationAcknowledgement;
+    dispatchResult?: NorthstarVisualDispatchResult;
     browserIssues?: string[];
   }): { critique: string; requiredChanges: string[] } => {
     const acknowledgement = input.acknowledgement;
@@ -7168,6 +7170,18 @@ async function buildGeneratedCodeArtifactPackage({
         mutationVisibleChange: input.prepared.draft.visibleChange,
         operationKinds: input.prepared.draft.operations.map((operation) => operation.op),
       },
+      dispatchResult: input.dispatchResult
+        ? {
+            status: input.dispatchResult.status,
+            stage: input.dispatchResult.stage,
+            reasonCode: input.dispatchResult.reasonCode,
+            browserDispatched: input.dispatchResult.browserDispatched,
+            detail: input.dispatchResult.detail,
+            operationIndex: input.dispatchResult.status === "rejected" ? input.dispatchResult.operationIndex : undefined,
+            operation: input.dispatchResult.status === "rejected" ? input.dispatchResult.operation : undefined,
+            targetId: input.dispatchResult.status === "rejected" ? input.dispatchResult.targetId : undefined,
+          }
+        : undefined,
       browserResult: {
         rejectionFamily,
         reason: acknowledgement?.reason,
@@ -7190,6 +7204,12 @@ async function buildGeneratedCodeArtifactPackage({
         "Re-observe the entire exact committed artboard and choose a materially different next creative act.",
         "Use real semantic targets and grounded evidence; do not follow a fixed obligation, layout family, or component recipe.",
         "Do not request or set artboard dimensions; runtime content measurement owns the iframe and outer Canvas geometry together.",
+        ...(input.dispatchResult && !input.dispatchResult.browserDispatched
+          ? [
+              `The candidate was rejected before browser dispatch at ${input.dispatchResult.stage} (${input.dispatchResult.reasonCode}).`,
+              `Correct the exact pre-dispatch failure: ${input.dispatchResult.detail}`,
+            ]
+          : []),
         ...geometryCorrection,
         ...buildNorthstarCorrectionDirective({
           contract: input.prepared.contract,
@@ -7455,10 +7475,11 @@ async function buildGeneratedCodeArtifactPackage({
         intention: act.intention,
         viewerUnderstanding: act.viewerUnderstanding,
         operationCount: act.mutation.operations.length,
-        affectedNodeIds: act.affectedNodeIds,
+        operationSummaries: summarizeNorthstarMoveOperations(act.mutation),
+        declaredAffectedNodeIds: act.affectedNodeIds,
         modelExpectsMoreWork: act.continueWorking,
         attempt: preparationAttempt + 1,
-      });
+      }, act.intention);
 
       const latestAcknowledgement = callbacks.getLastMutationAck?.();
       const latestVisible = callbacks.getVisibleArtifact() ?? canonicalBase;
@@ -7523,9 +7544,13 @@ async function buildGeneratedCodeArtifactPackage({
           fingerprint: preflight.fingerprint,
           targetIds: preflight.targetIds,
           insertedIds: preflight.insertedIds,
+          declaredAffectedNodeIds: preflight.declaredAffectedNodeIds,
+          derivedAffectedNodeIds: preflight.derivedAffectedNodeIds,
+          unresolvedDeclaredAffectedNodeIds: preflight.unresolvedDeclaredAffectedNodeIds,
+          operationSummaries: preflight.operationSummaries,
           operationCount: compiled.draft.operations.length,
           attempt: preparationAttempt + 1,
-        });
+        }, `Accepted ${compiled.draft.operations.length} safe creative operations against ${canonicalBase.revisionId}.`);
         await callbacks.completeStep({
           id: step.id,
           tool: step.tool,
@@ -7567,31 +7592,33 @@ async function buildGeneratedCodeArtifactPackage({
           `Northstar stopped repeating an unchanged rejected act on revision ${canonicalBase.revisionId}. ${reason}`,
         );
       }
+      const correctionDirectives = [
+        ...buildNorthstarCorrectionDirective({ contract, preflightIssues: preflight.issues }),
+        "Keep creative authority, but execute a materially different idea through safe atomic operations against real semantic targets.",
+        "Do not request or set artboard dimensions. Runtime content measurement owns all outer sizing.",
+        `Do not repeat rejected fingerprint ${preflight.fingerprint}.`,
+      ];
       correctionContext = {
         critique: reason,
-        requiredChanges: [
-          ...buildNorthstarCorrectionDirective({ contract, preflightIssues: preflight.issues }),
-          "Keep creative authority, but execute a materially different idea through safe atomic operations against real semantic targets.",
-          "Do not request or set artboard dimensions. Runtime content measurement owns all outer sizing.",
-          `Do not repeat rejected fingerprint ${preflight.fingerprint}.`,
-        ],
+        requiredChanges: correctionDirectives,
       };
       callbacks.trace?.("creative.act.preflight_rejected", {
         baseRevisionId: canonicalBase.revisionId,
         fingerprint: preflight.fingerprint,
         issues: preflight.issues,
+        issueDetails: preflight.issueDetails,
         targetIds: preflight.targetIds,
         insertedIds: preflight.insertedIds,
+        declaredAffectedNodeIds: preflight.declaredAffectedNodeIds,
+        derivedAffectedNodeIds: preflight.derivedAffectedNodeIds,
+        unresolvedDeclaredAffectedNodeIds: preflight.unresolvedDeclaredAffectedNodeIds,
+        operationSummaries: preflight.operationSummaries,
+        correctionDirectives,
         attempt: preparationAttempt + 1,
         repeated,
-      });
+      }, reason);
     }
 
-    await callbacks.failStep({
-      id: step.id,
-      tool: step.tool,
-      detail: `Northstar could not prepare a safe material adaptive creative act after ${maximumPreparationAttempts} attempts.`,
-    });
     throw new NorthstarBudgetExceededError(
       `adaptive-creative-act:${canonicalBase.revisionId}`,
       maximumPreparationAttempts,
@@ -7613,10 +7640,24 @@ async function buildGeneratedCodeArtifactPackage({
       latestRenderedCritique,
       latestIndependentReview,
     );
+    const sessionSnapshot = adaptiveSession.snapshot();
     callbacks.trace?.("creative.session.observed", {
       revisionId: canonical.revisionId,
       decision: continuation,
-      session: adaptiveSession.snapshot(),
+      session: sessionSnapshot,
+    }, continuation.reason);
+    callbacks.trace?.("creative.session.continuation_decided", {
+      revisionId: canonical.revisionId,
+      thinkingDepth,
+      acceptedActCount: sessionSnapshot.acceptedActCount,
+      authorContinueWorking: latestRenderedCritique?.continueWorking ?? null,
+      authorWeaknessCount: latestRenderedCritique?.whatStillWeak.length ?? 0,
+      reviewerMaterialImprovementAvailable: latestIndependentReview?.materialImprovementAvailable ?? null,
+      reviewerProblemCount: latestIndependentReview?.unresolvedProblems.length ?? 0,
+      continueWorking: continuation.continueWorking,
+      readyForPublication: continuation.readyForPublication,
+      reasonCode: continuation.reasonCode,
+      knownLimitationCount: continuation.knownLimitations.length,
     }, continuation.reason);
 
     if (!continuation.continueWorking) {
@@ -7638,8 +7679,45 @@ async function buildGeneratedCodeArtifactPackage({
       prepared = await prepareMoveForExactScene(canonical);
     } catch (error) {
       if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      if (error instanceof NorthstarBudgetExceededError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
+      const currentSession = adaptiveSession.snapshot();
+      const canSettleVerifiedArtifact = currentSession.acceptedActCount > 0
+        && continuation.readiness.operationallyReady;
+
+      if (canSettleVerifiedArtifact) {
+        const settlementReason = `Northstar retained the latest browser-verified creative result because the optional continuation could not be prepared safely. ${reason}`;
+        await callbacks.completeStep({
+          id: `author-adaptive-creative-act-${moveIndex + 1}`,
+          tool: "prepare_composition_evidence",
+          detail: "No additional safe material act was prepared. Northstar retained the latest verified artifact and recorded the remaining refinements as known limitations.",
+        });
+        callbacks.trace?.("creative.session.continuation_abandoned", {
+          revisionId: canonical.revisionId,
+          thinkingDepth,
+          acceptedActCount: currentSession.acceptedActCount,
+          errorType: error instanceof NorthstarBudgetExceededError ? "budget-or-preflight-exhausted" : "preparation-error",
+          errorMessage: reason,
+          readyForPublication: true,
+          knownLimitations: continuation.knownLimitations,
+          session: currentSession,
+        }, settlementReason);
+        readyForPublication = true;
+        latestReviewSummary = settlementReason;
+        finalKnownLimitations = Array.from(new Set([
+          ...continuation.knownLimitations,
+          `Optional continuation was abandoned safely: ${reason}`,
+        ])).slice(0, 18);
+        break;
+      }
+
+      if (error instanceof NorthstarBudgetExceededError) {
+        await callbacks.failStep({
+          id: `author-adaptive-creative-act-${moveIndex + 1}`,
+          tool: "prepare_composition_evidence",
+          detail: reason,
+        });
+        throw error;
+      }
       const repeated = adaptiveSession.recordRejectedAct({
         revisionId: canonical.revisionId,
         reason,
@@ -7680,7 +7758,7 @@ async function buildGeneratedCodeArtifactPackage({
       ],
     });
     authorship.advanceTransaction("visible", candidate.revisionId);
-    const dispatched = await callbacks.publishArtifact(
+    const dispatchResult = await callbacks.publishArtifact(
       candidate,
       2,
       prepared.contract.label,
@@ -7694,13 +7772,15 @@ async function buildGeneratedCodeArtifactPackage({
         };
       },
     );
-    if (!dispatched) {
-      const rejectedAck = callbacks.getLastRejectedMutationAck?.() ?? callbacks.getLastMutationAck?.();
+    if (dispatchResult.status !== "committed") {
+      const rejectedAck = dispatchResult.acknowledgement
+        ?? callbacks.getLastRejectedMutationAck?.()
+        ?? callbacks.getLastMutationAck?.();
       rejectedMoveFingerprints.add(prepared.fingerprint);
       authorship.advanceTransaction("rejected", candidate.revisionId);
       authorship.advanceTransaction("restored", canonical.revisionId);
       authorship.recordRejectedMove(prepared.fingerprint);
-      const reason = rejectedAck?.reason ?? "The browser rejected the candidate transaction.";
+      const reason = dispatchResult.detail;
       const repeated = adaptiveSession.recordRejectedAct({
         revisionId: canonical.revisionId,
         fingerprint: prepared.fingerprint,
@@ -7710,15 +7790,26 @@ async function buildGeneratedCodeArtifactPackage({
       priorCritique = buildRejectedDesignCritique({
         prepared,
         acknowledgement: rejectedAck,
+        dispatchResult,
         browserIssues: [reason],
       });
-      callbacks.trace?.("creative.act.rejected", {
-        baseRevisionId: canonical.revisionId,
-        candidateRevisionId: candidate.revisionId,
-        fingerprint: prepared.fingerprint,
-        repeated,
+      callbacks.trace?.(
+        dispatchResult.browserDispatched ? "creative.act.rejected" : "creative.act.dispatch_rejected",
+        {
+          baseRevisionId: canonical.revisionId,
+          candidateRevisionId: candidate.revisionId,
+          fingerprint: prepared.fingerprint,
+          repeated,
+          reason,
+          dispatchStage: dispatchResult.stage,
+          reasonCode: dispatchResult.reasonCode,
+          browserDispatched: dispatchResult.browserDispatched,
+          operationIndex: dispatchResult.status === "rejected" ? dispatchResult.operationIndex : undefined,
+          operation: dispatchResult.status === "rejected" ? dispatchResult.operation : undefined,
+          targetId: dispatchResult.status === "rejected" ? dispatchResult.targetId : undefined,
+        },
         reason,
-      });
+      );
       currentPackage = callbacks.getVisibleArtifact() ?? canonical;
       continue;
     }
@@ -8093,7 +8184,7 @@ async function buildGeneratedCodeArtifactPackage({
       ...publicationPreflight.targetIds,
       ...publicationPreflight.insertedIds,
     ])];
-    const publicationApplied = await callbacks.publishArtifact(
+    const publicationDispatch = await callbacks.publishArtifact(
       publicationCandidate,
       4,
       "Publish the final presentation",
@@ -8110,7 +8201,7 @@ async function buildGeneratedCodeArtifactPackage({
         };
       },
     );
-    if (!publicationApplied) {
+    if (publicationDispatch.status !== "committed") {
       rejectedMoveFingerprints.add(publicationPreflight.fingerprint);
       authorship.advanceTransaction("rejected", publicationCandidate.revisionId);
       authorship.advanceTransaction("restored", publicationBase.revisionId);
@@ -11203,46 +11294,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               return `${acknowledgement.status}:${reason}`.slice(0, 800);
             };
 
-            const proposalPreservesSceneContinuity = (
-              packageValue: NorthstarGeneratedCodeArtifactPackage,
-            ): { ok: true } | { ok: false; reason: string } => {
-              const latest = packageValue.mutationJournal?.at(-1);
-              if (!latest) return { ok: true };
-              const protectedTargets = new Set(["artboard", "header", "evidence", "synthesis", "decision"]);
-              for (const operation of latest.operations) {
-                if (operation.op === "set-html" && protectedTargets.has(operation.targetId)) {
-                  return { ok: false, reason: `Blocked destructive replacement of ${operation.targetId}.` };
-                }
-                if (operation.op === "remove" && protectedTargets.has(operation.targetId)) {
-                  return { ok: false, reason: `Blocked removal of canonical scene region ${operation.targetId}.` };
-                }
-                if (operation.op === "set-css-layer" && northstarCssHidesCanonicalArtboard(operation.css || "")) {
-                  return { ok: false, reason: "Blocked a CSS layer that would blank the live artboard." };
-                }
-                if (operation.op === "set-css-layer") {
-                  const css = operation.css || "";
-                  const orderedFlowRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-                    .filter((match) => /(?:working-flow__sequence|data-ns-flow-sequence|data-ns-reference-flow|data-ns-flow-id|data-ns-node-id\$?=["']?-sequence)/i.test(match[1] || ""));
-                  const makesFlowVertical = orderedFlowRules.some((match) =>
-                    /flex-direction\s*:\s*column|grid-auto-flow\s*:\s*row|grid-template-columns\s*:\s*(?:1fr|repeat\(1\s*,|minmax\([^)]*\))|flex-wrap\s*:\s*(?:wrap|wrap-reverse)/i.test(match[2] || ""),
-                  );
-                  if (makesFlowVertical) {
-                    return { ok: false, reason: "FLOW_TOPOLOGY_VIOLATION: Ordered flow evidence must remain a single horizontal, non-wrapping sequence." };
-                  }
-                }
-                if (operation.op === "set-styles" && /(?:flow.*sequence|sequence)$/i.test(operation.targetId)) {
-                  const styles = operation.styles || {};
-                  const flexDirection = String(styles.flexDirection ?? styles["flex-direction"] ?? "").toLowerCase();
-                  const flexWrap = String(styles.flexWrap ?? styles["flex-wrap"] ?? "").toLowerCase();
-                  const gridAutoFlow = String(styles.gridAutoFlow ?? styles["grid-auto-flow"] ?? "").toLowerCase();
-                  if (flexDirection.startsWith("column") || (flexWrap && flexWrap !== "nowrap") || gridAutoFlow === "row") {
-                    return { ok: false, reason: "FLOW_TOPOLOGY_VIOLATION: Ordered flow evidence must remain a single horizontal, non-wrapping sequence." };
-                  }
-                }
-              }
-              return { ok: true };
-            };
-
             const retainCommittedLiveArtboard = async (
               stageIndex: number,
               expectedCommittedRevisionId?: string,
@@ -11354,6 +11405,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   return {
                     status: "rejected",
                     detail: "The proposal did not append exactly one mutation to the committed artboard.",
+                    stage: "publication-preparation",
+                    reasonCode: "MUTATION_JOURNAL_APPEND_INVALID",
+                    browserDispatched: false,
                     recoverable: true,
                   };
                 }
@@ -11378,11 +11432,21 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 };
               }
 
-              const continuity = proposalPreservesSceneContinuity(packageValue);
+              const continuity = validateNorthstarDispatchSceneContinuity(packageValue);
               if (!continuity.ok) {
-                const detail = "reason" in continuity ? continuity.reason : "Scene continuity validation rejected the proposal.";
-                console.warn("Northstar revised a destructive scene proposal before it entered the activity timeline.", detail);
-                return { status: "rejected", detail, recoverable: true };
+                const { issue } = continuity;
+                console.warn("Northstar rejected a proposal at the final pre-dispatch continuity gate.", issue);
+                return {
+                  status: "rejected",
+                  detail: issue.detail,
+                  stage: "continuity",
+                  reasonCode: issue.ruleCode,
+                  browserDispatched: false,
+                  recoverable: true,
+                  operationIndex: issue.operationIndex,
+                  operation: issue.operation,
+                  targetId: issue.targetId,
+                };
               }
 
               const committed = liveArtboardActor.snapshot();
@@ -11395,7 +11459,14 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);
                 console.warn("Northstar rebased a proposal that was not based on the committed artboard.", error);
-                return { status: "rejected", detail, recoverable: true };
+                return {
+                  status: "rejected",
+                  detail,
+                  stage: "publication-preparation",
+                  reasonCode: "PUBLICATION_PREPARATION_REJECTED",
+                  browserDispatched: false,
+                  recoverable: true,
+                };
               }
 
               let proposal;
@@ -11404,7 +11475,14 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);
                 console.warn("Northstar actor requested a revised proposal before user-facing activity was recorded.", error);
-                return { status: "rejected", detail, recoverable: true };
+                return {
+                  status: "rejected",
+                  detail,
+                  stage: "actor",
+                  reasonCode: "ACTOR_PROPOSAL_REJECTED",
+                  browserDispatched: false,
+                  recoverable: true,
+                };
               }
 
               const publishablePackage = proposal.candidate;
@@ -11426,6 +11504,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 return {
                   status: "skipped",
                   detail: `The exact candidate for “${label}” was already rejected. A different candidate may still be rendered.`,
+                  stage: "candidate-deduplication",
+                  reasonCode: "CANDIDATE_ALREADY_REJECTED",
+                  browserDispatched: false,
                   recoverable: true,
                 };
               }
@@ -11456,6 +11537,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               };
 
               let activityStarted = false;
+              let browserDispatched = false;
               const retainVisualActivity = (detail: string) => {
                 if (!activityStarted) return;
                 send("tool.completed", {
@@ -11520,6 +11602,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 });
                 await acknowledgementPromise.ready;
                 requestedCanvasActionCount += 1;
+                browserDispatched = true;
                 send("canvas.action.requested", { runId, action });
 
                 const acknowledgementWait = await acknowledgementPromise.result;
@@ -11575,7 +11658,15 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                       detail: "The requested visual state was already present on the living artboard.",
                       objectIds: [],
                     });
-                    return { status: "skipped", detail, recoverable: true };
+                    return {
+                      status: "skipped",
+                      detail,
+                      stage: "browser",
+                      reasonCode: "BROWSER_VERIFIED_NOOP",
+                      browserDispatched: true,
+                      recoverable: true,
+                      acknowledgement,
+                    };
                   }
 
                   const rejectionSignature = normalizeLiveRejectionSignature(acknowledgement);
@@ -11610,7 +11701,11 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                     return {
                       status: "rejected",
                       detail,
+                      stage: "browser",
+                      reasonCode: "BROWSER_QUALITY_REJECTED",
+                      browserDispatched: true,
                       recoverable: true,
+                      acknowledgement,
                     };
                   }
                   lastLiveRejectedMutationAck = acknowledgement;
@@ -11619,7 +11714,15 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                     console.warn("Northstar detected revision divergence and will rebase the next transaction on the exact actor snapshot.", acknowledgement.reason);
                     const detail = acknowledgement.reason || "The browser reported revision divergence.";
                     retainVisualActivity(detail);
-                    return { status: "rejected", detail, recoverable: true };
+                    return {
+                      status: "rejected",
+                      detail,
+                      stage: "browser",
+                      reasonCode: "BROWSER_LINEAGE_REJECTED",
+                      browserDispatched: true,
+                      recoverable: true,
+                      acknowledgement,
+                    };
                   }
                   console.warn("Northstar rejected an uncommitted visual proposal and retained the last accepted artboard.", {
                     proposalId: proposal.proposalId,
@@ -11632,8 +11735,32 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                     || contractReview?.issues.join(" ")
                     || semanticAcceptance?.issues.join(" ")
                     || "The browser rejected the visual transaction.";
+                  const actorMatched = liveArtboardActor.matches(proposal, acknowledgement);
+                  const browserAccepted = liveAcknowledgementPassed(acknowledgement, latestBatch?.mutationId);
+                  const rejectionStage = !actorMatched
+                    ? "actor"
+                    : !browserAccepted
+                      ? "browser"
+                      : contractReview && !contractReview.accepted
+                        ? "contract-review"
+                        : "semantic-review";
+                  const reasonCode = !actorMatched
+                    ? "ACK_PROPOSAL_MISMATCH"
+                    : !browserAccepted
+                      ? "BROWSER_ACK_REJECTED"
+                      : contractReview && !contractReview.accepted
+                        ? "CONTRACT_REVIEW_REJECTED"
+                        : "SEMANTIC_REVIEW_REJECTED";
                   retainVisualActivity(detail);
-                  return { status: "rejected", detail, recoverable: true };
+                  return {
+                    status: "rejected",
+                    detail,
+                    stage: rejectionStage,
+                    reasonCode,
+                    browserDispatched: true,
+                    recoverable: true,
+                    acknowledgement,
+                  };
                 }
 
                 // Commit the exact browser-materialized canonical scene, not the pre-render
@@ -11683,6 +11810,11 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   detail: browserReportedAcknowledgement
                     ? "The browser verified and committed the visual transaction."
                     : "The visual transaction was delivered and committed while acknowledgement telemetry reconciles.",
+                  stage: "commit",
+                  reasonCode: "COMMITTED",
+                  browserDispatched: true,
+                  recoverable: false,
+                  acknowledgement,
                 };
               } catch (error) {
                 liveArtboardActor.discard(proposal);
@@ -11758,7 +11890,14 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 }
                 console.warn("Northstar will rebase and correct the proposal after an execution fault.", internalDetail);
                 retainVisualActivity(internalDetail);
-                return { status: "rejected", detail: internalDetail, recoverable: true };
+                return {
+                  status: "rejected",
+                  detail: internalDetail,
+                  stage: browserDispatched ? "browser" : "action-build",
+                  reasonCode: browserDispatched ? "BROWSER_DISPATCH_OR_ACK_FAILED" : "ACTION_BUILD_FAILED",
+                  browserDispatched,
+                  recoverable: true,
+                };
               }
             };
 
@@ -12001,14 +12140,13 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 return lastLiveArtifactPackage;
               },
               async publishArtifact(packageValue, stageIndex, label, expectedChangedNodeIds, acceptMaterialized) {
-                const result = await dispatchLiveArtifactPackage(
+                return dispatchLiveArtifactPackage(
                   packageValue,
                   stageIndex,
                   label,
                   expectedChangedNodeIds,
                   acceptMaterialized,
                 );
-                return result.status === "committed";
               },
               checkpoint(phase, ledger, currentToolResults) {
                 emitCompositionCheckpoint(phase, ledger, currentToolResults);

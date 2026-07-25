@@ -155,12 +155,55 @@ export type NorthstarPreparedMove = {
   expectedChangedNodeIds: string[];
 };
 
+export type NorthstarPreflightIssueCode =
+  | "STALE_BASE_REVISION"
+  | "EMPTY_MOVE"
+  | "MISSING_VISIBLE_DELTA"
+  | "MISSING_SEMANTIC_DELTA"
+  | "REPEATED_MOVE"
+  | "DUPLICATE_SEMANTIC_ID"
+  | "MISSING_TARGET"
+  | "MISSING_RELATIONSHIP_ENDPOINT"
+  | "ROOT_REPLACEMENT_BLOCKED"
+  | "PROTECTED_EVIDENCE_REPLACEMENT_INCOMPLETE"
+  | "CANONICAL_REGION_REMOVAL_BLOCKED"
+  | "ROOT_HIDDEN"
+  | "REASONING_FLOW_INVALID"
+  | "NON_MATERIAL_MOVE"
+  | "SEMANTIC_POSTCONDITION_FAILED"
+  | "OTHER";
+
+export type NorthstarMoveOperationDiagnosticSummary = {
+  index: number;
+  op: string;
+  targetId?: string;
+  parentId?: string;
+  beforeId?: string;
+  payloadBytes: number;
+  payloadHash?: string;
+  introducedSemanticIds: string[];
+  referencedSemanticIds: string[];
+};
+
+export type NorthstarPreflightIssueDetail = {
+  code: NorthstarPreflightIssueCode;
+  message: string;
+  operationIndex?: number;
+  op?: string;
+  targetId?: string;
+};
+
 export type NorthstarPreflightResult = {
   accepted: boolean;
   fingerprint: string;
   issues: string[];
+  issueDetails: NorthstarPreflightIssueDetail[];
   targetIds: string[];
   insertedIds: string[];
+  declaredAffectedNodeIds: string[];
+  derivedAffectedNodeIds: string[];
+  unresolvedDeclaredAffectedNodeIds: string[];
+  operationSummaries: NorthstarMoveOperationDiagnosticSummary[];
   materiallyChangesScene: boolean;
 };
 
@@ -645,13 +688,62 @@ function operationTargetIds(draft: NorthstarArtboardMutationDraft): string[] {
   return [...ids];
 }
 
-function insertedIds(draft: NorthstarArtboardMutationDraft): string[] {
+function semanticIdsFromMarkup(markup: string): string[] {
+  return [...markup.matchAll(/data-ns-node-id\s*=\s*["']([^"']+)["']/gi)].map((match) => match[1]);
+}
+
+function referencedSemanticIdsFromMarkup(markup: string): string[] {
+  return [...markup.matchAll(/data-ns-(?:source|target)-node-id\s*=\s*["']([^"']+)["']/gi)].map((match) => match[1]);
+}
+
+function authoredSemanticIds(draft: NorthstarArtboardMutationDraft): string[] {
   const ids: string[] = [];
   for (const operation of draft.operations as Array<Record<string, unknown>>) {
-    if (operation.op !== "insert-html" || typeof operation.html !== "string") continue;
-    for (const match of operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/gi)) ids.push(match[1]);
+    if ((operation.op !== "insert-html" && operation.op !== "set-html") || typeof operation.html !== "string") continue;
+    ids.push(...semanticIdsFromMarkup(operation.html));
   }
   return ids;
+}
+
+function insertedIds(draft: NorthstarArtboardMutationDraft, currentIds?: ReadonlySet<string>): string[] {
+  const ids = authoredSemanticIds(draft);
+  return currentIds ? ids.filter((id) => !currentIds.has(id)) : ids;
+}
+
+export function summarizeNorthstarMoveOperations(
+  draft: NorthstarArtboardMutationDraft,
+): NorthstarMoveOperationDiagnosticSummary[] {
+  return (draft.operations as Array<Record<string, unknown>>).map((operation, index) => {
+    const payloadValue = typeof operation.html === "string"
+      ? operation.html
+      : typeof operation.css === "string"
+        ? operation.css
+        : operation.styles && typeof operation.styles === "object"
+          ? JSON.stringify(operation.styles)
+          : operation.attributes && typeof operation.attributes === "object"
+            ? JSON.stringify(operation.attributes)
+            : typeof operation.text === "string"
+              ? operation.text
+              : "";
+    const payloadBytes = Buffer.byteLength(payloadValue, "utf8");
+    return {
+      index,
+      op: String(operation.op ?? "unknown"),
+      ...(typeof operation.targetId === "string" ? { targetId: operation.targetId } : {}),
+      ...(typeof operation.parentId === "string" ? { parentId: operation.parentId } : {}),
+      ...(typeof operation.beforeId === "string" ? { beforeId: operation.beforeId } : {}),
+      payloadBytes,
+      ...(payloadBytes > 0
+        ? { payloadHash: createHash("sha256").update(payloadValue).digest("hex").slice(0, 16) }
+        : {}),
+      introducedSemanticIds: typeof operation.html === "string"
+        ? semanticIdsFromMarkup(operation.html).slice(0, 40)
+        : [],
+      referencedSemanticIds: typeof operation.html === "string"
+        ? referencedSemanticIdsFromMarkup(operation.html).slice(0, 40)
+        : [],
+    };
+  });
 }
 
 function normalizeNorthstarGeneratedIdentity(value: string): string {
@@ -915,6 +1007,177 @@ export function northstarCssHidesCanonicalArtboard(css: string): boolean {
   return false;
 }
 
+function groundedEvidenceIdsFromHtml(html: string): string[] {
+  return Array.from(new Set(
+    [...html.matchAll(/data-ns-evidence-id\s*=\s*["']([^"']+)["']/gi)].map((match) => match[1]),
+  ));
+}
+
+export type NorthstarDispatchContinuityIssue = {
+  ruleCode:
+    | "ROOT_REPLACEMENT_BLOCKED"
+    | "ROOT_REMOVAL_BLOCKED"
+    | "PROTECTED_EVIDENCE_REPLACEMENT_INCOMPLETE"
+    | "ROOT_HIDDEN"
+    | "FLOW_TOPOLOGY_VIOLATION";
+  detail: string;
+  operationIndex: number;
+  operation: string;
+  targetId?: string;
+};
+
+export type NorthstarDispatchContinuityResult =
+  | { ok: true }
+  | { ok: false; issue: NorthstarDispatchContinuityIssue };
+
+/**
+ * Final pre-dispatch continuity validation. This gate protects runtime and
+ * evidence invariants only; it must not freeze authored analytical regions.
+ * In particular, header, synthesis, decision, and reasoning regions are legal
+ * reconstruction targets after creative preflight has accepted the act.
+ */
+export function validateNorthstarDispatchSceneContinuity(
+  packageValue: NorthstarGeneratedCodeArtifactPackage,
+): NorthstarDispatchContinuityResult {
+  const latest = packageValue.mutationJournal?.at(-1);
+  if (!latest) return { ok: true };
+
+  const mutationHtml = latest.operations
+    .filter((operation) => operation.op === "set-html" || operation.op === "insert-html")
+    .map((operation) => operation.html || "")
+    .join("\n");
+  const existingEvidenceIds = groundedEvidenceIdsFromHtml(packageValue.document.html);
+  const replacementEvidenceIds = new Set(groundedEvidenceIdsFromHtml(mutationHtml));
+  const evidenceRegionReconstructed = latest.operations.some((operation) =>
+    (operation.op === "set-html" || operation.op === "remove")
+      && operation.targetId === "evidence",
+  );
+
+  if (evidenceRegionReconstructed && existingEvidenceIds.length > 0) {
+    const missingEvidenceIds = existingEvidenceIds.filter((id) => !replacementEvidenceIds.has(id));
+    if (missingEvidenceIds.length > 0) {
+      const operationIndex = latest.operations.findIndex((operation) =>
+        (operation.op === "set-html" || operation.op === "remove")
+          && operation.targetId === "evidence",
+      );
+      const operation = latest.operations[Math.max(0, operationIndex)];
+      return {
+        ok: false,
+        issue: {
+          ruleCode: "PROTECTED_EVIDENCE_REPLACEMENT_INCOMPLETE",
+          detail: `The evidence region reconstruction omitted ${missingEvidenceIds.length} grounded evidence identit${missingEvidenceIds.length === 1 ? "y" : "ies"}: ${missingEvidenceIds.slice(0, 8).join(", ")}.`,
+          operationIndex: Math.max(0, operationIndex),
+          operation: operation?.op ?? "unknown",
+          targetId: "evidence",
+        },
+      };
+    }
+  }
+
+  for (const [operationIndex, operation] of latest.operations.entries()) {
+    if (operation.op === "set-html" && operation.targetId === "artboard") {
+      return {
+        ok: false,
+        issue: {
+          ruleCode: "ROOT_REPLACEMENT_BLOCKED",
+          detail: "The canonical artboard root cannot be replaced by a mutation.",
+          operationIndex,
+          operation: operation.op,
+          targetId: operation.targetId,
+        },
+      };
+    }
+    if (operation.op === "remove" && operation.targetId === "artboard") {
+      return {
+        ok: false,
+        issue: {
+          ruleCode: "ROOT_REMOVAL_BLOCKED",
+          detail: "The canonical artboard root cannot be removed.",
+          operationIndex,
+          operation: operation.op,
+          targetId: operation.targetId,
+        },
+      };
+    }
+    if (operation.op === "set-css-layer" && northstarCssHidesCanonicalArtboard(operation.css || "")) {
+      return {
+        ok: false,
+        issue: {
+          ruleCode: "ROOT_HIDDEN",
+          detail: "A CSS layer cannot hide or blank the canonical artboard root.",
+          operationIndex,
+          operation: operation.op,
+        },
+      };
+    }
+    if (operation.op === "set-css-layer") {
+      const css = operation.css || "";
+      const orderedFlowRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+        .filter((match) => /(?:working-flow__sequence|data-ns-flow-sequence|data-ns-reference-flow|data-ns-flow-id|data-ns-node-id\$?=["']?-sequence)/i.test(match[1] || ""));
+      const makesFlowVertical = orderedFlowRules.some((match) =>
+        /flex-direction\s*:\s*column|grid-auto-flow\s*:\s*row|grid-template-columns\s*:\s*(?:1fr|repeat\(1\s*,|minmax\([^)]*\))|flex-wrap\s*:\s*(?:wrap|wrap-reverse)/i.test(match[2] || ""),
+      );
+      if (makesFlowVertical) {
+        return {
+          ok: false,
+          issue: {
+            ruleCode: "FLOW_TOPOLOGY_VIOLATION",
+            detail: "Ordered flow evidence must remain a single horizontal, non-wrapping sequence.",
+            operationIndex,
+            operation: operation.op,
+          },
+        };
+      }
+    }
+    if (operation.op === "set-styles" && /(?:flow.*sequence|sequence)$/i.test(operation.targetId)) {
+      const styles = operation.styles || {};
+      const flexDirection = String(styles.flexDirection ?? styles["flex-direction"] ?? "").toLowerCase();
+      const flexWrap = String(styles.flexWrap ?? styles["flex-wrap"] ?? "").toLowerCase();
+      const gridAutoFlow = String(styles.gridAutoFlow ?? styles["grid-auto-flow"] ?? "").toLowerCase();
+      if (flexDirection.startsWith("column") || (flexWrap && flexWrap !== "nowrap") || gridAutoFlow === "row") {
+        return {
+          ok: false,
+          issue: {
+            ruleCode: "FLOW_TOPOLOGY_VIOLATION",
+            detail: "Ordered flow evidence must remain a single horizontal, non-wrapping sequence.",
+            operationIndex,
+            operation: operation.op,
+            targetId: operation.targetId,
+          },
+        };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+function classifyNorthstarPreflightIssue(message: string): NorthstarPreflightIssueCode {
+  if (/stale against the canonical revision/i.test(message)) return "STALE_BASE_REVISION";
+  if (/contains no operations/i.test(message)) return "EMPTY_MOVE";
+  if (/does not declare an observable visible delta/i.test(message)) return "MISSING_VISIBLE_DELTA";
+  if (/does not declare a semantic delta/i.test(message)) return "MISSING_SEMANTIC_DELTA";
+  if (/already present|already rejected/i.test(message)) return "REPEATED_MOVE";
+  if (/duplicate semantic ids|re-inserts existing semantic id/i.test(message)) return "DUPLICATE_SEMANTIC_ID";
+  if (/targets missing semantic node|names missing affected semantic node/i.test(message)) return "MISSING_TARGET";
+  if (/relationship endpoint/i.test(message)) return "MISSING_RELATIONSHIP_ENDPOINT";
+  if (/replaces the canonical artboard root/i.test(message)) return "ROOT_REPLACEMENT_BLOCKED";
+  if (/protected grounded evidence/i.test(message)) return "PROTECTED_EVIDENCE_REPLACEMENT_INCOMPLETE";
+  if (/removes protected canonical region/i.test(message)) return "CANONICAL_REGION_REMOVAL_BLOCKED";
+  if (/hides the canonical artboard/i.test(message)) return "ROOT_HIDDEN";
+  if (/reasoning theatre|reasoning pair|normal-flow grid/i.test(message)) return "REASONING_FLOW_INVALID";
+  if (/style-only|status metadata|non-material styling/i.test(message)) return "NON_MATERIAL_MOVE";
+  if (/does not|lacks|is not visibly grounded|cannot satisfy/i.test(message)) return "SEMANTIC_POSTCONDITION_FAILED";
+  return "OTHER";
+}
+
+function operationForIssue(
+  message: string,
+  summaries: NorthstarMoveOperationDiagnosticSummary[],
+): NorthstarMoveOperationDiagnosticSummary | undefined {
+  return summaries.find((summary) => summary.targetId && message.includes(summary.targetId))
+    ?? summaries.find((summary) => message.includes(summary.op));
+}
+
 export function preflightNorthstarMove(input: {
   artifact: NorthstarGeneratedCodeArtifactPackage;
   contract: NorthstarMoveContract;
@@ -925,9 +1188,14 @@ export function preflightNorthstarMove(input: {
   const issues: string[] = [];
   const currentIds = new Set(semanticIds(input.artifact.document));
   const targets = operationTargetIds(input.draft);
-  const newIds = insertedIds(input.draft);
+  const newIds = insertedIds(input.draft, currentIds);
   const duplicateInsertions = duplicates(newIds);
   const fingerprint = fingerprintNorthstarMove(input.draft, input.contract);
+  const operationSummaries = summarizeNorthstarMoveOperations(input.draft);
+  const derivedAffectedNodeIds = Array.from(new Set([...targets, ...newIds]));
+  const unresolvedDeclaredAffectedNodeIds = input.contract.affectedNodeIds.filter(
+    (id) => !currentIds.has(id) && !newIds.includes(id),
+  );
   const semanticObligations = new Set<NorthstarObligationKey>([
     "creative-progress",
     "visual-thesis",
@@ -953,27 +1221,35 @@ export function preflightNorthstarMove(input: {
   if (input.acceptedFingerprints?.has(fingerprint)) issues.push("the same semantic move is already present");
   if (input.rejectedFingerprints?.has(fingerprint)) issues.push("the same semantic move was already rejected");
   if (duplicateInsertions.length) issues.push(`move inserts duplicate semantic ids: ${duplicateInsertions.join(", ")}`);
-  for (const id of newIds) if (currentIds.has(id)) issues.push(`move re-inserts existing semantic id ${id}`);
-  for (const id of input.contract.affectedNodeIds) {
-    if (!currentIds.has(id) && !newIds.includes(id)) issues.push(`move contract names missing affected semantic node ${id}`);
-  }
+
+  // Model-declared affectedNodeIds are advisory metadata. The authoritative change surface is
+  // derived from the executable operations, which prevents false failures when a new semantic
+  // node is introduced inside set-html rather than insert-html.
   if (input.contract.relationship) {
     for (const id of [input.contract.relationship.sourceNodeId, input.contract.relationship.targetNodeId]) {
       if (!currentIds.has(id) && !newIds.includes(id)) issues.push(`relationship endpoint ${id} is absent from the canonical scene and transaction`);
     }
   }
 
+  const protectedEvidenceIds = groundedEvidenceIdsFromHtml(input.artifact.document.html);
   for (const operation of input.draft.operations as Array<Record<string, unknown>>) {
     const op = String(operation.op ?? "");
     const targetId = typeof operation.targetId === "string" ? operation.targetId : "";
     if (op !== "set-css-layer" && targetId && !currentIds.has(targetId) && !newIds.includes(targetId)) {
       issues.push(`move targets missing semantic node ${targetId}`);
     }
-    if (op === "set-html" && ["artboard", "header", "evidence", "synthesis", "decision", "reasoning-zone"].includes(targetId)) {
-      issues.push(`move destructively replaces canonical region ${targetId}`);
+    if (op === "set-html" && targetId === "artboard") {
+      issues.push("move replaces the canonical artboard root");
     }
-    if (op === "remove" && ["artboard", "header", "evidence", "synthesis", "decision", "reasoning-zone"].includes(targetId)) {
-      issues.push(`move removes canonical region ${targetId}`);
+    if (op === "set-html" && targetId === "evidence" && typeof operation.html === "string") {
+      const replacementEvidenceIds = new Set(groundedEvidenceIdsFromHtml(operation.html));
+      const missingEvidence = protectedEvidenceIds.filter((id) => !replacementEvidenceIds.has(id));
+      if (missingEvidence.length > 0) {
+        issues.push(`move replaces the evidence region without retaining protected grounded evidence: ${missingEvidence.slice(0, 12).join(", ")}`);
+      }
+    }
+    if (op === "remove" && ["artboard", "evidence"].includes(targetId)) {
+      issues.push(`move removes protected canonical region ${targetId}`);
     }
     if (op === "set-css-layer" && typeof operation.css === "string") {
       const css = operation.css;
@@ -999,12 +1275,31 @@ export function preflightNorthstarMove(input: {
   issues.push(...operationSpecificIssues(input.artifact, input.contract, input.draft));
   issues.push(...evidenceInventoryIssues(input.draft));
 
+  const uniqueIssues = [...new Set(issues)];
+  const issueDetails = uniqueIssues.map((message) => {
+    const operation = operationForIssue(message, operationSummaries);
+    return {
+      code: classifyNorthstarPreflightIssue(message),
+      message,
+      ...(operation ? {
+        operationIndex: operation.index,
+        op: operation.op,
+        ...(operation.targetId ? { targetId: operation.targetId } : {}),
+      } : {}),
+    } satisfies NorthstarPreflightIssueDetail;
+  });
+
   return {
-    accepted: issues.length === 0,
+    accepted: uniqueIssues.length === 0,
     fingerprint,
-    issues: [...new Set(issues)],
+    issues: uniqueIssues,
+    issueDetails,
     targetIds: targets,
     insertedIds: newIds,
+    declaredAffectedNodeIds: [...input.contract.affectedNodeIds],
+    derivedAffectedNodeIds,
+    unresolvedDeclaredAffectedNodeIds,
+    operationSummaries,
     materiallyChangesScene,
   };
 }
