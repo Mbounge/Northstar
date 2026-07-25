@@ -406,6 +406,25 @@ function CodeArtifactHostImpl({
 
     if (!current || !ackToken || !proposalId || !revisionId) return;
 
+    // A terminal browser report is authoritative only for the exact revision
+    // currently mounted in the iframe. Old resize/review callbacks can arrive
+    // after React has dispatched the next proposal; treating those callbacks as
+    // current would reject a new revision using the previous revision's DOM.
+    if (!isFoundationReady && browserRevisionRef.current !== revisionId) {
+      onLifecycleEvent({
+        name: "revision.received",
+        artifactId: current.artifactId,
+        revisionId,
+        ackToken,
+        proposalId,
+        mutationId: input.message.mutationId ?? inFlight?.mutationId,
+        browserRevisionId: browserRevisionRef.current,
+        detail: `Ignored stale terminal browser report for ${revisionId}; mounted browser revision is ${browserRevisionRef.current ?? "unknown"}.`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     const acknowledgement: NorthstarArtifactMutationAcknowledgement = {
       schema: "northstar.artboard-ack.v1",
       proposalId,

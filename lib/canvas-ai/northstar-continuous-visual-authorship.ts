@@ -639,31 +639,62 @@ function insertedIds(draft: NorthstarArtboardMutationDraft): string[] {
   return ids;
 }
 
+function normalizeNorthstarGeneratedIdentity(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
+    .replace(/\b(?:proposal|mutation|revision|transaction|relationship|annotation|claim|layer|fallback)-[a-z0-9:_-]+\b/g, (match) => `${match.split("-")[0]}-#`)
+    .replace(/(data-ns-(?:node|relationship|annotation|claim)-id=)(["'])[^"']+\2/g, "$1$2#generated$2")
+    .replace(/(\bid=)(["'])[^"']+\2/g, "$1$2#generated$2")
+    .replace(/([.#])(?:ns-)?[a-z][a-z0-9_-]*-[0-9]{1,6}\b/g, "$1generated-#")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function canonicalizeNorthstarMoveOperation(operation: Record<string, unknown>): Record<string, unknown> {
+  const canonical: Record<string, unknown> = {};
+  for (const key of Object.keys(operation).sort()) {
+    const value = operation[key];
+    if (key === "layerId") {
+      canonical[key] = "#layer";
+      continue;
+    }
+    if (key === "attributes" && value && typeof value === "object" && !Array.isArray(value)) {
+      canonical[key] = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([attribute]) => !/^data-ns-(?:node|relationship|annotation|claim)-id$/i.test(attribute))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([attribute, attributeValue]) => [
+            attribute,
+            typeof attributeValue === "string" ? normalizeNorthstarGeneratedIdentity(attributeValue) : attributeValue,
+          ]),
+      );
+      continue;
+    }
+    if (typeof value === "string") {
+      canonical[key] = normalizeNorthstarGeneratedIdentity(value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      canonical[key] = value.map((entry) => typeof entry === "string" ? normalizeNorthstarGeneratedIdentity(entry) : entry);
+      continue;
+    }
+    canonical[key] = value;
+  }
+  return canonical;
+}
+
 export function fingerprintNorthstarMove(draft: NorthstarArtboardMutationDraft, contract?: Partial<NorthstarMoveContract>): string {
-  const operations = contract?.obligation === "evidence-hierarchy"
-    ? (draft.operations as Array<Record<string, unknown>>)
-        .filter((operation) => operation.op === "set-attributes")
-        .map((operation) => {
-          const attributes = operation.attributes && typeof operation.attributes === "object"
-            ? operation.attributes as Record<string, unknown>
-            : {};
-          return {
-            targetId: operation.targetId,
-            role: attributes["data-ns-evidence-role"],
-          };
-        })
-        .filter((operation) => typeof operation.targetId === "string" && typeof operation.role === "string")
-        .sort((a, b) => String(a.targetId).localeCompare(String(b.targetId)))
-    : draft.operations;
+  const operations = (draft.operations as Array<Record<string, unknown>>)
+    .map(canonicalizeNorthstarMoveOperation);
   const normalized = JSON.stringify({
     obligation: contract?.obligation,
     operationKind: contract?.operationKind,
+    visualStrategy: normalizeNorthstarGeneratedIdentity(draft.visualStrategy ?? ""),
+    visibleChange: normalizeNorthstarGeneratedIdentity(draft.visibleChange ?? ""),
+    geometryIntent: draft.geometryIntent,
     operations,
-  })
-    .toLowerCase()
-    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
-    .replace(/data-ns-(?:node|relationship|annotation)-id\\?=[\\?"']+[^"']+["']/g, "")
-    .replace(/\s+/g, " ");
+  });
   return createHash("sha256").update(normalized).digest("hex").slice(0, 20);
 }
 

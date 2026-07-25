@@ -154,6 +154,13 @@ export interface NorthstarArtboardMutationBatch {
   /** Text-only changes are reserved for genuinely copy-led acts, never as a generic fallback. */
   allowTextOnly?: boolean;
   requiredChangeKinds?: NorthstarArtboardChangeKind[];
+  /** Minimum share of the artboard occupied by meaningfully changed semantic nodes. */
+  minimumChangedAreaRatio?: number;
+  /** Minimum number of semantic nodes whose browser geometry must move, resize, appear, or disappear. */
+  minimumSpatiallyChangedNodes?: number;
+  /** Optional stronger movement and resize requirements for compositional design stages. */
+  minimumMovedNodes?: number;
+  minimumResizedNodes?: number;
   createdAt: string;
 }
 
@@ -403,6 +410,12 @@ export interface CanvasCodeArtifactRuntimeReview {
   missingRequiredAssetCount?: number;
   meaningfulChangedNodeCount?: number;
   visualDeltaScore?: number;
+  changedAreaRatio?: number;
+  spatiallyChangedNodeCount?: number;
+  movedNodeCount?: number;
+  resizedNodeCount?: number;
+  addedNodeCount?: number;
+  removedNodeCount?: number;
   unusedSpaceRatio?: number;
 }
 

@@ -16964,7 +16964,14 @@ type CanvasActionLifecycleSettlement =
   | { kind: "timed_out"; event?: NorthstarArtifactLifecycleEvent }
   | { kind: "cancelled" };
 
-function canvasActionLifecycleProposalId(action: CanvasAIActionRequest): string | null {
+type CanvasActionLifecycleIdentity = {
+  proposalId: string;
+  revisionId?: string;
+  mutationId?: string;
+  ackToken?: string;
+};
+
+function canvasActionLifecycleIdentity(action: CanvasAIActionRequest): CanvasActionLifecycleIdentity | null {
   if (
     action.tool !== "compose_visual_scene" &&
     action.tool !== "compose_visual_board" &&
@@ -16973,26 +16980,77 @@ function canvasActionLifecycleProposalId(action: CanvasAIActionRequest): string 
     return null;
   }
   const prefix = "live-artifact-";
-  return action.stepId.startsWith(prefix) ? action.stepId.slice(prefix.length) : null;
+  if (!action.stepId.startsWith(prefix)) return null;
+  const proposalId = action.stepId.slice(prefix.length);
+  let revisionId: string | undefined;
+  let mutationId: string | undefined;
+  let ackToken: string | undefined;
+  const rawComposition = action.arguments?.compositionJson;
+  try {
+    const parsed = typeof rawComposition === "string" ? JSON.parse(rawComposition) : rawComposition;
+    const packageValue = parsed && typeof parsed === "object" && "package" in parsed
+      ? (parsed as { package?: { revisionId?: unknown; pendingAckToken?: unknown; mutationJournal?: Array<{ mutationId?: unknown }> } }).package
+      : undefined;
+    revisionId = typeof packageValue?.revisionId === "string" ? packageValue.revisionId : undefined;
+    ackToken = typeof packageValue?.pendingAckToken === "string" ? packageValue.pendingAckToken : undefined;
+    const lastMutation = packageValue?.mutationJournal?.at(-1);
+    mutationId = typeof lastMutation?.mutationId === "string" ? lastMutation.mutationId : undefined;
+  } catch {
+    // Settlement still correlates by proposal id when a legacy action omitted a parseable package.
+  }
+  return { proposalId, revisionId, mutationId, ackToken };
 }
 
 async function waitForCanvasActionLifecycleSettlement(
   runId: string,
-  proposalId: string,
+  identity: CanvasActionLifecycleIdentity,
   timeoutMs: number,
 ): Promise<CanvasActionLifecycleSettlement> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (activeArtifactLifecycleRunId !== runId) return { kind: "cancelled" };
-    const event = [...(artifactLifecycleByRunRef.current.get(runId)?.values() ?? [])]
-      .filter((candidate) => candidate.proposalId === proposalId)
-      .sort((left, right) => right.timestamp - left.timestamp)
-      .find((candidate) =>
-        candidate.name === "revision.acknowledged" ||
-        candidate.name === "revision.rejected" ||
-        candidate.name === "revision.timed_out" ||
-        candidate.name === "ack.delivery_failed"
-      );
+    const proposalEvents = [...(artifactLifecycleByRunRef.current.get(runId)?.values() ?? [])]
+      .filter((candidate) => candidate.proposalId === identity.proposalId)
+      .sort((left, right) => right.timestamp - left.timestamp);
+    const event = proposalEvents.find((candidate) =>
+      candidate.name === "revision.acknowledged" ||
+      candidate.name === "revision.rejected" ||
+      candidate.name === "revision.timed_out" ||
+      candidate.name === "ack.delivery_failed"
+    );
+    if (event) {
+      const mismatches = [
+        identity.revisionId && event.revisionId !== identity.revisionId ? `revision ${event.revisionId ?? "missing"} != ${identity.revisionId}` : "",
+        identity.mutationId && event.mutationId !== identity.mutationId ? `mutation ${event.mutationId ?? "missing"} != ${identity.mutationId}` : "",
+        identity.ackToken && event.ackToken !== identity.ackToken ? `ack token ${event.ackToken ?? "missing"} != ${identity.ackToken}` : "",
+        identity.revisionId && event.browserRevisionId !== identity.revisionId ? `browser revision ${event.browserRevisionId ?? "missing"} != ${identity.revisionId}` : "",
+      ].filter(Boolean);
+      if (mismatches.length) {
+        recordCanvasDiagnostic({
+          phase: "runtime",
+          name: "settlement.identity_mismatch",
+          runId,
+          detail: `Ignored a malformed terminal runtime event for proposal ${identity.proposalId}: ${mismatches.join("; ")}.`,
+          data: {
+            proposalId: identity.proposalId,
+            expectedRevisionId: identity.revisionId,
+            actualRevisionId: event.revisionId,
+            browserRevisionId: event.browserRevisionId,
+            expectedMutationId: identity.mutationId,
+            actualMutationId: event.mutationId,
+            eventName: event.name,
+          },
+        });
+        return {
+          kind: "rejected",
+          event: {
+            ...event,
+            name: "revision.rejected",
+            detail: `The artifact runtime returned a terminal event with a mismatched revision envelope: ${mismatches.join("; ")}.`,
+          },
+        };
+      }
+    }
     if (event?.name === "revision.acknowledged") return { kind: "acknowledged", event };
     if (event?.name === "revision.rejected") return { kind: "rejected", event };
     if (event?.name === "revision.timed_out" || event?.name === "ack.delivery_failed") {
@@ -18052,15 +18110,15 @@ function ChatWorkspacePanel({
                 }
               }
 
-              const lifecycleProposalId = canvasActionLifecycleProposalId(action);
+              const lifecycleIdentity = canvasActionLifecycleIdentity(action);
               if (
                 !priorOutcome &&
-                lifecycleProposalId &&
+                lifecycleIdentity &&
                 normalizeCanvasAIActionOutcome(rawResult).status === "succeeded"
               ) {
                 const settlement = await waitForCanvasActionLifecycleSettlement(
                   runId,
-                  lifecycleProposalId,
+                  lifecycleIdentity,
                   CANVAS_ACTION_TIMEOUT_MS,
                 );
                 if (settlement.kind === "rejected") {
@@ -18082,7 +18140,7 @@ function ChatWorkspacePanel({
                       : "RUNTIME_SETTLEMENT_TIMEOUT",
                     retrySafe: false,
                     detail: settlement.event?.detail ??
-                      `The artifact runtime did not settle proposal ${lifecycleProposalId} within ${CANVAS_ACTION_TIMEOUT_MS}ms.`,
+                      `The artifact runtime did not settle proposal ${lifecycleIdentity.proposalId} within ${CANVAS_ACTION_TIMEOUT_MS}ms.`,
                   };
                 } else if (settlement.kind === "cancelled") {
                   rawResult = {

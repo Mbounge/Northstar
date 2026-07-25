@@ -759,6 +759,51 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const meaningful = changed.filter((id) => !PROGRESS_ONLY_NODE_IDS.has(id));
     return { changed, meaningful };
   };
+  const measureVisualImpact = (before, after, meaningfulIds) => {
+    const rootRect = root.getBoundingClientRect();
+    const rootArea = Math.max(1, rootRect.width * rootRect.height);
+    let changedArea = 0;
+    let movedNodeCount = 0;
+    let resizedNodeCount = 0;
+    let addedNodeCount = 0;
+    let removedNodeCount = 0;
+    const spatiallyChanged = new Set();
+    for (const id of meaningfulIds) {
+      if (id === "artboard") continue;
+      const beforeNode = before.get(id);
+      const afterNode = after.get(id);
+      const beforeRect = beforeNode?.rect;
+      const afterRect = afterNode?.rect;
+      if (!beforeRect && afterRect) {
+        addedNodeCount += 1;
+        spatiallyChanged.add(id);
+        changedArea += Math.max(0, afterRect[2] * afterRect[3]);
+        continue;
+      }
+      if (beforeRect && !afterRect) {
+        removedNodeCount += 1;
+        spatiallyChanged.add(id);
+        changedArea += Math.max(0, beforeRect[2] * beforeRect[3]);
+        continue;
+      }
+      if (!beforeRect || !afterRect) continue;
+      const moved = Math.abs(afterRect[0] - beforeRect[0]) > 4 || Math.abs(afterRect[1] - beforeRect[1]) > 4;
+      const resized = Math.abs(afterRect[2] - beforeRect[2]) > Math.max(4, beforeRect[2] * 0.03)
+        || Math.abs(afterRect[3] - beforeRect[3]) > Math.max(4, beforeRect[3] * 0.03);
+      if (moved) movedNodeCount += 1;
+      if (resized) resizedNodeCount += 1;
+      if (moved || resized) spatiallyChanged.add(id);
+      changedArea += Math.max(beforeRect[2] * beforeRect[3], afterRect[2] * afterRect[3]);
+    }
+    return {
+      changedAreaRatio: Math.max(0, Math.min(1, changedArea / rootArea)),
+      spatiallyChangedNodeCount: spatiallyChanged.size,
+      movedNodeCount,
+      resizedNodeCount,
+      addedNodeCount,
+      removedNodeCount,
+    };
+  };
   const rectIntersectionArea = (a, b) => {
     const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
     const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
@@ -952,15 +997,32 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const comparisonEntityCount = root.querySelectorAll("[data-ns-flow-id], [data-ns-comparison-entity]").length;
     const flowTopologyViolations = Array.from(root.querySelectorAll("[data-ns-flow-id], [data-ns-reference-flow], [data-ns-flow-sequence]"))
       .map((flow) => {
-        const evidence = Array.from(flow.querySelectorAll("[data-ns-evidence-id], img[data-ns-node-id]"))
-          .map((element) => ({ id: element.getAttribute("data-ns-evidence-id") || element.getAttribute("data-ns-node-id") || "flow-screen", rect: element.getBoundingClientRect() }))
+        const sequence = flow.matches("[data-ns-flow-sequence]")
+          ? flow
+          : flow.querySelector("[data-ns-flow-sequence], .working-flow__sequence, [data-ns-node-id$='-sequence']") || flow;
+        const evidence = Array.from(sequence.querySelectorAll(":scope > [data-ns-evidence-id], :scope > figure, :scope > article, :scope > li"))
+          .map((element) => ({
+            id: element.getAttribute("data-ns-evidence-id") || element.getAttribute("data-ns-node-id") || "flow-screen",
+            rect: element.getBoundingClientRect(),
+          }))
           .filter((item) => item.rect.width > 8 && item.rect.height > 8);
         if (evidence.length < 3) return null;
-        const centers = evidence.map((item) => ({ id: item.id, x: item.rect.left + item.rect.width / 2, y: item.rect.top + item.rect.height / 2 }));
-        const xSpread = Math.max(...centers.map((item) => item.x)) - Math.min(...centers.map((item) => item.x));
-        const ySpread = Math.max(...centers.map((item) => item.y)) - Math.min(...centers.map((item) => item.y));
-        const verticallySequenced = ySpread > Math.max(80, xSpread * 1.15);
-        return verticallySequenced ? (flow.getAttribute("data-ns-flow-id") || flow.getAttribute("data-ns-node-id") || "ordered-flow") : null;
+        const centers = evidence.map((item) => ({
+          id: item.id,
+          x: item.rect.left + item.rect.width / 2,
+          bottom: item.rect.bottom,
+          height: item.rect.height,
+        }));
+        const orderedLeftToRight = centers.every((item, index) => index === 0 || item.x > centers[index - 1].x + 2);
+        const sortedHeights = centers.map((item) => item.height).sort((a, b) => a - b);
+        const medianHeight = sortedHeights[Math.floor(sortedHeights.length / 2)] || 0;
+        const bottomSpread = Math.max(...centers.map((item) => item.bottom)) - Math.min(...centers.map((item) => item.bottom));
+        const singleRow = bottomSpread <= Math.max(36, medianHeight * .25);
+        const style = getComputedStyle(sequence);
+        const declaresVertical = style.display === "flex" && style.flexDirection.startsWith("column");
+        const declaresWrapping = style.display === "flex" && style.flexWrap !== "nowrap";
+        const violates = declaresVertical || declaresWrapping || !orderedLeftToRight || !singleRow;
+        return violates ? (flow.getAttribute("data-ns-flow-id") || flow.getAttribute("data-ns-node-id") || "ordered-flow") : null;
       })
       .filter(Boolean);
     const currentActText = (root.querySelector('[data-ns-node-id="current-act-text"]')?.textContent || "").toLowerCase();
@@ -1073,7 +1135,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const classifyChangeKinds = (batch, diff, beforeBounds, afterBounds) => {
     const kinds = new Set();
     for (const operation of batch.operations || []) {
-      if (["insert-html", "remove", "move"].includes(operation.op)) kinds.add("structure");
+      if (["insert-html", "set-html", "remove", "move"].includes(operation.op)) kinds.add("structure");
       if (operation.op === "move") kinds.add("position");
       if (operation.op === "set-text" || operation.op === "set-html" || operation.op === "insert-html") kinds.add("content");
       if (operation.op === "set-styles" || operation.op === "set-classes" || operation.op === "set-css-layer") kinds.add("style");
@@ -1347,6 +1409,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const minimumMeaningful = Math.max(1, Number(acknowledgement.batch.minimumMeaningfulChangedNodes) || 1);
         const textOnly = changeKinds.length === 1 && changeKinds[0] === "content";
         const requiredKinds = acknowledgement.batch.requiredChangeKinds || [];
+        const visualImpact = measureVisualImpact(acknowledgement.transaction.beforeSnapshot, afterSnapshot, diff.meaningful);
+        const minimumChangedAreaRatio = Math.max(0, Number(acknowledgement.batch.minimumChangedAreaRatio) || 0);
+        const minimumSpatiallyChangedNodes = Math.max(0, Number(acknowledgement.batch.minimumSpatiallyChangedNodes) || 0);
+        const minimumMovedNodes = Math.max(0, Number(acknowledgement.batch.minimumMovedNodes) || 0);
+        const minimumResizedNodes = Math.max(0, Number(acknowledgement.batch.minimumResizedNodes) || 0);
+        const visualImpactFailures = [];
+        if (visualImpact.changedAreaRatio + 0.0001 < minimumChangedAreaRatio) visualImpactFailures.push("changed area " + Math.round(visualImpact.changedAreaRatio * 1000) / 10 + "% < " + Math.round(minimumChangedAreaRatio * 1000) / 10 + "%");
+        if (visualImpact.spatiallyChangedNodeCount < minimumSpatiallyChangedNodes) visualImpactFailures.push("spatial nodes " + visualImpact.spatiallyChangedNodeCount + " < " + minimumSpatiallyChangedNodes);
+        if (visualImpact.movedNodeCount < minimumMovedNodes) visualImpactFailures.push("moved nodes " + visualImpact.movedNodeCount + " < " + minimumMovedNodes);
+        if (visualImpact.resizedNodeCount < minimumResizedNodes) visualImpactFailures.push("resized nodes " + visualImpact.resizedNodeCount + " < " + minimumResizedNodes);
         // Geometry remains browser-measured, but unchanged outer bounds must not
         // roll back an otherwise meaningful and safe internal recomposition.
         const missingRequiredKinds = requiredKinds.filter(
@@ -1372,6 +1444,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             ? "The proposed adjustment did not visibly change enough semantic content."
             : textOnly && acknowledgement.batch.allowTextOnly !== true
               ? "The proposed adjustment changed only copy or cosmetic styling when a compositional move was required."
+              : visualImpactFailures.length
+                ? "The visual design stage did not produce a palpable compositional delta: " + visualImpactFailures.join(", ")
               : missingRequiredKinds.length
                 ? "The visible change did not satisfy the required design move: " + missingRequiredKinds.join(", ")
                 : hardIssues > 0
@@ -1397,7 +1471,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             mutationId: acknowledgement.mutationId,
             message: rejectedReason,
             size,
-            review: { ...review, hardFailureCount: hardIssues, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: missingAssets.length, meaningfulChangedNodeCount: diff.meaningful.length },
+            review: { ...review, hardFailureCount: hardIssues, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: missingAssets.length, meaningfulChangedNodeCount: diff.meaningful.length, visualDeltaScore: visualImpact.changedAreaRatio, ...visualImpact },
             changedNodeIds: diff.changed,
             meaningfulChangedNodeIds: diff.meaningful,
             changeKinds,
@@ -1455,7 +1529,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             mutationId: acknowledgement.mutationId,
             visibleChange: acknowledgement.visibleChange,
             size: acknowledgedSize,
-            review: { ...review, hardFailureCount: 0, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: 0, meaningfulChangedNodeCount: diff.meaningful.length },
+            review: { ...review, hardFailureCount: 0, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: 0, meaningfulChangedNodeCount: diff.meaningful.length, visualDeltaScore: visualImpact.changedAreaRatio, ...visualImpact },
             changedNodeIds: diff.changed,
             meaningfulChangedNodeIds: diff.meaningful,
             changeKinds,

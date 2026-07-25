@@ -385,6 +385,13 @@ export function createNorthstarArtboardMutationBatch(input: {
   label: string;
   phase: Exclude<CanvasCodeArtifactBuildPhase, "complete">;
   intent: string;
+  minimumMeaningfulChangedNodes?: number;
+  allowTextOnly?: boolean;
+  requiredChangeKinds?: NorthstarArtboardMutationBatch["requiredChangeKinds"];
+  minimumChangedAreaRatio?: number;
+  minimumSpatiallyChangedNodes?: number;
+  minimumMovedNodes?: number;
+  minimumResizedNodes?: number;
 }): NorthstarArtboardMutationBatch {
   const draft = sanitizeNorthstarArtboardMutationDraft(input.draft);
   const styleOnly = draft.operations.every((operation) =>
@@ -415,6 +422,21 @@ export function createNorthstarArtboardMutationBatch(input: {
     geometryIntent: draft.geometryIntent,
     transitionMs: draft.transitionMs,
     operations: draft.operations,
+    minimumMeaningfulChangedNodes: input.minimumMeaningfulChangedNodes,
+    allowTextOnly: input.allowTextOnly,
+    requiredChangeKinds: input.requiredChangeKinds,
+    minimumChangedAreaRatio: input.minimumChangedAreaRatio === undefined
+      ? undefined
+      : Math.max(0, Math.min(1, input.minimumChangedAreaRatio)),
+    minimumSpatiallyChangedNodes: input.minimumSpatiallyChangedNodes === undefined
+      ? undefined
+      : Math.max(0, Math.floor(input.minimumSpatiallyChangedNodes)),
+    minimumMovedNodes: input.minimumMovedNodes === undefined
+      ? undefined
+      : Math.max(0, Math.floor(input.minimumMovedNodes)),
+    minimumResizedNodes: input.minimumResizedNodes === undefined
+      ? undefined
+      : Math.max(0, Math.floor(input.minimumResizedNodes)),
     createdAt: new Date().toISOString(),
   };
 }
@@ -428,6 +450,13 @@ export function appendNorthstarArtboardMutation(input: {
   intent: string;
   verified?: boolean;
   diagnostics?: string[];
+  minimumMeaningfulChangedNodes?: number;
+  allowTextOnly?: boolean;
+  requiredChangeKinds?: NorthstarArtboardMutationBatch["requiredChangeKinds"];
+  minimumChangedAreaRatio?: number;
+  minimumSpatiallyChangedNodes?: number;
+  minimumMovedNodes?: number;
+  minimumResizedNodes?: number;
 }): NorthstarGeneratedCodeArtifactPackage {
   const sanitized = sanitizeNorthstarArtboardMutationDraft(input.draft);
   const batch = createNorthstarArtboardMutationBatch({
@@ -436,6 +465,13 @@ export function appendNorthstarArtboardMutation(input: {
     label: input.label,
     phase: input.phase,
     intent: input.intent,
+    minimumMeaningfulChangedNodes: input.minimumMeaningfulChangedNodes,
+    allowTextOnly: input.allowTextOnly,
+    requiredChangeKinds: input.requiredChangeKinds,
+    minimumChangedAreaRatio: input.minimumChangedAreaRatio,
+    minimumSpatiallyChangedNodes: input.minimumSpatiallyChangedNodes,
+    minimumMovedNodes: input.minimumMovedNodes,
+    minimumResizedNodes: input.minimumResizedNodes,
   });
   // Geometry is never estimated into the package. The currently mounted browser surface
   // applies the mutation first, measures its exact full bounds, and then updates the same
