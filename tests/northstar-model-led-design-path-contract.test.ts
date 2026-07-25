@@ -11,20 +11,22 @@ const engine = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-presenta
 const diagnostics = fs.readFileSync(path.join(root, "lib/canvas-ai/canvas-diagnostics.ts"), "utf8");
 const workspace = fs.readFileSync(path.join(root, "components/canvas/north-star-canvas-workspace.tsx"), "utf8");
 
-test("visual authorship always has an evidence-grounded executable path", () => {
-  assert.equal(route.includes("buildNorthstarFallbackPresentationDecision"), true);
-  assert.equal(route.includes("decisionSource = \"evidence-grounded-fallback\""), true);
-  assert.equal(route.includes("Typed presentation preflight failed"), true);
-  assert.equal(engine.includes("compileNorthstarPresentationPass"), true);
-  assert.equal(engine.includes("variant?: number"), true);
+test("visual authorship uses emergent model-authored executable mutations", () => {
+  assert.equal(route.includes("createNorthstarGeminiCreativeAdapter"), true);
+  assert.equal(route.includes("sanitizeNorthstarEmergentCreativeAct"), true);
+  assert.equal(route.includes("compileNorthstarMutationDraft"), true);
+  assert.equal(route.includes("compileNorthstarPresentationPass"), false);
+  assert.equal(route.includes("buildNorthstarFallbackPresentationDecision"), false);
+  assert.equal(route.includes("No visual template or archetype is being selected"), true);
 });
 
-test("browser rejection becomes decision critique and changes the next evidence ranking", () => {
+test("browser rejection becomes creative critique without choosing another preset", () => {
   assert.equal(route.includes("const buildRejectedDesignCritique"), true);
-  assert.equal(route.includes("BROWSER CRITIQUE FROM THE PREVIOUS CANDIDATE"), true);
-  assert.equal(route.includes("presentationAttemptsByObligation"), true);
-  assert.equal(route.includes("variant: attemptIndex - 1"), true);
+  assert.equal(route.includes("choose a materially different next creative act"), true);
+  assert.equal(route.includes("Do not request or set artboard dimensions"), true);
   assert.equal(route.includes("priorCritique = undefined;"), true);
+  assert.equal(route.includes("nextObligation("), false);
+  assert.equal(route.includes("Change the composition archetype"), false);
 });
 
 test("equivalent generated identities share a fingerprint", () => {
@@ -83,11 +85,11 @@ test("materially different strategies retain different fingerprints", () => {
   );
 });
 
-test("design decisions and preflight outcomes enter the canonical diagnostic stream", () => {
-  assert.equal(route.includes('callbacks.trace?.("design.attempt.started"'), true);
-  assert.equal(route.includes('callbacks.trace?.("design.decision.received"'), true);
-  assert.equal(route.includes('callbacks.trace?.("design.preflight.rejected"'), true);
-  assert.equal(route.includes('callbacks.trace?.("design.preflight.accepted"'), true);
+test("creative acts and preflight outcomes enter the canonical diagnostic stream", () => {
+  assert.equal(route.includes('callbacks.trace?.("creative.act.started"'), true);
+  assert.equal(route.includes('callbacks.trace?.("creative.act.received"'), true);
+  assert.equal(route.includes('callbacks.trace?.("creative.act.preflight_rejected"'), true);
+  assert.equal(route.includes('callbacks.trace?.("creative.act.preflight_accepted"'), true);
   assert.equal(workspace.includes('eventName === "server.trace"'), true);
 });
 

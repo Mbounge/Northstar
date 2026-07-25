@@ -7,6 +7,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type {
   CanvasCodeArtifactDataBundle,
+  CanvasCodeArtifactIntrinsicBounds,
   NorthstarCreativeDirection,
   NorthstarCreativeReview,
   NorthstarWebArtifactDocument,
@@ -78,6 +79,7 @@ function buildHtml(input: {
   width: number;
   height: number;
   mutationJournal?: NorthstarArtboardMutationBatch[];
+  focusBounds?: CanvasCodeArtifactIntrinsicBounds;
 }): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=${input.width},initial-scale=1">
@@ -127,16 +129,18 @@ try{${input.document.javascript}}catch(error){document.documentElement.dataset.n
 for(const batch of ${safeJson(input.mutationJournal ?? [])}){try{__northstarApplyBatch(batch);}catch(error){document.documentElement.dataset.northstarMutationError=String(error&&error.message||error);}}
 function normalizeCapture(){
   const rootRect=captureRoot.getBoundingClientRect();
-  let minX=Math.min(0,__northstarRequestedBounds.minX),minY=Math.min(0,__northstarRequestedBounds.minY),maxX=Math.max(${input.width},__northstarRequestedBounds.maxX),maxY=Math.max(${input.height},__northstarRequestedBounds.maxY);
-  captureRoot.querySelectorAll('*').forEach(element=>{
+  const focus=${safeJson(input.focusBounds ?? null)};
+  let minX=focus?Number(focus.minX):Math.min(0,__northstarRequestedBounds.minX),minY=focus?Number(focus.minY):Math.min(0,__northstarRequestedBounds.minY),maxX=focus?Number(focus.maxX):Math.max(${input.width},__northstarRequestedBounds.maxX),maxY=focus?Number(focus.maxY):Math.max(${input.height},__northstarRequestedBounds.maxY);
+  if(!focus){captureRoot.querySelectorAll('*').forEach(element=>{
     const style=getComputedStyle(element);if(style.display==='none'||style.visibility==='hidden')return;
     const rect=element.getBoundingClientRect();if(rect.width<=0&&rect.height<=0)return;
     minX=Math.min(minX,rect.left-rootRect.left);minY=Math.min(minY,rect.top-rootRect.top);
     maxX=Math.max(maxX,rect.right-rootRect.left);maxY=Math.max(maxY,rect.bottom-rootRect.top);
-  });
+  });}
+  minX=Math.max(-24000,Math.min(24000,minX));minY=Math.max(-24000,Math.min(24000,minY));maxX=Math.max(minX+1,Math.min(24000,maxX));maxY=Math.max(minY+1,Math.min(24000,maxY));
   const rawWidth=Math.max(1,Math.ceil(maxX-minX));
   const rawHeight=Math.max(1,Math.ceil(maxY-minY));
-  const scale=Math.min(1,1920/rawWidth,5000/rawHeight);
+  const scale=focus?Math.min(1,1600/rawWidth,1800/rawHeight):Math.min(1,1920/rawWidth,5000/rawHeight);
   const width=Math.max(1,Math.ceil(rawWidth*scale));
   const height=Math.max(1,Math.ceil(rawHeight*scale));
   captureOrigin.style.transform='translate('+(-minX*scale)+'px,'+(-minY*scale)+'px) scale('+scale+')';
@@ -207,6 +211,7 @@ export async function captureNorthstarArtifactPng(input: {
   width: number;
   height: number;
   mutationJournal?: NorthstarArtboardMutationBatch[];
+  focusBounds?: CanvasCodeArtifactIntrinsicBounds;
   timeoutMs?: number;
 }): Promise<NorthstarRenderedArtifactPng> {
   const baseWidth = Math.max(720, Math.min(2400, Math.round(input.width)));

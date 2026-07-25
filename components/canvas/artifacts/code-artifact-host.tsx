@@ -12,6 +12,7 @@ import {
 } from "@/lib/canvas-ai/northstar-artboard-ack";
 import type { NorthstarBrowserCommit } from "@/lib/canvas-ai/northstar-transaction-kernel";
 import { NORTHSTAR_HEALTH_POLICY } from "@/lib/canvas-ai/northstar-health-policy";
+import { acceptNorthstarContentSize } from "@/lib/canvas-artifacts/content-size-coordinator";
 import type {
   CanvasCodeArtifactContentSize,
   CanvasCodeArtifactPayload,
@@ -700,20 +701,8 @@ function CodeArtifactHostImpl({
 
       if (event.data.type === "northstar.artifact.ready") {
         for (const id of event.data.appliedMutationIds ?? []) appliedMutationIdsRef.current.add(id);
-        if (event.data.size) {
-          latestSizeRef.current = event.data.size;
-          liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, event.data.size.sequence ?? -1);
-          setLiveSize(event.data.size);
-          onContentSize(event.data.size);
-        }
-        if (event.data.review) latestReviewRef.current = event.data.review;
-        readyRef.current = true;
-        browserRevisionRef.current = event.data.revisionId ?? current.revisionId;
-        setSurfaceReady(true);
-        setRuntimeError(null);
-        postCurrentContext();
         // Ready with a mutation id is provisional. Only mutation-applied or
-        // mutation-rejected may commit/clear that exact proposal token.
+        // mutation-rejected may publish geometry and settle that exact proposal.
         const hasPendingMutation = Boolean(
           current.pendingAckToken
           && (current.mutationJournal ?? []).some((batch) =>
@@ -721,15 +710,44 @@ function CodeArtifactHostImpl({
             && !failedMutationIdsRef.current.has(batch.mutationId),
           ),
         );
+        let acceptedReadySize: CanvasCodeArtifactContentSize | undefined;
+        if (event.data.size) {
+          acceptedReadySize = acceptNorthstarContentSize({
+            candidate: event.data.size,
+            artifactId: current.artifactId,
+            revisionId: event.data.revisionId ?? current.revisionId,
+            previous: latestSizeRef.current,
+            previousIntrinsicWidth: current.preferredWidth,
+            previousIntrinsicHeight: current.preferredHeight,
+            allowEqualSequence: true,
+          });
+          if (acceptedReadySize) {
+            latestSizeRef.current = acceptedReadySize;
+            liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, acceptedReadySize.sequence ?? -1);
+            if (!event.data.mutationId && !hasPendingMutation) {
+              setLiveSize(acceptedReadySize);
+              onContentSize(acceptedReadySize);
+            }
+          }
+        }
+        if (event.data.review) latestReviewRef.current = event.data.review;
+        readyRef.current = true;
+        browserRevisionRef.current = event.data.revisionId ?? current.revisionId;
+        setSurfaceReady(true);
+        setRuntimeError(null);
+        postCurrentContext();
         if (!event.data.mutationId && !hasPendingMutation) {
+          const readyMessage = acceptedReadySize
+            ? { ...event.data, size: acceptedReadySize }
+            : event.data;
           onBrowserCommit({
             artifactId: event.data.artifactId,
             revisionId: event.data.revisionId ?? current.revisionId,
-            size: event.data.size,
+            size: acceptedReadySize,
             review: event.data.review,
             snapshot: event.data.snapshot,
           });
-          void postAcknowledgement({ status: "ready", message: event.data })
+          void postAcknowledgement({ status: "ready", message: readyMessage })
             .then(() => window.setTimeout(pumpNextMutation, 40))
             .catch((error: unknown) => {
               console.warn("Northstar foundation acknowledgement transport failed; the mounted artboard remains locally usable.", error);
@@ -812,13 +830,20 @@ function CodeArtifactHostImpl({
       }
 
       if (event.data.type === "northstar.artifact.content-size" && event.data.size) {
-        const nextSequence = event.data.size.sequence ?? liveSizeSequenceRef.current + 1;
-        if (nextSequence < liveSizeSequenceRef.current) return;
-        liveSizeSequenceRef.current = nextSequence;
-        latestSizeRef.current = event.data.size;
-        // Provisional reflow, asset loading, and rollback never move or zoom the
-        // outer Canvas object. Ready and mutation-applied are the only events
-        // allowed to publish a settled size to the workspace.
+        const acceptedSize = acceptNorthstarContentSize({
+          candidate: event.data.size,
+          artifactId: current.artifactId,
+          revisionId: event.data.revisionId ?? current.revisionId,
+          previous: latestSizeRef.current,
+          previousIntrinsicWidth: current.preferredWidth,
+          previousIntrinsicHeight: current.preferredHeight,
+        });
+        if (!acceptedSize) return;
+        liveSizeSequenceRef.current = acceptedSize.sequence ?? liveSizeSequenceRef.current + 1;
+        latestSizeRef.current = acceptedSize;
+        // Provisional reflow is buffered from the same normalized measurement
+        // used by the terminal event. The iframe and outer artboard publish that
+        // exact measurement together only after ready/applied settlement.
         return;
       }
 
@@ -938,18 +963,33 @@ function CodeArtifactHostImpl({
       }
 
       if (event.data.type === "northstar.artifact.mutation-applied") {
+        let acceptedAppliedSize: CanvasCodeArtifactContentSize | undefined;
         if (event.data.size) {
-          latestSizeRef.current = event.data.size;
-          liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, event.data.size.sequence ?? -1);
-          setLiveSize(event.data.size);
-          onContentSize(event.data.size);
+          acceptedAppliedSize = acceptNorthstarContentSize({
+            candidate: event.data.size,
+            artifactId: current.artifactId,
+            revisionId: event.data.revisionId ?? current.revisionId,
+            previous: latestSizeRef.current,
+            previousIntrinsicWidth: current.preferredWidth,
+            previousIntrinsicHeight: current.preferredHeight,
+            allowEqualSequence: true,
+          });
+          if (acceptedAppliedSize) {
+            latestSizeRef.current = acceptedAppliedSize;
+            liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, acceptedAppliedSize.sequence ?? -1);
+            setLiveSize(acceptedAppliedSize);
+            onContentSize(acceptedAppliedSize);
+          }
         }
+        const appliedMessage = acceptedAppliedSize
+          ? { ...event.data, size: acceptedAppliedSize }
+          : event.data;
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         onBrowserCommit({
           artifactId: event.data.artifactId,
           revisionId: event.data.revisionId ?? current.revisionId,
           mutationId: event.data.mutationId,
-          size: event.data.size,
+          size: acceptedAppliedSize,
           review: event.data.review,
           snapshot: event.data.snapshot,
         });
@@ -960,7 +1000,7 @@ function CodeArtifactHostImpl({
           inFlightProposalRef.current = null;
         }
         setVisibleMutationLabel(event.data.visibleChange || null);
-        void postAcknowledgement({ status: "applied", message: event.data })
+        void postAcknowledgement({ status: "applied", message: appliedMessage })
           .then(() => {
             window.setTimeout(() => {
               setVisibleMutationLabel(null);

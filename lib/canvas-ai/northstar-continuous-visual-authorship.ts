@@ -38,6 +38,7 @@ export type NorthstarTransactionState =
   | "correcting";
 
 export type NorthstarObligationKey =
+  | "creative-progress"
   | "visual-thesis"
   | "first-evidence"
   | "evidence-hierarchy"
@@ -224,6 +225,7 @@ const CORE_OBLIGATIONS: NorthstarObligationKey[] = [
 const SETTLEMENT_OBLIGATIONS: NorthstarObligationKey[] = ["process-settled", "publication-cleanup"];
 
 const OBLIGATION_RATIONALES: Record<NorthstarObligationKey, string> = {
+  "creative-progress": "The adaptive agent must make one material evidence-grounded improvement without following a predetermined visual agenda.",
   "visual-thesis": "The viewer must understand the governing argument and three-second read.",
   "first-evidence": "At least one grounded piece of evidence must materially enter the visible composition.",
   "evidence-hierarchy": "Evidence must be visibly ranked rather than presented as equal-weight inventory.",
@@ -441,6 +443,7 @@ export function assessNorthstarCanonicalScene(
 
 function obligationStatus(key: NorthstarObligationKey, assessment: NorthstarSceneAssessment): NorthstarObligationStatus {
   const verified = (() => {
+    if (key === "creative-progress") return false;
     if (key === "visual-thesis") return assessment.visualThesisPresent;
     if (key === "first-evidence") return assessment.groundedEvidencePresent;
     if (key === "evidence-hierarchy") return assessment.evidenceHierarchyPresent;
@@ -926,6 +929,7 @@ export function preflightNorthstarMove(input: {
   const duplicateInsertions = duplicates(newIds);
   const fingerprint = fingerprintNorthstarMove(input.draft, input.contract);
   const semanticObligations = new Set<NorthstarObligationKey>([
+    "creative-progress",
     "visual-thesis",
     "evidence-hierarchy",
     "hypothesis-tested",
@@ -1038,8 +1042,10 @@ export function buildNorthstarCorrectionDirective(input: {
   const issues = [...(input.preflightIssues ?? []), ...(input.browserIssues ?? [])];
   const reason = input.acknowledgement?.reason ?? "";
   const directives = [
-    `Continue the same unresolved obligation: ${input.contract.obligation}.`,
-    `Preserve the verified visual thesis while replacing the rejected structural approach for â€œ${input.contract.label}â€.`,
+    input.contract.obligation === "creative-progress"
+      ? "Re-observe the exact committed artboard and author a materially different creative act; no visual agenda or layout family is prescribed."
+      : `Continue the same unresolved obligation: ${input.contract.obligation}.`,
+    `Preserve grounded truth while replacing the rejected structural approach for â€œ${input.contract.label}â€.`,
     "Rebase on the exact current materialized DOM and browser geometry.",
     "Produce a materially different visible and semantic delta; changing identifiers or wording alone is not a correction.",
     "Keep the working hypothesis and current test in the reserved two-column normal-flow reasoning region.",
@@ -1047,7 +1053,7 @@ export function buildNorthstarCorrectionDirective(input: {
   ];
   if (/missing semantic node|target/i.test(`${issues.join(" ")} ${reason}`)) directives.push("Address only semantic nodes that exist in the current canonical DOM, or insert their parent structure first in the same atomic move.");
   if (/duplicate/i.test(`${issues.join(" ")} ${reason}`)) directives.push("Update the existing canonical region instead of inserting an equivalent node.");
-  if (/overflow|contain|clip|scroll|geometry/i.test(`${issues.join(" ")} ${reason}`)) directives.push("Use the measured browser dimensions to expand or recompose the root and remove all overflow, clipping, collision, and accidental empty bands in the same move.");
+  if (/overflow|contain|clip|scroll|geometry/i.test(`${issues.join(" ")} ${reason}`)) directives.push("Recompose the authored content so runtime-derived bounds contain it naturally; do not request or set artboard dimensions.");
   if (/meaningful|no meaningful|status metadata/i.test(`${issues.join(" ")} ${reason}`)) directives.push("Change evidence hierarchy, geometry, relationships, synthesis, or semantic structure; status-only and animation-only changes do not qualify.");
   if (/asset|image/i.test(`${issues.join(" ")} ${reason}`)) directives.push("Use only registered grounded assets and preserve their complete readable aspect ratios.");
   if (/reasoning theatre|normal flow|vertical/i.test(`${issues.join(" ")} ${reason}`)) directives.push("Use `.ns-reasoning-zone{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}` inside the reserved scene grid region.");

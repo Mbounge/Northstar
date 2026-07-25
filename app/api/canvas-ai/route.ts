@@ -33,32 +33,17 @@ import {
   type NorthstarArtboardMutationDraft,
 } from "@/lib/canvas-ai/northstar-artboard-mutations";
 import {
-  NORTHSTAR_CREATIVE_CRITIQUE_JSON_SCHEMA,
-  NORTHSTAR_CREATIVE_EXPLORATION_JSON_SCHEMA,
-  NORTHSTAR_CREATIVE_SELECTION_JSON_SCHEMA,
-  buildCreativeCritiqueModelInput,
-  buildCreativeCritiqueSystemInstruction,
-  buildCreativeDirection,
-  buildCreativeExplorationModelInput,
-  buildCreativeExplorationSystemInstruction,
-  buildCreativeSelectionModelInput,
-  buildCreativeSelectionSystemInstruction,
-  createCreativeDiversityContext,
   creativeBudgetForThinkingDepth,
-  deterministicCreativeDirection,
-  sanitizeCreativeCritique,
-  sanitizeCreativeExploration,
   buildNorthstarDesignBehaviorAddendum,
-  type NorthstarCreativeCritiqueDraft,
-  type NorthstarCreativeExplorationDraft,
-  type NorthstarCreativeSelectionDraft,
-  type NorthstarProgressiveDesignAct,
 } from "@/lib/canvas-ai/northstar-design-intelligence";
-import {
-  loadNorthstarDesignReferenceParts,
-  NORTHSTAR_VISUAL_DNA,
-} from "@/lib/canvas-ai/northstar-design-reference-pack";
+import { loadNorthstarDesignReferenceParts } from "@/lib/canvas-ai/northstar-design-reference-pack";
 import { captureNorthstarArtifactPng } from "@/lib/canvas-ai/northstar-render-capture";
+import {
+  buildNorthstarVisualObservation,
+  buildNorthstarVisualObservationParts,
+  planNorthstarVisualDetailViews,
+  type NorthstarVisualObservation,
+} from "@/lib/canvas-ai/northstar-visual-observation";
 import {
   getNorthstarArtifactAcknowledgement,
   prepareNorthstarArtifactAcknowledgementWait,
@@ -75,15 +60,13 @@ import {
   type NorthstarVisualDispatchResult,
 } from "@/lib/canvas-ai/northstar-run-health";
 import { compileNorthstarMutationDraft } from "@/lib/canvas-ai/northstar-mutation-compiler";
-import { alignNorthstarMutationToVisibleScene, enrichNorthstarMutationWithLivingThoughtTheatre, prepareNorthstarEditorialPublicationDraft } from "@/lib/canvas-ai/northstar-living-thought-theatre";
+import { alignNorthstarMutationToVisibleScene, prepareNorthstarEditorialPublicationDraft } from "@/lib/canvas-ai/northstar-living-thought-theatre";
 import {
   NorthstarContinuousAuthorshipController,
-  NorthstarPreparedMoveQueue,
   assessNorthstarCanonicalScene,
   buildNorthstarCorrectionDirective,
   buildNorthstarFinalResponseInstruction,
   buildNorthstarFinalStateBrief,
-  listNorthstarOpenObligations,
   buildNorthstarMoveContract,
   northstarCssHidesCanonicalArtboard,
   preflightNorthstarMove,
@@ -94,17 +77,32 @@ import {
   type NorthstarObligationKey,
   type NorthstarPreparedMove,
 } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
+import { buildNorthstarEditableSurfaceDescriptor } from "@/lib/canvas-ai/northstar-presentation-engine";
 import {
-  NORTHSTAR_PRESENTATION_DECISION_JSON_SCHEMA,
-  NORTHSTAR_PRESENTATION_ENGINE_VERSION,
-  buildNorthstarEditableSurfaceDescriptor,
-  buildNorthstarFallbackPresentationDecision,
-  buildNorthstarPresentationDecisionPrompt,
-  compileNorthstarPresentationPass,
-  sanitizeNorthstarPresentationDecision,
-  type NorthstarPresentationDecisionDraft,
-} from "@/lib/canvas-ai/northstar-presentation-engine";
-import { buildNorthstarSpatialMoveAddendum, NORTHSTAR_SPATIAL_INTELLIGENCE_CONTRACT } from "@/lib/canvas-ai/northstar-spatial-intelligence";
+  NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION,
+  buildNorthstarAdaptiveCreativeContext,
+  buildNorthstarEmergentCreativeSystemInstruction,
+  buildNorthstarAdaptiveCritiqueContext,
+  buildNorthstarEmergentCritiqueSystemInstruction,
+  createNorthstarEmergentCreativeDirection,
+  sanitizeNorthstarEmergentCreativeAct,
+  sanitizeNorthstarEmergentCreativeCritique,
+  type NorthstarEmergentCreativeAct,
+  type NorthstarEmergentCreativeActDraft,
+  type NorthstarEmergentCreativeCritique,
+} from "@/lib/canvas-ai/northstar-emergent-creative-authorship";
+import { createNorthstarGeminiCreativeAdapter } from "@/lib/canvas-ai/northstar-gemini-creative-adapter";
+import {
+  buildNorthstarIndependentCreativeReviewContext,
+  buildNorthstarIndependentCreativeReviewSystemInstruction,
+  sanitizeNorthstarIndependentCreativeReview,
+  type NorthstarIndependentCreativeReview,
+} from "@/lib/canvas-ai/northstar-independent-creative-review";
+import {
+  NORTHSTAR_ADAPTIVE_CREATIVE_SESSION_VERSION,
+  NorthstarAdaptiveCreativeSession,
+  assessNorthstarAdaptiveReadiness,
+} from "@/lib/canvas-ai/northstar-adaptive-creative-session";
 import {
   NORTHSTAR_VISUAL_SCENE_JSON_SCHEMA,
   buildNorthstarVisualSceneModelInput,
@@ -112,11 +110,7 @@ import {
   deterministicNorthstarVisualScenePlan,
   sanitizeNorthstarVisualScenePlan,
 } from "@/lib/canvas-ai/northstar-visual-scene-engine";
-import {
-  buildDivergentVisualThesisSystemAddendum,
-  buildNorthstarCreativeReviewAddendum,
-  buildThesisExecutionContext,
-} from "@/lib/canvas-ai/northstar-divergent-visual-thesis";
+
 import {
   NORTHSTAR_CODE_ARTIFACT_ACTION_SCHEMA,
   NORTHSTAR_GENERATED_CODE_ARTIFACT_SCHEMA,
@@ -7064,159 +7058,23 @@ async function buildGeneratedCodeArtifactPackage({
   signal: AbortSignal;
 }): Promise<NorthstarGeneratedCodeArtifactPackage> {
   const budget = creativeBudgetForThinkingDepth(thinkingDepth);
-  const diversity = createCreativeDiversityContext(recentCreativeSignatures);
-  const designReferenceParts = await loadNorthstarDesignReferenceParts();
-  const divergentThesisAddendum = buildDivergentVisualThesisSystemAddendum({
+  const designReferenceParts = await loadNorthstarDesignReferenceParts({ mode: "unlabeled-taste" });
+
+  // No visual concept, family, archetype, or composition is selected before the
+  // model sees and works on the exact living artboard. This compatibility object
+  // carries persistence metadata only; accepted live creative acts author the design.
+  const creativeDirection = createNorthstarEmergentCreativeDirection({
+    objective: intent.objective || message,
     thinkingDepth,
-    userRequest: message,
-    recentCreativeSignatures,
+    prior: previousArtifact?.creativeDirection,
   });
-  const directionSteps = [
-    {
-      id: "frame-creative-brief",
-      label: "Choose the viewer job and visual medium",
-      tool: "prepare_composition_evidence",
-      icon: "analyze" as CanvasAIActivityIcon,
-    },
-    {
-      id: "explore-creative-concepts",
-      label: `Originate ${budget.conceptCount} materially different live-move theses`,
-      tool: "prepare_composition_evidence",
-      icon: "plan" as CanvasAIActivityIcon,
-    },
-    {
-      id: "select-creative-direction",
-      label: "Choose the strongest provisional direction for visible testing",
-      tool: "prepare_composition_evidence",
-      icon: "compare" as CanvasAIActivityIcon,
-    },
-  ];
-  await callbacks.extendPlan(
-    directionSteps,
-    `${thinkingDepth[0].toUpperCase()}${thinkingDepth.slice(1)} thinking: originate alternatives in reasoning, then test every consequential choice visibly on the one canonical artboard.`,
-  );
-
-  let creativeDirection: NorthstarCreativeDirection;
-  let exploration: NorthstarCreativeExplorationDraft | null = null;
-
-  try {
-    await callbacks.startStep(directionSteps[0]);
-    const rawExploration = await callGeminiJson<NorthstarCreativeExplorationDraft>({
-      apiKey,
-      systemInstruction: `${buildCreativeExplorationSystemInstruction()}\n\n${divergentThesisAddendum}`,
-      contents: [{
-        role: "user",
-        parts: [
-          ...designReferenceParts,
-          {
-            text: JSON.stringify(buildCreativeExplorationModelInput({
-              userRequest: message,
-              objective: intent.objective || message,
-              audience: blueprint.audience,
-              artifactType: blueprint.artifactType,
-              thinkingDepth,
-              conceptCount: budget.conceptCount,
-              evidenceBrief: {
-                title: blueprint.title,
-                subtitle: blueprint.subtitle,
-                summary: blueprint.summary,
-                visualStrategy: blueprint.visualStrategy,
-                researchDigest: blueprint.researchDigest,
-                sections: blueprint.sections.map((section) => ({
-                  id: section.id,
-                  kind: section.kind,
-                  title: section.title,
-                  body: section.body,
-                  appName: section.appName,
-                  flowName: section.flowName,
-                  evidenceIds: section.evidenceIds,
-                  emphasis: section.emphasis,
-                })),
-              },
-              researchLedger: compactCompositionResearchContext(ledger, "standard"),
-              diversity,
-              previousDirection: previousArtifact?.creativeDirection,
-              revisionInstruction: previousArtifact ? message : undefined,
-            })),
-          },
-        ],
-      }],
-      schema: NORTHSTAR_CREATIVE_EXPLORATION_JSON_SCHEMA,
-      signal,
-      maxOutputTokens: 30_000,
-      temperature: budget.explorationTemperature,
-    });
-    exploration = sanitizeCreativeExploration(rawExploration, budget.conceptCount, intent.objective || message);
-    // v0.6.3.0 deliberately does not render parallel private artboards. Concepts are
-    // provisional reasoning hypotheses only. Their quality is proven or rejected later
-    // through reversible, browser-verified moves on the one visible canonical surface.
-    await callbacks.completeStep({
-      id: directionSteps[0].id,
-      tool: directionSteps[0].tool,
-      detail: `Framed the artifact around â€œ${exploration.brief.editorialThesis}â€ and the central tension: ${exploration.brief.centralTension}`,
-    });
-    await callbacks.startStep(directionSteps[1]);
-    await callbacks.completeStep({
-      id: directionSteps[1].id,
-      tool: directionSteps[1].tool,
-      detail: `Originated ${exploration.concepts.length} materially different visual-move theses without creating a parallel hidden artboard.`,
-    });
-
-    await callbacks.startStep(directionSteps[2]);
-    const selection = await runNorthstarModelStageWithTimeout({
-      stage: "select-creative-direction",
-      timeoutMs: thinkingDepth === "high" ? 90_000 : 60_000,
-      parentSignal: signal,
-      run: (stageSignal) => callGeminiJson<NorthstarCreativeSelectionDraft>({
-        apiKey,
-        systemInstruction: `${buildCreativeSelectionSystemInstruction()}\n\n${divergentThesisAddendum}`,
-        contents: [{
-          role: "user",
-          parts: [
-            ...designReferenceParts,
-            { text: "Choose a PROVISIONAL direction from the structured theses. Do not claim a rendered winner. The selected direction must earn permanence through visible browser-verified transactions on the exact living artboard." },
-            {
-              text: JSON.stringify(buildCreativeSelectionModelInput({
-                exploration: exploration!,
-                audience: blueprint.audience,
-                objective: intent.objective || message,
-                recentSignatures: diversity.recentSignatures,
-              })),
-            },
-          ],
-        }],
-        schema: NORTHSTAR_CREATIVE_SELECTION_JSON_SCHEMA,
-        signal: stageSignal,
-        maxOutputTokens: 5_000,
-        temperature: budget.selectionTemperature,
-      }),
-    });
-    creativeDirection = buildCreativeDirection({ exploration, selection, thinkingDepth, diversity });
-    await callbacks.completeStep({
-      id: directionSteps[2].id,
-      tool: directionSteps[2].tool,
-      detail: `Chose â€œ${creativeDirection.selectedConcept.name}â€ as a provisional direction for visible testing. ${creativeDirection.selectionRationale}`,
-    });
-  } catch (error) {
-    if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-    creativeDirection = deterministicCreativeDirection({
-      objective: intent.objective || message,
-      thinkingDepth,
-      diversity,
-    });
-    callbacks.trace?.("creative-direction.fallback", {
-      reason: error instanceof Error ? error.message : String(error),
-      selectedConcept: creativeDirection.selectedConcept.name,
-      diversityKey: creativeDirection.diversityKey,
-    });
-    for (const step of directionSteps) {
-      await callbacks.completeStep({
-        id: step.id,
-        tool: step.tool,
-        detail: `Northstar retained an evidence-grounded creative direction after the exploratory model turn was unavailable: ${creativeDirection.selectedConcept.name}.`,
-      });
-    }
-  }
+  callbacks.trace?.("creative.authorship.ready", {
+    provider: "google",
+    model: GEMINI_MODEL,
+    thinkingDepth,
+    priorDirectionRetained: Boolean(previousArtifact?.creativeDirection),
+    referenceMode: "unlabeled-taste",
+  }, "The creative model will discover the visual direction progressively from evidence and the exact browser-visible artboard; no visual option was preselected.");
 
   let currentPackage = callbacks.getVisibleArtifact() ?? createNorthstarWorkingArtifactPackage({
     artifactId,
@@ -7232,11 +7090,6 @@ async function buildGeneratedCodeArtifactPackage({
     scenePlan: deterministicNorthstarVisualScenePlan({ objective: intent.objective || message, dataBundle }),
   });
 
-  const thesisExecutionContext = buildThesisExecutionContext({
-    creativeDirection,
-    artifact: callbacks.getVisibleArtifact(),
-    userRequest: message,
-  });
   const evidenceSummary = {
     referencePackVersion: "northstar-eight-reference-pack.v0.4.8.5.1",
     identityRule: "All eight gold-standard references condition every autonomous move; none is a template.",
@@ -7247,30 +7100,28 @@ async function buildGeneratedCodeArtifactPackage({
     decisionCount: dataBundle.decisions.length,
     coverageSummary: dataBundle.coverageSummary,
   };
+  // The legacy controller remains the transaction-state recorder and settlement
+  // guard. It no longer schedules creative obligations or dictates visual order.
   const authorship = new NorthstarContinuousAuthorshipController({
     runId: artifactId,
     objective: intent.objective || message,
   });
-  const preparedMoves = new NorthstarPreparedMoveQueue();
+  const adaptiveSession = new NorthstarAdaptiveCreativeSession(
+    thinkingDepth,
+    Date.now(),
+    intent.objective || message,
+  );
   let visibleMutationCount = 0;
   let moveIndex = 0;
-  let latestReviewSummary = "The canonical artboard is entering continuous visual authorship.";
+  let latestReviewSummary = "The canonical artboard is entering adaptive creative authorship.";
   let finalVerified = false;
+  let finalKnownLimitations: string[] = [];
   let priorCritique: { critique: string; requiredChanges: string[] } | undefined;
+  let latestRenderedCritique: NorthstarEmergentCreativeCritique | undefined;
+  let latestIndependentReview: NorthstarIndependentCreativeReview | undefined;
   const acceptedMoveFingerprints = new Set<string>();
   const rejectedMoveFingerprints = new Set<string>();
-  const presentationAttemptsByObligation = new Map<NorthstarObligationKey, number>();
   const successfulMoves: Array<{ label: string; visibleChange: string; operationKind: string }> = [];
-  let preparedMovePromise: Promise<NorthstarPreparedMove> | undefined;
-
-  const awaitWithNorthstarVisualCadence = async <T>(
-    promise: Promise<T>,
-    _requestedObligation?: NorthstarObligationKey,
-  ): Promise<T> => {
-    // The typed presentation engine owns executable mutations. Waiting for a model
-    // decision never blocks the evidence-grounded compiler from advancing the run.
-    return promise;
-  };
 
   const buildRejectedDesignCritique = (input: {
     prepared: NorthstarPreparedMove;
@@ -7285,33 +7136,31 @@ async function buildGeneratedCodeArtifactPackage({
     );
     const geometryCorrection = rejectionFamily === "analysis-lane-overlap"
       ? [
-          "Use the dedicated analysis lane in normal document flow; do not insert analytical blocks into occupied evidence or synthesis geometry.",
-          "Choose a different relationship mode or evidence pair if the prior composition was too dense, but keep the conclusion grounded.",
+          "Use normal document flow and a structurally different composition; do not place analysis inside occupied evidence geometry.",
+          "Reduce density, change the relationship, or choose different proof when the prior composition was too crowded.",
         ]
       : rejectionFamily === "protected-evidence-overlap"
         ? [
-            "Keep annotations and analytical references outside protected screenshot bounds; reference evidence semantically rather than overlaying it.",
-            "Reduce density or choose a normal-flow analytical lane instead of absolute or synthetic overlay behavior.",
+            "Keep analytical material outside protected screenshot bounds and reference evidence semantically rather than overlaying it.",
+            "Simplify or recompose in normal flow instead of using synthetic overlay behavior.",
           ]
         : rejectionFamily === "insufficient-semantic-change"
           ? [
-              "Change the composition archetype, focal treatment, or relationship mode—not only the copy.",
-              "Select a materially different evidence hierarchy and create a stronger dominant reading path.",
+              "Make a materially different compositional decision rather than a copy, color, or metadata-only change.",
+              "Reconsider the reading path, evidence choreography, spatial structure, or governing visual idea from the exact current render.",
             ]
           : rejectionFamily === "operational-audit-regression"
             ? [
-                "Preserve every operationally healthy property of the verified parent; the next candidate must not add clipping, internal scrolling, missing media, or spatial hard failures.",
-                "Reduce analytical density and use the existing normal-flow analysis lane with a simpler relationship composition.",
+                "Preserve every operationally healthy property of the verified parent; do not add clipping, internal scrolling, missing media, or spatial hard failures.",
+                "Recompose the content naturally inside runtime-derived bounds instead of trying to control the outer artboard.",
               ]
             : [];
     const critiquePacket = {
-      obligation: input.prepared.contract.obligation,
       rejectedStrategy: {
         fingerprint: input.prepared.fingerprint,
-        operationKind: input.prepared.contract.operationKind,
         label: input.prepared.contract.label,
         diagnosis: input.prepared.contract.diagnosis,
-        intent: input.prepared.contract.intent,
+        intention: input.prepared.contract.intent,
         expectedVisibleDelta: input.prepared.contract.expectedVisibleDelta,
         expectedSemanticDelta: input.prepared.contract.expectedSemanticDelta,
         affectedNodeIds: input.prepared.contract.affectedNodeIds,
@@ -7338,9 +7187,9 @@ async function buildGeneratedCodeArtifactPackage({
       critique: JSON.stringify(critiquePacket),
       requiredChanges: [
         `Do not repeat rejected strategy fingerprint ${input.prepared.fingerprint}.`,
-        `Choose a materially different grounded evidence selection or editorial emphasis for ${input.prepared.contract.obligation}.`,
-        "Return only evidence IDs, hierarchy choices, comparison language, and the viewer-facing conclusion; the typed presentation engine owns all executable operations.",
-        "Use the exact canonical render and browser measurements as critique evidence. Do not repeat the same focal evidence ranking when it produced an insufficient delta.",
+        "Re-observe the entire exact committed artboard and choose a materially different next creative act.",
+        "Use real semantic targets and grounded evidence; do not follow a fixed obligation, layout family, or component recipe.",
+        "Do not request or set artboard dimensions; runtime content measurement owns the iframe and outer Canvas geometry together.",
         ...geometryCorrection,
         ...buildNorthstarCorrectionDirective({
           contract: input.prepared.contract,
@@ -7351,280 +7200,407 @@ async function buildGeneratedCodeArtifactPackage({
     };
   };
 
+  const creativeModel = createNorthstarGeminiCreativeAdapter({
+    apiKey,
+    modelId: GEMINI_MODEL,
+    generateJson: callGeminiJson,
+  });
+  const creativeObservationCache = new Map<string, NorthstarVisualObservation>();
+
+  const captureCreativeObservation = async (input: {
+    artifact: NorthstarGeneratedCodeArtifactPackage;
+    acknowledgement?: NorthstarArtifactMutationAcknowledgement;
+    includeDetails: boolean;
+  }): Promise<NorthstarVisualObservation> => {
+    const cached = creativeObservationCache.get(input.artifact.revisionId);
+    if (cached && (cached.detailViews.length > 0 || !input.includeDetails)) {
+      return input.includeDetails ? cached : { ...cached, detailViews: [] };
+    }
+    const surface = captureDocumentFromLiveAcknowledgement(input.artifact, input.acknowledgement);
+    const fullArtboard = await captureNorthstarArtifactPng({
+      document: surface.document,
+      mutationJournal: surface.mutationJournal,
+      dataBundle: input.artifact.dataBundle,
+      creativeDirection,
+      creativeReviews: input.artifact.creativeReviews,
+      width: surface.width,
+      height: surface.height,
+    });
+    const maximumViews = !input.includeDetails
+      ? 0
+      : thinkingDepth === "high"
+        ? 3
+        : thinkingDepth === "medium"
+          ? 2
+          : 1;
+    const plannedViews = planNorthstarVisualDetailViews({
+      width: surface.width,
+      height: surface.height,
+      acknowledgement: input.acknowledgement,
+      maximumViews,
+    });
+    const detailViews = await Promise.all(plannedViews.map(async (planned) => ({
+      ...planned,
+      image: await captureNorthstarArtifactPng({
+        document: surface.document,
+        mutationJournal: surface.mutationJournal,
+        dataBundle: input.artifact.dataBundle,
+        creativeDirection,
+        creativeReviews: input.artifact.creativeReviews,
+        width: surface.width,
+        height: surface.height,
+        focusBounds: planned.bounds,
+      }),
+    })));
+    const observation = buildNorthstarVisualObservation({
+      revisionId: input.artifact.revisionId,
+      fullArtboard,
+      detailViews,
+      acknowledgement: input.acknowledgement,
+    });
+    creativeObservationCache.set(input.artifact.revisionId, observation);
+    return observation;
+  };
 
   const prepareMoveForExactScene = async (
     base: NorthstarGeneratedCodeArtifactPackage,
-    requestedObligation?: NorthstarObligationKey,
-    cadenceCommits = true,
   ): Promise<NorthstarPreparedMove> => {
-    void cadenceCommits;
     let acknowledgement = callbacks.getLastMutationAck?.();
     let canonicalBase = materializeNorthstarCanonicalPackage(base, acknowledgement);
     let assessment = assessNorthstarCanonicalScene(canonicalBase, acknowledgement);
-    authorship.reconcile(assessment, canonicalBase.revisionId);
-    const obligation = requestedObligation ?? authorship.nextObligation(assessment);
-    if (!obligation) throw new Error("No open visual-authorship obligation remains for move preparation.");
-    const attemptIndex = (presentationAttemptsByObligation.get(obligation) ?? 0) + 1;
-    presentationAttemptsByObligation.set(obligation, attemptIndex);
-
+    let readiness = assessNorthstarAdaptiveReadiness(assessment);
     const descriptor = buildNorthstarEditableSurfaceDescriptor(canonicalBase);
-    const obligationRequiresGroundedGraph = new Set<NorthstarObligationKey>([
-      "evidence-hierarchy",
-      "hypothesis-tested",
-      "relationship-visible",
-      "synthesis",
-      "contextual-resolution",
-    ]).has(obligation);
     const dataHasGroundedEvidence = canonicalBase.dataBundle.screenshots.length > 0;
     const dataHasGroundedFlows = canonicalBase.dataBundle.flows.length > 0;
-    const graphHasGroundedEvidence = descriptor.evidenceNodes.length > 0;
-    const graphHasGroundedFlows = !dataHasGroundedFlows || descriptor.flowRegions.length > 0;
-    if (obligationRequiresGroundedGraph && (
-      !dataHasGroundedEvidence
-      || !graphHasGroundedEvidence
-      || !graphHasGroundedFlows
-    )) {
+    if (
+      (dataHasGroundedEvidence && descriptor.evidenceNodes.length === 0)
+      || (dataHasGroundedFlows && descriptor.flowRegions.length === 0)
+    ) {
       const detail = [
-        `Northstar cannot author ${obligation} because the committed presentation graph is incomplete.`,
+        "Northstar cannot begin adaptive creative authorship because the committed creative surface is incomplete.",
         `Committed revision: ${canonicalBase.revisionId}.`,
         `Data bundle: ${canonicalBase.dataBundle.screenshots.length} screenshots and ${canonicalBase.dataBundle.flows.length} flows.`,
-        `Editable graph: ${descriptor.evidenceNodes.length} evidence nodes and ${descriptor.flowRegions.length} flow regions.`,
-        "The run stopped before invoking the design model so it could not invent targets against stale or missing evidence.",
+        `Editable surface: ${descriptor.evidenceNodes.length} evidence nodes and ${descriptor.flowRegions.length} flow regions.`,
+        "The run stopped before invoking the creative model so it could not invent targets against stale or missing evidence.",
       ].join(" ");
-      callbacks.trace?.("design.context.invalid", {
-        obligation,
+      callbacks.trace?.("creative.context.invalid", {
         baseRevisionId: canonicalBase.revisionId,
         dataScreenshotCount: canonicalBase.dataBundle.screenshots.length,
         dataFlowCount: canonicalBase.dataBundle.flows.length,
         editableEvidenceCount: descriptor.evidenceNodes.length,
         editableFlowCount: descriptor.flowRegions.length,
-        code: "PRESENTATION_GRAPH_UNAVAILABLE",
+        code: "CREATIVE_SURFACE_UNAVAILABLE",
       }, detail);
-      throw new NorthstarBudgetExceededError(
-        "presentation-graph-unavailable",
-        1,
-        detail,
-      );
+      throw new NorthstarBudgetExceededError("creative-surface-unavailable", 1, detail);
     }
+
     const step = {
-      id: `author-presentation-pass-${moveIndex + 1}-${obligation}`,
-      label: `Design the next visible ${obligation} pass`,
+      id: `author-adaptive-creative-act-${moveIndex + 1}`,
+      label: "Author the next material visual act",
       tool: "prepare_composition_evidence",
       icon: "plan" as CanvasAIActivityIcon,
     };
-    await callbacks.extendPlan([step], `Northstar is editing a typed presentation graph for ${obligation}; the model selects evidence and emphasis while the application owns every executable DOM target.`);
+    await callbacks.extendPlan(
+      [step],
+      "Northstar is observing the exact committed artboard and deciding its next creative act emergently. No visual template or archetype is being selected, and no family or obligation sequence is being imposed.",
+    );
     await callbacks.startStep(step);
-    callbacks.trace?.("design.attempt.started", {
-      obligation,
+    callbacks.trace?.("creative.act.started", {
       baseRevisionId: canonicalBase.revisionId,
       editableEvidenceCount: descriptor.evidenceNodes.length,
       editableFlowCount: descriptor.flowRegions.length,
-      engineVersion: NORTHSTAR_PRESENTATION_ENGINE_VERSION,
-      attemptIndex,
+      authorshipVersion: NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION,
+      adaptiveSessionVersion: NORTHSTAR_ADAPTIVE_CREATIVE_SESSION_VERSION,
+      providerId: creativeModel.providerId,
+      modelId: creativeModel.modelId,
+      session: adaptiveSession.snapshot(),
+      readiness,
     });
 
-    let rawDecision: NorthstarPresentationDecisionDraft | undefined;
-    let decisionSource: "model" | "evidence-grounded-fallback" = "model";
-    try {
-      const surface = captureDocumentFromLiveAcknowledgement(canonicalBase, acknowledgement);
-      const render = await captureNorthstarArtifactPng({
-        document: surface.document,
-        mutationJournal: surface.mutationJournal,
-        dataBundle: canonicalBase.dataBundle,
-        creativeDirection,
-        creativeReviews: canonicalBase.creativeReviews,
-        width: surface.width,
-        height: surface.height,
+    const maximumPreparationAttempts = thinkingDepth === "high" ? 4 : thinkingDepth === "low" ? 2 : 3;
+    let correctionContext = priorCritique;
+
+    for (let preparationAttempt = 0; preparationAttempt < maximumPreparationAttempts; preparationAttempt += 1) {
+      try {
+        adaptiveSession.assertCanAttempt();
+      } catch (error) {
+        throw new NorthstarBudgetExceededError(
+          "adaptive-creative-session",
+          adaptiveSession.budget.maximumTotalAttempts,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      adaptiveSession.noteAttempt();
+      const observation = await captureCreativeObservation({
+        artifact: canonicalBase,
+        acknowledgement,
+        includeDetails: true,
       });
-      rawDecision = await runNorthstarModelStageWithTimeout({
-        stage: step.id,
-        timeoutMs: thinkingDepth === "high" ? 75_000 : thinkingDepth === "low" ? 35_000 : 50_000,
-        parentSignal: signal,
-        run: (stageSignal) => callGeminiJson<NorthstarPresentationDecisionDraft>({
-          apiKey,
-          systemInstruction: [
-            buildNorthstarDesignBehaviorAddendum(),
-            "You are the editorial design decision-maker for one typed Northstar presentation pass.",
-            "Never return HTML, CSS, DOM node IDs, selectors, coordinates, or mutation operations.",
-            "Choose grounded evidence IDs, hierarchy, comparison language, and the viewer-facing conclusion. The application compiles your decision into safe executable browser operations.",
-          ].join("\n\n"),
-          contents: [{
-            role: "user",
+      const render = observation.fullArtboard;
+
+      let rawAct: NorthstarEmergentCreativeActDraft;
+      try {
+        rawAct = await runNorthstarModelStageWithTimeout({
+          stage: step.id,
+          timeoutMs: adaptiveSession.budget.authoringTimeoutMs,
+          parentSignal: signal,
+          run: (stageSignal) => creativeModel.authorCreativeAct({
+            systemInstruction: buildNorthstarEmergentCreativeSystemInstruction({
+              designAddendum: "The attached reference images are unlabeled taste conditioning only. Infer their shared standard of finish and communication without copying, naming, or selecting any visible structure from them.",
+            }),
             parts: [
               ...designReferenceParts,
-              { text: buildNorthstarPresentationDecisionPrompt({ obligation, descriptor, bundle: canonicalBase.dataBundle }) },
-              ...(priorCritique ? [{ text: `BROWSER CRITIQUE FROM THE PREVIOUS CANDIDATE:
-${priorCritique.critique}
-Required changes:
-${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : []),
-              { inlineData: { mimeType: render.mimeType, data: render.data } },
+              {
+                text: buildNorthstarAdaptiveCreativeContext({
+                  objective: intent.objective || message,
+                  userRequest: message,
+                  audience: blueprint.audience,
+                  artifactType: blueprint.artifactType,
+                  thinkingDepth,
+                  artifact: canonicalBase,
+                  renderedWidth: render.width,
+                  renderedHeight: render.height,
+                  editableSurface: descriptor,
+                  groundedResearch: {
+                    evidenceSummary,
+                    dataBundle,
+                    researchLedger: compactCompositionResearchContext(
+                      ledger,
+                      thinkingDepth === "high" ? "standard" : "minimal",
+                    ),
+                  },
+                  sceneObservations: {
+                    blocking: readiness.blockingObservations,
+                    advisory: readiness.advisoryObservations,
+                  },
+                  creativeMemory: adaptiveSession.snapshot(),
+                  priorCritique: correctionContext,
+                  runtimeReview: acknowledgement?.review,
+                }),
+              },
+              ...buildNorthstarVisualObservationParts({
+                observation,
+                acknowledgement,
+                label: "CURRENT VERIFIED ARTBOARD",
+              }),
             ],
-          }],
-          schema: NORTHSTAR_PRESENTATION_DECISION_JSON_SCHEMA,
-          signal: stageSignal,
-          maxOutputTokens: 4_000,
-          temperature: Math.min(0.78, budget.artifactTemperature),
-        }),
-      });
-      callbacks.trace?.("design.decision.received", {
-        obligation,
-        baseRevisionId: canonicalBase.revisionId,
-        source: "model",
-        focalEvidenceIds: rawDecision.focalEvidenceIds ?? [],
-        supportingEvidenceIds: rawDecision.supportingEvidenceIds ?? [],
-        attemptIndex,
-      });
-    } catch (error) {
-      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      decisionSource = "evidence-grounded-fallback";
-      rawDecision = buildNorthstarFallbackPresentationDecision({
-        obligation,
-        descriptor,
-        bundle: canonicalBase.dataBundle,
-        variant: attemptIndex - 1,
-      });
-      callbacks.trace?.("design.decision.fallback", {
-        obligation,
-        baseRevisionId: canonicalBase.revisionId,
-        reason: error instanceof Error ? error.message : String(error),
-        attemptIndex,
-      });
-    }
+            signal: stageSignal,
+            maxOutputTokens: adaptiveSession.budget.authoringOutputTokens,
+            temperature: adaptiveSession.budget.authoringTemperature,
+          }),
+        });
+      } catch (error) {
+        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+        const reason = error instanceof Error ? error.message : String(error);
+        const repeated = adaptiveSession.recordRejectedAct({
+          revisionId: canonicalBase.revisionId,
+          reason,
+        });
+        if (repeated >= adaptiveSession.budget.maximumRepeatedFailureFingerprints) {
+          throw new NorthstarBudgetExceededError(
+            "adaptive-authoring-stalled",
+            repeated,
+            `Northstar stopped repeating the same unchanged authoring failure: ${reason}`,
+          );
+        }
+        correctionContext = {
+          critique: reason,
+          requiredChanges: [
+            "Return a smaller atomic creative act against the unchanged verified artboard.",
+            "Use only real semantic node and evidence identities supplied in the current context.",
+            "Do not request, set, or imply artboard dimensions; content-derived sizing is runtime-owned.",
+          ],
+        };
+        callbacks.trace?.("creative.act.authoring_failed", {
+          baseRevisionId: canonicalBase.revisionId,
+          attempt: preparationAttempt + 1,
+          reason,
+          repeated,
+        });
+        continue;
+      }
 
-    const decision = sanitizeNorthstarPresentationDecision({
-      draft: rawDecision,
-      obligation,
-      descriptor,
-      bundle: canonicalBase.dataBundle,
-      source: decisionSource,
-      variant: attemptIndex - 1,
-    });
-    let compiled = compileNorthstarPresentationPass({
-      artifact: canonicalBase,
-      descriptor,
-      decision,
-    });
-    let contract = buildNorthstarMoveContract(compiled.contractInput);
-    let preflight = preflightNorthstarMove({
-      artifact: canonicalBase,
-      contract,
-      draft: compiled.draft,
-      acceptedFingerprints: acceptedMoveFingerprints,
-      rejectedFingerprints: new Set<string>(),
-    });
+      let act: NorthstarEmergentCreativeAct;
+      try {
+        act = sanitizeNorthstarEmergentCreativeAct(rawAct, {
+          evidenceIdByNodeId: new Map(
+            descriptor.evidenceNodes.map((node) => [node.nodeId, node.evidenceId]),
+          ),
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const repeated = adaptiveSession.recordRejectedAct({
+          revisionId: canonicalBase.revisionId,
+          reason,
+        });
+        correctionContext = {
+          critique: reason,
+          requiredChanges: [
+            "Correct the executable mutation while preserving the creative intention only when it remains valid after re-observation.",
+            "Do not emit request-space or root artboard dimension styles. Runtime measurement owns all outer sizing.",
+            "Use safe HTML, SVG, CSS, and exact data-ns-node-id targets only.",
+          ],
+        };
+        callbacks.trace?.("creative.act.invalid", {
+          baseRevisionId: canonicalBase.revisionId,
+          attempt: preparationAttempt + 1,
+          reason,
+          repeated,
+        });
+        continue;
+      }
 
-    const repeatedRejectedModelDecision = decision.source === "model"
-      && rejectedMoveFingerprints.has(preflight.fingerprint);
-    if ((!preflight.accepted || repeatedRejectedModelDecision) && decision.source === "model") {
-      callbacks.trace?.("design.preflight.rejected", {
-        obligation,
+      callbacks.trace?.("creative.act.received", {
         baseRevisionId: canonicalBase.revisionId,
-        source: decision.source,
-        issues: repeatedRejectedModelDecision
-          ? [...preflight.issues, "The model repeated a browser-rejected presentation fingerprint."]
-          : preflight.issues,
-        targetIds: preflight.targetIds,
-        repeatedRejectedModelDecision,
+        intention: act.intention,
+        viewerUnderstanding: act.viewerUnderstanding,
+        operationCount: act.mutation.operations.length,
+        affectedNodeIds: act.affectedNodeIds,
+        modelExpectsMoreWork: act.continueWorking,
+        attempt: preparationAttempt + 1,
       });
-      const fallbackDecision = buildNorthstarFallbackPresentationDecision({
-        obligation,
-        descriptor,
-        bundle: canonicalBase.dataBundle,
-        variant: attemptIndex - 1,
+
+      const latestAcknowledgement = callbacks.getLastMutationAck?.();
+      const latestVisible = callbacks.getVisibleArtifact() ?? canonicalBase;
+      const latestCanonical = materializeNorthstarCanonicalPackage(latestVisible, latestAcknowledgement);
+      if (latestCanonical.revisionId !== canonicalBase.revisionId) {
+        canonicalBase = latestCanonical;
+        acknowledgement = latestAcknowledgement;
+        assessment = assessNorthstarCanonicalScene(canonicalBase, acknowledgement);
+        readiness = assessNorthstarAdaptiveReadiness(assessment);
+        correctionContext = {
+          critique: "The canonical artboard changed while this act was being authored.",
+          requiredChanges: ["Re-observe and re-author against the newest exact browser-acknowledged artboard."],
+        };
+        continue;
+      }
+
+      const liveSemanticSnapshot = acknowledgement?.revisionId === canonicalBase.revisionId
+        ? acknowledgement.snapshot?.semanticNodes
+        : undefined;
+      const authoredMutation = alignNorthstarMutationToVisibleScene(act.mutation, canonicalBase.document.html);
+      const compiled = compileNorthstarMutationDraft({
+        previous: canonicalBase,
+        draft: authoredMutation,
+        semanticSnapshot: liveSemanticSnapshot,
       });
-      compiled = compileNorthstarPresentationPass({
-        artifact: canonicalBase,
-        descriptor,
-        decision: fallbackDecision,
+      const contract = buildNorthstarMoveContract({
+        baseRevisionId: canonicalBase.revisionId,
+        obligation: "creative-progress",
+        operationKind: "recompose-scene",
+        phase: "analysis",
+        label: act.mutation.title,
+        diagnosis: act.whyThisMoveNow,
+        intent: act.intention,
+        expectedVisibleDelta: act.mutation.visibleChange,
+        expectedSemanticDelta: act.viewerUnderstanding,
+        affectedNodeIds: act.affectedNodeIds,
+        evidenceRoles: act.evidenceRoles,
+        relationship: act.relationship,
+        geometryRequirements: [
+          "Let one runtime-derived content measurement control both iframe and outer Canvas geometry.",
+          "Do not introduce internal scrolling, clipping, protected-evidence overlap, or root dimension control.",
+        ],
+        acceptanceCriteria: act.successCriteria.length > 0
+          ? act.successCriteria
+          : [
+              "The browser verifies a material visible and semantic change.",
+              "The exact grounded evidence and provenance remain intact.",
+              "The result remains readable, asset-complete, and free of hard spatial regressions.",
+            ],
       });
-      contract = buildNorthstarMoveContract(compiled.contractInput);
-      preflight = preflightNorthstarMove({
+      const preflight = preflightNorthstarMove({
         artifact: canonicalBase,
         contract,
         draft: compiled.draft,
         acceptedFingerprints: acceptedMoveFingerprints,
-        rejectedFingerprints: new Set<string>(),
+        rejectedFingerprints: rejectedMoveFingerprints,
       });
-    }
 
-    if (!preflight.accepted) {
-      callbacks.trace?.("design.preflight.blocked", {
-        obligation,
+      if (preflight.accepted) {
+        callbacks.trace?.("creative.act.preflight_accepted", {
+          baseRevisionId: canonicalBase.revisionId,
+          fingerprint: preflight.fingerprint,
+          targetIds: preflight.targetIds,
+          insertedIds: preflight.insertedIds,
+          operationCount: compiled.draft.operations.length,
+          attempt: preparationAttempt + 1,
+        });
+        await callbacks.completeStep({
+          id: step.id,
+          tool: step.tool,
+          detail: `Authored one adaptive model-directed visual act with ${compiled.draft.operations.length} concrete operations against the exact living artboard.`,
+        });
+        return {
+          contract,
+          draft: compiled.draft,
+          impactRequirements: northstarVisualImpactRequirements("creative-progress"),
+          diagnostics: [
+            `${NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION}: ${act.intention}`,
+            `${NORTHSTAR_ADAPTIVE_CREATIVE_SESSION_VERSION}: act ${adaptiveSession.snapshot().acceptedActCount + 1}.`,
+            `Viewer understanding: ${act.viewerUnderstanding}`,
+            `Creative provider: ${creativeModel.providerId}/${creativeModel.modelId}.`,
+          ],
+          preparedAt: Date.now(),
+          baseRevisionId: canonicalBase.revisionId,
+          fingerprint: preflight.fingerprint,
+          expectedChangedNodeIds: [...new Set([
+            ...act.affectedNodeIds,
+            ...preflight.targetIds,
+            ...preflight.insertedIds,
+          ])],
+        };
+      }
+
+      rejectedMoveFingerprints.add(preflight.fingerprint);
+      const reason = preflight.issues.join(" ");
+      const repeated = adaptiveSession.recordRejectedAct({
+        revisionId: canonicalBase.revisionId,
+        fingerprint: preflight.fingerprint,
+        reason,
+        attemptedIntention: act.intention,
+      });
+      if (repeated >= adaptiveSession.budget.maximumRepeatedFailureFingerprints) {
+        throw new NorthstarBudgetExceededError(
+          "adaptive-preflight-stalled",
+          repeated,
+          `Northstar stopped repeating an unchanged rejected act on revision ${canonicalBase.revisionId}. ${reason}`,
+        );
+      }
+      correctionContext = {
+        critique: reason,
+        requiredChanges: [
+          ...buildNorthstarCorrectionDirective({ contract, preflightIssues: preflight.issues }),
+          "Keep creative authority, but execute a materially different idea through safe atomic operations against real semantic targets.",
+          "Do not request or set artboard dimensions. Runtime content measurement owns all outer sizing.",
+          `Do not repeat rejected fingerprint ${preflight.fingerprint}.`,
+        ],
+      };
+      callbacks.trace?.("creative.act.preflight_rejected", {
         baseRevisionId: canonicalBase.revisionId,
+        fingerprint: preflight.fingerprint,
         issues: preflight.issues,
         targetIds: preflight.targetIds,
         insertedIds: preflight.insertedIds,
+        attempt: preparationAttempt + 1,
+        repeated,
       });
-      await callbacks.failStep({
-        id: step.id,
-        tool: step.tool,
-        detail: `Northstar could not compile a safe ${obligation} presentation pass: ${preflight.issues.join(" ")}`,
-      });
-      throw new Error(`Typed presentation preflight failed for ${obligation}: ${preflight.issues.join(" ")}`);
     }
 
-    callbacks.trace?.("design.preflight.accepted", {
-      obligation,
-      baseRevisionId: canonicalBase.revisionId,
-      source: compiled.decision.source,
-      fingerprint: preflight.fingerprint,
-      targetIds: preflight.targetIds,
-      insertedIds: preflight.insertedIds,
-      expectedChangedNodeIds: compiled.expectedChangedNodeIds,
-      attemptIndex,
-    });
-    await callbacks.completeStep({
+    await callbacks.failStep({
       id: step.id,
       tool: step.tool,
-      detail: compiled.decision.source === "model"
-        ? `Compiled a model-directed ${obligation} presentation pass against ${compiled.expectedChangedNodeIds.length} exact live regions.`
-        : `Compiled an evidence-grounded ${obligation} presentation pass after the model decision was unavailable or invalid.`,
+      detail: `Northstar could not prepare a safe material adaptive creative act after ${maximumPreparationAttempts} attempts.`,
     });
-
-    return {
-      contract,
-      draft: compiled.draft,
-      impactRequirements: compiled.impactRequirements,
-      diagnostics: compiled.diagnostics,
-      preparedAt: Date.now(),
-      baseRevisionId: canonicalBase.revisionId,
-      fingerprint: preflight.fingerprint,
-      expectedChangedNodeIds: [...new Set([
-        ...compiled.expectedChangedNodeIds,
-        ...preflight.targetIds,
-        ...preflight.insertedIds,
-      ])],
-    };
-  };
-
-  const maximumAuthorshipIterations = thinkingDepth === "high" ? 28 : thinkingDepth === "low" ? 16 : 22;
-  const preparationFailuresByContext = new Map<string, number>();
-  const maximumPreparationFailuresPerContext = 2;
-  const rejectionCountsByObligation = new Map<string, number>();
-  const maximumRejectionsPerObligationFamily = 4;
-  const registerObligationRejection = (
-    obligation: NorthstarObligationKey,
-    acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined,
-  ): void => {
-    const family = normalizeNorthstarRejectionFamily(
-      acknowledgement?.reason ?? acknowledgement?.review?.summary,
+    throw new NorthstarBudgetExceededError(
+      `adaptive-creative-act:${canonicalBase.revisionId}`,
+      maximumPreparationAttempts,
+      `Northstar could not prepare a safe material adaptive creative act after ${maximumPreparationAttempts} attempts.`,
     );
-    const key = `${obligation}:${family}`;
-    const count = (rejectionCountsByObligation.get(key) ?? 0) + 1;
-    rejectionCountsByObligation.set(key, count);
-    if (count >= maximumRejectionsPerObligationFamily) {
-      const familyLabel = family === "operational-audit-regression"
-        ? "operational layout"
-        : family.replace(/-/g, " ");
-      throw new NorthstarBudgetExceededError(
-        `obligation-rejection:${key}`,
-        maximumRejectionsPerObligationFamily,
-        `Required visual obligation ${obligation} remained unresolved after ${count} ${familyLabel} rejection${count === 1 ? "" : "s"}. The verified horizontal artboard was preserved.`,
-      );
-    }
   };
+
   let readyForPublication = false;
-  for (let authorshipIteration = 0; authorshipIteration < maximumAuthorshipIterations; authorshipIteration += 1) {
+  while (!readyForPublication) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const visible = callbacks.getVisibleArtifact() ?? currentPackage;
     const liveAck = callbacks.getLastMutationAck?.();
@@ -7632,68 +7608,60 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
     currentPackage = canonical;
     const assessment = assessNorthstarCanonicalScene(canonical, liveAck);
     authorship.reconcile(assessment, canonical.revisionId);
-    if (authorship.readyForSettlement(assessment)) {
-      readyForPublication = true;
-      break;
-    }
-    const obligation = authorship.nextObligation(assessment);
-    if (!obligation) break;
+    const continuation = adaptiveSession.decideContinuation(
+      assessment,
+      latestRenderedCritique,
+      latestIndependentReview,
+    );
+    callbacks.trace?.("creative.session.observed", {
+      revisionId: canonical.revisionId,
+      decision: continuation,
+      session: adaptiveSession.snapshot(),
+    }, continuation.reason);
 
-    preparedMoves.discardStale(canonical.revisionId);
-    let prepared = preparedMoves.take(canonical.revisionId, authorship.openObligations(false));
-    if (!prepared && preparedMovePromise) {
-      try {
-        const resolved = await awaitWithNorthstarVisualCadence(preparedMovePromise, obligation);
-        preparedMoves.enqueue(resolved);
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-        priorCritique = {
-          critique: error instanceof Error ? error.message : String(error),
-          requiredChanges: ["Re-read the exact canonical scene and prepare a different material operation for the same open obligation."],
-        };
-      } finally {
-        preparedMovePromise = undefined;
+    if (!continuation.continueWorking) {
+      if (continuation.readyForPublication) {
+        readyForPublication = true;
+        latestReviewSummary = continuation.reason;
+        finalKnownLimitations = continuation.knownLimitations;
+        break;
       }
-      prepared = preparedMoves.take(canonical.revisionId, authorship.openObligations(false));
+      throw new NorthstarBudgetExceededError(
+        "adaptive-creative-readiness",
+        adaptiveSession.budget.maximumAcceptedActs,
+        `${continuation.reason} ${continuation.readiness.blockingObservations.join(" ")}`.trim(),
+      );
     }
-    if (!prepared) {
-      try {
-        prepared = await prepareMoveForExactScene(canonical, obligation);
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-        if (error instanceof NorthstarBudgetExceededError) throw error;
-        const preparationFailure = error instanceof Error ? error.message : String(error);
-        const normalizedFailure = preparationFailure
-          .toLowerCase()
-          .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
-          .replace(/artifact-[a-z0-9-]+/g, "artifact-#")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 700);
-        const contextKey = `${canonical.revisionId}:${obligation}:${normalizedFailure}`;
-        const failureCount = (preparationFailuresByContext.get(contextKey) ?? 0) + 1;
-        preparationFailuresByContext.set(contextKey, failureCount);
-        callbacks.trace?.("design.preparation.stalled", {
-          obligation,
-          baseRevisionId: canonical.revisionId,
-          failureCount,
-          maximumPreparationFailuresPerContext,
-          normalizedFailure,
-        }, preparationFailure);
-        if (failureCount >= maximumPreparationFailuresPerContext) {
-          throw new NorthstarBudgetExceededError(
-            `design-preparation-stalled:${obligation}`,
-            maximumPreparationFailuresPerContext,
-            `Northstar stopped retrying ${obligation} because the committed revision and failure condition did not change after ${failureCount} attempts. ${preparationFailure}`,
-          );
-        }
-        priorCritique = {
-          critique: preparationFailure,
-          requiredChanges: ["Continue the same open obligation from the exact browser-acknowledged scene with a materially different structural proposal."],
-        };
-        await delayWithSignal(350, signal);
-        continue;
+
+    let prepared: NorthstarPreparedMove;
+    try {
+      prepared = await prepareMoveForExactScene(canonical);
+    } catch (error) {
+      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+      if (error instanceof NorthstarBudgetExceededError) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      const repeated = adaptiveSession.recordRejectedAct({
+        revisionId: canonical.revisionId,
+        reason,
+      });
+      callbacks.trace?.("creative.session.preparation_stalled", {
+        revisionId: canonical.revisionId,
+        repeated,
+        session: adaptiveSession.snapshot(),
+      }, reason);
+      if (repeated >= adaptiveSession.budget.maximumRepeatedFailureFingerprints) {
+        throw new NorthstarBudgetExceededError(
+          "adaptive-creative-preparation-stalled",
+          repeated,
+          `Northstar stopped retrying the unchanged committed scene and failure condition. ${reason}`,
+        );
       }
+      priorCritique = {
+        critique: reason,
+        requiredChanges: ["Re-observe the exact browser-acknowledged scene and author a materially different safe act."],
+      };
+      await delayWithSignal(350, signal);
+      continue;
     }
 
     authorship.beginTransaction(prepared.contract);
@@ -7704,9 +7672,9 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
       label: prepared.contract.label,
       phase: toNorthstarMutationBuildPhase(prepared.contract.phase),
       intent: `${prepared.contract.intent} ${prepared.contract.expectedSemanticDelta}`,
-      ...(prepared.impactRequirements ?? northstarVisualImpactRequirements(prepared.contract.obligation)),
+      ...(prepared.impactRequirements ?? northstarVisualImpactRequirements("creative-progress")),
       diagnostics: [
-        `Northstar v0.8.0 obligation ${prepared.contract.obligation}: ${prepared.draft.visibleChange}`,
+        `Northstar adaptive creative act: ${prepared.draft.visibleChange}`,
         `Move contract ${prepared.contract.contractId} prepared against ${prepared.baseRevisionId}.`,
         ...(prepared.diagnostics ?? []),
       ],
@@ -7714,35 +7682,44 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
     authorship.advanceTransaction("visible", candidate.revisionId);
     const dispatched = await callbacks.publishArtifact(
       candidate,
-      prepared.contract.phase === "analysis" ? 2 : prepared.contract.phase === "recommendation" ? 3 : 4,
+      2,
       prepared.contract.label,
       prepared.expectedChangedNodeIds,
       (materialized, acknowledgement) => {
-        const postcondition = assessNorthstarCanonicalScene(materialized, acknowledgement);
-        const unresolved = listNorthstarOpenObligations(postcondition, false);
-        const accepted = !unresolved.includes(prepared.contract.obligation);
+        const postAssessment = assessNorthstarCanonicalScene(materialized, acknowledgement);
+        const postReadiness = assessNorthstarAdaptiveReadiness(postAssessment);
         return {
-          accepted,
-          issues: accepted
-            ? []
-            : [`The browser-visible transaction did not close its declared ${prepared.contract.obligation} postcondition.`],
+          accepted: postReadiness.operationallyReady,
+          issues: postReadiness.blockingObservations,
         };
       },
     );
     if (!dispatched) {
       const rejectedAck = callbacks.getLastRejectedMutationAck?.() ?? callbacks.getLastMutationAck?.();
       rejectedMoveFingerprints.add(prepared.fingerprint);
-      registerObligationRejection(prepared.contract.obligation, rejectedAck);
       authorship.advanceTransaction("rejected", candidate.revisionId);
       authorship.advanceTransaction("restored", canonical.revisionId);
       authorship.recordRejectedMove(prepared.fingerprint);
+      const reason = rejectedAck?.reason ?? "The browser rejected the candidate transaction.";
+      const repeated = adaptiveSession.recordRejectedAct({
+        revisionId: canonical.revisionId,
+        fingerprint: prepared.fingerprint,
+        reason,
+        attemptedIntention: prepared.contract.intent,
+      });
       priorCritique = buildRejectedDesignCritique({
         prepared,
         acknowledgement: rejectedAck,
-        browserIssues: rejectedAck?.reason ? [rejectedAck.reason] : ["The browser rejected the candidate transaction."],
+        browserIssues: [reason],
+      });
+      callbacks.trace?.("creative.act.rejected", {
+        baseRevisionId: canonical.revisionId,
+        candidateRevisionId: candidate.revisionId,
+        fingerprint: prepared.fingerprint,
+        repeated,
+        reason,
       });
       currentPackage = callbacks.getVisibleArtifact() ?? canonical;
-      preparedMoves.discardStale(currentPackage.revisionId);
       continue;
     }
 
@@ -7755,14 +7732,27 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
     });
     if (!browserReview.accepted) {
       rejectedMoveFingerprints.add(prepared.fingerprint);
-      registerObligationRejection(prepared.contract.obligation, committedAck);
       authorship.advanceTransaction("rejected", committed.revisionId);
       authorship.advanceTransaction("restored", canonical.revisionId);
       authorship.recordRejectedMove(prepared.fingerprint);
+      const reason = browserReview.issues.join(" ");
+      const repeated = adaptiveSession.recordRejectedAct({
+        revisionId: canonical.revisionId,
+        fingerprint: prepared.fingerprint,
+        reason,
+        attemptedIntention: prepared.contract.intent,
+      });
       priorCritique = buildRejectedDesignCritique({
         prepared,
         acknowledgement: committedAck,
         browserIssues: browserReview.issues,
+      });
+      callbacks.trace?.("creative.act.browser_review_rejected", {
+        baseRevisionId: canonical.revisionId,
+        candidateRevisionId: committed.revisionId,
+        fingerprint: prepared.fingerprint,
+        repeated,
+        issues: browserReview.issues,
       });
       currentPackage = callbacks.getVisibleArtifact() ?? canonical;
       continue;
@@ -7775,128 +7765,242 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
     authorship.advanceTransaction("browser-reviewed", committed.revisionId);
     authorship.advanceTransaction("accepted", committed.revisionId);
     authorship.recordAcceptedMove(prepared.fingerprint, committed.revisionId);
+    adaptiveSession.recordAcceptedAct({
+      revisionId: committed.revisionId,
+      fingerprint: prepared.fingerprint,
+      intention: prepared.contract.intent,
+      viewerUnderstanding: prepared.contract.expectedSemanticDelta,
+      visibleChange: prepared.draft.visibleChange,
+      affectedNodeIds: prepared.expectedChangedNodeIds,
+      operationKinds: prepared.draft.operations.map((operation) => operation.op),
+    });
     successfulMoves.push({
       label: prepared.contract.label,
       visibleChange: prepared.draft.visibleChange,
       operationKind: prepared.contract.operationKind,
     });
-    // A critique belongs only to the rejected strategy and obligation that
-    // produced it. Never leak stale correction context into the next design act.
     priorCritique = undefined;
 
     const postAssessment = assessNorthstarCanonicalScene(committed, committedAck);
-    authorship.reconcile(postAssessment, committed.revisionId);
-    latestReviewSummary = `${prepared.contract.label} materially advanced ${prepared.contract.obligation}. Remaining obligations: ${authorship.openObligations(false).join(", ") || "none"}.`;
+    const postReadiness = assessNorthstarAdaptiveReadiness(postAssessment);
+    latestReviewSummary = `${prepared.contract.label} was committed and is now being judged from the exact rendered result.`;
     currentPackage = {
       ...currentPackage,
-      diagnostics: [...currentPackage.diagnostics, latestReviewSummary].slice(-80),
+      diagnostics: [
+        ...currentPackage.diagnostics,
+        latestReviewSummary,
+        `Adaptive session accepted act ${adaptiveSession.snapshot().acceptedActCount}.`,
+      ].slice(-80),
       provisional: true,
       publicationState: "working",
     };
 
-    const nextObligation = authorship.nextObligation(postAssessment);
-    if (nextObligation) {
-      preparedMovePromise = prepareMoveForExactScene(currentPackage, nextObligation, false);
-    }
-
-    const shouldCritique = visibleMutationCount === 1
-      || visibleMutationCount % (thinkingDepth === "high" ? 2 : 3) === 0
-      || ["relationship-visible", "synthesis", "contextual-resolution", "geometry"].includes(prepared.contract.obligation);
-    if (shouldCritique) {
-      try {
-        const beforeSurface = captureDocumentFromLiveAcknowledgement(canonical, liveAck);
-        const beforeCapture = await captureNorthstarArtifactPng({
-          document: beforeSurface.document,
-          mutationJournal: beforeSurface.mutationJournal,
-          dataBundle: canonical.dataBundle,
-          creativeDirection,
-          creativeReviews: canonical.creativeReviews,
-          width: beforeSurface.width,
-          height: beforeSurface.height,
-        });
-        const afterSurface = captureDocumentFromLiveAcknowledgement(committed, committedAck);
-        const afterCapture = await captureNorthstarArtifactPng({
-          document: afterSurface.document,
-          mutationJournal: afterSurface.mutationJournal,
-          dataBundle: committed.dataBundle,
-          creativeDirection,
-          creativeReviews: committed.creativeReviews,
-          width: afterSurface.width,
-          height: afterSurface.height,
-        });
-        const rawCritique = await awaitWithNorthstarVisualCadence(callGeminiJson<NorthstarCreativeCritiqueDraft>({
-          apiKey,
-          systemInstruction: `${buildCreativeCritiqueSystemInstruction()}\n\n${buildNorthstarCreativeReviewAddendum()}`,
-          contents: [{ role: "user", parts: [
-            ...designReferenceParts,
-            { text: "BEFORE â€” the exact canonical artboard before the accepted transaction." },
-            { inlineData: { mimeType: beforeCapture.mimeType, data: beforeCapture.data } },
-            { text: `AFTER â€” the exact materialized artboard after â€œ${prepared.contract.label}â€. Judge whether the declared visible and semantic deltas occurred, whether evidence hierarchy is authored rather than equal-weight, whether the reasoning pair remains horizontal and collision-free, and which open obligation should be addressed next.` },
-            { inlineData: { mimeType: afterCapture.mimeType, data: afterCapture.data } },
-            { text: JSON.stringify(buildCreativeCritiqueModelInput({
-                title: committed.title,
-                description: committed.description,
-                visualStrategy: committed.visualStrategy,
-                document: afterSurface.document,
-                direction: creativeDirection,
-                evidenceSummary: { ...evidenceSummary, moveContract: prepared.contract, openObligations: authorship.openObligations(false) },
-                pass: visibleMutationCount,
-                remainingObligationCount: authorship.openObligations(false).length,
-                priorReviews: committed.creativeReviews,
-                runtimeReview: committedAck?.review,
-                previousRender: { width: beforeCapture.width, height: beforeCapture.height, mimeType: beforeCapture.mimeType },
-                renderCapture: { width: afterCapture.width, height: afterCapture.height, mimeType: afterCapture.mimeType },
-                designAct: {
-                  id: prepared.contract.contractId,
-                  label: prepared.contract.label,
-                  phase: prepared.contract.phase === "settlement" || prepared.contract.phase === "evidence" ? "refinement" : prepared.contract.phase,
-                  intent: prepared.contract.intent,
-                  successCriteria: prepared.contract.acceptanceCriteria,
-                  minimumChangeCharacters: 1,
-                },
-              })) },
-          ] }],
-          schema: NORTHSTAR_CREATIVE_CRITIQUE_JSON_SCHEMA,
-          signal,
-          maxOutputTokens: thinkingDepth === "low" ? 3_600 : 7_000,
-          temperature: budget.critiqueTemperature,
-        }), authorship.nextObligation(assessNorthstarCanonicalScene(currentPackage, callbacks.getLastMutationAck?.())));
-        const critique = sanitizeCreativeCritique(rawCritique, visibleMutationCount, afterSurface.document);
-        priorCritique = {
-          critique: critique.review.critique,
-          requiredChanges: [...critique.review.requiredChanges, ...postAssessment.unresolved.map((issue) => `Resolve ${issue}.`)].slice(0, 16),
-        };
-        currentPackage = {
-          ...currentPackage,
-          creativeReviews: [...currentPackage.creativeReviews, critique.review].slice(-24),
-          diagnostics: [...currentPackage.diagnostics, `Rendered before/after critic: ${critique.review.critique}`].slice(-80),
-        };
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-        console.warn("Northstar deferred a rendered critique while continuous authorship continued.", error);
-      }
-    }
-
-    // The prepared proposal remains in flight while the loop returns to the exact
-    // canonical scene. The next iteration reconciles it under the cadence lease.
-  }
-
-  if (!readyForPublication) {
-    const remainingObligations = authorship.openObligations(false);
-    callbacks.trace?.("design.obligations.exhausted", {
-      maximumAuthorshipIterations,
-      remainingObligations,
-      revisionId: currentPackage.revisionId,
+    const beforeObservation = await captureCreativeObservation({
+      artifact: canonical,
+      acknowledgement: liveAck,
+      includeDetails: false,
     });
-    throw new NorthstarBudgetExceededError(
-      "continuous-authorship-obligations",
-      maximumAuthorshipIterations,
-      `Northstar did not close the required visual obligations: ${remainingObligations.join(", ") || "unknown"}. The last browser-verified artboard remains available.`,
-    );
+    const afterObservation = await captureCreativeObservation({
+      artifact: committed,
+      acknowledgement: committedAck,
+      includeDetails: true,
+    });
+    callbacks.trace?.("creative.visual_observation.captured", {
+      revisionId: committed.revisionId,
+      fullWidth: afterObservation.fullArtboard.width,
+      fullHeight: afterObservation.fullArtboard.height,
+      detailViewCount: afterObservation.detailViews.length,
+      changedNodeIds: afterObservation.changedNodeIds,
+      meaningfulChangedNodeIds: afterObservation.meaningfulChangedNodeIds,
+    });
+
+    let renderedCritique: NorthstarEmergentCreativeCritique;
+    try {
+      const rawCritique = await runNorthstarModelStageWithTimeout({
+        stage: `critique-adaptive-creative-act-${moveIndex}`,
+        timeoutMs: adaptiveSession.budget.critiqueTimeoutMs,
+        parentSignal: signal,
+        run: (stageSignal) => creativeModel.critiqueRenderedAct({
+          systemInstruction: buildNorthstarEmergentCritiqueSystemInstruction(),
+          parts: [
+            ...designReferenceParts,
+            ...buildNorthstarVisualObservationParts({
+              observation: beforeObservation,
+              acknowledgement: liveAck,
+              label: "BEFORE — EXACT VERIFIED ARTBOARD",
+            }),
+            ...buildNorthstarVisualObservationParts({
+              observation: afterObservation,
+              acknowledgement: committedAck,
+              label: "AFTER — EXACT ACCEPTED ARTBOARD",
+            }),
+            {
+              text: buildNorthstarAdaptiveCritiqueContext({
+                userRequest: message,
+                objective: intent.objective || message,
+                intention: prepared.contract.intent,
+                viewerUnderstanding: prepared.contract.expectedSemanticDelta,
+                visibleChange: prepared.draft.visibleChange,
+                groundedResearch: { evidenceSummary, dataBundle },
+                sceneObservations: {
+                  blocking: postReadiness.blockingObservations,
+                  advisory: postReadiness.advisoryObservations,
+                },
+                runtimeReview: committedAck?.review,
+                creativeMemory: adaptiveSession.snapshot(),
+              }),
+            },
+          ],
+          signal: stageSignal,
+          maxOutputTokens: adaptiveSession.budget.critiqueOutputTokens,
+          temperature: budget.critiqueTemperature,
+        }),
+      });
+      renderedCritique = sanitizeNorthstarEmergentCreativeCritique(rawCritique);
+    } catch (error) {
+      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+      renderedCritique = {
+        summary: "The author critique was unavailable, so Northstar retained the exact committed browser result and used deterministic readiness observations.",
+        observedEffect: prepared.draft.visibleChange,
+        whatImproved: [],
+        whatStillWeak: postReadiness.advisoryObservations,
+        recommendedNextMove: postReadiness.advisoryObservations[0]
+          ?? "Do not force another mutation unless the next observation identifies a material communication improvement.",
+        continueWorking: !postReadiness.communicativelyReady,
+      };
+    }
+
+    latestRenderedCritique = renderedCritique;
+    adaptiveSession.recordCritique(committed.revisionId, renderedCritique);
+
+    let independentReview: NorthstarIndependentCreativeReview;
+    try {
+      const rawReview = await runNorthstarModelStageWithTimeout({
+        stage: `independent-review-adaptive-creative-act-${moveIndex}`,
+        timeoutMs: adaptiveSession.budget.independentReviewTimeoutMs,
+        parentSignal: signal,
+        run: (stageSignal) => creativeModel.reviewCreativeArtifact({
+          systemInstruction: buildNorthstarIndependentCreativeReviewSystemInstruction(),
+          parts: [
+            ...designReferenceParts,
+            ...buildNorthstarVisualObservationParts({
+              observation: afterObservation,
+              acknowledgement: committedAck,
+              label: "ARTIFACT UNDER INDEPENDENT REVIEW",
+            }),
+            {
+              text: buildNorthstarIndependentCreativeReviewContext({
+                userRequest: message,
+                objective: intent.objective || message,
+                authoredIntention: prepared.contract.intent,
+                authoredVisibleChange: prepared.draft.visibleChange,
+                groundedResearch: { evidenceSummary, dataBundle },
+                operationalObservations: {
+                  blocking: postReadiness.blockingObservations,
+                  advisory: postReadiness.advisoryObservations,
+                  runtimeReview: committedAck?.review,
+                },
+                creativeJournal: adaptiveSession.snapshot().creativeJournal,
+              }),
+            },
+          ],
+          signal: stageSignal,
+          maxOutputTokens: adaptiveSession.budget.independentReviewOutputTokens,
+          temperature: adaptiveSession.budget.independentReviewTemperature,
+        }),
+      });
+      independentReview = sanitizeNorthstarIndependentCreativeReview(rawReview);
+    } catch (error) {
+      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+      independentReview = {
+        interpretation: renderedCritique.summary,
+        strongestAspect: renderedCritique.whatImproved[0]
+          ?? "The latest candidate is browser-verified and preserves the grounded artifact.",
+        unresolvedProblems: renderedCritique.whatStillWeak,
+        evidenceCommunicationAssessment: renderedCritique.observedEffect,
+        recommendedIntervention: renderedCritique.recommendedNextMove,
+        materialImprovementAvailable: renderedCritique.continueWorking
+          || renderedCritique.whatStillWeak.length > 0,
+        rationale: "The isolated review call was unavailable, so this conservative fallback mirrors the author critique without fabricating an independent judgment.",
+      };
+    }
+
+    latestIndependentReview = independentReview;
+    adaptiveSession.recordIndependentReview(committed.revisionId, independentReview);
+    const changeAreaRatio = Number(committedAck?.review?.changedAreaRatio ?? 0);
+    const structuralOperationCount = prepared.draft.operations.filter((operation) =>
+      operation.op === "insert-html"
+      || operation.op === "set-html"
+      || operation.op === "move"
+      || operation.op === "remove"
+    ).length;
+    if (changeAreaRatio >= 0.45 || structuralOperationCount >= 4 || prepared.expectedChangedNodeIds.length >= 12) {
+      callbacks.trace?.("creative.revision.major", {
+        revisionId: committed.revisionId,
+        changedAreaRatio: changeAreaRatio,
+        structuralOperationCount,
+        changedNodeCount: prepared.expectedChangedNodeIds.length,
+      }, "The accepted act materially reconsidered a large portion of the living artifact.");
+    }
+
+    const unresolvedCreativeProblems = Array.from(new Set([
+      ...renderedCritique.whatStillWeak,
+      ...independentReview.unresolvedProblems,
+      ...postReadiness.blockingObservations,
+      ...adaptiveSession.snapshot().creativeJournal.cosmeticDriftWarnings,
+    ].filter(Boolean))).slice(0, 18);
+    if (
+      renderedCritique.continueWorking
+      || independentReview.materialImprovementAvailable
+      || unresolvedCreativeProblems.length > 0
+    ) {
+      priorCritique = {
+        critique: [
+          renderedCritique.summary,
+          renderedCritique.observedEffect,
+          `Independent review: ${independentReview.interpretation}`,
+          independentReview.rationale,
+        ].filter(Boolean).join(" "),
+        requiredChanges: [
+          ...unresolvedCreativeProblems,
+          renderedCritique.recommendedNextMove,
+          independentReview.recommendedIntervention,
+        ].filter(Boolean).slice(0, 20),
+      };
+    } else {
+      priorCritique = undefined;
+    }
+    currentPackage = {
+      ...currentPackage,
+      diagnostics: [
+        ...currentPackage.diagnostics,
+        `Adaptive author critic: ${renderedCritique.summary}`,
+        `Independent creative review: ${independentReview.interpretation}`,
+        ...(unresolvedCreativeProblems.length > 0
+          ? [`Creative limitations still visible: ${unresolvedCreativeProblems.join(" | ")}`]
+          : []),
+      ].slice(-80),
+    };
+    callbacks.trace?.("creative.act.critiqued", {
+      revisionId: committed.revisionId,
+      continueWorking: renderedCritique.continueWorking,
+      whatImproved: renderedCritique.whatImproved,
+      whatStillWeak: renderedCritique.whatStillWeak,
+      recommendedNextMove: renderedCritique.recommendedNextMove,
+      session: adaptiveSession.snapshot(),
+    }, renderedCritique.summary);
+    callbacks.trace?.("creative.act.independently_reviewed", {
+      revisionId: committed.revisionId,
+      materialImprovementAvailable: independentReview.materialImprovementAvailable,
+      unresolvedProblems: independentReview.unresolvedProblems,
+      recommendedIntervention: independentReview.recommendedIntervention,
+      session: adaptiveSession.snapshot(),
+    }, independentReview.interpretation);
+
   }
 
-  // Publication begins only after every core design obligation is verified in
-  // the exact browser-visible scene.
+  // Publication begins after the adaptive session decides that the exact
+  // browser-visible artifact is ready or its thinking-level budget is responsibly exhausted.
   const maximumPublicationAttempts = 3;
   for (let publicationAttempt = 0; publicationAttempt < maximumPublicationAttempts; publicationAttempt += 1) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -7905,9 +8009,10 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
     const publicationBase = materializeNorthstarCanonicalPackage(publicationVisible, publicationAckBefore);
     const publicationAssessment = assessNorthstarCanonicalScene(publicationBase, publicationAckBefore);
     authorship.reconcile(publicationAssessment, publicationBase.revisionId);
-    if (!authorship.readyForSettlement(publicationAssessment)) {
-      console.info("Northstar is publishing the latest verified scene with advisory creative refinements still available.", {
-        remainingObligations: authorship.openObligations(false),
+    const publicationReadiness = assessNorthstarAdaptiveReadiness(publicationAssessment);
+    if (!publicationReadiness.communicativelyReady) {
+      console.info("Northstar is settling the latest browser-verified scene with advisory creative opportunities still available.", {
+        advisoryObservations: publicationReadiness.advisoryObservations,
       });
     }
 
@@ -8052,6 +8157,14 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
     break;
   }
 
+  callbacks.trace?.("creative.session.converged", {
+    revisionId: currentPackage.revisionId,
+    finalVerified,
+    knownLimitations: finalKnownLimitations,
+    independentReview: latestIndependentReview,
+    session: adaptiveSession.snapshot(),
+  }, latestReviewSummary);
+
   if (!finalVerified) {
     callbacks.trace?.("publication.exhausted", {
       maximumPublicationAttempts,
@@ -8071,6 +8184,10 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
       ...currentPackage.diagnostics,
       `Northstar v0.7.0 committed ${visibleMutationCount} browser-reviewed material visual transactions on one continuously mounted artboard.`,
       latestReviewSummary,
+      ...(finalKnownLimitations.length > 0
+        ? [`Known creative limitations at convergence: ${finalKnownLimitations.join(" | ")}`]
+        : []),
+      `Phase 3 creative journal: ${JSON.stringify(adaptiveSession.snapshot().creativeJournal)}`,
     ].slice(-80),
     provisional: !finalVerified,
     publicationState: finalVerified ? "verified" : "working",
@@ -12033,7 +12150,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             const finalCodeArtifactPackage: NorthstarGeneratedCodeArtifactPackage = committedCodeArtifactPackage;
             const finalAcknowledgement = liveArtboardActor.lastAcknowledgement() ?? lastLiveMutationAck;
             const finalSceneAssessment = assessNorthstarCanonicalScene(finalCodeArtifactPackage, finalAcknowledgement);
-            const finalOpenObligations = listNorthstarOpenObligations(finalSceneAssessment, true);
             if (
               finalSceneAssessment.publicationState !== "verified" ||
               !finalSceneAssessment.processSettled ||
@@ -12048,7 +12164,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               artifact: finalCodeArtifactPackage,
               objective: semanticIntent.objective || message,
               assessment: finalSceneAssessment,
-              openObligations: finalOpenObligations,
             });
             compositionFinalStateBrief = finalStateBrief;
             compositionFinalAnswer = scrubInternalIds(await generateNorthstarCompositionFinalResponse({

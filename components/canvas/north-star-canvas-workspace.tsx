@@ -102,6 +102,10 @@ import {
   materializeNorthstarBrowserCommit,
   type NorthstarBrowserCommit,
 } from "@/lib/canvas-ai/northstar-transaction-kernel";
+import {
+  deriveNorthstarCanvasGeometry,
+  normalizeNorthstarContentSize,
+} from "@/lib/canvas-artifacts/content-size-coordinator";
 import { cn } from "@/lib/utils";
 
 const unbounded = Unbounded({
@@ -14840,20 +14844,19 @@ export function NorthStarCanvasWorkspace({
                 onArtifactDragStart={(clientX, clientY) => {
                   beginObjectMoveAtPoint(object, { clientX, clientY });
                 }}
-                onArtifactContentSize={(size) => {
-                  // One monotonic live-layout clock per mounted revision. A remounted
-                  // iframe starts its own sequence, so artifact-only clocks can reject
-                  // a valid clean terminal measurement from the next revision.
+                onArtifactContentSize={(reportedSize) => {
+                  const size = normalizeNorthstarContentSize(reportedSize);
+                  if (!size) return;
+                  // One monotonic live-layout clock per mounted revision. The exact
+                  // normalized terminal measurement drives both the iframe geometry
+                  // and the outer Canvas object; there is no second sizing formula.
                   const sequenceKey = `${size.artifactId}:${size.revisionId}`;
                   const previousSequence = artifactContentSizeSequenceRef.current.get(sequenceKey) ?? -1;
                   const nextSequence = size.sequence ?? previousSequence + 1;
-                  if (nextSequence < previousSequence) return;
+                  if (nextSequence <= previousSequence) return;
                   artifactContentSizeSequenceRef.current.set(sequenceKey, nextSequence);
 
                   const current = objectsRef.current;
-                  // TypeScript does not propagate assignments made inside Array.map callbacks
-                  // into control-flow narrowing after the callback. Collect eligible follow
-                  // targets explicitly, then select the latest committed geometry below.
                   const followTargets: Array<{
                     object: CanvasBoxObject;
                     displayScale: number;
@@ -14864,9 +14867,6 @@ export function NorthStarCanvasWorkspace({
                     if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
                       return candidate;
                     }
-                    // The current live DOM may be provisional, committed, rolling back,
-                    // loading assets, or animating. If it belongs to this mounted artifact,
-                    // its complete bounds are authoritative for the visible Canvas object.
                     if (
                       candidate.codeArtifact.artifactId !== size.artifactId
                       || candidate.codeArtifact.revisionId !== size.revisionId
@@ -14880,105 +14880,64 @@ export function NorthStarCanvasWorkspace({
                       1,
                       candidate.source?.originalHeight ?? candidate.codeArtifact.preferredHeight,
                     );
-                    const displayScale = Math.max(
-                      0.01,
-                      Math.min(
-                        candidate.w / previousIntrinsicWidth,
-                        candidate.h / previousIntrinsicHeight,
-                      ),
-                    );
                     const previousBounds = candidate.codeArtifact.intrinsicBounds ?? {
                       minX: 0,
                       minY: 0,
                       maxX: previousIntrinsicWidth,
                       maxY: previousIntrinsicHeight,
                     };
-                    const reportedBounds = size.contentBounds ?? {
-                      minX: previousBounds.minX,
-                      minY: previousBounds.minY,
-                      maxX: previousBounds.minX + Math.max(1, size.intrinsicWidth),
-                      maxY: previousBounds.minY + Math.max(1, size.intrinsicHeight),
-                    };
-                    const reportedWidth = Math.max(1, reportedBounds.maxX - reportedBounds.minX);
-                    const reportedHeight = Math.max(1, reportedBounds.maxY - reportedBounds.minY);
-                    // Reject viewport/self-measurement echoes. A single settled report must not
-                    // inflate an artboard by orders of magnitude or preserve blank viewport bands.
+                    const geometry = deriveNorthstarCanvasGeometry({
+                      size,
+                      previousBounds,
+                      previousIntrinsicWidth,
+                      previousIntrinsicHeight,
+                      canvasX: candidate.x,
+                      canvasY: candidate.y,
+                      canvasWidth: candidate.w,
+                      canvasHeight: candidate.h,
+                      minimumWidth: candidate.codeArtifact.minimumWidth,
+                      minimumHeight: candidate.codeArtifact.minimumHeight,
+                    });
+
                     if (
-                      reportedWidth > 24000 || reportedHeight > 24000 ||
-                      reportedWidth > previousIntrinsicWidth * 6 ||
-                      reportedHeight > Math.max(previousIntrinsicHeight * 6, 12000)
+                      Math.abs(geometry.intrinsicWidth - previousIntrinsicWidth) < 2
+                      && Math.abs(geometry.intrinsicHeight - previousIntrinsicHeight) < 2
+                      && Math.abs(geometry.width - candidate.w) < 1
+                      && Math.abs(geometry.height - candidate.h) < 1
+                      && Math.abs(geometry.x - candidate.x) < 1
+                      && Math.abs(geometry.y - candidate.y) < 1
                     ) return candidate;
-                    const clampedReportedBounds = {
-                      minX: Math.max(-24000, Math.min(24000, Math.floor(reportedBounds.minX))),
-                      minY: Math.max(-24000, Math.min(24000, Math.floor(reportedBounds.minY))),
-                      maxX: Math.max(-24000, Math.min(24000, Math.ceil(reportedBounds.maxX))),
-                      maxY: Math.max(-24000, Math.min(24000, Math.ceil(reportedBounds.maxY))),
-                    };
-
-                    // Geometry follows the complete live DOM immediately. A later reflow,
-                    // rollback, image load, font load, or publication cleanup simply emits a
-                    // newer sequence and moves the same object to the new exact bounds.
-                    const targetBounds = clampedReportedBounds;
-                    const targetIntrinsicWidth = Math.max(
-                      candidate.codeArtifact.minimumWidth,
-                      Math.min(24000, targetBounds.maxX - targetBounds.minX),
-                    );
-                    const targetIntrinsicHeight = Math.max(
-                      candidate.codeArtifact.minimumHeight,
-                      Math.min(24000, targetBounds.maxY - targetBounds.minY),
-                    );
-                    const targetCanvasWidth = Math.max(
-                      candidate.codeArtifact.minimumWidth * displayScale,
-                      targetIntrinsicWidth * displayScale,
-                    );
-                    const targetCanvasHeight = Math.max(
-                      candidate.codeArtifact.minimumHeight * displayScale,
-                      targetIntrinsicHeight * displayScale,
-                    );
-                    const targetX = candidate.x + (targetBounds.minX - previousBounds.minX) * displayScale;
-                    const targetY = candidate.y + (targetBounds.minY - previousBounds.minY) * displayScale;
-
-                    if (
-                      Math.abs(targetIntrinsicWidth - previousIntrinsicWidth) < 2 &&
-                      Math.abs(targetIntrinsicHeight - previousIntrinsicHeight) < 2 &&
-                      Math.abs(targetCanvasWidth - candidate.w) < 1 &&
-                      Math.abs(targetCanvasHeight - candidate.h) < 1 &&
-                      Math.abs(targetX - candidate.x) < 1 &&
-                      Math.abs(targetY - candidate.y) < 1
-                    ) {
-                      return candidate;
-                    }
 
                     const updated: CanvasBoxObject = {
                       ...candidate,
-                      x: targetX,
-                      y: targetY,
-                      w: targetCanvasWidth,
-                      h: targetCanvasHeight,
+                      x: geometry.x,
+                      y: geometry.y,
+                      w: geometry.width,
+                      h: geometry.height,
                       source: candidate.source
                         ? {
                             ...candidate.source,
-                            originalWidth: targetIntrinsicWidth,
-                            originalHeight: targetIntrinsicHeight,
+                            originalWidth: geometry.intrinsicWidth,
+                            originalHeight: geometry.intrinsicHeight,
                           }
                         : candidate.source,
                       codeArtifact: {
                         ...candidate.codeArtifact,
-                        preferredWidth: targetIntrinsicWidth,
-                        preferredHeight: targetIntrinsicHeight,
-                        intrinsicBounds: targetBounds,
+                        preferredWidth: geometry.intrinsicWidth,
+                        preferredHeight: geometry.intrinsicHeight,
+                        intrinsicBounds: geometry.bounds,
                       },
                     };
                     const geometryChanged =
-                      Math.abs(targetCanvasWidth - candidate.w) > 2 ||
-                      Math.abs(targetCanvasHeight - candidate.h) > 2 ||
-                      Math.abs(targetX - candidate.x) > 2 ||
-                      Math.abs(targetY - candidate.y) > 2;
+                      Math.abs(geometry.width - candidate.w) > 2
+                      || Math.abs(geometry.height - candidate.h) > 2
+                      || Math.abs(geometry.x - candidate.x) > 2
+                      || Math.abs(geometry.y - candidate.y) > 2;
                     if (geometryChanged) {
                       followTargets.push({
                         object: updated,
-                        displayScale,
-                        targetBounds,
+                        displayScale: geometry.displayScale,
+                        targetBounds: geometry.bounds,
                         changedBounds: size.changedBounds,
                       });
                     }

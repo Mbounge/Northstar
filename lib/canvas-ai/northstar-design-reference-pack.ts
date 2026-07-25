@@ -89,7 +89,9 @@ export const NORTHSTAR_DESIGN_REFERENCES: readonly NorthstarDesignReferenceDefin
   },
 ] as const;
 
-let cached: Promise<NorthstarReferencePart[]> | undefined;
+const cachedByMode = new Map<NorthstarReferenceMode, Promise<NorthstarReferencePart[]>>();
+
+export type NorthstarReferenceMode = "labeled-study" | "unlabeled-taste";
 
 async function imagePart(file: string): Promise<NorthstarReferencePart> {
   const filePath = path.join(process.cwd(), "public", "northstar", "design-references", file);
@@ -97,37 +99,62 @@ async function imagePart(file: string): Promise<NorthstarReferencePart> {
   return { inlineData: { mimeType: "image/png", data: bytes.toString("base64") } };
 }
 
-export function loadNorthstarDesignReferenceParts(): Promise<NorthstarReferencePart[]> {
-  if (!cached) {
-    cached = (async () => {
-      const parts: NorthstarReferencePart[] = [
-        {
-          text: [
-            "NORTHSTAR EIGHT-IMAGE FEW-SHOT IDENTITY PACK",
-            "The next eight images are always-on visual identity references. They are not the current artifact and they are not templates.",
-            "Infer shared taste, clarity, evidence choreography, spatial confidence, and finish across the set. Deliberately avoid copying any one image's layout, module order, component shapes, or named composition.",
-            NORTHSTAR_VISUAL_DNA,
-          ].join("\n\n"),
-        },
-      ];
+export function loadNorthstarDesignReferenceParts(input?: {
+  mode?: NorthstarReferenceMode;
+}): Promise<NorthstarReferencePart[]> {
+  const mode = input?.mode ?? "labeled-study";
+  const existing = cachedByMode.get(mode);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    if (mode === "unlabeled-taste") {
+      const parts: NorthstarReferencePart[] = [{
+        text: [
+          "NORTHSTAR VISUAL TASTE REFERENCES",
+          "The following images are unlabeled taste conditioning only.",
+          "Infer the shared standard of strategic communication, evidence clarity, typography, restraint, spatial confidence, originality, and finish across the complete set.",
+          "Do not classify the images, select a family, copy a composition, reproduce a component arrangement, or infer that any visible structure is required.",
+          "Invent the right artifact for the current user problem from first principles.",
+        ].join("\n\n"),
+      }];
       for (const reference of NORTHSTAR_DESIGN_REFERENCES) {
-        parts.push({
-          text: [
-            `REFERENCE — ${reference.name}`,
-            `Problem solved: ${reference.communicationProblem}`,
-            `Learn: ${reference.grammarLesson}`,
-            `Anti-copy instruction: ${reference.doNotCopy}`,
-          ].join("\n"),
-        });
         parts.push(await imagePart(reference.file));
       }
       parts.push({
-        text: "REFERENCE PACK COMPLETE. Now solve the current assignment from first principles. The result should share Northstar taste while using a composition genome original to this problem.",
+        text: "REFERENCE IMAGES COMPLETE. Treat them as a quality bar, not as options or instructions. Return to the current evidence, user intent, and rendered artboard and invent what belongs there.",
       });
       return parts;
-    })();
-  }
-  return cached;
+    }
+
+    const parts: NorthstarReferencePart[] = [
+      {
+        text: [
+          "NORTHSTAR EIGHT-IMAGE FEW-SHOT IDENTITY PACK",
+          "The next eight images are always-on visual identity references. They are not the current artifact and they are not templates.",
+          "Infer shared taste, clarity, evidence choreography, spatial confidence, and finish across the set. Deliberately avoid copying any one image's layout, module order, component shapes, or named composition.",
+          NORTHSTAR_VISUAL_DNA,
+        ].join("\n\n"),
+      },
+    ];
+    for (const reference of NORTHSTAR_DESIGN_REFERENCES) {
+      parts.push({
+        text: [
+          `REFERENCE — ${reference.name}`,
+          `Problem solved: ${reference.communicationProblem}`,
+          `Learn: ${reference.grammarLesson}`,
+          `Anti-copy instruction: ${reference.doNotCopy}`,
+        ].join("\n"),
+      });
+      parts.push(await imagePart(reference.file));
+    }
+    parts.push({
+      text: "REFERENCE PACK COMPLETE. Now solve the current assignment from first principles. The result should share Northstar taste while using a composition genome original to this problem.",
+    });
+    return parts;
+  })();
+
+  cachedByMode.set(mode, pending);
+  return pending;
 }
 
 export function buildNorthstarVisualReviewParts(input: {

@@ -36,15 +36,14 @@ test("stale restore actions cannot overwrite a newer acknowledged revision", () 
   assert.equal(workspace.includes("latestAcknowledgedRevisionForRun"), true);
 });
 
-test("design does not invoke the model with a missing semantic evidence graph", () => {
-  assert.equal(route.includes("PRESENTATION_GRAPH_UNAVAILABLE"), true);
-  assert.equal(route.includes('callbacks.trace?.("design.context.invalid"'), true);
-  assert.equal(route.includes("The run stopped before invoking the design model"), true);
+test("creative authorship does not invoke the model with a missing semantic evidence graph", () => {
+  assert.equal(route.includes("CREATIVE_SURFACE_UNAVAILABLE"), true);
+  assert.equal(route.includes('callbacks.trace?.("creative.context.invalid"'), true);
+  assert.equal(route.includes("The run stopped before invoking the creative model"), true);
 });
 
-test("unchanged preparation failures terminate instead of consuming an unbounded retry loop", () => {
-  assert.equal(route.includes("preparationFailuresByContext"), true);
-  assert.equal(route.includes("maximumPreparationFailuresPerContext = 2"), true);
-  assert.equal(route.includes('callbacks.trace?.("design.preparation.stalled"'), true);
-  assert.equal(route.includes("Northstar stopped retrying"), true);
+test("unchanged adaptive failures terminate instead of consuming an unbounded retry loop", () => {
+  assert.equal(route.includes("maximumRepeatedFailureFingerprints"), true);
+  assert.equal(route.includes('callbacks.trace?.("creative.session.preparation_stalled"'), true);
+  assert.equal(route.includes("Northstar stopped retrying the unchanged committed scene"), true);
 });

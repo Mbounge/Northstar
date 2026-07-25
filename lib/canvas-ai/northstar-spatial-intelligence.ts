@@ -5,7 +5,7 @@
 export const NORTHSTAR_SPATIAL_INTELLIGENCE_CONTRACT = `
 NORTHSTAR v0.5.2 — PRECISE SPATIAL COMMUNICATION
 
-The artboard may grow or contract freely around the actual visible composition. Never optimize for small dimensions. Never create internal artifact scrolling.
+The runtime derives the artboard, iframe, Canvas object, and persisted intrinsic bounds from the actual visible composition. Never optimize content for a small viewport and never create internal artifact scrolling. The model has no artboard-resize or request-space authority.
 
 AUTHOR SEMANTIC INTENT, NOT COORDINATES
 Anchored annotations must declare:
@@ -34,7 +34,7 @@ SELF-REPAIR
 After each browser-acknowledged spatial mutation, inspect the rendered pixels and spatial audit.
 - Correct the anchor when the label belongs to the wrong node.
 - Change side, alignment, gap, width, grouping, or route when communication is ambiguous.
-- Reserve additional real artboard space when clarity requires it.
+- Recompose content naturally when clarity requires more or less room; the runtime will measure and synchronize the resulting bounds.
 - Rethink or remove a relationship when its visual form implies unsupported meaning.
 - Prefer fewer accurate relationships over a dense but misleading web.
 
