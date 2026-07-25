@@ -2,7 +2,7 @@
 
 import type { NorthstarArtifactMutationAcknowledgement } from "@/lib/canvas-artifacts/types";
 
-export type NorthstarRunTerminalState = "complete" | "blocked" | "failed" | "cancelled";
+export type NorthstarRunTerminalState = "complete" | "incomplete" | "blocked" | "failed" | "cancelled";
 
 export type NorthstarVisualStage =
   | "foundation"

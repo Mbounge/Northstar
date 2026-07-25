@@ -74,7 +74,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const MINIMUM_HEIGHT = ${minimumHeight};
   const appliedMutationIds = new Set();
   const queuedMutationIds = new Set();
+  const cancelledMutationIds = new Set();
   const terminalMutationMessages = new Map();
+  const mutationTransactions = new Map();
   const mutationQueue = [];
   let applyingMutation = false;
   let pendingAcknowledgement = null;
@@ -844,7 +846,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         geometryRole: classifySemanticGeometryRole(element),
       }))
       .filter((item) => item.geometryRole !== "root" && item.rect.width > 1 && item.rect.height > 1);
-    const evidenceElements = Array.from(root.querySelectorAll("[data-ns-evidence-id], figure:has(img)"));
+    const evidenceElements = Array.from(root.querySelectorAll("[data-ns-evidence-id], [data-ns-protected-evidence], figure:has(img)"))
+      .filter((element) => element.hasAttribute("data-ns-protected-evidence") || Boolean(element.querySelector("img,video,canvas,svg")));
     const evidenceRects = evidenceElements.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 4 && rect.height > 4);
     const unsafeEvidenceOverlayIds = [];
     const majorAnalyticalItems = [];
@@ -1149,6 +1152,34 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     return Array.from(kinds);
   };
 
+  const rememberMutationTransaction = (mutationId, transaction) => {
+    if (!mutationId) return;
+    mutationTransactions.set(mutationId, transaction);
+    if (mutationTransactions.size > 80) {
+      mutationTransactions.delete(mutationTransactions.keys().next().value);
+    }
+  };
+
+  const rollbackMutation = (mutationId) => {
+    if (!mutationId) return false;
+    const transaction = mutationTransactions.get(mutationId);
+    if (!transaction) return false;
+    if (pendingAcknowledgement?.mutationId === mutationId) pendingAcknowledgement = null;
+    root.innerHTML = transaction.html;
+    restoreStyleState(transaction.styles);
+    requestedBounds = { ...transaction.requestedBounds };
+    currentRevisionId = transaction.revisionId;
+    currentMutationId = transaction.mutationId;
+    appliedMutationIds.delete(mutationId);
+    queuedMutationIds.delete(mutationId);
+    terminalMutationMessages.delete(mutationId);
+    mutationTransactions.delete(mutationId);
+    enforceAssetPolicy(root);
+    applyStage();
+    queueContentSize();
+    return true;
+  };
+
   const applyOperation = (operation) => {
     if (!operation || typeof operation.op !== "string") return;
     if (operation.op === "request-space") { requestSpace(operation); return; }
@@ -1205,13 +1236,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   };
 
   const applyMutationBatch = async (batch, revisionId, acknowledge = true, proposal = null) => {
-    if (!batch || appliedMutationIds.has(batch.mutationId)) return;
+    if (!batch || appliedMutationIds.has(batch.mutationId) || cancelledMutationIds.has(batch.mutationId)) return;
     if (proposal?.baseRevisionId && proposal.baseRevisionId !== currentRevisionId) {
       throw new Error("Proposal base revision does not match the mounted browser revision.");
     }
     const expectedParent = Array.from(appliedMutationIds).at(-1);
     if (batch.parentMutationId && expectedParent && batch.parentMutationId !== expectedParent) throw new Error("Mutation lineage is discontinuous.");
     registerAssets(batch.requiredAssetUrls || []);
+    solveSpatialSystem();
     const transaction = {
       html: root.innerHTML,
       styles: captureStyleState(),
@@ -1221,7 +1253,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       beforeSnapshot: semanticSnapshot(),
       beforeBounds: getContentBounds(),
       beforeVisualSafety: visualSafetySnapshot(),
+      beforeAudit: collectRuntimeAudit(),
     };
+    rememberMutationTransaction(batch.mutationId, transaction);
     if (batch.geometryIntent === "contract-after-refinement" || batch.geometryIntent === "recompose") {
       requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
     }
@@ -1233,6 +1267,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     currentRevisionId = revisionId || currentRevisionId;
     currentMutationId = batch.mutationId;
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (cancelledMutationIds.has(batch.mutationId)) {
+      rollbackMutation(batch.mutationId);
+      root.removeAttribute("data-ns-mutating");
+      return;
+    }
     animateMutation(before, Math.max(80, Math.min(1200, Number(batch.transitionMs) || 320)));
     root.removeAttribute("data-ns-mutating");
     if (acknowledge) {
@@ -1268,6 +1307,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     try {
       while (mutationQueue.length) {
         const item = mutationQueue.shift();
+        if (item?.batch?.mutationId && cancelledMutationIds.has(item.batch.mutationId)) {
+          queuedMutationIds.delete(item.batch.mutationId);
+          continue;
+        }
         try { await applyMutationBatch(item.batch, item.revisionId, true, item.proposal); }
         catch (error) {
           const terminalMessage = {
@@ -1312,7 +1355,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     return { minX, minY, maxX, maxY, width: Math.max(MINIMUM_WIDTH, maxX - minX), height: Math.max(MINIMUM_HEIGHT, maxY - minY) };
   };
 
-  const audit = () => {
+  const collectRuntimeAudit = () => {
     const elements = Array.from(root.querySelectorAll("*")).filter((element) => !element.closest("[data-ns-spatial-system]"));
     let overflowElementCount = 0, clippedTextCount = 0, smallTextCount = 0, tinyInteractiveCount = 0, missingImageCount = 0, internalScrollElementCount = 0;
     elements.forEach((element) => {
@@ -1348,6 +1391,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       },
       summary: issueCount ? "Live artboard audit detected " + issueCount + " potential visual issues for the next micro-adjustment." : "Live artboard audit passed.",
     };
+    return review;
+  };
+  const audit = () => {
+    const review = collectRuntimeAudit();
     parent.postMessage({ type: "northstar.artifact.runtime-review", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, review }, "*");
     return review;
   };
@@ -1429,12 +1476,27 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           (operation.op === "insert-html" || operation.op === "set-html")
           && /data-ns-(?:annotation-id|relationship-id)/i.test(operation.html || "")
         );
-        const hardIssues =
-          review.overflowElementCount +
-          review.clippedTextCount +
-          review.missingImageCount +
-          (review.documentScrollRisk ? 1 : 0) +
-          (spatialMutation ? (review.spatialAudit?.hardFailureCount || 0) : 0);
+        const beforeAudit = acknowledgement.transaction.beforeAudit || review;
+        const hardIssueDeltas = {
+          overflowElements: Math.max(0, Number(review.overflowElementCount || 0) - Number(beforeAudit.overflowElementCount || 0)),
+          clippedText: Math.max(0, Number(review.clippedTextCount || 0) - Number(beforeAudit.clippedTextCount || 0)),
+          missingImages: Math.max(0, Number(review.missingImageCount || 0) - Number(beforeAudit.missingImageCount || 0)),
+          internalScrollElements: Math.max(0, Number(review.internalScrollElementCount || 0) - Number(beforeAudit.internalScrollElementCount || 0)),
+          spatialHardFailures: spatialMutation
+            ? Math.max(0, Number(review.spatialAudit?.hardFailureCount || 0) - Number(beforeAudit.spatialAudit?.hardFailureCount || 0))
+            : 0,
+        };
+        const hardIssues = Object.values(hardIssueDeltas).reduce((sum, count) => sum + count, 0);
+        const hardIssueFailures = [
+          hardIssueDeltas.overflowElements ? hardIssueDeltas.overflowElements + " new overflowing element(s)" : "",
+          hardIssueDeltas.clippedText ? hardIssueDeltas.clippedText + " new clipped text region(s)" : "",
+          hardIssueDeltas.missingImages ? hardIssueDeltas.missingImages + " newly missing image(s)" : "",
+          hardIssueDeltas.internalScrollElements ? hardIssueDeltas.internalScrollElements + " new internal scroll container(s)" : "",
+          hardIssueDeltas.spatialHardFailures ? hardIssueDeltas.spatialHardFailures + " new spatial hard failure(s)" : "",
+        ].filter(Boolean);
+        const hardIssueReason = hardIssues > 0
+          ? "The candidate introduced new operational layout regressions: " + hardIssueFailures.join(", ") + "."
+          : "";
         const afterVisualSafety = visualSafetySnapshot();
         const visualSafetyReason = visualSafetyFailure(acknowledgement.transaction.beforeVisualSafety || afterVisualSafety, afterVisualSafety);
         const rejectedReason = visualSafetyReason
@@ -1449,8 +1511,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
                 ? "The visual design stage did not produce a palpable compositional delta: " + visualImpactFailures.join(", ")
               : missingRequiredKinds.length
                 ? "The visible change did not satisfy the required design move: " + missingRequiredKinds.join(", ")
-                : hardIssues > 0
-                  ? "The live artboard audit rejected clipping, overflow, internal scrolling, or missing imagery."
+                : hardIssueReason
+                  ? hardIssueReason
                   : "";
         if (rejectedReason) {
           const rejectedRevisionId = acknowledgement.revisionId;
@@ -1461,6 +1523,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           requestedBounds = { ...acknowledgement.transaction.requestedBounds };
           currentRevisionId = rollbackRevisionId;
           currentMutationId = acknowledgement.transaction.mutationId;
+          mutationTransactions.delete(acknowledgement.mutationId);
           enforceAssetPolicy(root);
           applyStage();
           const terminalMessage = {
@@ -1475,7 +1538,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             mutationId: acknowledgement.mutationId,
             message: rejectedReason,
             size,
-            review: { ...review, hardFailureCount: hardIssues, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: missingAssets.length, meaningfulChangedNodeCount: diff.meaningful.length, visualDeltaScore: visualImpact.changedAreaRatio, ...visualImpact },
+            review: { ...review, hardFailureCount: hardIssues, hardIssueDeltas, beforeAudit: { overflowElementCount: beforeAudit.overflowElementCount, clippedTextCount: beforeAudit.clippedTextCount, missingImageCount: beforeAudit.missingImageCount, internalScrollElementCount: beforeAudit.internalScrollElementCount, spatialHardFailureCount: beforeAudit.spatialAudit?.hardFailureCount || 0 }, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: missingAssets.length, meaningfulChangedNodeCount: diff.meaningful.length, visualDeltaScore: visualImpact.changedAreaRatio, ...visualImpact },
             changedNodeIds: diff.changed,
             meaningfulChangedNodeIds: diff.meaningful,
             changeKinds,
@@ -1596,9 +1659,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       enforceAssetPolicy(root);
       return;
     }
+    if (message.type === "northstar.artifact.cancel-mutation" && message.mutationId) {
+      const mutationId = message.mutationId;
+      cancelledMutationIds.add(mutationId);
+      for (let index = mutationQueue.length - 1; index >= 0; index -= 1) {
+        if (mutationQueue[index]?.batch?.mutationId === mutationId) mutationQueue.splice(index, 1);
+      }
+      queuedMutationIds.delete(mutationId);
+      rollbackMutation(mutationId);
+      return;
+    }
     if (message.type === "northstar.artifact.apply-mutation" && message.batch) {
       registerAssets(message.assetUrls || []);
       const mutationId = message.batch.mutationId;
+      if (cancelledMutationIds.has(mutationId)) return;
       parent.postMessage({
         type: "northstar.artifact.mutation-received",
         artifactId: ARTIFACT_ID,

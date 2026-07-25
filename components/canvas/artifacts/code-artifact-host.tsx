@@ -194,6 +194,14 @@ function CodeArtifactHostImpl({
   const mountedSurfaceRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
   const appliedMutationIdsRef = useRef<Set<string>>(new Set());
   const failedMutationIdsRef = useRef<Set<string>>(new Set());
+  const terminalProposalByAckTokenRef = useRef<Map<string, {
+    status: "ready" | "applied" | "rejected" | "timed_out";
+    revisionId: string;
+    baseRevisionId?: string;
+    mutationId?: string;
+    settledAt: number;
+  }>>(new Map());
+  const ignoredLateTerminalEventsRef = useRef<Set<string>>(new Set());
   const inFlightProposalRef = useRef<{
     proposalId: string;
     ackToken: string;
@@ -239,6 +247,8 @@ function CodeArtifactHostImpl({
       setMountedSurface(artifact);
       appliedMutationIdsRef.current = new Set();
       failedMutationIdsRef.current = new Set();
+      terminalProposalByAckTokenRef.current = new Map();
+      ignoredLateTerminalEventsRef.current = new Set();
       inFlightProposalRef.current = null;
       readyRef.current = false;
       browserRevisionRef.current = artifact.revisionId;
@@ -409,6 +419,28 @@ function CodeArtifactHostImpl({
 
     if (!current || !ackToken || !proposalId || !revisionId) return;
 
+    const priorTerminal = terminalProposalByAckTokenRef.current.get(ackToken);
+    if (priorTerminal) {
+      const lateEventKey = `${ackToken}:${input.status}:${input.message.mutationId ?? "none"}`;
+      if (!ignoredLateTerminalEventsRef.current.has(lateEventKey)) {
+        ignoredLateTerminalEventsRef.current.add(lateEventKey);
+        onLifecycleEvent({
+          name: "revision.received",
+          artifactId: current.artifactId,
+          revisionId,
+          ackToken,
+          proposalId,
+          mutationId: input.message.mutationId ?? inFlight?.mutationId,
+          browserRevisionId: input.browserRevisionId ?? input.message.browserRevisionId ?? browserRevisionRef.current,
+          detail: priorTerminal.status === "timed_out"
+            ? `Ignored a late ${input.status} receipt after proposal ${proposalId} had already timed out and been rolled back.`
+            : `Ignored a duplicate terminal ${input.status} receipt for proposal ${proposalId}.`,
+          timestamp: Date.now(),
+        });
+      }
+      return;
+    }
+
     // Applied events must be emitted by the exact candidate revision currently
     // mounted. Rejected events are different: the runtime atomically rolls the
     // DOM back before posting its terminal receipt, so the browser revision is
@@ -462,6 +494,18 @@ function CodeArtifactHostImpl({
       snapshot: input.message.snapshot,
       acknowledgedAt: new Date().toISOString(),
     };
+
+    terminalProposalByAckTokenRef.current.set(acknowledgement.ackToken, {
+      status: acknowledgement.status,
+      revisionId: acknowledgement.revisionId,
+      baseRevisionId: acknowledgement.baseRevisionId,
+      mutationId: acknowledgement.mutationId,
+      settledAt: Date.now(),
+    });
+    if (terminalProposalByAckTokenRef.current.size > 120) {
+      const oldestToken = terminalProposalByAckTokenRef.current.keys().next().value;
+      if (oldestToken) terminalProposalByAckTokenRef.current.delete(oldestToken);
+    }
 
     // Broadcast is ephemeral. Retain the exact idempotent terminal message until
     // React receives the committed package and clears this proposal token.
@@ -549,6 +593,24 @@ function CodeArtifactHostImpl({
       const proposalAge = now - (proposal.receivedAt ?? proposal.lastDispatchedAt);
       if (proposal.dispatchAttempts >= NORTHSTAR_HEALTH_POLICY.acknowledgement.maxDispatchAttempts ||
         proposalAge > NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs) {
+        terminalProposalByAckTokenRef.current.set(proposal.ackToken, {
+          status: "timed_out",
+          revisionId: proposal.revisionId,
+          baseRevisionId: proposal.baseRevisionId,
+          mutationId: proposal.mutationId,
+          settledAt: now,
+        });
+        frameRef.current?.contentWindow?.postMessage({
+          type: "northstar.artifact.cancel-mutation",
+          artifactId: current.artifactId,
+          surfaceId: current.surfaceId ?? current.artifactId,
+          revisionId: proposal.revisionId,
+          baseRevisionId: proposal.baseRevisionId,
+          proposalId: proposal.proposalId,
+          ackToken: proposal.ackToken,
+          mutationId: proposal.mutationId,
+          reason: "HOST_TERMINAL_TIMEOUT",
+        }, "*");
         onLifecycleEvent({
           name: "revision.timed_out",
           artifactId: current.artifactId,
@@ -596,6 +658,45 @@ function CodeArtifactHostImpl({
       if (!isArtifactPointerMessage(event.data) || event.source !== frameRef.current?.contentWindow) return;
       const current = latestArtifactRef.current;
       if (!current || event.data.artifactId !== current.artifactId) return;
+
+      const terminalForEvent = event.data.ackToken
+        ? terminalProposalByAckTokenRef.current.get(event.data.ackToken)
+        : undefined;
+      if (
+        terminalForEvent?.status === "timed_out"
+        && (event.data.type === "northstar.artifact.mutation-applied"
+          || event.data.type === "northstar.artifact.mutation-rejected"
+          || event.data.type === "northstar.artifact.runtime-error")
+      ) {
+        const lateEventKey = `${event.data.ackToken}:${event.data.type}:${event.data.mutationId ?? "none"}`;
+        if (!ignoredLateTerminalEventsRef.current.has(lateEventKey)) {
+          ignoredLateTerminalEventsRef.current.add(lateEventKey);
+          onLifecycleEvent({
+            name: "revision.received",
+            artifactId: current.artifactId,
+            revisionId: event.data.revisionId ?? terminalForEvent.revisionId,
+            ackToken: event.data.ackToken,
+            proposalId: event.data.proposalId,
+            mutationId: event.data.mutationId,
+            browserRevisionId: event.data.browserRevisionId ?? browserRevisionRef.current,
+            detail: `Ignored ${event.data.type} because the exact proposal had already reached the strict timed-out terminal state.`,
+            timestamp: Date.now(),
+          });
+        }
+        frameRef.current?.contentWindow?.postMessage({
+          type: "northstar.artifact.cancel-mutation",
+          artifactId: current.artifactId,
+          surfaceId: current.surfaceId ?? current.artifactId,
+          revisionId: terminalForEvent.revisionId,
+          baseRevisionId: terminalForEvent.baseRevisionId,
+          ackToken: event.data.ackToken,
+          proposalId: event.data.proposalId,
+          mutationId: terminalForEvent.mutationId ?? event.data.mutationId,
+          reason: "LATE_TERMINAL_RECEIPT",
+        }, "*");
+        if (terminalForEvent.baseRevisionId) browserRevisionRef.current = terminalForEvent.baseRevisionId;
+        return;
+      }
 
       if (event.data.type === "northstar.artifact.ready") {
         for (const id of event.data.appliedMutationIds ?? []) appliedMutationIdsRef.current.add(id);

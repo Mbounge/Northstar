@@ -160,8 +160,13 @@ const MAX_COMPOSITION_CHECKPOINT_SCREENS = 180;
 const MAX_COMPOSITION_RESEARCH_ROUNDS = 3;
 const MAX_COMPOSITION_BLUEPRINT_REVISIONS = 3;
 const NORTHSTAR_MODEL_CALL_TIMEOUT_MS = 75_000;
-const NORTHSTAR_BROWSER_ACK_TIMEOUT_MS = 4_000;
-const NORTHSTAR_ACK_RECONCILIATION_MS = 500;
+// The browser runtime intentionally audits mutations for up to 8.1 seconds while
+// assets, fonts, layout, and spatial constraints settle. The server must never
+// declare the same proposal uncommitted before the browser's own terminal policy.
+// Keep this deadline beyond the host terminal timeout so one strict settlement
+// authority wins and late acknowledgements cannot race a queued restoration.
+const NORTHSTAR_BROWSER_ACK_TIMEOUT_MS = 32_000;
+const NORTHSTAR_ACK_RECONCILIATION_MS = 3_000;
 
 type ContextMode = "canvas" | "selection";
 type AgentMode = "direct" | "agent";
@@ -6188,6 +6193,7 @@ type CompositionResearchCallbacks = {
     ) => { accepted: boolean; issues: string[] },
   ) => boolean | Promise<boolean>;
   getLastMutationAck?: () => NorthstarArtifactMutationAcknowledgement | undefined;
+  getLastRejectedMutationAck?: () => NorthstarArtifactMutationAcknowledgement | undefined;
 };
 
 
@@ -6319,7 +6325,13 @@ function normalizeNorthstarRejectionFamily(reasonValue: unknown): string {
   }
   if (/did not visibly change enough semantic content/i.test(reason)) return "insufficient-semantic-change";
   if (/whole-artboard utilization failed|occupied only a thin strip/i.test(reason)) return "whole-artboard-utilization";
-  if (/protected evidence screenshot/i.test(reason)) return "protected-evidence-overlap";
+  if (/major analytical region overlapped|complete atomic reflow|analysis lane.*overlap|analytical region collision/i.test(reason)) {
+    return "analysis-lane-overlap";
+  }
+  if (/synthetic annotation overlapped|protected evidence screenshot/i.test(reason)) return "protected-evidence-overlap";
+  if (/candidate introduced new operational layout regressions|new overflowing element|new clipped text region|newly missing image|new internal scroll container|new spatial hard failure/i.test(reason)) {
+    return "operational-audit-regression";
+  }
   if (/unsafe edge-weighted|mostly empty layout/i.test(reason)) return "unsafe-layout-collapse";
   if (/duplicate semantic node id/i.test(reason)) return "duplicate-semantic-node";
   if (/required design move|did not satisfy.*(?:structure|hierarchy|relationship|synthesis|resolution)/i.test(reason)) {
@@ -6342,7 +6354,9 @@ function isExpectedNorthstarQualityRejection(
     "flow-topology",
     "insufficient-semantic-change",
     "whole-artboard-utilization",
+    "analysis-lane-overlap",
     "protected-evidence-overlap",
+    "operational-audit-regression",
     "unsafe-layout-collapse",
     "duplicate-semantic-node",
     "design-intent-mismatch",
@@ -7266,6 +7280,30 @@ async function buildGeneratedCodeArtifactPackage({
     const acknowledgement = input.acknowledgement;
     const review = acknowledgement?.review as unknown as Record<string, unknown> | undefined;
     const metric = (key: string): unknown => review?.[key];
+    const rejectionFamily = normalizeNorthstarRejectionFamily(
+      acknowledgement?.reason ?? input.browserIssues?.[0],
+    );
+    const geometryCorrection = rejectionFamily === "analysis-lane-overlap"
+      ? [
+          "Use the dedicated analysis lane in normal document flow; do not insert analytical blocks into occupied evidence or synthesis geometry.",
+          "Choose a different relationship mode or evidence pair if the prior composition was too dense, but keep the conclusion grounded.",
+        ]
+      : rejectionFamily === "protected-evidence-overlap"
+        ? [
+            "Keep annotations and analytical references outside protected screenshot bounds; reference evidence semantically rather than overlaying it.",
+            "Reduce density or choose a normal-flow analytical lane instead of absolute or synthetic overlay behavior.",
+          ]
+        : rejectionFamily === "insufficient-semantic-change"
+          ? [
+              "Change the composition archetype, focal treatment, or relationship mode—not only the copy.",
+              "Select a materially different evidence hierarchy and create a stronger dominant reading path.",
+            ]
+          : rejectionFamily === "operational-audit-regression"
+            ? [
+                "Preserve every operationally healthy property of the verified parent; the next candidate must not add clipping, internal scrolling, missing media, or spatial hard failures.",
+                "Reduce analytical density and use the existing normal-flow analysis lane with a simpler relationship composition.",
+              ]
+            : [];
     const critiquePacket = {
       obligation: input.prepared.contract.obligation,
       rejectedStrategy: {
@@ -7282,6 +7320,7 @@ async function buildGeneratedCodeArtifactPackage({
         operationKinds: input.prepared.draft.operations.map((operation) => operation.op),
       },
       browserResult: {
+        rejectionFamily,
         reason: acknowledgement?.reason,
         issues: input.browserIssues ?? [],
         changeKinds: acknowledgement?.changeKinds ?? [],
@@ -7302,6 +7341,7 @@ async function buildGeneratedCodeArtifactPackage({
         `Choose a materially different grounded evidence selection or editorial emphasis for ${input.prepared.contract.obligation}.`,
         "Return only evidence IDs, hierarchy choices, comparison language, and the viewer-facing conclusion; the typed presentation engine owns all executable operations.",
         "Use the exact canonical render and browser measurements as critique evidence. Do not repeat the same focal evidence ranking when it produced an insufficient delta.",
+        ...geometryCorrection,
         ...buildNorthstarCorrectionDirective({
           contract: input.prepared.contract,
           acknowledgement,
@@ -7328,6 +7368,44 @@ async function buildGeneratedCodeArtifactPackage({
     presentationAttemptsByObligation.set(obligation, attemptIndex);
 
     const descriptor = buildNorthstarEditableSurfaceDescriptor(canonicalBase);
+    const obligationRequiresGroundedGraph = new Set<NorthstarObligationKey>([
+      "evidence-hierarchy",
+      "hypothesis-tested",
+      "relationship-visible",
+      "synthesis",
+      "contextual-resolution",
+    ]).has(obligation);
+    const dataHasGroundedEvidence = canonicalBase.dataBundle.screenshots.length > 0;
+    const dataHasGroundedFlows = canonicalBase.dataBundle.flows.length > 0;
+    const graphHasGroundedEvidence = descriptor.evidenceNodes.length > 0;
+    const graphHasGroundedFlows = !dataHasGroundedFlows || descriptor.flowRegions.length > 0;
+    if (obligationRequiresGroundedGraph && (
+      !dataHasGroundedEvidence
+      || !graphHasGroundedEvidence
+      || !graphHasGroundedFlows
+    )) {
+      const detail = [
+        `Northstar cannot author ${obligation} because the committed presentation graph is incomplete.`,
+        `Committed revision: ${canonicalBase.revisionId}.`,
+        `Data bundle: ${canonicalBase.dataBundle.screenshots.length} screenshots and ${canonicalBase.dataBundle.flows.length} flows.`,
+        `Editable graph: ${descriptor.evidenceNodes.length} evidence nodes and ${descriptor.flowRegions.length} flow regions.`,
+        "The run stopped before invoking the design model so it could not invent targets against stale or missing evidence.",
+      ].join(" ");
+      callbacks.trace?.("design.context.invalid", {
+        obligation,
+        baseRevisionId: canonicalBase.revisionId,
+        dataScreenshotCount: canonicalBase.dataBundle.screenshots.length,
+        dataFlowCount: canonicalBase.dataBundle.flows.length,
+        editableEvidenceCount: descriptor.evidenceNodes.length,
+        editableFlowCount: descriptor.flowRegions.length,
+        code: "PRESENTATION_GRAPH_UNAVAILABLE",
+      }, detail);
+      throw new NorthstarBudgetExceededError(
+        "presentation-graph-unavailable",
+        1,
+        detail,
+      );
+    }
     const step = {
       id: `author-presentation-pass-${moveIndex + 1}-${obligation}`,
       label: `Design the next visible ${obligation} pass`,
@@ -7520,6 +7598,8 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
   };
 
   const maximumAuthorshipIterations = thinkingDepth === "high" ? 28 : thinkingDepth === "low" ? 16 : 22;
+  const preparationFailuresByContext = new Map<string, number>();
+  const maximumPreparationFailuresPerContext = 2;
   const rejectionCountsByObligation = new Map<string, number>();
   const maximumRejectionsPerObligationFamily = 4;
   const registerObligationRejection = (
@@ -7533,10 +7613,13 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
     const count = (rejectionCountsByObligation.get(key) ?? 0) + 1;
     rejectionCountsByObligation.set(key, count);
     if (count >= maximumRejectionsPerObligationFamily) {
+      const familyLabel = family === "operational-audit-regression"
+        ? "operational layout"
+        : family.replace(/-/g, " ");
       throw new NorthstarBudgetExceededError(
         `obligation-rejection:${key}`,
         maximumRejectionsPerObligationFamily,
-        `Required visual obligation ${obligation} remained unresolved after ${count} ${family} rejections. The verified horizontal artboard was preserved.`,
+        `Required visual obligation ${obligation} remained unresolved after ${count} ${familyLabel} rejection${count === 1 ? "" : "s"}. The verified horizontal artboard was preserved.`,
       );
     }
   };
@@ -7579,8 +7662,33 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
       } catch (error) {
         if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
         if (error instanceof NorthstarBudgetExceededError) throw error;
+        const preparationFailure = error instanceof Error ? error.message : String(error);
+        const normalizedFailure = preparationFailure
+          .toLowerCase()
+          .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, "#id")
+          .replace(/artifact-[a-z0-9-]+/g, "artifact-#")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 700);
+        const contextKey = `${canonical.revisionId}:${obligation}:${normalizedFailure}`;
+        const failureCount = (preparationFailuresByContext.get(contextKey) ?? 0) + 1;
+        preparationFailuresByContext.set(contextKey, failureCount);
+        callbacks.trace?.("design.preparation.stalled", {
+          obligation,
+          baseRevisionId: canonical.revisionId,
+          failureCount,
+          maximumPreparationFailuresPerContext,
+          normalizedFailure,
+        }, preparationFailure);
+        if (failureCount >= maximumPreparationFailuresPerContext) {
+          throw new NorthstarBudgetExceededError(
+            `design-preparation-stalled:${obligation}`,
+            maximumPreparationFailuresPerContext,
+            `Northstar stopped retrying ${obligation} because the committed revision and failure condition did not change after ${failureCount} attempts. ${preparationFailure}`,
+          );
+        }
         priorCritique = {
-          critique: error instanceof Error ? error.message : String(error),
+          critique: preparationFailure,
           requiredChanges: ["Continue the same open obligation from the exact browser-acknowledged scene with a materially different structural proposal."],
         };
         await delayWithSignal(350, signal);
@@ -7622,7 +7730,7 @@ ${priorCritique.requiredChanges.map((item) => `- ${item}`).join("\n")}` }] : [])
       },
     );
     if (!dispatched) {
-      const rejectedAck = callbacks.getLastMutationAck?.();
+      const rejectedAck = callbacks.getLastRejectedMutationAck?.() ?? callbacks.getLastMutationAck?.();
       rejectedMoveFingerprints.add(prepared.fingerprint);
       registerObligationRejection(prepared.contract.obligation, rejectedAck);
       authorship.advanceTransaction("rejected", candidate.revisionId);
@@ -10072,6 +10180,7 @@ export async function POST(request: NextRequest) {
         try {
           controller.enqueue(encodeSseEvent(event, normalizeNorthstarDisplayPayload(data)));
           if (event === "run.completed") runLifecycle.finish("complete");
+          if (event === "run.incomplete") runLifecycle.finish("incomplete");
           if (event === "run.blocked") runLifecycle.finish("blocked");
           if (event === "run.failed") runLifecycle.finish("failed");
           if (event === "run.cancelled") runLifecycle.finish("cancelled");
@@ -10944,6 +11053,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             let lastLiveArtifactPackage = preparedInitialLivePackage ?? selectedLivePackage;
             let lastLiveArtifactRevisionId = lastLiveArtifactPackage?.revisionId;
             let lastLiveMutationAck: NorthstarArtifactMutationAcknowledgement | undefined;
+            let lastLiveRejectedMutationAck: NorthstarArtifactMutationAcknowledgement | undefined;
             const liveArtboardActor = new NorthstarArtboardActor(lastLiveArtifactPackage);
             let liveArtifactDispatchQueue: Promise<boolean> = Promise.resolve(true);
             let researchVisualCheckpointQueue: Promise<void> = Promise.resolve();
@@ -10952,7 +11062,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             let liveQualityRejectionCount = 0;
             let lastLiveDispatchStartedAt = 0;
             const liveRejectionSignatures = new Map<string, number>();
-            const skippedLiveObligations = new Set<string>();
+            const rejectedLiveCandidateKeys = new Set<string>();
             const LIVE_MIN_COMMIT_INTERVAL_MS = 900;
 
             const normalizeLiveObligationKey = (label: string): string =>
@@ -11016,10 +11126,24 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               return { ok: true };
             };
 
-            const retainCommittedLiveArtboard = async (stageIndex: number): Promise<void> => {
+            const retainCommittedLiveArtboard = async (
+              stageIndex: number,
+              expectedCommittedRevisionId?: string,
+            ): Promise<boolean> => {
               const snapshot = liveArtboardActor.snapshot();
               if (!snapshot) {
                 throw new Error("Cannot retain the canonical artboard before a committed snapshot exists.");
+              }
+              if (expectedCommittedRevisionId && snapshot.revisionId !== expectedCommittedRevisionId) {
+                send("server.trace", {
+                  runId,
+                  traceId,
+                  name: "composition.visual.stale_restore_suppressed",
+                  expectedCommittedRevisionId,
+                  currentCommittedRevisionId: snapshot.revisionId,
+                  detail: "A queued restoration was discarded because a newer browser-verified revision had already become canonical.",
+                });
+                return false;
               }
               const committedSnapshot = withoutPendingNorthstarAckToken(snapshot);
               const restoreStep: PlannerStep = {
@@ -11058,9 +11182,22 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               // iframe runtime already rolls a rejected DOM transaction back
               // atomically, so requiring a second browser acknowledgement here
               // creates a circular failure and forces a visible remount.
+              const latestSnapshot = liveArtboardActor.snapshot();
+              if (!latestSnapshot || latestSnapshot.revisionId !== committedSnapshot.revisionId) {
+                send("server.trace", {
+                  runId,
+                  traceId,
+                  name: "composition.visual.stale_restore_suppressed",
+                  expectedCommittedRevisionId: committedSnapshot.revisionId,
+                  currentCommittedRevisionId: latestSnapshot?.revisionId,
+                  detail: "A restoration prepared from an older snapshot was discarded before dispatch.",
+                });
+                return false;
+              }
               send("canvas.action.requested", { runId, action: restoreAction });
               lastLiveArtifactPackage = committedSnapshot;
               lastLiveArtifactRevisionId = committedSnapshot.revisionId;
+              return true;
             };
 
             const dispatchLiveArtifactPackageInternal = async (
@@ -11074,20 +11211,6 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               ) => { accepted: boolean; issues: string[] },
             ): Promise<NorthstarVisualDispatchResult> => {
               const obligationKey = normalizeLiveObligationKey(label);
-              if (skippedLiveObligations.has(obligationKey)) {
-                send("server.trace", {
-                  runId,
-                  traceId,
-                  name: "composition.visual.obligation_already_skipped",
-                  obligationKey,
-                  detail: `Skipped another equivalent “${label}” proposal after the browser had already rejected that obligation.`,
-                });
-                return {
-                  status: "skipped",
-                  detail: `The equivalent visual obligation “${label}” was already rejected and will not be dispatched again in this run.`,
-                  recoverable: true,
-                };
-              }
 
               const elapsedSinceLastDispatch = Date.now() - lastLiveDispatchStartedAt;
               if (elapsedSinceLastDispatch < LIVE_MIN_COMMIT_INTERVAL_MS) {
@@ -11169,6 +11292,27 @@ The semantic intent gate requires grounded tool execution. You must return an ag
 
               const publishablePackage = proposal.candidate;
               const latestBatch = publishablePackage.mutationJournal?.at(-1);
+              const candidateKey = latestBatch
+                ? `${obligationKey}:${latestBatch.mutationId}`
+                : `${obligationKey}:${publishablePackage.revisionId}`;
+              if (rejectedLiveCandidateKeys.has(candidateKey)) {
+                liveArtboardActor.discard(proposal);
+                send("server.trace", {
+                  runId,
+                  traceId,
+                  name: "composition.visual.candidate_already_rejected",
+                  proposalId: proposal.proposalId,
+                  obligationKey,
+                  candidateKey,
+                  detail: `Skipped the exact previously rejected candidate for “${label}”; materially different candidates remain eligible.`,
+                });
+                return {
+                  status: "skipped",
+                  detail: `The exact candidate for “${label}” was already rejected. A different candidate may still be rendered.`,
+                  recoverable: true,
+                };
+              }
+              lastLiveRejectedMutationAck = undefined;
               const step: PlannerStep = {
                 id: `live-artifact-${proposal.proposalId}`,
                 label,
@@ -11294,7 +11438,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   const browserRejected = acknowledgement.status === "rejected";
                   const lineageRejected = isNorthstarLineageRejection(acknowledgement);
                   if (!browserRejected) lastLiveMutationAck = acknowledgement;
-                  await retainCommittedLiveArtboard(stageIndex);
+                  await retainCommittedLiveArtboard(stageIndex, proposal.baseRevisionId);
 
                   if (isNorthstarVerifiedNoop(acknowledgement)) {
                     const detail = acknowledgement.reason || "The proposed update was already represented by the verified artboard.";
@@ -11323,44 +11467,37 @@ The semantic intent gate requires grounded tool execution. You must return an ag
 
                   if (isExpectedNorthstarQualityRejection(acknowledgement)) {
                     liveQualityRejectionCount += 1;
-                    const detail = acknowledgement.reason || "The browser rejected a non-material visual change.";
-                    skippedLiveObligations.add(obligationKey);
+                    const detail = acknowledgement.reason || "The browser rejected the candidate visual change.";
+                    lastLiveRejectedMutationAck = acknowledgement;
+                    rejectedLiveCandidateKeys.add(candidateKey);
                     send("server.trace", {
                       runId,
                       traceId,
-                      name: "composition.visual.obligation_skipped",
+                      name: "composition.visual.candidate_rejected",
                       proposalId: proposal.proposalId,
                       obligationKey,
+                      candidateKey,
+                      rejectionFamily: normalizeNorthstarRejectionFamily(detail),
                       rejectionSignature,
                       attempts: repeatedCount,
                       detail,
                     });
-                    console.warn("Northstar skipped a browser-rejected visual obligation for the remainder of this run and continued from the last verified artboard.", {
+                    console.warn("Northstar rejected one browser candidate while keeping the visual obligation open for a materially different retry.", {
                       obligationKey,
+                      candidateKey,
                       rejectionSignature,
                       attempts: repeatedCount,
                       totalQualityRejections: liveQualityRejectionCount,
                     });
-                    if (activityStarted) {
-                      send("tool.completed", {
-                        runId,
-                        stepId: activityStepId,
-                        tool: "compose_visual_scene",
-                        detail: "The browser rejected this visual obligation; Northstar retained the last verified artboard and disabled equivalent proposals for this run.",
-                      });
-                      send("step.completed", {
-                        runId,
-                        stepId: activityStepId,
-                        detail: "The rejected visual obligation was skipped without retrying an equivalent proposal.",
-                        objectIds: [],
-                      });
-                    }
+                    retainVisualActivity(detail);
                     return {
-                      status: "skipped",
-                      detail: `Browser-rejected visual obligation skipped for this run. ${detail}`,
+                      status: "rejected",
+                      detail,
                       recoverable: true,
                     };
                   }
+                  lastLiveRejectedMutationAck = acknowledgement;
+                  rejectedLiveCandidateKeys.add(candidateKey);
                   if (lineageRejected) {
                     console.warn("Northstar detected revision divergence and will rebase the next transaction on the exact actor snapshot.", acknowledgement.reason);
                     const detail = acknowledgement.reason || "The browser reported revision divergence.";
@@ -11390,6 +11527,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 lastLiveArtifactPackage = committedPackage;
                 lastLiveArtifactRevisionId = committedPackage.revisionId;
                 lastLiveMutationAck = acknowledgement;
+                lastLiveRejectedMutationAck = undefined;
 
                 toolResults.push({
                   stepId: step.id,
@@ -11497,7 +11635,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 }
                 const internalDetail = error instanceof Error ? error.message : String(error);
                 try {
-                  await retainCommittedLiveArtboard(stageIndex);
+                  await retainCommittedLiveArtboard(stageIndex, proposal.baseRevisionId);
                 } catch (restoreError) {
                   console.warn("Northstar kept the actor snapshot after the outer speculative package could not be cleared.", restoreError);
                 }
@@ -11761,6 +11899,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               },
               getLastMutationAck() {
                 return liveArtboardActor.lastAcknowledgement() ?? lastLiveMutationAck;
+              },
+              getLastRejectedMutationAck() {
+                return lastLiveRejectedMutationAck;
               },
             };
 
@@ -12307,10 +12448,17 @@ ${error instanceof Error ? error.message : "The run ended before the current age
 
 ${error instanceof Error ? error.message : "The run could not be completed."}`;
           if (error instanceof NorthstarBudgetExceededError) {
-            send("run.blocked", {
+            sendServerTrace("request", "failed", traceStartedAt, {
+              outcome: "incomplete",
+              code: error.code,
+              error: safeMessage,
+            });
+            send("run.incomplete", {
               runId,
+              traceId,
               error: safeMessage,
               code: error.code,
+              terminal: true,
             });
             close();
             return;

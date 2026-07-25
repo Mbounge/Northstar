@@ -196,7 +196,7 @@ export function renderCanonicalFlowMarkup(bundle: CanvasCodeArtifactDataBundle, 
     .slice(0, 24);
   const images = screens.map((screen) => {
     const id = screenNodeId(flow, screen.id);
-    return `<figure data-ns-node-id="${id}" data-ns-evidence-id="${escapeHtml(screen.id)}"><img data-ns-node-id="${id}-image" src="${escapeHtml(screen.imageUrl ?? "")}" alt="${escapeHtml(screen.title)}"></figure>`;
+    return `<figure data-ns-node-id="${id}" data-ns-evidence-id="${escapeHtml(screen.id)}" data-ns-protected-evidence="true"><img data-ns-node-id="${id}-image" src="${escapeHtml(screen.imageUrl ?? "")}" alt="${escapeHtml(screen.title)}"></figure>`;
   }).join("");
   return `<section class="working-flow" data-ns-node-id="${nodeId}" data-ns-flow-id="${escapeHtml(key)}" data-ns-source-flow-id="${escapeHtml(flow.id)}" data-ns-stage="evidence"><div class="working-flow__identity" data-ns-node-id="${nodeId}-identity">${app?.iconUrl ? `<img data-ns-node-id="${nodeId}-icon" src="${escapeHtml(app.iconUrl)}" alt="${escapeHtml(flow.appName)} icon">` : ""}<div><strong data-ns-node-id="${nodeId}-app-name">${escapeHtml(flow.appName)}</strong><span data-ns-node-id="${nodeId}-flow-name">${escapeHtml(flow.flowName)}</span></div></div><div class="working-flow__sequence" data-ns-node-id="${nodeId}-sequence">${images || `<p class="working-empty" data-ns-node-id="${nodeId}-empty">Grounded screens are arriving.</p>`}</div></section>`;
 }

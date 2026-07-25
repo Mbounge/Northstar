@@ -17004,38 +17004,85 @@ function canvasActionLifecycleIdentity(action: CanvasAIActionRequest): CanvasAct
   return { proposalId, revisionId, baseRevisionId, mutationId, ackToken };
 }
 
+type CanvasRestoreRevisionIdentity = {
+  artifactId: string;
+  revisionId: string;
+};
+
+function canvasRestoreRevisionIdentity(action: CanvasAIActionRequest): CanvasRestoreRevisionIdentity | null {
+  if (
+    !action.stepId.startsWith("restore-verified-artboard-")
+    && !action.stepId.startsWith("rollback-live-artifact-")
+  ) return null;
+  try {
+    const rawComposition = action.arguments?.compositionJson;
+    const parsed = typeof rawComposition === "string" ? JSON.parse(rawComposition) : rawComposition;
+    const packageValue = parsed && typeof parsed === "object" && "package" in parsed
+      ? (parsed as { package?: { artifactId?: unknown; revisionId?: unknown } }).package
+      : undefined;
+    if (typeof packageValue?.artifactId !== "string" || typeof packageValue?.revisionId !== "string") return null;
+    return { artifactId: packageValue.artifactId, revisionId: packageValue.revisionId };
+  } catch {
+    return null;
+  }
+}
+
+function latestAcknowledgedRevisionForRun(
+  runId: string,
+  artifactId: string,
+): NorthstarArtifactLifecycleEvent | undefined {
+  return [...(artifactLifecycleByRunRef.current.get(runId)?.values() ?? [])]
+    .filter((event) => event.name === "revision.acknowledged" && event.artifactId === artifactId)
+    .sort((left, right) => right.timestamp - left.timestamp)[0];
+}
+
 async function waitForCanvasActionLifecycleSettlement(
   runId: string,
   identity: CanvasActionLifecycleIdentity,
   timeoutMs: number,
 ): Promise<CanvasActionLifecycleSettlement> {
   const deadline = Date.now() + timeoutMs;
+  const reportedMalformedEvents = new Set<string>();
   while (Date.now() < deadline) {
     if (activeArtifactLifecycleRunId !== runId) return { kind: "cancelled" };
     const proposalEvents = [...(artifactLifecycleByRunRef.current.get(runId)?.values() ?? [])]
       .filter((candidate) => candidate.proposalId === identity.proposalId)
+      .filter((candidate) =>
+        candidate.name === "revision.acknowledged"
+        || candidate.name === "revision.rejected"
+        || candidate.name === "revision.timed_out"
+        || candidate.name === "ack.delivery_failed"
+      )
       .sort((left, right) => right.timestamp - left.timestamp);
-    const event = proposalEvents.find((candidate) =>
-      candidate.name === "revision.acknowledged" ||
-      candidate.name === "revision.rejected" ||
-      candidate.name === "revision.timed_out" ||
-      candidate.name === "ack.delivery_failed"
-    );
-    if (event) {
-      const browserRevisionMatches = event.name === "revision.rejected"
+
+    let exactEvent: NorthstarArtifactLifecycleEvent | undefined;
+    for (const candidate of proposalEvents) {
+      const browserRevisionMatches = candidate.name === "revision.rejected"
         ? Boolean(
             !identity.revisionId
-            || event.browserRevisionId === identity.revisionId
-            || (identity.baseRevisionId && event.browserRevisionId === identity.baseRevisionId),
+            || candidate.browserRevisionId === identity.revisionId
+            || (identity.baseRevisionId && candidate.browserRevisionId === identity.baseRevisionId),
           )
-        : Boolean(!identity.revisionId || event.browserRevisionId === identity.revisionId);
+        : candidate.name === "revision.timed_out" || candidate.name === "ack.delivery_failed"
+          ? Boolean(
+              !identity.revisionId
+              || candidate.browserRevisionId === identity.revisionId
+              || (identity.baseRevisionId && candidate.browserRevisionId === identity.baseRevisionId),
+            )
+          : Boolean(!identity.revisionId || candidate.browserRevisionId === identity.revisionId);
       const mismatches = [
-        identity.revisionId && event.revisionId !== identity.revisionId ? `revision ${event.revisionId ?? "missing"} != ${identity.revisionId}` : "",
-        identity.mutationId && event.mutationId !== identity.mutationId ? `mutation ${event.mutationId ?? "missing"} != ${identity.mutationId}` : "",
-        identity.ackToken && event.ackToken !== identity.ackToken ? `ack token ${event.ackToken ?? "missing"} != ${identity.ackToken}` : "",
-        !browserRevisionMatches ? `browser revision ${event.browserRevisionId ?? "missing"} is neither candidate ${identity.revisionId ?? "unknown"} nor rollback base ${identity.baseRevisionId ?? "unknown"}` : "",
+        identity.revisionId && candidate.revisionId !== identity.revisionId ? `revision ${candidate.revisionId ?? "missing"} != ${identity.revisionId}` : "",
+        identity.mutationId && candidate.mutationId !== identity.mutationId ? `mutation ${candidate.mutationId ?? "missing"} != ${identity.mutationId}` : "",
+        identity.ackToken && candidate.ackToken !== identity.ackToken ? `ack token ${candidate.ackToken ?? "missing"} != ${identity.ackToken}` : "",
+        !browserRevisionMatches ? `browser revision ${candidate.browserRevisionId ?? "missing"} is neither candidate ${identity.revisionId ?? "unknown"} nor rollback base ${identity.baseRevisionId ?? "unknown"}` : "",
       ].filter(Boolean);
-      if (mismatches.length) {
+      if (!mismatches.length) {
+        exactEvent = candidate;
+        break;
+      }
+      const malformedKey = `${candidate.name}:${candidate.timestamp}:${mismatches.join("|")}`;
+      if (!reportedMalformedEvents.has(malformedKey)) {
+        reportedMalformedEvents.add(malformedKey);
         recordCanvasDiagnostic({
           phase: "runtime",
           name: "settlement.identity_mismatch",
@@ -17044,27 +17091,20 @@ async function waitForCanvasActionLifecycleSettlement(
           data: {
             proposalId: identity.proposalId,
             expectedRevisionId: identity.revisionId,
-            actualRevisionId: event.revisionId,
-            browserRevisionId: event.browserRevisionId,
+            actualRevisionId: candidate.revisionId,
+            browserRevisionId: candidate.browserRevisionId,
             expectedMutationId: identity.mutationId,
-            actualMutationId: event.mutationId,
-            eventName: event.name,
+            actualMutationId: candidate.mutationId,
+            eventName: candidate.name,
           },
         });
-        return {
-          kind: "rejected",
-          event: {
-            ...event,
-            name: "revision.rejected",
-            detail: `The artifact runtime returned a terminal event with a mismatched revision envelope: ${mismatches.join("; ")}.`,
-          },
-        };
       }
     }
-    if (event?.name === "revision.acknowledged") return { kind: "acknowledged", event };
-    if (event?.name === "revision.rejected") return { kind: "rejected", event };
-    if (event?.name === "revision.timed_out" || event?.name === "ack.delivery_failed") {
-      return { kind: "timed_out", event };
+
+    if (exactEvent?.name === "revision.acknowledged") return { kind: "acknowledged", event: exactEvent };
+    if (exactEvent?.name === "revision.rejected") return { kind: "rejected", event: exactEvent };
+    if (exactEvent?.name === "revision.timed_out" || exactEvent?.name === "ack.delivery_failed") {
+      return { kind: "timed_out", event: exactEvent };
     }
     await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
   }
@@ -18042,6 +18082,15 @@ function ChatWorkspacePanel({
               const blockedByCriticalFailure = Boolean(criticalFailure && isDownstreamPresentationAction);
               const idempotencyKey = `${runId}:${action.actionId}`;
               const priorOutcome = actionOutcomeByIdempotencyKeyRef.current.get(idempotencyKey);
+              const restoreIdentity = canvasRestoreRevisionIdentity(action);
+              const latestAcknowledgedRevision = restoreIdentity
+                ? latestAcknowledgedRevisionForRun(runId, restoreIdentity.artifactId)
+                : undefined;
+              const staleRestore = Boolean(
+                restoreIdentity
+                && latestAcknowledgedRevision
+                && latestAcknowledgedRevision.revisionId !== restoreIdentity.revisionId,
+              );
               let rawResult: CanvasAIActionExecutionResult;
 
               if (priorOutcome) {
@@ -18069,6 +18118,27 @@ function ChatWorkspacePanel({
                   detail: "The action belonged to a run that is no longer active and was not executed.",
                   objectIds: [],
                 };
+              } else if (staleRestore && restoreIdentity && latestAcknowledgedRevision) {
+                rawResult = {
+                  ok: true,
+                  status: "superseded",
+                  reasonCode: "STALE_RESTORE_SUPPRESSED",
+                  detail: `A queued restoration for ${restoreIdentity.revisionId} was suppressed because ${latestAcknowledgedRevision.revisionId} is already browser-verified.`,
+                  objectIds: [],
+                };
+                recordCanvasDiagnostic({
+                  phase: "runtime",
+                  name: "revision.stale_restore_suppressed",
+                  runId,
+                  actionId: action.actionId,
+                  stepId: action.stepId,
+                  detail: rawResult.detail,
+                  data: {
+                    artifactId: restoreIdentity.artifactId,
+                    restoreRevisionId: restoreIdentity.revisionId,
+                    latestAcknowledgedRevisionId: latestAcknowledgedRevision.revisionId,
+                  },
+                });
               } else if (blockedByCriticalFailure) {
                 rawResult = {
                   ok: false,
@@ -18357,6 +18427,41 @@ function ChatWorkspacePanel({
             });
           }
           updateAssistantMessage({ runStatus: "failed" });
+          return;
+        }
+
+        if (eventName === "run.incomplete") {
+          const incompleteRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          terminalBlockMessage = typeof payload.error === "string"
+            ? payload.error
+            : "North Star stopped at the last verified artboard before every required visual obligation was resolved.";
+          receivedFinal = true;
+          if (incompleteRunId && !getCanvasDiagnostics().some((event) => event.runId === incompleteRunId && event.name === "run.incomplete")) {
+            recordCanvasDiagnostic({
+              phase: "run",
+              name: "run.incomplete",
+              runId: incompleteRunId,
+              detail: terminalBlockMessage,
+              data: {
+                terminal: true,
+                code: typeof payload.code === "string" ? payload.code : undefined,
+              },
+            });
+          }
+          updateAssistantMessage((current) => ({
+            content: terminalBlockMessage || current.content,
+            references: [],
+            suggestedActions: [],
+            showSuggestedActions: false,
+            runStatus: "blocked",
+            streaming: false,
+            error: true,
+            activity: (current.activity ?? []).map((item) =>
+              item.status === "pending" || item.status === "running"
+                ? { ...item, status: "cancelled" as const }
+                : item
+            ),
+          }));
           return;
         }
 
@@ -18698,6 +18803,13 @@ function ChatWorkspacePanel({
       runId: recoverableRun.runId,
       detail: "The interrupted run was resumed from the last verified canvas state.",
     });
+    recordCanvasDiagnostic({
+      phase: "run",
+      name: "run.cancelled",
+      runId: recoverableRun.runId,
+      detail: "The interrupted execution was superseded by a new resumed run from its verified checkpoint.",
+      data: { terminal: true, recoveryDisposition: "resumed" },
+    });
     setRecoverableRun(null);
     void sendMessage(prompt);
   }, [loading, recoverableRun]);
@@ -18711,6 +18823,15 @@ function ChatWorkspacePanel({
       runId,
       detail: "The interrupted run recovery journal was discarded while preserving the verified canvas snapshot.",
     });
+    if (runId) {
+      recordCanvasDiagnostic({
+        phase: "run",
+        name: "run.cancelled",
+        runId,
+        detail: "The interrupted execution was explicitly discarded; its verified canvas snapshot was preserved.",
+        data: { terminal: true, recoveryDisposition: "discarded" },
+      });
+    }
   }, [persistRunRecovery, recoverableRun?.runId]);
 
   const starterPrompts = hasSelection

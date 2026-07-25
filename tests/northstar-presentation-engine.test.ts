@@ -94,7 +94,7 @@ const dataBundle: CanvasCodeArtifactDataBundle = {
 
 function flowMarkup(flow: CanvasCodeArtifactFlowData): string {
   const flowId = canonicalFlowNodeId(flow);
-  return `<section data-ns-node-id="${flowId}"><div data-ns-node-id="${flowId}-sequence">${flow.screenshotIds.map((evidenceId) => `<article data-ns-node-id="${flowId}-screen-${evidenceId}" data-ns-evidence-id="${evidenceId}" data-ns-evidence-role="unresolved"><img src="https://example.com/${evidenceId}.png"/></article>`).join("")}</div></section>`;
+  return `<section data-ns-node-id="${flowId}"><div data-ns-node-id="${flowId}-sequence">${flow.screenshotIds.map((evidenceId) => `<article data-ns-node-id="${flowId}-screen-${evidenceId}" data-ns-evidence-id="${evidenceId}" data-ns-protected-evidence="true" data-ns-evidence-role="unresolved"><img src="https://example.com/${evidenceId}.png"/></article>`).join("")}</div></section>`;
 }
 
 const artifact: NorthstarGeneratedCodeArtifactPackage = {
@@ -176,4 +176,63 @@ test("canonical-artboard CSS safety checks only reject rules that directly hide 
   assert.equal(northstarCssHidesCanonicalArtboard('.ns-artifact{display:none!important}'), true);
   assert.equal(northstarCssHidesCanonicalArtboard('.canvas-shell .ns-artifact{display:none!important}'), true);
   assert.equal(northstarCssHidesCanonicalArtboard('[data-ns-node-id="artboard"]{visibility:hidden}'), true);
+});
+
+
+test("presentation v2 allocates a dedicated analysis lane and never marks analytical references as protected evidence", () => {
+  const descriptor = buildNorthstarEditableSurfaceDescriptor(artifact);
+  const relationshipDecision = buildNorthstarFallbackPresentationDecision({
+    obligation: "relationship-visible",
+    descriptor,
+    bundle: dataBundle,
+    variant: 0,
+  });
+  const relationship = compileNorthstarPresentationPass({ artifact, descriptor, decision: relationshipDecision });
+  const insertedHtml = relationship.draft.operations
+    .filter((operation) => operation.op === "insert-html")
+    .map((operation) => "html" in operation ? operation.html : "")
+    .join("\n");
+  assert.ok(insertedHtml.includes('data-ns-node-id="analysis-lane"'));
+  assert.ok(insertedHtml.includes("ns-relationship-block"));
+  assert.ok(insertedHtml.includes("data-ns-evidence-ref="));
+  assert.equal(insertedHtml.includes("data-ns-protected-evidence"), false);
+  assert.equal(insertedHtml.includes("data-ns-evidence-id="), false);
+  assert.ok(relationship.draft.operations.some((operation) =>
+    operation.op === "insert-html" && operation.targetId === "analysis-lane"
+  ));
+});
+
+test("presentation variants rotate composition archetype, focal treatment, and relationship mode", () => {
+  const descriptor = buildNorthstarEditableSurfaceDescriptor(artifact);
+  const first = buildNorthstarFallbackPresentationDecision({ obligation: "relationship-visible", descriptor, bundle: dataBundle, variant: 0 });
+  const second = buildNorthstarFallbackPresentationDecision({ obligation: "relationship-visible", descriptor, bundle: dataBundle, variant: 1 });
+  assert.notEqual(first.archetype, second.archetype);
+  assert.notEqual(first.focalTreatment, second.focalTreatment);
+  assert.notEqual(first.relationshipMode, second.relationshipMode);
+});
+
+test("evidence hierarchy uses layout-affecting sizing instead of transform scaling", () => {
+  const descriptor = buildNorthstarEditableSurfaceDescriptor(artifact);
+  const decision = buildNorthstarFallbackPresentationDecision({ obligation: "evidence-hierarchy", descriptor, bundle: dataBundle, variant: 0 });
+  const compiled = compileNorthstarPresentationPass({ artifact, descriptor, decision });
+  const css = compiled.draft.operations
+    .filter((operation) => operation.op === "set-css-layer")
+    .map((operation) => "css" in operation ? operation.css : "")
+    .join("\n");
+  assert.ok(css.includes("flex:0 0"));
+  assert.ok(css.includes("transform:none"));
+  assert.equal(/transform\s*:\s*scale\(/.test(css), false);
+});
+
+test("final geometry pass includes analytical regions in collision-safe normal flow", () => {
+  const descriptor = buildNorthstarEditableSurfaceDescriptor(artifact);
+  const decision = buildNorthstarFallbackPresentationDecision({ obligation: "geometry", descriptor, bundle: dataBundle, variant: 0 });
+  const compiled = compileNorthstarPresentationPass({ artifact, descriptor, decision });
+  const css = compiled.draft.operations
+    .filter((operation) => operation.op === "set-css-layer")
+    .map((operation) => "css" in operation ? operation.css : "")
+    .join("\n");
+  assert.ok(css.includes('data-ns-node-id="analysis-lane"'));
+  assert.ok(css.includes("ns-relationship-block"));
+  assert.ok(css.includes("contain:layout style"));
 });
