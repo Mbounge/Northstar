@@ -142,8 +142,19 @@ export function materializeCommittedEvidenceState(input: {
 
   for (const entry of input.mutationJournal ?? []) {
     for (const operation of entry.operations) {
-      if (operation.op === "insert-html") {
+      if (operation.op === "insert-html" || operation.op === "recompose-region") {
         for (const identity of inspectRenderedFlowIdentities(operation.html)) put(identity);
+        if (operation.op === "recompose-region") {
+          for (const retiredId of operation.retireNodeIds ?? []) {
+            flowsByNodeId.delete(retiredId);
+            const index = order.indexOf(retiredId);
+            if (index >= 0) order.splice(index, 1);
+          }
+          for (const placement of operation.placements) {
+            const existing = flowsByNodeId.get(placement.targetId);
+            if (existing) put(existing, placement.beforeId);
+          }
+        }
         continue;
       }
       if (operation.op === "remove") {

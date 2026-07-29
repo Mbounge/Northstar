@@ -1,4 +1,4 @@
-// Northstar Artboard Mutation Engine v0.4.8 — safe incremental edits on one persistent live surface.
+// Northstar Artboard Mutation Engine v0.6.0 — safe atomic edits plus deterministic typed primitive realization.
 import { createHash } from "node:crypto";
 import {
   NORTHSTAR_ARTBOARD_MUTATION_SCHEMA,
@@ -6,7 +6,12 @@ import {
   type NorthstarArtboardGeometryIntent,
   type NorthstarArtboardMutationBatch,
   type NorthstarArtboardMutationOperation,
+  type NorthstarConstructionBeat,
+  type NorthstarConstructionBeatKind,
+  type NorthstarConstructionPlan,
   type NorthstarGeneratedCodeArtifactPackage,
+  type NorthstarRequiredPrimitive,
+  type NorthstarRequiredPrimitiveKind,
 } from "@/lib/canvas-artifacts/types";
 
 export interface NorthstarArtboardMutationDraft {
@@ -17,6 +22,10 @@ export interface NorthstarArtboardMutationDraft {
   geometryIntent: NorthstarArtboardGeometryIntent;
   transitionMs: number;
   operations: NorthstarArtboardMutationOperation[];
+  requiredPrimitives?: NorthstarRequiredPrimitive[];
+  constructionPlan?: NorthstarConstructionPlan;
+  /** Full authored DesignAct intention used only for deterministic promise fidelity checks. */
+  authoredIntention?: string;
 }
 
 const MUTATION_PHASES: Array<Exclude<CanvasCodeArtifactBuildPhase, "complete">> = [
@@ -41,6 +50,28 @@ const FORBIDDEN_HTML = /<(?:script|iframe|object|embed|link|meta|base|form|input
 const FORBIDDEN_CSS = /@import|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|url\s*\(/i;
 const FORBIDDEN_STYLE_NAME = /^(?:behavior|-moz-binding)$/i;
 const FORBIDDEN_ATTRIBUTE = /^(?:on[a-z]+|srcdoc|formaction|action|target)$/i;
+const REQUIRED_PRIMITIVE_KINDS: NorthstarRequiredPrimitiveKind[] = [
+  "frame",
+  "evidence-lane",
+  "chart",
+  "sparkline",
+  "axis",
+  "annotation",
+  "relationship",
+  "synthesis",
+  "decision",
+];
+const CONSTRUCTION_BEAT_KINDS: NorthstarConstructionBeatKind[] = [
+  "establish-frame",
+  "open-layout",
+  "choreograph-evidence",
+  "draw-analysis",
+  "anchor-annotations",
+  "route-relationships",
+  "reveal-synthesis",
+  "resolve-decision",
+  "settle",
+];
 
 export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
   type: "object",
@@ -162,6 +193,16 @@ export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
             type: "object",
             additionalProperties: false,
             properties: {
+              op: { type: "string", enum: ["set-runtime-module"] },
+              moduleId: { type: "string", minLength: 1, maxLength: 80 },
+              javascript: { type: "string", maxLength: 80000 },
+            },
+            required: ["op", "moduleId", "javascript"],
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: {
               op: { type: "string", enum: ["request-space"] },
               left: { type: "number", minimum: 0, maximum: 12000 },
               top: { type: "number", minimum: 0, maximum: 12000 },
@@ -172,6 +213,91 @@ export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
           },
         ],
       },
+    },
+    requiredPrimitives: {
+      type: "array",
+      maxItems: 24,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 120 },
+          kind: { type: "string", enum: REQUIRED_PRIMITIVE_KINDS },
+          minimumInstances: { type: "integer", minimum: 1, maximum: 12 },
+          criticality: { type: "string", enum: ["essential", "optional"] },
+          instanceNodeIds: { type: "array", maxItems: 24, items: { type: "string", minLength: 1, maxLength: 120 } },
+          nodeIds: { type: "array", maxItems: 24, items: { type: "string", minLength: 1, maxLength: 120 } },
+          memberNodeIds: { type: "array", maxItems: 48, items: { type: "string", minLength: 1, maxLength: 120 } },
+          anchorNodeIds: { type: "array", maxItems: 24, items: { type: "string", minLength: 1, maxLength: 120 } },
+          sourceNodeIds: { type: "array", maxItems: 24, items: { type: "string", minLength: 1, maxLength: 120 } },
+          targetNodeIds: { type: "array", maxItems: 24, items: { type: "string", minLength: 1, maxLength: 120 } },
+          parentNodeId: { type: "string", minLength: 1, maxLength: 120 },
+          placement: {
+            type: "string",
+            enum: ["frame", "beneath-flow", "between-sections", "anchored-margin", "routed-overlay", "synthesis", "decision"],
+          },
+          label: { type: "string", maxLength: 180 },
+          text: { type: "string", maxLength: 1200 },
+          description: { type: "string", maxLength: 500 },
+          encoding: { type: "string", enum: ["qualitative", "quantitative"] },
+          valuesGrounded: { type: "boolean" },
+          unit: { type: "string", maxLength: 80 },
+          dataPoints: {
+            type: "array",
+            maxItems: 24,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                sourceNodeId: { type: "string", minLength: 1, maxLength: 120 },
+                label: { type: "string", minLength: 1, maxLength: 180 },
+                value: { type: "number" },
+                qualitativeLevel: { type: "string", enum: ["low", "medium", "high"] },
+              },
+              required: ["sourceNodeId", "label"],
+            },
+          },
+          relationshipType: { type: "string", maxLength: 120 },
+          route: { type: "string", enum: ["straight", "elbow", "soft-curve"] },
+          confidence: { type: "string", enum: ["observed", "interpretive"] },
+          priority: { type: "string", enum: ["low", "normal", "high"] },
+        },
+        required: ["id", "kind", "minimumInstances"],
+      },
+    },
+    constructionPlan: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        version: { type: "string", enum: ["northstar.live-visual-authorship.v2"] },
+        mode: { type: "string", enum: ["cinematic", "compact"] },
+        showBeatLabels: { type: "boolean" },
+        coverageNodeIds: { type: "array", maxItems: 320, items: { type: "string", minLength: 1, maxLength: 120 } },
+        strictCoverage: { type: "boolean" },
+        totalDurationMs: { type: "integer", minimum: 600, maximum: 20000 },
+        deadlineMs: { type: "integer", minimum: 1200, maximum: 26000 },
+        beats: {
+          type: "array",
+          minItems: 1,
+          maxItems: 18,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              id: { type: "string", minLength: 1, maxLength: 120 },
+              kind: { type: "string", enum: CONSTRUCTION_BEAT_KINDS },
+              label: { type: "string", minLength: 1, maxLength: 180 },
+              nodeIds: { type: "array", maxItems: 160, items: { type: "string", minLength: 1, maxLength: 120 } },
+              durationMs: { type: "integer", minimum: 180, maximum: 2200 },
+              staggerMs: { type: "integer", minimum: 0, maximum: 240 },
+              holdMs: { type: "integer", minimum: 0, maximum: 1200 },
+              emphasis: { type: "string", enum: ["quiet", "normal", "hero"] },
+            },
+            required: ["id", "kind", "label", "nodeIds", "durationMs", "staggerMs", "holdMs", "emphasis"],
+          },
+        },
+      },
+      required: ["version", "mode", "beats", "showBeatLabels"],
     },
   },
   required: [
@@ -197,6 +323,133 @@ function cleanId(value: unknown): string {
   const id = typeof value === "string" ? value.trim() : "";
   if (!TARGET_ID_PATTERN.test(id)) throw new Error(`Invalid semantic node id: ${id || "(empty)"}.`);
   return id;
+}
+
+function cleanOptionalIds(value: unknown, maximum = 24): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value
+    .map((entry) => typeof entry === "string" ? entry.trim() : "")
+    .filter((entry) => TARGET_ID_PATTERN.test(entry))))
+    .slice(0, maximum);
+}
+
+function cleanOptionalId(value: unknown): string | undefined {
+  const candidate = typeof value === "string" ? value.trim() : "";
+  return TARGET_ID_PATTERN.test(candidate) ? candidate : undefined;
+}
+
+function sanitizePrimitiveDataPoints(value: unknown): NonNullable<NorthstarRequiredPrimitive["dataPoints"]> {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 24).flatMap((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const row = raw as { sourceNodeId?: unknown; label?: unknown; value?: unknown; qualitativeLevel?: unknown };
+    const sourceNodeId = cleanOptionalId(row.sourceNodeId);
+    const label = cleanText(row.label, 180);
+    if (!sourceNodeId || !label) return [];
+    const numericValue = typeof row.value === "number" ? row.value : Number.NaN;
+    const qualitativeLevel = ["low", "medium", "high"].includes(String(row.qualitativeLevel))
+      ? row.qualitativeLevel as "low" | "medium" | "high"
+      : undefined;
+    return [{
+      sourceNodeId,
+      label,
+      value: Number.isFinite(numericValue) ? numericValue : undefined,
+      qualitativeLevel,
+    }];
+  });
+}
+
+function sanitizeRequiredPrimitives(value: unknown): NorthstarRequiredPrimitive[] {
+  if (!Array.isArray(value)) return [];
+  const result: NorthstarRequiredPrimitive[] = [];
+  const seen = new Set<string>();
+  for (const raw of value.slice(0, 24)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const row = raw as Partial<NorthstarRequiredPrimitive>;
+    const id = typeof row.id === "string" && TARGET_ID_PATTERN.test(row.id.trim()) ? row.id.trim() : "";
+    const kind = REQUIRED_PRIMITIVE_KINDS.includes(row.kind as NorthstarRequiredPrimitiveKind)
+      ? row.kind as NorthstarRequiredPrimitiveKind
+      : undefined;
+    if (!id || !kind || seen.has(id)) continue;
+    seen.add(id);
+    const placement = ["frame", "beneath-flow", "between-sections", "anchored-margin", "routed-overlay", "synthesis", "decision"].includes(String(row.placement))
+      ? row.placement
+      : undefined;
+    const route = ["straight", "elbow", "soft-curve"].includes(String(row.route)) ? row.route : undefined;
+    const confidence = ["observed", "interpretive"].includes(String(row.confidence)) ? row.confidence : undefined;
+    const priority = ["low", "normal", "high"].includes(String(row.priority)) ? row.priority : undefined;
+    const encoding = ["qualitative", "quantitative"].includes(String(row.encoding)) ? row.encoding : undefined;
+    result.push({
+      id,
+      kind,
+      minimumInstances: Math.max(1, Math.min(12, Math.floor(Number(row.minimumInstances) || 1))),
+      criticality: row.criticality === "essential" ? "essential" : "optional",
+      instanceNodeIds: cleanOptionalIds(row.instanceNodeIds),
+      nodeIds: cleanOptionalIds(row.nodeIds),
+      memberNodeIds: cleanOptionalIds(row.memberNodeIds, 48),
+      anchorNodeIds: cleanOptionalIds(row.anchorNodeIds),
+      sourceNodeIds: cleanOptionalIds(row.sourceNodeIds),
+      targetNodeIds: cleanOptionalIds(row.targetNodeIds),
+      parentNodeId: cleanOptionalId(row.parentNodeId),
+      placement,
+      label: cleanText(row.label, 180) || undefined,
+      text: cleanText(row.text, 1200) || undefined,
+      description: cleanText(row.description, 500) || undefined,
+      encoding,
+      valuesGrounded: row.valuesGrounded === true,
+      unit: cleanText(row.unit, 80) || undefined,
+      dataPoints: sanitizePrimitiveDataPoints(row.dataPoints),
+      relationshipType: cleanText(row.relationshipType, 120) || undefined,
+      route,
+      confidence,
+      priority,
+    });
+  }
+  return result;
+}
+
+function sanitizeConstructionBeat(raw: unknown, index: number): NorthstarConstructionBeat | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const row = raw as Partial<NorthstarConstructionBeat>;
+  const kind = CONSTRUCTION_BEAT_KINDS.includes(row.kind as NorthstarConstructionBeatKind)
+    ? row.kind as NorthstarConstructionBeatKind
+    : undefined;
+  if (!kind) return undefined;
+  const id = typeof row.id === "string" && TARGET_ID_PATTERN.test(row.id.trim())
+    ? row.id.trim()
+    : `beat-${index + 1}`;
+  return {
+    id,
+    kind,
+    label: cleanText(row.label, 180) || kind.replaceAll("-", " "),
+    nodeIds: cleanOptionalIds(row.nodeIds, 160),
+    durationMs: Math.max(180, Math.min(2200, Math.round(Number(row.durationMs) || 680))),
+    staggerMs: Math.max(0, Math.min(240, Math.round(Number(row.staggerMs) || 55))),
+    holdMs: Math.max(0, Math.min(1200, Math.round(Number(row.holdMs) || 120))),
+    emphasis: row.emphasis === "quiet" || row.emphasis === "hero" ? row.emphasis : "normal",
+  };
+}
+
+function sanitizeConstructionPlan(value: unknown): NorthstarConstructionPlan | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Partial<NorthstarConstructionPlan>;
+  const beats = (Array.isArray(row.beats) ? row.beats : [])
+    .slice(0, 18)
+    .map((beat, index) => sanitizeConstructionBeat(beat, index))
+    .filter((beat): beat is NorthstarConstructionBeat => Boolean(beat));
+  if (beats.length === 0) return undefined;
+  const computedTotal = beats.reduce((sum, beat) => sum + beat.durationMs + beat.holdMs + Math.max(0, beat.nodeIds.length - 1) * beat.staggerMs, 0);
+  const totalDurationMs = Math.max(600, Math.min(20_000, Math.round(Number(row.totalDurationMs) || computedTotal)));
+  return {
+    version: "northstar.live-visual-authorship.v2",
+    mode: row.mode === "compact" ? "compact" : "cinematic",
+    beats,
+    coverageNodeIds: cleanOptionalIds(row.coverageNodeIds, 320),
+    strictCoverage: row.strictCoverage !== false,
+    totalDurationMs,
+    deadlineMs: Math.max(totalDurationMs + 1_500, Math.min(26_000, Math.round(Number(row.deadlineMs) || totalDurationMs + 4_000))),
+    showBeatLabels: row.showBeatLabels !== false,
+  };
 }
 
 function cleanClassNames(value: unknown): string[] {
@@ -225,9 +478,47 @@ function cleanStringMap(value: unknown, kind: "attributes" | "styles"): Record<s
   return result;
 }
 
+
+const FORBIDDEN_RUNTIME_JAVASCRIPT: Array<[RegExp, string]> = [
+  [/\bfetch\s*\(/, "network access"],
+  [/\bXMLHttpRequest\b/, "XMLHttpRequest"],
+  [/\bWebSocket\b/, "WebSocket"],
+  [/\bEventSource\b/, "EventSource"],
+  [/\blocalStorage\b|\bsessionStorage\b|\bindexedDB\b/, "browser storage"],
+  [/document\s*\.\s*cookie/, "cookies"],
+  [/\bparent\b|\bopener\b/, "parent-window access"],
+  [/\bwindow\s*\.\s*top\b|\btop\s*\./, "top-window access"],
+  [/\beval\s*\(|\bFunction\s*\(/, "dynamic code evaluation"],
+  [/\bimport\s*\(|\brequire\s*\(/, "module loading"],
+  [/\bprocess\b|\bDeno\b/, "server runtime access"],
+  [/\b(?:window|document|globalThis|self|navigator|history)\b/, "ambient browser-global access; use the Northstar API"],
+  [/\b(?:Worker|SharedWorker|ServiceWorker|BroadcastChannel|MessageChannel|RTCPeerConnection|WebTransport|WebAssembly)\b/, "external execution or communication"],
+  [/\b(?:sendBeacon|open)\s*\(/, "external communication or navigation"],
+  [/\b(?:constructor|__proto__|prototype)\b/, "prototype or constructor escape"],
+  [/\b(?:setTimeout|setInterval|requestAnimationFrame|requestIdleCallback|queueMicrotask)\s*\(/, "deferred scheduling"],
+  [/\b(?:async|await|Promise)\b/, "asynchronous execution"],
+  [/\bpostMessage\s*\(/, "cross-context messaging"],
+  [/\blocation\s*=|\blocation\s*\.\s*(?:assign|replace)\s*\(/, "navigation"],
+];
+
+function sanitizeRuntimeJavascript(value: unknown): string {
+  const javascript = cleanSource(value, 80000);
+  for (const [pattern, label] of FORBIDDEN_RUNTIME_JAVASCRIPT) {
+    if (pattern.test(javascript)) throw new Error(`A runtime source module contains prohibited ${label}.`);
+  }
+  try {
+    // Syntax-only validation. The browser executes the module inside the existing
+    // isolated runtime with Northstar/data/creative/reviews as its only inputs.
+    new Function("Northstar", "data", "creative", "reviews", `"use strict";\n${javascript}`);
+  } catch (error) {
+    throw new Error(`A runtime source module has invalid JavaScript syntax: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return javascript;
+}
+
 function sanitizeOperation(operation: NorthstarArtboardMutationOperation): NorthstarArtboardMutationOperation {
   const protectedRoot = "targetId" in operation && ["artboard", "__root__"].includes(String(operation.targetId));
-  if (protectedRoot && ["set-html", "remove", "move"].includes(operation.op)) {
+  if (protectedRoot && ["set-html", "recompose-region", "remove", "move"].includes(operation.op)) {
     throw new Error("The permanent living-artboard root cannot be replaced, removed, or moved.");
   }
   switch (operation.op) {
@@ -237,6 +528,24 @@ function sanitizeOperation(operation: NorthstarArtboardMutationOperation): North
       const html = cleanSource(operation.html, 80000);
       if (!html || FORBIDDEN_HTML.test(html)) throw new Error("A mutation contains unsafe or empty HTML.");
       return { op: "set-html", targetId: cleanId(operation.targetId), html };
+    }
+    case "recompose-region": {
+      const html = cleanSource(operation.html, 80000);
+      if (!html || FORBIDDEN_HTML.test(html)) throw new Error("A recomposition contains unsafe or empty HTML.");
+      const placements = (operation.placements ?? []).slice(0, 240).map((placement) => ({
+        targetId: cleanId(placement.targetId),
+        parentId: cleanId(placement.parentId),
+        beforeId: placement.beforeId ? cleanId(placement.beforeId) : undefined,
+        runtimeInherited: placement.runtimeInherited === true || undefined,
+        preserveGeometry: placement.preserveGeometry === true || undefined,
+      }));
+      return {
+        op: "recompose-region",
+        targetId: cleanId(operation.targetId),
+        html,
+        placements,
+        retireNodeIds: Array.from(new Set((operation.retireNodeIds ?? []).map((nodeId) => cleanId(nodeId)))).slice(0, 240),
+      };
     }
     case "insert-html": {
       const html = cleanSource(operation.html, 80000);
@@ -267,6 +576,10 @@ function sanitizeOperation(operation: NorthstarArtboardMutationOperation): North
       if (FORBIDDEN_CSS.test(css)) throw new Error("A mutation CSS layer contains a prohibited construct.");
       return { op: "set-css-layer", layerId, css };
     }
+    case "set-runtime-module": {
+      const moduleId = cleanId(operation.moduleId).slice(0, 80);
+      return { op: "set-runtime-module", moduleId, javascript: sanitizeRuntimeJavascript(operation.javascript) };
+    }
     case "request-space":
       return {
         op: "request-space",
@@ -296,6 +609,8 @@ export function sanitizeNorthstarArtboardMutationDraft(
     geometryIntent,
     transitionMs: Math.max(80, Math.min(1200, Math.round(Number(draft.transitionMs) || 320))),
     operations,
+    requiredPrimitives: sanitizeRequiredPrimitives(draft.requiredPrimitives),
+    constructionPlan: sanitizeConstructionPlan(draft.constructionPlan),
   };
 }
 
@@ -305,6 +620,28 @@ export function sanitizeNorthstarArtboardMutationDraft(
  * Keeps the established compiler contract while removing operations that would
  * replace structural roots or draw untyped freehand relationships.
  */
+const PERMANENT_PRESENTATION_ANCHORS = [
+  { nodeId: "synthesis", stage: "analysis", className: "ns-synthesis-anchor" },
+  { nodeId: "decision", stage: "recommendation", className: "ns-decision-anchor" },
+] as const;
+
+function hasSemanticNode(markup: string, nodeId: string): boolean {
+  return new RegExp(`data-ns-node-id\\s*=\\s*["']${nodeId}["']`, "i").test(markup);
+}
+
+function repairPermanentPresentationAnchors(markup: string): { markup: string; restoredNodeIds: string[] } {
+  const restoredNodeIds = PERMANENT_PRESENTATION_ANCHORS
+    .filter((anchor) => !hasSemanticNode(markup, anchor.nodeId))
+    .map((anchor) => anchor.nodeId);
+  if (restoredNodeIds.length === 0) return { markup, restoredNodeIds };
+
+  const anchors = PERMANENT_PRESENTATION_ANCHORS
+    .filter((anchor) => restoredNodeIds.includes(anchor.nodeId))
+    .map((anchor) => `<section class="${anchor.className}" data-ns-node-id="${anchor.nodeId}" data-ns-stage="${anchor.stage}"></section>`)
+    .join("");
+  return { markup: `${markup}${anchors}`, restoredNodeIds };
+}
+
 export function repairNorthstarArtboardMutationDraft(
   draft: NorthstarArtboardMutationDraft,
 ): { draft: NorthstarArtboardMutationDraft; repairs: string[] } {
@@ -313,8 +650,6 @@ export function repairNorthstarArtboardMutationDraft(
   const structuralSetHtmlTargets = new Set([
     "artboard",
     "__root__",
-    "header",
-    "evidence",
   ]);
 
   for (const operation of draft.operations ?? []) {
@@ -323,6 +658,15 @@ export function repairNorthstarArtboardMutationDraft(
       structuralSetHtmlTargets.has(String(operation.targetId))
     ) {
       repairs.push(`Dropped illegal structural replacement of ${String(operation.targetId)}.`);
+      continue;
+    }
+
+    if (operation.op === "set-html" && operation.targetId === "presentation") {
+      const repaired = repairPermanentPresentationAnchors(operation.html);
+      operations.push({ ...operation, html: repaired.markup });
+      if (repaired.restoredNodeIds.length > 0) {
+        repairs.push(`Restored permanent presentation anchor${repaired.restoredNodeIds.length === 1 ? "" : "s"}: ${repaired.restoredNodeIds.join(", ")}.`);
+      }
       continue;
     }
 
@@ -407,7 +751,13 @@ export function createNorthstarArtboardMutationBatch(input: {
   const sequence = journal.length + 1;
   const parentMutationId = journal.at(-1)?.mutationId;
   const hash = createHash("sha256")
-    .update(JSON.stringify({ sequence, operations: draft.operations, label: input.label }))
+    .update(JSON.stringify({
+      sequence,
+      operations: draft.operations,
+      requiredPrimitives: draft.requiredPrimitives,
+      constructionPlan: draft.constructionPlan,
+      label: input.label,
+    }))
     .digest("hex")
     .slice(0, 14);
   return {
@@ -422,6 +772,8 @@ export function createNorthstarArtboardMutationBatch(input: {
     geometryIntent: draft.geometryIntent,
     transitionMs: draft.transitionMs,
     operations: draft.operations,
+    requiredPrimitives: draft.requiredPrimitives,
+    constructionPlan: draft.constructionPlan,
     minimumMeaningfulChangedNodes: input.minimumMeaningfulChangedNodes,
     allowTextOnly: input.allowTextOnly,
     requiredChangeKinds: input.requiredChangeKinds,
@@ -619,7 +971,7 @@ function extractSemanticNodeIds(packageValue: NorthstarGeneratedCodeArtifactPack
   const sources = [
     packageValue.document.html,
     ...(packageValue.mutationJournal ?? []).flatMap((batch) => batch.operations
-      .filter((operation): operation is Extract<NorthstarArtboardMutationOperation, { op: "set-html" | "insert-html" }> => operation.op === "set-html" || operation.op === "insert-html")
+      .filter((operation): operation is Extract<NorthstarArtboardMutationOperation, { op: "set-html" | "insert-html" | "recompose-region" }> => operation.op === "set-html" || operation.op === "insert-html" || operation.op === "recompose-region")
       .map((operation) => operation.html)),
   ];
   for (const source of sources) {

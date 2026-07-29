@@ -47,3 +47,14 @@ test("terminal hard failures remain unresolved problems", () => {
   assert.equal(classifyCanvasDiagnosticEvent(events[0], events), "problem");
   assert.equal(classifyCanvasDiagnosticEvent(events[1], events), "problem");
 });
+
+
+test("completed-with-notes runs recover rejected candidates and remain terminal", () => {
+  const events = [
+    event({ phase: "runtime", name: "revision.rejected", detail: "Candidate rejected" }),
+    event({ phase: "run", name: "run.completed_with_notes" }),
+  ];
+
+  assert.equal(classifyCanvasDiagnosticEvent(events[0], events), "recovered");
+  assert.equal(classifyCanvasDiagnosticEvent(events[1], events), "info");
+});

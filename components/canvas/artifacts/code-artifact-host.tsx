@@ -122,8 +122,19 @@ export interface NorthstarArtifactLifecycleEvent {
   timestamp: number;
 }
 
+
+export interface NorthstarCreativeActivity {
+  artifactId: string;
+  revisionId?: string;
+  phase: "authoring" | "previewing" | "committing";
+  label: string;
+  stageIndex?: number;
+  updatedAt: number;
+}
+
 interface CodeArtifactHostProps {
   artifact?: CanvasCodeArtifactPayload;
+  creativeActivity?: NorthstarCreativeActivity;
   selected: boolean;
   width: number;
   height: number;
@@ -178,6 +189,7 @@ function artifactGeometry(
 
 function CodeArtifactHostImpl({
   artifact,
+  creativeActivity,
   selected,
   width,
   height,
@@ -283,6 +295,8 @@ function CodeArtifactHostImpl({
       dataBundle: current.dataBundle,
       creativeDirection: current.creativeDirection,
       creativeReviews: current.creativeReviews,
+      publicationState: current.publicationState,
+      provisional: current.provisional,
       allowedAssetUrls: current.dataBundle?.allowedAssetUrls ?? [],
     }, "*");
     frame.contentWindow.postMessage({
@@ -699,6 +713,8 @@ function CodeArtifactHostImpl({
         return;
       }
 
+
+
       if (event.data.type === "northstar.artifact.ready") {
         for (const id of event.data.appliedMutationIds ?? []) appliedMutationIdsRef.current.add(id);
         // Ready with a mutation id is provisional. Only mutation-applied or
@@ -1105,6 +1121,24 @@ function CodeArtifactHostImpl({
         </div>
       )}
 
+      {creativeActivity && creativeActivity.artifactId === current?.artifactId && !runtimeError && (
+        <div
+          className="pointer-events-none absolute inset-0 z-[35] overflow-hidden"
+          data-ns-ephemeral-creative-activity={creativeActivity.phase}
+          aria-hidden="true"
+        >
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgba(107,92,255,0.09),transparent_42%)] animate-pulse" />
+          <div className="absolute left-1/2 top-3 flex max-w-[78%] -translate-x-1/2 items-center gap-2 rounded-full border border-[#6B5CFF]/20 bg-white/92 px-3 py-1.5 text-[10px] font-[850] text-zinc-700 shadow-lg backdrop-blur-xl">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[#6B5CFF]" />
+            <span className="truncate">{creativeActivity.label}</span>
+          </div>
+          <div className="absolute inset-x-[8%] bottom-3 h-px overflow-hidden bg-black/[0.05]">
+            <div className="h-full w-1/3 animate-[ns-host-creative-scan_1.8s_ease-in-out_infinite] bg-[#6B5CFF]/70" />
+          </div>
+          <style>{`@keyframes ns-host-creative-scan{0%{transform:translateX(-120%)}100%{transform:translateX(420%)}}`}</style>
+        </div>
+      )}
+
       {!surfaceReady && !runtimeError && (
         <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex items-center justify-center">
           <div className="flex items-center gap-2 rounded-full border border-black/[0.06] bg-white/88 px-3 py-1.5 text-xs font-bold text-zinc-500 shadow-sm backdrop-blur-xl"><Loader2 className="h-4 w-4 animate-spin text-[#6B5CFF]" />Mounting the one live artboard…</div>
@@ -1145,6 +1179,7 @@ export const CodeArtifactHost = memo(
   CodeArtifactHostImpl,
   (previous: CodeArtifactHostProps, next: CodeArtifactHostProps) =>
     previous.artifact === next.artifact &&
+    previous.creativeActivity === next.creativeActivity &&
     previous.selected === next.selected &&
     previous.width === next.width &&
     previous.height === next.height &&

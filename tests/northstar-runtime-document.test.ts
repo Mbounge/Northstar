@@ -81,3 +81,57 @@ test("the runtime schedules terminal audits at both stability and asset deadline
   assert.ok(runtime);
   assert.match(runtime, /3_100, 8_100/);
 });
+test("model-source geometry derives from the authored surface without leaking the host background", () => {
+  const artifact = pendingArtifact();
+  artifact.document = {
+    schema: "northstar.web-artifact-document.v1",
+    html: '<main data-ns-node-id="artboard" data-ns-creative-authority="model-source"><section data-ns-node-id="presentation">Source-owned composition</section></main>',
+    css: "main{display:grid}",
+    javascript: "",
+  };
+  const runtime = buildCanvasArtifactRuntimeDocument(artifact);
+  assert.ok(runtime);
+  assert.match(runtime, /body\{position:relative;background:transparent/);
+  assert.match(runtime, /html,body\{background:transparent!important\}/);
+  assert.match(runtime, /const syncIntrinsicGeometryMode = \(\) =>/);
+  assert.match(runtime, /northstar-source-owned-intrinsic-geometry/);
+  assert.match(runtime, /width:max-content!important/);
+  assert.match(runtime, /const collectGeometryFacts = \(bounds\) =>/);
+  assert.match(runtime, /backgroundLeakRisk/);
+  assert.match(runtime, /sourceOwnedSurface: hasModelSourceAuthority\(\)/);
+  assert.match(runtime, /geometryIntegrityReason/);
+});
+
+test("source-to-source cinema keeps a retired subtree until its latest relevant descendant beat", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  assert.match(runtime, /const retirementBeatForSubtree = \(rootNodeId\) =>/);
+  assert.match(runtime, /candidateIndex > selectedIndex/);
+  assert.match(runtime, /const beatId = retirementBeatForSubtree\(nodeId\)/);
+});
+
+test("model-source cinema preserves the authored dramatic sequence instead of inventing semantic beats", () => {
+  const artifact = pendingArtifact();
+  artifact.document = {
+    schema: "northstar.web-artifact-document.v1",
+    html: '<main data-ns-node-id="artboard" data-ns-creative-authority="model-source"><section data-ns-node-id="presentation">Source-owned composition</section></main>',
+    css: "main{display:grid}",
+    javascript: "",
+  };
+  const runtime = buildCanvasArtifactRuntimeDocument(artifact);
+  assert.ok(runtime);
+  assert.match(runtime, /const modelSourceAuthority = hasModelSourceAuthority\(\)/);
+  assert.match(runtime, /The creative model owns the dramatic sequence/);
+  assert.match(runtime, /must not infer/);
+  assert.match(runtime, /strictCoverage: false/);
+  assert.match(runtime, /Settling the exact authored source/);
+});
+
+test("geometry integrity targets readable leaves and evidence rather than grading every authored container", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  assert.match(runtime, /const isReadableIntegrityTarget = \(element\) =>/);
+  assert.match(runtime, /meaningfulElementSet\.has\(element\)/);
+  assert.match(runtime, /ancestorClipped/);
+  assert.doesNotMatch(runtime, /if \(clippedX \|\| clippedY\) clippedSemanticNodeIds/);
+});

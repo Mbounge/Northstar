@@ -365,14 +365,23 @@ export function renderNorthstarVisualSceneDocument(plan: NorthstarVisualScenePla
     if (["hypothesis","open-question","research-note","contradiction"].includes(object.role)) return renderThoughtObject(object, dataBundle, thoughtNodeIds.get(object.id) || object.id);
     return `<article class="ns-scene-object ns-role-${object.role} ns-material-${object.material} ns-emphasis-${object.emphasis}" data-ns-node-id="${escapeHtml(object.id)}" data-ns-working-role="${object.role}" data-ns-publication-policy="${escapeHtml(object.publicationPolicy || "retain")}" style="--span:${object.span}">${escapeHtml(object.content)}</article>`;
   };
-  const mainObjects = plan.objects.filter((object) => !isThoughtRole(object.role)).map(renderObject).join("");
+  const evidenceObjects = plan.objects.filter((object) => object.role === "evidence-field").map(renderObject).join("");
+  const mainObjects = plan.objects
+    .filter((object) => !isThoughtRole(object.role) && object.role !== "evidence-field")
+    .map(renderObject)
+    .join("");
   const thoughtObjects = plan.objects.filter((object) => isThoughtRole(object.role)).slice(0, 2).map(renderObject).join("");
   const objects = `${mainObjects}${thoughtObjects ? `<aside class="ns-reasoning-zone" data-ns-node-id="reasoning-zone" data-ns-working-role="reasoning">${thoughtObjects}</aside>` : ""}`;
 
   const safeSupporting = contrastSafeSupportingColor(plan.artDirection.supporting, plan.artDirection.background, plan.artDirection.ink);
   const css = serializeNorthstarCssRules([
     { selector: ".ns-visual-scene", declarations: { position: "relative", width: `${artboardWidth}px`, "min-width": "1180px", "min-height": "720px", "box-sizing": "border-box", padding: "48px 56px 64px", background: `radial-gradient(circle at 18% -8%,color-mix(in srgb,${plan.artDirection.accent} 13%,transparent),transparent 36%),${plan.artDirection.background}`, color: plan.artDirection.ink, "font-family": "Inter,ui-sans-serif,system-ui,sans-serif", overflow: "visible", "--ns-scene-accent": plan.artDirection.accent, "--ns-scene-ink": plan.artDirection.ink, "--ns-scene-supporting": safeSupporting } },
+    { selector: ".ns-presentation-stage", declarations: { display: "grid", "align-content": "start", gap: `${gap}px`, "min-width": "0" } },
     { selector: ".ns-scene-grid", declarations: { display: "grid", "grid-template-columns": "repeat(12,minmax(0,1fr))", "grid-auto-flow": "row dense", gap: `${gap}px`, "align-items": "start" } },
+    { selector: ".ns-evidence-reservoir", declarations: { display: "grid", gap: "10px", "margin-top": "18px", "padding-top": "14px", "border-top": `1px solid color-mix(in srgb,${plan.artDirection.ink} 10%,transparent)`, "min-width": "0" } },
+    { selector: ".ns-evidence-reservoir>summary", declarations: { cursor: "pointer", "list-style": "none", "font-size": "9px", "font-weight": "800", "letter-spacing": ".14em", "text-transform": "uppercase", color: safeSupporting } },
+    { selector: ".ns-evidence-reservoir>summary::-webkit-details-marker", declarations: { display: "none" } },
+    { selector: ".ns-evidence-reservoir:not([open])", declarations: { display: "block", "padding-top": "10px" } },
     { selector: ".ns-scene-object", declarations: { "grid-column": "span min(var(--span,4),12)", "min-width": "0", "box-sizing": "border-box" } },
     { selector: ".ns-role-title,.ns-role-framing", declarations: { "grid-column": "1/7" } },
     { selector: ".ns-reasoning-zone", declarations: { position: "relative", inset: "auto", "grid-column": "7/-1", "grid-row": "1/span 3", width: "auto", display: "grid", "grid-template-columns": "repeat(2,minmax(0,1fr))", "align-items": "start", gap: "18px", "z-index": "auto", "min-width": "0" } },
@@ -424,7 +433,7 @@ export function renderNorthstarVisualSceneDocument(plan: NorthstarVisualScenePla
 
   const document: NorthstarWebArtifactDocument = {
     schema: "northstar.web-artifact-document.v1",
-    html: `<main class="ns-artifact ns-visual-scene" data-ns-node-id="artboard" data-ns-design-kernel="scene-v1" data-ns-publication="working" data-ns-canonical-surface="true" data-ns-transaction-state="visible" data-ns-three-second-read="${escapeHtml(plan.threeSecondRead)}"><header data-ns-node-id="header" data-ns-stage="foundation"></header><div class="ns-scene-grid">${objects}</div><section data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section data-ns-node-id="decision" data-ns-stage="recommendation"></section></main>`,
+    html: `<main class="ns-artifact ns-visual-scene" data-ns-node-id="artboard" data-ns-design-kernel="scene-v1" data-ns-publication="working" data-ns-canonical-surface="true" data-ns-transaction-state="visible" data-ns-three-second-read="${escapeHtml(plan.threeSecondRead)}"><section class="ns-presentation-stage" data-ns-node-id="presentation" data-ns-presentation-layer="true"><header data-ns-node-id="header" data-ns-stage="foundation"></header><div class="ns-scene-grid">${objects}</div><section data-ns-node-id="synthesis" data-ns-stage="analysis"></section><section data-ns-node-id="decision" data-ns-stage="recommendation"></section></section><details class="ns-evidence-reservoir" data-ns-node-id="evidence-reservoir" data-ns-publication-policy="inspectable-evidence" open><summary data-ns-node-id="evidence-reservoir-summary">Grounded evidence</summary>${evidenceObjects || `<section class="ns-scene-object ns-role-evidence" data-ns-node-id="evidence" data-ns-working-role="evidence"></section>`}</details></main>`,
     css: css + motionCss,
     javascript: "",
   };

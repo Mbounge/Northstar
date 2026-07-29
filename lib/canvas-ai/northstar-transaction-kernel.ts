@@ -64,6 +64,9 @@ export function sanitizeNorthstarLiveSnapshot(
     ...snapshot,
     html: stripNorthstarRuntimeScaffolding(snapshot.html),
     css: stripNorthstarRuntimeCss(snapshot.css),
+    cssLayers: snapshot.cssLayers
+      ? Object.fromEntries(Object.entries(snapshot.cssLayers).map(([id, css]) => [id, stripNorthstarRuntimeCss(css)]))
+      : undefined,
   };
 }
 
@@ -122,11 +125,14 @@ export function materializeNorthstarBrowserCommit(
           schema: "northstar.web-artifact-document.v1",
           html: snapshot.html,
           css: snapshot.css,
-          javascript: "",
+          cssLayers: snapshot.cssLayers ?? artifact.document?.cssLayers,
+          javascript: snapshot.javascript ?? artifact.document?.javascript ?? "",
+          creativeJavascript: snapshot.creativeJavascript ?? artifact.document?.creativeJavascript,
         }
       : artifact.document,
     mutationJournal: snapshot ? [] : artifact.mutationJournal,
     pendingAckToken: undefined,
+    creativeLease: undefined,
     preferredWidth,
     preferredHeight,
     intrinsicBounds: bounds,

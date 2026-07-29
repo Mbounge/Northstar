@@ -1,5 +1,5 @@
 //lib/canvas-artifacts/types.ts
-// Northstar Canvas Artifact Contracts v0.5.2.3 — one authoritative live surface, browser acknowledgements, granular mutations, and measured geometry
+// Northstar Canvas Artifact Contracts v0.7.0 — one authoritative typed DesignAct, deterministic primitive realization, and browser-owned live visual authorship
 export const NORTHSTAR_CODE_ARTIFACT_SCHEMA = "northstar.code-artifact.v0.1" as const;
 export const NORTHSTAR_GENERATED_CODE_ARTIFACT_SCHEMA =
   "northstar.generated-web-artifact.v0.3" as const;
@@ -41,10 +41,14 @@ export interface NorthstarWebArtifactDocument {
   schema: typeof NORTHSTAR_WEB_ARTIFACT_DOCUMENT_SCHEMA;
   /** Standard HTML placed inside the isolated artifact body. No script tags. */
   html: string;
-  /** Standard scoped CSS. External imports are prohibited. */
+  /** Standard scoped foundation CSS. External imports are prohibited. */
   css: string;
-  /** Optional vanilla JavaScript executed after the HTML is mounted. */
+  /** Exact independently replaceable authored CSS layers keyed by runtime style ID. */
+  cssLayers?: Record<string, string>;
+  /** Foundation JavaScript owned by the artifact shell. */
   javascript: string;
+  /** Complete cumulative safe interaction module owned by creative authorship. */
+  creativeJavascript?: string;
 }
 
 
@@ -65,9 +69,129 @@ export type NorthstarArtboardChangeKind =
   | "geometry"
   | "assets";
 
+export type NorthstarRequiredPrimitiveKind =
+  | "frame"
+  | "evidence-lane"
+  | "chart"
+  | "sparkline"
+  | "axis"
+  | "annotation"
+  | "relationship"
+  | "synthesis"
+  | "decision";
+
+export type NorthstarPrimitiveEncoding = "qualitative" | "quantitative";
+export type NorthstarPrimitiveConfidence = "observed" | "interpretive";
+export type NorthstarPrimitiveRoute = "straight" | "elbow" | "soft-curve";
+export type NorthstarPrimitivePriority = "low" | "normal" | "high";
+
+export interface NorthstarPrimitiveDataPoint {
+  /** Exact grounded semantic source for this mark. */
+  sourceNodeId: string;
+  label: string;
+  /** Quantitative values are accepted only when valuesGrounded is true. */
+  value?: number;
+  /** Qualitative ordinal intensity; rendered without pretending to be a measured metric. */
+  qualitativeLevel?: "low" | "medium" | "high";
+}
+
+export interface NorthstarRequiredPrimitive {
+  /**
+   * Stable semantic identity and authoritative typed DesignAct specification.
+   * The compiler deterministically realizes this specification into DOM operations;
+   * it is not a second promise that the model must independently reproduce in HTML.
+   */
+  id: string;
+  kind: NorthstarRequiredPrimitiveKind;
+  minimumInstances: number;
+  /** Essential bindings may block commit; optional bindings degrade independently. */
+  criticality?: "essential" | "optional";
+  /** Exact rendered primitive identities. Prefer this over legacy nodeIds. */
+  instanceNodeIds?: string[];
+  /** Legacy field retained for old model responses. The compiler normalizes it by primitive kind. */
+  nodeIds?: string[];
+  /** Existing evidence or semantic nodes contained by a frame/evidence lane. */
+  memberNodeIds?: string[];
+  /** Exact anchors for annotation specifications. */
+  anchorNodeIds?: string[];
+  sourceNodeIds?: string[];
+  targetNodeIds?: string[];
+  /** Optional semantic parent. The compiler falls back to the permanent presentation surface. */
+  parentNodeId?: string;
+  placement?: "frame" | "beneath-flow" | "between-sections" | "anchored-margin" | "routed-overlay" | "synthesis" | "decision";
+  label?: string;
+  text?: string;
+  description?: string;
+  encoding?: NorthstarPrimitiveEncoding;
+  valuesGrounded?: boolean;
+  unit?: string;
+  dataPoints?: NorthstarPrimitiveDataPoint[];
+  relationshipType?: string;
+  route?: NorthstarPrimitiveRoute;
+  confidence?: NorthstarPrimitiveConfidence;
+  priority?: NorthstarPrimitivePriority;
+}
+
+export type NorthstarConstructionBeatKind =
+  | "establish-frame"
+  | "open-layout"
+  | "choreograph-evidence"
+  | "draw-analysis"
+  | "anchor-annotations"
+  | "route-relationships"
+  | "reveal-synthesis"
+  | "resolve-decision"
+  | "settle";
+
+export interface NorthstarConstructionBeat {
+  id: string;
+  kind: NorthstarConstructionBeatKind;
+  label: string;
+  nodeIds: string[];
+  durationMs: number;
+  staggerMs: number;
+  holdMs: number;
+  emphasis: "quiet" | "normal" | "hero";
+}
+
+export interface NorthstarConstructionPlan {
+  version: "northstar.live-visual-authorship.v2";
+  mode: "cinematic" | "compact";
+  beats: NorthstarConstructionBeat[];
+  /** Every meaningful semantic node introduced or materially changed by the transaction. */
+  coverageNodeIds: string[];
+  /** Browser choreography must stage every coverage node before acknowledgement. */
+  strictCoverage: boolean;
+  totalDurationMs: number;
+  /** Hard browser deadline; choreography always settles to the safe final state by this time. */
+  deadlineMs: number;
+  showBeatLabels: boolean;
+}
+
 export type NorthstarArtboardMutationOperation =
   | { op: "set-text"; targetId: string; text: string }
   | { op: "set-html"; targetId: string; html: string }
+  | {
+      /**
+       * Internal compiler primitive for an atomic region replacement that must preserve
+       * existing semantic subtrees while rebuilding the surrounding presentation.
+       * Model-authored JSON continues to use set-html + move + remove; the compiler
+       * coalesces that sequence into this operation after observing the exact browser DOM.
+       */
+      op: "recompose-region";
+      targetId: string;
+      html: string;
+      placements: Array<{
+        targetId: string;
+        parentId: string;
+        beforeId?: string;
+        /** Runtime-added preservation placement; never required from the creative model. */
+        runtimeInherited?: boolean;
+        /** Preserve the node at its prior artboard-relative geometry when no authored destination survives. */
+        preserveGeometry?: boolean;
+      }>;
+      retireNodeIds?: string[];
+    }
   | {
       op: "insert-html";
       targetId: string;
@@ -80,6 +204,7 @@ export type NorthstarArtboardMutationOperation =
   | { op: "set-styles"; targetId: string; styles: Record<string, string | null> }
   | { op: "set-classes"; targetId: string; add?: string[]; remove?: string[] }
   | { op: "set-css-layer"; layerId: string; css: string }
+  | { op: "set-runtime-module"; moduleId: string; javascript: string }
   | { op: "request-space"; left?: number; top?: number; right?: number; bottom?: number };
 
 
@@ -147,6 +272,10 @@ export interface NorthstarArtboardMutationBatch {
   geometryIntent: NorthstarArtboardGeometryIntent;
   transitionMs: number;
   operations: NorthstarArtboardMutationOperation[];
+  /** Exact semantic deliverables promised by the authored DesignAct. */
+  requiredPrimitives?: NorthstarRequiredPrimitive[];
+  /** Browser-owned perceptual choreography over one atomic final transaction. */
+  constructionPlan?: NorthstarConstructionPlan;
   /** Asset URLs introduced by this batch. The live runtime registers these before DOM insertion. */
   requiredAssetUrls?: string[];
   /** A progress step cannot complete unless this many non-progress semantic nodes visibly change. */
@@ -321,12 +450,62 @@ export interface CanvasCodeArtifactIntrinsicBounds {
   maxY: number;
 }
 
+export type NorthstarArtifactViewingMode =
+  | "single-frame"
+  | "zoom-and-inspect"
+  | "scrolling-artboard";
+
+export interface NorthstarArtifactViewingIntent {
+  mode: NorthstarArtifactViewingMode;
+  primaryNodeIds: string[];
+  supportingNodeIds: string[];
+  intendedViewerOutcome: string;
+  intendedReadingPath: string[];
+  preserveAllEvidence: true;
+}
+
+export interface NorthstarOuterCanvasPresentationFacts {
+  mode: NorthstarArtifactViewingMode;
+  intrinsicWidth: number;
+  intrinsicHeight: number;
+  stableFrameWidth: number;
+  stableFrameHeight: number;
+  /** Exact intrinsic-source to stable outer-object scale. */
+  sourceToOuterScale: number;
+  /** Stable outer-object to real Northstar workspace scale. */
+  outerToWorkspaceScale: number;
+  /** Exact intrinsic-source to real Northstar workspace scale. */
+  fitScale: number;
+  widthFitScale: number;
+  heightFitScale: number;
+  minimumPrimaryTextPxAtFit: number;
+  minimumSupportingTextPxAtFit: number;
+  evidenceNodeCount: number;
+  visibleEvidenceNodeCount: number;
+  hiddenEvidenceNodeIds: string[];
+  partiallyClippedEvidenceNodeIds: string[];
+  croppedEvidenceNodeIds: string[];
+  minimumEvidenceVisibleRatio: number;
+  evidenceAreaRatio: number;
+  primaryAreaRatio: number;
+  widthGrowthRatio: number;
+  heightGrowthRatio: number;
+  areaGrowthRatio: number;
+  blocksCommit: boolean;
+  blockingReasons: string[];
+  advisories: string[];
+}
+
 export interface CanvasCodeArtifactContentSize {
   artifactId: string;
   revisionId: string;
   measuredAt: string;
   intrinsicWidth: number;
   intrinsicHeight: number;
+  /** True when cumulative model-authored source owns the artboard and historical foundation minimums must not constrain outer Canvas geometry. */
+  sourceOwnedSurface?: boolean;
+  /** Model-owned viewing mode used to keep the outer Canvas object stable while intrinsic source changes. */
+  viewingMode?: NorthstarArtifactViewingMode;
   /** Raw authored-space bounds before the runtime normalizes them into the iframe viewport. */
   contentBounds?: CanvasCodeArtifactIntrinsicBounds;
   sequence?: number;
@@ -350,6 +529,12 @@ export interface NorthstarCommittedSemanticNode {
 export interface NorthstarLiveSurfaceSnapshot {
   html: string;
   css: string;
+  /** Exact authored mutation CSS layers keyed by their runtime style element ID. */
+  cssLayers?: Record<string, string>;
+  /** Foundation script source retained by the artifact shell. */
+  javascript?: string;
+  /** Exact cumulative safe interaction module owned by creative authorship. */
+  creativeJavascript?: string;
   capturedAt: string;
   semanticNodes?: NorthstarCommittedSemanticNode[];
 }
@@ -378,6 +563,38 @@ export interface NorthstarArtifactMutationAcknowledgement {
   missingAssetUrls: string[];
   snapshot?: NorthstarLiveSurfaceSnapshot;
   acknowledgedAt: string;
+}
+
+export interface CanvasCodeArtifactGeometryFacts {
+  sourceOwnedSurface: boolean;
+  viewingMode: NorthstarArtifactViewingMode;
+  viewportWidth: number;
+  viewportHeight: number;
+  artboardBounds: CanvasCodeArtifactIntrinsicBounds;
+  semanticContentBounds: CanvasCodeArtifactIntrinsicBounds;
+  occupiedWidthRatio: number;
+  occupiedHeightRatio: number;
+  unusedSpaceRatio: number;
+  rightGutterPx: number;
+  bottomGutterPx: number;
+  authoredSurfaceCoverageX: number;
+  authoredSurfaceCoverageY: number;
+  backgroundLeakRisk: boolean;
+  outOfBoundsNodeIds: string[];
+  clippedSemanticNodeIds: string[];
+  evidenceNodeCount: number;
+  visibleEvidenceNodeCount: number;
+  hiddenEvidenceNodeIds: string[];
+  partiallyClippedEvidenceNodeIds?: string[];
+  croppedEvidenceNodeIds?: string[];
+  minimumEvidenceVisibleRatio?: number;
+  primaryNodeIds: string[];
+  supportingNodeIds: string[];
+  minimumPrimaryTextPx: number;
+  minimumSupportingTextPx: number;
+  evidenceAreaRatio: number;
+  primaryAreaRatio: number;
+  integrityFailures: string[];
 }
 
 export interface CanvasCodeArtifactRuntimeReview {
@@ -410,6 +627,10 @@ export interface CanvasCodeArtifactRuntimeReview {
   missingRequiredAssetCount?: number;
   meaningfulChangedNodeCount?: number;
   visualDeltaScore?: number;
+  /** Exact browser-measured geometry facts. These constrain execution integrity, never visual style. */
+  geometryFacts?: CanvasCodeArtifactGeometryFacts;
+  /** Non-blocking cinema or optional analytical-binding issues retained for the next model observation. */
+  advisoryDeliveryIssues?: string[];
   changedAreaRatio?: number;
   spatiallyChangedNodeCount?: number;
   movedNodeCount?: number;
@@ -417,6 +638,14 @@ export interface CanvasCodeArtifactRuntimeReview {
   addedNodeCount?: number;
   removedNodeCount?: number;
   unusedSpaceRatio?: number;
+}
+
+export interface NorthstarCreativeLeaseClaim {
+  leaseId: string;
+  ownerRunId: string;
+  surfaceId: string;
+  baseRevisionId: string;
+  expiresAt: number;
 }
 
 export interface NorthstarGeneratedCodeArtifactPackage {
@@ -436,6 +665,8 @@ export interface NorthstarGeneratedCodeArtifactPackage {
   surfaceId?: string;
   /** Unique token for the browser acknowledgement required before the server may advance. */
   pendingAckToken?: string;
+  /** Browser-authoritative scene lease. Competing canonical proposals are rejected client-side. */
+  creativeLease?: NorthstarCreativeLeaseClaim;
   /** Legacy fields are retained only so artifacts created by v0.2/v0.3 can still be loaded. */
   sourceTsx?: string;
   compiledJs?: string;
@@ -478,6 +709,7 @@ export interface CanvasCodeArtifactPayload {
   mutationJournal?: NorthstarArtboardMutationBatch[];
   surfaceId?: string;
   pendingAckToken?: string;
+  creativeLease?: NorthstarCreativeLeaseClaim;
   sourceTsx?: string;
   compiledJs?: string;
   dataBundle?: CanvasCodeArtifactDataBundle;
@@ -515,6 +747,7 @@ export interface CanvasCodeArtifactRevisionPatch {
   mutationJournal?: NorthstarArtboardMutationBatch[];
   surfaceId?: string;
   pendingAckToken?: string;
+  creativeLease?: NorthstarCreativeLeaseClaim;
   sourceTsx?: string;
   compiledJs?: string;
   dataBundle?: CanvasCodeArtifactDataBundle;
@@ -582,6 +815,7 @@ export function createCanvasCodeArtifactPayloadFromPackage(
     mutationJournal: packageValue.mutationJournal ?? [],
     surfaceId: packageValue.surfaceId ?? packageValue.artifactId,
     pendingAckToken: packageValue.pendingAckToken,
+    creativeLease: packageValue.creativeLease,
     sourceTsx: packageValue.sourceTsx,
     compiledJs: packageValue.compiledJs,
     dataBundle: packageValue.dataBundle,

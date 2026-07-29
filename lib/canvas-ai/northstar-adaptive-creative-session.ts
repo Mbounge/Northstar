@@ -7,6 +7,7 @@ import type {
 import { NorthstarCreativeJournal } from "@/lib/canvas-ai/northstar-creative-journal";
 import { decideNorthstarCreativeConvergence } from "@/lib/canvas-ai/northstar-creative-convergence";
 import type { NorthstarIndependentCreativeReview } from "@/lib/canvas-ai/northstar-independent-creative-review";
+import type { NorthstarCreativeClosureAdjudication } from "@/lib/canvas-ai/northstar-creative-closure-adjudication";
 
 export const NORTHSTAR_ADAPTIVE_CREATIVE_SESSION_VERSION =
   "northstar.adaptive-creative-session.v2" as const;
@@ -69,6 +70,8 @@ export interface NorthstarAdaptiveIndependentReviewMemory {
   unresolvedProblems: string[];
   recommendedIntervention: string;
   materialImprovementAvailable: boolean;
+  publicationReady: boolean;
+  structuralBlockers: string[];
   recordedAt: number;
 }
 
@@ -80,6 +83,7 @@ export interface NorthstarAdaptiveCreativeSessionSnapshot {
   acceptedActCount: number;
   rejectedActCount: number;
   totalAttemptCount: number;
+  systemRepairAttemptCount: number;
   consecutiveRejectionCount: number;
   acceptedActs: NorthstarAdaptiveAcceptedActMemory[];
   rejectedActs: NorthstarAdaptiveRejectedActMemory[];
@@ -101,6 +105,7 @@ export interface NorthstarAdaptiveReadiness {
 export interface NorthstarAdaptiveContinuationDecision {
   continueWorking: boolean;
   readyForPublication: boolean;
+  settleWithNotes: boolean;
   reason: string;
   reasonCode: import("@/lib/canvas-ai/northstar-creative-convergence").NorthstarCreativeConvergenceReasonCode;
   readiness: NorthstarAdaptiveReadiness;
@@ -115,15 +120,15 @@ export function northstarAdaptiveCreativeBudget(
   if (depth === "low") {
     return {
       requiresAcceptedCreativeAct: true,
-      maximumAcceptedActs: 5,
-      maximumTotalAttempts: 9,
+      maximumAcceptedActs: 7,
+      maximumTotalAttempts: 12,
       maximumConsecutiveRejections: 3,
       maximumOptionalConsecutiveRejectionsAfterAccepted: 2,
       maximumRepeatedFailureFingerprints: 2,
-      maximumElapsedMs: 4 * 60_000,
+      maximumElapsedMs: 6 * 60_000,
       authoringTimeoutMs: 48_000,
       critiqueTimeoutMs: 32_000,
-      authoringOutputTokens: 7_000,
+      authoringOutputTokens: 9_000,
       critiqueOutputTokens: 2_800,
       independentReviewTimeoutMs: 30_000,
       independentReviewOutputTokens: 2_400,
@@ -190,6 +195,24 @@ export function assessNorthstarAdaptiveReadiness(
     );
   }
 
+
+  if (assessment.modelSourceAuthority) {
+    if (!assessment.visualThesisPresent) {
+      advisoryObservations.push("The model-authored source does not yet present a legible governing point of view.");
+    }
+    if (!assessment.evidenceHierarchyPresent) {
+      advisoryObservations.push("The model may still strengthen evidence hierarchy, but no runtime-owned composition grammar will be imposed.");
+    }
+    return {
+      operationallyReady: blockingObservations.length === 0,
+      communicativelyReady: blockingObservations.length === 0
+        && assessment.visualThesisPresent
+        && assessment.groundedEvidencePresent,
+      blockingObservations,
+      advisoryObservations,
+    };
+  }
+
   const communicativeSignals = [
     assessment.visualThesisPresent,
     assessment.synthesisPresent,
@@ -245,6 +268,7 @@ export class NorthstarAdaptiveCreativeSession {
   private latestIndependentReviewValue?: NorthstarIndependentCreativeReview;
   private readonly journal: NorthstarCreativeJournal;
   private totalAttemptCountValue = 0;
+  private systemRepairAttemptCountValue = 0;
   private consecutiveRejectionCountValue = 0;
   private readonly failureFingerprintCounts = new Map<string, number>();
 
@@ -260,6 +284,11 @@ export class NorthstarAdaptiveCreativeSession {
 
   noteAttempt(): void {
     this.totalAttemptCountValue += 1;
+  }
+
+  reclassifyLastAttemptAsSystemRepair(): void {
+    if (this.totalAttemptCountValue > 0) this.totalAttemptCountValue -= 1;
+    this.systemRepairAttemptCountValue += 1;
   }
 
   recordAcceptedAct(
@@ -331,6 +360,8 @@ export class NorthstarAdaptiveCreativeSession {
       unresolvedProblems: review.unresolvedProblems,
       recommendedIntervention: review.recommendedIntervention,
       materialImprovementAvailable: review.materialImprovementAvailable,
+      publicationReady: review.publicationReady,
+      structuralBlockers: review.structuralBlockers,
       recordedAt: Date.now(),
     });
     this.independentReviewsValue = this.independentReviewsValue.slice(-12);
@@ -381,6 +412,7 @@ export class NorthstarAdaptiveCreativeSession {
     assessment: NorthstarSceneAssessment,
     critique?: NorthstarEmergentCreativeCritique,
     independentReview: NorthstarIndependentCreativeReview | undefined = this.latestIndependentReviewValue,
+    closureAdjudication?: NorthstarCreativeClosureAdjudication,
   ): NorthstarAdaptiveContinuationDecision {
     const readiness = assessNorthstarAdaptiveReadiness(assessment);
     const acceptedCount = this.acceptedActsValue.length;
@@ -391,11 +423,13 @@ export class NorthstarAdaptiveCreativeSession {
       reachedMaximumAcceptedActs: acceptedCount >= this.budget.maximumAcceptedActs,
       authorCritique: critique,
       independentReview,
+      closureAdjudication,
       cosmeticDriftWarnings: this.journal.cosmeticDriftWarnings(),
     });
     return {
       continueWorking: convergence.continueWorking,
       readyForPublication: convergence.readyForPublication,
+      settleWithNotes: convergence.settleWithNotes,
       reason: convergence.reason,
       reasonCode: convergence.reasonCode,
       readiness,
@@ -415,6 +449,7 @@ export class NorthstarAdaptiveCreativeSession {
       acceptedActCount: this.acceptedActsValue.length,
       rejectedActCount: this.rejectedActsValue.length,
       totalAttemptCount: this.totalAttemptCountValue,
+      systemRepairAttemptCount: this.systemRepairAttemptCountValue,
       consecutiveRejectionCount: this.consecutiveRejectionCountValue,
       acceptedActs: [...this.acceptedActsValue],
       rejectedActs: [...this.rejectedActsValue],

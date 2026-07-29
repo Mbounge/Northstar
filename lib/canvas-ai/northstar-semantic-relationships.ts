@@ -1,5 +1,5 @@
 //lib/canvas-ai/northstar-semantic-relationships.ts
-// Northstar Semantic Relationship Intelligence v0.4.9.1
+// Northstar Semantic Relationship Intelligence v0.5.1
 
 export type NorthstarRelationshipType =
   | "causal"
@@ -105,7 +105,19 @@ function normalizeRelationshipRoute(raw: string | undefined): NorthstarRelations
 }
 
 export function normalizeNorthstarRelationshipMarkup(markup: string): string {
+  // The parser and browser router accept the older source-node/target-node
+  // aliases as compatibility input, while new authoring uses source-id/target-id.
+  // Preserve the original grounding attributes because non-relationship
+  // synthesis nodes may also use them as provenance metadata.
   return String(markup ?? "")
+    .replace(/<[^>]+data-ns-relationship-id\s*=\s*["'][^"']+["'][^>]*>/gi, (tag) => {
+      let next = tag;
+      const source = next.match(/data-ns-source-node-id\s*=\s*["']([^"']+)["']/i)?.[1];
+      const target = next.match(/data-ns-target-node-id\s*=\s*["']([^"']+)["']/i)?.[1];
+      if (source && !/data-ns-source-id\s*=/i.test(next)) next = next.replace(/\s*\/?>(?=$)/, (ending) => ` data-ns-source-id="${source}"${ending}`);
+      if (target && !/data-ns-target-id\s*=/i.test(next)) next = next.replace(/\s*\/?>(?=$)/, (ending) => ` data-ns-target-id="${target}"${ending}`);
+      return next;
+    })
     .replace(
       /data-ns-relationship-type\s*=\s*(["'])([^"']*)\1/gi,
       (_match, quote: string, value: string) =>
@@ -149,8 +161,8 @@ export function extractNorthstarSemanticRelationships(markup: string): Northstar
     const route = normalizeRelationshipRoute(value["data-ns-route"]);
     relationships.push({
       id: value["data-ns-relationship-id"] || "",
-      sourceNodeId: value["data-ns-source-id"] || "",
-      targetNodeId: value["data-ns-target-id"] || "",
+      sourceNodeId: value["data-ns-source-id"] || value["data-ns-source-node-id"] || "",
+      targetNodeId: value["data-ns-target-id"] || value["data-ns-target-node-id"] || "",
       type,
       meaning: value["data-ns-meaning"] || "",
       confidence: normalizeConfidence(value["data-ns-confidence"]),
@@ -204,11 +216,11 @@ export function relationshipInventory(markupSources: string[]): NorthstarSemanti
 
 export const NORTHSTAR_RELATIONSHIP_RENDERING_CONTRACT = `
 RELATIONSHIP FIDELITY
-- A visual relationship is allowed only when it has data-ns-relationship-id, data-ns-relationship-type, data-ns-source-id, data-ns-target-id, data-ns-meaning, data-ns-confidence, data-ns-priority, and data-ns-route.
+- A visual relationship is allowed only when it has data-ns-relationship-id, data-ns-relationship-type, data-ns-source-id, data-ns-target-id, data-ns-meaning, data-ns-confidence, data-ns-priority, and data-ns-route. The compiler repairs the legacy source-node-id and target-node-id aliases, but new work should use the canonical names.
 - Relationship types are causal, comparative, contrastive, evidentiary, sequential, or synthesis.
 - Route grammars are straight, elbow, soft-curve, bracket, shared-spine, converging, or diverging.
 - Endpoints must be stable existing semantic nodes. Never use invented coordinates as the semantic source of truth.
-- The semantic relationship element is metadata; the browser-owned spatial router renders the visible path from measured endpoint ports.
+- A relationship may be represented by a visible analytical block, hidden routing metadata, or both. Only elements explicitly marked data-ns-relationship-metadata="true" or data-ns-analysis-placement="external-relationship" are hidden; the browser-owned spatial router renders the connector from measured endpoint ports.
 - Never insert manual SVG paths or model-authored connector coordinates for semantic relationships.
 - After every geometry change the browser reroutes the relationship and audits endpoint clarity, obstacle intersections, crossings, and false visual intersections.
 - Lines, pills, labels, and markers must read as one system. A label belongs to a relationship, not to empty space.

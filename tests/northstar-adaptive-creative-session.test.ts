@@ -74,10 +74,26 @@ test("the adaptive session can settle after one exceptional accepted render rega
     observedEffect: "The argument is immediately legible.",
     whatImproved: ["The evidence and conclusion now read as one visual argument."],
     whatStillWeak: [],
+    implementationDefects: [],
     recommendedNextMove: "No further material act is justified.",
     continueWorking: false,
   };
   session.recordCritique("revision-2", critique);
+  session.recordIndependentReview("revision-2", {
+    interpretation: "The exact render has one unmistakable governing idea and resolves the user request.",
+    strongestAspect: "Evidence and conclusion are choreographed as one visual argument.",
+    unresolvedProblems: [],
+    evidenceCommunicationAssessment: "Grounded proof is curated, legible, and visibly connected to the conclusion.",
+    recommendedIntervention: "No mandatory structural intervention remains.",
+    materialImprovementAvailable: false,
+    publicationReady: true,
+    governingVisualIdeaAssessment: "The governing idea survives without explanatory prose or container chrome.",
+    evidenceTransformationAssessment: "Evidence has been transformed from inventory into purposeful hierarchy and relationships.",
+    containerAndSurfaceAssessment: "The surface carries the composition and every remaining boundary earns its role.",
+    originalityAssessment: "The result is problem-specific and does not resemble a reusable dashboard or screenshot wall.",
+    structuralBlockers: [],
+    rationale: "The artifact meets the universal Northstar publication bar.",
+  });
   const decision = session.decideContinuation(assessment({ revisionId: "revision-2" }), critique);
   assert.equal(decision.readyForPublication, true);
   assert.equal(decision.continueWorking, false);

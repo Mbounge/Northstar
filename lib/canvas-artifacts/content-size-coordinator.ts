@@ -50,11 +50,16 @@ export function normalizeNorthstarContentSize(
     || Math.abs(contentBounds.maxY) > NORTHSTAR_MAX_INTRINSIC_EXTENT
   ) return undefined;
 
+  const viewingMode = size.viewingMode === "zoom-and-inspect" || size.viewingMode === "scrolling-artboard"
+    ? size.viewingMode
+    : "single-frame";
   return {
     ...size,
     sequence: Math.max(0, Math.floor(finite(size.sequence, 0))),
     intrinsicWidth,
     intrinsicHeight,
+    sourceOwnedSurface: size.sourceOwnedSurface === true,
+    viewingMode,
     contentBounds,
   };
 }
@@ -126,8 +131,33 @@ export function deriveNorthstarCanvasGeometry(input: {
     ),
   );
   const bounds = normalized.contentBounds;
-  const intrinsicWidth = Math.max(input.minimumWidth, normalized.intrinsicWidth);
-  const intrinsicHeight = Math.max(input.minimumHeight, normalized.intrinsicHeight);
+  // Foundation minimums protect legacy artifacts. Once the browser confirms that
+  // cumulative model-authored source owns the surface, the same exact intrinsic
+  // measurement must be allowed to shrink the outer Canvas object. Otherwise an
+  // obsolete working-stage minimum produces the large blank lower region and
+  // pale interior gutter seen in the failed Patch 2.1 run.
+  const minimumWidth = normalized.sourceOwnedSurface ? 1 : input.minimumWidth;
+  const minimumHeight = normalized.sourceOwnedSurface ? 1 : input.minimumHeight;
+  const intrinsicWidth = Math.max(minimumWidth, normalized.intrinsicWidth);
+  const intrinsicHeight = Math.max(minimumHeight, normalized.intrinsicHeight);
+  if (normalized.sourceOwnedSurface) {
+    // Once the model owns the cumulative source, intrinsic document size and
+    // outer Canvas object size are deliberately separate. The exact source may
+    // become denser, interactive, or zoomable, but it may not make the host
+    // camera chase an ever-growing document. CodeArtifactHost fits the measured
+    // intrinsic source inside this stable object, and private outer-canvas review
+    // rejects source whose declared viewing intent becomes unreadable at that fit.
+    return {
+      bounds,
+      intrinsicWidth,
+      intrinsicHeight,
+      displayScale,
+      x: input.canvasX,
+      y: input.canvasY,
+      width: input.canvasWidth,
+      height: input.canvasHeight,
+    };
+  }
   return {
     bounds,
     intrinsicWidth,
@@ -135,7 +165,7 @@ export function deriveNorthstarCanvasGeometry(input: {
     displayScale,
     x: input.canvasX + (bounds.minX - input.previousBounds.minX) * displayScale,
     y: input.canvasY + (bounds.minY - input.previousBounds.minY) * displayScale,
-    width: Math.max(input.minimumWidth * displayScale, intrinsicWidth * displayScale),
-    height: Math.max(input.minimumHeight * displayScale, intrinsicHeight * displayScale),
+    width: Math.max(minimumWidth * displayScale, intrinsicWidth * displayScale),
+    height: Math.max(minimumHeight * displayScale, intrinsicHeight * displayScale),
   };
 }

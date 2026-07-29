@@ -1,7 +1,10 @@
 // lib/canvas-ai/northstar-living-thought-theatre.ts
-// Northstar Canvas v0.7.0 — reserved horizontal reasoning theatre with truthful lifecycle settlement.
+// Northstar Canvas v0.7.1 — reserved horizontal reasoning theatre with transaction-aware scene alignment.
 
-import type { CanvasCodeArtifactDataBundle } from "@/lib/canvas-artifacts/types";
+import type {
+  CanvasCodeArtifactDataBundle,
+  NorthstarCommittedSemanticNode,
+} from "@/lib/canvas-artifacts/types";
 import type { NorthstarArtboardMutationDraft } from "@/lib/canvas-ai/northstar-artboard-mutations";
 
 type Stage = "evidence" | "analysis" | "recommendation" | "refinement";
@@ -111,34 +114,161 @@ function semanticIdsFromHtml(html: string): Set<string> {
   return new Set([...html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)].map((match) => match[1]));
 }
 
-function insertedSemanticIds(draft: NorthstarArtboardMutationDraft): Set<string> {
-  const ids = new Set<string>();
-  for (const operation of draft.operations as any[]) {
-    if (operation.op !== "insert-html" || typeof operation.html !== "string") continue;
-    for (const match of operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)) ids.add(match[1]);
-  }
-  return ids;
+function semanticIdsFromOperationHtml(operation: Record<string, unknown>): string[] {
+  if (typeof operation.html !== "string") return [];
+  return [...operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)]
+    .map((match) => match[1])
+    .filter(Boolean);
 }
 
-export function alignNorthstarMutationToVisibleScene(draft: NorthstarArtboardMutationDraft, visibleHtml: string): NorthstarArtboardMutationDraft {
+function semanticChildren(snapshot?: NorthstarCommittedSemanticNode[]): Map<string, Set<string>> {
+  const children = new Map<string, Set<string>>();
+  for (const node of snapshot ?? []) {
+    if (!node.parentId) continue;
+    const bucket = children.get(node.parentId) ?? new Set<string>();
+    bucket.add(node.nodeId);
+    children.set(node.parentId, bucket);
+  }
+  return children;
+}
+
+function semanticDescendants(
+  nodeId: string,
+  children: Map<string, Set<string>>,
+): Set<string> {
+  const result = new Set<string>();
+  const queue = [...(children.get(nodeId) ?? [])];
+  while (queue.length > 0) {
+    const candidate = queue.shift()!;
+    if (result.has(candidate)) continue;
+    result.add(candidate);
+    queue.push(...(children.get(candidate) ?? []));
+  }
+  return result;
+}
+
+function isSemanticDescendant(
+  nodeId: string,
+  ancestorId: string,
+  children: Map<string, Set<string>>,
+): boolean {
+  return nodeId === ancestorId || semanticDescendants(ancestorId, children).has(nodeId);
+}
+
+/**
+ * Align an already-sanitized/compiled transaction to the exact visible scene.
+ *
+ * This is deliberately sequential. A later operation may target a semantic node
+ * introduced by an earlier set-html, insert-html, or recompose-region operation.
+ * The previous implementation built a mostly static target inventory and silently
+ * discarded those dependent operations before the compiler could form an atomic
+ * recomposition. The staged inventory below follows the transaction in order and
+ * only removes operations that are impossible against both the committed scene and
+ * the semantic nodes introduced earlier in the same transaction.
+ */
+export function alignNorthstarMutationToVisibleScene(
+  draft: NorthstarArtboardMutationDraft,
+  visibleHtml: string,
+  semanticSnapshot?: NorthstarCommittedSemanticNode[],
+  authoritativeNodeIds?: string[],
+): NorthstarArtboardMutationDraft {
   const visible = semanticIdsFromHtml(visibleHtml);
   const available = new Set(visible);
-  for (const id of insertedSemanticIds(draft)) available.add(id);
-  const operations = (draft.operations as any[]).filter((operation) => {
-    if (operation.op === "set-css-layer") return true;
+  for (const node of semanticSnapshot ?? []) available.add(node.nodeId);
+  for (const nodeId of authoritativeNodeIds ?? []) {
+    const normalized = String(nodeId ?? "").trim();
+    if (normalized) available.add(normalized);
+  }
+  const children = semanticChildren(semanticSnapshot);
+  const operations: NorthstarArtboardMutationDraft["operations"] = [];
+  const evacuatedRoots = new Set<string>();
+  const isEvacuated = (nodeId: string): boolean => [...evacuatedRoots].some((rootId) =>
+    isSemanticDescendant(nodeId, rootId, children),
+  );
+
+  for (const operation of draft.operations) {
+    if (operation.op === "set-css-layer" || operation.op === "set-runtime-module" || operation.op === "request-space") {
+      operations.push(operation);
+      continue;
+    }
+
     if (operation.op === "insert-html") {
-      if (!available.has(String(operation.targetId ?? ""))) return false;
-      const insertedIds = typeof operation.html === "string"
-        ? [...operation.html.matchAll(/data-ns-node-id=["']([^"']+)["']/g)].map((match: RegExpMatchArray) => match[1])
-        : [];
-      return insertedIds.every((id: string) => !visible.has(id));
+      if (!available.has(operation.targetId)) continue;
+      const introducedIds = semanticIdsFromOperationHtml(operation as unknown as Record<string, unknown>);
+      if (introducedIds.some((id) => available.has(id))) continue;
+      operations.push(operation);
+      for (const id of introducedIds) available.add(id);
+      continue;
     }
-    for (const key of ["targetId", "parentId", "beforeId"] as const) {
-      const value = typeof operation[key] === "string" ? operation[key] : "";
-      if (value && !available.has(value)) return false;
+
+    if (operation.op === "set-html") {
+      if (!available.has(operation.targetId)) continue;
+      operations.push(operation);
+      // set-html replaces only the target's children. Once the compiler has had
+      // an opportunity to coalesce preservation moves, descendants that are not
+      // present in the replacement must no longer be treated as valid targets.
+      for (const id of semanticDescendants(operation.targetId, children)) available.delete(id);
+      available.add(operation.targetId);
+      for (const id of semanticIdsFromOperationHtml(operation as unknown as Record<string, unknown>)) {
+        available.add(id);
+      }
+      continue;
     }
-    return true;
-  });
+
+    if (operation.op === "recompose-region") {
+      if (!available.has(operation.targetId)) continue;
+      const introducedIds = semanticIdsFromOperationHtml(operation as unknown as Record<string, unknown>);
+      const stagedIds = new Set([...available, ...introducedIds, operation.targetId]);
+      const placementsResolve = operation.placements.every((placement) =>
+        stagedIds.has(placement.targetId)
+        && stagedIds.has(placement.parentId)
+        && (!placement.beforeId || stagedIds.has(placement.beforeId)),
+      );
+      if (!placementsResolve) continue;
+      operations.push(operation);
+      const preservedRoots = new Set(operation.placements.map((placement) => placement.targetId));
+      for (const placement of operation.placements) evacuatedRoots.add(placement.targetId);
+      for (const id of semanticDescendants(operation.targetId, children)) {
+        const preserved = [...preservedRoots].some((rootId) =>
+          isSemanticDescendant(id, rootId, children),
+        );
+        if (!preserved && !isEvacuated(id)) available.delete(id);
+      }
+      available.add(operation.targetId);
+      for (const id of introducedIds) available.add(id);
+      for (const placement of operation.placements) {
+        available.add(placement.targetId);
+        for (const id of semanticDescendants(placement.targetId, children)) available.add(id);
+      }
+      for (const retiredId of operation.retireNodeIds ?? []) {
+        available.delete(retiredId);
+        for (const id of semanticDescendants(retiredId, children)) available.delete(id);
+      }
+      continue;
+    }
+
+    if (operation.op === "move") {
+      if (!available.has(operation.targetId) || !available.has(operation.parentId)) continue;
+      if (operation.beforeId && !available.has(operation.beforeId)) continue;
+      operations.push(operation);
+      evacuatedRoots.add(operation.targetId);
+      continue;
+    }
+
+    if (operation.op === "remove") {
+      if (!available.has(operation.targetId)) continue;
+      operations.push(operation);
+      if (!isEvacuated(operation.targetId)) available.delete(operation.targetId);
+      for (const id of semanticDescendants(operation.targetId, children)) {
+        if (!isEvacuated(id)) available.delete(id);
+      }
+      continue;
+    }
+
+    if (!available.has(operation.targetId)) continue;
+    operations.push(operation);
+  }
+
   return { ...draft, operations };
 }
 
@@ -205,6 +335,14 @@ export function prepareNorthstarEditorialPublicationDraft(
     { op: "remove", targetId: "thought-secondary" },
     { op: "remove", targetId: "thought-tertiary" },
     { op: "remove", targetId: "current-act" },
+    {
+      op: "set-attributes",
+      targetId: "evidence-reservoir",
+      attributes: {
+        open: null,
+        "data-ns-evidence-reservoir-state": "collapsed-for-publication",
+      },
+    },
   );
   for (const app of dataBundle?.apps ?? []) {
     const slug = slugify(app.name);
@@ -214,7 +352,7 @@ export function prepareNorthstarEditorialPublicationDraft(
   }
   operations.push(
     { op: "set-attributes", targetId: "artboard", attributes: { "data-ns-transaction-state": "settled", "data-ns-publication": "verified", "data-ns-thought-stage": "settled" } },
-    { op: "set-css-layer", layerId: "continuous-authorship-publication-cleanup", css: `[data-ns-publication-policy="working-only"],[data-ns-working-role="status"],[data-ns-current-focus="true"],.ns-reasoning-zone{display:none!important}.ns-process-provenance{display:flex;align-items:baseline;gap:12px;margin-top:18px;padding-top:14px;border-top:1px solid color-mix(in srgb,currentColor 14%,transparent);font-size:11px;line-height:1.45;opacity:.66}.ns-process-provenance span{font-weight:800;letter-spacing:.1em;text-transform:uppercase}.ns-process-provenance p{margin:0;max-width:72ch}.ns-published-artifact .ns-role-identity{background:transparent!important;box-shadow:none!important;border-radius:0!important}` },
+    { op: "set-css-layer", layerId: "continuous-authorship-publication-cleanup", css: `[data-ns-publication-policy="working-only"],[data-ns-working-role="status"],[data-ns-current-focus="true"],.ns-reasoning-zone{display:none!important}.ns-process-provenance{display:flex;align-items:baseline;gap:12px;margin-top:18px;padding-top:14px;border-top:1px solid color-mix(in srgb,currentColor 14%,transparent);font-size:11px;line-height:1.45;opacity:.66}.ns-process-provenance span{font-weight:800;letter-spacing:.1em;text-transform:uppercase}.ns-process-provenance p{margin:0;max-width:72ch}.ns-published-artifact .ns-role-identity{background:transparent!important;box-shadow:none!important;border-radius:0!important}[data-ns-node-id="evidence-reservoir"]:not([open]){margin-top:18px!important;padding-top:10px!important;border-top:1px solid color-mix(in srgb,currentColor 10%,transparent)!important}[data-ns-node-id="evidence-reservoir"]:not([open])>summary{font-size:9px!important;letter-spacing:.13em!important;text-transform:uppercase!important;opacity:.58!important}` },
   );
   return { ...draft, operations };
 }

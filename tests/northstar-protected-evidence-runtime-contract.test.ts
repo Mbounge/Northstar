@@ -17,3 +17,10 @@ test("runtime collision detection protects rendered media, not text-only evidenc
   assert.equal(runtimeDocument.includes('Boolean(element.querySelector("img,video,canvas,svg"))'), true);
   assert.equal(canonicalEvidence.includes('data-ns-protected-evidence="true"'), true);
 });
+
+
+test("runtime-owned inheritance preserves omitted evidence instead of requiring model bookkeeping", () => {
+  assert.equal(runtimeDocument.includes('data-ns-runtime-inherited-placement'), true);
+  assert.equal(runtimeDocument.includes('placement.preserveGeometry'), true);
+  assert.equal(runtimeDocument.includes('clearRuntimeInheritedPlacement'), true);
+});

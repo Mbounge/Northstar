@@ -15,6 +15,7 @@ export interface NorthstarPlannedDetailView {
 
 export interface NorthstarCapturedDetailView extends NorthstarPlannedDetailView {
   image: NorthstarRenderedArtifactPng;
+  role?: "spatial-detail" | "cinema-frame" | "workspace-frame";
 }
 
 export interface NorthstarVisualObservation {
@@ -200,12 +201,18 @@ export function buildNorthstarVisualObservationParts(input: {
   ];
 
   input.observation.detailViews.forEach((detail, index) => {
+    const isCinemaFrame = detail.role === "cinema-frame";
+    const isWorkspaceFrame = detail.role === "workspace-frame";
     parts.push({
       text: [
-        `${label} — detail view ${index + 1}.`,
+        `${label} — ${isCinemaFrame ? "exact compositor cinema frame" : isWorkspaceFrame ? "stable Northstar workspace-fit frame" : "detail view"} ${index + 1}.`,
         `Reason: ${detail.reason}`,
         `Authored-space bounds: ${JSON.stringify(detail.bounds)}.`,
-        "Use this only to inspect craft and local communication. The runtime, not the model, owns artboard sizing.",
+        isCinemaFrame
+          ? "Judge continuity between complete source states. Accidental blank teardown, obscured evidence, clipping, or a broken intermediate state is an implementation defect; weak or generic choreography is a creative weakness for the next model-owned source revision."
+          : isWorkspaceFrame
+            ? "Judge the real initial user experience: stable outer-object fit, primary-text legibility, host-safe margins, premium Northstar background framing, and whether preserved evidence supports rather than overwhelms the declared reading path."
+            : "Use this only to inspect craft and local communication. The runtime, not the model, owns artboard sizing.",
       ].join("\n"),
     });
     parts.push({ inlineData: { mimeType: detail.image.mimeType, data: detail.image.data } });

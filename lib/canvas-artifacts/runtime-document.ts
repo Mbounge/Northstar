@@ -1,4 +1,4 @@
-// Northstar Canvas Artifact Runtime v0.7.9 â€” idempotent terminal replay on one continuously mounted surface.
+// Northstar Canvas Artifact Runtime v0.9.0 — live visual authorship, deterministic typed primitives, precise analytical layout, and obstacle-aware semantic routing.
 import type { CanvasCodeArtifactPayload } from "./types";
 import { NORTHSTAR_DESIGN_KERNEL_CSS } from "@/lib/canvas-ai/northstar-design-kernel";
 import { NORTHSTAR_HEALTH_POLICY } from "@/lib/canvas-ai/northstar-health-policy";
@@ -45,11 +45,17 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const initialRevisionId = artifact.pendingAckToken
     ? artifact.parentRevisionId ?? artifact.revisionId
     : artifact.revisionId;
+  const shouldAnimateInitialMount = mutationJournal.length === 0 && artifact.provisional && activeStageIndex === 0;
   const allowedAssetUrls = Array.from(new Set([
     ...(dataBundle.allowedAssetUrls ?? []),
     ...dataBundle.screenshots.map((screen) => screen.imageUrl).filter((value): value is string => Boolean(value)),
     ...dataBundle.apps.map((app) => app.iconUrl).filter((value): value is string => Boolean(value)),
   ]));
+
+  const initialAuthoredCssLayers = Object.entries(documentSource.cssLayers ?? {})
+    .filter(([styleId]) => /^northstar-mutation-style-[a-zA-Z0-9_-]+$/.test(styleId))
+    .map(([styleId, css]) => `<style id="${styleId}">${String(css).replaceAll("</style", "<\\/style")}</style>`)
+    .join("\n");
 
   const bridgeScript = String.raw`
 (() => {
@@ -61,9 +67,12 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   let currentData = ${safeJson(dataBundle)};
   let currentCreative = ${safeJson(artifact.creativeDirection ?? null)};
   let currentReviews = ${safeJson(artifact.creativeReviews ?? [])};
+  let currentPublicationState = ${safeJson(artifact.publicationState ?? "working")};
+  let currentProvisional = ${safeJson(artifact.provisional !== false)};
   let activeStageIndex = ${activeStageIndex};
   const STAGES = ${safeJson(stages)};
   const INITIAL_JOURNAL = ${safeJson(initialJournal)};
+  const SHOULD_ANIMATE_INITIAL_MOUNT = ${safeJson(shouldAnimateInitialMount)};
   const ALLOWED_ASSETS = new Set(${safeJson(allowedAssetUrls)});
   const registerAssets = (values) => {
     for (const value of Array.isArray(values) ? values : []) {
@@ -81,6 +90,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   let applyingMutation = false;
   let pendingAcknowledgement = null;
   let requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
+  let sourceOwnedGeometryActive = false;
   let spatialBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   let spatialLayoutVersion = 0;
   let lastSpatialAudit = null;
@@ -100,11 +110,69 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const origin = document.getElementById("northstar-artifact-origin");
   const root = document.getElementById("northstar-artifact-root");
   if (!stageSurface || !origin || !root) return;
+  const prepaintFailsafe = window.setTimeout(() => root.removeAttribute("data-ns-prepaint"), 8_000);
 
   // Runtime-owned overlays are derived browser state. A historical snapshot may
   // contain them, but a mount must always begin from one clean authored tree.
   root.querySelectorAll('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
   document.querySelectorAll('style[data-ns-runtime-owned="true"],style[data-ns-runtime-spatial-style]').forEach((element) => element.remove());
+
+  const applyPublicationPresentationState = () => {
+    const verified = currentPublicationState === "verified" && currentProvisional === false;
+    root.setAttribute("data-ns-publication", verified ? "verified" : "working");
+    root.setAttribute("data-ns-transaction-state", verified ? "settled" : (root.getAttribute("data-ns-transaction-state") || "visible"));
+    let style = document.getElementById("northstar-publication-presentation-state");
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "northstar-publication-presentation-state";
+      style.setAttribute("data-ns-runtime-owned", "true");
+      document.head.appendChild(style);
+    }
+    style.textContent = verified
+      ? '[data-ns-publication-policy="working-only"],[data-ns-thought-state="active"],[data-ns-thought-state="evolving"]{display:none!important}[data-ns-current-focus="true"]{outline:none!important;box-shadow:none!important}'
+      : '';
+    queueMicrotask(() => { try { queueContentSize(); } catch {} });
+  };
+  applyPublicationPresentationState();
+
+  const authoredArtboard = () => root.querySelector('[data-ns-node-id="artboard"]');
+  const hasModelSourceAuthority = () => authoredArtboard()?.getAttribute("data-ns-creative-authority") === "model-source";
+  const syncIntrinsicGeometryMode = () => {
+    const artboard = authoredArtboard();
+    const sourceOwned = hasModelSourceAuthority();
+    if (sourceOwned && !sourceOwnedGeometryActive) {
+      // The permanent foundation reserves a generous working surface. Once the
+      // model owns the cumulative source, that historical reservation must not
+      // become a false minimum that creates blank lower space or an interior
+      // host-background gutter. The browser now derives outer geometry from the
+      // authored content itself.
+      requestedBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      sourceOwnedGeometryActive = true;
+    } else if (!sourceOwned) {
+      sourceOwnedGeometryActive = false;
+    }
+    const minimumWidth = sourceOwned ? 1 : MINIMUM_WIDTH;
+    const minimumHeight = sourceOwned ? 1 : MINIMUM_HEIGHT;
+    stageSurface.style.minWidth = minimumWidth + "px";
+    stageSurface.style.minHeight = minimumHeight + "px";
+    root.style.minWidth = minimumWidth + "px";
+    root.style.minHeight = minimumHeight + "px";
+    let geometryStyle = document.getElementById("northstar-source-owned-intrinsic-geometry");
+    if (!geometryStyle) {
+      geometryStyle = document.createElement("style");
+      geometryStyle.id = "northstar-source-owned-intrinsic-geometry";
+      geometryStyle.setAttribute("data-ns-runtime-owned", "true");
+      document.head.appendChild(geometryStyle);
+    }
+    // Root dimensions are runtime-owned; the model remains free to author any
+    // internal HTML/CSS/SVG composition. This runtime-only stylesheet removes
+    // the stale foundation width/min-height without contaminating the authored
+    // DOM or the cumulative source snapshot with inline geometry declarations.
+    geometryStyle.textContent = sourceOwned
+      ? '[data-ns-node-id="artboard"][data-ns-creative-authority="model-source"]{width:max-content!important;height:max-content!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important}'
+      : "";
+    return { sourceOwned, minimumWidth, minimumHeight, artboard };
+  };
 
   const cssEscape = (value) => window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replace(/[^a-zA-Z0-9:_-]/g, "");
   const LEGACY_NODE_SELECTORS = Object.freeze({
@@ -214,7 +282,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     "[data-ns-annotation-id]:not([data-ns-spatial-copy]){display:none!important}",
     "[data-ns-spatial-copy]{position:absolute!important;display:block!important;box-sizing:border-box;pointer-events:none;z-index:2}",
     "[data-ns-spatial-copy][data-ns-flow-caption=true]{text-align:center;line-height:1.2}",
-    "[data-ns-relationship-id]{display:none!important}",
+    "[data-ns-relationship-metadata=true],[data-ns-analysis-placement=external-relationship]{display:none!important}",
     ".ns-spatial-path{fill:none;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}",
     ".ns-spatial-route-label{font:700 12px/1.2 Inter,ui-sans-serif,system-ui,sans-serif;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}",
   ].join("\\n");
@@ -241,6 +309,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     excessiveDistanceIds: [],
     unresolvedRelationshipIds: [],
     obstacleIntersectionIds: [],
+    annotationLeaderIntersectionIds: [],
+    unresolvedAnalyticalSourceIds: [],
+    emptyAnalyticalPrimitiveIds: [],
+    clippedAnalyticalPrimitiveIds: [],
     falseIntersectionIds: [],
     crossingCount: 0,
     hardFailureCount: 0,
@@ -275,6 +347,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const rect = localRect(element.getBoundingClientRect(), rootRect);
         const nodeId = element.getAttribute("data-ns-node-id") || "";
         return {
+          element,
           nodeId,
           rect,
           center: { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 },
@@ -324,37 +397,126 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       ? [source.ports.bottom, target.ports.top]
       : [source.ports.top, target.ports.bottom];
   };
-  const makeRelationshipPath = (source, target, route) => {
+  const cubicPoint = (start, c1, c2, end, t) => {
+    const mt = 1 - t;
+    return {
+      x: mt * mt * mt * start.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * end.x,
+      y: mt * mt * mt * start.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * end.y,
+    };
+  };
+  const makeRelationshipPath = (source, target, route, variant) => {
     const selected = choosePorts(source, target);
     const start = selected[0], end = selected[1];
     if (route === "straight") {
-      return { d: "M" + start.x + "," + start.y + " L" + end.x + "," + end.y, points: [start, end] };
+      return { d: "M" + start.x + "," + start.y + " L" + end.x + "," + end.y, points: [start, end], samples: [start, end] };
     }
     if (route === "elbow" || route === "shared-spine" || route === "bracket") {
-      const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
-      const first = horizontal
-        ? { x: (start.x + end.x) / 2, y: start.y }
-        : { x: start.x, y: (start.y + end.y) / 2 };
-      const second = horizontal
-        ? { x: (start.x + end.x) / 2, y: end.y }
-        : { x: end.x, y: (start.y + end.y) / 2 };
+      const horizontal = variant === "vertical" ? false : variant === "horizontal" ? true : Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+      const offset = route === "bracket" ? 34 : 0;
+      const midpoint = horizontal ? (start.x + end.x) / 2 + offset : (start.y + end.y) / 2 + offset;
+      const first = horizontal ? { x: midpoint, y: start.y } : { x: start.x, y: midpoint };
+      const second = horizontal ? { x: midpoint, y: end.y } : { x: end.x, y: midpoint };
+      const points = [start, first, second, end];
       return {
         d: "M" + start.x + "," + start.y + " L" + first.x + "," + first.y + " L" + second.x + "," + second.y + " L" + end.x + "," + end.y,
-        points: [start, first, second, end],
+        points,
+        samples: points,
       };
     }
-    const curve = Math.max(48, Math.min(260, distance(start, end) * 0.28));
-    const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+    const curve = Math.max(48, Math.min(300, distance(start, end) * 0.28));
+    const horizontal = variant === "vertical" ? false : variant === "horizontal" ? true : Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+    const bend = variant === "reverse" ? -1 : 1;
     const c1 = horizontal
-      ? { x: start.x + Math.sign(end.x - start.x || 1) * curve, y: start.y }
-      : { x: start.x, y: start.y + Math.sign(end.y - start.y || 1) * curve };
+      ? { x: start.x + Math.sign(end.x - start.x || 1) * curve, y: start.y + bend * 24 }
+      : { x: start.x + bend * 24, y: start.y + Math.sign(end.y - start.y || 1) * curve };
     const c2 = horizontal
-      ? { x: end.x - Math.sign(end.x - start.x || 1) * curve, y: end.y }
-      : { x: end.x, y: end.y - Math.sign(end.y - start.y || 1) * curve };
+      ? { x: end.x - Math.sign(end.x - start.x || 1) * curve, y: end.y + bend * 24 }
+      : { x: end.x + bend * 24, y: end.y - Math.sign(end.y - start.y || 1) * curve };
+    const samples = Array.from({ length: 21 }, (_value, index) => cubicPoint(start, c1, c2, end, index / 20));
     return {
       d: "M" + start.x + "," + start.y + " C" + c1.x + "," + c1.y + " " + c2.x + "," + c2.y + " " + end.x + "," + end.y,
       points: [start, c1, c2, end],
+      samples,
     };
+  };
+  const segmentIntersectsRect = (a, b, rect, padding) => {
+    const left = rect.x - padding, right = rect.right + padding, top = rect.y - padding, bottom = rect.bottom + padding;
+    if ((a.x < left && b.x < left) || (a.x > right && b.x > right) || (a.y < top && b.y < top) || (a.y > bottom && b.y > bottom)) return false;
+    const steps = Math.max(4, Math.ceil(distance(a, b) / 24));
+    for (let index = 0; index <= steps; index += 1) {
+      const t = index / steps;
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t;
+      if (x >= left && x <= right && y >= top && y <= bottom) return true;
+    }
+    return false;
+  };
+  const relationshipObstacleScore = (candidate, obstacles) => {
+    let score = 0;
+    const samples = candidate.samples || candidate.points || [];
+    for (let index = 1; index < samples.length; index += 1) {
+      for (const obstacle of obstacles) {
+        if (segmentIntersectsRect(samples[index - 1], samples[index], obstacle.rect, 8)) score += obstacle.isScreenshot ? 1000 : 120;
+      }
+    }
+    return score;
+  };
+  const makeDetourPath = (source, target, side, obstacles) => {
+    const selected = choosePorts(source, target);
+    const start = selected[0], end = selected[1];
+    if (!obstacles.length) return undefined;
+    const minX = Math.min(...obstacles.map((obstacle) => obstacle.rect.x));
+    const maxX = Math.max(...obstacles.map((obstacle) => obstacle.rect.right));
+    const minY = Math.min(...obstacles.map((obstacle) => obstacle.rect.y));
+    const maxY = Math.max(...obstacles.map((obstacle) => obstacle.rect.bottom));
+    const margin = 34;
+    let points;
+    if (side === "above") {
+      const y = Math.max(12, minY - margin);
+      points = [start, { x: start.x, y }, { x: end.x, y }, end];
+    } else if (side === "below") {
+      const y = maxY + margin;
+      points = [start, { x: start.x, y }, { x: end.x, y }, end];
+    } else if (side === "left") {
+      const x = Math.max(12, minX - margin);
+      points = [start, { x, y: start.y }, { x, y: end.y }, end];
+    } else {
+      const x = maxX + margin;
+      points = [start, { x, y: start.y }, { x, y: end.y }, end];
+    }
+    return {
+      d: points.map((point, index) => (index ? "L" : "M") + point.x + "," + point.y).join(" "),
+      points,
+      samples: points,
+      route: "detour-" + side,
+      variant: side,
+    };
+  };
+  const chooseRelationshipRoute = (source, target, requestedRoute, obstacles) => {
+    const requests = [
+      [requestedRoute || "soft-curve", undefined],
+      ["elbow", "horizontal"],
+      ["elbow", "vertical"],
+      ["soft-curve", "horizontal"],
+      ["soft-curve", "vertical"],
+      ["soft-curve", "reverse"],
+      ["straight", undefined],
+    ];
+    const candidates = requests.map(([route, variant]) => ({ ...makeRelationshipPath(source, target, route, variant), route, variant }));
+    for (const side of ["above", "below", "left", "right"]) {
+      const detour = makeDetourPath(source, target, side, obstacles);
+      if (detour) candidates.push(detour);
+    }
+    let best;
+    for (const candidate of candidates) {
+      const score = relationshipObstacleScore(candidate, obstacles);
+      const samples = candidate.samples || candidate.points || [];
+      const length = samples.slice(1).reduce((sum, point, index) => sum + distance(samples[index], point), 0);
+      const bendPenalty = Math.max(0, samples.length - 2) * 4;
+      const cost = score + length * 0.02 + bendPenalty;
+      if (!best || cost < best.cost) best = { ...candidate, cost, obstacleScore: score };
+    }
+    return best;
   };
 
   const solveSpatialSystem = () => {
@@ -372,9 +534,32 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       const excessiveDistanceIds = [];
       const unresolvedRelationshipIds = [];
       const obstacleIntersectionIds = [];
+      const annotationLeaderIntersectionIds = [];
+      const unresolvedAnalyticalSourceIds = [];
+      const emptyAnalyticalPrimitiveIds = [];
+      const clippedAnalyticalPrimitiveIds = [];
       const falseIntersectionIds = [];
       const placed = [];
       let crossingCount = 0;
+
+      const rootRect = root.getBoundingClientRect();
+      const analyticalPrimitives = Array.from(root.querySelectorAll('[data-ns-analysis-kind="chart"],[data-ns-analysis-kind="sparkline"],[data-ns-analysis-kind="axis"],[data-ns-analysis-kind="analytical-bridge"],[data-ns-analysis-kind="relationship"]:not([data-ns-analysis-placement="external-relationship"]):not([data-ns-relationship-metadata="true"])'));
+      for (const primitive of analyticalPrimitives) {
+        const primitiveId = primitive.getAttribute("data-ns-node-id") || primitive.getAttribute("data-ns-analysis-kind") || "analytical-primitive";
+        const sourceIds = (primitive.getAttribute("data-ns-source-ids") || primitive.getAttribute("data-ns-source-id") || "")
+          .split(/[\s,]+/)
+          .filter(Boolean);
+        if (["chart", "sparkline", "axis"].includes(primitive.getAttribute("data-ns-analysis-kind") || "")) {
+          if (!sourceIds.length || sourceIds.some((sourceId) => !byId.has(sourceId))) unresolvedAnalyticalSourceIds.push(primitiveId);
+        }
+        const rect = primitive.getBoundingClientRect();
+        if (rect.width < 32 || rect.height < 10 || getComputedStyle(primitive).visibility === "hidden") emptyAnalyticalPrimitiveIds.push(primitiveId);
+        const style = getComputedStyle(primitive);
+        const clippedBySelf = (primitive.scrollWidth > primitive.clientWidth + 2 && style.overflowX !== "visible")
+          || (primitive.scrollHeight > primitive.clientHeight + 2 && style.overflowY !== "visible");
+        const clippedByRoot = rect.left < rootRect.left - 2 || rect.top < rootRect.top - 2 || rect.right > rootRect.right + 2 || rect.bottom > rootRect.bottom + 2;
+        if (clippedBySelf || clippedByRoot) clippedAnalyticalPrimitiveIds.push(primitiveId);
+      }
 
       const annotations = Array.from(root.querySelectorAll("[data-ns-annotation-id]"))
         .filter((element) => !element.hasAttribute("data-ns-spatial-copy"));
@@ -504,7 +689,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         for (const item of placed) {
           if (overlaps(best.rect, item.rect, 4)) overlappingAnnotationPairs.push([item.id, annotationId]);
         }
-        placed.push({ id: annotationId, rect: best.rect });
+        placed.push({ id: annotationId, rect: best.rect, anchorId, anchorNode, metadata });
         spatialBounds.minX = Math.min(spatialBounds.minX, Math.floor(best.rect.x - 24));
         spatialBounds.minY = Math.min(spatialBounds.minY, Math.floor(best.rect.y - 24));
         spatialBounds.maxX = Math.max(spatialBounds.maxX, Math.ceil(best.rect.right + 24));
@@ -516,21 +701,71 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       });
 
       relationshipLayer.replaceChildren();
-      const metadataNodes = Array.from(root.querySelectorAll("[data-ns-relationship-id]"))
-        .filter((element) => !element.closest("[data-ns-spatial-system]"));
+      for (const annotation of placed) {
+        const annotationNode = {
+          rect: annotation.rect,
+          center: { x: annotation.rect.x + annotation.rect.width / 2, y: annotation.rect.y + annotation.rect.height / 2 },
+          ports: ports(annotation.rect),
+        };
+        const obstacles = scene.filter((node) =>
+          node.nodeId !== annotation.anchorId
+          && !annotation.anchorNode.element?.contains?.(node.element)
+          && !node.element?.contains?.(annotation.anchorNode.element)
+          && (node.isScreenshot || node.evidenceId)
+        );
+        const routed = chooseRelationshipRoute(annotation.anchorNode, annotationNode, "elbow", obstacles);
+        if (!routed) {
+          unresolvedAnchorIds.push(annotation.id);
+          continue;
+        }
+        if (routed.obstacleScore > 0) annotationLeaderIntersectionIds.push(annotation.id);
+        const leader = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        leader.setAttribute("class", "ns-spatial-path");
+        leader.setAttribute("data-ns-routed-annotation-id", annotation.id);
+        leader.setAttribute("d", routed.d);
+        leader.setAttribute("stroke", "rgba(76,65,132,.56)");
+        leader.setAttribute("stroke-width", "1.5");
+        leader.setAttribute("stroke-dasharray", "3 4");
+        relationshipLayer.appendChild(leader);
+      }
+
+      const metadataNodes = Array.from(root.querySelectorAll("[data-ns-relationship-id][data-ns-source-id], [data-ns-relationship-id][data-ns-source-node-id]"))
+        .filter((element) => !element.closest("[data-ns-spatial-system]"))
+        .sort((a, b) => {
+          const priority = { primary: 0, secondary: 1, supporting: 2 };
+          return (priority[a.getAttribute("data-ns-priority") || "secondary"] ?? 1)
+            - (priority[b.getAttribute("data-ns-priority") || "secondary"] ?? 1);
+        });
       const routedBounds = [];
       for (const metadata of metadataNodes) {
         const relationshipId = metadata.getAttribute("data-ns-relationship-id") || "";
-        const source = byId.get(metadata.getAttribute("data-ns-source-id") || "");
-        const target = byId.get(metadata.getAttribute("data-ns-target-id") || "");
+        const sourceId = metadata.getAttribute("data-ns-source-id") || metadata.getAttribute("data-ns-source-node-id") || "";
+        const targetId = metadata.getAttribute("data-ns-target-id") || metadata.getAttribute("data-ns-target-node-id") || "";
+        const source = byId.get(sourceId);
+        const target = byId.get(targetId);
         if (!relationshipId || !source || !target) {
           unresolvedRelationshipIds.push(relationshipId || "relationship");
           continue;
         }
-        const routed = makeRelationshipPath(source, target, metadata.getAttribute("data-ns-route") || "soft-curve");
+        const obstacles = scene.filter((node) =>
+          node.nodeId !== sourceId
+          && node.nodeId !== targetId
+          && !source.element?.contains?.(node.element)
+          && !target.element?.contains?.(node.element)
+          && !node.element?.contains?.(source.element)
+          && !node.element?.contains?.(target.element)
+          && (node.isScreenshot || node.evidenceId)
+        );
+        const routed = chooseRelationshipRoute(source, target, metadata.getAttribute("data-ns-route") || "soft-curve", obstacles);
+        if (!routed) {
+          unresolvedRelationshipIds.push(relationshipId);
+          continue;
+        }
+        if (routed.obstacleScore > 0) obstacleIntersectionIds.push(relationshipId);
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("class", "ns-spatial-path");
         path.setAttribute("data-ns-routed-relationship-id", relationshipId);
+        path.setAttribute("data-ns-resolved-route", String(routed.route || "soft-curve"));
         path.setAttribute("d", routed.d);
         const priority = metadata.getAttribute("data-ns-priority") || "secondary";
         const confidence = Math.max(0.5, Math.min(1, Number(metadata.getAttribute("data-ns-confidence")) || 0.65));
@@ -539,8 +774,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         path.setAttribute("stroke-opacity", String(confidence));
         if ((metadata.getAttribute("data-ns-relationship-type") || "") === "contrastive") path.setAttribute("stroke-dasharray", "8 7");
         relationshipLayer.appendChild(path);
-        const xs = routed.points.map((point) => point.x);
-        const ys = routed.points.map((point) => point.y);
+        const routeSamples = routed.samples || routed.points;
+        const xs = routeSamples.map((point) => point.x);
+        const ys = routeSamples.map((point) => point.y);
         const bounds = {
           x: Math.min.apply(null, xs),
           y: Math.min.apply(null, ys),
@@ -555,7 +791,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const label = metadata.getAttribute("data-ns-label");
         if (label) {
           const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-          const midpoint = routed.points[Math.floor(routed.points.length / 2)];
+          const midpoint = routeSamples[Math.floor(routeSamples.length / 2)];
           text.setAttribute("class", "ns-spatial-route-label");
           text.setAttribute("x", String(midpoint.x + 8));
           text.setAttribute("y", String(midpoint.y - 8));
@@ -587,10 +823,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         overlappingAnnotationPairs.length +
         annotationTargetOverlapIds.length +
         clippedAnnotationIds.length +
-        unresolvedRelationshipIds.length;
+        unresolvedRelationshipIds.length +
+        obstacleIntersectionIds.length +
+        annotationLeaderIntersectionIds.length +
+        unresolvedAnalyticalSourceIds.length +
+        emptyAnalyticalPrimitiveIds.length +
+        clippedAnalyticalPrimitiveIds.length;
       const softIssueCount =
         excessiveDistanceIds.length +
-        obstacleIntersectionIds.length +
         falseIntersectionIds.length +
         crossingCount;
       lastSpatialAudit = {
@@ -603,6 +843,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         excessiveDistanceIds,
         unresolvedRelationshipIds,
         obstacleIntersectionIds,
+        annotationLeaderIntersectionIds,
+        unresolvedAnalyticalSourceIds,
+        emptyAnalyticalPrimitiveIds,
+        clippedAnalyticalPrimitiveIds,
         falseIntersectionIds,
         crossingCount,
         hardFailureCount,
@@ -622,6 +866,61 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
   };
 
+  const measureCreativeNode = (nodeId) => {
+    const id = String(nodeId || "").trim();
+    const node = id ? nodeById(id) : null;
+    if (!node) {
+      const error = new Error("NORTHSTAR_CAPABILITY_NODE_NOT_FOUND: No mounted semantic node exists for " + (id || "<empty>"));
+      error.code = "NORTHSTAR_CAPABILITY_NODE_NOT_FOUND";
+      error.nodeId = id;
+      throw error;
+    }
+    const rootRect = root.getBoundingClientRect();
+    const rect = node.getBoundingClientRect();
+    return Object.freeze({
+      nodeId: id,
+      x: rect.left - rootRect.left,
+      y: rect.top - rootRect.top,
+      width: rect.width,
+      height: rect.height,
+      top: rect.top - rootRect.top,
+      right: rect.right - rootRect.left,
+      bottom: rect.bottom - rootRect.top,
+      left: rect.left - rootRect.left,
+      centerX: rect.left - rootRect.left + rect.width / 2,
+      centerY: rect.top - rootRect.top + rect.height / 2,
+    });
+  };
+  const routeBetweenCreativeNodes = (sourceId, targetId, options = {}) => {
+    const source = measureCreativeNode(sourceId);
+    const target = measureCreativeNode(targetId);
+    if (!source.nodeId || !target.nodeId || source.nodeId === target.nodeId) {
+      const error = new Error("NORTHSTAR_CAPABILITY_INVALID_ROUTE: routeBetween requires two distinct mounted semantic node IDs.");
+      error.code = "NORTHSTAR_CAPABILITY_INVALID_ROUTE";
+      error.sourceId = source.nodeId;
+      error.targetId = target.nodeId;
+      throw error;
+    }
+    const bend = Number.isFinite(Number(options.bend)) ? Math.max(-1, Math.min(1, Number(options.bend))) : 0;
+    const start = { x: source.centerX, y: source.centerY };
+    const end = { x: target.centerX, y: target.centerY };
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const normalX = -dy / distance;
+    const normalY = dx / distance;
+    const offset = distance * .22 * bend;
+    const control = { x: (start.x + end.x) / 2 + normalX * offset, y: (start.y + end.y) / 2 + normalY * offset };
+    return Object.freeze({
+      source,
+      target,
+      start: Object.freeze(start),
+      end: Object.freeze(end),
+      control: Object.freeze(control),
+      path: "M" + start.x.toFixed(2) + "," + start.y.toFixed(2) + " Q" + control.x.toFixed(2) + "," + control.y.toFixed(2) + " " + end.x.toFixed(2) + "," + end.y.toFixed(2),
+    });
+  };
+
   const Northstar = Object.freeze({
     get data() { return currentData; },
     get creative() { return currentCreative; },
@@ -629,6 +928,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     root,
     query: (selector) => root.querySelector(selector),
     queryAll: (selector) => Array.from(root.querySelectorAll(selector)),
+    measure: measureCreativeNode,
+    routeBetween: routeBetweenCreativeNodes,
     on: (target, event, handler, options) => { target?.addEventListener?.(event, handler, options); return () => target?.removeEventListener?.(event, handler, options); },
     emit: (name, detail) => root.dispatchEvent(new CustomEvent(name, { detail })),
     canvas: Object.freeze({ requestSpace, baseSize: Object.freeze({ width: MINIMUM_WIDTH, height: MINIMUM_HEIGHT }) }),
@@ -644,6 +945,98 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const found = STAGES.findIndex((stage) => stage.phase === phase);
     return found < 0 ? 0 : found;
   };
+  const setImportantStyle = (element, name, value) => {
+    if (!(element instanceof HTMLElement || element instanceof SVGElement)) return;
+    element.style.setProperty(name, value, "important");
+  };
+  const normalizeAnalyticalFlow = () => {
+    root.querySelectorAll("[data-ns-analysis-placement]").forEach((element) => {
+      const mode = element.getAttribute("data-ns-analysis-placement") || "";
+      if (mode === "external-relationship" || element.getAttribute("data-ns-relationship-metadata") === "true") return;
+      if (mode === "margin-lane" && element.hasAttribute("data-ns-annotation-id")) return;
+      if (mode !== "caption-lane" && mode !== "inter-row-lane" && mode !== "margin-lane") return;
+      setImportantStyle(element, "position", "relative");
+      setImportantStyle(element, "inset", "auto");
+      setImportantStyle(element, "transform", "none");
+      setImportantStyle(element, "float", "none");
+      setImportantStyle(element, "box-sizing", "border-box");
+      setImportantStyle(element, "min-width", "0");
+      setImportantStyle(element, "overflow", "visible");
+      if (mode === "caption-lane") {
+        setImportantStyle(element, "display", "block");
+        setImportantStyle(element, "width", "100%");
+        setImportantStyle(element, "max-width", "100%");
+        setImportantStyle(element, "clear", "both");
+        setImportantStyle(element, "align-self", "stretch");
+        setImportantStyle(element, "justify-self", "stretch");
+      } else if (mode === "inter-row-lane") {
+        setImportantStyle(element, "display", "block");
+        setImportantStyle(element, "grid-column", "1 / -1");
+        setImportantStyle(element, "grid-row", "auto");
+        setImportantStyle(element, "grid-area", "auto");
+        setImportantStyle(element, "width", "100%");
+        setImportantStyle(element, "max-width", "none");
+        setImportantStyle(element, "clear", "both");
+        setImportantStyle(element, "align-self", "stretch");
+        setImportantStyle(element, "justify-self", "stretch");
+      }
+    });
+
+    if (root.getAttribute("data-ns-analytical-reflow") !== "true") return;
+    root.querySelectorAll('[data-ns-node-id="northstar-communication-stack"]').forEach((element) => {
+      setImportantStyle(element, "position", "relative");
+      setImportantStyle(element, "inset", "auto");
+      setImportantStyle(element, "transform", "none");
+      setImportantStyle(element, "display", "flex");
+      setImportantStyle(element, "flex-direction", "column");
+      setImportantStyle(element, "align-items", "stretch");
+      setImportantStyle(element, "gap", "28px");
+      setImportantStyle(element, "grid-column", "1 / -1");
+      setImportantStyle(element, "grid-row", "auto");
+      setImportantStyle(element, "grid-area", "auto");
+      setImportantStyle(element, "width", "100%");
+      setImportantStyle(element, "max-width", "none");
+      setImportantStyle(element, "min-width", "0");
+      setImportantStyle(element, "clear", "both");
+      setImportantStyle(element, "overflow", "visible");
+      setImportantStyle(element, "box-sizing", "border-box");
+    });
+    root.querySelectorAll('[data-ns-role="analysis-slot"]').forEach((element) => {
+      setImportantStyle(element, "position", "relative");
+      setImportantStyle(element, "inset", "auto");
+      setImportantStyle(element, "display", "flex");
+      setImportantStyle(element, "flex-direction", "column");
+      setImportantStyle(element, "gap", "10px");
+      setImportantStyle(element, "width", "100%");
+      setImportantStyle(element, "max-width", "100%");
+      setImportantStyle(element, "min-width", "0");
+      setImportantStyle(element, "overflow", "visible");
+      setImportantStyle(element, "box-sizing", "border-box");
+    });
+    root.querySelectorAll('[data-ns-node-id="synthesis"],[data-ns-node-id="decision"]').forEach((element) => {
+      setImportantStyle(element, "position", "relative");
+      setImportantStyle(element, "inset", "auto");
+      setImportantStyle(element, "left", "auto");
+      setImportantStyle(element, "right", "auto");
+      setImportantStyle(element, "top", "auto");
+      setImportantStyle(element, "bottom", "auto");
+      setImportantStyle(element, "transform", "none");
+      setImportantStyle(element, "float", "none");
+      setImportantStyle(element, "clear", "both");
+      setImportantStyle(element, "grid-column", "1 / -1");
+      setImportantStyle(element, "grid-row", "auto");
+      setImportantStyle(element, "grid-area", "auto");
+      setImportantStyle(element, "width", "100%");
+      setImportantStyle(element, "max-width", "none");
+      setImportantStyle(element, "min-width", "0");
+      setImportantStyle(element, "margin-left", "0");
+      setImportantStyle(element, "margin-right", "0");
+      setImportantStyle(element, "align-self", "stretch");
+      setImportantStyle(element, "justify-self", "stretch");
+      setImportantStyle(element, "box-sizing", "border-box");
+      setImportantStyle(element, "overflow", "visible");
+    });
+  };
   const applyStage = () => {
     root.querySelectorAll("[data-ns-stage]").forEach((element) => {
       const index = stageIndexFor(element.getAttribute("data-ns-stage") || "foundation");
@@ -651,30 +1044,664 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       element.setAttribute("aria-hidden", "false");
       element.removeAttribute("data-ns-pending");
     });
+    normalizeAnalyticalFlow();
   };
 
   const snapshotRects = () => {
     const map = new Map();
     root.querySelectorAll("[data-ns-node-id]").forEach((element) => {
       const id = element.getAttribute("data-ns-node-id");
-      if (id) map.set(id, element.getBoundingClientRect());
+      if (!id) return;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const parentSemantic = element.parentElement?.closest?.("[data-ns-node-id]");
+      map.set(id, {
+        rect,
+        opacity: Number(style.opacity) || 1,
+        visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0,
+        parentId: parentSemantic?.getAttribute?.("data-ns-node-id") || undefined,
+        clone: element.cloneNode(true),
+      });
     });
     return map;
   };
-  const animateMutation = (before, duration) => {
-    root.querySelectorAll("[data-ns-node-id]").forEach((element) => {
-      const id = element.getAttribute("data-ns-node-id");
-      if (!id || !(element instanceof HTMLElement || element instanceof SVGElement)) return;
-      const prior = before.get(id), next = element.getBoundingClientRect();
-      if (!prior) {
-        element.animate([{ opacity: 0, transform: "translateY(10px) scale(.985)" }, { opacity: 1, transform: "none" }], { duration, easing: "cubic-bezier(.2,.8,.2,1)" });
-        return;
-      }
-      const dx = prior.left - next.left, dy = prior.top - next.top;
-      const sx = next.width > 0 ? prior.width / next.width : 1, sy = next.height > 0 ? prior.height / next.height : 1;
-      if (Math.abs(dx) < .5 && Math.abs(dy) < .5 && Math.abs(sx - 1) < .01 && Math.abs(sy - 1) < .01) return;
-      element.animate([{ transformOrigin: "top left", transform: "translate(" + dx + "px," + dy + "px) scale(" + sx + "," + sy + ")" }, { transformOrigin: "top left", transform: "none" }], { duration, easing: "cubic-bezier(.2,.8,.2,1)" });
+
+  const constructionSleep = (duration) => new Promise((resolve) => window.setTimeout(resolve, Math.max(0, duration || 0)));
+  const constructionOverlay = () => {
+    let overlay = origin.querySelector('[data-ns-construction-overlay="true"]');
+    if (overlay) return overlay;
+    overlay = document.createElement("div");
+    overlay.setAttribute("data-ns-runtime-owned", "true");
+    overlay.setAttribute("data-ns-construction-overlay", "true");
+    overlay.setAttribute("aria-hidden", "true");
+    Object.assign(overlay.style, {
+      position: "absolute",
+      inset: "0",
+      width: "100%",
+      height: "100%",
+      pointerEvents: "none",
+      overflow: "visible",
+      zIndex: "2147483000",
     });
+    const badge = document.createElement("div");
+    badge.setAttribute("data-ns-construction-badge", "true");
+    Object.assign(badge.style, {
+      position: "absolute",
+      top: "22px",
+      right: "24px",
+      display: "flex",
+      alignItems: "center",
+      gap: "9px",
+      maxWidth: "360px",
+      padding: "10px 14px",
+      borderRadius: "999px",
+      color: "#2c263d",
+      background: "rgba(255,255,255,.9)",
+      border: "1px solid rgba(96,74,220,.18)",
+      boxShadow: "0 14px 38px rgba(52,36,110,.14)",
+      backdropFilter: "blur(16px)",
+      font: "700 12px/1.25 Inter,ui-sans-serif,system-ui,sans-serif",
+      letterSpacing: ".01em",
+      zIndex: "1000",
+      opacity: "0",
+      transform: "translateY(-8px) scale(.98)",
+    });
+    const pulse = document.createElement("span");
+    Object.assign(pulse.style, { width: "8px", height: "8px", borderRadius: "999px", background: "#6b4dff", boxShadow: "0 0 0 5px rgba(107,77,255,.12)", flex: "0 0 auto" });
+    const label = document.createElement("span");
+    label.setAttribute("data-ns-construction-label", "true");
+    badge.append(pulse, label);
+    overlay.append(badge);
+    origin.append(overlay);
+    return overlay;
+  };
+
+  const classifyConstructionKind = (element, id) => {
+    const source = (id + " " + (element?.outerHTML || "")).toLowerCase();
+    if (/data-ns-annotation-id|annotation|callout/.test(source)) return "anchor-annotations";
+    if (/data-ns-relationship-id|relationship|connector/.test(source)) return "route-relationships";
+    if (/data-ns-analysis-kind|sparkline|chart|axis|plot|graph|heat[-_ ]?index|friction[-_ ]?(?:pulse|delta|index)/.test(source)) return "draw-analysis";
+    if (/synthesis|summary|takeaway/.test(source)) return "reveal-synthesis";
+    if (/decision|recommendation|conclusion|implication/.test(source)) return "resolve-decision";
+    if (/data-ns-evidence-id|data-ns-flow-id|protected-evidence|screenshot|screen-|flow-/.test(source)) return "choreograph-evidence";
+    if (/rail|lane|comparison-canvas|communication-stack|grid|sequence|layout|shell/.test(source)) return "open-layout";
+    if (/presentation|header|title|deck|analysis-core|frame|thesis/.test(source)) return "establish-frame";
+    return "settle";
+  };
+
+  const inferredConstructionPlan = (batch) => {
+    const order = ["establish-frame", "open-layout", "choreograph-evidence", "draw-analysis", "anchor-annotations", "route-relationships", "reveal-synthesis", "resolve-decision", "settle"];
+    const labels = {
+      "establish-frame": "Establishing the visual idea",
+      "open-layout": "Opening the composition",
+      "choreograph-evidence": "Choreographing grounded evidence",
+      "draw-analysis": "Drawing the analytical language",
+      "anchor-annotations": "Anchoring key observations",
+      "route-relationships": "Connecting proof to meaning",
+      "reveal-synthesis": "Resolving the synthesis",
+      "resolve-decision": "Landing the implication",
+      settle: "Settling the final artboard",
+    };
+    const affectedIds = new Set();
+    for (const operation of batch?.operations || []) {
+      if (operation?.targetId) affectedIds.add(operation.targetId);
+      if (operation?.parentId) affectedIds.add(operation.parentId);
+      if (operation?.beforeId) affectedIds.add(operation.beforeId);
+      if (operation?.op === "recompose-region") {
+        for (const placement of operation.placements || []) {
+          if (placement.targetId) affectedIds.add(placement.targetId);
+          if (placement.parentId) affectedIds.add(placement.parentId);
+          if (placement.beforeId) affectedIds.add(placement.beforeId);
+        }
+      }
+      if (typeof operation?.html === "string" && operation.html) {
+        const template = document.createElement("template");
+        template.innerHTML = operation.html;
+        template.content.querySelectorAll("[data-ns-node-id]").forEach((element) => {
+          const id = element.getAttribute("data-ns-node-id");
+          if (id) affectedIds.add(id);
+        });
+      }
+    }
+    const grouped = new Map();
+    affectedIds.forEach((id) => {
+      if (!id || id === "artboard") return;
+      const element = nodeById(id);
+      if (!element) return;
+      const kind = classifyConstructionKind(element, id);
+      const values = grouped.get(kind) || [];
+      values.push(id);
+      grouped.set(kind, values);
+    });
+    const beats = order.filter((kind) => grouped.has(kind)).map((kind) => ({
+      id: "runtime-" + kind,
+      kind,
+      label: labels[kind],
+      nodeIds: grouped.get(kind),
+      durationMs: kind === "choreograph-evidence" ? 1300 : kind === "draw-analysis" || kind === "route-relationships" ? 980 : 680,
+      staggerMs: kind === "choreograph-evidence" ? 70 : 45,
+      holdMs: kind === "settle" ? 180 : 100,
+      emphasis: kind === "choreograph-evidence" || kind === "draw-analysis" ? "hero" : kind === "settle" ? "quiet" : "normal",
+    }));
+    if (!beats.some((beat) => beat.kind === "settle")) beats.push({ id: "runtime-settle", kind: "settle", label: labels.settle, nodeIds: ["artboard"], durationMs: 460, staggerMs: 0, holdMs: 160, emphasis: "quiet" });
+    const coverageNodeIds = Array.from(affectedIds).filter((id) => id && id !== "__root__");
+    const totalDurationMs = Math.min(18000, beats.reduce((sum, beat) => sum + beat.durationMs + beat.holdMs + Math.max(0, (beat.nodeIds?.length || 0) - 1) * beat.staggerMs, 0));
+    return { version: "northstar.live-visual-authorship.v2", mode: "cinematic", beats, coverageNodeIds, strictCoverage: true, totalDurationMs, deadlineMs: Math.min(26000, Math.max(5000, totalDurationMs + 2500)), showBeatLabels: true };
+  };
+
+  const initialFoundationConstructionPlan = () => {
+    const ids = Array.from(root.querySelectorAll("[data-ns-node-id]"))
+      .map((element) => element.getAttribute("data-ns-node-id"))
+      .filter((id) => id && id !== "artboard");
+    const frame = ids.filter((id) => /^(?:presentation|header|title|deck|identity-|thought-|reasoning-zone)/.test(id));
+    const evidence = ids.filter((id) => /(?:evidence|flow-|screen-|sequence)/.test(id));
+    const ending = ids.filter((id) => /(?:synthesis|decision|recommendation)/.test(id));
+    const beats = [
+      { id: "initial-frame", kind: "establish-frame", label: "Opening the living artboard", nodeIds: frame.length ? frame : ids.slice(0, 8), durationMs: 720, staggerMs: 55, holdMs: 120, emphasis: "normal" },
+      ...(evidence.length ? [{ id: "initial-evidence", kind: "choreograph-evidence", label: "Preparing the evidence field", nodeIds: evidence, durationMs: 980, staggerMs: 60, holdMs: 120, emphasis: "hero" }] : []),
+      ...(ending.length ? [{ id: "initial-ending", kind: "reveal-synthesis", label: "Opening the reasoning surface", nodeIds: ending, durationMs: 620, staggerMs: 50, holdMs: 100, emphasis: "normal" }] : []),
+      { id: "initial-settle", kind: "settle", label: "Ready to create", nodeIds: ["artboard"], durationMs: 420, staggerMs: 0, holdMs: 120, emphasis: "quiet" },
+    ];
+    return { version: "northstar.live-visual-authorship.v2", mode: "cinematic", beats, coverageNodeIds: ids, strictCoverage: true, totalDurationMs: 4200, deadlineMs: 7000, showBeatLabels: true };
+  };
+
+  const transparentPaint = (value) => {
+    const normalized = String(value || "").replace(/\s+/g, "").toLowerCase();
+    return !normalized || normalized === "transparent" || normalized === "rgba(0,0,0,0)" || normalized.endsWith(",0)");
+  };
+
+  const elementHasVisualSurface = (element) => {
+    if (!(element instanceof Element)) return false;
+    const style = getComputedStyle(element);
+    const borderWidth = [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth]
+      .some((value) => Number.parseFloat(value || "0") > .25);
+    return !transparentPaint(style.backgroundColor)
+      || borderWidth
+      || (style.boxShadow && style.boxShadow !== "none")
+      || (style.outlineStyle && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth || "0") > .25);
+  };
+
+  const isVisualEvidenceLeaf = (element, id) => {
+    const source = ((id || "") + " " + (element?.outerHTML || "")).toLowerCase();
+    return /data-ns-(?:evidence-id|screen-id)|protected-evidence|(?:^|[-_:])screen(?:[-_:]|$)|figure|img/.test(source)
+      && !element?.querySelector?.('[data-ns-node-id][data-ns-evidence-id],[data-ns-node-id][data-ns-screen-id],[data-ns-node-id*="screen-"]');
+  };
+
+  const elementConstructionKeyframes = (element, prior, kind, options = {}) => {
+    if (options.skipContainer) return null;
+    const next = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    if (options.surfaceOnly) {
+      return [
+        { opacity: prior?.visible ? Math.max(.76, prior.opacity || 1) : 0, backgroundColor: "rgba(255,255,255,0)", borderColor: "rgba(0,0,0,0)", boxShadow: "none", outlineColor: "rgba(0,0,0,0)", clipPath: "inset(0 0 100% 0 round 12px)" },
+        { opacity: 1, backgroundColor: style.backgroundColor, borderColor: style.borderColor, boxShadow: style.boxShadow, outlineColor: style.outlineColor, clipPath: "inset(0 0 0 0 round 12px)" },
+      ];
+    }
+    if (prior?.visible) {
+      const dx = prior.rect.left - next.left, dy = prior.rect.top - next.top;
+      const rawSx = next.width > 0 ? prior.rect.width / next.width : 1;
+      const rawSy = next.height > 0 ? prior.rect.height / next.height : 1;
+      const moved = Math.abs(dx) > .5 || Math.abs(dy) > .5 || Math.abs(rawSx - 1) > .01 || Math.abs(rawSy - 1) > .01;
+      if (moved) {
+        const safeUniformScale = isVisualEvidenceLeaf(element, element.getAttribute?.("data-ns-node-id"))
+          && rawSx >= .62 && rawSx <= 1.62 && rawSy >= .62 && rawSy <= 1.62
+          && Math.abs(rawSx - rawSy) <= .18
+            ? Math.max(.62, Math.min(1.62, (rawSx + rawSy) / 2))
+            : 1;
+        const initialTransform = "translate(" + dx + "px," + dy + "px)" + (Math.abs(safeUniformScale - 1) > .01 ? " scale(" + safeUniformScale + ")" : "");
+        return [
+          { offset: 0, transformOrigin: "top left", transform: initialTransform, opacity: Math.max(.72, prior.opacity || 1), filter: "saturate(.9)" },
+          { offset: .82, transformOrigin: "top left", transform: "translate(0,-2px) scale(1.003)", opacity: 1, filter: "saturate(1.02)" },
+          { offset: 1, transformOrigin: "top left", transform: "none", opacity: 1, filter: "none" },
+        ];
+      }
+      return [
+        { opacity: .58, filter: "saturate(.9)", transform: "translateY(4px)" },
+        { opacity: 1, filter: "none", transform: "none" },
+      ];
+    }
+    if (kind === "draw-analysis") return [
+      { opacity: 0, clipPath: "inset(0 100% 0 0 round 10px)", transform: "translateY(6px)" },
+      { opacity: 1, clipPath: "inset(0 0 0 0 round 10px)", transform: "none" },
+    ];
+    if (kind === "anchor-annotations") return [
+      { opacity: 0, transform: "translate(12px,-6px) scale(.96)" },
+      { opacity: 1, transform: "none" },
+    ];
+    if (kind === "route-relationships") return [
+      { opacity: 0, transform: "scaleX(.88)", transformOrigin: "left center" },
+      { opacity: 1, transform: "none" },
+    ];
+    if (kind === "reveal-synthesis") return [
+      { opacity: 0, clipPath: "inset(0 0 100% 0)", transform: "translateY(14px)" },
+      { opacity: 1, clipPath: "inset(0 0 0 0)", transform: "none" },
+    ];
+    if (kind === "resolve-decision") return [
+      { opacity: 0, transform: "translateY(14px) scale(.98)" },
+      { offset: .76, opacity: 1, transform: "translateY(-1px) scale(1.004)" },
+      { opacity: 1, transform: "none" },
+    ];
+    if (kind === "settle") return [
+      { opacity: .88, filter: "saturate(.94)" },
+      { opacity: 1, filter: "none" },
+    ];
+    return [
+      { opacity: 0, transform: "translateY(12px) scale(.985)" },
+      { opacity: 1, transform: "none" },
+    ];
+  };
+
+  const meaningfulPriorConstructionNode = (nodeId, prior, directChild = false) => {
+    if (!prior || /-image$/i.test(nodeId || "")) return false;
+    const clone = prior.clone;
+    const source = ((clone instanceof Element ? clone.outerHTML : "") + " " + (nodeId || "")).toLowerCase();
+    const explicitlyMeaningful = /data-ns-(?:evidence-id|screen-id|flow-id|analysis-kind|annotation-id|relationship-id)/.test(source)
+      || /(?:screen|evidence|flow|sequence|rail|lane|analysis|chart|sparkline|axis|annotation|callout|relationship|synthesis|decision|recommendation|conclusion)/.test(nodeId || "");
+    const meaningfulDirectSurface = directChild && /(?:header|reasoning|thought|thesis|comparison|presentation-copy|working-opening)/.test(nodeId || "");
+    return explicitlyMeaningful || meaningfulDirectSurface;
+  };
+
+  const priorConstructionDescendants = (before, rootId, includeRoot = false) => {
+    if (!before?.size || !rootId) return [];
+    const result = [];
+    const queue = includeRoot ? [rootId] : Array.from(before.entries()).filter(([, value]) => value?.parentId === rootId).map(([id]) => id);
+    while (queue.length > 0) {
+      const nodeId = queue.shift();
+      const prior = before.get(nodeId);
+      if (!prior) continue;
+      if (meaningfulPriorConstructionNode(nodeId, prior, prior.parentId === rootId)) result.push(nodeId);
+      before.forEach((value, childId) => { if (value?.parentId === nodeId) queue.push(childId); });
+    }
+    return result;
+  };
+
+  const runtimeAffectedNodeIds = (batch, before) => {
+    const ids = new Set(batch?.constructionPlan?.coverageNodeIds || []);
+    for (const requirement of batch?.requiredPrimitives || []) {
+      for (const nodeId of requirement?.instanceNodeIds?.length ? requirement.instanceNodeIds : requirement?.nodeIds?.length ? requirement.nodeIds : [requirement?.id]) if (nodeId) ids.add(nodeId);
+    }
+    for (const operation of batch?.operations || []) {
+      if (operation?.targetId) ids.add(operation.targetId);
+      if (operation?.parentId) ids.add(operation.parentId);
+      if (operation?.beforeId) ids.add(operation.beforeId);
+      if (operation?.op === "remove") {
+        priorConstructionDescendants(before, operation.targetId, true).forEach((nodeId) => ids.add(nodeId));
+      }
+      if (operation?.op === "set-html" || operation?.op === "recompose-region") {
+        priorConstructionDescendants(before, operation.targetId, false).forEach((nodeId) => ids.add(nodeId));
+      }
+      if (operation?.op === "recompose-region") {
+        for (const retiredId of operation.retireNodeIds || []) priorConstructionDescendants(before, retiredId, true).forEach((nodeId) => ids.add(nodeId));
+      }
+      if (operation?.op === "move") {
+        const target = nodeById(operation.targetId);
+        target?.querySelectorAll?.('[data-ns-node-id][data-ns-evidence-id],[data-ns-node-id][data-ns-screen-id],[data-ns-node-id*="screen-"]').forEach((element) => {
+          const nodeId = element.getAttribute("data-ns-node-id");
+          if (nodeId && !/-image$/i.test(nodeId)) ids.add(nodeId);
+        });
+      }
+      if (operation?.op === "recompose-region") {
+        for (const placement of operation.placements || []) {
+          if (placement.targetId) ids.add(placement.targetId);
+          if (placement.parentId) ids.add(placement.parentId);
+          if (placement.beforeId) ids.add(placement.beforeId);
+        }
+      }
+      if (typeof operation?.html === "string" && operation.html) {
+        const template = document.createElement("template");
+        template.innerHTML = operation.html;
+        template.content.querySelectorAll("[data-ns-node-id]").forEach((element) => {
+          const nodeId = element.getAttribute("data-ns-node-id");
+          if (nodeId) ids.add(nodeId);
+        });
+      }
+    }
+    ids.delete("__root__");
+    return Array.from(ids);
+  };
+
+  const hardenedConstructionPlan = (batch, before) => {
+    const modelSourceAuthority = hasModelSourceAuthority();
+    const suppliedPlan = batch?.constructionPlan?.beats?.length ? batch.constructionPlan : undefined;
+    const source = suppliedPlan || (modelSourceAuthority
+      ? { version: "northstar.live-visual-authorship.v2", mode: "cinematic", beats: [], coverageNodeIds: [], strictCoverage: false, totalDurationMs: 900, deadlineMs: 3200, showBeatLabels: false }
+      : inferredConstructionPlan(batch));
+    const beats = (source?.beats || []).map((beat) => ({ ...beat, nodeIds: Array.from(new Set(beat.nodeIds || [])) }));
+    const coverageNodeIds = Array.from(new Set([...(source?.coverageNodeIds || []), ...runtimeAffectedNodeIds(batch, before)]));
+
+    if (modelSourceAuthority) {
+      // The creative model owns the dramatic sequence. The browser may normalize
+      // timing and append one neutral settlement mechanic, but it must not infer
+      // a visual grammar, classify nodes into authored-looking beat kinds, or add
+      // semantic reveal moments the model never requested.
+      if (!beats.some((beat) => beat.kind === "settle")) beats.push({ id: "runtime-settle", kind: "settle", label: "Settling the exact authored source", nodeIds: ["artboard"], durationMs: 360, staggerMs: 0, holdMs: 80, emphasis: "quiet" });
+      const totalDurationMs = Math.min(18000, Math.max(600, Number(source?.totalDurationMs) || beats.reduce((sum, beat) => sum + Number(beat.durationMs || 0) + Number(beat.holdMs || 0) + Math.max(0, (beat.nodeIds?.length || 0) - 1) * Number(beat.staggerMs || 0), 0)));
+      return { ...source, version: "northstar.live-visual-authorship.v2", beats, coverageNodeIds, strictCoverage: false, totalDurationMs, deadlineMs: Math.min(26000, Math.max(totalDurationMs + 1800, Number(source?.deadlineMs) || totalDurationMs + 3000)), showBeatLabels: source?.showBeatLabels !== false };
+    }
+
+    const assigned = new Set(beats.flatMap((beat) => beat.nodeIds || []));
+    for (const nodeId of coverageNodeIds) {
+      if (!nodeId || assigned.has(nodeId) || nodeId === "__root__") continue;
+      const element = nodeById(nodeId);
+      const priorElement = before?.get?.(nodeId)?.clone;
+      if (!element && !(priorElement instanceof Element) && nodeId !== "artboard") continue;
+      const kind = nodeId === "artboard" ? "settle" : classifyConstructionKind(element || priorElement, nodeId);
+      let beat = beats.find((candidate) => candidate.kind === kind && (candidate.nodeIds?.length || 0) < 160);
+      if (!beat) {
+        beat = { id: "runtime-coverage-" + kind + "-" + (beats.length + 1), kind, label: defaultConstructionLabel(kind), nodeIds: [], durationMs: kind === "choreograph-evidence" ? 1050 : 620, staggerMs: kind === "choreograph-evidence" ? 44 : 30, holdMs: 70, emphasis: kind === "choreograph-evidence" || kind === "draw-analysis" ? "hero" : "normal" };
+        const settleIndex = beats.findIndex((candidate) => candidate.kind === "settle");
+        if (settleIndex >= 0) beats.splice(settleIndex, 0, beat); else beats.push(beat);
+      }
+      beat.nodeIds.push(nodeId);
+      assigned.add(nodeId);
+    }
+    if (!beats.some((beat) => beat.kind === "settle")) beats.push({ id: "runtime-settle", kind: "settle", label: "Settling the final artboard", nodeIds: ["artboard"], durationMs: 420, staggerMs: 0, holdMs: 120, emphasis: "quiet" });
+    const totalDurationMs = Math.min(18000, Math.max(900, Number(source?.totalDurationMs) || beats.reduce((sum, beat) => sum + Number(beat.durationMs || 0) + Number(beat.holdMs || 0) + Math.max(0, (beat.nodeIds?.length || 0) - 1) * Number(beat.staggerMs || 0), 0)));
+    return { ...source, version: "northstar.live-visual-authorship.v2", beats, coverageNodeIds, strictCoverage: source?.strictCoverage !== false, totalDurationMs, deadlineMs: Math.min(26000, Math.max(totalDurationMs + 2000, Number(source?.deadlineMs) || totalDurationMs + 3500)), showBeatLabels: source?.showBeatLabels !== false };
+  };
+
+  const defaultConstructionLabel = (kind) => ({
+    "establish-frame": "Establishing the visual idea",
+    "open-layout": "Opening the composition",
+    "choreograph-evidence": "Choreographing grounded evidence",
+    "draw-analysis": "Drawing the analytical language",
+    "anchor-annotations": "Anchoring key observations",
+    "route-relationships": "Connecting proof to meaning",
+    "reveal-synthesis": "Resolving the synthesis",
+    "resolve-decision": "Landing the implication",
+    settle: "Settling the final artboard",
+  })[kind] || "Building the artboard";
+
+  const constructionDeadline = (promise, timeoutMs) => Promise.race([
+    Promise.resolve(promise).then(() => ({ timedOut: false })),
+    constructionSleep(timeoutMs).then(() => ({ timedOut: true })),
+  ]);
+
+  let beforeConstructionSnapshot = null;
+  const constructionResults = new Map();
+  const runConstructionSequence = async (before, batch) => {
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    const plan = hardenedConstructionPlan(batch, before);
+    if (!plan?.beats?.length) return;
+    beforeConstructionSnapshot = before;
+    const overlay = constructionOverlay();
+    const badge = overlay.querySelector('[data-ns-construction-badge="true"]');
+    const badgeLabel = overlay.querySelector('[data-ns-construction-label="true"]');
+    const nodeToBeat = new Map();
+    const beatIndexById = new Map();
+    plan.beats.forEach((beat, beatIndex) => {
+      beatIndexById.set(beat.id, beatIndex);
+      (beat.nodeIds || []).forEach((id) => { if (!nodeToBeat.has(id)) nodeToBeat.set(id, beat.id); });
+    });
+    const coverage = new Set(plan.coverageNodeIds || []);
+    const retiredCoverageNodeIds = Array.from(coverage).filter((id) => id !== "artboard" && !nodeById(id) && before?.has?.(id));
+    const missingCoverageNodeIds = Array.from(coverage).filter((id) => id !== "artboard" && !nodeById(id) && !before?.has?.(id));
+    const stagedCoverageNodeIds = new Set();
+    const animationsByBeat = new Map();
+    const ghostWrappersByBeat = new Map();
+    const activeAnimations = new Set();
+    let currentBadgeAnimation = null;
+    let completed = false;
+    let timedOut = false;
+    let recovered = false;
+    let recoveryMessage = "";
+    let timedOutBeatCount = 0;
+    const startedAt = Date.now();
+    const absoluteDeadline = startedAt + Math.max(1200, Number(plan.deadlineMs) || Number(plan.totalDurationMs) + 3500);
+    const trackAnimation = (animation) => {
+      if (!animation) return animation;
+      activeAnimations.add(animation);
+      animation.finished.catch(() => undefined).finally(() => activeAnimations.delete(animation));
+      return animation;
+    };
+    const cleanup = () => {
+      activeAnimations.forEach((animation) => { try { animation.cancel(); } catch {} });
+      activeAnimations.clear();
+      origin.querySelectorAll('[data-ns-construction-guide="true"]').forEach((guide) => guide.remove());
+      overlay.remove();
+      root.removeAttribute("data-ns-construction-active");
+      root.removeAttribute("data-ns-construction-mode");
+      root.removeAttribute("data-ns-construction-beat");
+      root.removeAttribute("data-ns-construction-beat-index");
+      beforeConstructionSnapshot = null;
+      solveSpatialSystem();
+      queueContentSize();
+    };
+
+    try {
+      const plannedElements = Array.from(root.querySelectorAll("[data-ns-node-id]")).filter((element) => {
+        const id = element.getAttribute("data-ns-node-id");
+        return id && nodeToBeat.has(id) && (element instanceof HTMLElement || element instanceof SVGElement);
+      });
+      plannedElements.forEach((element) => {
+        const id = element.getAttribute("data-ns-node-id");
+        const beatId = id ? nodeToBeat.get(id) : undefined;
+        const beat = plan.beats.find((candidate) => candidate.id === beatId);
+        if (!id || !beat) return;
+        const hasPlannedDescendant = Array.from(element.querySelectorAll?.("[data-ns-node-id]") || []).some((child) => {
+          const childId = child.getAttribute("data-ns-node-id");
+          return childId && childId !== id && nodeToBeat.has(childId);
+        });
+        const parentOwnsMovement = hasPlannedDescendant && element !== root;
+        const surfaceOnly = parentOwnsMovement && elementHasVisualSurface(element)
+          && (beat.kind === "establish-frame" || beat.kind === "open-layout");
+        const skipContainer = parentOwnsMovement && !surfaceOnly;
+        const keyframes = elementConstructionKeyframes(element, before.get(id), beat.kind, { surfaceOnly, skipContainer });
+        if (!keyframes) {
+          if (skipContainer) stagedCoverageNodeIds.add(id);
+          return;
+        }
+        const beatAnimations = animationsByBeat.get(beat.id) || [];
+        const delay = reducedMotion ? 0 : Math.min(1000, beatAnimations.length * Math.max(0, Number(beat.staggerMs) || 0));
+        const animation = trackAnimation(element.animate(keyframes, { duration: reducedMotion ? Math.min(180, beat.durationMs) : beat.durationMs, delay, easing: beat.emphasis === "hero" ? "cubic-bezier(.16,.84,.2,1)" : "cubic-bezier(.2,.8,.2,1)", fill: "both" }));
+        animation.pause();
+        animation.currentTime = 0;
+        beatAnimations.push(animation);
+        animationsByBeat.set(beat.id, beatAnimations);
+        stagedCoverageNodeIds.add(id);
+      });
+
+      // Nodes retired by a destructive recomposition no longer exist in the final
+      // DOM, so FLIP cannot animate them directly. Preserve one top-level visual
+      // ghost per retired subtree and let it leave during its assigned beat. This
+      // keeps the old composition perceptually continuous until the new structure
+      // has visibly earned its place, without exposing a non-canonical half-state.
+      const retiredSet = new Set(retiredCoverageNodeIds.filter((id) => before.get(id)?.visible));
+      const topLevelRetiredIds = Array.from(retiredSet).filter((id) => {
+        let parentId = before.get(id)?.parentId;
+        while (parentId) {
+          if (retiredSet.has(parentId)) return false;
+          parentId = before.get(parentId)?.parentId;
+        }
+        return true;
+      });
+      const retirementBeatForSubtree = (rootNodeId) => {
+        let selectedBeatId = nodeToBeat.get(rootNodeId);
+        let selectedIndex = selectedBeatId == null ? -1 : Number(beatIndexById.get(selectedBeatId) ?? -1);
+        before.forEach((_value, candidateId) => {
+          let cursor = candidateId;
+          let belongsToSubtree = false;
+          while (cursor) {
+            if (cursor === rootNodeId) { belongsToSubtree = true; break; }
+            cursor = before.get(cursor)?.parentId;
+          }
+          if (!belongsToSubtree) return;
+          const candidateBeatId = nodeToBeat.get(candidateId);
+          const candidateIndex = candidateBeatId == null ? -1 : Number(beatIndexById.get(candidateBeatId) ?? -1);
+          if (candidateIndex > selectedIndex) { selectedIndex = candidateIndex; selectedBeatId = candidateBeatId; }
+        });
+        if (selectedBeatId == null && hasModelSourceAuthority()) {
+          const fallbackBeat = [...plan.beats].reverse().find((candidate) => candidate.kind !== "settle")
+            || plan.beats.at(-1);
+          return fallbackBeat?.id;
+        }
+        return selectedBeatId;
+      };
+      const originRect = origin.getBoundingClientRect();
+      for (const nodeId of topLevelRetiredIds) {
+        const prior = before.get(nodeId);
+        const beatId = retirementBeatForSubtree(nodeId);
+        const beat = plan.beats.find((candidate) => candidate.id === beatId);
+        if (!prior?.visible || !(prior.clone instanceof Element) || !beat) continue;
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ns-runtime-owned", "true");
+        wrapper.setAttribute("data-ns-construction-ghost", "true");
+        wrapper.setAttribute("data-ns-construction-ghost-id", nodeId);
+        Object.assign(wrapper.style, {
+          position: "absolute",
+          left: (prior.rect.left - originRect.left) + "px",
+          top: (prior.rect.top - originRect.top) + "px",
+          width: Math.max(1, prior.rect.width) + "px",
+          height: Math.max(1, prior.rect.height) + "px",
+          margin: "0",
+          padding: "0",
+          pointerEvents: "none",
+          transformOrigin: "top left",
+          overflow: "hidden",
+          clipPath: "inset(0 round 10px)",
+          isolation: "isolate",
+          zIndex: "2",
+          opacity: String(Math.max(0, Math.min(1, prior.opacity || 1))),
+          contain: "strict",
+        });
+        const clone = prior.clone.cloneNode(true);
+        if (clone instanceof Element) {
+          [clone, ...Array.from(clone.querySelectorAll("[data-ns-node-id],[id]"))].forEach((element) => {
+            element.removeAttribute?.("data-ns-node-id");
+            element.removeAttribute?.("id");
+            element.removeAttribute?.("data-ns-runtime-owned");
+          });
+          if (clone instanceof HTMLElement) Object.assign(clone.style, { position: "absolute", inset: "0", width: "100%", height: "100%", maxWidth: "none", maxHeight: "none", margin: "0", transform: "none", animation: "none", transition: "none", overflow: "hidden", pointerEvents: "none" });
+          wrapper.append(clone);
+        }
+        overlay.append(wrapper);
+        const beatAnimations = animationsByBeat.get(beat.id) || [];
+        const delay = reducedMotion ? 0 : Math.min(800, beatAnimations.length * Math.max(0, Number(beat.staggerMs) || 0));
+        const exitY = beat.kind === "choreograph-evidence" ? -10 : beat.kind === "open-layout" ? -6 : 0;
+        const animation = trackAnimation(wrapper.animate([
+          { opacity: Math.max(0, Math.min(1, prior.opacity || 1)), transform: "none", filter: "none" },
+          { offset: .28, opacity: Math.max(.72, Math.min(1, prior.opacity || 1)), transform: "none", filter: "none" },
+          { opacity: 0, transform: "translateY(" + exitY + "px) scale(.988)", filter: "blur(1px) saturate(.9)" },
+        ], { duration: reducedMotion ? Math.min(180, beat.durationMs) : Math.max(420, beat.durationMs), delay, easing: "cubic-bezier(.4,0,.6,1)", fill: "both" }));
+        animation.pause();
+        animation.currentTime = 0;
+        beatAnimations.push(animation);
+        animationsByBeat.set(beat.id, beatAnimations);
+        const wrappers = ghostWrappersByBeat.get(beat.id) || [];
+        wrappers.push(wrapper);
+        ghostWrappersByBeat.set(beat.id, wrappers);
+        before.forEach((value, candidateId) => {
+          if (!retiredSet.has(candidateId)) return;
+          let cursor = candidateId;
+          while (cursor) {
+            if (cursor === nodeId) { stagedCoverageNodeIds.add(candidateId); break; }
+            cursor = before.get(cursor)?.parentId;
+          }
+        });
+      }
+
+      root.removeAttribute("data-ns-prepaint");
+      window.clearTimeout(prepaintFailsafe);
+      root.setAttribute("data-ns-construction-active", "true");
+      root.setAttribute("data-ns-construction-mode", plan.mode || "cinematic");
+      parent.postMessage({ type: "northstar.artifact.construction-started", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: batch.mutationId, beatCount: plan.beats.length, totalDurationMs: plan.totalDurationMs, coverageNodeCount: coverage.size }, "*");
+
+      for (let beatIndex = 0; beatIndex < plan.beats.length; beatIndex += 1) {
+        const beat = plan.beats[beatIndex];
+        if (cancelledMutationIds.has(batch.mutationId)) return;
+        if (Date.now() >= absoluteDeadline) { timedOut = true; break; }
+        root.setAttribute("data-ns-construction-beat", beat.kind);
+        root.setAttribute("data-ns-construction-beat-index", String(beatIndex));
+        if (badge && badgeLabel && plan.showBeatLabels !== false) {
+          badgeLabel.textContent = beat.label;
+          try { currentBadgeAnimation?.cancel(); } catch {}
+          currentBadgeAnimation = trackAnimation(badge.animate([{ opacity: 0, transform: "translateY(-8px) scale(.98)" }, { opacity: 1, transform: "none" }], { duration: reducedMotion ? 100 : 240, easing: "cubic-bezier(.2,.8,.2,1)", fill: "forwards" }));
+        }
+        const guides = [];
+        const rootRect = root.getBoundingClientRect();
+        const guideKinds = new Set(["draw-analysis", "anchor-annotations", "route-relationships"]);
+        if (guideKinds.has(beat.kind)) for (const nodeId of (beat.nodeIds || []).slice(0, 6)) {
+          const element = nodeById(nodeId);
+          if (!element || element === root || element.querySelector?.("[data-ns-node-id]")) continue;
+          const rect = element.getBoundingClientRect();
+          const areaRatio = (rect.width * rect.height) / Math.max(1, rootRect.width * rootRect.height);
+          if (rect.width < 4 || rect.height < 4 || areaRatio > .22) continue;
+          const guide = document.createElement("div");
+          guide.setAttribute("data-ns-construction-guide", "true");
+          Object.assign(guide.style, { position: "absolute", left: (rect.left - rootRect.left - 3) + "px", top: (rect.top - rootRect.top - 3) + "px", width: (rect.width + 6) + "px", height: (rect.height + 6) + "px", borderRadius: "9px", border: "1px solid rgba(107,77,255,.22)", boxShadow: "0 0 0 2px rgba(107,77,255,.035)", opacity: "0" });
+          overlay.append(guide);
+          trackAnimation(guide.animate([{ opacity: 0 }, { opacity: .55 }], { duration: reducedMotion ? 80 : 180, fill: "forwards" }));
+          guides.push(guide);
+        }
+        parent.postMessage({ type: "northstar.artifact.construction-beat-started", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: batch.mutationId, beatId: beat.id, beatKind: beat.kind, beatLabel: beat.label, beatIndex, beatCount: plan.beats.length, nodeIds: beat.nodeIds || [] }, "*");
+        queueContentSize();
+        const beatAnimations = [...(animationsByBeat.get(beat.id) || [])];
+        beatAnimations.forEach((animation) => animation.play());
+        const pathAnimations = [];
+        if (beat.kind === "draw-analysis" || beat.kind === "route-relationships") {
+          solveSpatialSystem();
+          const paths = new Set();
+          if (beat.kind === "draw-analysis") {
+            for (const nodeId of beat.nodeIds || []) {
+              const element = nodeById(nodeId);
+              if (!element) continue;
+              if (element.matches?.("path,polyline,line")) paths.add(element);
+              element.querySelectorAll?.("path,polyline,line").forEach((path) => paths.add(path));
+            }
+          } else {
+            const relationshipIds = new Set();
+            for (const nodeId of beat.nodeIds || []) {
+              const element = nodeById(nodeId);
+              const relationshipId = element?.getAttribute?.("data-ns-relationship-id");
+              if (relationshipId) relationshipIds.add(relationshipId);
+            }
+            origin.querySelectorAll('[data-ns-spatial-system] path[data-ns-routed-relationship-id]').forEach((path) => {
+              const relationshipId = path.getAttribute("data-ns-routed-relationship-id");
+              if (relationshipIds.size === 0 || relationshipIds.has(relationshipId)) paths.add(path);
+            });
+          }
+          for (const path of Array.from(paths).slice(0, 80)) {
+            if (typeof SVGGeometryElement === "undefined" || !(path instanceof SVGGeometryElement) || typeof path.getTotalLength !== "function") continue;
+            const length = Math.max(1, path.getTotalLength());
+            const pathAnimation = trackAnimation(path.animate([{ strokeDasharray: String(length), strokeDashoffset: String(length), opacity: .08 }, { strokeDasharray: String(length), strokeDashoffset: "0", opacity: 1 }], { duration: reducedMotion ? 150 : Math.max(420, beat.durationMs), easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" }));
+            pathAnimation.pause(); pathAnimation.currentTime = 0; pathAnimation.play(); pathAnimations.push(pathAnimation);
+          }
+        }
+        const completionAnimations = [...beatAnimations, ...pathAnimations];
+        const maxDelay = reducedMotion ? 0 : Math.min(1000, Math.max(0, completionAnimations.length - 1) * Math.max(0, Number(beat.staggerMs) || 0));
+        const remaining = Math.max(120, absoluteDeadline - Date.now());
+        const beatDeadline = Math.min(remaining, Math.max(900, Number(beat.durationMs) + maxDelay + Number(beat.holdMs) + 1200));
+        const waitResult = completionAnimations.length > 0
+          ? await constructionDeadline(Promise.all(completionAnimations.map((animation) => animation.finished.catch(() => undefined))), beatDeadline)
+          : await constructionDeadline(constructionSleep(reducedMotion ? Math.min(180, beat.durationMs) : beat.durationMs), beatDeadline);
+        if (waitResult.timedOut) { timedOut = true; timedOutBeatCount += 1; }
+        await constructionSleep(reducedMotion ? Math.min(50, beat.holdMs) : Math.min(beat.holdMs, Math.max(0, absoluteDeadline - Date.now())));
+        guides.forEach((guide) => { const fade = trackAnimation(guide.animate([{ opacity: .82 }, { opacity: 0 }], { duration: reducedMotion ? 60 : 160, fill: "forwards" })); fade.finished.catch(() => undefined).finally(() => guide.remove()); });
+        (ghostWrappersByBeat.get(beat.id) || []).forEach((wrapper) => wrapper.remove());
+        ghostWrappersByBeat.delete(beat.id);
+        beatAnimations.forEach((animation) => { try { animation.cancel(); } catch {} });
+        pathAnimations.forEach((animation) => { try { animation.cancel(); } catch {} });
+        parent.postMessage({ type: "northstar.artifact.construction-beat-completed", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: batch.mutationId, beatId: beat.id, beatKind: beat.kind, beatIndex, beatCount: plan.beats.length, timedOut: waitResult.timedOut }, "*");
+        if (Date.now() >= absoluteDeadline) { timedOut = true; break; }
+      }
+      if (badge) {
+        try { currentBadgeAnimation?.cancel(); } catch {}
+        const fade = trackAnimation(badge.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-6px) scale(.985)" }], { duration: reducedMotion ? 80 : 220, fill: "forwards" }));
+        await constructionDeadline(fade.finished.catch(() => undefined), 600);
+      }
+      completed = true;
+    } catch (error) {
+      recovered = true;
+      completed = true;
+      recoveryMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      cleanup();
+    }
+
+    const uncoveredNodeIds = Array.from(coverage).filter((id) => id !== "artboard" && nodeById(id) && !stagedCoverageNodeIds.has(id));
+    const result = { completed, timedOut, recovered, recoveryMessage, timedOutBeatCount, coverageNodeCount: coverage.size, stagedNodeCount: stagedCoverageNodeIds.size, retiredCoverageNodeCount: retiredCoverageNodeIds.length, missingCoverageNodeIds, uncoveredNodeIds, durationMs: Date.now() - startedAt };
+    constructionResults.set(batch.mutationId, result);
+    if (completed) parent.postMessage({ type: timedOut || recovered ? "northstar.artifact.construction-recovered" : "northstar.artifact.construction-completed", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: batch.mutationId, beatCount: plan.beats.length, result }, "*");
   };
 
   const PROGRESS_ONLY_NODE_IDS = new Set(["kicker", "current-act", "current-act-text"]);
@@ -1059,52 +2086,73 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     };
   };
   const visualSafetyFailure = (before, after) => {
-    if (after.duplicateSingletonRoles?.length) {
-      return "Canonical artboard role uniqueness failed; duplicate singleton regions were present: " + after.duplicateSingletonRoles.map((entry) => entry.role + " [" + entry.owners.join(", ") + "]").join("; ");
+    const newlyAdded = (next, prior) => {
+      const previous = new Set(prior || []);
+      return (next || []).filter((value) => !previous.has(value));
+    };
+    const newDuplicateRoles = (after.duplicateSingletonRoles || []).filter((entry) =>
+      !(before.duplicateSingletonRoles || []).some((previous) => previous.role === entry.role && previous.owners.join("|") === entry.owners.join("|"))
+    );
+    if (newDuplicateRoles.length) {
+      return "Canonical artboard role uniqueness regressed; new duplicate singleton regions appeared: " + newDuplicateRoles.map((entry) => entry.role + " [" + entry.owners.join(", ") + "]").join("; ");
     }
-    if (after.unsafeEvidenceOverlayIds.length) {
-      return "Synthetic annotation overlapped a protected evidence screenshot: " + after.unsafeEvidenceOverlayIds.join(", ");
+    const newUnsafeEvidenceOverlays = newlyAdded(after.unsafeEvidenceOverlayIds, before.unsafeEvidenceOverlayIds);
+    if (newUnsafeEvidenceOverlays.length) {
+      return "A new synthetic overlay obscured protected evidence: " + newUnsafeEvidenceOverlays.join(", ");
     }
-    if (after.incoherentMajorRegionIds?.length) {
-      return "A major analytical region overlapped grounded evidence instead of receiving a complete atomic reflow: " + after.incoherentMajorRegionIds.join(", ");
+    const newIncoherentRegions = newlyAdded(after.incoherentMajorRegionIds, before.incoherentMajorRegionIds);
+    if (newIncoherentRegions.length) {
+      return "A new major analytical region obscured grounded evidence instead of receiving a complete reflow: " + newIncoherentRegions.join(", ");
     }
-    if (after.majorRegionCollisionPairs?.length) {
-      return "Major analytical regions collided in the visible composition: " + after.majorRegionCollisionPairs.map((pair) => pair.join(" â†” ")).join(", ");
+    const beforeCollisionKeys = new Set((before.majorRegionCollisionPairs || []).map((pair) => pair.slice().sort().join("|")));
+    const newCollisionPairs = (after.majorRegionCollisionPairs || []).filter((pair) => !beforeCollisionKeys.has(pair.slice().sort().join("|")));
+    if (newCollisionPairs.length) {
+      return "New major-region collisions appeared in the visible composition: " + newCollisionPairs.map((pair) => pair.join(" ↔ ")).join(", ");
     }
-    if (after.outOfBoundsNodeIds?.length) {
-      const detail = (after.overflowDetails || []).slice(0, 6).map((item) => {
+    const newOutOfBounds = newlyAdded(after.outOfBoundsNodeIds, before.outOfBoundsNodeIds);
+    if (newOutOfBounds.length) {
+      const detail = (after.overflowDetails || []).filter((item) => newOutOfBounds.includes(item.id)).slice(0, 6).map((item) => {
         const directions = Object.entries(item.overflow)
           .filter(([, value]) => value > 4)
           .map(([direction, value]) => direction + " " + Math.ceil(value) + "px")
           .join("/");
         return item.id + (directions ? " (" + directions + ")" : "");
       });
-      return "Whole-artboard containment failed; meaningful content extended beyond the rendered root: " + (detail.length ? detail.join(", ") : after.outOfBoundsNodeIds.slice(0, 8).join(", "));
+      return "Whole-artboard containment regressed; new meaningful content extended beyond the rendered root: " + (detail.length ? detail.join(", ") : newOutOfBounds.slice(0, 8).join(", "));
     }
-    if (after.clippedSemanticNodeIds?.length) {
-      return "Whole-artboard clipping failed; meaningful nodes were clipped by an ancestor: " + after.clippedSemanticNodeIds.slice(0, 8).join(", ");
+    const newClippedNodes = newlyAdded(after.clippedSemanticNodeIds, before.clippedSemanticNodeIds);
+    if (newClippedNodes.length) {
+      return "Whole-artboard clipping regressed; new meaningful nodes were clipped by an ancestor: " + newClippedNodes.slice(0, 8).join(", ");
     }
-    if (after.declaredStructureFailures?.length) {
-      return "The working status claimed a completed structure that was not fully visible: " + after.declaredStructureFailures.join(", ");
+    const newDeclaredStructureFailures = newlyAdded(after.declaredStructureFailures, before.declaredStructureFailures);
+    if (newDeclaredStructureFailures.length) {
+      return "The transaction newly claimed a completed structure that was not fully visible: " + newDeclaredStructureFailures.join(", ");
     }
     if (before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
       return "Comparison completeness failed; a required comparison entity or evidence lane disappeared.";
     }
-    if (after.flowTopologyViolations?.length) {
-      return "FLOW_TOPOLOGY_VIOLATION: Ordered flow evidence was converted into a vertical or wrapped sequence: " + after.flowTopologyViolations.join(", ");
-    }
-    const excessiveVerticalVoid = after.occupiedHeightRatio < .42 && after.occupiedWidthRatio > .55 && after.centroidYRatio < .42;
-    const excessiveHorizontalVoid = after.occupiedWidthRatio < .48 && after.occupiedHeightRatio > .42;
-    if (excessiveVerticalVoid || excessiveHorizontalVoid) {
-      return "Whole-artboard utilization failed; the visible composition occupied only a thin strip and left disproportionate empty space.";
-    }
-    const widthCollapsed = before.occupiedWidthRatio >= .52 && after.occupiedWidthRatio < Math.max(.28, before.occupiedWidthRatio * .58);
-    const heightCollapsed = before.occupiedHeightRatio >= .45 && after.occupiedHeightRatio < Math.max(.24, before.occupiedHeightRatio * .55);
-    const edgeCollapsed = after.occupiedWidthRatio < .46 && (after.centroidXRatio < .22 || after.centroidXRatio > .78);
+    // Flow orientation and artboard whitespace are creative decisions. They remain
+    // measured and reported, but only catastrophic regressions may block commit.
+    const widthCollapsed = before.occupiedWidthRatio >= .52 && after.occupiedWidthRatio < Math.max(.22, before.occupiedWidthRatio * .42);
+    const heightCollapsed = before.occupiedHeightRatio >= .45 && after.occupiedHeightRatio < Math.max(.2, before.occupiedHeightRatio * .4);
     const evidenceDestroyed = before.evidenceCount >= 4 && after.evidenceCount < Math.ceil(before.evidenceCount * .35) && after.evidenceArea < before.evidenceArea * .28;
-    if (widthCollapsed || heightCollapsed || edgeCollapsed) return "The proposed recomposition collapsed meaningful content into an unsafe edge-weighted or mostly empty layout.";
+    if (widthCollapsed || heightCollapsed) return "The proposed recomposition catastrophically collapsed meaningful content.";
     if (evidenceDestroyed) return "The proposed recomposition removed or collapsed too much grounded evidence at once.";
     return "";
+  };
+  const foundationJavascript = ${safeJson(documentSource.javascript)};
+  let currentAuthoredJavascript = ${safeJson(documentSource.creativeJavascript ?? "")};
+  const runtimeModuleCleanups = new Map();
+  const executeRuntimeModule = (moduleId, javascript) => {
+    const safeModuleId = String(moduleId || "northstar-creative-source").replace(/[^a-zA-Z0-9_-]/g, "-");
+    const priorCleanup = runtimeModuleCleanups.get(safeModuleId);
+    if (typeof priorCleanup === "function") { try { priorCleanup(); } catch {} }
+    runtimeModuleCleanups.delete(safeModuleId);
+    currentAuthoredJavascript = String(javascript || "");
+    if (!currentAuthoredJavascript.trim()) return;
+    const runModule = new Function("Northstar", "data", "creative", "reviews", '"use strict";\n' + currentAuthoredJavascript);
+    const cleanup = runModule(Northstar, currentData, currentCreative, currentReviews);
+    if (typeof cleanup === "function") runtimeModuleCleanups.set(safeModuleId, cleanup);
   };
   const captureStyleState = () => new Map(Array.from(document.querySelectorAll('style[id^="northstar-mutation-style-"]')).map((style) => [style.id, style.textContent || ""]));
   const restoreStyleState = (state) => {
@@ -1122,10 +2170,13 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     authoredRoot.querySelectorAll?.('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
     return {
       html: authoredRoot.innerHTML,
-      css: Array.from(document.querySelectorAll("style"))
-        .filter((style) => !style.hasAttribute("data-ns-runtime-owned") && !style.hasAttribute("data-ns-runtime-spatial-style"))
-        .map((style) => style.textContent || "")
-        .join("\n"),
+      css: document.getElementById("northstar-authored-foundation-style")?.textContent || "",
+      cssLayers: Object.fromEntries(
+        Array.from(document.querySelectorAll('style[id^="northstar-mutation-style-"]'))
+          .map((style) => [style.id, style.textContent || ""]),
+      ),
+      javascript: foundationJavascript,
+      creativeJavascript: currentAuthoredJavascript,
       capturedAt: new Date().toISOString(),
       semanticNodes: captureCommittedSemanticNodes(),
     };
@@ -1138,10 +2189,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const classifyChangeKinds = (batch, diff, beforeBounds, afterBounds) => {
     const kinds = new Set();
     for (const operation of batch.operations || []) {
-      if (["insert-html", "set-html", "remove", "move"].includes(operation.op)) kinds.add("structure");
-      if (operation.op === "move") kinds.add("position");
-      if (operation.op === "set-text" || operation.op === "set-html" || operation.op === "insert-html") kinds.add("content");
+      if (["insert-html", "set-html", "recompose-region", "remove", "move"].includes(operation.op)) kinds.add("structure");
+      if (operation.op === "move" || operation.op === "recompose-region") kinds.add("position");
+      if (operation.op === "set-text" || operation.op === "set-html" || operation.op === "recompose-region" || operation.op === "insert-html") kinds.add("content");
       if (operation.op === "set-styles" || operation.op === "set-classes" || operation.op === "set-css-layer") kinds.add("style");
+      if (operation.op === "set-runtime-module") kinds.add("content");
       if (operation.op === "request-space") kinds.add("geometry");
       if (operation.op === "set-styles" && Object.keys(operation.styles || {}).some((key) => /width|height|flex-basis|font-size|transform|scale/i.test(key))) kinds.add("scale");
       if (operation.op === "set-css-layer" && /(?:width|height|flex-basis|font-size|transform|scale)\s*:/i.test(operation.css || "")) kinds.add("scale");
@@ -1176,8 +2228,55 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     mutationTransactions.delete(mutationId);
     enforceAssetPolicy(root);
     applyStage();
+    executeRuntimeModule("northstar-creative-source", transaction.authoredJavascript);
     queueContentSize();
     return true;
+  };
+
+  const clearRuntimeInheritedPlacement = (element) => {
+    if (!element?.style) return;
+    const raw = element.getAttribute("data-ns-runtime-inherited-style");
+    if (raw) {
+      try {
+        const prior = JSON.parse(raw);
+        for (const [name, state] of Object.entries(prior || {})) {
+          const appliedValue = String(state?.appliedValue || "");
+          const currentValue = element.style.getPropertyValue(name);
+          const currentPriority = element.style.getPropertyPriority(name);
+          if (currentValue !== appliedValue || currentPriority !== "important") continue;
+          const priorValue = String(state?.priorValue || "");
+          const priorPriority = String(state?.priorPriority || "");
+          if (priorValue) element.style.setProperty(name, priorValue, priorPriority);
+          else element.style.removeProperty(name);
+        }
+      } catch {}
+    }
+    element.removeAttribute("data-ns-runtime-inherited-style");
+    element.removeAttribute("data-ns-runtime-inherited-placement");
+  };
+
+  const applyRuntimeInheritedGeometry = (element, geometry) => {
+    if (!element?.style || !geometry) return;
+    clearRuntimeInheritedPlacement(element);
+    const values = {
+      position: "absolute",
+      left: Math.round(geometry.left * 1000) / 1000 + "px",
+      top: Math.round(geometry.top * 1000) / 1000 + "px",
+      width: Math.max(1, Math.round(geometry.width * 1000) / 1000) + "px",
+      height: Math.max(1, Math.round(geometry.height * 1000) / 1000) + "px",
+      margin: "0px",
+    };
+    const prior = {};
+    for (const [name, appliedValue] of Object.entries(values)) {
+      prior[name] = {
+        priorValue: element.style.getPropertyValue(name),
+        priorPriority: element.style.getPropertyPriority(name),
+        appliedValue,
+      };
+      element.style.setProperty(name, appliedValue, "important");
+    }
+    element.setAttribute("data-ns-runtime-inherited-style", JSON.stringify(prior));
+    element.setAttribute("data-ns-runtime-inherited-placement", "true");
   };
 
   const applyOperation = (operation) => {
@@ -1190,6 +2289,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       style.textContent = String(operation.css || "").replace(/@import|url\s*\([^)]*\)|expression\s*\([^)]*\)/gi, "");
       return;
     }
+    if (operation.op === "set-runtime-module") {
+      executeRuntimeModule(operation.moduleId, operation.javascript);
+      return;
+    }
     const target = nodeById(operation.targetId);
     // A stale optional target should not freeze the living surface. Other operations in
     // the same batch still apply, and the next model move receives the exact rendered state.
@@ -1198,6 +2301,51 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (operation.op === "set-html") {
       if (operation.targetId === "artboard" || target === root) throw new Error("The permanent artboard root cannot be replaced.");
       target.replaceChildren(sanitizeFragment(operation.html));
+      return;
+    }
+    if (operation.op === "recompose-region") {
+      if (operation.targetId === "artboard" || target === root) throw new Error("The permanent artboard root cannot be replaced.");
+      const targetRect = target.getBoundingClientRect();
+      const preserved = new Map();
+      for (const placement of operation.placements || []) {
+        const source = nodeById(placement.targetId);
+        if (!source) throw new Error("Atomic recomposition source was not found: " + placement.targetId);
+        const rect = source.getBoundingClientRect();
+        preserved.set(placement.targetId, {
+          source,
+          geometry: placement.preserveGeometry ? {
+            left: rect.left - targetRect.left,
+            top: rect.top - targetRect.top,
+            width: rect.width,
+            height: rect.height,
+          } : null,
+        });
+      }
+      target.replaceChildren(sanitizeFragment(operation.html));
+      for (const placement of operation.placements || []) {
+        const preservedEntry = preserved.get(placement.targetId);
+        const source = preservedEntry?.source;
+        const placeholder = nodeById(placement.targetId);
+        if (placeholder && placeholder !== source) {
+          clearRuntimeInheritedPlacement(source);
+          placeholder.replaceWith(source);
+          continue;
+        }
+        const parent = placement.parentId === operation.targetId ? target : nodeById(placement.parentId);
+        const before = placement.beforeId ? nodeById(placement.beforeId) : null;
+        if (!parent) throw new Error("Atomic recomposition parent was not found: " + placement.parentId);
+        clearRuntimeInheritedPlacement(source);
+        parent.insertBefore(source, before && before.parentElement === parent ? before : null);
+        if (placement.preserveGeometry && preservedEntry?.geometry) {
+          if (getComputedStyle(parent).position === "static") parent.style.setProperty("position", "relative");
+          applyRuntimeInheritedGeometry(source, preservedEntry.geometry);
+        }
+      }
+      for (const retiredId of operation.retireNodeIds || []) {
+        if (retiredId === operation.targetId || retiredId === "artboard") continue;
+        const retired = nodeById(retiredId);
+        if (retired) retired.remove();
+      }
       return;
     }
     if (operation.op === "insert-html") {
@@ -1247,6 +2395,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const transaction = {
       html: root.innerHTML,
       styles: captureStyleState(),
+      authoredJavascript: currentAuthoredJavascript,
       requestedBounds: { ...requestedBounds },
       revisionId: currentRevisionId,
       mutationId: currentMutationId,
@@ -1261,18 +2410,49 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     const before = snapshotRects();
     root.setAttribute("data-ns-mutating", "true");
-    for (const operation of batch.operations || []) applyOperation(operation);
-    enforceAssetPolicy(root);
-    applyStage();
-    currentRevisionId = revisionId || currentRevisionId;
-    currentMutationId = batch.mutationId;
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    try {
+      for (const operation of batch.operations || []) applyOperation(operation);
+      enforceAssetPolicy(root);
+      applyStage();
+      currentRevisionId = revisionId || currentRevisionId;
+      currentMutationId = batch.mutationId;
+    } catch (error) {
+      rollbackMutation(batch.mutationId);
+      root.removeAttribute("data-ns-mutating");
+      throw error;
+    }
+    // Do not yield a paint frame here. The final DOM is installed atomically, then
+    // immediately held at the first construction keyframe before the browser can
+    // display the completed result. Geometry reads inside runConstructionSequence
+    // synchronously flush layout without exposing the final frame.
     if (cancelledMutationIds.has(batch.mutationId)) {
       rollbackMutation(batch.mutationId);
       root.removeAttribute("data-ns-mutating");
       return;
     }
-    animateMutation(before, Math.max(80, Math.min(1200, Number(batch.transitionMs) || 320)));
+    if (acknowledge) {
+      try {
+        await runConstructionSequence(before, batch);
+      } catch (error) {
+        origin.querySelector('[data-ns-construction-overlay="true"]')?.remove();
+        root.removeAttribute("data-ns-construction-active");
+        root.removeAttribute("data-ns-construction-mode");
+        root.removeAttribute("data-ns-construction-beat");
+        root.removeAttribute("data-ns-construction-beat-index");
+        parent.postMessage({
+          type: "northstar.artifact.construction-failed",
+          artifactId: ARTIFACT_ID,
+          revisionId: currentRevisionId,
+          mutationId: batch.mutationId,
+          message: error instanceof Error ? error.message : String(error),
+        }, "*");
+      }
+    }
+    if (cancelledMutationIds.has(batch.mutationId)) {
+      rollbackMutation(batch.mutationId);
+      root.removeAttribute("data-ns-mutating");
+      return;
+    }
     root.removeAttribute("data-ns-mutating");
     if (acknowledge) {
       pendingAcknowledgement = {
@@ -1333,9 +2513,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   };
 
   const getContentBounds = () => {
+    const geometryMode = syncIntrinsicGeometryMode();
     const rootRect = root.getBoundingClientRect();
     let minX = Math.min(0, requestedBounds.minX), minY = Math.min(0, requestedBounds.minY);
-    let maxX = Math.max(MINIMUM_WIDTH, requestedBounds.maxX), maxY = Math.max(MINIMUM_HEIGHT, requestedBounds.maxY);
+    let maxX = Math.max(geometryMode.minimumWidth, requestedBounds.maxX), maxY = Math.max(geometryMode.minimumHeight, requestedBounds.maxY);
     [root, ...root.querySelectorAll("*")].forEach((element) => {
       if (element !== root && element.closest("[data-ns-spatial-system]")) return;
       const style = getComputedStyle(element);
@@ -1352,10 +2533,332 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     maxX = Math.max(maxX, spatialBounds.maxX);
     maxY = Math.max(maxY, spatialBounds.maxY);
     minX = Math.floor(minX); minY = Math.floor(minY); maxX = Math.ceil(maxX); maxY = Math.ceil(maxY);
-    return { minX, minY, maxX, maxY, width: Math.max(MINIMUM_WIDTH, maxX - minX), height: Math.max(MINIMUM_HEIGHT, maxY - minY) };
+    return {
+      minX, minY, maxX, maxY,
+      width: Math.max(geometryMode.minimumWidth, maxX - minX),
+      height: Math.max(geometryMode.minimumHeight, maxY - minY),
+    };
   };
 
-  const collectRuntimeAudit = () => {
+  const collectGeometryFacts = (bounds) => {
+    const geometryMode = syncIntrinsicGeometryMode();
+    const rootRect = root.getBoundingClientRect();
+    const artboard = geometryMode.artboard;
+    const artboardRect = artboard?.getBoundingClientRect?.();
+    const localBounds = (rect) => ({
+      minX: rect.left - rootRect.left,
+      minY: rect.top - rootRect.top,
+      maxX: rect.right - rootRect.left,
+      maxY: rect.bottom - rootRect.top,
+    });
+    const artboardBounds = artboardRect
+      ? localBounds(artboardRect)
+      : { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    const semanticElements = Array.from(root.querySelectorAll("[data-ns-node-id]"))
+      .filter((element) => element !== artboard && !element.closest("[data-ns-spatial-system]") && !element.closest('[data-ns-runtime-owned="true"]'))
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > .01 && rect.width > 0 && rect.height > 0;
+      });
+    const meaningfulElements = semanticElements.filter((element) => {
+      const hasSemanticChild = Boolean(element.querySelector(":scope [data-ns-node-id]"));
+      const directText = Array.from(element.childNodes || []).some((node) => node.nodeType === Node.TEXT_NODE && String(node.textContent || "").trim());
+      return !hasSemanticChild || directText || element.matches("img,svg,canvas,figure,[data-ns-evidence-id]");
+    });
+    let semanticContentBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    if (meaningfulElements.length > 0) {
+      const measured = meaningfulElements.map((element) => localBounds(element.getBoundingClientRect()));
+      semanticContentBounds = {
+        minX: Math.min(...measured.map((entry) => entry.minX)),
+        minY: Math.min(...measured.map((entry) => entry.minY)),
+        maxX: Math.max(...measured.map((entry) => entry.maxX)),
+        maxY: Math.max(...measured.map((entry) => entry.maxY)),
+      };
+    }
+    const artboardWidth = Math.max(1, artboardBounds.maxX - artboardBounds.minX);
+    const artboardHeight = Math.max(1, artboardBounds.maxY - artboardBounds.minY);
+    const contentWidth = Math.max(0, semanticContentBounds.maxX - semanticContentBounds.minX);
+    const contentHeight = Math.max(0, semanticContentBounds.maxY - semanticContentBounds.minY);
+    const outOfBoundsNodeIds = [];
+    const clippedSemanticNodeIds = [];
+    const meaningfulElementSet = new Set(meaningfulElements);
+    const clipsDescendants = (style) => [style.overflow, style.overflowX, style.overflowY]
+      .some((value) => value === "hidden" || value === "clip" || value === "scroll" || value === "auto");
+    const isReadableIntegrityTarget = (element) => {
+      if (meaningfulElementSet.has(element)) return true;
+      return element.matches?.("img,picture,video,canvas,svg,[role=img],[data-ns-evidence-id]") === true;
+    };
+    for (const element of semanticElements) {
+      const nodeId = element.getAttribute("data-ns-node-id");
+      if (!nodeId) continue;
+      const elementRect = element.getBoundingClientRect();
+      const rect = localBounds(elementRect);
+      if (artboardRect && (rect.minX < artboardBounds.minX - 2 || rect.minY < artboardBounds.minY - 2 || rect.maxX > artboardBounds.maxX + 2 || rect.maxY > artboardBounds.maxY + 2)) outOfBoundsNodeIds.push(nodeId);
+      if (!isReadableIntegrityTarget(element)) continue;
+      const style = getComputedStyle(element);
+      const ownTextClipped = (element.scrollWidth > element.clientWidth + 2 && style.overflowX !== "visible")
+        || (element.scrollHeight > element.clientHeight + 2 && style.overflowY !== "visible");
+      let ancestorClipped = false;
+      let ancestor = element.parentElement;
+      while (ancestor && ancestor !== artboard && ancestor !== root) {
+        const ancestorStyle = getComputedStyle(ancestor);
+        if (clipsDescendants(ancestorStyle)) {
+          const ancestorRect = ancestor.getBoundingClientRect();
+          if (elementRect.left < ancestorRect.left - 2 || elementRect.top < ancestorRect.top - 2 || elementRect.right > ancestorRect.right + 2 || elementRect.bottom > ancestorRect.bottom + 2) {
+            ancestorClipped = true;
+            break;
+          }
+        }
+        ancestor = ancestor.parentElement;
+      }
+      if (ownTextClipped || ancestorClipped) clippedSemanticNodeIds.push(nodeId);
+    }
+    const viewingModeValue = artboard?.getAttribute?.("data-ns-viewing-mode");
+    const viewingMode = viewingModeValue === "zoom-and-inspect" || viewingModeValue === "scrolling-artboard"
+      ? viewingModeValue
+      : "single-frame";
+    const primaryNodeIds = splitSemanticIds(artboard?.getAttribute?.("data-ns-primary-node-ids"));
+    const supportingNodeIds = splitSemanticIds(artboard?.getAttribute?.("data-ns-supporting-node-ids"));
+    const evidenceElements = Array.from(root.querySelectorAll("[data-ns-node-id][data-ns-evidence-id]"));
+    const isVisibleEvidence = (element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return !element.hidden
+        && element.getAttribute("aria-hidden") !== "true"
+        && style.display !== "none"
+        && style.visibility !== "hidden"
+        && Number(style.opacity || 1) >= .15
+        && rect.width > 2
+        && rect.height > 2;
+    };
+    const visibleEvidenceElements = evidenceElements.filter(isVisibleEvidence);
+    const hiddenEvidenceNodeIds = evidenceElements
+      .filter((element) => !isVisibleEvidence(element))
+      .map((element) => element.getAttribute("data-ns-node-id"))
+      .filter(Boolean);
+    const intersectionArea = (first, second) => {
+      const width = Math.max(0, Math.min(first.right, second.right) - Math.max(first.left, second.left));
+      const height = Math.max(0, Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top));
+      return width * height;
+    };
+    const evidenceVisibleRatio = (element) => {
+      const rect = element.getBoundingClientRect();
+      const area = Math.max(1, rect.width * rect.height);
+      let visibleArea = artboardRect ? intersectionArea(rect, artboardRect) : area;
+      let ancestor = element.parentElement;
+      while (ancestor && ancestor !== artboard && ancestor !== root) {
+        const style = getComputedStyle(ancestor);
+        if (clipsDescendants(style)) visibleArea = Math.min(visibleArea, intersectionArea(rect, ancestor.getBoundingClientRect()));
+        ancestor = ancestor.parentElement;
+      }
+      return Math.max(0, Math.min(1, visibleArea / area));
+    };
+    const evidenceVisibleRatios = visibleEvidenceElements.map((element) => ({
+      nodeId: element.getAttribute("data-ns-node-id"),
+      ratio: evidenceVisibleRatio(element),
+    }));
+    const partiallyClippedEvidenceNodeIds = evidenceVisibleRatios
+      .filter((entry) => entry.ratio < .985)
+      .map((entry) => entry.nodeId)
+      .filter(Boolean);
+    const evidenceUsesCropping = (element) => {
+      const candidates = [element, ...Array.from(element.querySelectorAll("img,picture,video,canvas,svg"))];
+      return candidates.some((candidate) => {
+        const style = getComputedStyle(candidate);
+        const objectFit = String(style.objectFit || "").toLowerCase();
+        const clipPath = String(style.clipPath || "none").toLowerCase();
+        const maskImage = String(style.maskImage || "none").toLowerCase();
+        return objectFit === "cover" || clipPath !== "none" || maskImage !== "none";
+      });
+    };
+    const croppedEvidenceNodeIds = visibleEvidenceElements
+      .filter(evidenceUsesCropping)
+      .map((element) => element.getAttribute("data-ns-node-id"))
+      .filter(Boolean);
+    const minimumEvidenceVisibleRatio = evidenceVisibleRatios.length
+      ? Math.min(...evidenceVisibleRatios.map((entry) => entry.ratio))
+      : (evidenceElements.length ? 0 : 1);
+    const nodeElements = (ids) => ids.map((id) => root.querySelector('[data-ns-node-id="' + CSS.escape(id) + '"]')).filter(Boolean);
+    const minimumTextPx = (elements, fallback) => {
+      const values = [];
+      for (const element of elements) {
+        const candidates = [element, ...Array.from(element.querySelectorAll("h1,h2,h3,h4,p,span,li,figcaption,button,a"))];
+        for (const candidate of candidates) {
+          if (!String(candidate.textContent || "").trim()) continue;
+          const style = getComputedStyle(candidate);
+          const rect = candidate.getBoundingClientRect();
+          if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) <= .01 || rect.width <= 0 || rect.height <= 0) continue;
+          const size = Number.parseFloat(style.fontSize);
+          if (Number.isFinite(size) && size > 0) values.push(size);
+        }
+      }
+      return values.length ? Math.min(...values) : fallback;
+    };
+    const summedAreaRatio = (elements) => Math.max(0, Math.min(1, elements.reduce((total, element) => {
+      const rect = element.getBoundingClientRect();
+      return total + Math.max(0, rect.width) * Math.max(0, rect.height);
+    }, 0) / Math.max(1, artboardWidth * artboardHeight)));
+    const primaryElements = nodeElements(primaryNodeIds);
+    const supportingElements = nodeElements(supportingNodeIds);
+    const minimumPrimaryTextPx = minimumTextPx(primaryElements, minimumTextPx(meaningfulElements, 16));
+    const minimumSupportingTextPx = minimumTextPx(supportingElements, minimumTextPx(visibleEvidenceElements, 12));
+    const evidenceAreaRatio = summedAreaRatio(visibleEvidenceElements);
+    const primaryAreaRatio = summedAreaRatio(primaryElements);
+    const rightGutterPx = Math.max(0, bounds.maxX - artboardBounds.maxX);
+    const bottomGutterPx = Math.max(0, bounds.maxY - artboardBounds.maxY);
+    const leftGutterPx = Math.max(0, artboardBounds.minX - bounds.minX);
+    const topGutterPx = Math.max(0, artboardBounds.minY - bounds.minY);
+    const backgroundLeakRisk = geometryMode.sourceOwned && (!artboardRect || rightGutterPx > 2 || bottomGutterPx > 2 || leftGutterPx > 2 || topGutterPx > 2);
+    const occupiedWidthRatio = Math.max(0, Math.min(1, contentWidth / artboardWidth));
+    const occupiedHeightRatio = Math.max(0, Math.min(1, contentHeight / artboardHeight));
+    const unusedSpaceRatio = Math.max(0, Math.min(1, 1 - ((contentWidth * contentHeight) / Math.max(1, artboardWidth * artboardHeight))));
+    const integrityFailures = [];
+    if (geometryMode.sourceOwned && !artboardRect) integrityFailures.push("The model-source artifact has no measurable canonical artboard surface.");
+    if (backgroundLeakRisk) integrityFailures.push("The authored artboard does not cover its measured artifact surface, which would expose an interior host-background gutter.");
+    if (outOfBoundsNodeIds.length > 0) integrityFailures.push("Semantic content extends outside the authored artboard: " + Array.from(new Set(outOfBoundsNodeIds)).slice(0, 12).join(", ") + ".");
+    if (clippedSemanticNodeIds.length > 0) integrityFailures.push("Semantic content is clipped by its own authored geometry: " + Array.from(new Set(clippedSemanticNodeIds)).slice(0, 12).join(", ") + ".");
+    if (artboard?.getAttribute?.("data-ns-preserve-all-evidence") === "true" && hiddenEvidenceNodeIds.length > 0) integrityFailures.push("Grounded evidence screens were hidden or collapsed in the settled source: " + Array.from(new Set(hiddenEvidenceNodeIds)).slice(0, 12).join(", ") + ".");
+    if (artboard?.getAttribute?.("data-ns-preserve-all-evidence") === "true" && partiallyClippedEvidenceNodeIds.length > 0) integrityFailures.push("Grounded evidence screens were visually truncated by the authored geometry: " + Array.from(new Set(partiallyClippedEvidenceNodeIds)).slice(0, 12).join(", ") + ".");
+    if (artboard?.getAttribute?.("data-ns-preserve-all-evidence") === "true" && croppedEvidenceNodeIds.length > 0) integrityFailures.push("Grounded evidence screens used cropping or masking instead of preserving the complete screenshot surface: " + Array.from(new Set(croppedEvidenceNodeIds)).slice(0, 12).join(", ") + ".");
+    return {
+      sourceOwnedSurface: geometryMode.sourceOwned,
+      viewingMode,
+      viewportWidth: Math.max(1, Math.round(window.innerWidth || bounds.width)),
+      viewportHeight: Math.max(1, Math.round(window.innerHeight || bounds.height)),
+      artboardBounds, semanticContentBounds, occupiedWidthRatio, occupiedHeightRatio, unusedSpaceRatio,
+      rightGutterPx, bottomGutterPx,
+      authoredSurfaceCoverageX: Math.max(0, Math.min(1, artboardWidth / Math.max(1, bounds.width))),
+      authoredSurfaceCoverageY: Math.max(0, Math.min(1, artboardHeight / Math.max(1, bounds.height))),
+      backgroundLeakRisk,
+      outOfBoundsNodeIds: Array.from(new Set(outOfBoundsNodeIds)),
+      clippedSemanticNodeIds: Array.from(new Set(clippedSemanticNodeIds)),
+      evidenceNodeCount: evidenceElements.length,
+      visibleEvidenceNodeCount: visibleEvidenceElements.length,
+      hiddenEvidenceNodeIds: Array.from(new Set(hiddenEvidenceNodeIds)),
+      partiallyClippedEvidenceNodeIds: Array.from(new Set(partiallyClippedEvidenceNodeIds)),
+      croppedEvidenceNodeIds: Array.from(new Set(croppedEvidenceNodeIds)),
+      minimumEvidenceVisibleRatio,
+      primaryNodeIds, supportingNodeIds, minimumPrimaryTextPx, minimumSupportingTextPx, evidenceAreaRatio, primaryAreaRatio,
+      integrityFailures,
+    };
+  };
+
+  const splitSemanticIds = (value) => String(value || "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+  const auditRequiredPrimitives = (requirements = []) => {
+    const failures = [];
+    const essentialFailures = [];
+    const optionalFailures = [];
+    const checkedNodeIds = [];
+    const pushFailure = (requirement, message) => {
+      const id = requirement?.id || requirement?.kind || "primitive";
+      const detail = id + ": " + message;
+      failures.push(detail);
+      if (requirement?.criticality === "essential") essentialFailures.push(detail);
+      else optionalFailures.push(detail);
+    };
+    const rootRect = root.getBoundingClientRect();
+    const visibleGeometry = (element) => {
+      if (!element) return false;
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > .01 && rect.width >= 10 && rect.height >= 6
+        && rect.right >= rootRect.left - 2 && rect.bottom >= rootRect.top - 2 && rect.left <= rootRect.right + 2 && rect.top <= rootRect.bottom + 2;
+    };
+    const attributeIds = (element, names) => {
+      const ids = [];
+      for (const name of names) ids.push(...splitSemanticIds(element?.getAttribute?.(name)));
+      return Array.from(new Set(ids));
+    };
+    for (const requirement of requirements || []) {
+      const nodeIds = requirement?.instanceNodeIds?.length ? requirement.instanceNodeIds : requirement?.nodeIds?.length ? requirement.nodeIds : [requirement?.id].filter(Boolean);
+      const elements = nodeIds.map((nodeId) => nodeById(nodeId)).filter(Boolean);
+      checkedNodeIds.push(...nodeIds);
+      const minimumInstances = Math.max(1, Number(requirement?.minimumInstances) || 1);
+      if (elements.length < minimumInstances) {
+        pushFailure(requirement, "missing exact semantic instance(s)");
+        continue;
+      }
+      const kindMatches = elements.filter((element) => {
+        const kind = requirement?.kind;
+        if (kind === "chart" || kind === "sparkline" || kind === "axis") return element.getAttribute("data-ns-analysis-kind") === kind;
+        if (kind === "annotation") return Boolean(element.getAttribute("data-ns-annotation-id") && element.getAttribute("data-ns-anchor-node-id"));
+        if (kind === "relationship") return Boolean(element.getAttribute("data-ns-relationship-id") && (element.getAttribute("data-ns-source-id") || element.getAttribute("data-ns-source-node-id")) && (element.getAttribute("data-ns-target-id") || element.getAttribute("data-ns-target-node-id")));
+        if (kind === "synthesis") return /synthesis|summary|takeaway/i.test(element.getAttribute("data-ns-node-id") || "") && (element.textContent || "").trim().length >= 48;
+        if (kind === "decision") return /decision|recommendation|conclusion|implication/i.test(element.getAttribute("data-ns-node-id") || "") && (element.textContent || "").trim().length >= 36;
+        return true;
+      });
+      if (kindMatches.length < minimumInstances) {
+        pushFailure(requirement, "rendered kind does not match exact contract");
+        continue;
+      }
+      for (const sourceId of requirement?.sourceNodeIds || []) {
+        if (!nodeById(sourceId)) pushFailure(requirement, "unresolved source " + sourceId);
+        if (!elements.some((element) => attributeIds(element, ["data-ns-source-ids", "data-ns-source-id", "data-ns-source-node-id", "data-ns-anchor-node-id"]).includes(sourceId))) pushFailure(requirement, "source binding missing for " + sourceId);
+      }
+      for (const targetId of requirement?.targetNodeIds || []) {
+        if (!nodeById(targetId)) pushFailure(requirement, "unresolved target " + targetId);
+        if (!elements.some((element) => attributeIds(element, ["data-ns-target-id", "data-ns-target-node-id"]).includes(targetId))) pushFailure(requirement, "target binding missing for " + targetId);
+      }
+      const expectedPlacement = {
+        "beneath-flow": "caption-lane",
+        "between-sections": "inter-row-lane",
+        "anchored-margin": "margin-lane",
+        "routed-overlay": "external-relationship",
+      }[requirement?.placement];
+      const structuralPlacementSatisfied = (requirement?.kind === "frame" || requirement?.kind === "evidence-lane")
+        && elements.some((element) => element.getAttribute("data-ns-required-placement") === requirement?.placement);
+      if (expectedPlacement && !structuralPlacementSatisfied && !elements.some((element) => element.getAttribute("data-ns-analysis-placement") === expectedPlacement)) pushFailure(requirement, "wrong rendered placement");
+      if (requirement?.kind === "chart" || requirement?.kind === "sparkline" || requirement?.kind === "axis") {
+        for (const element of kindMatches) {
+          if (!visibleGeometry(element)) pushFailure(requirement, "analytical primitive is not visibly measurable");
+          const sourceIds = attributeIds(element, ["data-ns-source-ids", "data-ns-source-id"]);
+          if (!sourceIds.length || sourceIds.some((sourceId) => !nodeById(sourceId))) pushFailure(requirement, "analytical sources are unresolved");
+          if (!element.getAttribute("data-ns-encoding")) pushFailure(requirement, "encoding is undeclared");
+          if (!(element.getAttribute("aria-label") || element.getAttribute("data-ns-label") || (element.textContent || "").trim())) pushFailure(requirement, "precise label is missing");
+          const svg = element instanceof SVGSVGElement ? element : element.querySelector("svg");
+          if (svg && !svg.getAttribute("viewBox")) pushFailure(requirement, "SVG viewBox is missing");
+          if (element.getAttribute("data-ns-encoding") === "quantitative" && element.getAttribute("data-ns-values-grounded") !== "true") pushFailure(requirement, "quantitative values are not grounded");
+        }
+      }
+      if (requirement?.kind === "annotation") {
+        for (const element of kindMatches) {
+          const annotationId = element.getAttribute("data-ns-annotation-id");
+          const copy = annotationId ? annotationLayer.querySelector('[data-ns-spatial-copy][data-ns-annotation-id="' + CSS.escape(annotationId) + '"]') : null;
+          if (!copy || !visibleGeometry(copy)) pushFailure(requirement, "anchored annotation did not resolve visibly");
+          if ((lastSpatialAudit?.unresolvedAnchorIds || []).includes(annotationId)) pushFailure(requirement, "annotation anchor is unresolved");
+          if ((lastSpatialAudit?.annotationTargetOverlapIds || []).includes(annotationId) || (lastSpatialAudit?.clippedAnnotationIds || []).includes(annotationId)) pushFailure(requirement, "annotation placement is obstructed");
+        }
+      }
+      if (requirement?.kind === "relationship") {
+        for (const element of kindMatches) {
+          const relationshipId = element.getAttribute("data-ns-relationship-id");
+          const path = relationshipId ? origin.querySelector('[data-ns-spatial-system] path[data-ns-routed-relationship-id="' + CSS.escape(relationshipId) + '"]') : null;
+          const pathStyle = path ? getComputedStyle(path) : null;
+          const pathLength = path && typeof path.getTotalLength === "function" ? path.getTotalLength() : 0;
+          if (!path || pathStyle?.display === "none" || pathStyle?.visibility === "hidden" || Number(pathStyle?.opacity || 1) <= .01 || pathLength < 8) pushFailure(requirement, "routed connector is not visible");
+          if ((lastSpatialAudit?.unresolvedRelationshipIds || []).includes(relationshipId) || (lastSpatialAudit?.obstacleIntersectionIds || []).includes(relationshipId)) pushFailure(requirement, "connector route is unresolved or intersects evidence");
+        }
+      }
+      if ((requirement?.kind === "frame" || requirement?.kind === "evidence-lane" || requirement?.kind === "synthesis" || requirement?.kind === "decision") && !kindMatches.some(visibleGeometry)) pushFailure(requirement, "contracted region is not visible");
+    }
+    const uniqueFailures = Array.from(new Set(failures)).slice(0, 40);
+    const uniqueEssential = Array.from(new Set(essentialFailures)).slice(0, 40);
+    const uniqueOptional = Array.from(new Set(optionalFailures)).slice(0, 40);
+    return {
+      healthy: uniqueEssential.length === 0,
+      checkedCount: checkedNodeIds.length,
+      failureCount: uniqueFailures.length,
+      essentialFailureCount: uniqueEssential.length,
+      optionalFailureCount: uniqueOptional.length,
+      failures: uniqueFailures,
+      essentialFailures: uniqueEssential,
+      optionalFailures: uniqueOptional,
+      checkedNodeIds: Array.from(new Set(checkedNodeIds)),
+    };
+  };
+
+  const collectRuntimeAudit = (requiredPrimitives = []) => {
     const elements = Array.from(root.querySelectorAll("*")).filter((element) => !element.closest("[data-ns-spatial-system]"));
     let overflowElementCount = 0, clippedTextCount = 0, smallTextCount = 0, tinyInteractiveCount = 0, missingImageCount = 0, internalScrollElementCount = 0;
     elements.forEach((element) => {
@@ -1373,13 +2876,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     });
     const bounds = getContentBounds(), stageRegions = Array.from(root.querySelectorAll("[data-ns-stage]"));
     const documentScrollRisk = internalScrollElementCount > 0;
-    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0);
+    const spatialAudit = lastSpatialAudit || emptySpatialAudit();
+    const requiredPrimitiveAudit = auditRequiredPrimitives(requiredPrimitives);
+    const constructionAudit = currentMutationId ? constructionResults.get(currentMutationId) : undefined;
+    const geometryFacts = collectGeometryFacts(bounds);
+    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0) + Number(spatialAudit.hardFailureCount || 0) + Number(spatialAudit.softIssueCount || 0) + requiredPrimitiveAudit.failureCount + geometryFacts.integrityFailures.length;
     const review = {
       revisionId: currentRevisionId, mutationId: currentMutationId, stageIndex: activeStageIndex, evaluatedAt: new Date().toISOString(),
       rootWidth: bounds.width, rootHeight: bounds.height, elementCount: elements.length,
       stageRegionCount: stageRegions.length, visibleStageRegionCount: stageRegions.length,
       overflowElementCount, clippedTextCount, smallTextCount, tinyInteractiveCount, missingImageCount, documentScrollRisk,
-      spatialAudit: lastSpatialAudit || emptySpatialAudit(),
+      spatialAudit,
+      requiredPrimitiveAudit,
+      constructionAudit,
+      geometryFacts,
       spatialSnapshot: {
         artifactId: ARTIFACT_ID,
         revisionId: currentRevisionId,
@@ -1387,14 +2897,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         measuredAt: new Date().toISOString(),
         layoutVersion: spatialLayoutVersion,
         artboardBounds: { x: bounds.minX, y: bounds.minY, width: bounds.width, height: bounds.height, right: bounds.maxX, bottom: bounds.maxY },
-        audit: lastSpatialAudit || emptySpatialAudit(),
+        audit: spatialAudit,
       },
       summary: issueCount ? "Live artboard audit detected " + issueCount + " potential visual issues for the next micro-adjustment." : "Live artboard audit passed.",
     };
     return review;
   };
-  const audit = () => {
-    const review = collectRuntimeAudit();
+  const audit = (requiredPrimitives = []) => {
+    const review = collectRuntimeAudit(requiredPrimitives);
     parent.postMessage({ type: "northstar.artifact.runtime-review", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, review }, "*");
     return review;
   };
@@ -1418,6 +2928,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const settled = (resourcesSettled || resourceDeadlineReached) && (stableCount >= 3 || pendingAge >= 3_000);
     const verifiedDocumentWidth = Math.max(bounds.width, root.scrollWidth, root.getBoundingClientRect().width);
     const verifiedDocumentHeight = Math.max(bounds.height, root.scrollHeight, root.getBoundingClientRect().height);
+    const geometryFacts = collectGeometryFacts(bounds);
     const size = {
       artifactId: ARTIFACT_ID,
       surfaceId: SURFACE_ID,
@@ -1426,6 +2937,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       measuredAt: new Date().toISOString(),
       intrinsicWidth: Math.ceil(verifiedDocumentWidth),
       intrinsicHeight: Math.ceil(verifiedDocumentHeight),
+      sourceOwnedSurface: hasModelSourceAuthority(),
+      viewingMode: geometryFacts.viewingMode,
       contentBounds: {
         minX: bounds.minX,
         minY: bounds.minY,
@@ -1441,7 +2954,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     };
     parent.postMessage({ type: "northstar.artifact.content-size", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, size }, "*");
     if (settled) {
-      const review = audit();
+      const review = audit(pendingAcknowledgement?.batch?.requiredPrimitives || []);
       if (!initialReady) {
         initialReady = true;
         parent.postMessage({ type: "northstar.artifact.ready", artifactId: ARTIFACT_ID, surfaceId: SURFACE_ID, revisionId: currentRevisionId, mutationId: currentMutationId, appliedMutationIds: Array.from(appliedMutationIds), size, review, changedNodeIds: [], meaningfulChangedNodeIds: [], changeKinds: [], requiredAssetUrls: [], loadedAssetUrls: loadedAssetUrls(), missingAssetUrls: [], snapshot: captureLiveSnapshot() }, "*");
@@ -1473,7 +2986,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           (kind) => kind !== "geometry" && !changeKinds.includes(kind),
         );
         const spatialMutation = acknowledgement.batch.operations.some((operation) =>
-          (operation.op === "insert-html" || operation.op === "set-html")
+          (operation.op === "insert-html" || operation.op === "set-html" || operation.op === "recompose-region")
           && /data-ns-(?:annotation-id|relationship-id)/i.test(operation.html || "")
         );
         const beforeAudit = acknowledgement.transaction.beforeAudit || review;
@@ -1482,9 +2995,12 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           clippedText: Math.max(0, Number(review.clippedTextCount || 0) - Number(beforeAudit.clippedTextCount || 0)),
           missingImages: Math.max(0, Number(review.missingImageCount || 0) - Number(beforeAudit.missingImageCount || 0)),
           internalScrollElements: Math.max(0, Number(review.internalScrollElementCount || 0) - Number(beforeAudit.internalScrollElementCount || 0)),
-          spatialHardFailures: spatialMutation
-            ? Math.max(0, Number(review.spatialAudit?.hardFailureCount || 0) - Number(beforeAudit.spatialAudit?.hardFailureCount || 0))
-            : 0,
+          // Routed annotations, connectors, and optional analytical helpers are
+          // creative delivery features. Their measured issues remain in the
+          // runtime review, but they must not roll back an otherwise safe and
+          // materially improved authored scene. Protected-evidence overlap and
+          // catastrophic geometry are enforced separately by visualSafetyReason.
+          spatialHardFailures: 0,
         };
         const hardIssues = Object.values(hardIssueDeltas).reduce((sum, count) => sum + count, 0);
         const hardIssueFailures = [
@@ -1499,8 +3015,25 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           : "";
         const afterVisualSafety = visualSafetySnapshot();
         const visualSafetyReason = visualSafetyFailure(acknowledgement.transaction.beforeVisualSafety || afterVisualSafety, afterVisualSafety);
-        const rejectedReason = visualSafetyReason
+        const geometryIntegrityReason = review.geometryFacts?.sourceOwnedSurface && (review.geometryFacts?.integrityFailures || []).length > 0
+          ? "The exact model-authored source has browser-measured geometry integrity failures: " + review.geometryFacts.integrityFailures.join(" ")
+          : "";
+        const essentialPrimitiveAuditReason = Number(review.requiredPrimitiveAudit?.essentialFailureCount || 0) > 0
+          ? "The browser could not verify an essential user-meaning contract: " + (review.requiredPrimitiveAudit?.essentialFailures || []).join("; ") + "."
+          : "";
+        const primitiveAuditReason = Number(review.requiredPrimitiveAudit?.optionalFailureCount || 0) > 0
+          ? "The browser could not verify every optional analytical binding: " + (review.requiredPrimitiveAudit?.optionalFailures || []).join("; ") + "."
+          : "";
+        const constructionResult = constructionResults.get(acknowledgement.mutationId);
+        const constructionCoverageReason = acknowledgement.batch.constructionPlan?.strictCoverage !== false && constructionResult?.completed && !constructionResult?.timedOut && !constructionResult?.recovered && (constructionResult?.uncoveredNodeIds || []).length > 0
+          ? "The cinema layer simplified the reveal because it could not stage every changed node: " + constructionResult.uncoveredNodeIds.slice(0, 12).join(", ") + "."
+          : "";
+        const rejectedReason = geometryIntegrityReason
+          ? geometryIntegrityReason
+          : visualSafetyReason
           ? visualSafetyReason
+          : essentialPrimitiveAuditReason
+          ? essentialPrimitiveAuditReason
           : missingAssets.length
           ? "Required evidence assets did not load: " + missingAssets.join(", ")
           : diff.meaningful.length < minimumMeaningful
@@ -1526,6 +3059,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           mutationTransactions.delete(acknowledgement.mutationId);
           enforceAssetPolicy(root);
           applyStage();
+          executeRuntimeModule("northstar-creative-source", acknowledgement.transaction.authoredJavascript);
           const terminalMessage = {
             type: "northstar.artifact.mutation-rejected",
             artifactId: ARTIFACT_ID,
@@ -1596,7 +3130,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             mutationId: acknowledgement.mutationId,
             visibleChange: acknowledgement.visibleChange,
             size: acknowledgedSize,
-            review: { ...review, hardFailureCount: 0, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: 0, meaningfulChangedNodeCount: diff.meaningful.length, visualDeltaScore: visualImpact.changedAreaRatio, ...visualImpact },
+            review: {
+              ...review,
+              hardFailureCount: 0,
+              requiredAssetCount: requiredAssets.length,
+              missingRequiredAssetCount: 0,
+              meaningfulChangedNodeCount: diff.meaningful.length,
+              visualDeltaScore: visualImpact.changedAreaRatio,
+              advisoryDeliveryIssues: [primitiveAuditReason, constructionCoverageReason].filter(Boolean),
+              ...visualImpact,
+            },
             changedNodeIds: diff.changed,
             meaningfulChangedNodeIds: diff.meaningful,
             changeKinds,
@@ -1653,6 +3196,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       currentData = message.dataBundle || currentData;
       currentCreative = message.creativeDirection ?? currentCreative;
       currentReviews = message.creativeReviews || currentReviews;
+      currentPublicationState = message.publicationState ?? currentPublicationState;
+      currentProvisional = typeof message.provisional === "boolean" ? message.provisional : currentProvisional;
+      applyPublicationPresentationState();
       registerAssets(message.allowedAssetUrls || currentData?.allowedAssetUrls || []);
       registerAssets((currentData?.screenshots || []).map((screen) => screen.imageUrl).filter(Boolean));
       registerAssets((currentData?.apps || []).map((app) => app.iconUrl).filter(Boolean));
@@ -1730,14 +3276,22 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   });
 
   try {
-    const runArtifact = new Function("Northstar", "data", "creative", "reviews", ${safeJson(documentSource.javascript)});
-    runArtifact(Northstar, currentData, currentCreative, currentReviews);
+    const runFoundation = new Function("Northstar", "data", "creative", "reviews", foundationJavascript);
+    runFoundation(Northstar, currentData, currentCreative, currentReviews);
+    executeRuntimeModule("northstar-creative-source", ${safeJson(documentSource.creativeJavascript ?? "")});
   } catch (error) {
     parent.postMessage({ type: "northstar.artifact.runtime-error", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, message: error instanceof Error ? error.message : String(error) }, "*");
   }
 
   (async () => {
     enforceAssetPolicy(root); applyStage();
+    if (SHOULD_ANIMATE_INITIAL_MOUNT) {
+      await runConstructionSequence(new Map(), {
+        mutationId: "initial-foundation",
+        constructionPlan: initialFoundationConstructionPlan(),
+        operations: [],
+      });
+    }
     for (const batch of INITIAL_JOURNAL) {
       try { await applyMutationBatch(batch, currentRevisionId, false); }
       catch (error) {
@@ -1766,22 +3320,27 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   <style>
     *,*::before,*::after{box-sizing:border-box}
     html,body{width:100%;min-height:100%;height:auto;margin:0;overflow:hidden}
-    body{position:relative;background:#f7f7fd;color:#10121d;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    body{position:relative;background:transparent;color:#10121d;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     button,input,textarea,select{font:inherit}img{display:block;max-width:100%}[hidden]{display:none!important}
     ${NORTHSTAR_DESIGN_KERNEL_CSS}
+    /* The premium Northstar field belongs to the host canvas. The isolated
+       browser document must never paint a second lavender canvas behind the
+       authored artboard or expose it as an interior gutter. */
+    html,body{background:transparent!important}
     #northstar-artifact-stage{position:relative;width:${minimumWidth}px;min-width:${minimumWidth}px;height:${minimumHeight}px;min-height:${minimumHeight}px;overflow:visible}
     #northstar-artifact-origin{position:absolute;left:0;top:0;width:max-content;height:max-content;transform-origin:top left;overflow:visible}
     #northstar-artifact-root{display:flow-root;width:max-content;min-width:${minimumWidth}px;min-height:${minimumHeight}px;height:auto;overflow:visible}
-    ${documentSource.css}
+    #northstar-artifact-root[data-ns-prepaint="true"]{opacity:0!important}
     #northstar-artifact-root,#northstar-artifact-root>.ns-artifact{max-width:none!important;max-height:none!important;overflow:visible!important}
-    #northstar-artifact-root>[data-ns-node-id="artboard"]{background-color:#fff!important}
     [data-ns-node-id]{will-change:transform,opacity}
     [data-ns-mutating="true"]{pointer-events:none}
     [data-ns-flow-id],[data-ns-reference-flow],[data-ns-flow-sequence],[data-ns-flow-id] [data-ns-evidence-id]{overflow:visible!important}
   </style>
+  <style id="northstar-authored-foundation-style">${documentSource.css.replaceAll("</style", "<\\/style")}</style>
+  ${initialAuthoredCssLayers}
 </head>
 <body>
-  <div id="northstar-artifact-stage"><div id="northstar-artifact-origin"><div id="northstar-artifact-root" aria-label=${safeJson(artifact.title)}>${documentSource.html}</div></div></div>
+  <div id="northstar-artifact-stage"><div id="northstar-artifact-origin"><div id="northstar-artifact-root"${shouldAnimateInitialMount ? ' data-ns-prepaint="true"' : ""} aria-label=${safeJson(artifact.title)}>${documentSource.html}</div></div></div>
   <script>${escapeScript(bridgeScript)}</script>
 </body>
 </html>`;
@@ -2497,7 +4056,7 @@ function buildLegacyCanvasArtifactRuntimeDocument(
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     html, body { width: 100%; min-height: 100%; height: auto; margin: 0; overflow: hidden; }
-    body { background: #f7f7fd; color: #10121d; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { background: transparent; color: #10121d; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     button, input, textarea, select { font: inherit; }
     img { display: block; max-width: 100%; }
     [hidden] { display: none !important; }

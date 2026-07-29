@@ -6,6 +6,7 @@ import type { NorthstarArtboardMutationDraft } from "@/lib/canvas-ai/northstar-a
 import type { NorthstarArtboardMutationBatch } from "@/lib/canvas-artifacts/types";
 import type {
   NorthstarArtifactMutationAcknowledgement,
+  NorthstarCommittedSemanticNode,
   NorthstarGeneratedCodeArtifactPackage,
   NorthstarWebArtifactDocument,
 } from "@/lib/canvas-artifacts/types";
@@ -92,6 +93,8 @@ export type NorthstarSceneAssessment = {
   transactionState: string;
   rootNodePresent: boolean;
   canonicalSurfacePresent: boolean;
+  /** The creative region is authored as direct model-owned source, not a runtime visual program. */
+  modelSourceAuthority?: boolean;
   visualThesisPresent: boolean;
   groundedEvidencePresent: boolean;
   evidenceHierarchyPresent: boolean;
@@ -183,6 +186,8 @@ export type NorthstarMoveOperationDiagnosticSummary = {
   payloadHash?: string;
   introducedSemanticIds: string[];
   referencedSemanticIds: string[];
+  placementTargetIds?: string[];
+  retireNodeIds?: string[];
 };
 
 export type NorthstarPreflightIssueDetail = {
@@ -345,6 +350,17 @@ function geometryPassed(acknowledgement: NorthstarArtifactMutationAcknowledgemen
   if (!review || !acknowledgement?.size?.settled) return false;
   const overlapCount = reviewMetric(review, ["overlapElementCount", "overlapCount", "collisionCount"]);
   const protectedEvidenceOverlapCount = reviewMetric(review, ["protectedEvidenceOverlapCount", "protectedEvidenceCollisionCount"]);
+  // Mutation acknowledgements report hardFailureCount as a before/after regression
+  // contract. Once that field exists, do not reclassify the complete inherited
+  // artboard against absolute perfection thresholds after the browser already
+  // accepted the transaction. Existing advisory issues belong to later creative
+  // refinement; only new hard regressions may revoke this candidate.
+  if (typeof review.hardFailureCount === "number") {
+    return acknowledgement.missingAssetUrls.length === 0
+      && (review.missingRequiredAssetCount ?? 0) === 0
+      && review.hardFailureCount === 0
+      && protectedEvidenceOverlapCount === 0;
+  }
   return acknowledgement.missingAssetUrls.length === 0
     && review.missingImageCount === 0
     && review.overflowElementCount === 0
@@ -380,19 +396,19 @@ function relationshipPresent(document: NorthstarWebArtifactDocument | undefined)
   const html = document?.html ?? "";
   const synthesis = extractNodeInnerHtml(document, "synthesis");
   const explicitRelationship = /data-ns-relationship-id=["'][^"']+["']/i.test(html)
-    && /data-ns-source-node-id=["'][^"']+["']/i.test(html)
-    && /data-ns-target-node-id=["'][^"']+["']/i.test(html);
-  const groundedAnalyticalForm = /class=["'][^"']*(?:axis|continuum|matrix|relationship|comparison-spine|evidence-web|tension-map)[^"']*["']/i.test(synthesis)
-    && /data-ns-(?:evidence-id|source-node-id)=["'][^"']+["']/i.test(synthesis)
-    && /data-ns-(?:claim-id|target-node-id)=["'][^"']+["']/i.test(synthesis);
+    && /data-ns-source-(?:id|node-id)=["'][^"']+["']/i.test(html)
+    && /data-ns-target-(?:id|node-id)=["'][^"']+["']/i.test(html);
+  const groundedAnalyticalForm = /(?:class|data-ns-role)=["'][^"']*(?:axis|continuum|matrix|relationship|comparison-spine|evidence-web|tension-map|lane-analysis|friction)[^"']*["']/i.test(synthesis)
+    && /data-ns-(?:evidence-id|source-id|source-node-id)=["'][^"']+["']/i.test(synthesis)
+    && /data-ns-(?:claim-id|target-id|target-node-id)=["'][^"']+["']/i.test(synthesis);
   return explicitRelationship || groundedAnalyticalForm;
 }
 
 function groundedSynthesisPresent(document: NorthstarWebArtifactDocument | undefined): boolean {
   const synthesis = extractNodeInnerHtml(document, "synthesis");
   const substantive = hasSubstantiveNode(document, "synthesis", 68);
-  const evidenceLinked = /data-ns-evidence-id=["'][^"']+["']|data-ns-source-node-id=["'][^"']+["']/i.test(synthesis);
-  const claimLinked = /data-ns-claim-id=["'][^"']+["']|data-ns-target-node-id=["'][^"']+["']|data-ns-relationship-id=["'][^"']+["']/i.test(synthesis);
+  const evidenceLinked = /data-ns-evidence-id=["'][^"']+["']|data-ns-source-(?:id|node-id)=["'][^"']+["']/i.test(synthesis);
+  const claimLinked = /data-ns-claim-id=["'][^"']+["']|data-ns-target-(?:id|node-id)=["'][^"']+["']|data-ns-relationship-id=["'][^"']+["']/i.test(synthesis);
   return substantive && evidenceLinked && claimLinked;
 }
 
@@ -424,8 +440,17 @@ export function assessNorthstarCanonicalScene(
   const html = document?.html ?? "";
   const ids = semanticIds(document);
   const duplicateSemanticIds = duplicates(ids);
-  const publication = rootAttribute(document, "data-ns-publication") || artifact?.publicationState || "working";
-  const transactionState = rootAttribute(document, "data-ns-transaction-state") || "unknown";
+  const publication = artifact?.publicationState === "verified"
+    ? "verified"
+    : rootAttribute(document, "data-ns-publication") || "working";
+  const metadataSettled = publication === "verified"
+    && artifact?.provisional === false
+    && Boolean(artifact?.revisionId)
+    && acknowledgement?.revisionId === artifact?.revisionId
+    && acknowledgement.status !== "rejected";
+  const transactionState = metadataSettled
+    ? "settled"
+    : rootAttribute(document, "data-ns-transaction-state") || "unknown";
   const reasoningTheatrePresent = /data-ns-node-id=["']reasoning-zone["']/i.test(html)
     && /data-ns-node-id=["']thought-primary["']/i.test(html)
     && /data-ns-node-id=["']thought-secondary["']/i.test(html);
@@ -435,20 +460,30 @@ export function assessNorthstarCanonicalScene(
     ? cssDeclaresHorizontalReasoning(document?.css ?? "")
     : reasoningLifecycleSettled;
   const synthesisPresent = groundedSynthesisPresent(document);
+  const modelSourceAuthority = rootAttribute(document, "data-ns-creative-authority") === "model-source";
   const decisionRequired = Boolean((artifact?.dataBundle?.decisions?.length ?? 0) > 0 || (artifact?.dataBundle?.apps?.length ?? 0) > 1 || (artifact?.dataBundle?.flows?.length ?? 0) > 1);
   const contextualResolutionPresent = !decisionRequired || hasSubstantiveNode(document, "decision", 52);
-  const processSettled = ["settled", "resolved"].includes(transactionState)
+  const authoredPresentationText = stripTags(extractNodeInnerHtml(document, "presentation"));
+  const authoredSourceThesisPresent = modelSourceAuthority
+    && authoredPresentationText.length >= 80
+    && /<(?:h1|h2|h3)\b|data-ns-(?:role|node-id)=["'][^"']*(?:title|thesis|headline|framing)/i.test(extractNodeInnerHtml(document, "presentation"));
+  const processSettled = metadataSettled || (["settled", "resolved"].includes(transactionState)
+    && !/data-ns-current-focus=["']true["']|data-ns-thought-state=["'](?:active|evolving)["']/i.test(html));
+  // Publication cleanliness describes the authored source itself, independent of
+  // whether metadata has already been promoted to verified. This lets the runtime
+  // prove the final accepted scene is clean before performing the metadata-only
+  // publication transition, rather than creating a circular requirement.
+  const publicationClean = !staleWorkingLanguage(document)
+    && !/data-ns-publication-policy=["']working-only["']/i.test(html)
     && !/data-ns-current-focus=["']true["']|data-ns-thought-state=["'](?:active|evolving)["']/i.test(html);
-  const publicationClean = publication === "verified"
-    && !staleWorkingLanguage(document)
-    && !/data-ns-publication-policy=["']working-only["']/i.test(html);
   const result: NorthstarSceneAssessment = {
     revisionId: artifact?.revisionId,
     publicationState: publication === "verified" ? "verified" : "working",
     transactionState,
     rootNodePresent: /data-ns-node-id=["']artboard["']/i.test(html),
     canonicalSurfacePresent: rootAttribute(document, "data-ns-canonical-surface") === "true",
-    visualThesisPresent: visualThesisPresent(document),
+    modelSourceAuthority,
+    visualThesisPresent: visualThesisPresent(document) || authoredSourceThesisPresent,
     groundedEvidencePresent: /data-ns-evidence-id=["'][^"']+["']|<img\b/i.test(extractNodeInnerHtml(document, "evidence") || html),
     evidenceHierarchyPresent: evidenceHierarchyPresent(document),
     reasoningTheatrePresent,
@@ -470,13 +505,15 @@ export function assessNorthstarCanonicalScene(
   if (!result.canonicalSurfacePresent) result.unresolved.push("canonical surface marker is missing");
   if (!result.visualThesisPresent) result.unresolved.push("visual thesis is not perceptible in the materialized scene");
   if (!result.groundedEvidencePresent) result.unresolved.push("grounded evidence has not materially entered the composition");
-  if (!result.evidenceHierarchyPresent) result.unresolved.push("evidence remains visually unranked");
-  if (!result.reasoningTheatreHorizontal) result.unresolved.push("working hypothesis and current test are not in a reserved horizontal normal-flow region");
-  if (!result.activeHypothesisPresent && !result.hypothesisResolvedOrPromoted) result.unresolved.push("the hypothesis lifecycle is not visible or resolved");
-  if (!result.hypothesisTested && !result.hypothesisResolvedOrPromoted) result.unresolved.push("the working hypothesis has not been visibly tested against grounded evidence");
-  if (!result.relationshipPresent) result.unresolved.push("no grounded relationship is visibly expressed");
-  if (!result.synthesisPresent) result.unresolved.push("synthesis is not materially resolved");
-  if (!result.contextualResolutionPresent) result.unresolved.push("the central question lacks a contextual resolution");
+  if (!result.modelSourceAuthority) {
+    if (!result.evidenceHierarchyPresent) result.unresolved.push("evidence remains visually unranked");
+    if (!result.reasoningTheatreHorizontal) result.unresolved.push("working hypothesis and current test are not in a reserved horizontal normal-flow region");
+    if (!result.activeHypothesisPresent && !result.hypothesisResolvedOrPromoted) result.unresolved.push("the hypothesis lifecycle is not visible or resolved");
+    if (!result.hypothesisTested && !result.hypothesisResolvedOrPromoted) result.unresolved.push("the working hypothesis has not been visibly tested against grounded evidence");
+    if (!result.relationshipPresent) result.unresolved.push("no grounded relationship is visibly expressed");
+    if (!result.synthesisPresent) result.unresolved.push("synthesis is not materially resolved");
+    if (!result.contextualResolutionPresent) result.unresolved.push("the central question lacks a contextual resolution");
+  }
   if (!result.geometryVerified) result.unresolved.push("browser geometry or asset verification is incomplete");
   if (duplicateSemanticIds.length) result.unresolved.push(`duplicate semantic node ids remain: ${duplicateSemanticIds.join(", ")}`);
   if (result.publicationState === "verified" && !result.processSettled) result.unresolved.push("publication is marked verified while the process is not settled");
@@ -684,6 +721,17 @@ function operationTargetIds(draft: NorthstarArtboardMutationDraft): string[] {
       const value = operation[key];
       if (typeof value === "string" && value) ids.add(value);
     }
+    if (Array.isArray(operation.placements)) {
+      for (const placement of operation.placements as Array<Record<string, unknown>>) {
+        for (const key of ["targetId", "parentId", "beforeId"]) {
+          const value = placement[key];
+          if (typeof value === "string" && value) ids.add(value);
+        }
+      }
+    }
+    if (Array.isArray(operation.retireNodeIds)) {
+      for (const value of operation.retireNodeIds) if (typeof value === "string" && value) ids.add(value);
+    }
   }
   return [...ids];
 }
@@ -699,7 +747,7 @@ function referencedSemanticIdsFromMarkup(markup: string): string[] {
 function authoredSemanticIds(draft: NorthstarArtboardMutationDraft): string[] {
   const ids: string[] = [];
   for (const operation of draft.operations as Array<Record<string, unknown>>) {
-    if ((operation.op !== "insert-html" && operation.op !== "set-html") || typeof operation.html !== "string") continue;
+    if ((operation.op !== "insert-html" && operation.op !== "set-html" && operation.op !== "recompose-region") || typeof operation.html !== "string") continue;
     ids.push(...semanticIdsFromMarkup(operation.html));
   }
   return ids;
@@ -742,6 +790,25 @@ export function summarizeNorthstarMoveOperations(
       referencedSemanticIds: typeof operation.html === "string"
         ? referencedSemanticIdsFromMarkup(operation.html).slice(0, 40)
         : [],
+      ...(Array.isArray(operation.placements)
+        ? {
+            placementTargetIds: (operation.placements as Array<Record<string, unknown>>)
+              .map((placement) => typeof placement.targetId === "string" ? placement.targetId : "")
+              .filter(Boolean)
+              .slice(0, 40),
+            placementParentIds: (operation.placements as Array<Record<string, unknown>>)
+              .map((placement) => typeof placement.parentId === "string" ? placement.parentId : "")
+              .filter(Boolean)
+              .slice(0, 40),
+          }
+        : {}),
+      ...(Array.isArray(operation.retireNodeIds)
+        ? {
+            retireNodeIds: operation.retireNodeIds
+              .filter((value): value is string => typeof value === "string")
+              .slice(0, 40),
+          }
+        : {}),
     };
   });
 }
@@ -812,14 +879,20 @@ function draftOperationText(draft: NorthstarArtboardMutationDraft): string {
 
 function insertedMarkup(draft: NorthstarArtboardMutationDraft): string {
   return (draft.operations as Array<Record<string, unknown>>)
-    .filter((operation) => operation.op === "insert-html" && typeof operation.html === "string")
+    .filter((operation) => ["insert-html", "set-html", "recompose-region"].includes(String(operation.op)) && typeof operation.html === "string")
     .map((operation) => String(operation.html))
     .join("\n");
 }
 
 function draftTouchesNode(draft: NorthstarArtboardMutationDraft, nodeId: string): boolean {
   return (draft.operations as Array<Record<string, unknown>>).some((operation) => {
-    return [operation.targetId, operation.parentId, operation.beforeId].some((value) => value === nodeId);
+    if ([operation.targetId, operation.parentId, operation.beforeId].some((value) => value === nodeId)) return true;
+    if (Array.isArray(operation.placements)) {
+      return (operation.placements as Array<Record<string, unknown>>).some((placement) =>
+        [placement.targetId, placement.parentId, placement.beforeId].some((value) => value === nodeId),
+      );
+    }
+    return Array.isArray(operation.retireNodeIds) && operation.retireNodeIds.includes(nodeId);
   });
 }
 
@@ -877,7 +950,7 @@ function evidenceRolePostconditionIssues(
 
   const markup = insertedMarkup(draft);
   if (/\b(?:trust anchor|friction point|conversion velocity)\b/i.test(stripTags(markup))
-    && !/data-ns-(?:annotation-id|evidence-id|source-node-id|target-node-id)=["'][^"']+["']/i.test(markup)) {
+    && !/data-ns-(?:annotation-id|evidence-id|source-id|source-node-id|target-id|target-node-id)=["'][^"']+["']/i.test(markup)) {
     issues.push("hierarchy labels must be anchored semantic annotations, not anonymous repeated badges");
   }
   return issues;
@@ -893,11 +966,11 @@ function operationSpecificIssues(
   const markup = insertedMarkup(draft);
   const evidenceRoleChange = /data-ns-evidence-role/i.test(operationsText);
   const explicitRelationship = /data-ns-relationship-id/i.test(operationsText)
-    && /data-ns-source-node-id/i.test(operationsText)
-    && /data-ns-target-node-id/i.test(operationsText);
-  const analyticalStructure = /(?:data-ns-relationship-id|class=\\?["'][^"']*(?:axis|continuum|matrix|relationship|comparison-spine|evidence-web|tension-map))/i.test(operationsText);
-  const groundedStructure = /data-ns-(?:evidence-id|source-node-id)/i.test(operationsText)
-    && /data-ns-(?:claim-id|target-node-id|relationship-id)/i.test(operationsText);
+    && /data-ns-source-(?:id|node-id)/i.test(operationsText)
+    && /data-ns-target-(?:id|node-id)/i.test(operationsText);
+  const analyticalStructure = /(?:data-ns-relationship-id|data-ns-analysis-placement|(?:class|data-ns-role)=\\?["'][^"']*(?:axis|continuum|matrix|relationship|comparison-spine|evidence-web|tension-map|lane-analysis|friction|sparkline))/i.test(operationsText);
+  const groundedStructure = /data-ns-(?:evidence-id|source-id|source-node-id)/i.test(operationsText)
+    && /data-ns-(?:claim-id|target-id|target-node-id|relationship-id)/i.test(operationsText);
   const relationshipKinds: NorthstarVisualOperationKind[] = [
     "establish-comparison-spine",
     "establish-divergence-structure",
@@ -1013,6 +1086,122 @@ function groundedEvidenceIdsFromHtml(html: string): string[] {
   ));
 }
 
+type NorthstarSemanticSimulationNode = {
+  nodeId: string;
+  parentId?: string;
+  evidenceId?: string;
+};
+
+function semanticNodesFromMarkup(markup: string, fallbackParentId?: string): NorthstarSemanticSimulationNode[] {
+  const nodes: NorthstarSemanticSimulationNode[] = [];
+  for (const tag of String(markup ?? "").match(/<[^>]+data-ns-node-id\s*=\s*["'][^"']+["'][^>]*>/gi) ?? []) {
+    const nodeId = tag.match(/data-ns-node-id\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (!nodeId) continue;
+    nodes.push({
+      nodeId,
+      parentId: fallbackParentId,
+      evidenceId: tag.match(/data-ns-evidence-id\s*=\s*["']([^"']+)["']/i)?.[1],
+    });
+  }
+  return nodes;
+}
+
+function simulateNorthstarSemanticFinalState(input: {
+  artifact: NorthstarGeneratedCodeArtifactPackage;
+  operations: NorthstarArtboardMutationBatch["operations"];
+  semanticSnapshot?: NorthstarCommittedSemanticNode[];
+}): {
+  initialEvidenceIds: string[];
+  finalEvidenceIds: string[];
+  missingEvidenceIds: string[];
+  finalNodeIds: Set<string>;
+} {
+  const nodes = new Map<string, NorthstarSemanticSimulationNode>();
+  for (const node of input.semanticSnapshot ?? []) {
+    nodes.set(node.nodeId, {
+      nodeId: node.nodeId,
+      parentId: node.parentId,
+      evidenceId: node.normalizedAttributes?.["data-ns-evidence-id"],
+    });
+  }
+  if (nodes.size === 0) {
+    for (const node of semanticNodesFromMarkup(input.artifact.document.html)) nodes.set(node.nodeId, node);
+  }
+
+  const initialEvidenceIds = Array.from(new Set([
+    ...groundedEvidenceIdsFromHtml(input.artifact.document.html),
+    ...[...nodes.values()].map((node) => node.evidenceId).filter((value): value is string => Boolean(value)),
+  ]));
+
+  const descendants = (rootId: string): Set<string> => {
+    const result = new Set<string>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const node of nodes.values()) {
+        if (!node.parentId || result.has(node.nodeId)) continue;
+        if (node.parentId === rootId || result.has(node.parentId)) {
+          result.add(node.nodeId);
+          changed = true;
+        }
+      }
+    }
+    return result;
+  };
+  const removeSubtree = (rootId: string, preserve = new Set<string>()) => {
+    for (const nodeId of [rootId, ...descendants(rootId)]) {
+      if (!preserve.has(nodeId)) nodes.delete(nodeId);
+    }
+  };
+  const addMarkup = (markup: string, parentId?: string) => {
+    for (const node of semanticNodesFromMarkup(markup, parentId)) nodes.set(node.nodeId, node);
+  };
+
+  for (const operation of input.operations) {
+    if (operation.op === "set-html") {
+      for (const nodeId of descendants(operation.targetId)) nodes.delete(nodeId);
+      addMarkup(operation.html, operation.targetId);
+    } else if (operation.op === "insert-html") {
+      addMarkup(operation.html, operation.targetId);
+    } else if (operation.op === "move") {
+      const node = nodes.get(operation.targetId);
+      if (node) node.parentId = operation.parentId;
+    } else if (operation.op === "remove") {
+      removeSubtree(operation.targetId);
+    } else if (operation.op === "set-attributes") {
+      const node = nodes.get(operation.targetId);
+      if (!node) continue;
+      const evidenceId = operation.attributes["data-ns-evidence-id"];
+      if (evidenceId === null) node.evidenceId = undefined;
+      else if (typeof evidenceId === "string") node.evidenceId = evidenceId;
+    } else if (operation.op === "recompose-region") {
+      const preserved = new Set<string>();
+      for (const placement of operation.placements) {
+        preserved.add(placement.targetId);
+        for (const nodeId of descendants(placement.targetId)) preserved.add(nodeId);
+      }
+      for (const nodeId of descendants(operation.targetId)) if (!preserved.has(nodeId)) nodes.delete(nodeId);
+      addMarkup(operation.html, operation.targetId);
+      for (const placement of operation.placements) {
+        const node = nodes.get(placement.targetId);
+        if (node) node.parentId = placement.parentId;
+      }
+      for (const retiredId of operation.retireNodeIds ?? []) removeSubtree(retiredId, preserved);
+    }
+  }
+
+  const finalEvidenceIds = Array.from(new Set(
+    [...nodes.values()].map((node) => node.evidenceId).filter((value): value is string => Boolean(value)),
+  ));
+  const finalEvidenceSet = new Set(finalEvidenceIds);
+  return {
+    initialEvidenceIds,
+    finalEvidenceIds,
+    missingEvidenceIds: initialEvidenceIds.filter((evidenceId) => !finalEvidenceSet.has(evidenceId)),
+    finalNodeIds: new Set(nodes.keys()),
+  };
+}
+
 export type NorthstarDispatchContinuityIssue = {
   ruleCode:
     | "ROOT_REPLACEMENT_BLOCKED"
@@ -1038,27 +1227,59 @@ export type NorthstarDispatchContinuityResult =
  */
 export function validateNorthstarDispatchSceneContinuity(
   packageValue: NorthstarGeneratedCodeArtifactPackage,
+  acknowledgement?: NorthstarArtifactMutationAcknowledgement,
 ): NorthstarDispatchContinuityResult {
   const latest = packageValue.mutationJournal?.at(-1);
   if (!latest) return { ok: true };
 
   const mutationHtml = latest.operations
-    .filter((operation) => operation.op === "set-html" || operation.op === "insert-html")
+    .filter((operation) => operation.op === "set-html" || operation.op === "insert-html" || operation.op === "recompose-region")
     .map((operation) => operation.html || "")
     .join("\n");
-  const existingEvidenceIds = groundedEvidenceIdsFromHtml(packageValue.document.html);
-  const replacementEvidenceIds = new Set(groundedEvidenceIdsFromHtml(mutationHtml));
+  const semanticSnapshot = acknowledgement?.snapshot?.semanticNodes;
+  const finalState = simulateNorthstarSemanticFinalState({
+    artifact: packageValue,
+    operations: latest.operations,
+    semanticSnapshot,
+  });
   const evidenceRegionReconstructed = latest.operations.some((operation) =>
-    (operation.op === "set-html" || operation.op === "remove")
-      && operation.targetId === "evidence",
+    ((operation.op === "set-html" || operation.op === "remove") && operation.targetId === "evidence")
+    || (operation.op === "recompose-region" && (
+      operation.targetId === "evidence"
+      || (operation.retireNodeIds ?? []).includes("evidence")
+    )),
   );
 
-  if (evidenceRegionReconstructed && existingEvidenceIds.length > 0) {
-    const missingEvidenceIds = existingEvidenceIds.filter((id) => !replacementEvidenceIds.has(id));
+  if (semanticSnapshot?.length && finalState.initialEvidenceIds.length > 0 && finalState.missingEvidenceIds.length > 0) {
+    const missingEvidenceIds = finalState.missingEvidenceIds;
+    const operationIndex = latest.operations.findIndex((operation) =>
+      operation.op === "remove"
+      || operation.op === "set-html"
+      || operation.op === "recompose-region",
+    );
+    const operation = latest.operations[Math.max(0, operationIndex)];
+    return {
+      ok: false,
+      issue: {
+        ruleCode: "PROTECTED_EVIDENCE_REPLACEMENT_INCOMPLETE",
+        detail: `The staged transaction omitted ${missingEvidenceIds.length} grounded evidence identit${missingEvidenceIds.length === 1 ? "y" : "ies"} from its final semantic state: ${missingEvidenceIds.slice(0, 8).join(", ")}.`,
+        operationIndex: Math.max(0, operationIndex),
+        operation: operation?.op ?? "unknown",
+        targetId: "evidence",
+      },
+    };
+  }
+
+  if (!semanticSnapshot?.length && evidenceRegionReconstructed && finalState.initialEvidenceIds.length > 0) {
+    const replacementEvidenceIds = new Set(groundedEvidenceIdsFromHtml(mutationHtml));
+    const missingEvidenceIds = finalState.initialEvidenceIds.filter((id) => !replacementEvidenceIds.has(id));
     if (missingEvidenceIds.length > 0) {
       const operationIndex = latest.operations.findIndex((operation) =>
-        (operation.op === "set-html" || operation.op === "remove")
-          && operation.targetId === "evidence",
+        ((operation.op === "set-html" || operation.op === "remove") && operation.targetId === "evidence")
+        || (operation.op === "recompose-region" && (
+          operation.targetId === "evidence"
+          || (operation.retireNodeIds ?? []).includes("evidence")
+        )),
       );
       const operation = latest.operations[Math.max(0, operationIndex)];
       return {
@@ -1075,7 +1296,7 @@ export function validateNorthstarDispatchSceneContinuity(
   }
 
   for (const [operationIndex, operation] of latest.operations.entries()) {
-    if (operation.op === "set-html" && operation.targetId === "artboard") {
+    if ((operation.op === "set-html" || operation.op === "recompose-region") && operation.targetId === "artboard") {
       return {
         ok: false,
         issue: {
@@ -1110,43 +1331,9 @@ export function validateNorthstarDispatchSceneContinuity(
         },
       };
     }
-    if (operation.op === "set-css-layer") {
-      const css = operation.css || "";
-      const orderedFlowRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-        .filter((match) => /(?:working-flow__sequence|data-ns-flow-sequence|data-ns-reference-flow|data-ns-flow-id|data-ns-node-id\$?=["']?-sequence)/i.test(match[1] || ""));
-      const makesFlowVertical = orderedFlowRules.some((match) =>
-        /flex-direction\s*:\s*column|grid-auto-flow\s*:\s*row|grid-template-columns\s*:\s*(?:1fr|repeat\(1\s*,|minmax\([^)]*\))|flex-wrap\s*:\s*(?:wrap|wrap-reverse)/i.test(match[2] || ""),
-      );
-      if (makesFlowVertical) {
-        return {
-          ok: false,
-          issue: {
-            ruleCode: "FLOW_TOPOLOGY_VIOLATION",
-            detail: "Ordered flow evidence must remain a single horizontal, non-wrapping sequence.",
-            operationIndex,
-            operation: operation.op,
-          },
-        };
-      }
-    }
-    if (operation.op === "set-styles" && /(?:flow.*sequence|sequence)$/i.test(operation.targetId)) {
-      const styles = operation.styles || {};
-      const flexDirection = String(styles.flexDirection ?? styles["flex-direction"] ?? "").toLowerCase();
-      const flexWrap = String(styles.flexWrap ?? styles["flex-wrap"] ?? "").toLowerCase();
-      const gridAutoFlow = String(styles.gridAutoFlow ?? styles["grid-auto-flow"] ?? "").toLowerCase();
-      if (flexDirection.startsWith("column") || (flexWrap && flexWrap !== "nowrap") || gridAutoFlow === "row") {
-        return {
-          ok: false,
-          issue: {
-            ruleCode: "FLOW_TOPOLOGY_VIOLATION",
-            detail: "Ordered flow evidence must remain a single horizontal, non-wrapping sequence.",
-            operationIndex,
-            operation: operation.op,
-            targetId: operation.targetId,
-          },
-        };
-      }
-    }
+    // Preserve semantic order and evidence identity, but do not prescribe one
+    // geometry for an ordered flow. Vertical, wrapped, radial, editorial, and
+    // multi-row choreography remain valid when the browser can render them safely.
   }
   return { ok: true };
 }
@@ -1182,11 +1369,19 @@ export function preflightNorthstarMove(input: {
   artifact: NorthstarGeneratedCodeArtifactPackage;
   contract: NorthstarMoveContract;
   draft: NorthstarArtboardMutationDraft;
+  semanticSnapshot?: NorthstarCommittedSemanticNode[];
+  /** Exact node identities proven by the editable-surface descriptor. */
+  authoritativeNodeIds?: string[];
   acceptedFingerprints?: Set<string>;
   rejectedFingerprints?: Set<string>;
 }): NorthstarPreflightResult {
   const issues: string[] = [];
   const currentIds = new Set(semanticIds(input.artifact.document));
+  for (const node of input.semanticSnapshot ?? []) currentIds.add(node.nodeId);
+  for (const nodeId of input.authoritativeNodeIds ?? []) {
+    const normalized = String(nodeId ?? "").trim();
+    if (normalized) currentIds.add(normalized);
+  }
   const targets = operationTargetIds(input.draft);
   const newIds = insertedIds(input.draft, currentIds);
   const duplicateInsertions = duplicates(newIds);
@@ -1238,24 +1433,50 @@ export function preflightNorthstarMove(input: {
     if (op !== "set-css-layer" && targetId && !currentIds.has(targetId) && !newIds.includes(targetId)) {
       issues.push(`move targets missing semantic node ${targetId}`);
     }
-    if (op === "set-html" && targetId === "artboard") {
+    if ((op === "set-html" || op === "recompose-region") && targetId === "artboard") {
       issues.push("move replaces the canonical artboard root");
     }
-    if (op === "set-html" && targetId === "evidence" && typeof operation.html === "string") {
+    if (!input.semanticSnapshot?.length && op === "set-html" && targetId === "evidence" && typeof operation.html === "string") {
       const replacementEvidenceIds = new Set(groundedEvidenceIdsFromHtml(operation.html));
       const missingEvidence = protectedEvidenceIds.filter((id) => !replacementEvidenceIds.has(id));
       if (missingEvidence.length > 0) {
         issues.push(`move replaces the evidence region without retaining protected grounded evidence: ${missingEvidence.slice(0, 12).join(", ")}`);
       }
     }
-    if (op === "remove" && ["artboard", "evidence"].includes(targetId)) {
+    if (op === "remove" && targetId === "artboard") {
       issues.push(`move removes protected canonical region ${targetId}`);
+    }
+    if (op === "recompose-region") {
+      const placements = Array.isArray(operation.placements)
+        ? operation.placements as Array<Record<string, unknown>>
+        : [];
+      for (const placement of placements) {
+        const sourceId = typeof placement.targetId === "string" ? placement.targetId : "";
+        const parentId = typeof placement.parentId === "string" ? placement.parentId : "";
+        if (!sourceId || (!currentIds.has(sourceId) && !newIds.includes(sourceId))) {
+          issues.push(`atomic recomposition source ${sourceId || "(missing)"} is absent from the canonical scene`);
+        }
+        if (!parentId || (!currentIds.has(parentId) && !newIds.includes(parentId) && parentId !== targetId)) {
+          issues.push(`atomic recomposition parent ${parentId || "(missing)"} is absent from the staged scene`);
+        }
+      }
     }
     if (op === "set-css-layer" && typeof operation.css === "string") {
       const css = operation.css;
       if (/\.ns-reasoning-zone[^{}]*\{[^{}]*position\s*:\s*(?:absolute|fixed)/i.test(css)) issues.push("move takes the reasoning theatre out of normal flow");
       if (/\.ns-reasoning-zone[^{}]*\{[^{}]*grid-template-columns\s*:\s*1fr(?:\s*;|\s*$)/i.test(css)) issues.push("move vertically stacks the required reasoning pair");
       if (northstarCssHidesCanonicalArtboard(css)) issues.push("move hides the canonical artboard");
+    }
+  }
+
+  if (input.semanticSnapshot?.length) {
+    const finalState = simulateNorthstarSemanticFinalState({
+      artifact: input.artifact,
+      operations: input.draft.operations,
+      semanticSnapshot: input.semanticSnapshot,
+    });
+    if (finalState.missingEvidenceIds.length > 0) {
+      issues.push(`move removes protected grounded evidence identities from the final staged scene: ${finalState.missingEvidenceIds.slice(0, 12).join(", ")}`);
     }
   }
 
@@ -1400,6 +1621,7 @@ export function buildNorthstarMoveContract(input: {
   geometryRequirements?: string[];
   acceptanceCriteria?: string[];
   rejectionConditions?: string[];
+  modelSourceAuthority?: boolean;
 }): NorthstarMoveContract {
   return {
     contractId: randomUUID(),
@@ -1417,8 +1639,12 @@ export function buildNorthstarMoveContract(input: {
     relationship: input.relationship,
     geometryRequirements: [...new Set([
       "Preserve one continuously mounted canonical artboard.",
-      "Leave the whole artboard readable, contained, non-overlapping, and free of internal scrolling.",
-      "Keep the working hypothesis and current test in a reserved horizontal normal-flow region.",
+      ...(input.modelSourceAuthority
+        ? ["Preserve protected evidence identity, sandbox boundaries, and browser-operational geometry without imposing a visual layout grammar."]
+        : [
+            "Leave the whole artboard readable, contained, non-overlapping, and free of internal scrolling.",
+            "Keep the working hypothesis and current test in a reserved horizontal normal-flow region.",
+          ]),
       ...(input.geometryRequirements ?? []),
     ])].slice(0, 18),
     acceptanceCriteria: [...new Set([

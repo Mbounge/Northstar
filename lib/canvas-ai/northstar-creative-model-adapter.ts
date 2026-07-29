@@ -5,6 +5,12 @@ import type {
 import type {
   NorthstarIndependentCreativeReviewDraft,
 } from "@/lib/canvas-ai/northstar-independent-creative-review";
+import type {
+  NorthstarEmergentDesignIntelligenceDraft,
+} from "@/lib/canvas-ai/northstar-emergent-design-intelligence";
+import type {
+  NorthstarCreativeClosureAdjudicationDraft,
+} from "@/lib/canvas-ai/northstar-creative-closure-adjudication";
 
 export type NorthstarCreativeModelPart =
   | { text: string }
@@ -21,6 +27,9 @@ export interface NorthstarCreativeAuthoringRequest {
 export interface NorthstarCreativeModelAdapter {
   readonly providerId: string;
   readonly modelId: string;
+  formDesignIntelligence(
+    request: NorthstarCreativeAuthoringRequest,
+  ): Promise<NorthstarEmergentDesignIntelligenceDraft>;
   authorCreativeAct(
     request: NorthstarCreativeAuthoringRequest,
   ): Promise<NorthstarEmergentCreativeActDraft>;
@@ -30,6 +39,9 @@ export interface NorthstarCreativeModelAdapter {
   reviewCreativeArtifact(
     request: NorthstarCreativeAuthoringRequest,
   ): Promise<NorthstarIndependentCreativeReviewDraft>;
+  adjudicateCreativeClosure(
+    request: NorthstarCreativeAuthoringRequest,
+  ): Promise<NorthstarCreativeClosureAdjudicationDraft>;
 }
 
 export interface NorthstarCreativeJsonCall {

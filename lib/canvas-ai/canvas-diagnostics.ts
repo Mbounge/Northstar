@@ -154,6 +154,7 @@ function terminalEventForDiagnosticRun(
   return [...sourceEvents].reverse().find((candidate) =>
     candidate.runId === event.runId
     && (candidate.name === "run.completed"
+      || candidate.name === "run.completed_with_notes"
       || candidate.name === "run.incomplete"
       || candidate.name === "run.failed"
       || candidate.name === "run.cancelled")
@@ -168,7 +169,7 @@ export function classifyCanvasDiagnosticEvent(
     ? event.data.status.toLowerCase()
     : "";
   const terminal = terminalEventForDiagnosticRun(event, sourceEvents);
-  const runCompleted = terminal?.name === "run.completed";
+  const runCompleted = terminal?.name === "run.completed" || terminal?.name === "run.completed_with_notes";
   const name = event.name.toLowerCase();
   const detail = (event.detail ?? "").toLowerCase();
   const renderSeverity = typeof event.data?.severity === "string"
@@ -176,7 +177,11 @@ export function classifyCanvasDiagnosticEvent(
     : undefined;
 
   if (event.name === "run.incomplete" || event.name === "run.failed") return "problem";
-  if (event.name === "run.cancelled" || event.name === "run.completed") return "info";
+  if (
+    event.name === "run.cancelled"
+    || event.name === "run.completed"
+    || event.name === "run.completed_with_notes"
+  ) return "info";
 
   if (
     event.name === "render.health"
@@ -274,9 +279,13 @@ export function getCanvasRunTelemetry(sourceEvents: CanvasDiagnosticEvent[] = ev
   for (const runEvents of runs.values()) {
     const started = runEvents.find((event) => event.name === "run.started") ?? runEvents[0];
     const terminal = [...runEvents].reverse().find((event) =>
-      event.name === "run.completed" || event.name === "run.incomplete" || event.name === "run.failed" || event.name === "run.cancelled",
+      event.name === "run.completed"
+      || event.name === "run.completed_with_notes"
+      || event.name === "run.incomplete"
+      || event.name === "run.failed"
+      || event.name === "run.cancelled",
     );
-    if (terminal?.name === "run.completed") completedRuns += 1;
+    if (terminal?.name === "run.completed" || terminal?.name === "run.completed_with_notes") completedRuns += 1;
     if (terminal?.name === "run.incomplete" || terminal?.name === "run.failed" || terminal?.name === "run.cancelled") incompleteRuns += 1;
     if (started && terminal) durations.push(Math.max(0, Date.parse(terminal.timestamp) - Date.parse(started.timestamp)));
 

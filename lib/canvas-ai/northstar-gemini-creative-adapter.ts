@@ -12,6 +12,14 @@ import type {
   NorthstarCreativeJsonGenerator,
   NorthstarCreativeModelAdapter,
 } from "@/lib/canvas-ai/northstar-creative-model-adapter";
+import {
+  NORTHSTAR_CREATIVE_CLOSURE_ADJUDICATION_JSON_SCHEMA,
+  type NorthstarCreativeClosureAdjudicationDraft,
+} from "@/lib/canvas-ai/northstar-creative-closure-adjudication";
+import {
+  NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA,
+  type NorthstarEmergentDesignIntelligenceDraft,
+} from "@/lib/canvas-ai/northstar-emergent-design-intelligence";
 
 export function createNorthstarGeminiCreativeAdapter(input: {
   apiKey: string;
@@ -21,6 +29,15 @@ export function createNorthstarGeminiCreativeAdapter(input: {
   return {
     providerId: "google",
     modelId: input.modelId,
+    formDesignIntelligence: (request) => input.generateJson<NorthstarEmergentDesignIntelligenceDraft>({
+      apiKey: input.apiKey,
+      systemInstruction: request.systemInstruction,
+      contents: [{ role: "user", parts: request.parts }],
+      schema: NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA,
+      signal: request.signal,
+      maxOutputTokens: request.maxOutputTokens,
+      temperature: request.temperature,
+    }),
     authorCreativeAct: (request) => input.generateJson<NorthstarEmergentCreativeActDraft>({
       apiKey: input.apiKey,
       systemInstruction: request.systemInstruction,
@@ -44,6 +61,15 @@ export function createNorthstarGeminiCreativeAdapter(input: {
       systemInstruction: request.systemInstruction,
       contents: [{ role: "user", parts: request.parts }],
       schema: NORTHSTAR_INDEPENDENT_CREATIVE_REVIEW_JSON_SCHEMA,
+      signal: request.signal,
+      maxOutputTokens: request.maxOutputTokens,
+      temperature: request.temperature,
+    }),
+    adjudicateCreativeClosure: (request) => input.generateJson<NorthstarCreativeClosureAdjudicationDraft>({
+      apiKey: input.apiKey,
+      systemInstruction: request.systemInstruction,
+      contents: [{ role: "user", parts: request.parts }],
+      schema: NORTHSTAR_CREATIVE_CLOSURE_ADJUDICATION_JSON_SCHEMA,
       signal: request.signal,
       maxOutputTokens: request.maxOutputTokens,
       temperature: request.temperature,

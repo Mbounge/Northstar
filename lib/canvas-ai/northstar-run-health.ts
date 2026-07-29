@@ -1,4 +1,4 @@
-// Northstar v0.7.9 â€” bounded run-health primitives for irreversible terminal control.
+// Northstar v0.8.0 — bounded run-health primitives with truthful deterministic contract failures.
 
 import type { NorthstarArtifactMutationAcknowledgement } from "@/lib/canvas-artifacts/types";
 
@@ -57,6 +57,27 @@ export class NorthstarBudgetExceededError extends NorthstarRunHealthError {
     this.name = "NorthstarBudgetExceededError";
     this.scope = scope;
     this.limit = limit;
+  }
+}
+
+
+export class NorthstarDeterministicDesignActError extends NorthstarRunHealthError {
+  readonly phase: "authoring" | "sanitization" | "realization" | "ambition" | "preflight" | "scene-advanced";
+
+  constructor(input: {
+    phase: NorthstarDeterministicDesignActError["phase"];
+    code: string;
+    message: string;
+    cause?: unknown;
+  }) {
+    super({
+      code: input.code,
+      message: input.message,
+      retryable: false,
+      cause: input.cause,
+    });
+    this.name = "NorthstarDeterministicDesignActError";
+    this.phase = input.phase;
   }
 }
 
@@ -123,6 +144,7 @@ export class NorthstarRunLifecycle {
 }
 
 export type NorthstarVisualDispatchStage =
+  | "scene-lease"
   | "continuity"
   | "publication-preparation"
   | "actor"

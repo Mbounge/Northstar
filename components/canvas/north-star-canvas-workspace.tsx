@@ -73,7 +73,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { CodeArtifactHost, type NorthstarArtifactLifecycleEvent } from "@/components/canvas/artifacts/code-artifact-host";
+import {
+  CodeArtifactHost,
+  type NorthstarArtifactLifecycleEvent,
+  type NorthstarCreativeActivity,
+} from "@/components/canvas/artifacts/code-artifact-host";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { createPrototypeCodeArtifactPayload } from "@/lib/canvas-artifacts/prototype";
 import {
@@ -85,6 +89,7 @@ import {
   type CanvasCodeArtifactContentSize,
   type CanvasCodeArtifactPayload,
   type CanvasCodeArtifactRuntimeReview,
+  type NorthstarGeneratedCodeArtifactPackage,
 } from "@/lib/canvas-artifacts/types";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -116,6 +121,10 @@ import {
   normalizeNorthstarContentSize,
 } from "@/lib/canvas-artifacts/content-size-coordinator";
 import { cn } from "@/lib/utils";
+import {
+  broadcastNorthstarRunCoordinationMessage,
+  type NorthstarSharedCreativeLease,
+} from "@/lib/canvas-ai/northstar-runtime-coordination";
 
 const unbounded = Unbounded({
   subsets: ["latin"],
@@ -1053,7 +1062,7 @@ interface CanvasAreaContext {
 }
 
 type CanvasAIContextMode = "canvas" | "selection";
-type CanvasAIRunStatus = "idle" | "running" | "completed" | "blocked" | "failed" | "cancelled";
+type CanvasAIRunStatus = "idle" | "running" | "completed" | "completed_with_notes" | "blocked" | "failed" | "cancelled";
 
 interface CanvasAIReference {
   objectIds: string[];
@@ -8279,12 +8288,31 @@ type PersistedCanvasRunRecovery = {
 
 const CANVAS_RUN_RECOVERY_MAX_AGE_MS = NORTHSTAR_HEALTH_POLICY.recovery.maxJournalAgeMs;
 
+const browserCreativeLeasesBySurface = new Map<string, NorthstarSharedCreativeLease>();
+
+function activeBrowserCreativeLease(surfaceId: string): NorthstarSharedCreativeLease | undefined {
+  const lease = browserCreativeLeasesBySurface.get(surfaceId);
+  if (lease && lease.expiresAt <= Date.now()) {
+    browserCreativeLeasesBySurface.delete(surfaceId);
+    return undefined;
+  }
+  return lease;
+}
+
+function releaseBrowserCreativeLeasesForRun(runId: string | null | undefined): void {
+  if (!runId) return;
+  for (const [surfaceId, lease] of browserCreativeLeasesBySurface) {
+    if (lease.ownerRunId === runId) browserCreativeLeasesBySurface.delete(surfaceId);
+  }
+}
+
 function canvasSnapshotFingerprint(snapshot: Pick<PersistedCanvasSnapshot, "objects" | "viewport">) {
   return JSON.stringify({
     objects: normalizeCanvasScene(snapshot.objects),
     viewport: snapshot.viewport,
   });
 }
+
 
 export function NorthStarCanvasWorkspace({
   userEmail,
@@ -8339,6 +8367,7 @@ export function NorthStarCanvasWorkspace({
   const [aiHighlightedIds, setAiHighlightedIds] = useState<string[]>([]);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnosticEvents, setDiagnosticEvents] = useState<CanvasDiagnosticEvent[]>([]);
+  const [creativeActivity, setCreativeActivity] = useState<NorthstarCreativeActivity | null>(null);
 
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: DEFAULT_CANVAS_ZOOM });
   const [objects, setObjectsState] = useState<CanvasObject[]>([]);
@@ -10648,6 +10677,19 @@ export function NorthStarCanvasWorkspace({
             }
 
             const artifactPackage = codeArtifactAction.package;
+            const leaseSurfaceId = artifactPackage.surfaceId ?? artifactPackage.artifactId;
+            const activeLease = activeBrowserCreativeLease(leaseSurfaceId);
+            const claim = artifactPackage.creativeLease;
+            if (activeLease) {
+              if (!claim || claim.leaseId !== activeLease.leaseId || claim.ownerRunId !== activeLease.ownerRunId) {
+                throw new Error(`SCENE_LEASE_CONFLICT: surface ${leaseSurfaceId} is owned by creative run ${activeLease.ownerRunId}.`);
+              }
+              if (artifactPackage.parentRevisionId !== activeLease.baseRevisionId) {
+                throw new Error(`SCENE_LEASE_CONFLICT: candidate parent ${artifactPackage.parentRevisionId ?? "none"} does not match leased revision ${activeLease.baseRevisionId}.`);
+              }
+            } else if (claim) {
+              throw new Error(`SCENE_LEASE_CONFLICT: creative lease ${claim.leaseId} is not active in the browser authority.`);
+            }
             const authoredArtifact = createCanvasCodeArtifactPayloadFromPackage(
               artifactPackage,
               codeArtifactAction.stageIndex,
@@ -14744,6 +14786,8 @@ export function NorthStarCanvasWorkspace({
         </div>
       </div>
 
+
+
       <div
         ref={canvasRef}
         className={cn(
@@ -14851,6 +14895,7 @@ export function NorthStarCanvasWorkspace({
                   event.stopPropagation();
                   beginObjectMove(object, event);
                 }}
+                creativeActivity={object.codeArtifact?.artifactId === creativeActivity?.artifactId ? creativeActivity ?? undefined : undefined}
                 onArtifactRequestSelect={() => {
                   setSelectedIds([object.id]);
                 }}
@@ -15331,6 +15376,19 @@ export function NorthStarCanvasWorkspace({
               onExecuteCanvasAction={executeCanvasAIAction}
               onFinalizeCanvasActionRun={finalizeCanvasAIActionRun}
               onVerifyCanonicalPersistence={verifyCanonicalPersistence}
+              getMaterializedArtifactRevision={(expectedRevisionId, surfaceId) => {
+                const matching = objectsRef.current.find((object) =>
+                  isBoxObject(object)
+                  && object.type === "code-artifact"
+                  && Boolean(object.codeArtifact?.revisionId)
+                  && (!expectedRevisionId || object.codeArtifact?.revisionId === expectedRevisionId)
+                  && (!surfaceId || (object.codeArtifact?.surfaceId ?? object.codeArtifact?.artifactId) === surfaceId),
+                );
+                return matching && isBoxObject(matching) && matching.type === "code-artifact"
+                  ? matching.codeArtifact?.revisionId
+                  : undefined;
+              }}
+              onCreativeActivity={setCreativeActivity}
             />
           )}
           {workspaceTab === "shapes" && (
@@ -16543,6 +16601,8 @@ function ChatActivityGroup({
       ? runningItem?.label ?? `${completedCount} of ${items.length} completed`
       : runStatus === "blocked"
         ? "Run stopped at the last verified artboard"
+        : runStatus === "completed_with_notes"
+          ? "Completed from the strongest verified artboard with advisory notes"
         : failedCount > 0
         ? `${failedCount} ${failedCount === 1 ? "step failed" : "steps failed"}`
         : runStatus === "cancelled" || cancelledCount > 0
@@ -16565,6 +16625,8 @@ function ChatActivityGroup({
             <Loader2 className="h-3.5 w-3.5 animate-spin text-[#6B5CFF] dark:text-[#BDB6FF]" />
           ) : runStatus === "blocked" || failedCount > 0 ? (
             <TriangleAlert className="h-3.5 w-3.5 text-red-500" />
+          ) : runStatus === "completed_with_notes" ? (
+            <TriangleAlert className="h-3.5 w-3.5 text-amber-500" />
           ) : runStatus === "cancelled" ? (
             <X className="h-3.5 w-3.5 text-zinc-400" />
           ) : (
@@ -17099,6 +17161,8 @@ function ChatWorkspacePanel({
   onExecuteCanvasAction,
   onFinalizeCanvasActionRun,
   onVerifyCanonicalPersistence,
+  getMaterializedArtifactRevision,
+  onCreativeActivity,
 }: {
   sessionId: string;
   recoveryKey: string;
@@ -17126,6 +17190,8 @@ function ChatWorkspacePanel({
   ) => Promise<CanvasAIActionExecutionResult>;
   onFinalizeCanvasActionRun: (runId: string) => void;
   onVerifyCanonicalPersistence: () => Promise<CanvasPersistenceHealth>;
+  getMaterializedArtifactRevision: (expectedRevisionId?: string, surfaceId?: string) => string | undefined;
+  onCreativeActivity: (activity: NorthstarCreativeActivity | null | ((current: NorthstarCreativeActivity | null) => NorthstarCreativeActivity | null)) => void;
 }) {
   const [messages, setMessages] = useState<CanvasAIChatMessage[]>([]);
   const [conversationSummary, setConversationSummary] = useState("");
@@ -17803,12 +17869,106 @@ function ChatWorkspacePanel({
       const decoder = new TextDecoder();
       let buffer = "";
       let receivedFinal = false;
-      let serverRunCompleted = false;
+      let terminalEventReceived = false;
+      let settlementRequestPromise: Promise<void> | null = null;
+      let expectedFinalRevisionId: string | undefined;
       let terminalBlockMessage: string | null = null;
+
+      const buildClientSettlementReceipt = async (completedRunId: string, expectedRevisionId?: string) => {
+        await actionExecutionChainRef.current;
+        const outcomes = actionExecutionResultsRef.current.map((record) => ({
+          ...normalizeCanvasAIActionOutcome(record),
+          tool: record.tool,
+        }));
+        const actionSettlement = summarizeNorthstarClientRunActionSettlement(outcomes);
+        const hardFailures = actionSettlement.unresolvedHardFailureIndexes
+          .map((index) => outcomes[index])
+          .filter((outcome): outcome is (typeof outcomes)[number] => Boolean(outcome));
+        const lifecycleEvents = [...(artifactLifecycleByRunRef.current.get(completedRunId)?.values() ?? [])];
+        const unresolvedAcknowledgements = lifecycleEvents.filter((event) =>
+          event.name === "revision.sent" || event.name === "revision.received" || event.name === "ack.delivery_failed",
+        );
+        const acknowledgementFailures = lifecycleEvents.filter((event) =>
+          event.name === "revision.timed_out" || event.name === "ack.delivery_failed",
+        );
+        const revisionRejections = lifecycleEvents.filter((event) =>
+          event.name === "revision.rejected" && !isNorthstarVerifiedNoopReason(event.detail),
+        );
+        const revisionParityFailures = lifecycleEvents.filter((event) =>
+          event.name === "revision.acknowledged"
+          && Boolean(event.browserRevisionId)
+          && event.browserRevisionId !== event.revisionId,
+        );
+        const acknowledgedRevisionKeys = new Set(
+          lifecycleEvents
+            .filter((event) => event.name === "revision.acknowledged")
+            .map((event) => `${event.artifactId}:${event.revisionId}`),
+        );
+        const latestRenderHealthByRevision = new Map<string, NorthstarArtifactLifecycleEvent>();
+        for (const event of lifecycleEvents.filter((candidate) => candidate.name === "render.health")) {
+          latestRenderHealthByRevision.set(`${event.artifactId}:${event.revisionId}`, event);
+        }
+        const operationallyHealthyRenderRevisionKeys = new Set(
+          [...latestRenderHealthByRevision.entries()]
+            .filter(([, event]) => event.renderHealth?.operationallyHealthy === true || event.renderHealth?.healthy === true)
+            .map(([revisionKey]) => revisionKey),
+        );
+        const fatalRenderHealthFailures = [...latestRenderHealthByRevision.values()].filter((event) =>
+          event.renderHealth?.severity === "fatal" || event.renderHealth?.operationallyHealthy === false,
+        );
+        const missingRenderHealthRevisions = [...acknowledgedRevisionKeys].filter(
+          (revisionKey) => !operationallyHealthyRenderRevisionKeys.has(revisionKey),
+        );
+        const persistenceHealth = await onVerifyCanonicalPersistence();
+        const latestAcknowledgedAt = lifecycleEvents
+          .filter((event) => event.name === "revision.acknowledged")
+          .reduce((latest, event) => Math.max(latest, event.timestamp), 0);
+        const unresolvedRevisionRejections = revisionRejections.filter((event) => event.timestamp > latestAcknowledgedAt);
+        const finalEditableCompositionExists = actionSettlement.finalEditableCompositionExists;
+        const acknowledgedFinalRevisionId = expectedRevisionId
+          ? lifecycleEvents.find((event) => event.name === "revision.acknowledged" && event.revisionId === expectedRevisionId)?.revisionId
+          : lifecycleEvents.filter((event) => event.name === "revision.acknowledged").sort((a, b) => b.timestamp - a.timestamp)[0]?.revisionId;
+        const materializedFinalRevisionId = getMaterializedArtifactRevision(expectedRevisionId);
+        const expectedRevisionAcknowledged = !expectedRevisionId || acknowledgedFinalRevisionId === expectedRevisionId;
+        const expectedRevisionMaterialized = !expectedRevisionId || materializedFinalRevisionId === expectedRevisionId;
+        const deliverableHealthy = finalEditableCompositionExists
+          && expectedRevisionAcknowledged
+          && expectedRevisionMaterialized
+          && unresolvedRevisionRejections.length === 0;
+        const pipelineSettled = outcomes.length === actionRequestCountRef.current && unresolvedAcknowledgements.length === 0;
+        const renderHealthy = fatalRenderHealthFailures.length === 0 && missingRenderHealthRevisions.length === 0;
+        const noHardFailures = hardFailures.length === 0
+          && acknowledgementFailures.length === 0
+          && revisionParityFailures.length === 0;
+        const localOperationalHealthy = receivedFinal
+          && noHardFailures
+          && pipelineSettled
+          && renderHealthy
+          && persistenceHealth.healthy
+          && deliverableHealthy;
+        return {
+          expectedFinalRevisionId: expectedRevisionId,
+          acknowledgedFinalRevisionId,
+          materializedFinalRevisionId,
+          receivedFinal,
+          browserAcknowledged: expectedRevisionAcknowledged,
+          outerCanvasMaterialized: expectedRevisionMaterialized && finalEditableCompositionExists,
+          persistenceHealthy: persistenceHealth.healthy,
+          pipelineSettled,
+          renderHealthy,
+          noHardFailures,
+          localOperationalHealthy,
+          submittedAt: new Date().toISOString(),
+        };
+      };
 
       const handleStreamEvent = (eventName: string, data: unknown) => {
         if (!data || typeof data !== "object") return;
         const payload = data as Record<string, unknown>;
+
+        if (["run.completed", "run.completed_with_notes", "run.incomplete", "run.failed", "run.cancelled", "run.blocked"].includes(eventName)) {
+          onCreativeActivity(null);
+        }
 
         if (eventName === "run.started") {
           const runId = typeof payload.runId === "string" ? payload.runId : undefined;
@@ -17864,10 +18024,44 @@ function ChatWorkspacePanel({
               : typeof traceData?.intention === "string" && traceData.intention.trim()
                 ? traceData.intention
                 : traceName.replace(/[._-]+/g, " ");
+          if (traceName === "creative.stage.authoring") {
+            const artifactId = typeof traceData?.artifactId === "string" ? traceData.artifactId : undefined;
+            if (artifactId) {
+              onCreativeActivity({
+                artifactId,
+                revisionId: typeof traceData?.revisionId === "string" ? traceData.revisionId : undefined,
+                phase: "authoring",
+                label: typeof traceData?.cueText === "string" ? traceData.cueText : traceDetail,
+                stageIndex: typeof traceData?.moveIndex === "number" ? traceData.moveIndex : undefined,
+                updatedAt: Date.now(),
+              });
+            }
+          } else if (traceName === "creative.stage.previewing" || traceName === "creative.act.private_preview_revision_requested" || traceName === "creative.act.private_runtime_revision_requested") {
+            onCreativeActivity((current) => current ? {
+              ...current,
+              phase: "previewing",
+              label: traceName === "creative.stage.previewing"
+                ? traceDetail
+                : "Northstar is refining the exact private browser preview",
+              updatedAt: Date.now(),
+            } : current);
+          } else if (traceName === "creative.stage.commit_ready" || traceName === "creative.act.private_preview_approved" || traceName === "creative.act.preflight_accepted") {
+            onCreativeActivity((current) => current ? {
+              ...current,
+              phase: "committing",
+              label: "Northstar is committing the verified visual stage",
+              updatedAt: Date.now(),
+            } : current);
+          } else if (traceName === "creative.act.critiqued" || traceName === "creative.session.converged" || traceName === "publication.metadata_verified" || traceName === "publication.metadata_deferred") {
+            onCreativeActivity(null);
+          }
+
           recordCanvasDiagnostic({
             phase: traceName.startsWith("design.")
               || traceName.startsWith("creative-direction.")
               || traceName.startsWith("creative.act.")
+              || traceName.startsWith("creative.stage.")
+              || traceName.startsWith("creative.source_workspace.")
               ? "action"
               : "run",
             name: traceName,
@@ -18032,6 +18226,82 @@ function ChatWorkspacePanel({
           }
           return;
         }
+
+        if (eventName === "canvas.artifact.lease.requested") {
+          const lease = payload.lease;
+          const runId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          if (!runId || !lease || typeof lease !== "object" || Array.isArray(lease)) return;
+          const row = lease as Record<string, unknown>;
+          if (
+            typeof row.leaseId !== "string"
+            || typeof row.surfaceId !== "string"
+            || typeof row.baseRevisionId !== "string"
+            || typeof row.ownerRunId !== "string"
+            || typeof row.expiresAt !== "number"
+          ) return;
+          const claim: NorthstarSharedCreativeLease = {
+            leaseId: row.leaseId,
+            surfaceId: row.surfaceId,
+            baseRevisionId: row.baseRevisionId,
+            ownerRunId: row.ownerRunId,
+            expiresAt: row.expiresAt,
+          };
+          const observed = getMaterializedArtifactRevision(undefined, claim.surfaceId);
+          const active = activeBrowserCreativeLease(claim.surfaceId);
+          const accepted = observed === claim.baseRevisionId
+            && (!active || active.leaseId === claim.leaseId || active.ownerRunId === claim.ownerRunId);
+          if (accepted) browserCreativeLeasesBySurface.set(claim.surfaceId, claim);
+          const realtime = createClient();
+          void broadcastNorthstarRunCoordinationMessage({
+            realtime,
+            runId,
+            message: {
+              kind: "lease-response",
+              requestId: claim.leaseId,
+              runId,
+              lease: claim,
+              accepted,
+              observedRevisionId: observed,
+              reason: accepted
+                ? undefined
+                : active && active.leaseId !== claim.leaseId
+                  ? `Surface ${claim.surfaceId} is already leased by run ${active.ownerRunId}.`
+                  : `Browser revision ${observed ?? "none"} does not match requested base ${claim.baseRevisionId}.`,
+              sentAt: Date.now(),
+            },
+          }).catch((error) => {
+            recordCanvasDiagnostic({
+              phase: "runtime",
+              name: "creative.lease.response_failed",
+              runId,
+              detail: error instanceof Error ? error.message : String(error),
+              data: { leaseId: claim.leaseId, surfaceId: claim.surfaceId },
+            });
+          });
+          return;
+        }
+
+        if (eventName === "canvas.artifact.lease.renewed") {
+          const lease = payload.lease;
+          if (!lease || typeof lease !== "object" || Array.isArray(lease)) return;
+          const row = lease as Record<string, unknown>;
+          const surfaceId = typeof row.surfaceId === "string" ? row.surfaceId : undefined;
+          const leaseId = typeof row.leaseId === "string" ? row.leaseId : undefined;
+          const active = surfaceId ? activeBrowserCreativeLease(surfaceId) : undefined;
+          if (active && leaseId === active.leaseId && typeof row.expiresAt === "number") {
+            browserCreativeLeasesBySurface.set(surfaceId!, { ...active, expiresAt: row.expiresAt });
+          }
+          return;
+        }
+
+        if (eventName === "canvas.artifact.lease.released") {
+          const surfaceId = typeof payload.surfaceId === "string" ? payload.surfaceId : undefined;
+          const leaseId = typeof payload.leaseId === "string" ? payload.leaseId : undefined;
+          const active = surfaceId ? activeBrowserCreativeLease(surfaceId) : undefined;
+          if (active && active.leaseId === leaseId) browserCreativeLeasesBySurface.delete(surfaceId!);
+          return;
+        }
+
 
         if (eventName === "canvas.action.requested") {
           const runId =
@@ -18369,19 +18639,95 @@ function ChatWorkspacePanel({
           return;
         }
 
-        if (eventName === "run.completed") {
-          serverRunCompleted = true;
-          if (actionRequestCountRef.current === 0) {
-            updateAssistantMessage({
-              runStatus: "completed",
+        if (eventName === "run.settlement.requested") {
+          const completedRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          const requestId = typeof payload.requestId === "string" ? payload.requestId : undefined;
+          expectedFinalRevisionId = typeof payload.expectedFinalRevisionId === "string"
+            ? payload.expectedFinalRevisionId
+            : undefined;
+          if (!completedRunId || !requestId) throw new Error("Northstar received an invalid run settlement request.");
+          onCreativeActivity(null);
+          settlementRequestPromise = (async () => {
+            const receipt = await buildClientSettlementReceipt(completedRunId, expectedFinalRevisionId);
+            const realtime = createClient();
+            await broadcastNorthstarRunCoordinationMessage({
+              realtime,
+              runId: completedRunId,
+              signal: controller.signal,
+              message: {
+                kind: "settlement-receipt",
+                requestId,
+                runId: completedRunId,
+                receipt,
+                sentAt: Date.now(),
+              },
+            });
+          })();
+          void settlementRequestPromise.catch((error) => {
+            recordCanvasDiagnostic({
+              phase: "run",
+              name: "run.settlement_receipt_failed",
+              runId: completedRunId,
+              detail: error instanceof Error ? error.message : String(error),
+              data: { requestId, expectedFinalRevisionId },
+            });
+          });
+          return;
+        }
+
+        if (eventName === "run.completed" || eventName === "run.completed_with_notes") {
+          terminalEventReceived = true;
+          const completedRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          const withNotes = eventName === "run.completed_with_notes";
+          releaseBrowserCreativeLeasesForRun(completedRunId);
+          const detail = typeof payload.detail === "string" ? payload.detail : undefined;
+          const finalPayload = deferredFinalPayloadRef.current as CanvasAIResponsePayload | null;
+          updateAssistantMessage((current) => {
+            const finalContent = typeof finalPayload?.answer === "string" && finalPayload.answer.trim()
+              ? finalPayload.answer
+              : current.content;
+            return {
+              ...current,
+              content: withNotes && detail
+                ? [finalContent, detail].filter(Boolean).join("\n\n")
+                : finalContent,
+              references: finalPayload?.references ?? current.references ?? [],
+              suggestedActions: finalPayload?.suggestedActions ?? current.suggestedActions ?? [],
+              showSuggestedActions: finalPayload?.showSuggestedActions === true,
+              runStatus: withNotes ? "completed_with_notes" : "completed",
               streaming: false,
+              error: false,
+            };
+          });
+          if (typeof finalPayload?.conversationSummary === "string") {
+            setConversationSummary(finalPayload.conversationSummary);
+          }
+          deferredFinalPayloadRef.current = null;
+          if (checkpointUpdatedThisRunRef.current) {
+            compositionCheckpointRef.current = null;
+            setCompositionCheckpoint(null);
+          }
+          if (completedRunId) {
+            recordCanvasDiagnostic({
+              phase: "run",
+              name: eventName,
+              runId: completedRunId,
+              detail,
+              data: {
+                terminalState: payload.terminalState,
+                expectedFinalRevisionId: payload.expectedFinalRevisionId,
+                clientReceipt: payload.clientReceipt,
+              },
             });
           }
+          persistRunRecovery(null);
           return;
         }
 
         if (eventName === "run.cancelled") {
+          terminalEventReceived = true;
           const cancelledRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          releaseBrowserCreativeLeasesForRun(cancelledRunId);
           if (cancelledRunId) {
             const existingTerminal = getCanvasDiagnostics().some(
               (event) => event.runId === cancelledRunId && event.name === "run.cancelled",
@@ -18410,25 +18756,47 @@ function ChatWorkspacePanel({
         }
 
         if (eventName === "run.failed") {
+          terminalEventReceived = true;
           const failedRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
+          releaseBrowserCreativeLeasesForRun(failedRunId);
+          const detail = typeof payload.detail === "string"
+            ? payload.detail
+            : typeof payload.error === "string"
+              ? payload.error
+              : "The run-owned terminal coordinator encountered an infrastructure failure. The last verified artboard was preserved.";
           if (failedRunId && !getCanvasDiagnostics().some((event) => event.runId === failedRunId && event.name === "run.failed")) {
             recordCanvasDiagnostic({
               phase: "run",
               name: "run.failed",
               runId: failedRunId,
-              detail: typeof payload.error === "string" ? payload.error : "The server run failed.",
-              data: { terminal: true },
+              detail,
+              data: { terminal: true, terminalState: payload.terminalState },
             });
           }
-          updateAssistantMessage({ runStatus: "failed" });
+          const finalPayload = deferredFinalPayloadRef.current as CanvasAIResponsePayload | null;
+          updateAssistantMessage((current) => ({
+            ...current,
+            content: [finalPayload?.answer || current.content, detail].filter(Boolean).join("\n\n"),
+            references: finalPayload?.references ?? current.references ?? [],
+            suggestedActions: [],
+            showSuggestedActions: false,
+            runStatus: "failed",
+            streaming: false,
+            error: true,
+          }));
+          deferredFinalPayloadRef.current = null;
           return;
         }
 
         if (eventName === "run.incomplete") {
+          terminalEventReceived = true;
           const incompleteRunId = typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current;
-          terminalBlockMessage = typeof payload.error === "string"
-            ? payload.error
-            : "North Star stopped at the last verified artboard before every required visual obligation was resolved.";
+          releaseBrowserCreativeLeasesForRun(incompleteRunId);
+          terminalBlockMessage = typeof payload.detail === "string"
+            ? payload.detail
+            : typeof payload.error === "string"
+              ? payload.error
+              : "North Star stopped at the last verified artboard before every required visual obligation was resolved.";
           receivedFinal = true;
           if (incompleteRunId && !getCanvasDiagnostics().some((event) => event.runId === incompleteRunId && event.name === "run.incomplete")) {
             recordCanvasDiagnostic({
@@ -18439,6 +18807,13 @@ function ChatWorkspacePanel({
               data: {
                 terminal: true,
                 code: typeof payload.code === "string" ? payload.code : undefined,
+                terminalState: typeof payload.terminalState === "string" ? payload.terminalState : undefined,
+                expectedFinalRevisionId: typeof payload.expectedFinalRevisionId === "string"
+                  ? payload.expectedFinalRevisionId
+                  : undefined,
+                clientReceipt: payload.clientReceipt && typeof payload.clientReceipt === "object"
+                  ? payload.clientReceipt
+                  : undefined,
               },
             });
           }
@@ -18460,6 +18835,8 @@ function ChatWorkspacePanel({
         }
 
         if (eventName === "run.blocked") {
+          terminalEventReceived = true;
+          releaseBrowserCreativeLeasesForRun(typeof payload.runId === "string" ? payload.runId : activeRunIdRef.current);
           terminalBlockMessage = typeof payload.error === "string"
             ? payload.error
             : "North Star stopped at the last verified artboard because the next operation could not be committed safely.";
@@ -18521,7 +18898,7 @@ function ChatWorkspacePanel({
       if (buffer.trim()) flushEvent(buffer);
       await actionExecutionChainRef.current;
 
-      if (actionRequestCountRef.current > 0 && !controller.signal.aborted && !terminalBlockMessage) {
+      if (actionRequestCountRef.current > 0 && !controller.signal.aborted && !terminalBlockMessage && !terminalEventReceived) {
         const deferredConversationSummary = (
           deferredFinalPayloadRef.current as CanvasAIResponsePayload | null
         )?.conversationSummary;
@@ -18539,9 +18916,9 @@ function ChatWorkspacePanel({
           references: [],
           suggestedActions: [],
           showSuggestedActions: false,
-          runStatus: failed ? "failed" : "completed",
-          streaming: false,
-          error: failed,
+          runStatus: "running",
+          streaming: true,
+          error: false,
         });
         if (typeof deferredConversationSummary === "string") {
           setConversationSummary(deferredConversationSummary);
@@ -18552,142 +18929,12 @@ function ChatWorkspacePanel({
         }
       }
 
-      const completedRunId = activeRunIdRef.current;
-      if (completedRunId && !controller.signal.aborted && !terminalBlockMessage) {
-        const outcomes = actionExecutionResultsRef.current.map((record) => ({
-          ...normalizeCanvasAIActionOutcome(record),
-          tool: record.tool,
-        }));
-        const actionSettlement = summarizeNorthstarClientRunActionSettlement(outcomes);
-        const hardFailures = actionSettlement.unresolvedHardFailureIndexes
-          .map((index) => outcomes[index])
-          .filter((outcome): outcome is (typeof outcomes)[number] => Boolean(outcome));
-        const lifecycleEvents = [...(artifactLifecycleByRunRef.current.get(completedRunId)?.values() ?? [])];
-        const unresolvedAcknowledgements = lifecycleEvents.filter((event) =>
-          event.name === "revision.sent" || event.name === "revision.received" || event.name === "ack.delivery_failed",
-        );
-        const acknowledgementFailures = lifecycleEvents.filter((event) =>
-          event.name === "revision.timed_out" || event.name === "ack.delivery_failed",
-        );
-        const verifiedNoopRevisionRejections = lifecycleEvents.filter((event) =>
-          event.name === "revision.rejected"
-          && isNorthstarVerifiedNoopReason(event.detail),
-        );
-        const revisionRejections = lifecycleEvents.filter((event) =>
-          event.name === "revision.rejected"
-          && !isNorthstarVerifiedNoopReason(event.detail),
-        );
-        const revisionParityFailures = lifecycleEvents.filter((event) =>
-          event.name === "revision.acknowledged"
-          && Boolean(event.browserRevisionId)
-          && event.browserRevisionId !== event.revisionId,
-        );
-        const acknowledgedRevisionKeys = new Set(
-          lifecycleEvents
-            .filter((event) => event.name === "revision.acknowledged")
-            .map((event) => `${event.artifactId}:${event.revisionId}`),
-        );
-        const renderHealthEvents = lifecycleEvents.filter((event) => event.name === "render.health");
-        const latestRenderHealthByRevision = new Map<string, NorthstarArtifactLifecycleEvent>();
-        for (const event of renderHealthEvents) {
-          latestRenderHealthByRevision.set(`${event.artifactId}:${event.revisionId}`, event);
-        }
-        const operationallyHealthyRenderRevisionKeys = new Set(
-          [...latestRenderHealthByRevision.entries()]
-            .filter(([, event]) => event.renderHealth?.operationallyHealthy === true || event.renderHealth?.healthy === true)
-            .map(([revisionKey]) => revisionKey),
-        );
-        const fatalRenderHealthFailures = [...latestRenderHealthByRevision.values()].filter((event) =>
-          event.renderHealth?.severity === "fatal"
-          || (event.renderHealth?.operationallyHealthy === false)
-        );
-        const renderHealthWarnings = [...latestRenderHealthByRevision.values()].filter((event) =>
-          event.renderHealth?.severity === "warning"
-        );
-        const missingRenderHealthRevisions = [...acknowledgedRevisionKeys].filter(
-          (revisionKey) => !operationallyHealthyRenderRevisionKeys.has(revisionKey),
-        );
-        const persistenceHealth = await onVerifyCanonicalPersistence();
-        const rejectedVisualOutcomes = outcomes.filter(
-          (outcome) =>
-            outcome.status === "rejected" &&
-            (outcome.tool === "compose_visual_scene" ||
-              outcome.tool === "compose_visual_board" ||
-              outcome.tool === "compose_artifact"),
-        );
-        const latestAcknowledgedAt = lifecycleEvents
-          .filter((event) => event.name === "revision.acknowledged")
-          .reduce((latest, event) => Math.max(latest, event.timestamp), 0);
-        const unresolvedRevisionRejections = revisionRejections.filter(
-          (event) => event.timestamp > latestAcknowledgedAt,
-        );
-        const finalEditableCompositionExists = actionSettlement.finalEditableCompositionExists;
-        // A rejected candidate is an expected part of iterative design. It only makes the
-        // deliverable unhealthy when no later browser-acknowledged revision recovered it.
-        const deliverableHealthy =
-          finalEditableCompositionExists &&
-          unresolvedRevisionRejections.length === 0;
-        const healthy =
-          receivedFinal &&
-          serverRunCompleted &&
-          hardFailures.length === 0 &&
-          outcomes.length === actionRequestCountRef.current &&
-          unresolvedAcknowledgements.length === 0 &&
-          acknowledgementFailures.length === 0 &&
-          revisionParityFailures.length === 0 &&
-          fatalRenderHealthFailures.length === 0 &&
-          missingRenderHealthRevisions.length === 0 &&
-          persistenceHealth.healthy &&
-          deliverableHealthy;
-        recordCanvasDiagnostic({
-          phase: "run",
-          name: healthy ? "run.completed" : "run.incomplete",
-          runId: completedRunId,
-          detail: healthy
-            ? "The server stream settled, the final editable artboard was browser-verified, and canonical persistence passed."
-            : "The run ended without satisfying the complete end-to-end health contract.",
-          data: {
-            healthy,
-            receivedFinal,
-            serverRunCompleted,
-            requestedActionCount: actionRequestCountRef.current,
-            terminalActionCount: outcomes.length,
-            hardFailureCount: hardFailures.length,
-            unresolvedAcknowledgementCount: unresolvedAcknowledgements.length,
-            acknowledgementFailureCount: acknowledgementFailures.length,
-            revisionRejectionCount: revisionRejections.length,
-            unresolvedRevisionRejectionCount: unresolvedRevisionRejections.length,
-            recoveredRevisionRejectionCount: Math.max(0, revisionRejections.length - unresolvedRevisionRejections.length),
-            rejectedVisualOutcomeCount: rejectedVisualOutcomes.length,
-            recoveredActionVisualRejectionCount: actionSettlement.recoveredVisualRejectionIndexes.length,
-            unresolvedActionVisualRejectionCount: actionSettlement.unresolvedVisualRejectionIndexes.length,
-            verifiedNoopRevisionCount: verifiedNoopRevisionRejections.length,
-            finalEditableCompositionExists,
-            pipelineSettled: outcomes.length === actionRequestCountRef.current && unresolvedAcknowledgements.length === 0,
-            deliverableHealthy,
-            revisionParityFailureCount: revisionParityFailures.length,
-            renderHealthFailureCount: fatalRenderHealthFailures.length,
-            renderHealthWarningCount: renderHealthWarnings.length,
-            missingRenderHealthRevisionCount: missingRenderHealthRevisions.length,
-            missingRenderHealthRevisions,
-            lifecycleEventCount: lifecycleEvents.length,
-            outcomeCounts: outcomes.reduce<Record<string, number>>((counts, outcome) => {
-              counts[outcome.status] = (counts[outcome.status] ?? 0) + 1;
-              return counts;
-            }, {}),
-          },
-        });
-        if (healthy) {
-          persistRunRecovery(null);
-        } else {
-          persistRunRecovery({
-            ...recoveryJournal,
-            runId: completedRunId,
-            updatedAt: Date.now(),
-            status: "interrupted",
-            checkpoint: compositionCheckpointRef.current ?? recoveryJournal.checkpoint,
-          });
-        }
+      const pendingSettlementReceipt = settlementRequestPromise as Promise<void> | null;
+      if (pendingSettlementReceipt) {
+        await pendingSettlementReceipt.catch(() => undefined);
+      }
+      if (!terminalEventReceived && !controller.signal.aborted && !terminalBlockMessage) {
+        throw new Error("North Star's run-owned terminal coordinator ended without a terminal server decision.");
       }
 
       if (!receivedFinal && !controller.signal.aborted) {
@@ -20215,6 +20462,7 @@ function CanvasBoxObjectViewImpl({
   onSelect,
   onContextMenu,
   onMoveStart,
+  creativeActivity,
   onArtifactRequestSelect,
   onArtifactDragStart,
   onArtifactRuntimeReview,
@@ -20242,6 +20490,7 @@ function CanvasBoxObjectViewImpl({
   onSelect: () => void;
   onContextMenu: (event: ReactMouseEvent<Element>) => void;
   onMoveStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  creativeActivity?: NorthstarCreativeActivity;
   onArtifactRequestSelect: () => void;
   onArtifactDragStart: (clientX: number, clientY: number) => void;
   onArtifactRuntimeReview: (review: CanvasCodeArtifactRuntimeReview) => void;
@@ -20365,6 +20614,7 @@ function CanvasBoxObjectViewImpl({
         {object.type === "code-artifact" && (
           <CodeArtifactHost
             artifact={object.codeArtifact}
+            creativeActivity={creativeActivity}
             selected={selected}
             width={object.w}
             height={object.h}
@@ -23353,6 +23603,7 @@ function CanvasDiagnosticsPanel({
     const started = scoped.find((event) => event.name === "run.started");
     const terminal = [...scoped].reverse().find((event) =>
       event.name === "run.completed" ||
+      event.name === "run.completed_with_notes" ||
       event.name === "run.incomplete" ||
       event.name === "run.failed" ||
       event.name === "run.cancelled"
@@ -23370,7 +23621,7 @@ function CanvasDiagnosticsPanel({
     const pendingAcks = terminal && typeof terminal.data?.unresolvedAcknowledgementCount === "number"
       ? terminal.data.unresolvedAcknowledgementCount
       : null;
-    const health = terminal?.name === "run.completed"
+    const health = terminal?.name === "run.completed" || terminal?.name === "run.completed_with_notes"
       ? "healthy"
       : terminal?.name === "run.cancelled"
         ? "cancelled"

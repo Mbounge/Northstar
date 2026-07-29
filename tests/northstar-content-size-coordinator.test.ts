@@ -109,3 +109,30 @@ test("iframe bounds and outer Canvas geometry are derived from the same normaliz
   assert.equal(geometry.width, 1000);
   assert.equal(geometry.height, 600);
 });
+
+
+test("model-source intrinsic geometry updates while the outer Canvas object stays stable", () => {
+  const geometry = deriveNorthstarCanvasGeometry({
+    size: size({
+      intrinsicWidth: 1320,
+      intrinsicHeight: 540,
+      contentBounds: { minX: 0, minY: 0, maxX: 1320, maxY: 540 },
+      sourceOwnedSurface: true,
+    }),
+    previousBounds: { minX: 0, minY: 0, maxX: 2400, maxY: 1296 },
+    previousIntrinsicWidth: 2400,
+    previousIntrinsicHeight: 1296,
+    canvasX: 100,
+    canvasY: 200,
+    canvasWidth: 1200,
+    canvasHeight: 648,
+    minimumWidth: 1480,
+    minimumHeight: 986,
+  });
+  assert.equal(geometry.intrinsicWidth, 1320);
+  assert.equal(geometry.intrinsicHeight, 540);
+  assert.equal(geometry.width, 1200);
+  assert.equal(geometry.height, 648);
+  assert.equal(geometry.x, 100);
+  assert.equal(geometry.y, 200);
+});
