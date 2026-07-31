@@ -73,7 +73,9 @@ export class NorthstarDeterministicDesignActError extends NorthstarRunHealthErro
     super({
       code: input.code,
       message: input.message,
-      retryable: false,
+      // The candidate is retryable even when the bounded design turn is not.
+      // The mounted artboard remains valid and is the recovery boundary.
+      retryable: true,
       cause: input.cause,
     });
     this.name = "NorthstarDeterministicDesignActError";

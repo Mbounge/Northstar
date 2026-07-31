@@ -15,8 +15,6 @@ export const NORTHSTAR_HEALTH_POLICY = {
     pumpIntervalMs: 200,
   },
   render: {
-    maxWidthGrowthRatio: 4,
-    maxHeightGrowthRatio: 6,
     minimumVisibleDimensionPx: 1,
     requiredNodeIds: ["artboard"] as const,
   },

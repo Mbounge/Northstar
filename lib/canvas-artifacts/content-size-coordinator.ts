@@ -2,12 +2,10 @@ import type {
   CanvasCodeArtifactContentSize,
   CanvasCodeArtifactIntrinsicBounds,
 } from "@/lib/canvas-artifacts/types";
+import { NORTHSTAR_ISOLATED_GEOMETRY_COMPILER_VERSION } from "@/lib/canvas-artifacts/isolated-geometry-compiler";
 
 export const NORTHSTAR_CONTENT_SIZE_COORDINATOR_VERSION =
-  "northstar.content-size-coordinator.v1" as const;
-
-export const NORTHSTAR_MAX_INTRINSIC_EXTENT = 24_000;
-export const NORTHSTAR_MAX_SINGLE_REFLOW_GROWTH = 6;
+  "northstar.content-size-coordinator.v2" as const;
 
 function finite(value: unknown, fallback: number): number {
   const number = Number(value);
@@ -16,20 +14,28 @@ function finite(value: unknown, fallback: number): number {
 
 function normalizeBounds(
   size: CanvasCodeArtifactContentSize,
-): CanvasCodeArtifactIntrinsicBounds {
+): CanvasCodeArtifactIntrinsicBounds | undefined {
   const source = size.contentBounds;
-  const minX = Math.floor(finite(source?.minX, 0));
-  const minY = Math.floor(finite(source?.minY, 0));
-  const fallbackWidth = Math.max(1, Math.ceil(finite(size.intrinsicWidth, 1)));
-  const fallbackHeight = Math.max(1, Math.ceil(finite(size.intrinsicHeight, 1)));
-  const maxX = Math.ceil(finite(source?.maxX, minX + fallbackWidth));
-  const maxY = Math.ceil(finite(source?.maxY, minY + fallbackHeight));
-  return {
-    minX,
-    minY,
-    maxX: Math.max(minX + 1, maxX),
-    maxY: Math.max(minY + 1, maxY),
-  };
+  const intrinsicWidth = Number(size.intrinsicWidth);
+  const intrinsicHeight = Number(size.intrinsicHeight);
+  if (!Number.isFinite(intrinsicWidth) || !Number.isFinite(intrinsicHeight)) return undefined;
+  if (intrinsicWidth <= 0 || intrinsicHeight <= 0) return undefined;
+  if (!source) {
+    return {
+      minX: 0,
+      minY: 0,
+      maxX: Math.ceil(intrinsicWidth),
+      maxY: Math.ceil(intrinsicHeight),
+    };
+  }
+  const values = [source.minX, source.minY, source.maxX, source.maxY];
+  if (!values.every(Number.isFinite)) return undefined;
+  const minX = Math.floor(source.minX);
+  const minY = Math.floor(source.minY);
+  const maxX = Math.ceil(source.maxX);
+  const maxY = Math.ceil(source.maxY);
+  if (maxX <= minX || maxY <= minY) return undefined;
+  return { minX, minY, maxX, maxY };
 }
 
 export function normalizeNorthstarContentSize(
@@ -37,28 +43,57 @@ export function normalizeNorthstarContentSize(
 ): CanvasCodeArtifactContentSize | undefined {
   if (!size?.artifactId || !size?.revisionId) return undefined;
   const contentBounds = normalizeBounds(size);
+  if (!contentBounds) return undefined;
   const measuredWidth = contentBounds.maxX - contentBounds.minX;
   const measuredHeight = contentBounds.maxY - contentBounds.minY;
-  const intrinsicWidth = Math.max(1, Math.ceil(finite(size.intrinsicWidth, measuredWidth)), measuredWidth);
-  const intrinsicHeight = Math.max(1, Math.ceil(finite(size.intrinsicHeight, measuredHeight)), measuredHeight);
-  if (
-    intrinsicWidth > NORTHSTAR_MAX_INTRINSIC_EXTENT
-    || intrinsicHeight > NORTHSTAR_MAX_INTRINSIC_EXTENT
-    || Math.abs(contentBounds.minX) > NORTHSTAR_MAX_INTRINSIC_EXTENT
-    || Math.abs(contentBounds.minY) > NORTHSTAR_MAX_INTRINSIC_EXTENT
-    || Math.abs(contentBounds.maxX) > NORTHSTAR_MAX_INTRINSIC_EXTENT
-    || Math.abs(contentBounds.maxY) > NORTHSTAR_MAX_INTRINSIC_EXTENT
-  ) return undefined;
-
+  const isolatedMeasurement = size.measurementMode === "isolated-compiler";
+  // A canonical compiler receipt has one exact rectangle. Never allow a stale
+  // intrinsic field to create a second outer-surface sizing formula. Legacy
+  // receipts remain normalized conservatively for backward compatibility.
+  const intrinsicWidth = isolatedMeasurement
+    ? measuredWidth
+    : Math.max(1, Math.ceil(finite(size.intrinsicWidth, measuredWidth)), measuredWidth);
+  const intrinsicHeight = isolatedMeasurement
+    ? measuredHeight
+    : Math.max(1, Math.ceil(finite(size.intrinsicHeight, measuredHeight)), measuredHeight);
   const viewingMode = size.viewingMode === "zoom-and-inspect" || size.viewingMode === "scrolling-artboard"
     ? size.viewingMode
     : "single-frame";
+  const measurementMode = size.measurementMode === "isolated-compiler"
+    ? "isolated-compiler"
+    : "live-observer";
+  const authoredContentBounds = size.authoredContentBounds
+    ? {
+        minX: Math.floor(size.authoredContentBounds.minX),
+        minY: Math.floor(size.authoredContentBounds.minY),
+        maxX: Math.ceil(size.authoredContentBounds.maxX),
+        maxY: Math.ceil(size.authoredContentBounds.maxY),
+      }
+    : undefined;
+  if (
+    measurementMode === "isolated-compiler"
+    && (
+      size.settled !== true
+      || !size.geometryTransactionId
+      || size.compilerPassCount !== 1
+      || size.geometryCompilerVersion !== NORTHSTAR_ISOLATED_GEOMETRY_COMPILER_VERSION
+      || !authoredContentBounds
+      || !Object.values(authoredContentBounds).every(Number.isFinite)
+      || authoredContentBounds.maxX <= authoredContentBounds.minX
+      || authoredContentBounds.maxY <= authoredContentBounds.minY
+      || authoredContentBounds.minX !== contentBounds.minX
+      || authoredContentBounds.minY !== contentBounds.minY
+      || authoredContentBounds.maxX !== contentBounds.maxX
+      || authoredContentBounds.maxY !== contentBounds.maxY
+    )
+  ) return undefined;
   return {
     ...size,
     sequence: Math.max(0, Math.floor(finite(size.sequence, 0))),
     intrinsicWidth,
     intrinsicHeight,
-    sourceOwnedSurface: size.sourceOwnedSurface === true,
+    sourceOwnedSurface: measurementMode === "isolated-compiler" || size.sourceOwnedSurface === true,
+    measurementMode,
     viewingMode,
     contentBounds,
   };
@@ -86,13 +121,6 @@ export function acceptNorthstarContentSize(input: {
         && input.allowEqualSequence !== true
       )
     )
-  ) return undefined;
-
-  const previousWidth = Math.max(1, input.previousIntrinsicWidth ?? input.previous?.intrinsicWidth ?? normalized.intrinsicWidth);
-  const previousHeight = Math.max(1, input.previousIntrinsicHeight ?? input.previous?.intrinsicHeight ?? normalized.intrinsicHeight);
-  if (
-    normalized.intrinsicWidth > previousWidth * NORTHSTAR_MAX_SINGLE_REFLOW_GROWTH
-    || normalized.intrinsicHeight > Math.max(previousHeight * NORTHSTAR_MAX_SINGLE_REFLOW_GROWTH, 12_000)
   ) return undefined;
 
   return normalized;
@@ -131,33 +159,16 @@ export function deriveNorthstarCanvasGeometry(input: {
     ),
   );
   const bounds = normalized.contentBounds;
-  // Foundation minimums protect legacy artifacts. Once the browser confirms that
-  // cumulative model-authored source owns the surface, the same exact intrinsic
-  // measurement must be allowed to shrink the outer Canvas object. Otherwise an
-  // obsolete working-stage minimum produces the large blank lower region and
-  // pale interior gutter seen in the failed Patch 2.1 run.
+  // Legacy artifacts may still carry historical minimums. Canonical web-artboard
+  // receipts own their complete geometry from initial construction onward, so
+  // no minimum may prevent exact expansion or contraction.
   const minimumWidth = normalized.sourceOwnedSurface ? 1 : input.minimumWidth;
   const minimumHeight = normalized.sourceOwnedSurface ? 1 : input.minimumHeight;
   const intrinsicWidth = Math.max(minimumWidth, normalized.intrinsicWidth);
   const intrinsicHeight = Math.max(minimumHeight, normalized.intrinsicHeight);
-  if (normalized.sourceOwnedSurface) {
-    // Once the model owns the cumulative source, intrinsic document size and
-    // outer Canvas object size are deliberately separate. The exact source may
-    // become denser, interactive, or zoomable, but it may not make the host
-    // camera chase an ever-growing document. CodeArtifactHost fits the measured
-    // intrinsic source inside this stable object, and private outer-canvas review
-    // rejects source whose declared viewing intent becomes unreadable at that fit.
-    return {
-      bounds,
-      intrinsicWidth,
-      intrinsicHeight,
-      displayScale,
-      x: input.canvasX,
-      y: input.canvasY,
-      width: input.canvasWidth,
-      height: input.canvasHeight,
-    };
-  }
+  // The exact same canonical rectangle controls the intrinsic document, runtime
+  // background, iframe host, and outer Canvas object. Keeping the current display
+  // scale preserves the user's camera while the object grows, contracts, or shifts.
   return {
     bounds,
     intrinsicWidth,

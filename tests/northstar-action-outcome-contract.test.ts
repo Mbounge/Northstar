@@ -29,19 +29,16 @@ test("does not classify skipped or rejected actions as hard failures", () => {
   );
 });
 
-test("emits an end-to-end run health verdict after client actions settle", () => {
-  assert.equal(
-    source.includes('name: healthy ? "run.completed" : "run.incomplete"'),
-    true,
-  );
-  assert.equal(source.includes("serverRunCompleted"), true);
-  assert.equal(source.includes("terminalActionCount: outcomes.length"), true);
-  assert.equal(source.includes("hardFailureCount: hardFailures.length"), true);
+test("submits an end-to-end client health receipt before accepting the server-owned terminal verdict", () => {
+  assert.equal(source.includes("buildClientSettlementReceipt"), true);
+  assert.equal(source.includes("localOperationalHealthy"), true);
+  assert.equal(source.includes('kind: "settlement-receipt"'), true);
+  assert.equal(source.includes('"run.completed_with_notes"'), true);
 });
 
 test("records every action's structured terminal outcome", () => {
   assert.equal(source.includes('name: "action.outcome"'), true);
-  assert.equal(source.includes("status: outcome.status"), true);
-  assert.equal(source.includes("actionId: outcome.actionId"), true);
-  assert.equal(source.includes("stepId: outcome.stepId"), true);
+  assert.equal(source.includes("status: result.status"), true);
+  assert.equal(source.includes("actionId: action.actionId"), true);
+  assert.equal(source.includes("stepId: action.stepId"), true);
 });

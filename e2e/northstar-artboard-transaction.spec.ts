@@ -50,16 +50,28 @@ test("lost terminal and acknowledgement delivery recover without remounting or b
   await expect(page.getByTestId("northstar-e2e-status")).toHaveText("mutation-1-pending");
   const runtime = page.frameLocator('[data-testid="northstar-live-artboard-frame"]');
   await expect(runtime.locator('[data-ns-node-id="title"]')).toHaveText("One living artboard");
+  await expect(page.getByTestId("northstar-e2e-status")).toHaveText("mutation-invalid-pending", { timeout: 12_000 });
+  await expect(page.getByTestId("northstar-e2e-canonical-revision")).toHaveText("northstar-e2e-revision-2");
+  await expect(runtime.locator('[data-ns-node-id="proof-1"]')).toBeVisible();
+  await expect(runtime.locator('[data-ns-node-id="invalid-candidate"]')).toHaveCount(0);
+  await expect(page.getByTestId("northstar-e2e-rejection-count")).toHaveText("1", { timeout: 12_000 });
+  await expect(page.getByTestId("northstar-e2e-rollback-revision")).toHaveText("northstar-e2e-revision-2");
   await expect(page.getByTestId("northstar-e2e-status")).toHaveText("mutation-2-pending", { timeout: 12_000 });
   await expect(runtime.locator('[data-ns-node-id="title"]')).toHaveText("One living artboard");
   await expect(runtime.locator('[data-ns-node-id="proof-1"]')).toBeVisible();
   await expect(page.getByTestId("northstar-e2e-status")).toHaveText("complete", { timeout: 20_000 });
+  await expect(page.getByTestId("northstar-e2e-canonical-revision")).toHaveText("northstar-e2e-revision-3");
   await expect(page.getByTestId("northstar-e2e-commit-count")).toHaveText("2");
+  await expect(page.getByTestId("northstar-e2e-snapshot-state")).toHaveText("clean");
+  await expect(page.getByTestId("northstar-e2e-evidence-state")).toHaveText("2/2");
   expect(injectedAcknowledgementFault).toBe(true);
   expect([...acknowledgementAttempts.values()].some((attempts) => attempts >= 2)).toBe(true);
 
   await expect(runtime.locator('[data-ns-node-id="proof-1"]')).toBeVisible();
   await expect(runtime.locator('[data-ns-node-id="proof-2"]')).toBeVisible();
+  await expect(runtime.locator('[data-ns-evidence-id="evidence-a"]')).toBeVisible();
+  await expect(runtime.locator('[data-ns-evidence-id="evidence-b"]')).toBeVisible();
+  await expect(runtime.locator("[data-ns-runtime-inherited-placement]")).toHaveCount(0);
   await expect(page.getByText("Mounting the one live artboard…")).toHaveCount(0);
 
   const continuity = await page.evaluate(() => {

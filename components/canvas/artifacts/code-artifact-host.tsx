@@ -20,6 +20,7 @@ import type {
   NorthstarArtifactMutationAcknowledgement,
   NorthstarArtboardChangeKind,
   NorthstarArtboardMutationBatch,
+  NorthstarEvidenceRegistryReceipt,
   NorthstarLiveSurfaceSnapshot,
 } from "@/lib/canvas-artifacts/types";
 
@@ -56,13 +57,17 @@ interface ArtifactPointerMessage {
   message?: string;
   review?: CanvasCodeArtifactRuntimeReview;
   size?: CanvasCodeArtifactContentSize;
+  restoredSize?: CanvasCodeArtifactContentSize;
   changedNodeIds?: string[];
   meaningfulChangedNodeIds?: string[];
   changeKinds?: NorthstarArtboardChangeKind[];
   requiredAssetUrls?: string[];
   loadedAssetUrls?: string[];
   missingAssetUrls?: string[];
+  evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
   snapshot?: NorthstarLiveSurfaceSnapshot;
+  rollbackDurationMs?: number;
+  candidateDurationMs?: number;
 }
 
 let browserRealtimeClient: ReturnType<typeof createSupabaseClient> | undefined;
@@ -97,6 +102,7 @@ export interface NorthstarArtifactLifecycleEvent {
     | "revision.rejected"
     | "revision.timed_out"
     | "ack.delivery_failed"
+    | "authority.surface_ready"
     | "render.health";
   artifactId: string;
   revisionId: string;
@@ -104,6 +110,22 @@ export interface NorthstarArtifactLifecycleEvent {
   proposalId?: string;
   mutationId?: string;
   browserRevisionId?: string;
+  authorityState?:
+    | "foundation-ready"
+    | "candidate-staged"
+    | "candidate-received"
+    | "candidate-committed"
+    | "candidate-rejected"
+    | "candidate-timed-out";
+  acceptedRevisionId?: string;
+  candidateRevisionId?: string;
+  frameInstanceId?: string;
+  surfaceMountCount?: number;
+  rollbackDurationMs?: number;
+  candidateDurationMs?: number;
+  snapshotSanitized?: boolean;
+  evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
+  evidenceCollisionPairs?: Array<[string, string]>;
   detail?: string;
   renderHealth?: {
     /** Operational health only. Creative-review warnings must never block construction. */
@@ -118,6 +140,8 @@ export interface NorthstarArtifactLifecycleEvent {
     overflowX: number;
     overflowY: number;
     extremeGrowth: boolean;
+    evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
+    evidenceCollisionPairs: Array<[string, string]>;
   };
   timestamp: number;
 }
@@ -126,7 +150,7 @@ export interface NorthstarArtifactLifecycleEvent {
 export interface NorthstarCreativeActivity {
   artifactId: string;
   revisionId?: string;
-  phase: "authoring" | "previewing" | "committing";
+  phase: "authoring" | "dispatching" | "reviewing";
   label: string;
   stageIndex?: number;
   updatedAt: number;
@@ -166,6 +190,18 @@ function surfaceIdentity(artifact?: CanvasCodeArtifactPayload): string | undefin
   return artifact.surfaceId ?? artifact.artifactId;
 }
 
+export function isNorthstarAuthoredSnapshotSanitized(
+  snapshot?: NorthstarLiveSurfaceSnapshot,
+): boolean | undefined {
+  if (!snapshot) return undefined;
+  const serialized = [
+    snapshot.html,
+    snapshot.css,
+    ...Object.values(snapshot.cssLayers ?? {}),
+  ].join("\n");
+  return !/data-ns-runtime-(?:owned|inherited|spatial)|data-ns-spatial-system|northstar-(?:publication-presentation-state|source-owned-intrinsic-geometry)/i.test(serialized);
+}
+
 function artifactGeometry(
   artifact: CanvasCodeArtifactPayload | undefined,
   width: number,
@@ -203,6 +239,10 @@ function CodeArtifactHostImpl({
   onCanvasWheel,
 }: CodeArtifactHostProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const frameInstanceIdRef = useRef(
+    `northstar-frame-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
+  );
+  const surfaceMountCountRef = useRef(artifact ? 1 : 0);
   const latestArtifactRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
   const mountedSurfaceRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
   const appliedMutationIdsRef = useRef<Set<string>>(new Set());
@@ -256,6 +296,9 @@ function CodeArtifactHostImpl({
     // remounting the iframe would blank the board and discard its terminal
     // result cache. Only a genuinely different surface may create a new frame.
     if (!mountedSurface || activeSurfaceId !== mountedSurfaceId) {
+      if (!mountedSurface || mountedSurfaceId !== activeSurfaceId) {
+        surfaceMountCountRef.current += mountedSurface ? 1 : surfaceMountCountRef.current === 0 ? 1 : 0;
+      }
       mountedSurfaceRef.current = artifact;
       setMountedSurface(artifact);
       appliedMutationIdsRef.current = new Set();
@@ -323,6 +366,11 @@ function CodeArtifactHostImpl({
       proposalId: input.proposal.proposalId,
       mutationId: input.proposal.mutationId,
       browserRevisionId: browserRevisionRef.current,
+      authorityState: "candidate-staged",
+      acceptedRevisionId: browserRevisionRef.current,
+      candidateRevisionId: input.proposal.revisionId,
+      frameInstanceId: frameInstanceIdRef.current,
+      surfaceMountCount: surfaceMountCountRef.current,
       timestamp: input.proposal.lastDispatchedAt,
     });
     frame.contentWindow.postMessage({
@@ -334,6 +382,8 @@ function CodeArtifactHostImpl({
       proposalId: input.proposal.proposalId,
       ackToken: input.proposal.ackToken,
       batch: input.batch,
+      layoutBaseWidth: input.artifact.layoutBaseWidth ?? input.artifact.preferredWidth,
+      layoutBaseHeight: input.artifact.layoutBaseHeight ?? input.artifact.preferredHeight,
       assetUrls: input.artifact.dataBundle?.allowedAssetUrls ?? [],
     }, "*");
     return true;
@@ -494,6 +544,7 @@ function CodeArtifactHostImpl({
       artifactId: current.artifactId,
       surfaceId: current.surfaceId ?? current.artifactId,
       revisionId,
+      browserRevisionId: observedBrowserRevision,
       mutationId: input.message.mutationId
         ?? (!isFoundationReady ? inFlight?.mutationId : undefined),
       status: input.status,
@@ -506,7 +557,11 @@ function CodeArtifactHostImpl({
       requiredAssetUrls: input.message.requiredAssetUrls ?? [],
       loadedAssetUrls: input.message.loadedAssetUrls ?? [],
       missingAssetUrls: input.message.missingAssetUrls ?? [],
+      evidenceRegistry: input.message.evidenceRegistry ?? input.message.review?.evidenceRegistry,
       snapshot: input.message.snapshot,
+      rollbackDurationMs: input.message.rollbackDurationMs,
+      candidateDurationMs: input.message.candidateDurationMs,
+      snapshotSanitized: isNorthstarAuthoredSnapshotSanitized(input.message.snapshot),
       acknowledgedAt: new Date().toISOString(),
     };
 
@@ -546,6 +601,22 @@ function CodeArtifactHostImpl({
         proposalId: acknowledgement.proposalId,
         mutationId: acknowledgement.mutationId,
         browserRevisionId: observedBrowserRevision,
+        authorityState: acknowledgement.status === "rejected"
+          ? "candidate-rejected"
+          : isFoundationReady
+            ? "foundation-ready"
+            : "candidate-committed",
+        acceptedRevisionId: acknowledgement.status === "rejected"
+          ? observedBrowserRevision
+          : acknowledgement.revisionId,
+        candidateRevisionId: isFoundationReady ? undefined : acknowledgement.revisionId,
+        frameInstanceId: frameInstanceIdRef.current,
+        surfaceMountCount: surfaceMountCountRef.current,
+        rollbackDurationMs: acknowledgement.rollbackDurationMs,
+        candidateDurationMs: acknowledgement.candidateDurationMs,
+        snapshotSanitized: acknowledgement.snapshotSanitized,
+        evidenceRegistry: acknowledgement.evidenceRegistry,
+        evidenceCollisionPairs: acknowledgement.review?.evidenceCollisionPairs,
         detail: acknowledgement.reason,
         timestamp: Date.now(),
       });
@@ -558,6 +629,22 @@ function CodeArtifactHostImpl({
         proposalId: acknowledgement.proposalId,
         mutationId: acknowledgement.mutationId,
         browserRevisionId: browserRevisionRef.current,
+        authorityState: acknowledgement.status === "rejected"
+          ? "candidate-rejected"
+          : isFoundationReady
+            ? "foundation-ready"
+            : "candidate-committed",
+        acceptedRevisionId: acknowledgement.status === "rejected"
+          ? observedBrowserRevision
+          : acknowledgement.revisionId,
+        candidateRevisionId: isFoundationReady ? undefined : acknowledgement.revisionId,
+        frameInstanceId: frameInstanceIdRef.current,
+        surfaceMountCount: surfaceMountCountRef.current,
+        rollbackDurationMs: acknowledgement.rollbackDurationMs,
+        candidateDurationMs: acknowledgement.candidateDurationMs,
+        snapshotSanitized: acknowledgement.snapshotSanitized,
+        evidenceRegistry: acknowledgement.evidenceRegistry,
+        evidenceCollisionPairs: acknowledgement.review?.evidenceCollisionPairs,
         detail: error instanceof Error ? error.message : "Acknowledgement delivery failed.",
         timestamp: Date.now(),
       });
@@ -634,6 +721,11 @@ function CodeArtifactHostImpl({
           proposalId: proposal.proposalId,
           mutationId: proposal.mutationId,
           browserRevisionId: browserRevisionRef.current,
+          authorityState: "candidate-timed-out",
+          acceptedRevisionId: browserRevisionRef.current,
+          candidateRevisionId: proposal.revisionId,
+          frameInstanceId: frameInstanceIdRef.current,
+          surfaceMountCount: surfaceMountCountRef.current,
           detail: `The live artifact did not reach a terminal browser acknowledgement within ${NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs}ms.`,
           timestamp: now,
         });
@@ -742,7 +834,6 @@ function CodeArtifactHostImpl({
             liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, acceptedReadySize.sequence ?? -1);
             if (!event.data.mutationId && !hasPendingMutation) {
               setLiveSize(acceptedReadySize);
-              onContentSize(acceptedReadySize);
             }
           }
         }
@@ -751,6 +842,20 @@ function CodeArtifactHostImpl({
         browserRevisionRef.current = event.data.revisionId ?? current.revisionId;
         setSurfaceReady(true);
         setRuntimeError(null);
+        onLifecycleEvent({
+          name: "authority.surface_ready",
+          artifactId: current.artifactId,
+          revisionId: event.data.revisionId ?? current.revisionId,
+          browserRevisionId: event.data.revisionId ?? current.revisionId,
+          authorityState: "foundation-ready",
+          acceptedRevisionId: event.data.revisionId ?? current.revisionId,
+          frameInstanceId: frameInstanceIdRef.current,
+          surfaceMountCount: surfaceMountCountRef.current,
+          snapshotSanitized: isNorthstarAuthoredSnapshotSanitized(event.data.snapshot),
+          evidenceRegistry: event.data.evidenceRegistry ?? event.data.review?.evidenceRegistry,
+          evidenceCollisionPairs: event.data.review?.evidenceCollisionPairs,
+          timestamp: Date.now(),
+        });
         postCurrentContext();
         if (!event.data.mutationId && !hasPendingMutation) {
           const readyMessage = acceptedReadySize
@@ -793,6 +898,11 @@ function CodeArtifactHostImpl({
             proposalId: proposal.proposalId,
             mutationId: proposal.mutationId,
             browserRevisionId: browserRevisionRef.current,
+            authorityState: "candidate-received",
+            acceptedRevisionId: browserRevisionRef.current,
+            candidateRevisionId: proposal.revisionId,
+            frameInstanceId: frameInstanceIdRef.current,
+            surfaceMountCount: surfaceMountCountRef.current,
             timestamp: proposal.receivedAt,
           });
         }
@@ -857,9 +967,15 @@ function CodeArtifactHostImpl({
         if (!acceptedSize) return;
         liveSizeSequenceRef.current = acceptedSize.sequence ?? liveSizeSequenceRef.current + 1;
         latestSizeRef.current = acceptedSize;
-        // Provisional reflow is buffered from the same normalized measurement
-        // used by the terminal event. The iframe and outer artboard publish that
-        // exact measurement together only after ready/applied settlement.
+        const canonicalRuntimeUpdate =
+          acceptedSize.measurementMode === "isolated-compiler"
+          && acceptedSize.settled === true
+          && !inFlightProposalRef.current
+          && (event.data.revisionId ?? current.revisionId) === (browserRevisionRef.current ?? current.revisionId);
+        if (canonicalRuntimeUpdate) {
+          setLiveSize(acceptedSize);
+          onContentSize(acceptedSize);
+        }
         return;
       }
 
@@ -905,6 +1021,8 @@ function CodeArtifactHostImpl({
           overflowX: review.overflowX ?? 0,
           overflowY: review.overflowY ?? 0,
           extremeGrowth,
+          evidenceRegistry: review.evidenceRegistry,
+          evidenceCollisionPairs: review.evidenceCollisionPairs ?? [],
         });
         if (lastRenderHealthFingerprintRef.current !== fingerprint) {
           lastRenderHealthFingerprintRef.current = fingerprint;
@@ -928,7 +1046,18 @@ function CodeArtifactHostImpl({
               overflowX: review.overflowX ?? 0,
               overflowY: review.overflowY ?? 0,
               extremeGrowth,
+              evidenceRegistry: review.evidenceRegistry,
+              evidenceCollisionPairs: review.evidenceCollisionPairs ?? [],
             },
+            authorityState: inFlightProposalRef.current
+              ? "candidate-received"
+              : "foundation-ready",
+            acceptedRevisionId: browserRevisionRef.current,
+            candidateRevisionId: inFlightProposalRef.current?.revisionId,
+            frameInstanceId: frameInstanceIdRef.current,
+            surfaceMountCount: surfaceMountCountRef.current,
+            evidenceRegistry: review.evidenceRegistry,
+            evidenceCollisionPairs: review.evidenceCollisionPairs,
             timestamp: Date.now(),
           });
         }
@@ -943,6 +1072,30 @@ function CodeArtifactHostImpl({
         if (event.data.mutationId) failedMutationIdsRef.current.add(event.data.mutationId);
         const rejectedProposal = inFlightProposalRef.current;
         const rollbackRevisionId = event.data.browserRevisionId ?? rejectedProposal?.baseRevisionId;
+        // Settlement is locally authoritative before any network delivery. A
+        // subsequent render capture or proposal must never observe the rejected
+        // candidate revision while its acknowledgement is in flight.
+        if (rollbackRevisionId) browserRevisionRef.current = rollbackRevisionId;
+        if (event.data.restoredSize && rollbackRevisionId) {
+          const restoredSize = acceptNorthstarContentSize({
+            candidate: event.data.restoredSize,
+            artifactId: current.artifactId,
+            revisionId: rollbackRevisionId,
+            previous: latestSizeRef.current,
+            previousIntrinsicWidth: current.preferredWidth,
+            previousIntrinsicHeight: current.preferredHeight,
+            allowEqualSequence: true,
+          });
+          if (restoredSize) {
+            latestSizeRef.current = restoredSize;
+            liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, restoredSize.sequence ?? -1);
+            setLiveSize(restoredSize);
+            // Restore the outer Canvas geometry together with the iframe DOM.
+            // A mechanically failed atomic action must leave no speculative
+            // width, height, or position behind.
+            onContentSize(restoredSize);
+          }
+        }
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         setVisibleMutationLabel("Northstar is repairing this rejected adjustment");
         void postAcknowledgement({
@@ -994,7 +1147,6 @@ function CodeArtifactHostImpl({
             latestSizeRef.current = acceptedAppliedSize;
             liveSizeSequenceRef.current = Math.max(liveSizeSequenceRef.current, acceptedAppliedSize.sequence ?? -1);
             setLiveSize(acceptedAppliedSize);
-            onContentSize(acceptedAppliedSize);
           }
         }
         const appliedMessage = acceptedAppliedSize

@@ -30,10 +30,12 @@ test("malformed lifecycle receipts are ignored until an exact envelope settles",
   assert.equal(workspace.includes("reportedMalformedEvents"), true);
 });
 
-test("stale restore actions cannot overwrite a newer acknowledged revision", () => {
-  assert.equal(route.includes("composition.visual.stale_restore_suppressed"), true);
-  assert.equal(workspace.includes('reasonCode: "STALE_RESTORE_SUPPRESSED"'), true);
-  assert.equal(workspace.includes("latestAcknowledgedRevisionForRun"), true);
+test("speculative candidates never require a restore action to protect canonical lineage", () => {
+  assert.equal(route.includes("retainCommittedLiveArtboard"), false);
+  assert.equal(route.includes("composition.visual.stale_restore_suppressed"), false);
+  assert.equal(workspace.includes("pendingArtifactCandidatesRef"), true);
+  assert.equal(workspace.includes("isNorthstarSpeculativeBrowserCandidate"), true);
+  assert.equal(workspace.includes("northstarTerminalEventSettlesCandidate"), true);
 });
 
 test("creative authorship does not invoke the model with a missing semantic evidence graph", () => {

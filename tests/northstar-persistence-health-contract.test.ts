@@ -24,6 +24,6 @@ test("restores the last verified canvas snapshot on reload", () => {
 
 test("gates run completion on persistence verification", () => {
   assert.equal(source.includes("const persistenceHealth = await onVerifyCanonicalPersistence();"), true);
-  assert.equal(source.includes("persistenceHealth.healthy;"), true);
+  assert.equal(source.includes("&& persistenceHealth.healthy"), true);
   assert.equal(source.includes("persistenceHealthy: persistenceHealth.healthy"), true);
 });

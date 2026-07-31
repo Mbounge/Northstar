@@ -1,5 +1,15 @@
 export const NORTHSTAR_INDEPENDENT_CREATIVE_REVIEW_VERSION =
-  "northstar.independent-creative-review.v1" as const;
+  "northstar.independent-creative-review.v2" as const;
+
+export interface NorthstarIndependentQualityScores {
+  informationHierarchy: number;
+  evidenceLegibility: number;
+  analyticalDepth: number;
+  structuralOriginality: number;
+  compositionCoherence: number;
+  craftPrecision: number;
+  decisionUsefulness: number;
+}
 
 export interface NorthstarIndependentCreativeReviewDraft {
   interpretation?: string;
@@ -18,6 +28,7 @@ export interface NorthstarIndependentCreativeReviewDraft {
   governingIdeaFidelityAssessment?: string;
   memorableAuthorshipAssessment?: string;
   universalQualityBarMet?: boolean;
+  qualityScores?: Partial<NorthstarIndependentQualityScores>;
   structuralBlockers?: string[];
   rationale?: string;
 }
@@ -39,6 +50,8 @@ export interface NorthstarIndependentCreativeReview {
   governingIdeaFidelityAssessment?: string;
   memorableAuthorshipAssessment?: string;
   universalQualityBarMet?: boolean;
+  qualityScores?: NorthstarIndependentQualityScores;
+  minimumQualityScore?: number;
   structuralBlockers: string[];
   rationale: string;
 }
@@ -63,6 +76,7 @@ export const NORTHSTAR_INDEPENDENT_CREATIVE_REVIEW_JSON_SCHEMA = {
     "governingIdeaFidelityAssessment",
     "memorableAuthorshipAssessment",
     "universalQualityBarMet",
+    "qualityScores",
     "structuralBlockers",
     "rationale",
   ],
@@ -87,6 +101,28 @@ export const NORTHSTAR_INDEPENDENT_CREATIVE_REVIEW_JSON_SCHEMA = {
     governingIdeaFidelityAssessment: { type: "string", minLength: 1, maxLength: 1600 },
     memorableAuthorshipAssessment: { type: "string", minLength: 1, maxLength: 1600 },
     universalQualityBarMet: { type: "boolean" },
+    qualityScores: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "informationHierarchy",
+        "evidenceLegibility",
+        "analyticalDepth",
+        "structuralOriginality",
+        "compositionCoherence",
+        "craftPrecision",
+        "decisionUsefulness",
+      ],
+      properties: {
+        informationHierarchy: { type: "number", minimum: 0, maximum: 100 },
+        evidenceLegibility: { type: "number", minimum: 0, maximum: 100 },
+        analyticalDepth: { type: "number", minimum: 0, maximum: 100 },
+        structuralOriginality: { type: "number", minimum: 0, maximum: 100 },
+        compositionCoherence: { type: "number", minimum: 0, maximum: 100 },
+        craftPrecision: { type: "number", minimum: 0, maximum: 100 },
+        decisionUsefulness: { type: "number", minimum: 0, maximum: 100 },
+      },
+    },
     structuralBlockers: {
       type: "array",
       maxItems: 12,
@@ -109,6 +145,11 @@ function cleanTextList(value: unknown, maxItems: number, maxLength: number): str
   )).slice(0, maxItems);
 }
 
+function qualityScore(value: unknown): number {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, Math.round(number))) : 0;
+}
+
 export function sanitizeNorthstarIndependentCreativeReview(
   value: NorthstarIndependentCreativeReviewDraft,
 ): NorthstarIndependentCreativeReview {
@@ -128,6 +169,27 @@ export function sanitizeNorthstarIndependentCreativeReview(
   if (!interpretation || !strongestAspect || !evidenceCommunicationAssessment || !recommendedIntervention || !governingVisualIdeaAssessment || !evidenceTransformationAssessment || !containerAndSurfaceAssessment || !originalityAssessment || !mediumFitnessAssessment || !precisionAndLegibilityAssessment || !governingIdeaFidelityAssessment || !memorableAuthorshipAssessment || !rationale) {
     throw new Error("The independent creative review is incomplete.");
   }
+  const qualityScores: NorthstarIndependentQualityScores = {
+    informationHierarchy: qualityScore(value.qualityScores?.informationHierarchy),
+    evidenceLegibility: qualityScore(value.qualityScores?.evidenceLegibility),
+    analyticalDepth: qualityScore(value.qualityScores?.analyticalDepth),
+    structuralOriginality: qualityScore(value.qualityScores?.structuralOriginality),
+    compositionCoherence: qualityScore(value.qualityScores?.compositionCoherence),
+    craftPrecision: qualityScore(value.qualityScores?.craftPrecision),
+    decisionUsefulness: qualityScore(value.qualityScores?.decisionUsefulness),
+  };
+  const minimumQualityScore = Math.min(...Object.values(qualityScores));
+  const structuralBlockers = cleanTextList(value.structuralBlockers, 12, 700);
+  const scoreFloorMet = qualityScores.informationHierarchy >= 78
+    && qualityScores.evidenceLegibility >= 82
+    && qualityScores.analyticalDepth >= 75
+    && qualityScores.structuralOriginality >= 75
+    && qualityScores.compositionCoherence >= 82
+    && qualityScores.craftPrecision >= 80
+    && qualityScores.decisionUsefulness >= 75;
+  const universalQualityBarMet = value.universalQualityBarMet === true
+    && scoreFloorMet
+    && structuralBlockers.length === 0;
   return {
     interpretation,
     strongestAspect,
@@ -135,7 +197,7 @@ export function sanitizeNorthstarIndependentCreativeReview(
     evidenceCommunicationAssessment,
     recommendedIntervention,
     materialImprovementAvailable: value.materialImprovementAvailable === true,
-    publicationReady: value.publicationReady === true,
+    publicationReady: value.publicationReady === true && universalQualityBarMet,
     governingVisualIdeaAssessment,
     evidenceTransformationAssessment,
     containerAndSurfaceAssessment,
@@ -144,8 +206,10 @@ export function sanitizeNorthstarIndependentCreativeReview(
     precisionAndLegibilityAssessment,
     governingIdeaFidelityAssessment,
     memorableAuthorshipAssessment,
-    universalQualityBarMet: value.universalQualityBarMet === true,
-    structuralBlockers: cleanTextList(value.structuralBlockers, 12, 700),
+    universalQualityBarMet,
+    qualityScores,
+    minimumQualityScore,
+    structuralBlockers,
     rationale,
   };
 }
@@ -167,6 +231,7 @@ Treat every visual medium neutrally. Charts, graphs, plots, diagrams, maps, SVG,
 Audit execution fidelity: the rendered scene must visibly realize the authored governing idea, not merely mention it in prose. Audit precision at actual rendered scale: labels, annotations, connectors, chart encodings, crops, and evidence relationships must be legible, exact, and collision-free.
 Never recommend invented metrics, conversion rates, retention effects, drop-off values, or causal business outcomes when the grounded research does not contain them. Recommend qualitative encodings, observed-step annotations, or explicitly labeled hypotheses instead.
 Set universalQualityBarMet=true only when the artifact is distinctive, memorable, premium, immediately understandable, evidence-grounded, and specifically authored for this problem. Set publicationReady=true only when universalQualityBarMet is true, the governing idea is visible, the chosen medium is fit, evidence is transformed, precision is strong, and no structural blocker remains.
+Score qualityScores from the rendered pixels, not from the author's claims. Use 0–100 independently for information hierarchy, evidence legibility, analytical depth, structural originality, composition coherence, craft precision, and decision usefulness. These scores are not a style rubric: they are the universal publication floor, identical at every thinking level. Be exacting; 80 means genuinely publication-grade, not merely acceptable.
 A recommendation to continue must identify a material improvement in understanding, not a preference for endless polish.
 Return only the required JSON object.
   `.trim();

@@ -44,6 +44,9 @@ test("thinking levels change persistence budgets without defining visual vocabul
   assert.ok(low.maximumAcceptedActs < medium.maximumAcceptedActs);
   assert.ok(medium.maximumAcceptedActs < high.maximumAcceptedActs);
   assert.ok(low.maximumElapsedMs < high.maximumElapsedMs);
+  assert.equal(low.authoringOutputTokens, high.authoringOutputTokens);
+  assert.equal(medium.authoringOutputTokens, high.authoringOutputTokens);
+  assert.equal(low.independentReviewOutputTokens, high.independentReviewOutputTokens);
   assert.equal("visualFamily" in low, false);
   assert.equal("archetype" in high, false);
 });
@@ -58,7 +61,7 @@ test("operational readiness is separate from open-ended creative advisory observ
   assert.equal(readiness.blockingObservations.length, 0);
 });
 
-test("the adaptive session can settle after one exceptional accepted render regardless of thinking level", () => {
+test("the adaptive session can settle after one exceptional accepted and operationally settled render", () => {
   const session = new NorthstarAdaptiveCreativeSession("high", 1_000);
   session.noteAttempt();
   session.recordAcceptedAct({
@@ -87,6 +90,7 @@ test("the adaptive session can settle after one exceptional accepted render rega
     recommendedIntervention: "No mandatory structural intervention remains.",
     materialImprovementAvailable: false,
     publicationReady: true,
+    universalQualityBarMet: true,
     governingVisualIdeaAssessment: "The governing idea survives without explanatory prose or container chrome.",
     evidenceTransformationAssessment: "Evidence has been transformed from inventory into purposeful hierarchy and relationships.",
     containerAndSurfaceAssessment: "The surface carries the composition and every remaining boundary earns its role.",
@@ -94,7 +98,11 @@ test("the adaptive session can settle after one exceptional accepted render rega
     structuralBlockers: [],
     rationale: "The artifact meets the universal Northstar publication bar.",
   });
-  const decision = session.decideContinuation(assessment({ revisionId: "revision-2" }), critique);
+  const decision = session.decideContinuation(assessment({
+    revisionId: "revision-2",
+    processSettled: true,
+    publicationClean: true,
+  }), critique);
   assert.equal(decision.readyForPublication, true);
   assert.equal(decision.continueWorking, false);
 });

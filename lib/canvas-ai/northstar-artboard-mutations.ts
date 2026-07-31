@@ -204,10 +204,10 @@ export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
             additionalProperties: false,
             properties: {
               op: { type: "string", enum: ["request-space"] },
-              left: { type: "number", minimum: 0, maximum: 12000 },
-              top: { type: "number", minimum: 0, maximum: 12000 },
-              right: { type: "number", minimum: 0, maximum: 12000 },
-              bottom: { type: "number", minimum: 0, maximum: 12000 },
+              left: { type: "number", minimum: 0 },
+              top: { type: "number", minimum: 0 },
+              right: { type: "number", minimum: 0 },
+              bottom: { type: "number", minimum: 0 },
             },
             required: ["op"],
           },
@@ -580,14 +580,19 @@ function sanitizeOperation(operation: NorthstarArtboardMutationOperation): North
       const moduleId = cleanId(operation.moduleId).slice(0, 80);
       return { op: "set-runtime-module", moduleId, javascript: sanitizeRuntimeJavascript(operation.javascript) };
     }
-    case "request-space":
+    case "request-space": {
+      const finiteNonNegative = (value: unknown) => {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.max(0, number) : 0;
+      };
       return {
         op: "request-space",
-        left: Math.max(0, Math.min(12000, Number(operation.left) || 0)),
-        top: Math.max(0, Math.min(12000, Number(operation.top) || 0)),
-        right: Math.max(0, Math.min(12000, Number(operation.right) || 0)),
-        bottom: Math.max(0, Math.min(12000, Number(operation.bottom) || 0)),
+        left: finiteNonNegative(operation.left),
+        top: finiteNonNegative(operation.top),
+        right: finiteNonNegative(operation.right),
+        bottom: finiteNonNegative(operation.bottom),
       };
+    }
   }
 }
 
@@ -736,6 +741,9 @@ export function createNorthstarArtboardMutationBatch(input: {
   minimumSpatiallyChangedNodes?: number;
   minimumMovedNodes?: number;
   minimumResizedNodes?: number;
+  executionPolicy?: NorthstarArtboardMutationBatch["executionPolicy"];
+  /** Infrastructure-owned sequence for the persistent linear design session. */
+  sequenceOverride?: number;
 }): NorthstarArtboardMutationBatch {
   const draft = sanitizeNorthstarArtboardMutationDraft(input.draft);
   const styleOnly = draft.operations.every((operation) =>
@@ -744,11 +752,17 @@ export function createNorthstarArtboardMutationBatch(input: {
   const semanticIntent = /challenge|analysis|solution|synthesis|recommendation|resolution|settlement|publication/i.test(
     `${input.label} ${input.intent}`,
   );
-  if (styleOnly && (input.phase === "analysis" || input.phase === "recommendation" || semanticIntent)) {
+  if (
+    input.executionPolicy !== "linear-design"
+    && styleOnly
+    && (input.phase === "analysis" || input.phase === "recommendation" || semanticIntent)
+  ) {
     throw new Error("A semantic visual stage cannot be satisfied by CSS, spacing, or style operations alone.");
   }
   const journal = input.previous.mutationJournal ?? [];
-  const sequence = journal.length + 1;
+  const sequence = input.sequenceOverride === undefined
+    ? journal.length + 1
+    : Math.max(1, Math.floor(input.sequenceOverride));
   const parentMutationId = journal.at(-1)?.mutationId;
   const hash = createHash("sha256")
     .update(JSON.stringify({
@@ -789,6 +803,7 @@ export function createNorthstarArtboardMutationBatch(input: {
     minimumResizedNodes: input.minimumResizedNodes === undefined
       ? undefined
       : Math.max(0, Math.floor(input.minimumResizedNodes)),
+    executionPolicy: input.executionPolicy,
     createdAt: new Date().toISOString(),
   };
 }
@@ -809,6 +824,8 @@ export function appendNorthstarArtboardMutation(input: {
   minimumSpatiallyChangedNodes?: number;
   minimumMovedNodes?: number;
   minimumResizedNodes?: number;
+  executionPolicy?: NorthstarArtboardMutationBatch["executionPolicy"];
+  sequenceOverride?: number;
 }): NorthstarGeneratedCodeArtifactPackage {
   const sanitized = sanitizeNorthstarArtboardMutationDraft(input.draft);
   const batch = createNorthstarArtboardMutationBatch({
@@ -824,10 +841,12 @@ export function appendNorthstarArtboardMutation(input: {
     minimumSpatiallyChangedNodes: input.minimumSpatiallyChangedNodes,
     minimumMovedNodes: input.minimumMovedNodes,
     minimumResizedNodes: input.minimumResizedNodes,
+    executionPolicy: input.executionPolicy,
+    sequenceOverride: input.sequenceOverride,
   });
-  // Geometry is never estimated into the package. The currently mounted browser surface
-  // applies the mutation first, measures its exact full bounds, and then updates the same
-  // Canvas object's x/y/w/h. Preserving these values prevents a pre-mutation scale jump.
+  // Geometry is never estimated into the package. The mutation preserves the
+  // authored layout base, then the isolated canonical compiler derives exact
+  // bounds and atomically updates the same Canvas object after browser settlement.
   const verified = Boolean(input.verified);
   return {
     ...input.previous,

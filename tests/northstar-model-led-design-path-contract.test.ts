@@ -89,7 +89,8 @@ test("creative acts and preflight outcomes enter the canonical diagnostic stream
   assert.equal(route.includes('callbacks.trace?.("creative.act.started"'), true);
   assert.equal(route.includes('callbacks.trace?.("creative.act.received"'), true);
   assert.equal(route.includes('callbacks.trace?.("creative.act.preflight_rejected"'), true);
-  assert.equal(route.includes('callbacks.trace?.("creative.act.preflight_accepted"'), true);
+  assert.equal(route.includes('callbacks.trace?.("creative.live_source.candidate_ready"'), true);
+  assert.equal(route.includes('callbacks.trace?.("creative.live_source.committed"'), true);
   assert.equal(workspace.includes('eventName === "server.trace"'), true);
 });
 

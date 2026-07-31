@@ -4,6 +4,7 @@ import type {
   NorthstarArtifactMutationAcknowledgement,
   NorthstarGeneratedCodeArtifactPackage,
 } from "@/lib/canvas-artifacts/types";
+import { NorthstarSingleRuntimeAuthority } from "@/lib/canvas-ai/northstar-single-runtime-authority";
 
 export type NorthstarArtboardCreativeLease = {
   leaseId: string;
@@ -25,32 +26,37 @@ function latestMutation(value?: NorthstarGeneratedCodeArtifactPackage) {
 }
 
 export class NorthstarArtboardActor {
-  private committed?: NorthstarGeneratedCodeArtifactPackage;
-  private committedAck?: NorthstarArtifactMutationAcknowledgement;
-  private inFlight?: NorthstarArtboardProposal;
+  private readonly authority: NorthstarSingleRuntimeAuthority<
+    NorthstarGeneratedCodeArtifactPackage,
+    NorthstarArtifactMutationAcknowledgement
+  >;
   private creativeLease?: NorthstarArtboardCreativeLease;
 
   constructor(initial?: NorthstarGeneratedCodeArtifactPackage) {
-    this.committed = initial;
+    this.authority = new NorthstarSingleRuntimeAuthority(initial);
   }
 
   snapshot(): NorthstarGeneratedCodeArtifactPackage | undefined {
-    return this.committed;
+    return this.authority.snapshot().accepted;
   }
 
   lastAcknowledgement(): NorthstarArtifactMutationAcknowledgement | undefined {
-    return this.committedAck;
+    return this.authority.snapshot().acceptedReceipt;
   }
 
+  authoritySnapshot() {
+    return this.authority.snapshot();
+  }
 
   bindCreativeLease(lease: NorthstarArtboardCreativeLease): void {
-    const surfaceId = this.committed?.surfaceId ?? this.committed?.artifactId;
+    const committed = this.snapshot();
+    const surfaceId = committed?.surfaceId ?? committed?.artifactId;
     if (!surfaceId) throw new Error("Cannot bind a creative lease before the artboard surface exists.");
     if (lease.surfaceId !== surfaceId) {
       throw new Error(`Creative lease surface ${lease.surfaceId} does not match actor surface ${surfaceId}.`);
     }
-    if (lease.baseRevisionId !== this.committed?.revisionId) {
-      throw new Error(`Creative lease base ${lease.baseRevisionId ?? "none"} does not match committed revision ${this.committed?.revisionId ?? "none"}.`);
+    if (lease.baseRevisionId !== committed?.revisionId) {
+      throw new Error(`Creative lease base ${lease.baseRevisionId ?? "none"} does not match committed revision ${committed?.revisionId ?? "none"}.`);
     }
     if (lease.expiresAt <= Date.now()) throw new Error("Cannot bind an expired creative lease.");
     this.creativeLease = lease;
@@ -73,10 +79,6 @@ export class NorthstarArtboardActor {
   }
 
   begin(candidate: NorthstarGeneratedCodeArtifactPackage, creativeLeaseId?: string): NorthstarArtboardProposal {
-    if (this.inFlight) {
-      throw new Error(`Proposal ${this.inFlight.proposalId} is still in flight.`);
-    }
-
     const activeLease = this.activeCreativeLease();
     if (activeLease && activeLease.leaseId !== creativeLeaseId) {
       throw new Error(`The artboard is leased to creative stage ${activeLease.leaseId}; this proposal is not its owner.`);
@@ -85,14 +87,15 @@ export class NorthstarArtboardActor {
       throw new Error(`Creative lease base ${activeLease.baseRevisionId ?? "none"} does not match candidate parent ${candidate.parentRevisionId ?? "none"}.`);
     }
 
-    const baseRevisionId = this.committed?.revisionId;
+    const committed = this.snapshot();
+    const baseRevisionId = committed?.revisionId;
     if (candidate.parentRevisionId !== baseRevisionId) {
       throw new Error(
         `Candidate parent ${candidate.parentRevisionId ?? "none"} does not match committed revision ${baseRevisionId ?? "none"}.`,
       );
     }
 
-    const committedSequence = latestMutation(this.committed)?.sequence ?? 0;
+    const committedSequence = latestMutation(committed)?.sequence ?? 0;
     const candidateMutation = latestMutation(candidate);
     if (candidateMutation && candidateMutation.sequence !== committedSequence + 1) {
       throw new Error(
@@ -112,7 +115,12 @@ export class NorthstarArtboardActor {
       },
       mutationId: candidateMutation?.mutationId,
     };
-    this.inFlight = proposal;
+    this.authority.stage({
+      proposalId,
+      baseRevisionId,
+      candidateRevisionId: proposal.candidate.revisionId,
+      value: proposal.candidate,
+    });
     return proposal;
   }
 
@@ -137,11 +145,20 @@ export class NorthstarArtboardActor {
       && acknowledgement.status === expectedStatus;
   }
 
+  markDispatched(proposal: NorthstarArtboardProposal): void {
+    if (this.authority.snapshot().staged?.proposalId !== proposal.proposalId) {
+      throw new Error("Proposal is no longer the active in-flight proposal.");
+    }
+    if (this.authority.snapshot().phase === "staging") {
+      this.authority.dispatched(proposal.proposalId);
+    }
+  }
+
   commit(
     proposal: NorthstarArtboardProposal,
     acknowledgement: NorthstarArtifactMutationAcknowledgement,
   ): NorthstarGeneratedCodeArtifactPackage {
-    if (this.inFlight?.proposalId !== proposal.proposalId) {
+    if (this.authority.snapshot().staged?.proposalId !== proposal.proposalId) {
       throw new Error("Proposal is no longer the active in-flight proposal.");
     }
     if (!this.matches(proposal, acknowledgement)) {
@@ -163,19 +180,32 @@ export class NorthstarArtboardActor {
     };
 
     delete committed.creativeLease;
-    this.committed = committed;
-    this.committedAck = acknowledgement;
-    this.inFlight = undefined;
+    this.markDispatched(proposal);
+    this.authority.commit({
+      proposalId: proposal.proposalId,
+      browserRevisionId: acknowledgement.revisionId,
+      accepted: committed,
+      receipt: acknowledgement,
+      detail: acknowledgement.reason,
+    });
     return committed;
   }
 
-  discard(proposal: NorthstarArtboardProposal): void {
-    if (this.inFlight?.proposalId === proposal.proposalId) this.inFlight = undefined;
+  discard(
+    proposal: NorthstarArtboardProposal,
+    acknowledgement?: NorthstarArtifactMutationAcknowledgement,
+  ): void {
+    if (this.authority.snapshot().staged?.proposalId !== proposal.proposalId) return;
+    this.authority.reject({
+      proposalId: proposal.proposalId,
+      browserRevisionId: acknowledgement?.browserRevisionId ?? acknowledgement?.baseRevisionId,
+      detail: acknowledgement?.reason,
+    });
   }
 
   publicationIsComplete(): boolean {
-    const committed = this.committed;
-    const acknowledgement = this.committedAck;
+    const committed = this.snapshot();
+    const acknowledgement = this.lastAcknowledgement();
     if (!committed || !acknowledgement) return false;
     return committed.publicationState === "verified"
       && committed.provisional === false

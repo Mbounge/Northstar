@@ -24,6 +24,7 @@ test("uses policy thresholds at action, acknowledgement, render, and recovery bo
   assert.equal(workspace.includes("NORTHSTAR_HEALTH_POLICY.action.timeoutMs"), true);
   assert.equal(workspace.includes("NORTHSTAR_HEALTH_POLICY.recovery.maxJournalAgeMs"), true);
   assert.equal(host.includes("NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs"), true);
-  assert.equal(runtime.includes("NORTHSTAR_HEALTH_POLICY.render.maxWidthGrowthRatio"), true);
+  assert.equal(runtime.includes("NORTHSTAR_HEALTH_POLICY.render.maxWidthGrowthRatio"), false);
+  assert.equal(runtime.includes("NORTHSTAR_HEALTH_POLICY.render.maxHeightGrowthRatio"), false);
   assert.equal(runtime.includes("NORTHSTAR_HEALTH_POLICY.render.requiredNodeIds"), true);
 });

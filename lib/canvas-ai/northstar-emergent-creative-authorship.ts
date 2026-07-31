@@ -12,8 +12,19 @@ import type {
   NorthstarArtifactViewingIntent,
   NorthstarCommittedSemanticNode,
 } from "@/lib/canvas-artifacts/types";
-import { buildNorthstarEmergentDesignBehaviorAddendum } from "@/lib/canvas-ai/northstar-emergent-design-intelligence";
-import { normalizeNorthstarViewingIntent } from "@/lib/canvas-ai/northstar-outer-canvas-presentation";
+import {
+  buildNorthstarEmergentDesignBehaviorAddendum,
+  NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA,
+  sanitizeNorthstarEmergentDesignIntelligence,
+  type NorthstarEmergentDesignIntelligence,
+  type NorthstarEmergentDesignIntelligenceDraft,
+} from "@/lib/canvas-ai/northstar-emergent-design-intelligence";
+import {
+  assessNorthstarStructuralNovelty,
+  northstarPremiumContractAttributes,
+  type NorthstarNoveltyReceipt,
+} from "@/lib/canvas-ai/northstar-premium-design-contract";
+import { normalizeNorthstarViewingIntent } from "@/lib/canvas-ai/northstar-viewing-intent";
 import type {
   NorthstarEvidenceRole,
   NorthstarObligationKey,
@@ -21,7 +32,7 @@ import type {
 } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
 
 export const NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION =
-  "northstar.emergent-creative-authorship.v3.3" as const;
+  "northstar.emergent-creative-authorship.v3.5" as const;
 
 type ModelAuthoredOperation = Exclude<
   NorthstarArtboardMutationOperation,
@@ -38,6 +49,8 @@ export interface NorthstarCreativeSourceEditDraft {
 }
 
 export interface NorthstarEmergentCreativeActDraft {
+  /** The problem-specific design contract authored in the same model response as its executable source. */
+  designIntelligence?: NorthstarEmergentDesignIntelligenceDraft;
   intention?: string;
   viewerUnderstanding?: string;
   whyThisMoveNow?: string;
@@ -45,7 +58,7 @@ export interface NorthstarEmergentCreativeActDraft {
   successCriteria?: string[];
   /** Model-owned declaration of how the complete preserved evidence should be experienced in the Northstar workspace. */
   viewingIntent?: Partial<NorthstarArtifactViewingIntent>;
-  /** Direct cumulative HTML/CSS/SVG/JavaScript edit of the retained private presentation source. */
+  /** Direct cumulative HTML/CSS/SVG/JavaScript edit of the browser-committed presentation source. */
   sourceEdit?: NorthstarCreativeSourceEditDraft;
   /** Meaning and cinema metadata for this source revision, not an implementation-owned design program. */
   stage?: {
@@ -83,6 +96,8 @@ export interface NorthstarEmergentCreativeCritique {
 }
 
 export interface NorthstarEmergentCreativeAct {
+  designIntelligence: NorthstarEmergentDesignIntelligence;
+  noveltyReceipt: NorthstarNoveltyReceipt;
   sourceFiles?: { targetId: string; html: string; css: string; javascript: string };
   intention: string;
   viewerUnderstanding: string;
@@ -123,6 +138,7 @@ export const NORTHSTAR_EMERGENT_CREATIVE_ACT_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   required: [
+    "designIntelligence",
     "intention",
     "viewerUnderstanding",
     "whyThisMoveNow",
@@ -135,6 +151,7 @@ export const NORTHSTAR_EMERGENT_CREATIVE_ACT_JSON_SCHEMA = {
     "constructionPlan",
   ],
   properties: {
+    designIntelligence: NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA,
     intention: { type: "string", minLength: 1, maxLength: 1800 },
     viewerUnderstanding: { type: "string", minLength: 1, maxLength: 1200 },
     whyThisMoveNow: { type: "string", minLength: 1, maxLength: 1200 },
@@ -432,6 +449,7 @@ function operationsFromSourceEdit(
   sourceEdit: NorthstarCreativeSourceEditDraft | undefined,
   viewingIntent: NorthstarArtifactViewingIntent,
   protectedEvidenceNodeIds: string[],
+  artboardAttributes: Record<string, string>,
   semanticSnapshot?: NorthstarCommittedSemanticNode[],
 ): NorthstarArtboardMutationOperation[] {
   if (!sourceEdit) return [];
@@ -502,6 +520,7 @@ function operationsFromSourceEdit(
       "data-ns-primary-node-ids": viewingIntent.primaryNodeIds.join(" "),
       "data-ns-supporting-node-ids": viewingIntent.supportingNodeIds.join(" "),
       "data-ns-preserve-all-evidence": "true",
+      ...artboardAttributes,
     },
   }, {
     op: "recompose-region",
@@ -531,15 +550,40 @@ export function sanitizeNorthstarEmergentCreativeAct(
     evidenceIdByNodeId?: ReadonlyMap<string, string> | Record<string, string>;
     protectedEvidenceNodeIds?: string[];
     semanticSnapshot?: NorthstarCommittedSemanticNode[];
+    diversityAnchor?: string;
+    groundedEvidenceIds?: string[];
+    recentCreativeSignatures?: readonly string[];
+    requireStructuralNovelty?: boolean;
   },
 ): NorthstarEmergentCreativeAct {
   if (!draft?.sourceEdit) throw new Error("The creative model did not return the required cumulative source revision.");
+  if (!draft?.designIntelligence) {
+    throw new Error("The creative model did not return the required design intelligence with its source revision.");
+  }
+  const designIntelligence = sanitizeNorthstarEmergentDesignIntelligence(
+    draft.designIntelligence,
+    {
+      diversityAnchor: cleanText(context?.diversityAnchor, 80),
+      groundedEvidenceIds: context?.groundedEvidenceIds ?? [],
+    },
+  );
+  const noveltyReceipt = assessNorthstarStructuralNovelty({
+    signature: designIntelligence.premiumPlan.noveltySignature,
+    recentSignatures: context?.recentCreativeSignatures ?? [],
+  });
+  // Novelty is a rendered-quality obligation, not an executable-source parser.
+  // Keep the receipt for browser review and subsequent refinement, but never
+  // suppress a safe cumulative source revision before the user can see it.
   const viewingIntent = normalizeNorthstarViewingIntent(draft.viewingIntent);
   const protectedEvidenceNodeIds = context?.protectedEvidenceNodeIds ?? [];
   const directSourceOperations = operationsFromSourceEdit(
     draft.sourceEdit,
     viewingIntent,
     protectedEvidenceNodeIds,
+    northstarPremiumContractAttributes(
+      designIntelligence.premiumPlan,
+      context?.recentCreativeSignatures ?? [],
+    ),
     context?.semanticSnapshot,
   );
   const rawOperations = [
@@ -583,6 +627,8 @@ export function sanitizeNorthstarEmergentCreativeAct(
   } : undefined;
 
   return {
+    designIntelligence,
+    noveltyReceipt,
     sourceFiles,
     intention: cleanText(draft.intention, 1800) || mutation.visualStrategy,
     viewerUnderstanding: cleanText(draft.viewerUnderstanding, 1200) || mutation.visibleChange,
@@ -748,7 +794,7 @@ ${input.designAddendum}
 ${buildNorthstarEmergentDesignBehaviorAddendum()}
 
 CREATIVE AUTHORITY
-- Invent the right visual artifact from the user request, current evidence, research, and exact rendered artboard. Form the governing idea inline and author the actual retained presentation source; there is no later template-selection call.
+- Invent the right visual artifact from the user request, current evidence, research, and exact rendered artboard. Return designIntelligence and the source that visibly executes it in this same response; there is no later template-selection or design-planning call.
 - There are no visual families, templates, archetypes, component recipes, prescribed module orders, or card systems to choose from.
 - Do not imitate a reference composition. Infer the shared level of taste, finish, clarity, restraint, evidence choreography, and originality, then create what this problem uniquely needs.
 - The inherited layout is disposable presentation scaffolding. Preserve truth, evidence identities, provenance, the permanent artboard root, and runtime safety—not the current screenshot rows, title placement, card language, module boundaries, or analytical furniture.
@@ -756,7 +802,7 @@ CREATIVE AUTHORITY
 - The permanent presentation node is a deliberately replaceable creative layer. You may set-html on presentation, introduce a new composition shell, then move real grounded evidence nodes into it. When replacing presentation, recreate the semantic anchors data-ns-node-id="synthesis" and data-ns-node-id="decision" somewhere meaningful inside the new composition so later reasoning and publication can continue. The evidence reservoir is source material, not the final layout; it remains a quiet native inspectable source ledger. Move the representative evidence needed for this visible stage into the presentation and leave unplaced grounded evidence safely inspectable for later stages; do not force the entire evidence corpus into one monolithic first commit.
 - Cards, panels, pills, borders, rounded boxes, and filled regions are never neutral defaults. Use a boundary only when the boundary itself clarifies grouping, proof, comparison, interaction, or meaning. Open surface, typography, evidence, lines, paths, scale, overlap, rhythm, and negative space are first-class design materials.
 - Low, Medium, and High share the same publication-quality floor. Thinking depth changes persistence, not the ambition or intelligence of the visual solution.
-- Work inside one bounded retained private source workspace. Edit HTML, CSS, SVG, semantic DOM movement, and safe JavaScript cumulatively until the smallest consequential stage is production-runtime safe. Commit that stage promptly; broader creative opportunities belong to the next visible stage so the user experiences the artboard evolving.
+- Work directly from the exact browser-committed source. Edit HTML, CSS, SVG, semantic DOM movement, and safe JavaScript cumulatively. Return the smallest consequential stage promptly: deterministic code normalizes and preflights it, then the mounted browser performs its only runtime execution and either commits atomically or restores the accepted revision. Broader creative opportunities belong to the next visible stage so the user experiences the artboard evolving.
 
 TRUTH AND EVIDENCE
 - Every factual claim, metric, screenshot, quotation, and conclusion must remain grounded in the supplied research and evidence.
@@ -781,6 +827,9 @@ EXECUTION
 - Decide the scope and structure of each meaningful stage yourself. The runtime will not require lanes, synthesis regions, decision regions, or any predefined communication reflow.
 - Quantitative graphics must use grounded values, honest units/scales, and traceable evidence. Qualitative graphics must be labeled as interpretation. You author the SVG, HTML, CSS, and interaction directly; no compiler generates or grades the visual form.
 - The authored HTML, CSS, SVG, JavaScript, and evidence choreography are the sole visual authority. Deterministic code may validate safety, truth, identity, and execution, but it may not reinterpret the design through a primitive system.
+- Give every required premium narrative beat one visible node whose data-ns-narrative-beat-id and data-ns-communication-role exactly match designIntelligence.premiumPlan. Give every required analytical intent one visible node whose data-ns-analysis-id matches and whose data-ns-source-ids lists the exact grounded evidence IDs. Mark at least one unmistakable focal node data-ns-visual-priority="hero" or "primary".
+- Structural novelty is mandatory across completed artboards, including repeated runs of the same prompt. Novelty means a materially different information topology, dominant geometry, reading path, medium combination, title integration, evidence treatment, and signature behavior—not merely new colors, copy, decoration, or reordered cards.
+- The premium contract is semantic, not a layout template. Invent the spatial form for this exact argument, while making every declared beat and analytical intent browser-verifiable.
 
 
 - Return constructionPlan as 2–12 meaningful perceptual beats. The browser and cinema layer own timing normalization, exact geometry, cancellation, and final settlement; you own the dramatic sequence and the meaning of each reveal. Coverage is a presentation aid, not a reason to reject a correct final scene.
@@ -793,7 +842,7 @@ OUTER-CANVAS VIEWING INTENT
 - Return viewingIntent for the exact Northstar workspace experience. Choose single-frame, zoom-and-inspect, or scrolling-artboard deliberately.
 - preserveAllEvidence must always be true. primaryNodeIds and supportingNodeIds describe your hierarchy; they do not authorize dropping, cropping, masking, or truncating any screen.
 - A single-frame revision must remain readable inside the stable existing outer Canvas object. A zoom-and-inspect revision must preserve a useful overview before detail inspection. A scrolling-artboard may extend vertically but must keep a stable readable width.
-- The private review will show both the intrinsic source and a premium Northstar workspace-fit preview. Correct the source when the actual fit contradicts your declared viewing intent.
+- The same mounted browser will validate intrinsic geometry and workspace fit behind an atomic accepted-revision shield. Correct the source when that measured fit contradicts your declared viewing intent; no separate private workspace exists.
 
 ARTBOARD SIZE — RUNTIME OWNERSHIP
 - You have no authority to resize the artboard, iframe, or Canvas object.
@@ -944,7 +993,7 @@ export function buildNorthstarAdaptiveCreativeContext(input: {
   acceptedCreativeActCount: number;
   requiredFirstActFlowNodeIds?: string[];
   priorCritique?: { critique: string; requiredChanges: string[] };
-  sourceWorkspace?: Record<string, unknown>;
+  sourceAuthorship?: Record<string, unknown>;
   runtimeReview?: unknown;
 }): string {
   return JSON.stringify({
@@ -976,7 +1025,7 @@ export function buildNorthstarAdaptiveCreativeContext(input: {
       instruction: "These are unordered observations about truth, communication, and browser health. They are not a required visual sequence and do not prescribe a layout or next move.",
     },
     adaptiveCreativeMemory: input.creativeMemory,
-    persistentSourceWorkspace: input.sourceWorkspace,
+    liveSourceAuthorship: input.sourceAuthorship,
     emergentDesignIntelligence: input.designIntelligence,
     acceptedCreativeActCount: input.acceptedCreativeActCount,
     firstCreativeActExecutionContract: input.acceptedCreativeActCount === 0
@@ -993,7 +1042,7 @@ export function buildNorthstarAdaptiveCreativeContext(input: {
     },
     previousRejectedOrWeakAttempt: input.priorCritique,
     instruction: [
-      "Re-observe the whole artifact and edit the retained private HTML/CSS/SVG/DOM workspace toward the smallest consequential stage worth committing now.",
+      "Re-observe the whole artifact and edit the exact browser-committed HTML/CSS/SVG/DOM source toward the smallest consequential stage worth committing now.",
       "Do not choose from or infer an implementation-owned visual family, template, composition recipe, or obligation sequence.",
       "You may continue, redirect, simplify, or substantially recompose prior work when the exact render and evidence justify it.",
       input.acceptedCreativeActCount === 0
@@ -1005,10 +1054,10 @@ export function buildNorthstarAdaptiveCreativeContext(input: {
       input.acceptedCreativeActCount > 0
         ? "When this stage could plausibly be the ending, resolve or remove working-only hypothesis chrome inside the authored scene itself. Publication will mark the exact accepted browser revision as verified; it will not run a separate cleanup mutation."
         : "The first stage may remain visibly exploratory while establishing a consequential evidence composition.",
-      input.sourceWorkspace && Boolean((input.sourceWorkspace as { hasAppliedFallback?: unknown }).hasAppliedFallback)
-        ? "Continue editing the retained cumulative source files instead of re-authoring from zero. Preserve every valid HTML, CSS, safe JavaScript interaction, SVG fragment, and grounded evidence move unless exact runtime feedback proves it wrong."
-        : "No private source revision exists yet; author the first executable source stage now.",
-      "A runtime-applied stage should be committed promptly. Leave broader hierarchy, synthesis, and polish opportunities for the next visible stage instead of hiding the entire creative evolution inside one long private call.",
+      input.sourceAuthorship
+        ? "Continue from the supplied canonical source files instead of reconstructing from memory. Preserve every valid HTML, CSS, safe JavaScript interaction, SVG fragment, and grounded evidence move unless exact browser feedback proves it wrong."
+        : "Author the first executable source stage from the current browser-committed document now.",
+      "A statically safe stage is dispatched immediately to the mounted browser. Leave broader hierarchy, synthesis, and polish opportunities for the next visible stage instead of hiding the creative evolution inside one long call.",
       "Choose any source structure that best communicates the result. No named region, lane, matrix, synthesis block, decision block, or placement grammar is required by the runtime.",
       "Use only evidence-supported language. Qualitative comparisons may interpret observed steps, but must not masquerade as measured conversion, retention, or drop-off data.",
     ].join(" "),

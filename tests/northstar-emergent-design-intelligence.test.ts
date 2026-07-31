@@ -46,6 +46,32 @@ function designDraft() {
       "Evidence is visibly unequal and connected to the argument.",
       "Repeated rectangular containers are not the primary design language.",
     ],
+    premiumPlan: {
+      noveltySignature: {
+        informationTopology: "two evidence constellations joined by one tension path",
+        dominantGeometry: "a continuous diagonal force line",
+        readingPath: "thesis through opposed proof clusters into a grounded resolution",
+        mediumCombination: "editorial typography, full evidence, and custom SVG",
+        titleIntegration: "the headline begins the force line",
+        evidenceTreatment: "turning points become anchors while complete proof remains inspectable",
+        signatureBehavior: "the tension path changes weight where trust and speed exchange dominance",
+      },
+      narrativeBeats: [
+        { id: "thesis", communicationRole: "thesis", purpose: "Frame the trade-off.", evidenceIds: [], visibleRealization: "A concise opening.", requiredAtPublication: true },
+        { id: "proof", communicationRole: "evidence", purpose: "Show exact proof.", evidenceIds: ["awin-1", "whop-1"], visibleRealization: "Opposed grounded evidence anchors.", requiredAtPublication: true },
+        { id: "resolution", communicationRole: "resolution", purpose: "Resolve the implication.", evidenceIds: [], visibleRealization: "A precise ending.", requiredAtPublication: true },
+      ],
+      analyticalIntents: [{
+        id: "tension-analysis",
+        question: "Where does each flow exchange speed for trust?",
+        form: "Qualitative tension map",
+        sourceEvidenceIds: ["awin-1", "whop-1"],
+        groundedClaim: "The observed onboarding steps place verification and activation at different moments.",
+        encoding: "qualitative",
+        requiredAtPublication: true,
+      }],
+      publicationOutcomes: ["Understand the trade-off", "Inspect the exact proof", "Reach a grounded conclusion"],
+    },
   };
 }
 
@@ -106,7 +132,7 @@ test("the design-intelligence instruction makes destructive recomposition and th
   assert.doesNotMatch(instruction, /editorial spread, cinematic storyboard/i);
 });
 
-test("a destructive presentation replacement must preserve semantic settlement anchors", () => {
+test("compiler-owned settlement anchors do not consume a creative rejection", () => {
   const issues = validateNorthstarFirstCreativeActAmbition({
     operationSummaries: [
       { op: "set-html", targetId: "presentation", introducedSemanticIds: ["visual-world"] },
@@ -117,5 +143,5 @@ test("a destructive presentation replacement must preserve semantic settlement a
     groundedEvidenceNodeIds: new Set(["evidence-awin-1"]),
     acceptedActCount: 0,
   });
-  assert.ok(issues.some((issue) => /synthesis, decision/i.test(issue)));
+  assert.deepEqual(issues, []);
 });

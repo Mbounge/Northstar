@@ -20,8 +20,8 @@ test("resumes from the last verified checkpoint", () => {
   assert.equal(source.includes("void sendMessage(prompt)"), true);
 });
 
-test("clears only healthy completed journals and preserves incomplete runs", () => {
-  assert.equal(source.includes("if (healthy)"), true);
+test("clears terminally completed journals and preserves interrupted runs", () => {
+  assert.equal(source.includes('eventName === "run.completed" || eventName === "run.completed_with_notes"'), true);
   assert.equal(source.includes("persistRunRecovery(null)"), true);
   assert.equal(source.includes('status: "interrupted"'), true);
 });

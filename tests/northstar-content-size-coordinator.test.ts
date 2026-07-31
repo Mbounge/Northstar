@@ -23,9 +23,14 @@ function size(overrides: Partial<CanvasCodeArtifactContentSize> = {}): CanvasCod
 
 test("normalization makes measured bounds the single intrinsic source of truth", () => {
   const normalized = normalizeNorthstarContentSize(size({
-    intrinsicWidth: 1200,
-    intrinsicHeight: 700,
+    intrinsicWidth: 9000,
+    intrinsicHeight: 7000,
     contentBounds: { minX: -20, minY: 0, maxX: 1580, maxY: 900 },
+    authoredContentBounds: { minX: -20, minY: 0, maxX: 1580, maxY: 900 },
+    measurementMode: "isolated-compiler",
+    geometryTransactionId: "artifact-1:revision-1:canonical",
+    compilerPassCount: 1,
+    geometryCompilerVersion: "northstar.isolated-geometry-compiler.v2",
   }));
   assert.ok(normalized);
   assert.equal(normalized?.intrinsicWidth, 1600);
@@ -69,20 +74,27 @@ test("a terminal receipt can promote the same buffered measurement sequence exac
   assert.equal(promoted?.settled, true);
 });
 
-test("implausible model-induced growth is rejected instead of expanding the outer Canvas", () => {
-  assert.equal(acceptNorthstarContentSize({
+test("arbitrarily large finite canonical geometry is accepted", () => {
+  const accepted = acceptNorthstarContentSize({
     candidate: size({
-      intrinsicWidth: 20_000,
-      intrinsicHeight: 900,
-      contentBounds: { minX: 0, minY: 0, maxX: 20_000, maxY: 900 },
+      intrinsicWidth: 250_000,
+      intrinsicHeight: 125_000,
+      contentBounds: { minX: 0, minY: 0, maxX: 250_000, maxY: 125_000 },
+      authoredContentBounds: { minX: 0, minY: 0, maxX: 250_000, maxY: 125_000 },
       sequence: 2,
+      measurementMode: "isolated-compiler",
+      geometryTransactionId: "artifact-1:revision-1:canonical",
+      compilerPassCount: 1,
+      geometryCompilerVersion: "northstar.isolated-geometry-compiler.v2",
     }),
     artifactId: "artifact-1",
     revisionId: "revision-1",
     previous: size({ sequence: 1 }),
     previousIntrinsicWidth: 1600,
     previousIntrinsicHeight: 900,
-  }), undefined);
+  });
+  assert.equal(accepted?.intrinsicWidth, 250_000);
+  assert.equal(accepted?.intrinsicHeight, 125_000);
 });
 
 test("iframe bounds and outer Canvas geometry are derived from the same normalized measurement", () => {
@@ -111,7 +123,7 @@ test("iframe bounds and outer Canvas geometry are derived from the same normaliz
 });
 
 
-test("model-source intrinsic geometry updates while the outer Canvas object stays stable", () => {
+test("model-source intrinsic geometry and the outer Canvas object follow the same terminal measurement", () => {
   const geometry = deriveNorthstarCanvasGeometry({
     size: size({
       intrinsicWidth: 1320,
@@ -131,8 +143,53 @@ test("model-source intrinsic geometry updates while the outer Canvas object stay
   });
   assert.equal(geometry.intrinsicWidth, 1320);
   assert.equal(geometry.intrinsicHeight, 540);
-  assert.equal(geometry.width, 1200);
-  assert.equal(geometry.height, 648);
+  assert.equal(geometry.width, 660);
+  assert.equal(geometry.height, 270);
   assert.equal(geometry.x, 100);
   assert.equal(geometry.y, 200);
+});
+
+test("a valid isolated compiler receipt may expand beyond the legacy single-reflow heuristic", () => {
+  const accepted = acceptNorthstarContentSize({
+    candidate: size({
+      revisionId: "revision-2",
+      mutationId: "mutation-2",
+      intrinsicWidth: 12_000,
+      intrinsicHeight: 6_000,
+      contentBounds: { minX: 0, minY: 0, maxX: 12_000, maxY: 6_000 },
+      authoredContentBounds: { minX: 0, minY: 0, maxX: 12_000, maxY: 6_000 },
+      sequence: 2,
+      measurementMode: "isolated-compiler",
+      geometryTransactionId: "artifact-1:revision-2:mutation-2",
+      compilerPassCount: 1,
+      geometryCompilerVersion: "northstar.isolated-geometry-compiler.v2",
+    }),
+    artifactId: "artifact-1",
+    revisionId: "revision-2",
+    previous: size({ revisionId: "revision-1", sequence: 1 }),
+    previousIntrinsicWidth: 1600,
+    previousIntrinsicHeight: 900,
+  });
+  assert.equal(accepted?.intrinsicWidth, 12_000);
+  assert.equal(accepted?.intrinsicHeight, 6_000);
+  assert.equal(accepted?.measurementMode, "isolated-compiler");
+});
+
+test("malformed isolated compiler receipts cannot resize the Canvas object", () => {
+  const base = {
+    measurementMode: "isolated-compiler" as const,
+    geometryTransactionId: "artifact-1:revision-2:mutation-2",
+    compilerPassCount: 1,
+    geometryCompilerVersion: "northstar.isolated-geometry-compiler.v2",
+    authoredContentBounds: { minX: 0, minY: 0, maxX: 1600, maxY: 900 },
+  };
+  assert.equal(normalizeNorthstarContentSize(size({ ...base, settled: false })), undefined);
+  assert.equal(normalizeNorthstarContentSize(size({ ...base, geometryTransactionId: "" })), undefined);
+  assert.equal(normalizeNorthstarContentSize(size({ ...base, compilerPassCount: 2 })), undefined);
+  assert.equal(normalizeNorthstarContentSize(size({ ...base, geometryCompilerVersion: "wrong" })), undefined);
+  assert.equal(normalizeNorthstarContentSize(size({ ...base, authoredContentBounds: undefined })), undefined);
+  assert.equal(normalizeNorthstarContentSize(size({
+    ...base,
+    authoredContentBounds: { minX: 0, minY: 0, maxX: 1700, maxY: 900 },
+  })), undefined);
 });

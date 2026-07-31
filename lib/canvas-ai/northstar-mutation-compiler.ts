@@ -2639,6 +2639,8 @@ export function compileNorthstarMutationDraft(input: {
   allowOptionalPrimitiveDegradation?: boolean;
   /** Creative source revisions bypass every legacy visual-primitive and layout-repair system. */
   creativeSourceAuthority?: boolean;
+  /** The linear design loop treats visual materiality as model critique, not a compiler veto. */
+  executionPolicy?: "legacy-gated" | "linear-design";
 }): NorthstarMutationCompilationResult {
   if (input.creativeSourceAuthority) {
     return compilationResult(
@@ -3136,7 +3138,9 @@ export function compileNorthstarMutationDraft(input: {
 
   const phaseMatch = `${initiallyRepaired.draft.title} ${initiallyRepaired.draft.description} ${initiallyRepaired.draft.visualStrategy}`.match(/\b(evidence|analysis|recommendation|refinement)\b/i);
   const inferredPhase = (phaseMatch?.[1]?.toLowerCase() ?? "analysis") as "evidence" | "analysis" | "recommendation" | "refinement";
-  const materialityIssues = validateNorthstarStageMateriality({ phase: inferredPhase, operations: filtered.operations });
+  const materialityIssues = input.executionPolicy === "linear-design"
+    ? []
+    : validateNorthstarStageMateriality({ phase: inferredPhase, operations: filtered.operations });
   if (materialityIssues.length > 0) {
     repairs.push(...materialityIssues.map((issue) => `MATERIALITY_UNDERSPECIFIED: ${issue}`));
     return compilationResult(

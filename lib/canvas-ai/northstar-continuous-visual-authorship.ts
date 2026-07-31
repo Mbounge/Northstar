@@ -107,6 +107,10 @@ export type NorthstarSceneAssessment = {
   synthesisPresent: boolean;
   contextualResolutionPresent: boolean;
   geometryVerified: boolean;
+  premiumDesignReady?: boolean;
+  premiumDesignFingerprint?: string;
+  premiumDesignBlockingReasons?: string[];
+  premiumDesignAdvisories?: string[];
   processSettled: boolean;
   publicationClean: boolean;
   duplicateSemanticIds: string[];
@@ -348,6 +352,10 @@ function reviewMetric(review: unknown, keys: string[]): number {
 function geometryPassed(acknowledgement: NorthstarArtifactMutationAcknowledgement | undefined): boolean {
   const review = acknowledgement?.review;
   if (!review || !acknowledgement?.size?.settled) return false;
+  const evidenceRegistry = acknowledgement.evidenceRegistry ?? review.evidenceRegistry;
+  const evidencePlacementResolved = !evidenceRegistry
+    || (evidenceRegistry.missingEvidenceIds.length === 0
+      && evidenceRegistry.unplacedEvidenceIds.length === 0);
   const overlapCount = reviewMetric(review, ["overlapElementCount", "overlapCount", "collisionCount"]);
   const protectedEvidenceOverlapCount = reviewMetric(review, ["protectedEvidenceOverlapCount", "protectedEvidenceCollisionCount"]);
   // Mutation acknowledgements report hardFailureCount as a before/after regression
@@ -359,7 +367,9 @@ function geometryPassed(acknowledgement: NorthstarArtifactMutationAcknowledgemen
     return acknowledgement.missingAssetUrls.length === 0
       && (review.missingRequiredAssetCount ?? 0) === 0
       && review.hardFailureCount === 0
-      && protectedEvidenceOverlapCount === 0;
+      && protectedEvidenceOverlapCount === 0
+      && (review.evidenceCollisionPairs?.length ?? 0) === 0
+      && evidencePlacementResolved;
   }
   return acknowledgement.missingAssetUrls.length === 0
     && review.missingImageCount === 0
@@ -367,6 +377,8 @@ function geometryPassed(acknowledgement: NorthstarArtifactMutationAcknowledgemen
     && review.clippedTextCount === 0
     && overlapCount === 0
     && protectedEvidenceOverlapCount === 0
+    && (review.evidenceCollisionPairs?.length ?? 0) === 0
+    && evidencePlacementResolved
     && !review.documentScrollRisk;
 }
 
@@ -476,6 +488,7 @@ export function assessNorthstarCanonicalScene(
   const publicationClean = !staleWorkingLanguage(document)
     && !/data-ns-publication-policy=["']working-only["']/i.test(html)
     && !/data-ns-current-focus=["']true["']|data-ns-thought-state=["'](?:active|evolving)["']/i.test(html);
+  const premiumDesignAudit = acknowledgement?.review?.premiumDesignAudit;
   const result: NorthstarSceneAssessment = {
     revisionId: artifact?.revisionId,
     publicationState: publication === "verified" ? "verified" : "working",
@@ -495,6 +508,12 @@ export function assessNorthstarCanonicalScene(
     synthesisPresent,
     contextualResolutionPresent,
     geometryVerified: geometryPassed(acknowledgement),
+    premiumDesignReady: modelSourceAuthority
+      ? premiumDesignAudit?.ready === true
+      : true,
+    premiumDesignFingerprint: premiumDesignAudit?.designFingerprint,
+    premiumDesignBlockingReasons: premiumDesignAudit?.blockingReasons ?? [],
+    premiumDesignAdvisories: premiumDesignAudit?.advisories ?? [],
     processSettled,
     publicationClean,
     duplicateSemanticIds,
@@ -515,6 +534,20 @@ export function assessNorthstarCanonicalScene(
     if (!result.contextualResolutionPresent) result.unresolved.push("the central question lacks a contextual resolution");
   }
   if (!result.geometryVerified) result.unresolved.push("browser geometry or asset verification is incomplete");
+  if (result.modelSourceAuthority && !result.premiumDesignReady) {
+    result.unresolved.push(...(
+      (result.premiumDesignBlockingReasons?.length ?? 0) > 0
+        ? result.premiumDesignBlockingReasons ?? []
+        : ["browser verification of the premium narrative contract is incomplete"]
+    ));
+  }
+  const evidenceRegistry = acknowledgement?.evidenceRegistry ?? acknowledgement?.review?.evidenceRegistry;
+  if (evidenceRegistry?.missingEvidenceIds.length) {
+    result.unresolved.push(`runtime evidence registry is missing: ${evidenceRegistry.missingEvidenceIds.slice(0, 8).join(", ")}`);
+  }
+  if (evidenceRegistry?.unplacedEvidenceIds.length) {
+    result.unresolved.push(`protected evidence still needs authored placement: ${evidenceRegistry.unplacedEvidenceIds.slice(0, 8).join(", ")}`);
+  }
   if (duplicateSemanticIds.length) result.unresolved.push(`duplicate semantic node ids remain: ${duplicateSemanticIds.join(", ")}`);
   if (result.publicationState === "verified" && !result.processSettled) result.unresolved.push("publication is marked verified while the process is not settled");
   if (result.publicationState === "verified" && !result.publicationClean) result.unresolved.push("publication cleanup remains incomplete");

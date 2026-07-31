@@ -24,13 +24,6 @@ export interface NorthstarSharedCreativeLease {
   expiresAt: number;
 }
 
-export type NorthstarRunTerminalState =
-  | "completed"
-  | "completed_with_notes"
-  | "incomplete"
-  | "cancelled"
-  | "infrastructure_failed";
-
 export type NorthstarRunCoordinationMessage =
   | {
       kind: "lease-response";
@@ -49,12 +42,6 @@ export type NorthstarRunCoordinationMessage =
       receipt: Record<string, unknown>;
       sentAt: number;
     };
-
-export interface NorthstarRunSettlementDecision {
-  terminalState: NorthstarRunTerminalState;
-  detail: string;
-  clientReceipt?: Record<string, unknown>;
-}
 
 export const NORTHSTAR_RUN_COORDINATION_EVENT = "northstar-run-coordination-v21";
 
@@ -174,111 +161,4 @@ export function prepareNorthstarRunCoordinationWait(input: {
     }
   });
   return { ready, result };
-}
-
-function cleanText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function booleanValue(record: Record<string, unknown> | undefined, key: string): boolean {
-  return record?.[key] === true;
-}
-
-function failedSettlementPredicates(input: {
-  expectedFinalRevisionId?: string;
-  client: Record<string, unknown>;
-}): string[] {
-  const failed: string[] = [];
-  if (input.expectedFinalRevisionId) {
-    if (cleanText(input.client.expectedFinalRevisionId) !== input.expectedFinalRevisionId) {
-      failed.push("expected revision echo");
-    }
-    if (cleanText(input.client.acknowledgedFinalRevisionId) !== input.expectedFinalRevisionId) {
-      failed.push("browser acknowledgement revision");
-    }
-    if (cleanText(input.client.materializedFinalRevisionId) !== input.expectedFinalRevisionId) {
-      failed.push("outer-canvas materialized revision");
-    }
-  }
-  const booleanPredicates: Array<[string, string]> = [
-    ["receivedFinal", "assistant final receipt"],
-    ["browserAcknowledged", "browser acknowledgement"],
-    ["outerCanvasMaterialized", "outer-canvas materialization"],
-    ["persistenceHealthy", "canonical persistence"],
-    ["pipelineSettled", "client action pipeline settlement"],
-    ["renderHealthy", "render health"],
-    ["noHardFailures", "hard-failure clearance"],
-    ["localOperationalHealthy", "local operational health"],
-  ];
-  for (const [key, label] of booleanPredicates) {
-    if (!booleanValue(input.client, key)) failed.push(label);
-  }
-  return Array.from(new Set(failed));
-}
-
-/** One pure terminal authority used only by the long-running server run. */
-export function decideNorthstarRunSettlement(input: {
-  expectedFinalRevisionId?: string;
-  serverState: Record<string, unknown>;
-  clientReceipt?: Record<string, unknown>;
-  receiptFailure?: string;
-}): NorthstarRunSettlementDecision {
-  const client = input.clientReceipt;
-  if (!client) {
-    const preserved = booleanValue(input.serverState, "operationalRevisionPreserved");
-    return {
-      terminalState: preserved ? "infrastructure_failed" : "incomplete",
-      detail: preserved
-        ? `The strongest browser-verified artboard was preserved, but the single run-owned terminal authority did not receive the required client settlement receipt.${input.receiptFailure ? ` ${input.receiptFailure}` : ""}`
-        : `The single run-owned terminal authority could not verify an operational final revision.${input.receiptFailure ? ` ${input.receiptFailure}` : ""}`,
-    };
-  }
-
-  const exactRevision = !input.expectedFinalRevisionId || (
-    cleanText(client.expectedFinalRevisionId) === input.expectedFinalRevisionId
-    && cleanText(client.acknowledgedFinalRevisionId) === input.expectedFinalRevisionId
-    && cleanText(client.materializedFinalRevisionId) === input.expectedFinalRevisionId
-  );
-  const operational = exactRevision
-    && booleanValue(client, "receivedFinal")
-    && booleanValue(client, "browserAcknowledged")
-    && booleanValue(client, "outerCanvasMaterialized")
-    && booleanValue(client, "persistenceHealthy")
-    && booleanValue(client, "pipelineSettled")
-    && booleanValue(client, "renderHealthy")
-    && booleanValue(client, "noHardFailures")
-    && booleanValue(client, "localOperationalHealthy");
-  const publicationRequired = booleanValue(input.serverState, "publicationRequired");
-  const publicationVerified = !publicationRequired || (
-    booleanValue(input.serverState, "publicationVerified")
-    && booleanValue(input.serverState, "communicativelyReady")
-    && booleanValue(input.serverState, "publicationClean")
-  );
-  const preserved = booleanValue(input.serverState, "operationalRevisionPreserved");
-
-  if (operational && publicationVerified) {
-    return {
-      terminalState: "completed",
-      detail: "The run-owned coordinator verified the exact browser-acknowledged, outer-canvas-materialized, persisted, communicatively resolved final revision.",
-      clientReceipt: client,
-    };
-  }
-  if (operational && preserved) {
-    return {
-      terminalState: "completed_with_notes",
-      detail: "The run-owned coordinator verified the strongest operational final revision; publication remains deferred only for advisory communication or source-cleanup work.",
-      clientReceipt: client,
-    };
-  }
-  const failedPredicates = failedSettlementPredicates({
-    expectedFinalRevisionId: input.expectedFinalRevisionId,
-    client,
-  });
-  return {
-    terminalState: "incomplete",
-    detail: failedPredicates.length > 0
-      ? `The run-owned terminal coordinator did not verify the exact end-to-end final revision contract. Failed checks: ${failedPredicates.join(", ")}.`
-      : "The run-owned terminal coordinator did not verify the exact end-to-end final revision contract.",
-    clientReceipt: client,
-  };
 }

@@ -63,6 +63,30 @@ test("legacy runtime overlay CSS is removed while authored CSS is retained", () 
   assert.equal(clean?.css, "main{display:grid}");
 });
 
+test("runtime-inherited geometry is restored instead of becoming authored source", () => {
+  const state = [
+    ["position", "", "", "absolute"],
+    ["left", "", "", "42px"],
+    ["width", "320px", "", "280px"],
+  ].reduce<Record<string, { priorValue: string; priorPriority: string; appliedValue: string }>>(
+    (result, [name, priorValue, priorPriority, appliedValue]) => {
+      result[name] = { priorValue, priorPriority, appliedValue };
+      return result;
+    },
+    {},
+  );
+  const encoded = JSON.stringify(state).replaceAll('"', "&quot;");
+  const clean = stripNorthstarRuntimeScaffolding(
+    `<figure data-ns-evidence-id="screen-1" data-ns-runtime-inherited-placement="true" data-ns-runtime-inherited-style="${encoded}" style="position: absolute !important; left: 42px !important; width: 280px !important; color: red"><img src="data:image/png;base64,x"></figure>`,
+  );
+
+  assert.doesNotMatch(clean, /data-ns-runtime-inherited/);
+  assert.doesNotMatch(clean, /left:\s*42px|position:\s*absolute/);
+  assert.match(clean, /width:\s*320px/);
+  assert.match(clean, /color:\s*red/);
+  assert.match(clean, /data-ns-evidence-id="screen-1"/);
+});
+
 test("the exact clean terminal geometry replaces provisional requested height", () => {
   const committed = materializeNorthstarBrowserCommit(artifact(), {
     artifactId: "artifact-1",

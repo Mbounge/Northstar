@@ -29,7 +29,9 @@ test("bounds diagnostic depth, collection size, and retained event count", () =>
 });
 
 test("exports a versioned sanitized payload contract", () => {
-  assert.equal(diagnosticsSource.includes('schema: "northstar.canvas-diagnostics.v2"'), true);
+  assert.equal(diagnosticsSource.includes('schema: "northstar.canvas-diagnostics.v3"'), true);
   assert.equal(diagnosticsSource.includes('payloadMode: "sanitized"'), true);
+  assert.equal(diagnosticsSource.includes('candidateSourcePayloadMode: "exact-browser-executable-source"'), true);
+  assert.equal(diagnosticsSource.includes("candidateSourceArchives:"), true);
   assert.equal(diagnosticsSource.includes("sanitization: stats"), true);
 });

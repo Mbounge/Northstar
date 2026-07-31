@@ -10,14 +10,14 @@ const source = fs.readFileSync(
 
 test("settles live artifact actions from the matching runtime lifecycle verdict", () => {
   assert.equal(source.includes("waitForCanvasActionLifecycleSettlement"), true);
-  assert.equal(source.includes('candidate.proposalId === proposalId'), true);
+  assert.equal(source.includes('candidate.proposalId === identity.proposalId'), true);
   assert.equal(source.includes('settlement.kind === "rejected"'), true);
   assert.equal(source.includes('reasonCode: "RUNTIME_REVISION_REJECTED"'), true);
-  assert.equal(source.includes('reasonCode: "RUNTIME_SETTLEMENT_TIMEOUT"'), true);
+  assert.equal(source.includes(': "RUNTIME_SETTLEMENT_TIMEOUT"'), true);
 });
 
-test("does not report verified-state restoration as semantic success", () => {
-  assert.equal(source.includes('action.stepId.startsWith("restore-verified-artboard-")'), true);
-  assert.equal(source.includes('reasonCode: "VERIFIED_STATE_RESTORED"'), true);
-  assert.equal(source.includes("The rejected semantic obligation remains unresolved."), true);
+test("does not use restoration actions as candidate settlement", () => {
+  assert.equal(source.includes('action.stepId.startsWith("restore-verified-artboard-")'), false);
+  assert.equal(source.includes('reasonCode: "VERIFIED_STATE_RESTORED"'), false);
+  assert.equal(source.includes("pendingArtifactCandidatesRef"), true);
 });

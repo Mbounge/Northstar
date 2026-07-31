@@ -4,6 +4,12 @@ import {
   NORTHSTAR_PRESENTATION_QUALITY_PROTOCOL,
   NORTHSTAR_SURFACE_FIRST_EDITORIAL_PROTOCOL,
 } from "@/lib/canvas-ai/northstar-design-intelligence";
+import {
+  NORTHSTAR_PREMIUM_DESIGN_PLAN_JSON_SCHEMA,
+  sanitizeNorthstarPremiumDesignPlan,
+  type NorthstarPremiumDesignPlan,
+  type NorthstarPremiumDesignPlanDraft,
+} from "@/lib/canvas-ai/northstar-premium-design-contract";
 
 
 export function buildNorthstarEmergentDesignBehaviorAddendum(): string {
@@ -33,7 +39,7 @@ ${NORTHSTAR_SURFACE_FIRST_EDITORIAL_PROTOCOL}
 }
 
 export const NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_VERSION =
-  "northstar.emergent-design-intelligence.v2" as const;
+  "northstar.emergent-design-intelligence.v3" as const;
 
 export interface NorthstarEmergentEvidenceChoreographyDraft {
   evidenceId?: string;
@@ -62,6 +68,7 @@ export interface NorthstarEmergentDesignIntelligenceDraft {
   precisionAndLegibilityStrategy?: string;
   visualizationIntegrityPlan?: string;
   publicationStandard?: string[];
+  premiumPlan?: NorthstarPremiumDesignPlanDraft;
 }
 
 export interface NorthstarEmergentEvidenceChoreography {
@@ -93,6 +100,8 @@ export interface NorthstarEmergentDesignIntelligence {
   precisionAndLegibilityStrategy: string;
   visualizationIntegrityPlan: string;
   publicationStandard: string[];
+  premiumPlan: NorthstarPremiumDesignPlan;
+  normalizationRepairs: string[];
 }
 
 export const NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA = {
@@ -118,6 +127,7 @@ export const NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA = {
     "precisionAndLegibilityStrategy",
     "visualizationIntegrityPlan",
     "publicationStandard",
+    "premiumPlan",
   ],
   properties: {
     viewerTransformation: { type: "string", minLength: 1, maxLength: 1600 },
@@ -127,7 +137,7 @@ export const NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA = {
     spatialLogic: { type: "string", minLength: 1, maxLength: 1800 },
     evidenceChoreography: {
       type: "array",
-      minItems: 1,
+      minItems: 0,
       maxItems: 48,
       items: {
         type: "object",
@@ -159,6 +169,7 @@ export const NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA = {
       maxItems: 16,
       items: { type: "string", minLength: 1, maxLength: 600 },
     },
+    premiumPlan: NORTHSTAR_PREMIUM_DESIGN_PLAN_JSON_SCHEMA,
   },
 } as const;
 
@@ -194,7 +205,8 @@ export function sanitizeNorthstarEmergentDesignIntelligence(
   },
 ): NorthstarEmergentDesignIntelligence {
   const knownEvidence = new Set(input.groundedEvidenceIds);
-  const choreography = Array.isArray(value.evidenceChoreography)
+  const normalizationRepairs: string[] = [];
+  let choreography = Array.isArray(value.evidenceChoreography)
     ? value.evidenceChoreography
         .map((entry) => ({
           evidenceId: cleanText(entry?.evidenceId, 220),
@@ -211,60 +223,88 @@ export function sanitizeNorthstarEmergentDesignIntelligence(
         )
         .slice(0, 48)
     : [];
+  if (choreography.length === 0 && input.groundedEvidenceIds.length > 0) {
+    choreography = input.groundedEvidenceIds.slice(0, 48).map((evidenceId, index) => ({
+      evidenceId,
+      roleInArgument: index === 0 ? "primary grounded proof" : "supporting grounded proof",
+      visibleTreatment: "Keep this evidence complete, visible, and available for source-authored hierarchy and annotation.",
+      reason: "The runtime inherited the evidence obligation after the model's descriptive reference could not be resolved.",
+    }));
+    normalizationRepairs.push(
+      "Inherited canonical grounded evidence choreography instead of rejecting executable source authorship.",
+    );
+  }
+
+  const fallbackText: Record<string, string> = {
+    viewerTransformation: "Make the answer immediately understandable through a materially transformed evidence-backed composition.",
+    editorialArgument: "Turn the grounded evidence into one visible argument that directly resolves the user’s request.",
+    threeSecondRead: "The governing evidence-backed conclusion is visible before detailed inspection.",
+    governingVisualIdea: "Use one coherent, problem-specific spatial idea to transform the inherited evidence presentation.",
+    spatialLogic: "Create a deliberate reading path from thesis through unequal evidence and analysis to resolution.",
+    emotionalRegister: "Premium, confident, precise, and highly legible.",
+    signatureMove: "Use one source-authored relationship or spatial gesture that clarifies the exact argument.",
+    existingStructureVerdict: "Preserve grounded truth and evidence identity while treating the inherited presentation as disposable.",
+    destructiveRecompositionIntent: "Materially recompose the presentation and evidence hierarchy without removing inspectable proof.",
+    surfaceAndContainerStrategy: "Use the open surface and introduce boundaries only when they communicate real grouping or meaning.",
+    antiGenericStrategy: "Avoid generic dashboard furniture and make the exact evidence determine the composition.",
+    divergenceFromRecentWork: "Vary information topology, dominant geometry, reading path, and evidence treatment from recent work.",
+    firstCreativeAct: "Replace the inherited presentation layer and materially transform evidence hierarchy in one atomic source revision.",
+    mediumAndRepresentationStrategy: "Choose HTML, CSS, SVG, imagery, and analytical graphics according to the grounded communication need.",
+    sceneExecutionPlan: "Author one executable whole-scene revision with a clear thesis, grounded proof, visible analysis, and resolution.",
+    precisionAndLegibilityStrategy: "Keep text readable, relationships anchored, evidence complete, and geometry collision-free at rendered scale.",
+    visualizationIntegrityPlan: "Use only grounded values and identities, with explicit labels and provenance for every analytical encoding.",
+  };
+  const requiredText = (name: string, raw: unknown, maximum: number): string => {
+    const cleaned = cleanText(raw, maximum);
+    if (cleaned) return cleaned;
+    normalizationRepairs.push(`Inherited the ${name} execution obligation.`);
+    return fallbackText[name].slice(0, maximum);
+  };
+  let publicationStandard = cleanTextList(value.publicationStandard, 16, 600);
+  const fallbackPublicationStandard = [
+    "The first accepted revision materially changes the presentation and evidence hierarchy.",
+    "The rendered composition is immediately understandable, readable, and collision-free.",
+    "Every material conclusion remains traceable to complete grounded evidence.",
+  ];
+  if (publicationStandard.length < 3) {
+    publicationStandard = Array.from(new Set([
+      ...publicationStandard,
+      ...fallbackPublicationStandard,
+    ])).slice(0, 16);
+    normalizationRepairs.push(
+      "Completed the minimum publication standard instead of rejecting executable source authorship.",
+    );
+  }
 
   const result: NorthstarEmergentDesignIntelligence = {
     version: NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_VERSION,
     diversityAnchor: cleanText(input.diversityAnchor, 80),
-    viewerTransformation: cleanText(value.viewerTransformation, 1600),
-    editorialArgument: cleanText(value.editorialArgument, 1600),
-    threeSecondRead: cleanText(value.threeSecondRead, 800),
-    governingVisualIdea: cleanText(value.governingVisualIdea, 1800),
-    spatialLogic: cleanText(value.spatialLogic, 1800),
+    viewerTransformation: requiredText("viewerTransformation", value.viewerTransformation, 1600),
+    editorialArgument: requiredText("editorialArgument", value.editorialArgument, 1600),
+    threeSecondRead: requiredText("threeSecondRead", value.threeSecondRead, 800),
+    governingVisualIdea: requiredText("governingVisualIdea", value.governingVisualIdea, 1800),
+    spatialLogic: requiredText("spatialLogic", value.spatialLogic, 1800),
     evidenceChoreography: choreography,
-    emotionalRegister: cleanText(value.emotionalRegister, 900),
-    signatureMove: cleanText(value.signatureMove, 1600),
-    existingStructureVerdict: cleanText(value.existingStructureVerdict, 1600),
-    destructiveRecompositionIntent: cleanText(value.destructiveRecompositionIntent, 1800),
-    surfaceAndContainerStrategy: cleanText(value.surfaceAndContainerStrategy, 1600),
-    antiGenericStrategy: cleanText(value.antiGenericStrategy, 1600),
-    divergenceFromRecentWork: cleanText(value.divergenceFromRecentWork, 1600),
-    firstCreativeAct: cleanText(value.firstCreativeAct, 1800),
-    mediumAndRepresentationStrategy: cleanText(value.mediumAndRepresentationStrategy, 1800),
-    sceneExecutionPlan: cleanText(value.sceneExecutionPlan, 2200),
-    precisionAndLegibilityStrategy: cleanText(value.precisionAndLegibilityStrategy, 1800),
-    visualizationIntegrityPlan: cleanText(value.visualizationIntegrityPlan, 1800),
-    publicationStandard: cleanTextList(value.publicationStandard, 16, 600),
+    emotionalRegister: requiredText("emotionalRegister", value.emotionalRegister, 900),
+    signatureMove: requiredText("signatureMove", value.signatureMove, 1600),
+    existingStructureVerdict: requiredText("existingStructureVerdict", value.existingStructureVerdict, 1600),
+    destructiveRecompositionIntent: requiredText("destructiveRecompositionIntent", value.destructiveRecompositionIntent, 1800),
+    surfaceAndContainerStrategy: requiredText("surfaceAndContainerStrategy", value.surfaceAndContainerStrategy, 1600),
+    antiGenericStrategy: requiredText("antiGenericStrategy", value.antiGenericStrategy, 1600),
+    divergenceFromRecentWork: requiredText("divergenceFromRecentWork", value.divergenceFromRecentWork, 1600),
+    firstCreativeAct: requiredText("firstCreativeAct", value.firstCreativeAct, 1800),
+    mediumAndRepresentationStrategy: requiredText("mediumAndRepresentationStrategy", value.mediumAndRepresentationStrategy, 1800),
+    sceneExecutionPlan: requiredText("sceneExecutionPlan", value.sceneExecutionPlan, 2200),
+    precisionAndLegibilityStrategy: requiredText("precisionAndLegibilityStrategy", value.precisionAndLegibilityStrategy, 1800),
+    visualizationIntegrityPlan: requiredText("visualizationIntegrityPlan", value.visualizationIntegrityPlan, 1800),
+    publicationStandard,
+    premiumPlan: sanitizeNorthstarPremiumDesignPlan(value.premiumPlan, {
+      groundedEvidenceIds: input.groundedEvidenceIds,
+      diversityAnchor: input.diversityAnchor,
+    }),
+    normalizationRepairs,
   };
 
-  const requiredText: Array<[string, string]> = [
-    ["viewerTransformation", result.viewerTransformation],
-    ["editorialArgument", result.editorialArgument],
-    ["threeSecondRead", result.threeSecondRead],
-    ["governingVisualIdea", result.governingVisualIdea],
-    ["spatialLogic", result.spatialLogic],
-    ["emotionalRegister", result.emotionalRegister],
-    ["signatureMove", result.signatureMove],
-    ["existingStructureVerdict", result.existingStructureVerdict],
-    ["destructiveRecompositionIntent", result.destructiveRecompositionIntent],
-    ["surfaceAndContainerStrategy", result.surfaceAndContainerStrategy],
-    ["antiGenericStrategy", result.antiGenericStrategy],
-    ["divergenceFromRecentWork", result.divergenceFromRecentWork],
-    ["firstCreativeAct", result.firstCreativeAct],
-    ["mediumAndRepresentationStrategy", result.mediumAndRepresentationStrategy],
-    ["sceneExecutionPlan", result.sceneExecutionPlan],
-    ["precisionAndLegibilityStrategy", result.precisionAndLegibilityStrategy],
-    ["visualizationIntegrityPlan", result.visualizationIntegrityPlan],
-  ];
-  const missing = requiredText.filter(([, text]) => !text).map(([name]) => name);
-  if (missing.length > 0) {
-    throw new Error(`The emergent design intelligence is incomplete: ${missing.join(", ")}.`);
-  }
-  if (result.evidenceChoreography.length === 0 && input.groundedEvidenceIds.length > 0) {
-    throw new Error("The emergent design intelligence did not choreograph any real grounded evidence.");
-  }
-  if (result.publicationStandard.length < 3) {
-    throw new Error("The emergent design intelligence must define a meaningful publication standard.");
-  }
   return result;
 }
 
@@ -287,6 +327,9 @@ NON-NEGOTIABLE CREATIVE CONTRACT
 - Do not describe a style adjective as the governing visual idea. The idea must have spatial and evidentiary consequences.
 - Do not hide behind prose. The editorial argument must become perceptible through geometry, scale, sequence, rhythm, relationships, evidence treatment, and composition.
 - The first creative act must materially recompose the presentation and evidence choreography rather than add another explanatory box to the inherited board.
+- Return a premiumPlan that turns the argument into executable narrative beats, grounded analytical intents, publication outcomes, and a structural novelty signature. This is not a template: it is the exact communication contract for this one artifact.
+- Every required narrative beat must be realized by a visible node with matching data-ns-narrative-beat-id and data-ns-communication-role attributes. Every required analysis must have a visible matching data-ns-analysis-id and exact grounded source identities.
+- The novelty signature must describe information topology, dominant geometry, reading path, medium combination, title integration, evidence treatment, and signature behavior. Repeated prompts must not repeat a recent structural signature.
 - Do not request or set artboard dimensions. The runtime owns content-derived sizing.
 
 Return only the required JSON object.
@@ -344,6 +387,9 @@ export function buildNorthstarEmergentDesignIntelligenceContext(input: {
       "Describe an executable whole-scene plan that makes the governing idea visible rather than merely naming it in prose.",
       "Describe how annotations, connectors, chart encodings, labels, crops, and evidence relationships will remain precise and legible at the rendered scale. Name whether each analytical primitive belongs in a caption lane, inter-row lane, margin lane, or browser-routed external relationship.",
       "For every proposed analytical primitive, name its exact semantic contract: charts and sparklines need grounded source node IDs plus encoding/provenance; annotations need exact anchor node IDs; relationships need exact source and target node IDs plus typed meaning and route metadata. Do not promise a primitive that cannot be authored in the same executable act.",
+      "Define premiumPlan as a complete evidence-to-narrative architecture. It must include thesis, evidence, and resolution beats, plus any problem-specific comparison, analysis, recommendation, risk, next-step, or provenance beats the viewer needs.",
+      "Use data-ns-narrative-beat-id, data-ns-communication-role, data-ns-analysis-id, and data-ns-visual-priority in the authored source so the mounted browser can verify that the declared narrative exists in the rendered pixels.",
+      "Treat the recent structural signatures as hard novelty pressure. Change the information topology, dominant geometry, reading path, medium combination, evidence treatment, title integration, and signature behavior materially; color or component rearrangement is not novelty.",
       "When quantitative encodings are useful, specify how values, scales, labels, and provenance remain truthful; otherwise do not add a chart merely to look designed. Qualitative friction or confidence graphics must be labeled interpretive and tied to exact observed steps.",
       "Do not infer conversion, retention, drop-off, revenue, or causal business outcomes from interface screenshots alone. Phrase unsupported outcome claims as open hypotheses or omit them.",
       "The executable scene plan must reserve normal-flow space for analytical graphics and for any synthesis or decision regions that expand in the same act.",

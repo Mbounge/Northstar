@@ -14,7 +14,7 @@ test("legacy creative audit warnings do not become fatal render failures", () =>
 
 test("completion gates only on fatal operational render failures", () => {
   assert.equal(workspace.includes("fatalRenderHealthFailures.length === 0"), true);
-  assert.equal(workspace.includes("renderHealthWarningCount: renderHealthWarnings.length"), true);
+  assert.equal(workspace.includes("missingRenderHealthRevisions.length === 0"), true);
   assert.equal(workspace.includes("latestRenderHealthByRevision"), true);
 });
 

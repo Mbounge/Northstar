@@ -93,6 +93,10 @@ export interface NorthstarCodeArtifactGenerationInput {
     runtimeReview?: CanvasCodeArtifactRuntimeReview;
     preferredWidth?: number;
     preferredHeight?: number;
+    /** Authored containing-block dimensions, independent of measured outer geometry. */
+    layoutBaseWidth?: number;
+    layoutBaseHeight?: number;
+    intrinsicBounds?: NorthstarGeneratedCodeArtifactPackage["intrinsicBounds"];
     dataBundle?: CanvasCodeArtifactDataBundle;
     publicationState?: "working" | "verified";
   };
@@ -352,8 +356,8 @@ export const NORTHSTAR_CODE_ARTIFACT_JSON_SCHEMA = {
     title: { type: "string", minLength: 1, maxLength: 180 },
     description: { type: "string", minLength: 1, maxLength: 500 },
     visualStrategy: { type: "string", minLength: 1, maxLength: 1600 },
-    preferredWidth: { type: "integer", minimum: 1080, maximum: 12000 },
-    preferredHeight: { type: "integer", minimum: 760, maximum: 12000 },
+    preferredWidth: { type: "integer", minimum: 1 },
+    preferredHeight: { type: "integer", minimum: 1 },
     stages: {
       type: "array",
       minItems: 4,
@@ -1146,18 +1150,17 @@ export function finalizeNorthstarCodeArtifactPackage(
     const required = outerPadding + identityRail + flow.requiredScreenshotIds.length * screenWidth + Math.max(0, flow.requiredScreenshotIds.length - 1) * gap;
     return Math.max(largest, required);
   }, 0);
-  const previousWidth = Math.max(0, input.previousArtifact?.preferredWidth ?? 0);
-  const previousHeight = Math.max(0, input.previousArtifact?.preferredHeight ?? 0);
+  // The prior measured outer artboard is intentionally absent from this solve.
+  // A revision owns its authored containing block; the isolated compiler later
+  // derives the unbounded outer geometry without feeding that result back here.
   const preferredWidth = Math.max(
     wideEvidenceSurface ? 1680 : 1200,
-    previousWidth,
-    Math.min(12000, Math.round(draft.preferredWidth || (wideEvidenceSurface ? 1680 : 1600))),
-    Math.min(12000, horizontalFlowWidth),
+    Math.max(1, Math.round(draft.preferredWidth || input.previousArtifact?.layoutBaseWidth || (wideEvidenceSurface ? 1680 : 1600))),
+    horizontalFlowWidth,
   );
   const preferredHeight = Math.max(
     wideEvidenceSurface ? 945 : 760,
-    previousHeight,
-    Math.min(12000, Math.round(draft.preferredHeight || (wideEvidenceSurface ? 1280 : 1000))),
+    Math.max(1, Math.round(draft.preferredHeight || input.previousArtifact?.layoutBaseHeight || (wideEvidenceSurface ? 1280 : 1000))),
   );
   const document = normalizedDocument(draft.document, input);
   const issues = validateWebArtifactDocument(document, input);
@@ -1213,9 +1216,9 @@ export function finalizeNorthstarCodeArtifactPackage(
       document: input.previousArtifact.document,
       preferredWidth: input.previousArtifact.preferredWidth ?? candidate.preferredWidth,
       preferredHeight: input.previousArtifact.preferredHeight ?? candidate.preferredHeight,
-      layoutBaseWidth: input.previousArtifact.preferredWidth ?? candidate.layoutBaseWidth,
-      layoutBaseHeight: input.previousArtifact.preferredHeight ?? candidate.layoutBaseHeight,
-      intrinsicBounds: { minX: 0, minY: 0, maxX: input.previousArtifact.preferredWidth ?? candidate.preferredWidth, maxY: input.previousArtifact.preferredHeight ?? candidate.preferredHeight },
+      layoutBaseWidth: input.previousArtifact.layoutBaseWidth ?? input.previousArtifact.preferredWidth ?? candidate.layoutBaseWidth,
+      layoutBaseHeight: input.previousArtifact.layoutBaseHeight ?? input.previousArtifact.preferredHeight ?? candidate.layoutBaseHeight,
+      intrinsicBounds: input.previousArtifact.intrinsicBounds ?? { minX: 0, minY: 0, maxX: input.previousArtifact.preferredWidth ?? candidate.preferredWidth, maxY: input.previousArtifact.preferredHeight ?? candidate.preferredHeight },
       dataBundle: input.previousArtifact.dataBundle ?? input.dataBundle,
       publicationState: input.previousArtifact.publicationState ?? "working",
     } satisfies NorthstarGeneratedCodeArtifactPackage;
@@ -1302,8 +1305,8 @@ export function createNorthstarConceptStudyPackage(input: {
     userRequest: input.objective,
     dataBundle: input.dataBundle,
   });
-  const width = Math.max(960, Math.min(12000, Math.round(study.preferredWidth)));
-  const height = Math.max(600, Math.min(12000, Math.round(study.preferredHeight)));
+  const width = Math.max(960, Math.round(study.preferredWidth));
+  const height = Math.max(600, Math.round(study.preferredHeight));
   const fingerprint = createHash("sha256").update(`${document.html}\n${document.css}`).digest("hex").slice(0, 14);
   return {
     schema: NORTHSTAR_GENERATED_CODE_ARTIFACT_SCHEMA,
@@ -1386,13 +1389,13 @@ function estimateNorthstarFlowGeometry(dataBundle: CanvasCodeArtifactDataBundle)
     return 180 + 26 + screenWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, screenWidths.length - 1) * 20;
   });
   const contentWidth = Math.max(1120, ...rowWidths);
-  const width = Math.min(12000, Math.max(1480, contentWidth + 104));
+  const width = Math.max(1480, contentWidth + 104);
   const headerHeight = 250;
   const rowHeight = 310;
   const synthesisReserve = dataBundle.apps.length > 1 || dataBundle.flows.length > 1 ? 210 : 120;
   const decisionReserve = dataBundle.decisions.length > 0 ? 150 : 96;
   const analysisReserve = 120 + synthesisReserve + decisionReserve;
-  const height = Math.min(12000, Math.max(920, headerHeight + Math.max(1, flows.length) * rowHeight + analysisReserve));
+  const height = Math.max(920, headerHeight + Math.max(1, flows.length) * rowHeight + analysisReserve);
   return { width, height };
 }
 

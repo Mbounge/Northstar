@@ -5,7 +5,7 @@ import type {
   NorthstarSceneAssessment,
 } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
 import { NorthstarCreativeJournal } from "@/lib/canvas-ai/northstar-creative-journal";
-import { decideNorthstarCreativeConvergence } from "@/lib/canvas-ai/northstar-creative-convergence";
+import { decideNorthstarCreativeConvergence } from "@/lib/canvas-ai/northstar-lifecycle-authority";
 import type { NorthstarIndependentCreativeReview } from "@/lib/canvas-ai/northstar-independent-creative-review";
 import type { NorthstarCreativeClosureAdjudication } from "@/lib/canvas-ai/northstar-creative-closure-adjudication";
 
@@ -107,7 +107,7 @@ export interface NorthstarAdaptiveContinuationDecision {
   readyForPublication: boolean;
   settleWithNotes: boolean;
   reason: string;
-  reasonCode: import("@/lib/canvas-ai/northstar-creative-convergence").NorthstarCreativeConvergenceReasonCode;
+  reasonCode: import("@/lib/canvas-ai/northstar-lifecycle-authority").NorthstarCreativeConvergenceReasonCode;
   readiness: NorthstarAdaptiveReadiness;
   knownLimitations: string[];
   authorRequestedContinuation?: boolean;
@@ -126,12 +126,12 @@ export function northstarAdaptiveCreativeBudget(
       maximumOptionalConsecutiveRejectionsAfterAccepted: 2,
       maximumRepeatedFailureFingerprints: 2,
       maximumElapsedMs: 6 * 60_000,
-      authoringTimeoutMs: 48_000,
-      critiqueTimeoutMs: 32_000,
-      authoringOutputTokens: 9_000,
-      critiqueOutputTokens: 2_800,
-      independentReviewTimeoutMs: 30_000,
-      independentReviewOutputTokens: 2_400,
+      authoringTimeoutMs: 95_000,
+      critiqueTimeoutMs: 60_000,
+      authoringOutputTokens: 13_000,
+      critiqueOutputTokens: 5_500,
+      independentReviewTimeoutMs: 62_000,
+      independentReviewOutputTokens: 4_800,
       independentReviewTemperature: 0.46,
       authoringTemperature: 0.82,
     };
@@ -163,12 +163,12 @@ export function northstarAdaptiveCreativeBudget(
     maximumOptionalConsecutiveRejectionsAfterAccepted: 3,
     maximumRepeatedFailureFingerprints: 2,
     maximumElapsedMs: 8 * 60_000,
-    authoringTimeoutMs: 72_000,
-    critiqueTimeoutMs: 46_000,
-    authoringOutputTokens: 10_500,
-    critiqueOutputTokens: 4_400,
-    independentReviewTimeoutMs: 46_000,
-    independentReviewOutputTokens: 3_600,
+    authoringTimeoutMs: 95_000,
+    critiqueTimeoutMs: 60_000,
+    authoringOutputTokens: 13_000,
+    critiqueOutputTokens: 5_500,
+    independentReviewTimeoutMs: 62_000,
+    independentReviewOutputTokens: 4_800,
     independentReviewTemperature: 0.52,
     authoringTemperature: 0.89,
   };
@@ -203,11 +203,20 @@ export function assessNorthstarAdaptiveReadiness(
     if (!assessment.evidenceHierarchyPresent) {
       advisoryObservations.push("The model may still strengthen evidence hierarchy, but no runtime-owned composition grammar will be imposed.");
     }
+    if (!assessment.premiumDesignReady) {
+      advisoryObservations.push(...(
+        (assessment.premiumDesignBlockingReasons?.length ?? 0) > 0
+          ? assessment.premiumDesignBlockingReasons ?? []
+          : ["The browser has not verified the model-authored premium narrative contract."]
+      ));
+    }
+    advisoryObservations.push(...(assessment.premiumDesignAdvisories ?? []));
     return {
       operationallyReady: blockingObservations.length === 0,
       communicativelyReady: blockingObservations.length === 0
         && assessment.visualThesisPresent
-        && assessment.groundedEvidencePresent,
+        && assessment.groundedEvidencePresent
+        && assessment.premiumDesignReady === true,
       blockingObservations,
       advisoryObservations,
     };

@@ -290,6 +290,13 @@ export interface NorthstarArtboardMutationBatch {
   /** Optional stronger movement and resize requirements for compositional design stages. */
   minimumMovedNodes?: number;
   minimumResizedNodes?: number;
+  /**
+   * `linear-design` means the browser is an execution instrument, not a
+   * creative approval authority. It may roll back only an unusable or
+   * evidence-corrupting transaction; visual-quality findings remain
+   * observations for the next model action.
+   */
+  executionPolicy?: "legacy-gated" | "linear-design";
   createdAt: string;
 }
 
@@ -502,9 +509,19 @@ export interface CanvasCodeArtifactContentSize {
   measuredAt: string;
   intrinsicWidth: number;
   intrinsicHeight: number;
-  /** True when cumulative model-authored source owns the artboard and historical foundation minimums must not constrain outer Canvas geometry. */
+  /** Canonical web artboards use one isolated compiler for every revision; live-observer remains only for legacy payload compatibility. */
+  measurementMode?: "live-observer" | "isolated-compiler";
+  /** Stable identity for the single geometry transaction owned by one canonical revision. */
+  geometryTransactionId?: string;
+  /** Canonical compiler pass count. The unbounded first-principles compiler emits exactly one pass. */
+  compilerPassCount?: number;
+  /** Exact compiler implementation that produced this terminal geometry. */
+  geometryCompilerVersion?: string;
+  /** Raw model-authored content union, before the runtime surface is derived. */
+  authoredContentBounds?: CanvasCodeArtifactIntrinsicBounds;
+  /** True for the canonical artboard surface; historical minimum dimensions never constrain its outer Canvas geometry. */
   sourceOwnedSurface?: boolean;
-  /** Model-owned viewing mode used to keep the outer Canvas object stable while intrinsic source changes. */
+  /** Model-owned viewing mode used by camera-follow and publication review; it does not override measured outer geometry. */
   viewingMode?: NorthstarArtifactViewingMode;
   /** Raw authored-space bounds before the runtime normalizes them into the iframe viewport. */
   contentBounds?: CanvasCodeArtifactIntrinsicBounds;
@@ -539,6 +556,23 @@ export interface NorthstarLiveSurfaceSnapshot {
   semanticNodes?: NorthstarCommittedSemanticNode[];
 }
 
+/**
+ * Browser-measured evidence ownership for one accepted or rejected candidate.
+ *
+ * Authored placement is a creative concern. Evidence survival is not: the
+ * runtime keeps every expected evidence identity alive and reports any item
+ * that is still using temporary inherited geometry as an explicit refinement
+ * obligation. Runtime inheritance is never serialized into authored source.
+ */
+export interface NorthstarEvidenceRegistryReceipt {
+  expectedEvidenceIds: string[];
+  presentEvidenceIds: string[];
+  visibleEvidenceIds: string[];
+  runtimeInheritedEvidenceIds: string[];
+  unplacedEvidenceIds: string[];
+  missingEvidenceIds: string[];
+}
+
 export interface NorthstarArtifactMutationAcknowledgement {
   schema: "northstar.artboard-ack.v1";
   /** Stable identity for a speculative proposal. It never becomes lineage by itself. */
@@ -550,6 +584,8 @@ export interface NorthstarArtifactMutationAcknowledgement {
   artifactId: string;
   surfaceId: string;
   revisionId: string;
+  /** Exact mounted revision after the transaction terminally settled. */
+  browserRevisionId?: string;
   mutationId?: string;
   status: "applied" | "rejected" | "ready";
   reason?: string;
@@ -561,7 +597,14 @@ export interface NorthstarArtifactMutationAcknowledgement {
   requiredAssetUrls: string[];
   loadedAssetUrls: string[];
   missingAssetUrls: string[];
+  evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
   snapshot?: NorthstarLiveSurfaceSnapshot;
+  /** Browser-measured time spent restoring the accepted DOM after rejecting this candidate. */
+  rollbackDurationMs?: number;
+  /** Wall-clock time from candidate staging to its terminal browser decision. */
+  candidateDurationMs?: number;
+  /** True only when the returned authored snapshot contains no runtime-owned placement state. */
+  snapshotSanitized?: boolean;
   acknowledgedAt: string;
 }
 
@@ -595,6 +638,30 @@ export interface CanvasCodeArtifactGeometryFacts {
   evidenceAreaRatio: number;
   primaryAreaRatio: number;
   integrityFailures: string[];
+}
+
+export interface NorthstarPremiumDesignAudit {
+  contractVersion?: string;
+  designFingerprint?: string;
+  ready: boolean;
+  requiredNarrativeBeatCount: number;
+  realizedNarrativeBeatCount: number;
+  missingNarrativeBeatIds: string[];
+  requiredCommunicationRoles: string[];
+  realizedCommunicationRoles: string[];
+  missingCommunicationRoles: string[];
+  requiredAnalysisCount: number;
+  realizedAnalysisCount: number;
+  missingAnalysisIds: string[];
+  ungroundedAnalysisIds: string[];
+  focalNodeCount: number;
+  minimumReadableTextPx: number;
+  evidenceRoleDiversity: number;
+  repeatedContainerRatio: number;
+  renderedStructureFingerprint: string;
+  repeatsRecentRenderedStructure: boolean;
+  blockingReasons: string[];
+  advisories: string[];
 }
 
 export interface CanvasCodeArtifactRuntimeReview {
@@ -638,6 +705,12 @@ export interface CanvasCodeArtifactRuntimeReview {
   addedNodeCount?: number;
   removedNodeCount?: number;
   unusedSpaceRatio?: number;
+  /** Runtime-owned evidence survival and remaining authored-placement work. */
+  evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
+  /** Browser-measured collisions between distinct protected evidence nodes. */
+  evidenceCollisionPairs?: Array<[string, string]>;
+  /** Browser-measured realization of the model-authored premium narrative contract. */
+  premiumDesignAudit?: NorthstarPremiumDesignAudit;
 }
 
 export interface NorthstarCreativeLeaseClaim {
@@ -694,6 +767,8 @@ export interface CanvasCodeArtifactActionEnvelope {
   artifactId: string;
   command: "create-or-update" | "advance-stage";
   stageIndex: number;
+  /** Fresh design-stage transport. Research/foundation actions omit this. */
+  executionMode?: "linear-design";
   package?: NorthstarGeneratedCodeArtifactPackage;
 }
 
@@ -940,7 +1015,8 @@ export function isCanvasCodeArtifactActionEnvelope(
     candidate.schema === NORTHSTAR_CODE_ARTIFACT_ACTION_SCHEMA &&
     typeof candidate.artifactId === "string" &&
     (candidate.command === "create-or-update" || candidate.command === "advance-stage") &&
-    typeof candidate.stageIndex === "number"
+    typeof candidate.stageIndex === "number" &&
+    (candidate.executionMode === undefined || candidate.executionMode === "linear-design")
   );
 }
 

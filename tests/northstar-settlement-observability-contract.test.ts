@@ -13,7 +13,7 @@ const diagnostics = fs.readFileSync(
   "utf8",
 );
 
-test("publication settlement trusts browser preservation rather than accepted-act count", () => {
+test("publication settlement requires both browser preservation and creative materiality", () => {
   assert.match(
     route,
     /const operationalRevisionPreserved = publicationReadiness\.operationallyReady\s+&& publicationAcknowledgement\?\.status === "applied"/,
@@ -22,7 +22,8 @@ test("publication settlement trusts browser preservation rather than accepted-ac
     route.indexOf("const publicationReadiness = assessNorthstarAdaptiveReadiness"),
     route.indexOf("if (!operationalRevisionPreserved)"),
   );
-  assert.doesNotMatch(publicationBlock, /acceptedActCount/);
+  assert.match(publicationBlock, /acceptedActCount/);
+  assert.match(publicationBlock, /northstarCreativeCompletionBlocker/);
 });
 
 test("incomplete diagnostics retain the terminal settlement receipt", () => {

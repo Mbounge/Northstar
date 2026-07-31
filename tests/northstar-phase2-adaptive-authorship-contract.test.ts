@@ -46,7 +46,8 @@ test("one normalized content measurement drives both iframe and outer Canvas geo
   assert.equal(host.includes("acceptNorthstarContentSize"), true);
   assert.equal(workspace.includes("deriveNorthstarCanvasGeometry"), true);
   assert.equal(workspace.includes("there is no second sizing formula"), true);
-  assert.equal(sizing.includes("NORTHSTAR_MAX_SINGLE_REFLOW_GROWTH"), true);
+  assert.equal(sizing.includes("NORTHSTAR_MAX_SINGLE_REFLOW_GROWTH"), false);
+  assert.equal(sizing.includes("NORTHSTAR_MAX_INTRINSIC_EXTENT"), false);
 });
 
 

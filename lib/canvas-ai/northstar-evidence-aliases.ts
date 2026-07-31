@@ -5,6 +5,9 @@ import type {
   NorthstarConstructionPlan,
   NorthstarRequiredPrimitive,
 } from "@/lib/canvas-artifacts/types";
+import type {
+  NorthstarEmergentDesignIntelligenceDraft,
+} from "@/lib/canvas-ai/northstar-emergent-design-intelligence";
 
 export const NORTHSTAR_EVIDENCE_ALIAS_REGISTRY_VERSION =
   "northstar.evidence-alias-registry.v1" as const;
@@ -120,6 +123,69 @@ export function remapNorthstarEvidenceAliasList(
   registry: NorthstarEvidenceAliasRegistry,
 ): string[] | undefined {
   return values?.map((value) => resolveNorthstarEvidenceAlias(value, registry) ?? value);
+}
+
+function evidenceIdForReference(
+  value: string | undefined,
+  registry: NorthstarEvidenceAliasRegistry,
+  evidenceIdByNodeId: ReadonlyMap<string, string>,
+): string | undefined {
+  if (!value) return value;
+  const nodeId = resolveNorthstarEvidenceAlias(value, registry) ?? value;
+  return evidenceIdByNodeId.get(nodeId) ?? evidenceIdByNodeId.get(value) ?? value;
+}
+
+function remapEvidenceIdList(
+  values: string[] | undefined,
+  registry: NorthstarEvidenceAliasRegistry,
+  evidenceIdByNodeId: ReadonlyMap<string, string>,
+): string[] | undefined {
+  return values?.map((value) =>
+    evidenceIdForReference(value, registry, evidenceIdByNodeId) ?? value
+  );
+}
+
+/**
+ * Resolves every model-facing evidence reference before design intelligence is
+ * sanitized. The model is deliberately shown short aliases, while premium
+ * contracts use canonical evidence identities. This is the single boundary
+ * that joins those two contracts so valid source authorship cannot be rejected
+ * merely because planning metadata used the supplied alias.
+ */
+export function remapNorthstarDesignIntelligenceEvidenceAliases(
+  draft: NorthstarEmergentDesignIntelligenceDraft | undefined,
+  registry: NorthstarEvidenceAliasRegistry,
+  evidenceIdByNodeId: ReadonlyMap<string, string>,
+): NorthstarEmergentDesignIntelligenceDraft | undefined {
+  if (!draft) return draft;
+  return {
+    ...draft,
+    evidenceChoreography: draft.evidenceChoreography?.map((entry) => ({
+      ...entry,
+      evidenceId:
+        evidenceIdForReference(entry.evidenceId, registry, evidenceIdByNodeId)
+        ?? entry.evidenceId,
+    })),
+    premiumPlan: draft.premiumPlan ? {
+      ...draft.premiumPlan,
+      narrativeBeats: draft.premiumPlan.narrativeBeats?.map((beat) => ({
+        ...beat,
+        evidenceIds: remapEvidenceIdList(
+          beat.evidenceIds,
+          registry,
+          evidenceIdByNodeId,
+        ),
+      })),
+      analyticalIntents: draft.premiumPlan.analyticalIntents?.map((intent) => ({
+        ...intent,
+        sourceEvidenceIds: remapEvidenceIdList(
+          intent.sourceEvidenceIds,
+          registry,
+          evidenceIdByNodeId,
+        ),
+      })),
+    } : draft.premiumPlan,
+  };
 }
 
 function escapeRegExp(value: string): string {

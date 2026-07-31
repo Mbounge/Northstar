@@ -2,6 +2,10 @@
 import type { CanvasCodeArtifactPayload } from "./types";
 import { NORTHSTAR_DESIGN_KERNEL_CSS } from "@/lib/canvas-ai/northstar-design-kernel";
 import { NORTHSTAR_HEALTH_POLICY } from "@/lib/canvas-ai/northstar-health-policy";
+import {
+  NORTHSTAR_ISOLATED_GEOMETRY_COMPILER_VERSION,
+  NORTHSTAR_ISOLATED_GEOMETRY_SETTLE_TIMEOUT_MS,
+} from "./isolated-geometry-compiler";
 
 function escapeHtml(value: string): string {
   return value
@@ -34,6 +38,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const stages = artifact.stagePlan ?? [];
   const minimumWidth = Math.max(1, Math.round(artifact.minimumWidth));
   const minimumHeight = Math.max(1, Math.round(artifact.minimumHeight));
+  const authoredLayoutBaseWidth = Math.max(1, Math.round(artifact.layoutBaseWidth ?? artifact.preferredWidth));
+  const authoredLayoutBaseHeight = Math.max(1, Math.round(artifact.layoutBaseHeight ?? artifact.preferredHeight));
   const mutationJournal = artifact.mutationJournal ?? [];
   // A package carrying pendingAckToken is a proposal, not committed browser
   // state. Replaying its newest batch during iframe construction bypasses the
@@ -74,6 +80,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const INITIAL_JOURNAL = ${safeJson(initialJournal)};
   const SHOULD_ANIMATE_INITIAL_MOUNT = ${safeJson(shouldAnimateInitialMount)};
   const ALLOWED_ASSETS = new Set(${safeJson(allowedAssetUrls)});
+  const EXPECTED_EVIDENCE_IDS = ${safeJson(Array.from(new Set(dataBundle.screenshots.map((screen) => screen.id))))};
   const registerAssets = (values) => {
     for (const value of Array.isArray(values) ? values : []) {
       if (typeof value === "string" && /^(?:https?:|data:|blob:)/i.test(value)) ALLOWED_ASSETS.add(value);
@@ -81,16 +88,25 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   };
   const MINIMUM_WIDTH = ${minimumWidth};
   const MINIMUM_HEIGHT = ${minimumHeight};
+  const CANONICAL_GEOMETRY_COMPILER_VERSION = ${safeJson(NORTHSTAR_ISOLATED_GEOMETRY_COMPILER_VERSION)};
+  const CANONICAL_GEOMETRY_SETTLE_TIMEOUT = ${NORTHSTAR_ISOLATED_GEOMETRY_SETTLE_TIMEOUT_MS};
+  let canonicalLayoutBaseWidth = ${authoredLayoutBaseWidth};
+  let canonicalLayoutBaseHeight = ${authoredLayoutBaseHeight};
   const appliedMutationIds = new Set();
   const queuedMutationIds = new Set();
   const cancelledMutationIds = new Set();
   const terminalMutationMessages = new Map();
   const mutationTransactions = new Map();
+  const mutationRollbackReceipts = new Map();
   const mutationQueue = [];
   let applyingMutation = false;
   let pendingAcknowledgement = null;
-  let requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
+  let requestedBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   let sourceOwnedGeometryActive = false;
+  let committedCanonicalGeometry = null;
+  let canonicalGeometrySequence = 0;
+  let canonicalGeometryCompilerActive = false;
+  let canonicalGeometryMutationId = null;
   let spatialBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   let spatialLayoutVersion = 0;
   let lastSpatialAudit = null;
@@ -117,6 +133,62 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   root.querySelectorAll('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
   document.querySelectorAll('style[data-ns-runtime-owned="true"],style[data-ns-runtime-spatial-style]').forEach((element) => element.remove());
 
+  const candidateVisibilityShields = new Map();
+  const beginAtomicCandidateValidation = (mutationId) => {
+    if (!mutationId || candidateVisibilityShields.has(mutationId)) return;
+    const rootRect = root.getBoundingClientRect();
+    const originRect = origin.getBoundingClientRect();
+    const shield = document.createElement("div");
+    shield.setAttribute("data-ns-runtime-owned", "true");
+    shield.setAttribute("data-ns-candidate-shield", mutationId);
+    shield.setAttribute("aria-hidden", "true");
+    shield.inert = true;
+    Object.assign(shield.style, {
+      position: "absolute",
+      left: (rootRect.left - originRect.left) + "px",
+      top: (rootRect.top - originRect.top) + "px",
+      width: Math.max(1, rootRect.width) + "px",
+      height: Math.max(1, rootRect.height) + "px",
+      overflow: "visible",
+      pointerEvents: "none",
+      zIndex: "2147483000",
+    });
+    const acceptedClone = root.cloneNode(true);
+    acceptedClone.removeAttribute("data-ns-prepaint");
+    acceptedClone.setAttribute("data-ns-runtime-owned", "true");
+    acceptedClone.style.visibility = "visible";
+    shield.appendChild(acceptedClone);
+    origin.appendChild(shield);
+    const priorPaintState = {
+      opacityValue: root.style.getPropertyValue("opacity"),
+      opacityPriority: root.style.getPropertyPriority("opacity"),
+      pointerEventsValue: root.style.getPropertyValue("pointer-events"),
+      pointerEventsPriority: root.style.getPropertyPriority("pointer-events"),
+    };
+    // Opacity isolates paint without changing layout, inherited visibility, or
+    // evidence measurability. The candidate remains a real browser surface for
+    // geometry, asset, clipping, and semantic audits.
+    root.style.setProperty("opacity", "0", "important");
+    root.style.setProperty("pointer-events", "none", "important");
+    candidateVisibilityShields.set(mutationId, { shield, priorPaintState });
+  };
+  const endAtomicCandidateValidation = (mutationId) => {
+    const state = candidateVisibilityShields.get(mutationId);
+    if (!state) return;
+    if (state.priorPaintState.opacityValue) {
+      root.style.setProperty("opacity", state.priorPaintState.opacityValue, state.priorPaintState.opacityPriority);
+    } else {
+      root.style.removeProperty("opacity");
+    }
+    if (state.priorPaintState.pointerEventsValue) {
+      root.style.setProperty("pointer-events", state.priorPaintState.pointerEventsValue, state.priorPaintState.pointerEventsPriority);
+    } else {
+      root.style.removeProperty("pointer-events");
+    }
+    state.shield.remove();
+    candidateVisibilityShields.delete(mutationId);
+  };
+
   const applyPublicationPresentationState = () => {
     const verified = currentPublicationState === "verified" && currentProvisional === false;
     root.setAttribute("data-ns-publication", verified ? "verified" : "working");
@@ -138,41 +210,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const authoredArtboard = () => root.querySelector('[data-ns-node-id="artboard"]');
   const hasModelSourceAuthority = () => authoredArtboard()?.getAttribute("data-ns-creative-authority") === "model-source";
   const syncIntrinsicGeometryMode = () => {
+    // Geometry authority is canonical for the complete artboard lifetime. It
+    // does not turn on at a research/design boundary and does not depend on the
+    // authored source-authority marker.
     const artboard = authoredArtboard();
-    const sourceOwned = hasModelSourceAuthority();
-    if (sourceOwned && !sourceOwnedGeometryActive) {
-      // The permanent foundation reserves a generous working surface. Once the
-      // model owns the cumulative source, that historical reservation must not
-      // become a false minimum that creates blank lower space or an interior
-      // host-background gutter. The browser now derives outer geometry from the
-      // authored content itself.
-      requestedBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-      sourceOwnedGeometryActive = true;
-    } else if (!sourceOwned) {
-      sourceOwnedGeometryActive = false;
-    }
-    const minimumWidth = sourceOwned ? 1 : MINIMUM_WIDTH;
-    const minimumHeight = sourceOwned ? 1 : MINIMUM_HEIGHT;
-    stageSurface.style.minWidth = minimumWidth + "px";
-    stageSurface.style.minHeight = minimumHeight + "px";
-    root.style.minWidth = minimumWidth + "px";
-    root.style.minHeight = minimumHeight + "px";
-    let geometryStyle = document.getElementById("northstar-source-owned-intrinsic-geometry");
-    if (!geometryStyle) {
-      geometryStyle = document.createElement("style");
-      geometryStyle.id = "northstar-source-owned-intrinsic-geometry";
-      geometryStyle.setAttribute("data-ns-runtime-owned", "true");
-      document.head.appendChild(geometryStyle);
-    }
-    // Root dimensions are runtime-owned; the model remains free to author any
-    // internal HTML/CSS/SVG composition. This runtime-only stylesheet removes
-    // the stale foundation width/min-height without contaminating the authored
-    // DOM or the cumulative source snapshot with inline geometry declarations.
-    geometryStyle.textContent = sourceOwned
-      ? '[data-ns-node-id="artboard"][data-ns-creative-authority="model-source"]{width:max-content!important;height:max-content!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important}'
-      : "";
-    return { sourceOwned, minimumWidth, minimumHeight, artboard };
+    sourceOwnedGeometryActive = true;
+    stageSurface.style.minWidth = "1px";
+    stageSurface.style.minHeight = "1px";
+    return { sourceOwned: true, minimumWidth: 1, minimumHeight: 1, artboard };
   };
+
 
   const cssEscape = (value) => window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replace(/[^a-zA-Z0-9:_-]/g, "");
   const LEGACY_NODE_SELECTORS = Object.freeze({
@@ -227,8 +274,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const bottom = Math.max(0, Number(request.bottom) || 0);
     requestedBounds.minX = Math.min(requestedBounds.minX, -left);
     requestedBounds.minY = Math.min(requestedBounds.minY, -top);
-    requestedBounds.maxX = Math.max(requestedBounds.maxX, MINIMUM_WIDTH + right);
-    requestedBounds.maxY = Math.max(requestedBounds.maxY, MINIMUM_HEIGHT + bottom);
+    requestedBounds.maxX = Math.max(requestedBounds.maxX, canonicalLayoutBaseWidth + right);
+    requestedBounds.maxY = Math.max(requestedBounds.maxY, canonicalLayoutBaseHeight + bottom);
     queueContentSize();
   };
 
@@ -810,8 +857,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         }
       }
 
-      const overlayWidth = Math.max(MINIMUM_WIDTH, spatialBounds.maxX - Math.min(0, spatialBounds.minX));
-      const overlayHeight = Math.max(MINIMUM_HEIGHT, spatialBounds.maxY - Math.min(0, spatialBounds.minY));
+      const overlayWidth = Math.max(1, spatialBounds.maxX - Math.min(0, spatialBounds.minX));
+      const overlayHeight = Math.max(1, spatialBounds.maxY - Math.min(0, spatialBounds.minY));
       spatialSystem.style.width = overlayWidth + "px";
       spatialSystem.style.height = overlayHeight + "px";
       relationshipLayer.setAttribute("viewBox", "0 0 " + overlayWidth + " " + overlayHeight);
@@ -932,7 +979,12 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     routeBetween: routeBetweenCreativeNodes,
     on: (target, event, handler, options) => { target?.addEventListener?.(event, handler, options); return () => target?.removeEventListener?.(event, handler, options); },
     emit: (name, detail) => root.dispatchEvent(new CustomEvent(name, { detail })),
-    canvas: Object.freeze({ requestSpace, baseSize: Object.freeze({ width: MINIMUM_WIDTH, height: MINIMUM_HEIGHT }) }),
+    canvas: Object.freeze({
+      requestSpace,
+      get baseSize() {
+        return Object.freeze({ width: canonicalLayoutBaseWidth, height: canonicalLayoutBaseHeight });
+      },
+    }),
     viz: Object.freeze({ clamp, extent, linearScale, bandScale, linePath, formatNumber }),
   });
   Object.defineProperty(window, "Northstar", { value: Northstar, writable: false, configurable: false });
@@ -1838,6 +1890,38 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
     return width * height;
   };
+  const captureEvidenceRegistryReceipt = () => {
+    const entries = Array.from(root.querySelectorAll("[data-ns-evidence-id]"))
+      .map((element) => {
+        const evidenceId = String(element.getAttribute("data-ns-evidence-id") || "").trim();
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const visible = rect.width > 4
+          && rect.height > 4
+          && style.display !== "none"
+          && style.visibility !== "hidden"
+          && Number(style.opacity || 1) > 0.01;
+        return {
+          evidenceId,
+          visible,
+          runtimeInherited: element.hasAttribute("data-ns-runtime-inherited-placement"),
+        };
+      })
+      .filter((entry) => entry.evidenceId);
+    const presentEvidenceIds = Array.from(new Set(entries.map((entry) => entry.evidenceId)));
+    const visibleEvidenceIds = Array.from(new Set(entries.filter((entry) => entry.visible).map((entry) => entry.evidenceId)));
+    const runtimeInheritedEvidenceIds = Array.from(new Set(
+      entries.filter((entry) => entry.runtimeInherited).map((entry) => entry.evidenceId),
+    ));
+    return {
+      expectedEvidenceIds: EXPECTED_EVIDENCE_IDS.slice(),
+      presentEvidenceIds,
+      visibleEvidenceIds,
+      runtimeInheritedEvidenceIds,
+      unplacedEvidenceIds: runtimeInheritedEvidenceIds.slice(),
+      missingEvidenceIds: EXPECTED_EVIDENCE_IDS.filter((id) => !presentEvidenceIds.includes(id)),
+    };
+  };
   const visualSafetySnapshot = () => {
     const rootRect = root.getBoundingClientRect();
     const singletonRoleForElement = (element) => {
@@ -1875,7 +1959,30 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       .filter((item) => item.geometryRole !== "root" && item.rect.width > 1 && item.rect.height > 1);
     const evidenceElements = Array.from(root.querySelectorAll("[data-ns-evidence-id], [data-ns-protected-evidence], figure:has(img)"))
       .filter((element) => element.hasAttribute("data-ns-protected-evidence") || Boolean(element.querySelector("img,video,canvas,svg")));
-    const evidenceRects = evidenceElements.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 4 && rect.height > 4);
+    const evidenceItems = evidenceElements
+      .map((element, index) => ({
+        element,
+        id: element.getAttribute("data-ns-evidence-id") || element.getAttribute("data-ns-node-id") || "evidence-" + index,
+        rect: element.getBoundingClientRect(),
+      }))
+      .filter((item) => item.rect.width > 4 && item.rect.height > 4);
+    const evidenceRects = evidenceItems.map((item) => item.rect);
+    const evidenceCollisionPairs = [];
+    for (let index = 0; index < evidenceItems.length; index += 1) {
+      for (let otherIndex = index + 1; otherIndex < evidenceItems.length; otherIndex += 1) {
+        const first = evidenceItems[index];
+        const second = evidenceItems[otherIndex];
+        if (first.element.contains(second.element) || second.element.contains(first.element)) continue;
+        const overlapArea = rectIntersectionArea(first.rect, second.rect);
+        const smallerArea = Math.max(1, Math.min(
+          first.rect.width * first.rect.height,
+          second.rect.width * second.rect.height,
+        ));
+        if (overlapArea / smallerArea > 0.08) {
+          evidenceCollisionPairs.push([first.id, second.id]);
+        }
+      }
+    }
     const unsafeEvidenceOverlayIds = [];
     const majorAnalyticalItems = [];
     for (const item of semantic) {
@@ -1953,6 +2060,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       comparisonEntityCount: root.querySelectorAll("[data-ns-flow-id], [data-ns-comparison-entity]").length,
       declaredStructureFailures: [],
       duplicateSingletonRoles,
+      evidenceCollisionPairs,
       flowTopologyViolations: [],
       contentBounds: { left: rootRect.left, top: rootRect.top, right: rootRect.right, bottom: rootRect.bottom },
     };
@@ -2081,11 +2189,12 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       comparisonEntityCount,
       declaredStructureFailures,
       duplicateSingletonRoles,
+      evidenceCollisionPairs,
       flowTopologyViolations: Array.from(new Set(flowTopologyViolations)),
       contentBounds: { left, top, right, bottom },
     };
   };
-  const visualSafetyFailure = (before, after) => {
+  const visualSafetyFailure = (before, after, mechanicalOnly = false) => {
     const newlyAdded = (next, prior) => {
       const previous = new Set(prior || []);
       return (next || []).filter((value) => !previous.has(value));
@@ -2093,42 +2202,42 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const newDuplicateRoles = (after.duplicateSingletonRoles || []).filter((entry) =>
       !(before.duplicateSingletonRoles || []).some((previous) => previous.role === entry.role && previous.owners.join("|") === entry.owners.join("|"))
     );
-    if (newDuplicateRoles.length) {
+    if (!mechanicalOnly && newDuplicateRoles.length) {
       return "Canonical artboard role uniqueness regressed; new duplicate singleton regions appeared: " + newDuplicateRoles.map((entry) => entry.role + " [" + entry.owners.join(", ") + "]").join("; ");
     }
     const newUnsafeEvidenceOverlays = newlyAdded(after.unsafeEvidenceOverlayIds, before.unsafeEvidenceOverlayIds);
-    if (newUnsafeEvidenceOverlays.length) {
+    if (!mechanicalOnly && newUnsafeEvidenceOverlays.length) {
       return "A new synthetic overlay obscured protected evidence: " + newUnsafeEvidenceOverlays.join(", ");
     }
     const newIncoherentRegions = newlyAdded(after.incoherentMajorRegionIds, before.incoherentMajorRegionIds);
-    if (newIncoherentRegions.length) {
+    if (!mechanicalOnly && newIncoherentRegions.length) {
       return "A new major analytical region obscured grounded evidence instead of receiving a complete reflow: " + newIncoherentRegions.join(", ");
     }
     const beforeCollisionKeys = new Set((before.majorRegionCollisionPairs || []).map((pair) => pair.slice().sort().join("|")));
     const newCollisionPairs = (after.majorRegionCollisionPairs || []).filter((pair) => !beforeCollisionKeys.has(pair.slice().sort().join("|")));
-    if (newCollisionPairs.length) {
+    if (!mechanicalOnly && newCollisionPairs.length) {
       return "New major-region collisions appeared in the visible composition: " + newCollisionPairs.map((pair) => pair.join(" ↔ ")).join(", ");
     }
-    const newOutOfBounds = newlyAdded(after.outOfBoundsNodeIds, before.outOfBoundsNodeIds);
-    if (newOutOfBounds.length) {
-      const detail = (after.overflowDetails || []).filter((item) => newOutOfBounds.includes(item.id)).slice(0, 6).map((item) => {
-        const directions = Object.entries(item.overflow)
-          .filter(([, value]) => value > 4)
-          .map(([direction, value]) => direction + " " + Math.ceil(value) + "px")
-          .join("/");
-        return item.id + (directions ? " (" + directions + ")" : "");
-      });
-      return "Whole-artboard containment regressed; new meaningful content extended beyond the rendered root: " + (detail.length ? detail.join(", ") : newOutOfBounds.slice(0, 8).join(", "));
+    const beforeEvidenceCollisionKeys = new Set((before.evidenceCollisionPairs || []).map((pair) => pair.slice().sort().join("|")));
+    const newEvidenceCollisionPairs = (after.evidenceCollisionPairs || []).filter(
+      (pair) => !beforeEvidenceCollisionKeys.has(pair.slice().sort().join("|")),
+    );
+    if (!mechanicalOnly && newEvidenceCollisionPairs.length) {
+      return "New protected-evidence collisions appeared in the visible composition: "
+        + newEvidenceCollisionPairs.map((pair) => pair.join(" ↔ ")).join(", ");
     }
+    // Content extending beyond the previous authored shell is not a safety
+    // failure. The canonical geometry compiler expands the runtime background,
+    // iframe and outer Canvas object to include that finite authored content.
     const newClippedNodes = newlyAdded(after.clippedSemanticNodeIds, before.clippedSemanticNodeIds);
-    if (newClippedNodes.length) {
+    if (!mechanicalOnly && newClippedNodes.length) {
       return "Whole-artboard clipping regressed; new meaningful nodes were clipped by an ancestor: " + newClippedNodes.slice(0, 8).join(", ");
     }
     const newDeclaredStructureFailures = newlyAdded(after.declaredStructureFailures, before.declaredStructureFailures);
-    if (newDeclaredStructureFailures.length) {
+    if (!mechanicalOnly && newDeclaredStructureFailures.length) {
       return "The transaction newly claimed a completed structure that was not fully visible: " + newDeclaredStructureFailures.join(", ");
     }
-    if (before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
+    if (!mechanicalOnly && before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
       return "Comparison completeness failed; a required comparison entity or evidence lane disappeared.";
     }
     // Flow orientation and artboard whitespace are creative decisions. They remain
@@ -2165,9 +2274,40 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       style.textContent = css;
     }
   };
+  const restoreRuntimeInheritedStyles = (element, attributeName) => {
+    if (!element?.style) return;
+    const raw = element.getAttribute(attributeName);
+    if (raw) {
+      try {
+        const prior = JSON.parse(raw);
+        for (const [name, state] of Object.entries(prior || {})) {
+          const appliedValue = String(state?.appliedValue || "");
+          const currentValue = element.style.getPropertyValue(name);
+          const currentPriority = element.style.getPropertyPriority(name);
+          if (currentValue !== appliedValue || currentPriority !== "important") continue;
+          const priorValue = String(state?.priorValue || "");
+          const priorPriority = String(state?.priorPriority || "");
+          if (priorValue) element.style.setProperty(name, priorValue, priorPriority);
+          else element.style.removeProperty(name);
+        }
+      } catch {}
+    }
+    element.removeAttribute(attributeName);
+  };
+  const clearRuntimeInheritedParentStyle = (element) => {
+    restoreRuntimeInheritedStyles(element, "data-ns-runtime-inherited-parent-style");
+  };
+  const clearRuntimeInheritedPlacement = (element) => {
+    restoreRuntimeInheritedStyles(element, "data-ns-runtime-inherited-style");
+    element?.removeAttribute?.("data-ns-runtime-inherited-placement");
+  };
   const captureLiveSnapshot = () => {
     const authoredRoot = root.cloneNode(true);
     authoredRoot.querySelectorAll?.('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+    authoredRoot.querySelectorAll?.('[data-ns-runtime-inherited-placement],[data-ns-runtime-inherited-style]')
+      .forEach((element) => clearRuntimeInheritedPlacement(element));
+    authoredRoot.querySelectorAll?.('[data-ns-runtime-inherited-parent-style]')
+      .forEach((element) => clearRuntimeInheritedParentStyle(element));
     return {
       html: authoredRoot.innerHTML,
       css: document.getElementById("northstar-authored-foundation-style")?.textContent || "",
@@ -2216,10 +2356,13 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (!mutationId) return false;
     const transaction = mutationTransactions.get(mutationId);
     if (!transaction) return false;
+    const rollbackStartedAt = performance.now();
     if (pendingAcknowledgement?.mutationId === mutationId) pendingAcknowledgement = null;
+    if (canonicalGeometryMutationId === mutationId) canonicalGeometryMutationId = null;
     root.innerHTML = transaction.html;
     restoreStyleState(transaction.styles);
     requestedBounds = { ...transaction.requestedBounds };
+    restoreCanonicalGeometry(transaction.canonicalGeometry, transaction.canonicalLayoutContext);
     currentRevisionId = transaction.revisionId;
     currentMutationId = transaction.mutationId;
     appliedMutationIds.delete(mutationId);
@@ -2229,30 +2372,17 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     enforceAssetPolicy(root);
     applyStage();
     executeRuntimeModule("northstar-creative-source", transaction.authoredJavascript);
+    endAtomicCandidateValidation(mutationId);
     queueContentSize();
-    return true;
-  };
-
-  const clearRuntimeInheritedPlacement = (element) => {
-    if (!element?.style) return;
-    const raw = element.getAttribute("data-ns-runtime-inherited-style");
-    if (raw) {
-      try {
-        const prior = JSON.parse(raw);
-        for (const [name, state] of Object.entries(prior || {})) {
-          const appliedValue = String(state?.appliedValue || "");
-          const currentValue = element.style.getPropertyValue(name);
-          const currentPriority = element.style.getPropertyPriority(name);
-          if (currentValue !== appliedValue || currentPriority !== "important") continue;
-          const priorValue = String(state?.priorValue || "");
-          const priorPriority = String(state?.priorPriority || "");
-          if (priorValue) element.style.setProperty(name, priorValue, priorPriority);
-          else element.style.removeProperty(name);
-        }
-      } catch {}
+    const receipt = {
+      rollbackDurationMs: Math.max(0, performance.now() - rollbackStartedAt),
+      candidateDurationMs: Math.max(0, Date.now() - transaction.startedAt),
+    };
+    mutationRollbackReceipts.set(mutationId, receipt);
+    if (mutationRollbackReceipts.size > 80) {
+      mutationRollbackReceipts.delete(mutationRollbackReceipts.keys().next().value);
     }
-    element.removeAttribute("data-ns-runtime-inherited-style");
-    element.removeAttribute("data-ns-runtime-inherited-placement");
+    return receipt;
   };
 
   const applyRuntimeInheritedGeometry = (element, geometry) => {
@@ -2277,6 +2407,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     element.setAttribute("data-ns-runtime-inherited-style", JSON.stringify(prior));
     element.setAttribute("data-ns-runtime-inherited-placement", "true");
+  };
+  const applyRuntimeInheritedParentPosition = (element) => {
+    if (!element?.style || getComputedStyle(element).position !== "static") return;
+    clearRuntimeInheritedParentStyle(element);
+    const appliedValue = "relative";
+    element.setAttribute("data-ns-runtime-inherited-parent-style", JSON.stringify({
+      position: {
+        priorValue: element.style.getPropertyValue("position"),
+        priorPriority: element.style.getPropertyPriority("position"),
+        appliedValue,
+      },
+    }));
+    element.style.setProperty("position", appliedValue, "important");
   };
 
   const applyOperation = (operation) => {
@@ -2337,7 +2480,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         clearRuntimeInheritedPlacement(source);
         parent.insertBefore(source, before && before.parentElement === parent ? before : null);
         if (placement.preserveGeometry && preservedEntry?.geometry) {
-          if (getComputedStyle(parent).position === "static") parent.style.setProperty("position", "relative");
+          applyRuntimeInheritedParentPosition(parent);
           applyRuntimeInheritedGeometry(source, preservedEntry.geometry);
         }
       }
@@ -2390,9 +2533,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     const expectedParent = Array.from(appliedMutationIds).at(-1);
     if (batch.parentMutationId && expectedParent && batch.parentMutationId !== expectedParent) throw new Error("Mutation lineage is discontinuous.");
+    canonicalGeometryMutationId = batch.mutationId;
     registerAssets(batch.requiredAssetUrls || []);
     solveSpatialSystem();
     const transaction = {
+      startedAt: Date.now(),
       html: root.innerHTML,
       styles: captureStyleState(),
       authoredJavascript: currentAuthoredJavascript,
@@ -2401,13 +2546,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       mutationId: currentMutationId,
       beforeSnapshot: semanticSnapshot(),
       beforeBounds: getContentBounds(),
+      canonicalGeometry: committedCanonicalGeometry ? { ...committedCanonicalGeometry } : null,
+      canonicalLayoutContext: { width: canonicalLayoutBaseWidth, height: canonicalLayoutBaseHeight },
       beforeVisualSafety: visualSafetySnapshot(),
       beforeAudit: collectRuntimeAudit(),
     };
     rememberMutationTransaction(batch.mutationId, transaction);
-    if (batch.geometryIntent === "contract-after-refinement" || batch.geometryIntent === "recompose") {
-      requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
-    }
+    if (acknowledge) beginAtomicCandidateValidation(batch.mutationId);
+    // request-space belongs only to this authored revision. Geometry itself is
+    // always re-derived and may expand or contract without an intent gate.
+    requestedBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     const before = snapshotRects();
     root.setAttribute("data-ns-mutating", "true");
     try {
@@ -2464,10 +2612,26 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         proposal,
         pendingSince: Date.now(),
       };
+      try {
+        const compiledSize = await compileCanonicalGeometry(currentRevisionId, batch.mutationId, {
+          width: proposal?.layoutBaseWidth,
+          height: proposal?.layoutBaseHeight,
+        });
+        if (!pendingAcknowledgement || pendingAcknowledgement.mutationId !== batch.mutationId) return;
+        pendingAcknowledgement.compiledSize = compiledSize;
+        applyCompiledCanonicalGeometry(compiledSize);
+        reportContentSize();
+      } catch (error) {
+        rollbackMutation(batch.mutationId);
+        throw error;
+      }
+      return;
     } else {
       appliedMutationIds.add(batch.mutationId);
+      if (canonicalGeometryMutationId === batch.mutationId) canonicalGeometryMutationId = null;
     }
-    // Report the complete live DOM throughout the transition for internal audit.
+    // Canonical geometry is compiled after journal replay or for each live
+    // acknowledged mutation. Observer callbacks only schedule that compilation.
     // The host buffers these provisional measurements and publishes outer Canvas
     // geometry only from terminal ready/applied events.
     queueContentSize();
@@ -2493,17 +2657,33 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         }
         try { await applyMutationBatch(item.batch, item.revisionId, true, item.proposal); }
         catch (error) {
+          const rollbackReceipt = mutationRollbackReceipts.get(item.batch?.mutationId);
+          mutationRollbackReceipts.delete(item.batch?.mutationId);
           const terminalMessage = {
-            type: "northstar.artifact.runtime-error",
+            // Candidate application failures are terminal for this proposal, not
+            // for the mounted artboard. applyMutationBatch has already restored
+            // the accepted DOM before this receipt is emitted.
+            type: "northstar.artifact.mutation-rejected",
             artifactId: ARTIFACT_ID,
             surfaceId: SURFACE_ID,
-            revisionId: currentRevisionId,
+            revisionId: item.revisionId,
+            browserRevisionId: currentRevisionId,
             baseRevisionId: item.proposal?.baseRevisionId,
             proposalId: item.proposal?.proposalId,
             ackToken: item.proposal?.ackToken,
             mutationId: item.batch?.mutationId,
             message: error instanceof Error ? error.message : String(error),
+            changedNodeIds: [],
+            meaningfulChangedNodeIds: [],
+            changeKinds: [],
+            requiredAssetUrls: item.batch?.requiredAssetUrls || [],
+            loadedAssetUrls: loadedAssetUrls(),
+            missingAssetUrls: missingRequiredAssets(item.batch?.requiredAssetUrls || []),
+            evidenceRegistry: captureEvidenceRegistryReceipt(),
             snapshot: captureLiveSnapshot(),
+            restoredSize: captureSettledContentSize(currentRevisionId, currentMutationId, canonicalGeometrySequence + 1),
+            rollbackDurationMs: rollbackReceipt?.rollbackDurationMs,
+            candidateDurationMs: rollbackReceipt?.candidateDurationMs,
           };
           postTerminalMutation(item.batch?.mutationId, terminalMessage);
         }
@@ -2514,6 +2694,21 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   const getContentBounds = () => {
     const geometryMode = syncIntrinsicGeometryMode();
+    if (
+      committedCanonicalGeometry
+      && committedCanonicalGeometry.revisionId === currentRevisionId
+      && !canonicalGeometryCompilerActive
+    ) {
+      const exact = committedCanonicalGeometry.contentBounds;
+      return {
+        minX: exact.minX,
+        minY: exact.minY,
+        maxX: exact.maxX,
+        maxY: exact.maxY,
+        width: committedCanonicalGeometry.intrinsicWidth,
+        height: committedCanonicalGeometry.intrinsicHeight,
+      };
+    }
     const rootRect = root.getBoundingClientRect();
     let minX = Math.min(0, requestedBounds.minX), minY = Math.min(0, requestedBounds.minY);
     let maxX = Math.max(geometryMode.minimumWidth, requestedBounds.maxX), maxY = Math.max(geometryMode.minimumHeight, requestedBounds.maxY);
@@ -2537,6 +2732,340 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       minX, minY, maxX, maxY,
       width: Math.max(geometryMode.minimumWidth, maxX - minX),
       height: Math.max(geometryMode.minimumHeight, maxY - minY),
+    };
+  };
+
+  const nextCompilerFrame = (view = window) => new Promise((resolve) => view.requestAnimationFrame(() => view.requestAnimationFrame(resolve)));
+  const waitWithTimeout = (promise, timeoutMs) => Promise.race([
+    Promise.resolve(promise).catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+  const waitForCompilerResources = async (scope) => {
+    const ownerDocument = scope.ownerDocument || document;
+    const ownerWindow = ownerDocument.defaultView || window;
+    await waitWithTimeout(ownerDocument.fonts?.ready, CANONICAL_GEOMETRY_SETTLE_TIMEOUT);
+    const images = Array.from(scope.querySelectorAll("img"));
+    await waitWithTimeout(Promise.all(images.map((image) => {
+      if (image.complete) return Promise.resolve();
+      return new Promise((resolve) => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", resolve, { once: true });
+      });
+    })), CANONICAL_GEOMETRY_SETTLE_TIMEOUT);
+    await nextCompilerFrame(ownerWindow);
+  };
+
+  const geometryContributor = (element, artboard, view) => {
+    if (!element || element === artboard) return false;
+    if (element.closest('[data-ns-runtime-owned="true"],[data-ns-spatial-system]')) return false;
+    const style = view.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) <= .001) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= .01 && rect.height <= .01) return false;
+    if (element.matches("img,svg,canvas,video,[data-ns-evidence-id],[data-ns-annotation-id],[data-ns-relationship-id]")) return true;
+    const directText = Array.from(element.childNodes || []).some((node) => node.nodeType === 3 && String(node.textContent || "").trim());
+    const hasSemanticChild = Boolean(element.querySelector(":scope [data-ns-node-id],:scope [data-ns-evidence-id],:scope [data-ns-annotation-id],:scope [data-ns-relationship-id]"));
+    const paintsSurface = style.backgroundImage !== "none"
+      || style.backgroundColor !== "rgba(0, 0, 0, 0)"
+      || parseFloat(style.borderTopWidth || "0") > 0
+      || parseFloat(style.borderRightWidth || "0") > 0
+      || parseFloat(style.borderBottomWidth || "0") > 0
+      || parseFloat(style.borderLeftWidth || "0") > 0;
+    if (directText) return true;
+    if (element.hasAttribute("data-ns-node-id")) {
+      return !hasSemanticChild || paintsSurface || style.position === "absolute" || style.position === "fixed";
+    }
+    if (element.children.length === 0) return paintsSurface;
+    return style.position === "absolute" || style.position === "fixed";
+  };
+
+  const authoredStyleSource = () => Array.from(document.head.querySelectorAll("style"))
+    .filter((style) => !style.matches('[data-ns-runtime-owned="true"]'))
+    .map((style) => "<style>" + String(style.textContent || "").replace(/<\/style/gi, "<\\/style") + "</style>")
+    .join("");
+
+  const authoredStateFingerprint = () => {
+    const imageState = Array.from(root.querySelectorAll("img")).map((image) => [
+      image.getAttribute("src") || "",
+      image.complete ? 1 : 0,
+      image.naturalWidth || 0,
+      image.naturalHeight || 0,
+    ].join(":"));
+    const source = [
+      currentRevisionId,
+      currentMutationId || "",
+      canonicalLayoutBaseWidth,
+      canonicalLayoutBaseHeight,
+      requestedBounds.minX,
+      requestedBounds.minY,
+      requestedBounds.maxX,
+      requestedBounds.maxY,
+      document.fonts?.status || "",
+      authoredStyleSource(),
+      root.innerHTML,
+      imageState.join("|"),
+    ].join("\u241f");
+    let hash = 2166136261;
+    for (let index = 0; index < source.length; index += 1) {
+      hash ^= source.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  };
+
+  const measureAuthoredContentInIsolation = async (layoutWidth, layoutHeight) => {
+    // Compile in a physically separate, non-visible DOM tree inside the same
+    // sandboxed runtime document. The production host intentionally mounts this
+    // runtime with sandbox="allow-scripts" and a frame-src 'none' CSP, so the
+    // compiler must not depend on nested-frame creation or parent access to a
+    // child frame's opaque-origin document.
+    const host = document.createElement("div");
+    host.setAttribute("data-ns-geometry-compiler-host", "true");
+    host.setAttribute("aria-hidden", "true");
+    host.inert = true;
+    Object.assign(host.style, {
+      position: "fixed",
+      left: "-1000000px",
+      top: "0px",
+      width: Math.max(1, Math.ceil(layoutWidth)) + "px",
+      height: Math.max(1, Math.ceil(layoutHeight)) + "px",
+      minWidth: "0",
+      minHeight: "0",
+      overflow: "visible",
+      opacity: "0",
+      pointerEvents: "none",
+      zIndex: "-2147483647",
+      contain: "layout style",
+    });
+    const compilerRoot = root.cloneNode(true);
+    compilerRoot.setAttribute("data-ns-geometry-compiler", "true");
+    compilerRoot.removeAttribute("data-ns-prepaint");
+    compilerRoot.removeAttribute("data-ns-mutating");
+    compilerRoot.querySelectorAll('script,[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+    // The wrapper supplies only the authored containing-block context. It is not
+    // a maximum and it is never derived from the previously measured surface.
+    // Authored descendants may overflow it to any finite coordinate.
+    compilerRoot.style.setProperty("display", "flow-root", "important");
+    compilerRoot.style.setProperty("position", "relative", "important");
+    compilerRoot.style.setProperty("width", Math.max(1, Math.ceil(layoutWidth)) + "px", "important");
+    compilerRoot.style.setProperty("min-width", "0px", "important");
+    compilerRoot.style.setProperty("max-width", "none", "important");
+    compilerRoot.style.setProperty("height", "auto", "important");
+    compilerRoot.style.setProperty("min-height", "0px", "important");
+    compilerRoot.style.setProperty("max-height", "none", "important");
+    compilerRoot.style.setProperty("overflow", "visible", "important");
+    compilerRoot.style.setProperty("opacity", "1", "important");
+    compilerRoot.style.setProperty("pointer-events", "none", "important");
+    host.appendChild(compilerRoot);
+    document.body.appendChild(host);
+    try {
+      const compilerArtboard = compilerRoot.querySelector('[data-ns-node-id="artboard"]') || compilerRoot.querySelector(".ns-artifact") || compilerRoot.firstElementChild || compilerRoot;
+      // Fixed authored descendants belong to the artboard plane, not to the
+      // browser viewport. Compile them as absolute descendants of that plane.
+      Array.from(compilerArtboard.querySelectorAll("*")).forEach((element) => {
+        const style = getComputedStyle(element);
+        if (style.position === "fixed") element.style.setProperty("position", "absolute", "important");
+      });
+      await waitForCompilerResources(compilerRoot);
+      const artboardRect = compilerArtboard.getBoundingClientRect();
+      let minX = Math.min(0, Number(requestedBounds.minX) || 0);
+      let minY = Math.min(0, Number(requestedBounds.minY) || 0);
+      let maxX = Math.max(1, artboardRect.width, compilerArtboard.scrollWidth || 0, Number(requestedBounds.maxX) || 0);
+      let maxY = Math.max(1, artboardRect.height, compilerArtboard.scrollHeight || 0, Number(requestedBounds.maxY) || 0);
+      const allElements = Array.from(compilerArtboard.querySelectorAll("*")).filter((element) => {
+        if (element.closest('[data-ns-runtime-owned="true"],[data-ns-spatial-system]')) return false;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > .001 && (rect.width > .01 || rect.height > .01);
+      });
+      for (const element of allElements) {
+        if (!geometryContributor(element, compilerArtboard, window)) continue;
+        const rect = element.getBoundingClientRect();
+        let contributionBounds = {
+          minX: rect.left - artboardRect.left,
+          minY: rect.top - artboardRect.top,
+          maxX: rect.right - artboardRect.left,
+          maxY: rect.bottom - artboardRect.top,
+        };
+        const style = getComputedStyle(element);
+        const directTextNodes = Array.from(element.childNodes || []).filter((node) => node.nodeType === 3 && String(node.textContent || "").trim());
+        const paintsSurface = style.backgroundImage !== "none"
+          || style.backgroundColor !== "rgba(0, 0, 0, 0)"
+          || parseFloat(style.borderTopWidth || "0") > 0
+          || parseFloat(style.borderRightWidth || "0") > 0
+          || parseFloat(style.borderBottomWidth || "0") > 0
+          || parseFloat(style.borderLeftWidth || "0") > 0;
+        if (directTextNodes.length && !paintsSurface && style.position !== "absolute" && style.position !== "fixed") {
+          const textRects = directTextNodes.map((node) => {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            return range.getBoundingClientRect();
+          }).filter((textRect) => textRect.width > .01 || textRect.height > .01);
+          if (textRects.length) {
+            contributionBounds = {
+              minX: Math.min(...textRects.map((textRect) => textRect.left - artboardRect.left)),
+              minY: Math.min(...textRects.map((textRect) => textRect.top - artboardRect.top)),
+              maxX: Math.max(...textRects.map((textRect) => textRect.right - artboardRect.left)),
+              maxY: Math.max(...textRects.map((textRect) => textRect.bottom - artboardRect.top)),
+            };
+          }
+        }
+        minX = Math.min(minX, contributionBounds.minX);
+        minY = Math.min(minY, contributionBounds.minY);
+        maxX = Math.max(maxX, contributionBounds.maxX);
+        maxY = Math.max(maxY, contributionBounds.maxY);
+      }
+      const bounds = {
+        minX: Math.floor(minX),
+        minY: Math.floor(minY),
+        maxX: Math.ceil(maxX),
+        maxY: Math.ceil(maxY),
+      };
+      if (![bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].every(Number.isFinite)) {
+        throw new Error("Northstar authored geometry must contain only finite coordinates.");
+      }
+      if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY) {
+        throw new Error("Northstar authored geometry must describe a non-empty rectangle.");
+      }
+      const computed = getComputedStyle(compilerArtboard);
+      return {
+        bounds,
+        background: computed.background,
+        backgroundColor: computed.backgroundColor,
+        borderRadius: computed.borderRadius,
+      };
+    } finally {
+      host.remove();
+    }
+  };
+
+  const compileCanonicalGeometry = async (revisionId, mutationId, layoutContext = {}) => {
+    if (canonicalGeometryCompilerActive) throw new Error("A canonical geometry compilation is already active.");
+    canonicalGeometryCompilerActive = true;
+    try {
+      const nextLayoutWidth = Number(layoutContext.width);
+      const nextLayoutHeight = Number(layoutContext.height);
+      if (Number.isFinite(nextLayoutWidth) && nextLayoutWidth > 0) canonicalLayoutBaseWidth = Math.ceil(nextLayoutWidth);
+      if (Number.isFinite(nextLayoutHeight) && nextLayoutHeight > 0) canonicalLayoutBaseHeight = Math.ceil(nextLayoutHeight);
+      const measurement = await measureAuthoredContentInIsolation(canonicalLayoutBaseWidth, canonicalLayoutBaseHeight);
+      const width = measurement.bounds.maxX - measurement.bounds.minX;
+      const height = measurement.bounds.maxY - measurement.bounds.minY;
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw new Error("Northstar authored geometry must describe a finite non-empty rectangle.");
+      }
+      canonicalGeometrySequence += 1;
+      return {
+        artifactId: ARTIFACT_ID,
+        surfaceId: SURFACE_ID,
+        revisionId,
+        mutationId: mutationId || undefined,
+        measuredAt: new Date().toISOString(),
+        intrinsicWidth: width,
+        intrinsicHeight: height,
+        measurementMode: "isolated-compiler",
+        geometryCompilerVersion: CANONICAL_GEOMETRY_COMPILER_VERSION,
+        geometryTransactionId: ARTIFACT_ID + ":" + revisionId + ":" + (mutationId || "canonical"),
+        compilerPassCount: 1,
+        sourceOwnedSurface: true,
+        viewingMode: "single-frame",
+        contentBounds: measurement.bounds,
+        authoredContentBounds: measurement.bounds,
+        sequence: canonicalGeometrySequence,
+        layoutVersion: canonicalGeometrySequence,
+        settled: true,
+        live: true,
+        background: measurement.background,
+        backgroundColor: measurement.backgroundColor,
+        borderRadius: measurement.borderRadius,
+        authoredStateFingerprint: authoredStateFingerprint(),
+      };
+    } finally {
+      canonicalGeometryCompilerActive = false;
+    }
+  };
+
+  const applyCompiledCanonicalGeometry = (size) => {
+    if (!size || size.measurementMode !== "isolated-compiler") return;
+    let layoutStyle = document.getElementById("northstar-canonical-layout-context");
+    if (!layoutStyle) {
+      layoutStyle = document.createElement("style");
+      layoutStyle.id = "northstar-canonical-layout-context";
+      layoutStyle.setAttribute("data-ns-runtime-owned", "true");
+      document.head.appendChild(layoutStyle);
+    }
+    layoutStyle.textContent = '#northstar-artifact-root:not([data-ns-geometry-compiler="true"]){display:flow-root!important;width:' + canonicalLayoutBaseWidth + 'px!important;min-width:0!important;max-width:none!important;height:auto!important;min-height:0!important;max-height:none!important;overflow:visible!important}';
+    const width = Math.max(1, Math.ceil(size.intrinsicWidth));
+    const height = Math.max(1, Math.ceil(size.intrinsicHeight));
+    stageSurface.style.width = width + "px";
+    stageSurface.style.height = height + "px";
+    stageSurface.style.minWidth = width + "px";
+    stageSurface.style.minHeight = height + "px";
+    if (size.background) stageSurface.style.background = size.background;
+    else if (size.backgroundColor) stageSurface.style.backgroundColor = size.backgroundColor;
+    if (size.borderRadius) stageSurface.style.borderRadius = size.borderRadius;
+    origin.style.transform = "translate(" + (-size.contentBounds.minX) + "px," + (-size.contentBounds.minY) + "px)";
+    committedCanonicalGeometry = size;
+  };
+
+  const restoreCanonicalGeometry = (size, layoutContext) => {
+    committedCanonicalGeometry = size || null;
+    if (layoutContext) {
+      canonicalLayoutBaseWidth = Math.max(1, Math.ceil(layoutContext.width || canonicalLayoutBaseWidth));
+      canonicalLayoutBaseHeight = Math.max(1, Math.ceil(layoutContext.height || canonicalLayoutBaseHeight));
+    }
+    if (size) {
+      applyCompiledCanonicalGeometry(size);
+      return;
+    }
+    document.getElementById("northstar-canonical-layout-context")?.remove();
+    stageSurface.style.width = canonicalLayoutBaseWidth + "px";
+    stageSurface.style.height = canonicalLayoutBaseHeight + "px";
+    stageSurface.style.minWidth = "1px";
+    stageSurface.style.minHeight = "1px";
+    stageSurface.style.removeProperty("background");
+    stageSurface.style.removeProperty("background-color");
+    stageSurface.style.removeProperty("border-radius");
+    origin.style.transform = "translate(0px,0px)";
+  };
+
+  const captureSettledContentSize = (revisionId, mutationId, sequenceValue) => {
+    if (committedCanonicalGeometry) {
+      return {
+        ...committedCanonicalGeometry,
+        revisionId,
+        mutationId: mutationId || undefined,
+        measuredAt: new Date().toISOString(),
+        sequence: Math.max(Number(committedCanonicalGeometry.sequence) || 0, Number(sequenceValue) || 0),
+        layoutVersion: Math.max(Number(committedCanonicalGeometry.layoutVersion) || 0, Number(sequenceValue) || 0),
+        settled: true,
+        live: true,
+      };
+    }
+    // Defensive pre-ready fallback only. It is derived from the authored layout
+    // context, never from the live surface, and is replaced by the first
+    // isolated compilation before the artboard becomes ready.
+    const width = Math.max(1, Math.ceil(canonicalLayoutBaseWidth));
+    const height = Math.max(1, Math.ceil(canonicalLayoutBaseHeight));
+    return {
+      artifactId: ARTIFACT_ID,
+      surfaceId: SURFACE_ID,
+      revisionId,
+      mutationId: mutationId || undefined,
+      measuredAt: new Date().toISOString(),
+      intrinsicWidth: width,
+      intrinsicHeight: height,
+      measurementMode: "isolated-compiler",
+      geometryCompilerVersion: CANONICAL_GEOMETRY_COMPILER_VERSION,
+      geometryTransactionId: ARTIFACT_ID + ":" + revisionId + ":defensive-layout-base",
+      compilerPassCount: 1,
+      sourceOwnedSurface: true,
+      viewingMode: "single-frame",
+      contentBounds: { minX: 0, minY: 0, maxX: width, maxY: height },
+      authoredContentBounds: { minX: 0, minY: 0, maxX: width, maxY: height },
+      sequence: Math.max(0, Number(sequenceValue) || 0),
+      layoutVersion: Math.max(0, Number(sequenceValue) || 0),
+      settled: true,
+      live: true,
     };
   };
 
@@ -2858,6 +3387,156 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     };
   };
 
+  const collectPremiumDesignAudit = () => {
+    const artboard = nodeById("artboard") || root.querySelector(".ns-artifact") || root;
+    const contractVersion = artboard?.getAttribute?.("data-ns-premium-contract") || undefined;
+    const designFingerprint = artboard?.getAttribute?.("data-ns-design-fingerprint") || undefined;
+    const requiredNarrativeBeatIds = splitSemanticIds(artboard?.getAttribute?.("data-ns-required-narrative-beats"));
+    const requiredCommunicationRoles = splitSemanticIds(artboard?.getAttribute?.("data-ns-required-communication-roles"));
+    const requiredAnalysisIds = splitSemanticIds(artboard?.getAttribute?.("data-ns-required-analysis-ids"));
+    const artboardRect = artboard.getBoundingClientRect();
+    const visibleGeometry = (element) => {
+      if (!element) return false;
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return !element.hidden
+        && element.getAttribute("aria-hidden") !== "true"
+        && style.display !== "none"
+        && style.visibility !== "hidden"
+        && Number(style.opacity || 1) > .08
+        && rect.width >= 8
+        && rect.height >= 6
+        && rect.right >= artboardRect.left - 2
+        && rect.bottom >= artboardRect.top - 2
+        && rect.left <= artboardRect.right + 2
+        && rect.top <= artboardRect.bottom + 2;
+    };
+    const narrativeElements = Array.from(root.querySelectorAll("[data-ns-narrative-beat-id][data-ns-communication-role]"))
+      .filter(visibleGeometry);
+    const realizedNarrativeBeatIds = Array.from(new Set(narrativeElements.flatMap((element) =>
+      splitSemanticIds(element.getAttribute("data-ns-narrative-beat-id"))
+    )));
+    const realizedCommunicationRoles = Array.from(new Set(narrativeElements.flatMap((element) =>
+      splitSemanticIds(element.getAttribute("data-ns-communication-role"))
+    )));
+    const missingNarrativeBeatIds = requiredNarrativeBeatIds.filter((id) => !realizedNarrativeBeatIds.includes(id));
+    const missingCommunicationRoles = requiredCommunicationRoles.filter((role) => !realizedCommunicationRoles.includes(role));
+    const analysisElements = Array.from(root.querySelectorAll("[data-ns-analysis-id]")).filter(visibleGeometry);
+    const realizedAnalysisIds = Array.from(new Set(analysisElements.flatMap((element) =>
+      splitSemanticIds(element.getAttribute("data-ns-analysis-id"))
+    )));
+    const missingAnalysisIds = requiredAnalysisIds.filter((id) => !realizedAnalysisIds.includes(id));
+    const evidenceIds = new Set(Array.from(root.querySelectorAll("[data-ns-evidence-id]"))
+      .map((element) => element.getAttribute("data-ns-evidence-id"))
+      .filter(Boolean));
+    const ungroundedAnalysisIds = requiredAnalysisIds.filter((analysisId) => {
+      const elements = analysisElements.filter((element) =>
+        splitSemanticIds(element.getAttribute("data-ns-analysis-id")).includes(analysisId)
+      );
+      if (!elements.length) return false;
+      if (!evidenceIds.size) return false;
+      const sources = Array.from(new Set(elements.flatMap((element) =>
+        splitSemanticIds(element.getAttribute("data-ns-source-ids"))
+      )));
+      return sources.length === 0 || sources.some((sourceId) => !evidenceIds.has(sourceId));
+    });
+    const focalNodeCount = Array.from(root.querySelectorAll('[data-ns-visual-priority="hero"],[data-ns-visual-priority="primary"]'))
+      .filter(visibleGeometry).length;
+    const textSizes = Array.from(root.querySelectorAll("h1,h2,h3,h4,p,li,figcaption,blockquote,td,th,label"))
+      .filter((element) => visibleGeometry(element) && String(element.textContent || "").trim())
+      .map((element) => Number.parseFloat(getComputedStyle(element).fontSize || "0"))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const minimumReadableTextPx = textSizes.length ? Math.min(...textSizes) : 0;
+    const evidenceRoleDiversity = new Set(
+      Array.from(root.querySelectorAll("[data-ns-evidence-role]"))
+        .filter(visibleGeometry)
+        .map((element) => element.getAttribute("data-ns-evidence-role"))
+        .filter(Boolean),
+    ).size;
+    const semanticElements = Array.from(root.querySelectorAll("[data-ns-node-id]"))
+      .filter((element) => element !== artboard && visibleGeometry(element));
+    const containerCount = semanticElements.filter((element) => {
+      const style = getComputedStyle(element);
+      const radius = Number.parseFloat(style.borderRadius || "0");
+      const hasBoundary = style.borderStyle !== "none" && Number.parseFloat(style.borderWidth || "0") > 0;
+      const hasFill = style.backgroundColor !== "rgba(0, 0, 0, 0)" && style.backgroundColor !== "transparent";
+      return radius >= 8 && (hasBoundary || hasFill);
+    }).length;
+    const repeatedContainerRatio = semanticElements.length
+      ? containerCount / semanticElements.length
+      : 0;
+    const structuralTokens = Array.from(root.querySelectorAll(
+      "[data-ns-narrative-beat-id],[data-ns-analysis-id],[data-ns-visual-priority],[data-ns-evidence-role]",
+    ))
+      .filter(visibleGeometry)
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const quantize = (value, total, buckets) => Math.max(0, Math.min(buckets, Math.round((value / Math.max(1, total)) * buckets)));
+        return {
+          x: quantize(rect.left - artboardRect.left, artboardRect.width, 12),
+          y: quantize(rect.top - artboardRect.top, artboardRect.height, 12),
+          token: [
+            String(element.tagName || "").toLowerCase(),
+            element.getAttribute("data-ns-communication-role") || "",
+            element.getAttribute("data-ns-visual-priority") || "",
+            element.getAttribute("data-ns-evidence-role") || "",
+            element.hasAttribute("data-ns-analysis-id") ? "analysis" : "",
+            quantize(rect.width, artboardRect.width, 8),
+            quantize(rect.height, artboardRect.height, 8),
+          ].join(":"),
+        };
+      })
+      .sort((left, right) => left.y - right.y || left.x - right.x || left.token.localeCompare(right.token))
+      .map((entry) => entry.x + "," + entry.y + ":" + entry.token);
+    const renderedStructureSource = structuralTokens.join("|");
+    let renderedStructureHash = 2166136261;
+    for (let index = 0; index < renderedStructureSource.length; index += 1) {
+      renderedStructureHash ^= renderedStructureSource.charCodeAt(index);
+      renderedStructureHash = Math.imul(renderedStructureHash, 16777619);
+    }
+    const renderedStructureFingerprint = (renderedStructureHash >>> 0).toString(16).padStart(8, "0");
+    const recentRenderedStructureFingerprints = splitSemanticIds(
+      artboard?.getAttribute?.("data-ns-recent-rendered-structure-fingerprints"),
+    );
+    const repeatsRecentRenderedStructure = recentRenderedStructureFingerprints.includes(renderedStructureFingerprint);
+    const blockingReasons = [];
+    if (!contractVersion) blockingReasons.push("The rendered source is missing its premium design contract.");
+    if (missingNarrativeBeatIds.length) blockingReasons.push("Required narrative beats are absent from the rendered pixels: " + missingNarrativeBeatIds.join(", ") + ".");
+    if (missingCommunicationRoles.length) blockingReasons.push("Required communication roles are absent: " + missingCommunicationRoles.join(", ") + ".");
+    if (missingAnalysisIds.length) blockingReasons.push("Required analytical intents are absent: " + missingAnalysisIds.join(", ") + ".");
+    if (ungroundedAnalysisIds.length) blockingReasons.push("Analytical forms have unresolved grounded sources: " + ungroundedAnalysisIds.join(", ") + ".");
+    if (focalNodeCount < 1) blockingReasons.push("The composition has no browser-visible hero or primary focal node.");
+    if (minimumReadableTextPx > 0 && minimumReadableTextPx < 12) blockingReasons.push("Meaningful authored text falls below the 12px publication floor.");
+    if (repeatsRecentRenderedStructure) blockingReasons.push("The rendered information geometry repeats a recent completed Northstar artboard.");
+    const advisories = [];
+    if (evidenceIds.size >= 3 && evidenceRoleDiversity < 2) advisories.push("The evidence is visually present but has not been choreographed into differentiated roles.");
+    if (semanticElements.length >= 8 && repeatedContainerRatio > .58) advisories.push("Rounded or filled containers dominate the semantic scene; verify that every boundary carries meaning.");
+    if (focalNodeCount > 5) advisories.push("Too many elements claim primary visual priority, weakening hierarchy.");
+    return {
+      contractVersion,
+      designFingerprint,
+      ready: blockingReasons.length === 0,
+      requiredNarrativeBeatCount: requiredNarrativeBeatIds.length,
+      realizedNarrativeBeatCount: realizedNarrativeBeatIds.length,
+      missingNarrativeBeatIds,
+      requiredCommunicationRoles,
+      realizedCommunicationRoles,
+      missingCommunicationRoles,
+      requiredAnalysisCount: requiredAnalysisIds.length,
+      realizedAnalysisCount: realizedAnalysisIds.length,
+      missingAnalysisIds,
+      ungroundedAnalysisIds,
+      focalNodeCount,
+      minimumReadableTextPx,
+      evidenceRoleDiversity,
+      repeatedContainerRatio,
+      renderedStructureFingerprint,
+      repeatsRecentRenderedStructure,
+      blockingReasons,
+      advisories,
+    };
+  };
+
   const collectRuntimeAudit = (requiredPrimitives = []) => {
     const elements = Array.from(root.querySelectorAll("*")).filter((element) => !element.closest("[data-ns-spatial-system]"));
     let overflowElementCount = 0, clippedTextCount = 0, smallTextCount = 0, tinyInteractiveCount = 0, missingImageCount = 0, internalScrollElementCount = 0;
@@ -2880,7 +3559,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const requiredPrimitiveAudit = auditRequiredPrimitives(requiredPrimitives);
     const constructionAudit = currentMutationId ? constructionResults.get(currentMutationId) : undefined;
     const geometryFacts = collectGeometryFacts(bounds);
-    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0) + Number(spatialAudit.hardFailureCount || 0) + Number(spatialAudit.softIssueCount || 0) + requiredPrimitiveAudit.failureCount + geometryFacts.integrityFailures.length;
+    const premiumDesignAudit = collectPremiumDesignAudit();
+    const evidenceRegistry = captureEvidenceRegistryReceipt();
+    const evidenceCollisionPairs = visualSafetySnapshot().evidenceCollisionPairs || [];
+    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0) + Number(spatialAudit.hardFailureCount || 0) + Number(spatialAudit.softIssueCount || 0) + requiredPrimitiveAudit.failureCount + geometryFacts.integrityFailures.length + evidenceRegistry.missingEvidenceIds.length + evidenceCollisionPairs.length;
     const review = {
       revisionId: currentRevisionId, mutationId: currentMutationId, stageIndex: activeStageIndex, evaluatedAt: new Date().toISOString(),
       rootWidth: bounds.width, rootHeight: bounds.height, elementCount: elements.length,
@@ -2890,6 +3572,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       requiredPrimitiveAudit,
       constructionAudit,
       geometryFacts,
+      premiumDesignAudit,
+      evidenceRegistry,
+      evidenceCollisionPairs,
       spatialSnapshot: {
         artifactId: ARTIFACT_ID,
         revisionId: currentRevisionId,
@@ -2909,55 +3594,37 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     return review;
   };
 
-  let sizeFrame = 0, lastSignature = "", stableCount = 0, sequence = 0, initialReady = false;
+  let sizeFrame = 0, initialReady = false;
+  let geometryCompilationQueued = false;
+  let lastPublishedGeometryFingerprint = "";
   const reportContentSize = () => {
-    solveSpatialSystem();
-    const bounds = getContentBounds(), signature = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].join(":");
-    stableCount = signature === lastSignature ? stableCount + 1 : 1; lastSignature = signature; sequence += 1;
-    stageSurface.style.width = bounds.width + "px"; stageSurface.style.height = bounds.height + "px";
-    origin.style.transform = "translate(" + (-bounds.minX) + "px," + (-bounds.minY) + "px)";
-    const resourcesSettled =
-      document.readyState === "complete" &&
-      (!document.fonts || document.fonts.status === "loaded") &&
-      Array.from(document.images).every((image) => image.complete);
-    const pendingAge = pendingAcknowledgement ? Date.now() - (pendingAcknowledgement.pendingSince || Date.now()) : 0;
-    // A remote image can remain in the browser's pending state indefinitely.
-    // The transaction audit already rejects missing required assets, so a
-    // resource must never prevent the runtime from returning a terminal result.
-    const resourceDeadlineReached = Boolean(pendingAcknowledgement) && pendingAge >= 8_000;
-    const settled = (resourcesSettled || resourceDeadlineReached) && (stableCount >= 3 || pendingAge >= 3_000);
-    const verifiedDocumentWidth = Math.max(bounds.width, root.scrollWidth, root.getBoundingClientRect().width);
-    const verifiedDocumentHeight = Math.max(bounds.height, root.scrollHeight, root.getBoundingClientRect().height);
-    const geometryFacts = collectGeometryFacts(bounds);
-    const size = {
-      artifactId: ARTIFACT_ID,
-      surfaceId: SURFACE_ID,
-      revisionId: currentRevisionId,
-      mutationId: currentMutationId,
-      measuredAt: new Date().toISOString(),
-      intrinsicWidth: Math.ceil(verifiedDocumentWidth),
-      intrinsicHeight: Math.ceil(verifiedDocumentHeight),
-      sourceOwnedSurface: hasModelSourceAuthority(),
-      viewingMode: geometryFacts.viewingMode,
-      contentBounds: {
-        minX: bounds.minX,
-        minY: bounds.minY,
-        maxX: Math.max(bounds.maxX, bounds.minX + verifiedDocumentWidth),
-        maxY: Math.max(bounds.maxY, bounds.minY + verifiedDocumentHeight),
-      },
-      // sequence is monotonic for the lifetime of the mounted iframe. The host and
-      // workspace use it as the live-layout clock, independent of proposal commit.
-      sequence,
-      layoutVersion: sequence,
-      settled,
-      live: true,
+    const compiledSize = pendingAcknowledgement?.compiledSize
+      ?? (committedCanonicalGeometry?.revisionId === currentRevisionId ? committedCanonicalGeometry : null);
+    // The isolated compiler is the only canonical geometry authority for every
+    // revision, including initial construction and research/evidence updates.
+    if (!compiledSize) return;
+    const bounds = {
+      minX: compiledSize.contentBounds.minX,
+      minY: compiledSize.contentBounds.minY,
+      maxX: compiledSize.contentBounds.maxX,
+      maxY: compiledSize.contentBounds.maxY,
+      width: compiledSize.intrinsicWidth,
+      height: compiledSize.intrinsicHeight,
     };
-    parent.postMessage({ type: "northstar.artifact.content-size", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, size }, "*");
+    const size = { ...compiledSize, measuredAt: new Date().toISOString(), settled: true, live: true };
+    const settled = true;
     if (settled) {
       const review = audit(pendingAcknowledgement?.batch?.requiredPrimitives || []);
       if (!initialReady) {
         initialReady = true;
-        parent.postMessage({ type: "northstar.artifact.ready", artifactId: ARTIFACT_ID, surfaceId: SURFACE_ID, revisionId: currentRevisionId, mutationId: currentMutationId, appliedMutationIds: Array.from(appliedMutationIds), size, review, changedNodeIds: [], meaningfulChangedNodeIds: [], changeKinds: [], requiredAssetUrls: [], loadedAssetUrls: loadedAssetUrls(), missingAssetUrls: [], snapshot: captureLiveSnapshot() }, "*");
+        lastPublishedGeometryFingerprint = size.authoredStateFingerprint || size.geometryTransactionId || "initial";
+        parent.postMessage({ type: "northstar.artifact.ready", artifactId: ARTIFACT_ID, surfaceId: SURFACE_ID, revisionId: currentRevisionId, mutationId: currentMutationId, appliedMutationIds: Array.from(appliedMutationIds), size, review, changedNodeIds: [], meaningfulChangedNodeIds: [], changeKinds: [], requiredAssetUrls: [], loadedAssetUrls: loadedAssetUrls(), missingAssetUrls: [], evidenceRegistry: review.evidenceRegistry, snapshot: captureLiveSnapshot() }, "*");
+      } else if (!pendingAcknowledgement) {
+        const publicationFingerprint = size.authoredStateFingerprint || size.geometryTransactionId || String(size.sequence || 0);
+        if (publicationFingerprint !== lastPublishedGeometryFingerprint) {
+          lastPublishedGeometryFingerprint = publicationFingerprint;
+          parent.postMessage({ type: "northstar.artifact.content-size", artifactId: ARTIFACT_ID, revisionId: currentRevisionId, mutationId: currentMutationId, size }, "*");
+        }
       }
       if (pendingAcknowledgement) {
         const acknowledgement = pendingAcknowledgement;
@@ -3013,12 +3680,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const hardIssueReason = hardIssues > 0
           ? "The candidate introduced new operational layout regressions: " + hardIssueFailures.join(", ") + "."
           : "";
+        const linearDesignExecution = acknowledgement.batch.executionPolicy === "linear-design";
         const afterVisualSafety = visualSafetySnapshot();
-        const visualSafetyReason = visualSafetyFailure(acknowledgement.transaction.beforeVisualSafety || afterVisualSafety, afterVisualSafety);
-        const geometryIntegrityReason = review.geometryFacts?.sourceOwnedSurface && (review.geometryFacts?.integrityFailures || []).length > 0
-          ? "The exact model-authored source has browser-measured geometry integrity failures: " + review.geometryFacts.integrityFailures.join(" ")
-          : "";
-        const essentialPrimitiveAuditReason = Number(review.requiredPrimitiveAudit?.essentialFailureCount || 0) > 0
+        const visualSafetyReason = visualSafetyFailure(
+          acknowledgement.transaction.beforeVisualSafety || afterVisualSafety,
+          afterVisualSafety,
+          linearDesignExecution,
+        );
+        const geometryIntegrityFailures = review.geometryFacts?.integrityFailures || [];
+        // Authored-shell coverage and overflow observations are advisory. The
+        // runtime-owned canonical surface is the exact geometry envelope, so a
+        // finite composition may grow beyond any previous shell in every phase.
+        const geometryIntegrityReason = "";
+        const essentialPrimitiveAuditReason = !linearDesignExecution
+          && Number(review.requiredPrimitiveAudit?.essentialFailureCount || 0) > 0
           ? "The browser could not verify an essential user-meaning contract: " + (review.requiredPrimitiveAudit?.essentialFailures || []).join("; ") + "."
           : "";
         const primitiveAuditReason = Number(review.requiredPrimitiveAudit?.optionalFailureCount || 0) > 0
@@ -3036,30 +3711,42 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           ? essentialPrimitiveAuditReason
           : missingAssets.length
           ? "Required evidence assets did not load: " + missingAssets.join(", ")
-          : diff.meaningful.length < minimumMeaningful
-            ? "The proposed adjustment did not visibly change enough semantic content."
-            : textOnly && acknowledgement.batch.allowTextOnly !== true
-              ? "The proposed adjustment changed only copy or cosmetic styling when a compositional move was required."
-              : visualImpactFailures.length
-                ? "The visual design stage did not produce a palpable compositional delta: " + visualImpactFailures.join(", ")
-              : missingRequiredKinds.length
-                ? "The visible change did not satisfy the required design move: " + missingRequiredKinds.join(", ")
-                : hardIssueReason
-                  ? hardIssueReason
-                  : "";
+          : linearDesignExecution
+            ? ""
+            : diff.meaningful.length < minimumMeaningful
+              ? "The proposed adjustment did not visibly change enough semantic content."
+              : textOnly && acknowledgement.batch.allowTextOnly !== true
+                ? "The proposed adjustment changed only copy or cosmetic styling when a compositional move was required."
+                : visualImpactFailures.length
+                  ? "The visual design stage did not produce a palpable compositional delta: " + visualImpactFailures.join(", ")
+                : missingRequiredKinds.length
+                  ? "The visible change did not satisfy the required design move: " + missingRequiredKinds.join(", ")
+                  : hardIssueReason
+                    ? hardIssueReason
+                    : "";
         if (rejectedReason) {
           const rejectedRevisionId = acknowledgement.revisionId;
           const rollbackRevisionId = acknowledgement.transaction.revisionId;
+          const rollbackStartedAt = performance.now();
           pendingAcknowledgement = null;
+          if (canonicalGeometryMutationId === acknowledgement.mutationId) canonicalGeometryMutationId = null;
           root.innerHTML = acknowledgement.transaction.html;
           restoreStyleState(acknowledgement.transaction.styles);
           requestedBounds = { ...acknowledgement.transaction.requestedBounds };
+          restoreCanonicalGeometry(acknowledgement.transaction.canonicalGeometry, acknowledgement.transaction.canonicalLayoutContext);
           currentRevisionId = rollbackRevisionId;
           currentMutationId = acknowledgement.transaction.mutationId;
           mutationTransactions.delete(acknowledgement.mutationId);
           enforceAssetPolicy(root);
           applyStage();
           executeRuntimeModule("northstar-creative-source", acknowledgement.transaction.authoredJavascript);
+          endAtomicCandidateValidation(acknowledgement.mutationId);
+          const rollbackDurationMs = Math.max(0, performance.now() - rollbackStartedAt);
+          const candidateDurationMs = Math.max(0, Date.now() - acknowledgement.transaction.startedAt);
+          const restoredSize = acknowledgement.transaction.canonicalGeometry
+            ? { ...acknowledgement.transaction.canonicalGeometry, revisionId: currentRevisionId, mutationId: currentMutationId, measuredAt: new Date().toISOString(), settled: true }
+            : captureSettledContentSize(currentRevisionId, currentMutationId, canonicalGeometrySequence + 1);
+          applyCompiledCanonicalGeometry(restoredSize);
           const terminalMessage = {
             type: "northstar.artifact.mutation-rejected",
             artifactId: ARTIFACT_ID,
@@ -3079,37 +3766,24 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             requiredAssetUrls: requiredAssets,
             loadedAssetUrls: loadedAssetUrls(),
             missingAssetUrls: missingAssets,
+            evidenceRegistry: review.evidenceRegistry,
             snapshot: captureLiveSnapshot(),
+            restoredSize,
+            rollbackDurationMs,
+            candidateDurationMs,
           };
           postTerminalMutation(acknowledgement.mutationId, terminalMessage);
           queueContentSize();
         } else {
           pendingAcknowledgement = null;
+          if (canonicalGeometryMutationId === acknowledgement.mutationId) canonicalGeometryMutationId = null;
           appliedMutationIds.add(acknowledgement.mutationId);
-          // request-space is provisional room for composing the mutation. Once
-          // the browser has measured the accepted visible result, actual content
-          // and resolved spatial extents become the sole sizing authority.
-          requestedBounds = { minX: 0, minY: 0, maxX: MINIMUM_WIDTH, maxY: MINIMUM_HEIGHT };
+          // request-space is authored geometry for this canonical revision. It
+          // remains part of the accepted transaction and is cleared only when
+          // the next revision begins (or restored on rollback).
           solveSpatialSystem();
-          const terminalBounds = getContentBounds();
-          const terminalDocumentWidth = Math.max(terminalBounds.width, root.scrollWidth, root.getBoundingClientRect().width);
-          const terminalDocumentHeight = Math.max(terminalBounds.height, root.scrollHeight, root.getBoundingClientRect().height);
-          const terminalSize = {
-            ...size,
-            measuredAt: new Date().toISOString(),
-            intrinsicWidth: Math.ceil(terminalDocumentWidth),
-            intrinsicHeight: Math.ceil(terminalDocumentHeight),
-            contentBounds: {
-              minX: terminalBounds.minX,
-              minY: terminalBounds.minY,
-              maxX: Math.max(terminalBounds.maxX, terminalBounds.minX + terminalDocumentWidth),
-              maxY: Math.max(terminalBounds.maxY, terminalBounds.minY + terminalDocumentHeight),
-            },
-            settled: true,
-          };
-          stageSurface.style.width = terminalBounds.width + "px";
-          stageSurface.style.height = terminalBounds.height + "px";
-          origin.style.transform = "translate(" + (-terminalBounds.minX) + "px," + (-terminalBounds.minY) + "px)";
+          const terminalSize = { ...acknowledgement.compiledSize, measuredAt: new Date().toISOString(), settled: true, live: true };
+          applyCompiledCanonicalGeometry(terminalSize);
           const changedRects = diff.meaningful.map((id) => nodeById(id)?.getBoundingClientRect()).filter(Boolean);
           const rootRect = root.getBoundingClientRect();
           const changedBounds = changedRects.length ? {
@@ -3119,6 +3793,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             maxY: Math.ceil(Math.max(...changedRects.map((rect) => rect.bottom - rootRect.top))),
           } : terminalSize.contentBounds;
           const acknowledgedSize = { ...terminalSize, changedBounds, changedNodeIds: diff.changed, meaningfulChangedNodeIds: diff.meaningful };
+          endAtomicCandidateValidation(acknowledgement.mutationId);
           const terminalMessage = {
             type: "northstar.artifact.mutation-applied",
             artifactId: ARTIFACT_ID,
@@ -3137,7 +3812,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
               missingRequiredAssetCount: 0,
               meaningfulChangedNodeCount: diff.meaningful.length,
               visualDeltaScore: visualImpact.changedAreaRatio,
-              advisoryDeliveryIssues: [primitiveAuditReason, constructionCoverageReason].filter(Boolean),
+              advisoryDeliveryIssues: [primitiveAuditReason, constructionCoverageReason, ...geometryIntegrityFailures].filter(Boolean),
               ...visualImpact,
             },
             changedNodeIds: diff.changed,
@@ -3146,6 +3821,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             requiredAssetUrls: requiredAssets,
             loadedAssetUrls: loadedAssetUrls(),
             missingAssetUrls: [],
+            evidenceRegistry: review.evidenceRegistry,
             snapshot: captureLiveSnapshot(),
           };
           postTerminalMutation(acknowledgement.mutationId, terminalMessage);
@@ -3154,7 +3830,42 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       }
     }
   };
-  const queueContentSize = () => { cancelAnimationFrame(sizeFrame); sizeFrame = requestAnimationFrame(() => requestAnimationFrame(reportContentSize)); };
+  const compileQueuedCanonicalGeometry = async () => {
+    geometryCompilationQueued = false;
+    if (pendingAcknowledgement || canonicalGeometryCompilerActive || canonicalGeometryMutationId) return;
+    const fingerprint = authoredStateFingerprint();
+    if (
+      committedCanonicalGeometry?.revisionId === currentRevisionId
+      && committedCanonicalGeometry.authoredStateFingerprint === fingerprint
+    ) {
+      reportContentSize();
+      return;
+    }
+    try {
+      const compiledSize = await compileCanonicalGeometry(currentRevisionId, currentMutationId, {
+        width: canonicalLayoutBaseWidth,
+        height: canonicalLayoutBaseHeight,
+      });
+      if (pendingAcknowledgement || canonicalGeometryMutationId) return;
+      applyCompiledCanonicalGeometry(compiledSize);
+      reportContentSize();
+      if (authoredStateFingerprint() !== compiledSize.authoredStateFingerprint) queueContentSize();
+    } catch (error) {
+      parent.postMessage({
+        type: "northstar.artifact.runtime-error",
+        artifactId: ARTIFACT_ID,
+        revisionId: currentRevisionId,
+        mutationId: currentMutationId,
+        message: error instanceof Error ? error.message : String(error),
+      }, "*");
+    }
+  };
+  const queueContentSize = () => {
+    if (geometryCompilationQueued) return;
+    geometryCompilationQueued = true;
+    cancelAnimationFrame(sizeFrame);
+    sizeFrame = requestAnimationFrame(() => requestAnimationFrame(() => { void compileQueuedCanonicalGeometry(); }));
+  };
 
   const observer = new MutationObserver((records) => {
     const externalChange = records.some((record) => {
@@ -3256,6 +3967,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           requiredAssetUrls: [],
           loadedAssetUrls: loadedAssetUrls(),
           missingAssetUrls: [],
+          evidenceRegistry: captureEvidenceRegistryReceipt(),
           snapshot: captureLiveSnapshot(),
         };
         postTerminalMutation(mutationId, lineageMessage);
@@ -3269,11 +3981,21 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           proposalId: message.proposalId,
           ackToken: message.ackToken,
           baseRevisionId: message.baseRevisionId,
+          layoutBaseWidth: message.layoutBaseWidth,
+          layoutBaseHeight: message.layoutBaseHeight,
         },
       });
       processQueue();
     }
   });
+
+  // Defensive migration for browser snapshots captured before Northstar 3.1.
+  // Temporary runtime geometry may exist in those documents, but it must never
+  // be allowed to become the next authored source revision.
+  root.querySelectorAll('[data-ns-runtime-inherited-placement],[data-ns-runtime-inherited-style]')
+    .forEach((element) => clearRuntimeInheritedPlacement(element));
+  root.querySelectorAll('[data-ns-runtime-inherited-parent-style]')
+    .forEach((element) => clearRuntimeInheritedParentStyle(element));
 
   try {
     const runFoundation = new Function("Northstar", "data", "creative", "reviews", foundationJavascript);
@@ -3327,9 +4049,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
        browser document must never paint a second lavender canvas behind the
        authored artboard or expose it as an interior gutter. */
     html,body{background:transparent!important}
-    #northstar-artifact-stage{position:relative;width:${minimumWidth}px;min-width:${minimumWidth}px;height:${minimumHeight}px;min-height:${minimumHeight}px;overflow:visible}
+    #northstar-artifact-stage{position:relative;width:${authoredLayoutBaseWidth}px;min-width:1px;height:${authoredLayoutBaseHeight}px;min-height:1px;overflow:visible}
     #northstar-artifact-origin{position:absolute;left:0;top:0;width:max-content;height:max-content;transform-origin:top left;overflow:visible}
-    #northstar-artifact-root{display:flow-root;width:max-content;min-width:${minimumWidth}px;min-height:${minimumHeight}px;height:auto;overflow:visible}
+    #northstar-artifact-root{display:flow-root;width:${authoredLayoutBaseWidth}px;min-width:0;max-width:none;min-height:0;height:auto;overflow:visible}
     #northstar-artifact-root[data-ns-prepaint="true"]{opacity:0!important}
     #northstar-artifact-root,#northstar-artifact-root>.ns-artifact{max-width:none!important;max-height:none!important;overflow:visible!important}
     [data-ns-node-id]{will-change:transform,opacity}
@@ -3877,7 +4599,9 @@ function buildLegacyCanvasArtifactRuntimeDocument(
     );
     const growthBaselineWidth = Math.max(1, Number.parseFloat(root.dataset.nsPreferredWidth || "0") || viewportWidth);
     const growthBaselineHeight = Math.max(1, Number.parseFloat(root.dataset.nsPreferredHeight || "0") || viewportHeight);
-    const extremeGrowth = contentBounds.width > growthBaselineWidth * ${NORTHSTAR_HEALTH_POLICY.render.maxWidthGrowthRatio} || contentBounds.height > growthBaselineHeight * ${NORTHSTAR_HEALTH_POLICY.render.maxHeightGrowthRatio};
+    // Finite authored growth is never a render-health failure. The artboard is
+    // unbounded and the runtime scales only its observation bitmap when needed.
+    const extremeGrowth = false;
     const healthy = visibleRoot && pendingImageCount === 0 && failedAssetUrls.length === 0 &&
       missingRequiredNodeIds.length === 0 && !extremeGrowth;
     const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount +

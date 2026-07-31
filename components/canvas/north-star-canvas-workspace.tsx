@@ -99,8 +99,12 @@ import {
   getCanvasDiagnostics,
   getCanvasRunTelemetry,
   recordCanvasDiagnostic,
+  recordNorthstarCandidateSourceArchive,
+  settleNorthstarCandidateSourceArchive,
   subscribeCanvasDiagnostics,
   summarizeCanvasDiagnosticSeverities,
+  summarizeNorthstarRunOutcome,
+  summarizeNorthstarRuntimeAuthorityDiagnostics,
   type CanvasDiagnosticEvent,
   type CanvasDiagnosticSeverity,
 } from "@/lib/canvas-ai/canvas-diagnostics";
@@ -113,7 +117,9 @@ import {
 } from "@/lib/canvas-ai/northstar-client-run-settlement";
 import { applyNorthstarFault, consumeNorthstarFault } from "@/lib/canvas-ai/northstar-fault-injection";
 import {
+  isNorthstarSpeculativeBrowserCandidate,
   materializeNorthstarBrowserCommit,
+  northstarTerminalEventSettlesCandidate,
   type NorthstarBrowserCommit,
 } from "@/lib/canvas-ai/northstar-transaction-kernel";
 import {
@@ -8339,6 +8345,13 @@ export function NorthStarCanvasWorkspace({
   const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: DEFAULT_CANVAS_ZOOM });
   const artifactAutoFollowSuspendedUntilRef = useRef(0);
   const artifactContentSizeSequenceRef = useRef<Map<string, number>>(new Map());
+  // Candidate source is an input to the mounted browser transaction. It is
+  // intentionally separate from `objectsRef`, which remains the accepted
+  // Canvas lineage until an exact browser commit arrives.
+  const pendingArtifactCandidatesRef = useRef<Map<string, CanvasCodeArtifactPayload>>(new Map());
+  // Design-stage actions use an independent pending transport so the existing
+  // research/foundation lifecycle remains byte-for-byte behaviorally unchanged.
+  const pendingLinearDesignActionsRef = useRef<Map<string, CanvasCodeArtifactPayload>>(new Map());
   const marqueeRef = useRef<Rect | null>(null);
   const moveSnapLockRef = useRef<MoveSnapLock>({});
   const resizeSnapLockRef = useRef<ResizeSnapLock>({});
@@ -8368,6 +8381,7 @@ export function NorthStarCanvasWorkspace({
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnosticEvents, setDiagnosticEvents] = useState<CanvasDiagnosticEvent[]>([]);
   const [creativeActivity, setCreativeActivity] = useState<NorthstarCreativeActivity | null>(null);
+  const [, bumpPendingArtifactCandidates] = useState(0);
 
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: DEFAULT_CANVAS_ZOOM });
   const [objects, setObjectsState] = useState<CanvasObject[]>([]);
@@ -10677,10 +10691,13 @@ export function NorthStarCanvasWorkspace({
             }
 
             const artifactPackage = codeArtifactAction.package;
+            const linearDesignAction = codeArtifactAction.executionMode === "linear-design";
             const leaseSurfaceId = artifactPackage.surfaceId ?? artifactPackage.artifactId;
-            const activeLease = activeBrowserCreativeLease(leaseSurfaceId);
+            const activeLease = linearDesignAction ? undefined : activeBrowserCreativeLease(leaseSurfaceId);
             const claim = artifactPackage.creativeLease;
-            if (activeLease) {
+            if (linearDesignAction && claim) {
+              throw new Error("LINEAR_DESIGN_PROTOCOL_INVALID: design actions cannot carry a creative lease.");
+            } else if (activeLease) {
               if (!claim || claim.leaseId !== activeLease.leaseId || claim.ownerRunId !== activeLease.ownerRunId) {
                 throw new Error(`SCENE_LEASE_CONFLICT: surface ${leaseSurfaceId} is owned by creative run ${activeLease.ownerRunId}.`);
               }
@@ -10700,7 +10717,27 @@ export function NorthStarCanvasWorkspace({
                 object.type === "code-artifact" &&
                 object.codeArtifact?.artifactId === authoredArtifact.artifactId,
             );
-            const artifact = authoredArtifact;
+            const linearDesignTransportValid = Boolean(
+              existing?.codeArtifact
+              && authoredArtifact.parentRevisionId === existing.codeArtifact.revisionId
+              && authoredArtifact.pendingAckToken
+              && authoredArtifact.mutationJournal?.length === 1
+              && authoredArtifact.mutationJournal[0]?.executionPolicy === "linear-design"
+            );
+            if (linearDesignAction && !linearDesignTransportValid) {
+              throw new Error(
+                `LINEAR_DESIGN_PROTOCOL_INVALID: revision ${authoredArtifact.revisionId} must contain exactly one ordered action against the current mounted revision.`,
+              );
+            }
+            const transactionalCandidate = linearDesignAction
+              ? true
+              : isNorthstarSpeculativeBrowserCandidate(
+                  existing?.codeArtifact,
+                  authoredArtifact,
+                );
+            const artifact = transactionalCandidate && existing?.codeArtifact
+              ? existing.codeArtifact
+              : authoredArtifact;
             const center = canvasCenter();
             const preferredRect: Rect = existing?.codeArtifact
               ? {
@@ -10732,6 +10769,21 @@ export function NorthStarCanvasWorkspace({
               ? preferredRect
               : findFreeRect(preferredRect, occupied, { margin: 140, step: 320, maxRings: 12 });
             const objectId = existing?.id ?? makeId();
+            if (transactionalCandidate && linearDesignAction) {
+              pendingLinearDesignActionsRef.current.set(objectId, authoredArtifact);
+              pendingArtifactCandidatesRef.current.delete(objectId);
+              bumpPendingArtifactCandidates((version) => version + 1);
+            } else if (transactionalCandidate) {
+              pendingArtifactCandidatesRef.current.set(objectId, authoredArtifact);
+              pendingLinearDesignActionsRef.current.delete(objectId);
+              bumpPendingArtifactCandidates((version) => version + 1);
+            } else {
+              const clearedCandidate = pendingArtifactCandidatesRef.current.delete(objectId);
+              const clearedLinearAction = pendingLinearDesignActionsRef.current.delete(objectId);
+              if (clearedCandidate || clearedLinearAction) {
+                bumpPendingArtifactCandidates((version) => version + 1);
+              }
+            }
             const nextObject: CanvasBoxObject = {
               ...(existing ?? createBoxObject("frame", rect)),
               id: objectId,
@@ -10828,12 +10880,16 @@ export function NorthStarCanvasWorkspace({
               });
             }
             const ids = storeResult([objectId]);
-            const stage = artifact.stagePlan?.[artifact.activeStageIndex ?? 0];
+            const stage = authoredArtifact.stagePlan?.[authoredArtifact.activeStageIndex ?? 0];
             return {
               ok: true,
-              detail: `${existing ? "Updated" : "Created"} “${artifact.title}” as one live standard-web artifact and completed the ${stage?.label?.toLowerCase() ?? "foundation"} stage.`,
+              detail: transactionalCandidate
+                ? linearDesignAction
+                  ? `Applied the next ordered design action to “${authoredArtifact.title}” while retaining the current Canvas revision until the browser returns its exact result.`
+                  : `Staged “${authoredArtifact.title}” as an atomic browser candidate while retaining the accepted Canvas revision.`
+                : `${existing ? "Updated" : "Created"} “${artifact.title}” as one live standard-web artifact and completed the ${stage?.label?.toLowerCase() ?? "foundation"} stage.`,
               objectIds: ids,
-              targetLabel: artifact.title,
+              targetLabel: authoredArtifact.title,
             };
           }
 
@@ -14879,6 +14935,7 @@ export function NorthStarCanvasWorkspace({
               <CanvasBoxObjectView
                 key={object.id}
                 object={object}
+                pendingArtifact={pendingLinearDesignActionsRef.current.get(object.id) ?? pendingArtifactCandidatesRef.current.get(object.id)}
                 selected={selectedIdSet.has(object.id)}
                 selectedCount={selectedIds.length}
                 viewportZoom={viewport.zoom}
@@ -14925,20 +14982,26 @@ export function NorthStarCanvasWorkspace({
                     if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
                       return candidate;
                     }
-                    if (
-                      candidate.codeArtifact.artifactId !== size.artifactId
-                      || candidate.codeArtifact.revisionId !== size.revisionId
-                    ) return candidate;
+                    const pendingArtifact = pendingLinearDesignActionsRef.current.get(candidate.id) ?? pendingArtifactCandidatesRef.current.get(candidate.id);
+                    const sizingArtifact =
+                      candidate.codeArtifact.artifactId === size.artifactId
+                        && candidate.codeArtifact.revisionId === size.revisionId
+                        ? candidate.codeArtifact
+                        : pendingArtifact?.artifactId === size.artifactId
+                            && pendingArtifact.revisionId === size.revisionId
+                          ? pendingArtifact
+                          : undefined;
+                    if (!sizingArtifact) return candidate;
 
                     const previousIntrinsicWidth = Math.max(
                       1,
-                      candidate.source?.originalWidth ?? candidate.codeArtifact.preferredWidth,
+                      candidate.source?.originalWidth ?? sizingArtifact.preferredWidth,
                     );
                     const previousIntrinsicHeight = Math.max(
                       1,
-                      candidate.source?.originalHeight ?? candidate.codeArtifact.preferredHeight,
+                      candidate.source?.originalHeight ?? sizingArtifact.preferredHeight,
                     );
-                    const previousBounds = candidate.codeArtifact.intrinsicBounds ?? {
+                    const previousBounds = sizingArtifact.intrinsicBounds ?? {
                       minX: 0,
                       minY: 0,
                       maxX: previousIntrinsicWidth,
@@ -14953,8 +15016,8 @@ export function NorthStarCanvasWorkspace({
                       canvasY: candidate.y,
                       canvasWidth: candidate.w,
                       canvasHeight: candidate.h,
-                      minimumWidth: candidate.codeArtifact.minimumWidth,
-                      minimumHeight: candidate.codeArtifact.minimumHeight,
+                      minimumWidth: sizingArtifact.minimumWidth,
+                      minimumHeight: sizingArtifact.minimumHeight,
                     });
 
                     if (
@@ -14979,12 +15042,17 @@ export function NorthStarCanvasWorkspace({
                             originalHeight: geometry.intrinsicHeight,
                           }
                         : candidate.source,
-                      codeArtifact: {
-                        ...candidate.codeArtifact,
-                        preferredWidth: geometry.intrinsicWidth,
-                        preferredHeight: geometry.intrinsicHeight,
-                        intrinsicBounds: geometry.bounds,
-                      },
+                      // A speculative candidate may drive accepted terminal
+                      // geometry, but it cannot replace the canonical package
+                      // until `onArtifactBrowserCommit` settles its revision.
+                      codeArtifact: sizingArtifact === candidate.codeArtifact
+                        ? {
+                            ...candidate.codeArtifact,
+                            preferredWidth: geometry.intrinsicWidth,
+                            preferredHeight: geometry.intrinsicHeight,
+                            intrinsicBounds: geometry.bounds,
+                          }
+                        : candidate.codeArtifact,
                     };
                     const geometryChanged =
                       Math.abs(geometry.width - candidate.w) > 2
@@ -15059,6 +15127,52 @@ export function NorthStarCanvasWorkspace({
                   }
                   const runId = activeArtifactLifecycleRunId;
                   if (!runId) return;
+                  if (event.name === "revision.sent" && event.mutationId) {
+                    const candidateObject = objectsRef.current.find((candidate) => {
+                      if (!isBoxObject(candidate)) return false;
+                      return candidate.codeArtifact?.artifactId === event.artifactId
+                        && candidate.codeArtifact.revisionId === event.revisionId;
+                    });
+                    const candidateArtifact = candidateObject && isBoxObject(candidateObject)
+                      ? candidateObject.codeArtifact
+                      : undefined;
+                    const mutationBatch = candidateArtifact?.mutationJournal?.find(
+                      (batch) => batch.mutationId === event.mutationId,
+                    );
+                    if (candidateArtifact?.document && mutationBatch) {
+                      recordNorthstarCandidateSourceArchive({
+                        runId,
+                        artifactId: event.artifactId,
+                        revisionId: event.revisionId,
+                        baseRevisionId: candidateArtifact.parentRevisionId,
+                        mutationId: event.mutationId,
+                        baseDocument: candidateArtifact.document,
+                        mutationBatch,
+                      });
+                    }
+                  } else if (
+                    event.name === "revision.rejected"
+                    || event.name === "revision.acknowledged"
+                    || event.name === "revision.timed_out"
+                  ) {
+                    settleNorthstarCandidateSourceArchive({
+                      revisionId: event.revisionId,
+                      status: event.name === "revision.rejected"
+                        ? "rejected"
+                        : event.name === "revision.timed_out"
+                          ? "timed_out"
+                          : "committed",
+                      reason: event.detail,
+                    });
+                  }
+                  if (event.name === "revision.rejected" || event.name === "revision.timed_out") {
+                    const pendingArtifact = pendingLinearDesignActionsRef.current.get(object.id) ?? pendingArtifactCandidatesRef.current.get(object.id);
+                    if (northstarTerminalEventSettlesCandidate(pendingArtifact, event)) {
+                      pendingArtifactCandidatesRef.current.delete(object.id);
+                      pendingLinearDesignActionsRef.current.delete(object.id);
+                      bumpPendingArtifactCandidates((version) => version + 1);
+                    }
+                  }
                   const runEvents = artifactLifecycleByRunRef.current.get(runId) ?? new Map<string, NorthstarArtifactLifecycleEvent>();
                   artifactLifecycleByRunRef.current.set(runId, runEvents);
                   const key = event.name === "render.health"
@@ -15078,6 +15192,16 @@ export function NorthStarCanvasWorkspace({
                       proposalId: event.proposalId,
                       mutationId: event.mutationId,
                       renderHealth: event.renderHealth,
+                      authorityState: event.authorityState,
+                      acceptedRevisionId: event.acceptedRevisionId,
+                      candidateRevisionId: event.candidateRevisionId,
+                      frameInstanceId: event.frameInstanceId,
+                      surfaceMountCount: event.surfaceMountCount,
+                      rollbackDurationMs: event.rollbackDurationMs,
+                      candidateDurationMs: event.candidateDurationMs,
+                      snapshotSanitized: event.snapshotSanitized,
+                      evidenceRegistry: event.evidenceRegistry,
+                      evidenceCollisionPairs: event.evidenceCollisionPairs,
                     },
                   });
                 }}
@@ -15087,29 +15211,93 @@ export function NorthStarCanvasWorkspace({
                     if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
                       return candidate;
                     }
-                    const committed = materializeNorthstarBrowserCommit(candidate.codeArtifact, commit);
-                    if (committed === candidate.codeArtifact) return candidate;
+                    const pendingArtifact = pendingLinearDesignActionsRef.current.get(candidate.id) ?? pendingArtifactCandidatesRef.current.get(candidate.id);
+                    const commitSource = pendingArtifact?.revisionId === commit.revisionId
+                      ? pendingArtifact
+                      : candidate.codeArtifact;
+                    const committed = materializeNorthstarBrowserCommit(commitSource, commit);
+                    const normalizedCommitSize = commit.size ? normalizeNorthstarContentSize(commit.size) : undefined;
+                    const previousIntrinsicWidth = Math.max(
+                      1,
+                      candidate.source?.originalWidth ?? commitSource.preferredWidth,
+                    );
+                    const previousIntrinsicHeight = Math.max(
+                      1,
+                      candidate.source?.originalHeight ?? commitSource.preferredHeight,
+                    );
+                    const previousBounds = commitSource.intrinsicBounds ?? {
+                      minX: 0,
+                      minY: 0,
+                      maxX: previousIntrinsicWidth,
+                      maxY: previousIntrinsicHeight,
+                    };
+                    const geometry = normalizedCommitSize
+                      ? deriveNorthstarCanvasGeometry({
+                          size: normalizedCommitSize,
+                          previousBounds,
+                          previousIntrinsicWidth,
+                          previousIntrinsicHeight,
+                          canvasX: candidate.x,
+                          canvasY: candidate.y,
+                          canvasWidth: candidate.w,
+                          canvasHeight: candidate.h,
+                          minimumWidth: commitSource.minimumWidth,
+                          minimumHeight: commitSource.minimumHeight,
+                        })
+                      : undefined;
+                    if (committed === commitSource && commitSource === candidate.codeArtifact && !geometry) return candidate;
+                    const canonicalArtifact = geometry
+                      ? {
+                          ...committed,
+                          preferredWidth: geometry.intrinsicWidth,
+                          preferredHeight: geometry.intrinsicHeight,
+                          intrinsicBounds: geometry.bounds,
+                        }
+                      : committed;
                     return {
                       ...candidate,
+                      x: geometry?.x ?? candidate.x,
+                      y: geometry?.y ?? candidate.y,
+                      w: geometry?.width ?? candidate.w,
+                      h: geometry?.height ?? candidate.h,
+                      text: canonicalArtifact.title,
                       source: candidate.source
                         ? {
                             ...candidate.source,
-                            originalWidth: committed.preferredWidth,
-                            originalHeight: committed.preferredHeight,
+                            originalWidth: canonicalArtifact.preferredWidth,
+                            originalHeight: canonicalArtifact.preferredHeight,
                           }
                         : candidate.source,
-                      codeArtifact: committed,
+                      codeArtifact: canonicalArtifact,
+                      semantic: {
+                        ...candidate.semantic,
+                        sceneRevision: canonicalArtifact.revisionId,
+                        label: canonicalArtifact.title,
+                      },
                     };
                   });
                   if (next.some((candidate, index) => candidate !== current[index])) {
                     objectsRef.current = next;
                     setObjects(next);
                   }
+                  const pendingArtifact = pendingLinearDesignActionsRef.current.get(object.id) ?? pendingArtifactCandidatesRef.current.get(object.id);
+                  if (pendingArtifact?.revisionId === commit.revisionId) {
+                    pendingArtifactCandidatesRef.current.delete(object.id);
+                    pendingLinearDesignActionsRef.current.delete(object.id);
+                    bumpPendingArtifactCandidates((version) => version + 1);
+                  }
                 }}
                 onArtifactRuntimeReview={(review) => {
                   const current = objectsRef.current;
                   const next = current.map((candidate) => {
                     if (!isBoxObject(candidate) || candidate.id !== object.id || !candidate.codeArtifact) {
+                      return candidate;
+                    }
+                    const pendingArtifact = pendingLinearDesignActionsRef.current.get(candidate.id) ?? pendingArtifactCandidatesRef.current.get(candidate.id);
+                    if (
+                      pendingArtifact?.revisionId === review.revisionId
+                      && candidate.codeArtifact.revisionId !== review.revisionId
+                    ) {
                       return candidate;
                     }
                     const previous = candidate.codeArtifact.runtimeReview;
@@ -15387,6 +15575,22 @@ export function NorthStarCanvasWorkspace({
                 return matching && isBoxObject(matching) && matching.type === "code-artifact"
                   ? matching.codeArtifact?.revisionId
                   : undefined;
+              }}
+              onDiscardArtifactCandidate={(artifactId, candidateRevisionId) => {
+                let changed = false;
+                for (const [objectId, candidate] of pendingArtifactCandidatesRef.current) {
+                  if (candidate.artifactId === artifactId && candidate.revisionId === candidateRevisionId) {
+                    pendingArtifactCandidatesRef.current.delete(objectId);
+                    changed = true;
+                  }
+                }
+                for (const [objectId, action] of pendingLinearDesignActionsRef.current) {
+                  if (action.artifactId === artifactId && action.revisionId === candidateRevisionId) {
+                    pendingLinearDesignActionsRef.current.delete(objectId);
+                    changed = true;
+                  }
+                }
+                if (changed) bumpPendingArtifactCandidates((version) => version + 1);
               }}
               onCreativeActivity={setCreativeActivity}
             />
@@ -17038,38 +17242,6 @@ function canvasActionLifecycleIdentity(action: CanvasAIActionRequest): CanvasAct
   return { proposalId, revisionId, baseRevisionId, mutationId, ackToken };
 }
 
-type CanvasRestoreRevisionIdentity = {
-  artifactId: string;
-  revisionId: string;
-};
-
-function canvasRestoreRevisionIdentity(action: CanvasAIActionRequest): CanvasRestoreRevisionIdentity | null {
-  if (
-    !action.stepId.startsWith("restore-verified-artboard-")
-    && !action.stepId.startsWith("rollback-live-artifact-")
-  ) return null;
-  try {
-    const rawComposition = action.arguments?.compositionJson;
-    const parsed = typeof rawComposition === "string" ? JSON.parse(rawComposition) : rawComposition;
-    const packageValue = parsed && typeof parsed === "object" && "package" in parsed
-      ? (parsed as { package?: { artifactId?: unknown; revisionId?: unknown } }).package
-      : undefined;
-    if (typeof packageValue?.artifactId !== "string" || typeof packageValue?.revisionId !== "string") return null;
-    return { artifactId: packageValue.artifactId, revisionId: packageValue.revisionId };
-  } catch {
-    return null;
-  }
-}
-
-function latestAcknowledgedRevisionForRun(
-  runId: string,
-  artifactId: string,
-): NorthstarArtifactLifecycleEvent | undefined {
-  return [...(artifactLifecycleByRunRef.current.get(runId)?.values() ?? [])]
-    .filter((event) => event.name === "revision.acknowledged" && event.artifactId === artifactId)
-    .sort((left, right) => right.timestamp - left.timestamp)[0];
-}
-
 async function waitForCanvasActionLifecycleSettlement(
   runId: string,
   identity: CanvasActionLifecycleIdentity,
@@ -17162,6 +17334,7 @@ function ChatWorkspacePanel({
   onFinalizeCanvasActionRun,
   onVerifyCanonicalPersistence,
   getMaterializedArtifactRevision,
+  onDiscardArtifactCandidate,
   onCreativeActivity,
 }: {
   sessionId: string;
@@ -17191,6 +17364,7 @@ function ChatWorkspacePanel({
   onFinalizeCanvasActionRun: (runId: string) => void;
   onVerifyCanonicalPersistence: () => Promise<CanvasPersistenceHealth>;
   getMaterializedArtifactRevision: (expectedRevisionId?: string, surfaceId?: string) => string | undefined;
+  onDiscardArtifactCandidate: (artifactId: string, candidateRevisionId: string) => void;
   onCreativeActivity: (activity: NorthstarCreativeActivity | null | ((current: NorthstarCreativeActivity | null) => NorthstarCreativeActivity | null)) => void;
 }) {
   const [messages, setMessages] = useState<CanvasAIChatMessage[]>([]);
@@ -18036,20 +18210,27 @@ function ChatWorkspacePanel({
                 updatedAt: Date.now(),
               });
             }
-          } else if (traceName === "creative.stage.previewing" || traceName === "creative.act.private_preview_revision_requested" || traceName === "creative.act.private_runtime_revision_requested") {
+          } else if (traceName === "creative.live_source.candidate_ready" || traceName === "creative.live_source.dispatched") {
             onCreativeActivity((current) => current ? {
               ...current,
-              phase: "previewing",
-              label: traceName === "creative.stage.previewing"
-                ? traceDetail
-                : "Northstar is refining the exact private browser preview",
+              phase: "dispatching",
+              label: traceName === "creative.live_source.dispatched"
+                ? "Northstar is validating the next design in the live browser"
+                : "Northstar has coded the next candidate design stage",
               updatedAt: Date.now(),
             } : current);
-          } else if (traceName === "creative.stage.commit_ready" || traceName === "creative.act.private_preview_approved" || traceName === "creative.act.preflight_accepted") {
+          } else if (traceName === "creative.live_source.committed") {
             onCreativeActivity((current) => current ? {
               ...current,
-              phase: "committing",
-              label: "Northstar is committing the verified visual stage",
+              phase: "reviewing",
+              label: "Northstar is reading the exact accepted design before its next move",
+              updatedAt: Date.now(),
+            } : current);
+          } else if (traceName === "creative.live_source.rejected") {
+            onCreativeActivity((current) => current ? {
+              ...current,
+              phase: "authoring",
+              label: "The browser preserved the stronger artboard; Northstar is correcting the source",
               updatedAt: Date.now(),
             } : current);
           } else if (traceName === "creative.act.critiqued" || traceName === "creative.session.converged" || traceName === "publication.metadata_verified" || traceName === "publication.metadata_deferred") {
@@ -18061,7 +18242,8 @@ function ChatWorkspacePanel({
               || traceName.startsWith("creative-direction.")
               || traceName.startsWith("creative.act.")
               || traceName.startsWith("creative.stage.")
-              || traceName.startsWith("creative.source_workspace.")
+              || traceName.startsWith("creative.source.")
+              || traceName.startsWith("creative.live_source.")
               ? "action"
               : "run",
             name: traceName,
@@ -18302,6 +18484,16 @@ function ChatWorkspacePanel({
           return;
         }
 
+        if (eventName === "canvas.artifact.candidate.discarded") {
+          const artifactId = typeof payload.artifactId === "string" ? payload.artifactId : undefined;
+          const candidateRevisionId = typeof payload.candidateRevisionId === "string"
+            ? payload.candidateRevisionId
+            : undefined;
+          if (artifactId && candidateRevisionId) {
+            onDiscardArtifactCandidate(artifactId, candidateRevisionId);
+          }
+          return;
+        }
 
         if (eventName === "canvas.action.requested") {
           const runId =
@@ -18332,15 +18524,6 @@ function ChatWorkspacePanel({
               const blockedByCriticalFailure = Boolean(criticalFailure && isDownstreamPresentationAction);
               const idempotencyKey = `${runId}:${action.actionId}`;
               const priorOutcome = actionOutcomeByIdempotencyKeyRef.current.get(idempotencyKey);
-              const restoreIdentity = canvasRestoreRevisionIdentity(action);
-              const latestAcknowledgedRevision = restoreIdentity
-                ? latestAcknowledgedRevisionForRun(runId, restoreIdentity.artifactId)
-                : undefined;
-              const staleRestore = Boolean(
-                restoreIdentity
-                && latestAcknowledgedRevision
-                && latestAcknowledgedRevision.revisionId !== restoreIdentity.revisionId,
-              );
               let rawResult: CanvasAIActionExecutionResult;
 
               if (priorOutcome) {
@@ -18368,27 +18551,6 @@ function ChatWorkspacePanel({
                   detail: "The action belonged to a run that is no longer active and was not executed.",
                   objectIds: [],
                 };
-              } else if (staleRestore && restoreIdentity && latestAcknowledgedRevision) {
-                rawResult = {
-                  ok: true,
-                  status: "superseded",
-                  reasonCode: "STALE_RESTORE_SUPPRESSED",
-                  detail: `A queued restoration for ${restoreIdentity.revisionId} was suppressed because ${latestAcknowledgedRevision.revisionId} is already browser-verified.`,
-                  objectIds: [],
-                };
-                recordCanvasDiagnostic({
-                  phase: "runtime",
-                  name: "revision.stale_restore_suppressed",
-                  runId,
-                  actionId: action.actionId,
-                  stepId: action.stepId,
-                  detail: rawResult.detail,
-                  data: {
-                    artifactId: restoreIdentity.artifactId,
-                    restoreRevisionId: restoreIdentity.revisionId,
-                    latestAcknowledgedRevisionId: latestAcknowledgedRevision.revisionId,
-                  },
-                });
               } else if (blockedByCriticalFailure) {
                 rawResult = {
                   ok: false,
@@ -18507,20 +18669,6 @@ function ChatWorkspacePanel({
                     detail: "The run was cancelled before the artifact runtime settled this proposal.",
                   };
                 }
-              }
-
-              if (
-                action.stepId.startsWith("restore-verified-artboard-") &&
-                normalizeCanvasAIActionOutcome(rawResult).status === "succeeded"
-              ) {
-                rawResult = {
-                  ...rawResult,
-                  ok: true,
-                  status: "superseded",
-                  reasonCode: "VERIFIED_STATE_RESTORED",
-                  retrySafe: false,
-                  detail: "The last verified artboard was restored. The rejected semantic obligation remains unresolved.",
-                };
               }
 
               const normalizedResult = normalizeCanvasAIActionOutcome(rawResult);
@@ -18717,6 +18865,7 @@ function ChatWorkspacePanel({
                 terminalState: payload.terminalState,
                 expectedFinalRevisionId: payload.expectedFinalRevisionId,
                 clientReceipt: payload.clientReceipt,
+                authorityReceipt: payload.authorityReceipt,
               },
             });
           }
@@ -18737,8 +18886,14 @@ function ChatWorkspacePanel({
                 phase: "run",
                 name: "run.cancelled",
                 runId: cancelledRunId,
-                detail: "The user stopped the run. Pending visual work was cancelled and the last verified artboard was preserved.",
-                data: { cancelled: true },
+                detail: typeof payload.detail === "string"
+                  ? payload.detail
+                  : "The user stopped the run. Pending visual work was cancelled and the last verified artboard was preserved.",
+                data: {
+                  cancelled: true,
+                  terminalState: payload.terminalState,
+                  authorityReceipt: payload.authorityReceipt,
+                },
               });
             }
           }
@@ -18770,7 +18925,11 @@ function ChatWorkspacePanel({
               name: "run.failed",
               runId: failedRunId,
               detail,
-              data: { terminal: true, terminalState: payload.terminalState },
+              data: {
+                terminal: true,
+                terminalState: payload.terminalState,
+                authorityReceipt: payload.authorityReceipt,
+              },
             });
           }
           const finalPayload = deferredFinalPayloadRef.current as CanvasAIResponsePayload | null;
@@ -18814,6 +18973,7 @@ function ChatWorkspacePanel({
                 clientReceipt: payload.clientReceipt && typeof payload.clientReceipt === "object"
                   ? payload.clientReceipt
                   : undefined,
+                authorityReceipt: payload.authorityReceipt,
               },
             });
           }
@@ -20452,6 +20612,7 @@ function CollapsedWorkspaceLauncher({
 
 function CanvasBoxObjectViewImpl({
   object,
+  pendingArtifact,
   selected,
   selectedCount,
   viewportZoom,
@@ -20480,6 +20641,7 @@ function CanvasBoxObjectViewImpl({
   onCellChange,
 }: {
   object: CanvasBoxObject;
+  pendingArtifact?: CanvasCodeArtifactPayload;
   selected: boolean;
   selectedCount: number;
   viewportZoom: number;
@@ -20613,7 +20775,7 @@ function CanvasBoxObjectViewImpl({
 
         {object.type === "code-artifact" && (
           <CodeArtifactHost
-            artifact={object.codeArtifact}
+            artifact={pendingArtifact ?? object.codeArtifact}
             creativeActivity={creativeActivity}
             selected={selected}
             width={object.w}
@@ -20751,6 +20913,7 @@ const CanvasBoxObjectView = memo(
   CanvasBoxObjectViewImpl,
   (previous, next) =>
     previous.object === next.object &&
+    previous.pendingArtifact === next.pendingArtifact &&
     previous.selected === next.selected &&
     previous.selectedCount === next.selectedCount &&
     previous.viewportZoom === next.viewportZoom &&
@@ -23621,16 +23784,35 @@ function CanvasDiagnosticsPanel({
     const pendingAcks = terminal && typeof terminal.data?.unresolvedAcknowledgementCount === "number"
       ? terminal.data.unresolvedAcknowledgementCount
       : null;
-    const health = terminal?.name === "run.completed" || terminal?.name === "run.completed_with_notes"
-      ? "healthy"
-      : terminal?.name === "run.cancelled"
-        ? "cancelled"
-        : terminal?.name === "run.incomplete" || terminal?.name === "run.failed"
-          ? "incomplete"
-          : scoped.length
-            ? "running"
-            : "idle";
-    return { scoped, durationMs, problems, hardFailures, pendingAcks, health, severityCounts };
+    const runtimeAuthority = summarizeNorthstarRuntimeAuthorityDiagnostics(scoped);
+    const runOutcome = summarizeNorthstarRunOutcome(scoped);
+    const premiumAuditEvent = [...scoped].reverse().find((event) =>
+      event.name === "creative.premium_design.browser_audited"
+    );
+    const independentReviewEvent = [...scoped].reverse().find((event) =>
+      event.name === "creative.act.independently_reviewed"
+    );
+    const premiumDesign = {
+      observed: Boolean(premiumAuditEvent),
+      ready: premiumAuditEvent?.data?.ready === true,
+      fingerprint: typeof premiumAuditEvent?.data?.designFingerprint === "string"
+        ? premiumAuditEvent.data.designFingerprint
+        : undefined,
+      realizedNarrativeBeats: Number(premiumAuditEvent?.data?.realizedNarrativeBeatCount ?? 0),
+      requiredNarrativeBeats: Number(premiumAuditEvent?.data?.requiredNarrativeBeatCount ?? 0),
+      realizedAnalyses: Number(premiumAuditEvent?.data?.realizedAnalysisCount ?? 0),
+      requiredAnalyses: Number(premiumAuditEvent?.data?.requiredAnalysisCount ?? 0),
+      minimumReadableTextPx: Number(premiumAuditEvent?.data?.minimumReadableTextPx ?? 0),
+      maximumRecentSimilarity: Number(
+        [...scoped].reverse().find((event) => event.name === "creative.design_intelligence.formed_inline")
+          ?.data?.maximumRecentSimilarity ?? 0,
+      ),
+      minimumQualityScore: typeof independentReviewEvent?.data?.minimumQualityScore === "number"
+        ? independentReviewEvent.data.minimumQualityScore
+        : undefined,
+      qualityBarMet: independentReviewEvent?.data?.universalQualityBarMet === true,
+    };
+    return { scoped, durationMs, problems, hardFailures, pendingAcks, severityCounts, runtimeAuthority, runOutcome, premiumDesign };
   }, [scopedEvents, events]);
 
   const phases = useMemo(
@@ -23641,12 +23823,12 @@ function CanvasDiagnosticsPanel({
   const telemetry = useMemo(() => getCanvasRunTelemetry(summary.scoped), [summary.scoped]);
 
   return (
-    <aside className="absolute bottom-24 right-8 top-24 z-[90] flex w-[560px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-950/95">
+    <aside className="absolute bottom-24 right-8 top-24 z-[90] flex w-[680px] max-w-[calc(100vw-4rem)] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white/95 shadow-2xl backdrop-blur-xl dark:border-zinc-800 dark:bg-zinc-950/95">
       <header className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-bold text-zinc-950 dark:text-white">Canvas diagnostics</div>
-            <div className="text-[11px] text-zinc-500">Run health, lifecycle timing, and exact event trace</div>
+            <div className="text-[11px] text-zinc-500">Run health, live-source latency, browser authority, and exact event trace</div>
           </div>
           <div className="flex items-center gap-1">
             <button onClick={download} className="rounded-lg p-2 hover:bg-zinc-100 dark:hover:bg-zinc-900" title="Export JSON"><Download className="h-4 w-4" /></button>
@@ -23656,8 +23838,15 @@ function CanvasDiagnosticsPanel({
         </div>
         <div className="mt-3 grid grid-cols-4 gap-2 text-[10px]">
           <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="text-zinc-400">Health</div>
-            <div className={cn("font-bold", summary.health === "healthy" ? "text-emerald-600" : summary.health === "incomplete" ? "text-red-600" : "text-amber-600")}>{summary.health}</div>
+            <div className="text-zinc-400">Operational</div>
+            <div className={cn(
+              "font-bold",
+              summary.runOutcome.operationalHealth === "healthy"
+                ? "text-emerald-600"
+                : summary.runOutcome.operationalHealth === "failed"
+                  ? "text-red-600"
+                  : "text-amber-600",
+            )}>{summary.runOutcome.operationalHealth}</div>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-zinc-400">Duration</div>
@@ -23677,6 +23866,233 @@ function CanvasDiagnosticsPanel({
           <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"><div className="text-zinc-400">Completion</div><div className="font-bold">{telemetry.completionRate === null ? "—" : `${Math.round(telemetry.completionRate * 100)}%`}</div></div>
           <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"><div className="text-zinc-400">Recovered</div><div className="font-bold text-sky-600">{summary.severityCounts.recovered}</div></div>
           <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"><div className="text-zinc-400">Warnings</div><div className="font-bold text-amber-600">{summary.severityCounts.warning}</div></div>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]" data-testid="northstar-run-outcome-summary">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Creative outcome</div>
+            <div className={cn(
+              "truncate font-bold",
+              summary.runOutcome.creativeOutcome === "accepted-progress"
+                ? "text-emerald-600"
+                : summary.runOutcome.creativeOutcome === "no-accepted-design"
+                  ? "text-red-600"
+                  : "text-amber-600",
+            )}>{summary.runOutcome.creativeOutcome}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Publication</div>
+            <div className={cn(
+              "font-bold",
+              summary.runOutcome.publicationReadiness === "ready" ? "text-emerald-600" : "text-amber-600",
+            )}>{summary.runOutcome.publicationReadiness}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Accepted designs</div>
+            <div className="font-bold text-violet-600">
+              {summary.runOutcome.acceptedCreativeStages}/{summary.runOutcome.attemptedCreativeStages}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Atomic validation</div>
+            <div className={cn(
+              "font-bold",
+              summary.runtimeAuthority.liveSource.atomicValidationExecutions > 0 ? "text-emerald-600" : "text-zinc-500",
+            )}>{summary.runtimeAuthority.liveSource.atomicValidationExecutions || "—"}</div>
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]" data-testid="northstar-runtime-authority-summary">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Authority</div>
+            <div className="truncate font-bold text-violet-600" title={summary.runtimeAuthority.state}>{summary.runtimeAuthority.state}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Accepted / browser</div>
+            <div className="truncate font-bold" title={`${summary.runtimeAuthority.acceptedRevisionId ?? "—"} / ${summary.runtimeAuthority.browserRevisionId ?? "—"}`}>
+              {!summary.runtimeAuthority.acceptedRevisionId || !summary.runtimeAuthority.browserRevisionId
+                ? "—"
+                : summary.runtimeAuthority.acceptedRevisionId === summary.runtimeAuthority.browserRevisionId
+                  ? "aligned"
+                  : "diverged"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Material design</div>
+            <div
+              className={cn(
+                "truncate font-bold",
+                summary.runtimeAuthority.lifecycle.materialCreativeRevisionPreserved
+                  ? "text-emerald-600"
+                  : summary.runtimeAuthority.lifecycle.creativeTransformationRequired
+                    ? "text-red-600"
+                    : "text-zinc-500",
+              )}
+              title={summary.runtimeAuthority.lifecycle.materialCreativeRevisionId ?? "—"}
+            >
+              {summary.runtimeAuthority.lifecycle.creativeTransformationRequired === false
+                ? "not required"
+                : summary.runtimeAuthority.lifecycle.materialCreativeRevisionPreserved
+                  ? `${summary.runtimeAuthority.lifecycle.acceptedCreativeActCount} accepted`
+                  : "missing"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Frame continuity</div>
+            <div className={cn("font-bold", summary.runtimeAuthority.unexpectedRemountCount === 0 ? "text-emerald-600" : "text-red-600")}>
+              {summary.runtimeAuthority.surfaceMountCount || "—"} mount{summary.runtimeAuthority.surfaceMountCount === 1 ? "" : "s"}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]" data-testid="northstar-live-source-summary">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Source delivery</div>
+            <div className={cn(
+              "font-bold",
+              summary.runtimeAuthority.liveSource.dispatchedCount === 0
+                ? "text-zinc-500"
+                : summary.runtimeAuthority.liveSource.hiddenRuntimeExecutions === 0
+                  ? "text-emerald-600"
+                  : "text-red-600",
+            )}>
+              {summary.runtimeAuthority.liveSource.dispatchedCount === 0 ? "—" : "atomic live"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">First design</div>
+            <div className="font-bold">
+              {summary.runtimeAuthority.liveSource.firstVisibleTransformationMs === undefined
+                ? "—"
+                : `${(summary.runtimeAuthority.liveSource.firstVisibleTransformationMs / 1000).toFixed(1)}s`}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Source commits</div>
+            <div className="font-bold text-violet-600">
+              {summary.runtimeAuthority.liveSource.committedCount}/{summary.runtimeAuthority.liveSource.dispatchedCount}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Normalize / private</div>
+            <div className={cn("font-bold", summary.runtimeAuthority.liveSource.hiddenRuntimeExecutions === 0 ? "text-emerald-600" : "text-red-600")}>
+              {summary.runtimeAuthority.liveSource.normalizationRetryCount} / {summary.runtimeAuthority.liveSource.hiddenRuntimeExecutions}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]" data-testid="northstar-premium-design-summary">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Premium contract</div>
+            <div
+              className={cn(
+                "truncate font-bold",
+                !summary.premiumDesign.observed
+                  ? "text-zinc-500"
+                  : summary.premiumDesign.ready
+                    ? "text-emerald-600"
+                    : "text-amber-600",
+              )}
+              title={summary.premiumDesign.fingerprint ?? "—"}
+            >
+              {!summary.premiumDesign.observed ? "—" : summary.premiumDesign.ready ? "realized" : "revising"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Narrative / analysis</div>
+            <div className="font-bold text-violet-600">
+              {summary.premiumDesign.realizedNarrativeBeats}/{summary.premiumDesign.requiredNarrativeBeats}
+              {" · "}
+              {summary.premiumDesign.realizedAnalyses}/{summary.premiumDesign.requiredAnalyses}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Readable / novelty</div>
+            <div className="font-bold">
+              {summary.premiumDesign.minimumReadableTextPx
+                ? `${summary.premiumDesign.minimumReadableTextPx.toFixed(0)}px`
+                : "—"}
+              {" · "}
+              {summary.premiumDesign.observed
+                ? `${Math.round(summary.premiumDesign.maximumRecentSimilarity * 100)}%`
+                : "—"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Quality floor</div>
+            <div className={cn(
+              "font-bold",
+              summary.premiumDesign.minimumQualityScore === undefined
+                ? "text-zinc-500"
+                : summary.premiumDesign.qualityBarMet
+                  ? "text-emerald-600"
+                  : "text-amber-600",
+            )}>
+              {summary.premiumDesign.minimumQualityScore === undefined
+                ? "—"
+                : `${summary.premiumDesign.qualityBarMet ? "pass" : "not met"} · ${summary.premiumDesign.minimumQualityScore}`}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]" data-testid="northstar-lifecycle-authority-summary">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Lifecycle outcome</div>
+            <div className="truncate font-bold text-violet-600" title={summary.runtimeAuthority.lifecycle.terminalState ?? "—"}>
+              {summary.runtimeAuthority.lifecycle.terminalState ?? "—"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Classification</div>
+            <div className="truncate font-bold" title={summary.runtimeAuthority.lifecycle.reasonCode ?? "—"}>
+              {summary.runtimeAuthority.lifecycle.classification ?? "—"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Browser preserved</div>
+            <div className={cn(
+              "font-bold",
+              summary.runtimeAuthority.lifecycle.operationalRevisionPreserved === undefined
+                ? "text-zinc-500"
+                : summary.runtimeAuthority.lifecycle.operationalRevisionPreserved
+                  ? "text-emerald-600"
+                  : "text-red-600",
+            )}>
+              {summary.runtimeAuthority.lifecycle.operationalRevisionPreserved === undefined
+                ? "—"
+                : summary.runtimeAuthority.lifecycle.operationalRevisionPreserved
+                  ? "yes"
+                  : "no"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Failed checks</div>
+            <div className={cn(
+              "truncate font-bold",
+              summary.runtimeAuthority.lifecycle.failedPredicates.length > 0 ? "text-amber-600" : "text-emerald-600",
+            )} title={summary.runtimeAuthority.lifecycle.failedPredicates.join(", ") || "none"}>
+              {summary.runtimeAuthority.lifecycle.terminalState
+                ? summary.runtimeAuthority.lifecycle.failedPredicates.length
+                : "—"}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]">
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Rollbacks</div>
+            <div className="font-bold text-sky-600">{summary.runtimeAuthority.rollbackCount}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Last rollback</div>
+            <div className="font-bold">{summary.runtimeAuthority.lastRollbackDurationMs === undefined ? "—" : `${summary.runtimeAuthority.lastRollbackDurationMs.toFixed(1)}ms`}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Evidence</div>
+            <div className={cn("font-bold", summary.runtimeAuthority.evidence.missing || summary.runtimeAuthority.evidence.collisions ? "text-red-600" : "text-emerald-600")}>
+              {summary.runtimeAuthority.evidence.visible}/{summary.runtimeAuthority.evidence.expected} visible
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-800">
+            <div className="text-zinc-400">Snapshot / placement</div>
+            <div className={cn("font-bold", summary.runtimeAuthority.snapshotSanitized === false || summary.runtimeAuthority.evidence.unplaced ? "text-red-600" : "text-emerald-600")}>
+              {summary.runtimeAuthority.snapshotSanitized === undefined ? "—" : summary.runtimeAuthority.snapshotSanitized ? "clean" : "polluted"} · {summary.runtimeAuthority.evidence.unplaced} open
+            </div>
+          </div>
         </div>
         <div className="mt-3 flex items-center gap-2">
           <select value={selectedRunId} onChange={(event) => setSelectedRunId(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-[11px] dark:border-zinc-800 dark:bg-zinc-950">

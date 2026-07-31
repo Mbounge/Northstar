@@ -21,8 +21,8 @@ test("rejects stale actions after their run is no longer active", () => {
 });
 
 test("uses bounded timeouts and only retries explicitly retry-safe failures", () => {
-  assert.equal(source.includes("const CANVAS_ACTION_TIMEOUT_MS = 45_000"), true);
-  assert.equal(source.includes("const CANVAS_ACTION_MAX_ATTEMPTS = 3"), true);
+  assert.equal(source.includes("const CANVAS_ACTION_TIMEOUT_MS = NORTHSTAR_HEALTH_POLICY.action.timeoutMs"), true);
+  assert.equal(source.includes("const CANVAS_ACTION_MAX_ATTEMPTS = NORTHSTAR_HEALTH_POLICY.action.maxAttempts"), true);
   assert.equal(source.includes("normalizedAttempt.retrySafe === true"), true);
   assert.equal(source.includes('reasonCode: timedOut ? "ACTION_EXECUTION_TIMEOUT"'), true);
   assert.equal(source.includes('name: "action.retry_scheduled"'), true);

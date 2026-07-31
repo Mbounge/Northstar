@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decideNorthstarCreativeConvergence } from "@/lib/canvas-ai/northstar-creative-convergence";
+import { decideNorthstarCreativeConvergence } from "@/lib/canvas-ai/northstar-lifecycle-authority";
 
 const readiness = {
   operationallyReady: true,

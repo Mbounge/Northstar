@@ -26,8 +26,14 @@ test("the exact rejected browser receipt remains available to geometry-aware des
   assert.equal(route.includes('rejectionFamily === "analysis-lane-overlap"'), true);
 });
 
-test("budget exhaustion emits an explicit incomplete terminal event", () => {
-  assert.equal(route.includes('send("run.incomplete"'), true);
+test("design budget exhaustion can complete with notes only through lifecycle authority", () => {
+  assert.equal(route.includes("verifiedProgress"), false);
+  assert.equal(route.includes("classifyNorthstarLifecycleFailure"), true);
+  assert.equal(route.includes("recordBrowserCommittedLifecycleState"), true);
+  assert.equal(route.includes('send("run.completed_with_notes"'), true);
+  assert.equal(route.includes('recovery: "accepted-browser-revision-preserved"'), true);
+  // The legacy event remains supported for genuinely unresolved infrastructure
+  // settlement, but a bounded design turn no longer enters that branch.
   assert.equal(workspace.includes('if (eventName === "run.incomplete")'), true);
   assert.equal(workspace.includes('name: "run.incomplete"'), true);
 });

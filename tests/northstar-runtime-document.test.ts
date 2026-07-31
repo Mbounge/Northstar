@@ -81,7 +81,18 @@ test("the runtime schedules terminal audits at both stability and asset deadline
   assert.ok(runtime);
   assert.match(runtime, /3_100, 8_100/);
 });
-test("model-source geometry derives from the authored surface without leaking the host background", () => {
+
+test("the generated browser transaction bridge is syntactically valid", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  const scripts = [...runtime.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  assert.ok(scripts.length > 0);
+  for (const script of scripts) {
+    assert.doesNotThrow(() => new Function(script));
+  }
+});
+
+test("model-source geometry is compiled outside the live surface without leaking the host background", () => {
   const artifact = pendingArtifact();
   artifact.document = {
     schema: "northstar.web-artifact-document.v1",
@@ -94,12 +105,25 @@ test("model-source geometry derives from the authored surface without leaking th
   assert.match(runtime, /body\{position:relative;background:transparent/);
   assert.match(runtime, /html,body\{background:transparent!important\}/);
   assert.match(runtime, /const syncIntrinsicGeometryMode = \(\) =>/);
-  assert.match(runtime, /northstar-source-owned-intrinsic-geometry/);
-  assert.match(runtime, /width:max-content!important/);
+  assert.match(runtime, /const measureAuthoredContentInIsolation = async/);
+  assert.match(runtime, /data-ns-geometry-compiler-host/);
+  assert.match(runtime, /const applyCompiledCanonicalGeometry = \(size\) =>/);
+  assert.doesNotMatch(runtime, /reconcileAdaptiveSurface/);
+  assert.doesNotMatch(runtime, /northstar-source-owned-intrinsic-geometry/);
   assert.match(runtime, /const collectGeometryFacts = \(bounds\) =>/);
   assert.match(runtime, /backgroundLeakRisk/);
-  assert.match(runtime, /sourceOwnedSurface: hasModelSourceAuthority\(\)/);
+  assert.match(runtime, /sourceOwnedSurface: true/);
   assert.match(runtime, /geometryIntegrityReason/);
+});
+
+test("candidate source remains visually atomic until the mounted browser settles it", () => {
+  const runtime = buildCanvasArtifactRuntimeDocument(pendingArtifact());
+  assert.ok(runtime);
+  assert.match(runtime, /const beginAtomicCandidateValidation = \(mutationId\) =>/);
+  assert.match(runtime, /data-ns-candidate-shield/);
+  assert.match(runtime, /root\.style\.setProperty\("opacity", "0", "important"\)/);
+  assert.match(runtime, /endAtomicCandidateValidation\(acknowledgement\.mutationId\)/);
+  assert.match(runtime, /restoredSize: captureSettledContentSize/);
 });
 
 test("source-to-source cinema keeps a retired subtree until its latest relevant descendant beat", () => {

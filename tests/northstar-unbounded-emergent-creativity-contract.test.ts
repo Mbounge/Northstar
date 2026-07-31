@@ -8,7 +8,7 @@ const route = fs.readFileSync(path.join(root, "app/api/canvas-ai/route.ts"), "ut
 const authorship = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-emergent-creative-authorship.ts"), "utf8");
 const intelligence = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-emergent-design-intelligence.ts"), "utf8");
 const review = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-independent-creative-review.ts"), "utf8");
-const convergence = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-creative-convergence.ts"), "utf8");
+const convergence = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-lifecycle-authority.ts"), "utf8");
 const artifact = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-code-artifact.ts"), "utf8");
 
 test("design intelligence is formed from the first model-authored source act rather than a runtime visual menu", () => {
@@ -17,8 +17,8 @@ test("design intelligence is formed from the first model-authored source act rat
   assert.ok(author >= 0);
   assert.ok(formInline > author);
   assert.match(route, /formDesignIntelligenceInline/);
-  assert.match(route, /governingVisualIdea: act\.intention/);
-  assert.match(route, /signatureMove: act\.mutation\.visibleChange/);
+  assert.match(route, /emergentDesignIntelligence = act\.designIntelligence/);
+  assert.match(route, /premiumPlan\.noveltySignature/);
 });
 
 test("the inherited evidence board is source material rather than the final composition", () => {

@@ -6,12 +6,13 @@ import test from "node:test";
 const route = fs.readFileSync(path.join(process.cwd(), "app/api/canvas-ai/route.ts"), "utf8");
 const workspace = fs.readFileSync(path.join(process.cwd(), "components/canvas/north-star-canvas-workspace.tsx"), "utf8");
 const diagnostics = fs.readFileSync(path.join(process.cwd(), "lib/canvas-ai/canvas-diagnostics.ts"), "utf8");
+const session = fs.readFileSync(path.join(process.cwd(), "lib/canvas-ai/northstar-adaptive-creative-session.ts"), "utf8");
 
 test("bounds equivalent visual rejection loops", () => {
-  assert.equal(route.includes("MAX_EQUIVALENT_LIVE_REJECTIONS = 3"), true);
-  assert.equal(route.includes("composition.visual.rejection_exhausted"), true);
-  assert.equal(route.includes('status: "skipped"'), true);
-  assert.equal(route.includes("Equivalent visual proposal rejected"), true);
+  assert.equal(session.includes("maximumRepeatedFailureFingerprints"), true);
+  assert.equal(session.includes("maximumConsecutiveRejections"), true);
+  assert.equal(route.includes("adaptiveSession.recordRejectedAct"), true);
+  assert.equal(route.includes("adaptiveSession.assertCanAttempt"), true);
 });
 
 test("normalizes fallback identifiers so equivalent rejections share a fingerprint", () => {
@@ -26,6 +27,7 @@ test("records manual cancellation as a terminal diagnostic", () => {
 
 test("does not classify browser-evaluated revision rejection as acknowledgement transport failure", () => {
   assert.equal(workspace.includes('event.name === "revision.timed_out" || event.name === "ack.delivery_failed"'), true);
-  assert.equal(workspace.includes("revisionRejectionCount"), true);
+  assert.equal(workspace.includes("const revisionRejections = lifecycleEvents.filter"), true);
+  assert.equal(workspace.includes("const acknowledgementFailures = lifecycleEvents.filter"), true);
   assert.equal(diagnostics.includes('/revision\\.timed_out|ack\\.delivery_failed/'), true);
 });
