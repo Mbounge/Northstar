@@ -8,10 +8,8 @@ export const NORTHSTAR_HEALTH_POLICY = {
     retryMaxDelayMs: 2_000,
   },
   acknowledgement: {
+    deliveryTimeoutMs: 5_000,
     terminalTimeoutMs: 30_000,
-    maxDispatchAttempts: 40,
-    retryBeforeReceiptMs: 400,
-    retryAfterReceiptMs: 900,
     pumpIntervalMs: 200,
   },
   render: {

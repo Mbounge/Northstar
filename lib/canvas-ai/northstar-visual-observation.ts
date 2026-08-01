@@ -21,6 +21,8 @@ export interface NorthstarCapturedDetailView extends NorthstarPlannedDetailView 
 export interface NorthstarVisualObservation {
   version: typeof NORTHSTAR_VISUAL_OBSERVATION_VERSION;
   revisionId: string;
+  captureStatus: "captured" | "unavailable";
+  captureWarning?: string;
   fullArtboard: NorthstarRenderedArtifactPng;
   detailViews: NorthstarCapturedDetailView[];
   semanticNodeCount: number;
@@ -163,6 +165,7 @@ export function buildNorthstarVisualObservation(input: {
   return {
     version: NORTHSTAR_VISUAL_OBSERVATION_VERSION,
     revisionId: input.revisionId,
+    captureStatus: "captured",
     fullArtboard: input.fullArtboard,
     detailViews: input.detailViews,
     semanticNodeCount: input.acknowledgement?.snapshot?.semanticNodes?.length ?? 0,
@@ -179,26 +182,74 @@ export function buildNorthstarVisualObservation(input: {
   };
 }
 
+const NORTHSTAR_TRANSPARENT_PIXEL_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+export function buildNorthstarUnavailableVisualObservation(input: {
+  revisionId: string;
+  width: number;
+  height: number;
+  warning: string;
+  acknowledgement?: NorthstarArtifactMutationAcknowledgement;
+}): NorthstarVisualObservation {
+  const width = Math.max(1, Math.round(input.width));
+  const height = Math.max(1, Math.round(input.height));
+  return {
+    version: NORTHSTAR_VISUAL_OBSERVATION_VERSION,
+    revisionId: input.revisionId,
+    captureStatus: "unavailable",
+    captureWarning: input.warning,
+    fullArtboard: {
+      mimeType: "image/png",
+      data: NORTHSTAR_TRANSPARENT_PIXEL_PNG,
+      width,
+      height,
+    },
+    detailViews: [],
+    semanticNodeCount: input.acknowledgement?.snapshot?.semanticNodes?.length ?? 0,
+    changedNodeIds: input.acknowledgement?.changedNodeIds ?? [],
+    meaningfulChangedNodeIds: input.acknowledgement?.meaningfulChangedNodeIds ?? [],
+    runtimeReview: input.acknowledgement?.review,
+    intrinsicMeasurement: input.acknowledgement?.size
+      ? {
+          width: input.acknowledgement.size.intrinsicWidth,
+          height: input.acknowledgement.size.intrinsicHeight,
+          contentBounds: input.acknowledgement.size.contentBounds,
+        }
+      : { width, height },
+  };
+}
+
 export function buildNorthstarVisualObservationParts(input: {
   observation: NorthstarVisualObservation;
   acknowledgement?: NorthstarArtifactMutationAcknowledgement;
   label?: string;
 }): NorthstarCreativeModelPart[] {
   const label = input.label ?? "CURRENT VERIFIED ARTIFACT";
+  const captureAvailable = input.observation.captureStatus !== "unavailable";
   const parts: NorthstarCreativeModelPart[] = [
     {
       text: [
-        `${label} — full artboard (${input.observation.fullArtboard.width}×${input.observation.fullArtboard.height}).`,
-        "This is the complete composition. Judge its governing idea, reading path, hierarchy, restraint, evidence choreography, and ending before focusing on details.",
+        captureAvailable
+          ? `${label} — full artboard (${input.observation.fullArtboard.width}×${input.observation.fullArtboard.height}).`
+          : `${label} — browser image capture unavailable; canonical measured surface is ${input.observation.fullArtboard.width}×${input.observation.fullArtboard.height}.`,
+        captureAvailable
+          ? "This is the complete composition. Judge its governing idea, reading path, hierarchy, restraint, evidence choreography, and ending before focusing on details."
+          : "Do not infer missing pixels. Continue from the exact accepted source, semantic inventory, intrinsic measurement, and runtime review supplied below. Treat image-capture unavailability as infrastructure degradation, not as an artboard defect.",
+        ...(!captureAvailable && input.observation.captureWarning
+          ? [`Capture warning: ${input.observation.captureWarning}`]
+          : []),
       ].join("\n"),
     },
-    {
+  ];
+  if (captureAvailable) {
+    parts.push({
       inlineData: {
         mimeType: input.observation.fullArtboard.mimeType,
         data: input.observation.fullArtboard.data,
       },
-    },
-  ];
+    });
+  }
 
   input.observation.detailViews.forEach((detail, index) => {
     const isCinemaFrame = detail.role === "cinema-frame";
@@ -222,6 +273,8 @@ export function buildNorthstarVisualObservationParts(input: {
     text: JSON.stringify({
       observationVersion: input.observation.version,
       revisionId: input.observation.revisionId,
+      captureStatus: input.observation.captureStatus,
+      captureWarning: input.observation.captureWarning,
       intrinsicMeasurement: input.observation.intrinsicMeasurement,
       changedNodeIds: input.observation.changedNodeIds,
       meaningfulChangedNodeIds: input.observation.meaningfulChangedNodeIds,

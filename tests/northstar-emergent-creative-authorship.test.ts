@@ -4,6 +4,7 @@ import {
   NORTHSTAR_EMERGENT_CREATIVE_ACT_JSON_SCHEMA,
   inferNorthstarCreativeOperationKind,
   sanitizeNorthstarEmergentCreativeAct,
+  sanitizeNorthstarEmergentCreativeCritique,
   type NorthstarEmergentCreativeActDraft,
 } from "@/lib/canvas-ai/northstar-emergent-creative-authorship";
 
@@ -155,42 +156,69 @@ test("sanitization forces runtime-owned geometry and preserves concrete creative
   }]);
 });
 
-test("request-space is rejected even if a provider bypasses schema enforcement", () => {
+test("request-space is removed deterministically if a provider bypasses schema enforcement", () => {
   const draft = baseDraft();
   (draft.exactActions as unknown[]).push({
     op: "request-space",
     left: 100,
     right: 100,
   });
-  assert.throws(
-    () => sanitizeNorthstarEmergentCreativeAct(draft),
-    /may not request or control artboard dimensions/i,
-  );
+  const act = sanitizeNorthstarEmergentCreativeAct(draft);
+  assert.equal(act.mutation.operations.some((operation) => operation.op === "request-space"), false);
+  assert.match(act.sanitizationRepairs.join(" "), /request-space/i);
 });
 
-test("root dimension styles are rejected while evidence sizing remains allowed", () => {
+test("root dimension styles are removed while evidence sizing remains allowed", () => {
   const rootStyle = baseDraft();
   rootStyle.exactActions = [{
     op: "set-styles",
     targetId: "artboard",
-    styles: { width: "2400px" },
+    styles: { width: "2400px", background: "white" },
   }];
-  assert.throws(
-    () => sanitizeNorthstarEmergentCreativeAct(rootStyle),
-    /may not set root artboard dimensions/i,
+  const repairedStyle = sanitizeNorthstarEmergentCreativeAct(rootStyle);
+  const rootOperation = repairedStyle.mutation.operations.find((operation) =>
+    operation.op === "set-styles" && operation.targetId === "artboard"
   );
+  assert.equal(rootOperation?.op, "set-styles");
+  if (rootOperation?.op === "set-styles") {
+    assert.equal("width" in rootOperation.styles, false);
+    assert.equal(rootOperation.styles.background, "white");
+  }
+  assert.match(repairedStyle.sanitizationRepairs.join(" "), /root sizing styles/i);
 
   const rootCss = baseDraft();
-  rootCss.sourceEdit.css = '.ns-artifact{min-width:2400px}.ns-proof{width:280px}';
-  assert.throws(
-    () => sanitizeNorthstarEmergentCreativeAct(rootCss),
-    /runtime owns content-derived sizing/i,
-  );
+  rootCss.sourceEdit.css = '.ns-artifact,.ns-proof{min-width:2400px;background:white}.ns-proof{width:280px}';
+  const repairedCss = sanitizeNorthstarEmergentCreativeAct(rootCss);
+  assert.doesNotMatch(repairedCss.sourceFiles?.css ?? "", /\.ns-artifact[^}]*min-width\s*:/i);
+  assert.match(repairedCss.sourceFiles?.css ?? "", /\.ns-artifact\{background:white\}/i);
+  assert.match(repairedCss.sourceFiles?.css ?? "", /\.ns-proof\{min-width:2400px;background:white\}/i);
+  assert.match(repairedCss.sourceFiles?.css ?? "", /\.ns-proof\{width:280px\}/i);
+  assert.match(repairedCss.sanitizationRepairs.join(" "), /root sizing declarations/i);
 
   const nested = sanitizeNorthstarEmergentCreativeAct(baseDraft());
   assert.equal(nested.mutation.operations.some((operation) =>
     operation.op === "set-styles" && operation.targetId === "evidence-awin-1"
   ), true);
+});
+
+test("critique cannot turn finite artboard magnitude into a root sizing instruction", () => {
+  const critique = sanitizeNorthstarEmergentCreativeCritique({
+    summary: "The board is too tall.",
+    observedEffect: "The evidence remains visible.",
+    whatImproved: [],
+    whatStillWeak: ["The narrative is dense."],
+    implementationDefects: [
+      "Artboard height (21,201px) is an execution fault that remains functionally unusable.",
+      "A grounded evidence screen is clipped by an authored overflow rule.",
+    ],
+    recommendedNextMove: "Force the artboard to a standard 2360x2200px viewport and curate the evidence.",
+    continueWorking: true,
+  });
+  assert.equal(critique.implementationDefects.some((item) => /21,201px/.test(item)), false);
+  assert.equal(critique.implementationDefects.some((item) => /clipped/.test(item)), true);
+  assert.match(critique.whatStillWeak.join(" "), /never by setting root artboard dimensions/i);
+  assert.doesNotMatch(critique.recommendedNextMove, /2360x2200/i);
+  assert.match(critique.recommendedNextMove, /curate and restructure/i);
 });
 
 test("internal operation classification is inferred from the process need, not chosen by the model", () => {

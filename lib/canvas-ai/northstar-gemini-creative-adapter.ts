@@ -37,6 +37,7 @@ export function createNorthstarGeminiCreativeAdapter(input: {
       signal: request.signal,
       maxOutputTokens: request.maxOutputTokens,
       temperature: request.temperature,
+      thinkingLevel: request.thinkingLevel,
     }),
     authorCreativeAct: (request) => input.generateJson<NorthstarEmergentCreativeActDraft>({
       apiKey: input.apiKey,
@@ -46,6 +47,7 @@ export function createNorthstarGeminiCreativeAdapter(input: {
       signal: request.signal,
       maxOutputTokens: request.maxOutputTokens,
       temperature: request.temperature,
+      thinkingLevel: request.thinkingLevel,
     }),
     critiqueRenderedAct: (request) => input.generateJson<NorthstarEmergentCreativeCritiqueDraft>({
       apiKey: input.apiKey,
@@ -55,6 +57,7 @@ export function createNorthstarGeminiCreativeAdapter(input: {
       signal: request.signal,
       maxOutputTokens: request.maxOutputTokens,
       temperature: request.temperature,
+      thinkingLevel: request.thinkingLevel,
     }),
     reviewCreativeArtifact: (request) => input.generateJson<NorthstarIndependentCreativeReviewDraft>({
       apiKey: input.apiKey,
@@ -64,6 +67,7 @@ export function createNorthstarGeminiCreativeAdapter(input: {
       signal: request.signal,
       maxOutputTokens: request.maxOutputTokens,
       temperature: request.temperature,
+      thinkingLevel: request.thinkingLevel,
     }),
     adjudicateCreativeClosure: (request) => input.generateJson<NorthstarCreativeClosureAdjudicationDraft>({
       apiKey: input.apiKey,
@@ -73,6 +77,7 @@ export function createNorthstarGeminiCreativeAdapter(input: {
       signal: request.signal,
       maxOutputTokens: request.maxOutputTokens,
       temperature: request.temperature,
+      thinkingLevel: request.thinkingLevel,
     }),
   };
 }

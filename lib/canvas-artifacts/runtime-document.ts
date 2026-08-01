@@ -3898,6 +3898,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   window.addEventListener("message", (event) => {
     const message = event.data;
     if (!message || message.artifactId !== ARTIFACT_ID) return;
+    if (message.type === "northstar.artifact.transport-probe") {
+      parent.postMessage({
+        type: "northstar.artifact.transport-probe-ack",
+        artifactId: ARTIFACT_ID,
+        surfaceId: SURFACE_ID,
+        revisionId: currentRevisionId,
+        proposalId: message.proposalId,
+        ackToken: message.ackToken,
+        mutationId: message.mutationId,
+        probeId: message.probeId,
+        frameInstanceId: message.frameInstanceId,
+      }, "*");
+      return;
+    }
     if (message.type === "northstar.artifact.set-stage") {
       activeStageIndex = Math.max(0, Math.min(STAGES.length - 1, Number(message.stageIndex) || 0)); applyStage(); queueContentSize(); return;
     }
@@ -3927,9 +3941,36 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       return;
     }
     if (message.type === "northstar.artifact.apply-mutation" && message.batch) {
-      registerAssets(message.assetUrls || []);
       const mutationId = message.batch.mutationId;
       if (cancelledMutationIds.has(mutationId)) return;
+      if (
+        Number.isFinite(Number(message.deliveryDeadlineAt))
+        && Date.now() > Number(message.deliveryDeadlineAt)
+      ) {
+        const expiredMessage = {
+          type: "northstar.artifact.mutation-rejected",
+          artifactId: ARTIFACT_ID,
+          surfaceId: SURFACE_ID,
+          revisionId: message.revisionId,
+          browserRevisionId: currentRevisionId,
+          baseRevisionId: message.baseRevisionId,
+          proposalId: message.proposalId,
+          ackToken: message.ackToken,
+          mutationId,
+          message: "NORTHSTAR_TRANSPORT_DELIVERY_DEADLINE_EXPIRED: The proposal reached the runtime after its immutable delivery deadline and was not applied.",
+          changedNodeIds: [],
+          meaningfulChangedNodeIds: [],
+          changeKinds: [],
+          requiredAssetUrls: message.batch.requiredAssetUrls || [],
+          loadedAssetUrls: loadedAssetUrls(),
+          missingAssetUrls: [],
+          evidenceRegistry: captureEvidenceRegistryReceipt(),
+          snapshot: captureLiveSnapshot(),
+        };
+        postTerminalMutation(mutationId, expiredMessage);
+        return;
+      }
+      registerAssets(message.assetUrls || []);
       parent.postMessage({
         type: "northstar.artifact.mutation-received",
         artifactId: ARTIFACT_ID,

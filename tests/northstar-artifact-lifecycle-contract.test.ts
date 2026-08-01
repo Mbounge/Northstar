@@ -19,6 +19,7 @@ test("emits correlated browser revision lifecycle events", () => {
     "revision.acknowledged",
     "revision.rejected",
     "revision.timed_out",
+    "transport.probe_acknowledged",
     "ack.delivery_failed",
   ]) {
     assert.equal(hostSource.includes(`\"${eventName}\"`), true);
@@ -28,9 +29,10 @@ test("emits correlated browser revision lifecycle events", () => {
 });
 
 test("terminates mutations that never reach browser acknowledgement", () => {
-  assert.equal(hostSource.includes("proposal.dispatchAttempts >= NORTHSTAR_HEALTH_POLICY.acknowledgement.maxDispatchAttempts"), true);
-  assert.equal(hostSource.includes("proposalAge > NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs"), true);
-  assert.equal(hostSource.includes('name: "revision.timed_out"'), true);
+  assert.equal(hostSource.includes("proposal.deliveryDeadlineAt"), true);
+  assert.equal(hostSource.includes("proposal.terminalDeadlineAt"), true);
+  assert.equal(hostSource.includes("if (input.proposal.firstSentAt > 0) return true"), true);
+  assert.equal(hostSource.includes('lifecycleName: "revision.timed_out"'), true);
 });
 
 test("gates run completion on acknowledgement health and revision parity", () => {

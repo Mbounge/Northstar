@@ -235,6 +235,14 @@ export function classifyCanvasDiagnosticEvent(
   ) {
     return "warning";
   }
+  if (
+    event.name === "linear.design.observation_degraded"
+    || event.name === "creative.observation.degraded"
+    || event.name === "linear.design.detail_observation_skipped"
+    || event.name === "creative.detail_observation.skipped"
+  ) {
+    return "warning";
+  }
 
   const recoverableCandidateEvent =
     status === "rejected"
@@ -686,7 +694,11 @@ export function getCanvasRunTelemetry(sourceEvents: CanvasDiagnosticEvent[] = ev
 
     if (runEvents.some((event) => event.name === "action.outcome" && (event.data?.status === "failed" || event.data?.status === "timed_out"))) hardFailureRuns += 1;
     if (runEvents.some((event) => /revision\.timed_out|ack\.delivery_failed/.test(event.name))) acknowledgementFailureRuns += 1;
-    if (runEvents.some((event) => event.name === "render.health" && event.data?.healthy === false)) renderFailureRuns += 1;
+    if (runEvents.some((event) =>
+      (event.name === "render.health" && event.data?.healthy === false)
+      || event.name === "linear.design.observation_degraded"
+      || event.name === "creative.observation.degraded"
+    )) renderFailureRuns += 1;
     if (runEvents.some((event) => event.phase === "persistence" && /failed|mismatch/.test(event.name))) persistenceFailureRuns += 1;
   }
 

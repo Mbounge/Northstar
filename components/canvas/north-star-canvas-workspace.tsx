@@ -109,6 +109,7 @@ import {
   type CanvasDiagnosticSeverity,
 } from "@/lib/canvas-ai/canvas-diagnostics";
 import { NORTHSTAR_HEALTH_POLICY } from "@/lib/canvas-ai/northstar-health-policy";
+import { northstarThinkingModePolicy } from "@/lib/canvas-ai/northstar-thinking-mode-policy";
 import { isNorthstarVerifiedNoopReason } from "@/lib/canvas-ai/northstar-run-health";
 import {
   isNorthstarClientActionHardFailure,
@@ -4984,6 +4985,11 @@ function getConnectorSidesBetweenBoxes(
 }
 
 type NorthStarThinkingDepth = "low" | "medium" | "high";
+
+const NORTHSTAR_THINKING_MODE_OPTIONS = (["low", "medium", "high"] as const).map((value) => ({
+  value,
+  description: northstarThinkingModePolicy(value).description,
+}));
 
 interface CanvasAICompositionCheckpoint {
   version: "northstar.composition-checkpoint.v1";
@@ -15177,6 +15183,8 @@ export function NorthStarCanvasWorkspace({
                   artifactLifecycleByRunRef.current.set(runId, runEvents);
                   const key = event.name === "render.health"
                     ? `${event.artifactId}:${event.revisionId}:render-health`
+                    : event.name === "transport.probe_acknowledged"
+                      ? `${event.ackToken ?? `${event.artifactId}:${event.revisionId}`}:transport-probe`
                     : event.ackToken ?? `${event.artifactId}:${event.revisionId}`;
                   runEvents.set(key, event);
                   recordCanvasDiagnostic({
@@ -15199,6 +15207,16 @@ export function NorthStarCanvasWorkspace({
                       surfaceMountCount: event.surfaceMountCount,
                       rollbackDurationMs: event.rollbackDurationMs,
                       candidateDurationMs: event.candidateDurationMs,
+                      transportPhase: event.transportPhase,
+                      transportOutcome: event.transportOutcome,
+                      payloadBytes: event.payloadBytes,
+                      firstSentAt: event.firstSentAt,
+                      deliveryDeadlineAt: event.deliveryDeadlineAt,
+                      terminalDeadlineAt: event.terminalDeadlineAt,
+                      probeId: event.probeId,
+                      probeAcknowledgedAt: event.probeAcknowledgedAt,
+                      receivedAt: event.receivedAt,
+                      frameLoadCount: event.frameLoadCount,
                       snapshotSanitized: event.snapshotSanitized,
                       evidenceRegistry: event.evidenceRegistry,
                       evidenceCollisionPairs: event.evidenceCollisionPairs,
@@ -19639,11 +19657,7 @@ function ChatWorkspacePanel({
                           <div className="px-3 pb-2 pt-1 text-[10px] font-[850] uppercase tracking-[0.12em] text-zinc-400">
                             Thinking depth
                           </div>
-                          {([
-                            ["low", "Fast, focused work"],
-                            ["medium", "Balanced research and refinement"],
-                            ["high", "Deep, recursive problem solving"],
-                          ] as Array<[NorthStarThinkingDepth, string]>).map(([value, description]) => (
+                          {NORTHSTAR_THINKING_MODE_OPTIONS.map(({ value, description }) => (
                             <button
                               key={value}
                               type="button"

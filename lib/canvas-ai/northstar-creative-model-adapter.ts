@@ -22,6 +22,7 @@ export interface NorthstarCreativeAuthoringRequest {
   signal: AbortSignal;
   maxOutputTokens: number;
   temperature: number;
+  thinkingLevel?: "low" | "medium" | "high";
 }
 
 export interface NorthstarCreativeModelAdapter {
@@ -55,6 +56,7 @@ export interface NorthstarCreativeJsonCall {
   signal: AbortSignal;
   maxOutputTokens: number;
   temperature?: number;
+  thinkingLevel?: "low" | "medium" | "high";
 }
 
 export type NorthstarCreativeJsonGenerator = <T>(

@@ -35,6 +35,7 @@ interface ArtifactPointerMessage {
     | "northstar.artifact.runtime-error"
     | "northstar.artifact.runtime-review"
     | "northstar.artifact.content-size"
+    | "northstar.artifact.transport-probe-ack"
     | "northstar.artifact.mutation-received"
     | "northstar.artifact.mutation-applied"
     | "northstar.artifact.mutation-rejected";
@@ -68,6 +69,8 @@ interface ArtifactPointerMessage {
   snapshot?: NorthstarLiveSurfaceSnapshot;
   rollbackDurationMs?: number;
   candidateDurationMs?: number;
+  probeId?: string;
+  frameInstanceId?: string;
 }
 
 let browserRealtimeClient: ReturnType<typeof createSupabaseClient> | undefined;
@@ -101,6 +104,7 @@ export interface NorthstarArtifactLifecycleEvent {
     | "revision.acknowledged"
     | "revision.rejected"
     | "revision.timed_out"
+    | "transport.probe_acknowledged"
     | "ack.delivery_failed"
     | "authority.surface_ready"
     | "render.health";
@@ -123,6 +127,22 @@ export interface NorthstarArtifactLifecycleEvent {
   surfaceMountCount?: number;
   rollbackDurationMs?: number;
   candidateDurationMs?: number;
+  transportPhase?: "delivery" | "application";
+  transportOutcome?:
+    | "probe-acknowledged"
+    | "delivery-deadline-expired-before-application"
+    | "frame-reloaded-before-delivery"
+    | "frame-unresponsive-before-delivery"
+    | "mutation-not-entered-after-live-probe"
+    | "mutation-entered-without-terminal";
+  payloadBytes?: number;
+  firstSentAt?: number;
+  deliveryDeadlineAt?: number;
+  terminalDeadlineAt?: number;
+  probeId?: string;
+  probeAcknowledgedAt?: number;
+  receivedAt?: number;
+  frameLoadCount?: number;
   snapshotSanitized?: boolean;
   evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
   evidenceCollisionPairs?: Array<[string, string]>;
@@ -190,6 +210,18 @@ function surfaceIdentity(artifact?: CanvasCodeArtifactPayload): string | undefin
   return artifact.surfaceId ?? artifact.artifactId;
 }
 
+function serializedMessageBytes(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof TextEncoder !== "undefined"
+      ? new TextEncoder().encode(serialized).byteLength
+      : serialized.length;
+  } catch {
+    // Transport telemetry must never prevent the actual proposal from being sent.
+    return 0;
+  }
+}
+
 export function isNorthstarAuthoredSnapshotSanitized(
   snapshot?: NorthstarLiveSurfaceSnapshot,
 ): boolean | undefined {
@@ -242,6 +274,7 @@ function CodeArtifactHostImpl({
   const frameInstanceIdRef = useRef(
     `northstar-frame-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
   );
+  const frameLoadCountRef = useRef(0);
   const surfaceMountCountRef = useRef(artifact ? 1 : 0);
   const latestArtifactRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
   const mountedSurfaceRef = useRef<CanvasCodeArtifactPayload | undefined>(artifact);
@@ -263,8 +296,14 @@ function CodeArtifactHostImpl({
     mutationId: string;
     received: boolean;
     receivedAt?: number;
-    dispatchAttempts: number;
-    lastDispatchedAt: number;
+    firstSentAt: number;
+    deliveryDeadlineAt: number;
+    terminalDeadlineAt?: number;
+    payloadBytes: number;
+    probeId: string;
+    probeAcknowledgedAt?: number;
+    frameLoadCount: number;
+    terminalizing: boolean;
   } | null>(null);
   const pendingAcknowledgementDeliveriesRef = useRef<Map<string, {
     acknowledgement: NorthstarArtifactMutationAcknowledgement;
@@ -355,9 +394,32 @@ function CodeArtifactHostImpl({
     artifact: CanvasCodeArtifactPayload;
   }) => {
     const frame = frameRef.current;
-    if (!frame?.contentWindow) return false;
-    input.proposal.dispatchAttempts += 1;
-    input.proposal.lastDispatchedAt = Date.now();
+    const targetWindow = frame?.contentWindow;
+    if (!targetWindow) return false;
+    // A proposal is delivered exactly once. Reposting the same large mutation
+    // while the iframe is busy obscures the original failure boundary and can
+    // build an unbounded task queue inside the sandboxed surface.
+    if (input.proposal.firstSentAt > 0) return true;
+    const firstSentAt = Date.now();
+    const deliveryDeadlineAt = firstSentAt + NORTHSTAR_HEALTH_POLICY.acknowledgement.deliveryTimeoutMs;
+    const mutationMessage = {
+      type: "northstar.artifact.apply-mutation",
+      artifactId: input.artifact.artifactId,
+      surfaceId: input.artifact.surfaceId ?? input.artifact.artifactId,
+      revisionId: input.artifact.revisionId,
+      baseRevisionId: input.artifact.parentRevisionId,
+      proposalId: input.proposal.proposalId,
+      ackToken: input.proposal.ackToken,
+      batch: input.batch,
+      layoutBaseWidth: input.artifact.layoutBaseWidth ?? input.artifact.preferredWidth,
+      layoutBaseHeight: input.artifact.layoutBaseHeight ?? input.artifact.preferredHeight,
+      assetUrls: input.artifact.dataBundle?.allowedAssetUrls ?? [],
+      deliveryDeadlineAt,
+    };
+    input.proposal.firstSentAt = firstSentAt;
+    input.proposal.deliveryDeadlineAt = deliveryDeadlineAt;
+    input.proposal.payloadBytes = serializedMessageBytes(mutationMessage);
+    input.proposal.frameLoadCount = frameLoadCountRef.current;
     onLifecycleEvent({
       name: "revision.sent",
       artifactId: input.artifact.artifactId,
@@ -371,21 +433,24 @@ function CodeArtifactHostImpl({
       candidateRevisionId: input.proposal.revisionId,
       frameInstanceId: frameInstanceIdRef.current,
       surfaceMountCount: surfaceMountCountRef.current,
-      timestamp: input.proposal.lastDispatchedAt,
+      payloadBytes: input.proposal.payloadBytes,
+      firstSentAt,
+      deliveryDeadlineAt,
+      probeId: input.proposal.probeId,
+      frameLoadCount: input.proposal.frameLoadCount,
+      timestamp: firstSentAt,
     });
-    frame.contentWindow.postMessage({
-      type: "northstar.artifact.apply-mutation",
+    targetWindow.postMessage({
+      type: "northstar.artifact.transport-probe",
       artifactId: input.artifact.artifactId,
-      surfaceId: input.artifact.surfaceId ?? input.artifact.artifactId,
-      revisionId: input.artifact.revisionId,
-      baseRevisionId: input.artifact.parentRevisionId,
+      frameInstanceId: frameInstanceIdRef.current,
+      probeId: input.proposal.probeId,
       proposalId: input.proposal.proposalId,
       ackToken: input.proposal.ackToken,
-      batch: input.batch,
-      layoutBaseWidth: input.artifact.layoutBaseWidth ?? input.artifact.preferredWidth,
-      layoutBaseHeight: input.artifact.layoutBaseHeight ?? input.artifact.preferredHeight,
-      assetUrls: input.artifact.dataBundle?.allowedAssetUrls ?? [],
+      revisionId: input.proposal.revisionId,
+      mutationId: input.proposal.mutationId,
     }, "*");
+    targetWindow.postMessage(mutationMessage, "*");
     return true;
   }, [onLifecycleEvent]);
 
@@ -420,8 +485,14 @@ function CodeArtifactHostImpl({
       mutationId: next.mutationId,
       received: false,
       receivedAt: undefined,
-      dispatchAttempts: 0,
-      lastDispatchedAt: 0,
+      firstSentAt: 0,
+      deliveryDeadlineAt: 0,
+      terminalDeadlineAt: undefined,
+      payloadBytes: 0,
+      probeId: crypto.randomUUID(),
+      probeAcknowledgedAt: undefined,
+      frameLoadCount: frameLoadCountRef.current,
+      terminalizing: false,
     };
     inFlightProposalRef.current = proposal;
     setVisibleMutationLabel(next.label);
@@ -464,6 +535,11 @@ function CodeArtifactHostImpl({
     reason?: string;
     proposal?: NonNullable<typeof inFlightProposalRef.current>;
     browserRevisionId?: string;
+    terminalStatus?: "ready" | "applied" | "rejected" | "timed_out";
+    lifecycleName?: "revision.acknowledged" | "revision.rejected" | "revision.timed_out";
+    authorityState?: "foundation-ready" | "candidate-committed" | "candidate-rejected" | "candidate-timed-out";
+    transportPhase?: NorthstarArtifactLifecycleEvent["transportPhase"];
+    transportOutcome?: NorthstarArtifactLifecycleEvent["transportOutcome"];
   }) => {
     const latest = latestArtifactRef.current;
     const mounted = mountedSurfaceRef.current;
@@ -566,7 +642,7 @@ function CodeArtifactHostImpl({
     };
 
     terminalProposalByAckTokenRef.current.set(acknowledgement.ackToken, {
-      status: acknowledgement.status,
+      status: input.terminalStatus ?? acknowledgement.status,
       revisionId: acknowledgement.revisionId,
       baseRevisionId: acknowledgement.baseRevisionId,
       mutationId: acknowledgement.mutationId,
@@ -593,19 +669,23 @@ function CodeArtifactHostImpl({
     try {
       await deliverAcknowledgement(acknowledgement);
       pendingAcknowledgementDeliveriesRef.current.delete(acknowledgement.ackToken);
+      const lifecycleName = input.lifecycleName
+        ?? (acknowledgement.status === "rejected" ? "revision.rejected" : "revision.acknowledged");
+      const authorityState = input.authorityState
+        ?? (acknowledgement.status === "rejected"
+          ? "candidate-rejected"
+          : isFoundationReady
+            ? "foundation-ready"
+            : "candidate-committed");
       onLifecycleEvent({
-        name: acknowledgement.status === "rejected" ? "revision.rejected" : "revision.acknowledged",
+        name: lifecycleName,
         artifactId: acknowledgement.artifactId,
         revisionId: acknowledgement.revisionId,
         ackToken: acknowledgement.ackToken,
         proposalId: acknowledgement.proposalId,
         mutationId: acknowledgement.mutationId,
         browserRevisionId: observedBrowserRevision,
-        authorityState: acknowledgement.status === "rejected"
-          ? "candidate-rejected"
-          : isFoundationReady
-            ? "foundation-ready"
-            : "candidate-committed",
+        authorityState,
         acceptedRevisionId: acknowledgement.status === "rejected"
           ? observedBrowserRevision
           : acknowledgement.revisionId,
@@ -617,6 +697,24 @@ function CodeArtifactHostImpl({
         snapshotSanitized: acknowledgement.snapshotSanitized,
         evidenceRegistry: acknowledgement.evidenceRegistry,
         evidenceCollisionPairs: acknowledgement.review?.evidenceCollisionPairs,
+        transportPhase: input.transportPhase ?? (lifecycleName === "revision.timed_out"
+          ? (inFlight?.received ? "application" : "delivery")
+          : undefined),
+        transportOutcome: input.transportOutcome ?? (lifecycleName === "revision.timed_out"
+          ? inFlight?.received
+            ? "mutation-entered-without-terminal"
+            : inFlight?.probeAcknowledgedAt
+              ? "mutation-not-entered-after-live-probe"
+              : "frame-unresponsive-before-delivery"
+          : undefined),
+        payloadBytes: inFlight?.payloadBytes,
+        firstSentAt: inFlight?.firstSentAt,
+        deliveryDeadlineAt: inFlight?.deliveryDeadlineAt,
+        terminalDeadlineAt: inFlight?.terminalDeadlineAt,
+        probeId: inFlight?.probeId,
+        probeAcknowledgedAt: inFlight?.probeAcknowledgedAt,
+        receivedAt: inFlight?.receivedAt,
+        frameLoadCount: inFlight?.frameLoadCount,
         detail: acknowledgement.reason,
         timestamp: Date.now(),
       });
@@ -679,9 +777,9 @@ function CodeArtifactHostImpl({
   }, [deliverAcknowledgement]);
 
   useEffect(() => {
-    // postMessage has no delivery guarantee. Retry the exact idempotent proposal
-    // until its token leaves the authoritative package. The iframe caches and
-    // replays terminal results, so this never needs to remount or blank the board.
+    // Never blind-replay a mutation. A single immutable delivery deadline
+    // distinguishes an unreachable frame from a mutation that entered the
+    // runtime but failed to settle, without filling the iframe task queue.
     const interval = window.setInterval(() => {
       const proposal = inFlightProposalRef.current;
       const current = latestArtifactRef.current;
@@ -691,17 +789,34 @@ function CodeArtifactHostImpl({
         pumpNextMutation();
         return;
       }
+      if (proposal.terminalizing || proposal.firstSentAt <= 0) return;
       const now = Date.now();
-      const proposalAge = now - (proposal.receivedAt ?? proposal.lastDispatchedAt);
-      if (proposal.dispatchAttempts >= NORTHSTAR_HEALTH_POLICY.acknowledgement.maxDispatchAttempts ||
-        proposalAge > NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs) {
-        terminalProposalByAckTokenRef.current.set(proposal.ackToken, {
-          status: "timed_out",
-          revisionId: proposal.revisionId,
-          baseRevisionId: proposal.baseRevisionId,
-          mutationId: proposal.mutationId,
-          settledAt: now,
-        });
+      const deadlineAt = proposal.received
+        ? proposal.terminalDeadlineAt
+        : proposal.deliveryDeadlineAt;
+      if (!deadlineAt || now <= deadlineAt) return;
+
+      proposal.terminalizing = true;
+      failedMutationIdsRef.current.add(proposal.mutationId);
+      const transportOutcome = proposal.received
+        ? "mutation-entered-without-terminal"
+        : frameLoadCountRef.current !== proposal.frameLoadCount
+          ? "frame-reloaded-before-delivery"
+          : proposal.probeAcknowledgedAt
+            ? "mutation-not-entered-after-live-probe"
+            : "frame-unresponsive-before-delivery";
+      const reasonCode = transportOutcome === "mutation-entered-without-terminal"
+        ? "NORTHSTAR_TRANSPORT_MUTATION_ENTERED_WITHOUT_TERMINAL"
+        : transportOutcome === "frame-reloaded-before-delivery"
+          ? "NORTHSTAR_TRANSPORT_FRAME_RELOADED_BEFORE_DELIVERY"
+          : transportOutcome === "mutation-not-entered-after-live-probe"
+            ? "NORTHSTAR_TRANSPORT_MUTATION_NOT_ENTERED_AFTER_LIVE_PROBE"
+            : "NORTHSTAR_TRANSPORT_FRAME_UNRESPONSIVE_BEFORE_DELIVERY";
+      const detail = proposal.received
+        ? `${reasonCode}: The runtime received proposal ${proposal.proposalId} but did not return a terminal result within ${NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs}ms.`
+        : `${reasonCode}: The runtime did not enter proposal ${proposal.proposalId} within ${NORTHSTAR_HEALTH_POLICY.acknowledgement.deliveryTimeoutMs}ms.`;
+
+      if (proposal.received) {
         frameRef.current?.contentWindow?.postMessage({
           type: "northstar.artifact.cancel-mutation",
           artifactId: current.artifactId,
@@ -713,39 +828,43 @@ function CodeArtifactHostImpl({
           mutationId: proposal.mutationId,
           reason: "HOST_TERMINAL_TIMEOUT",
         }, "*");
-        onLifecycleEvent({
-          name: "revision.timed_out",
-          artifactId: current.artifactId,
-          revisionId: proposal.revisionId,
-          ackToken: proposal.ackToken,
-          proposalId: proposal.proposalId,
-          mutationId: proposal.mutationId,
-          browserRevisionId: browserRevisionRef.current,
-          authorityState: "candidate-timed-out",
-          acceptedRevisionId: browserRevisionRef.current,
-          candidateRevisionId: proposal.revisionId,
-          frameInstanceId: frameInstanceIdRef.current,
-          surfaceMountCount: surfaceMountCountRef.current,
-          detail: `The live artifact did not reach a terminal browser acknowledgement within ${NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs}ms.`,
-          timestamp: now,
-        });
-        failedMutationIdsRef.current.add(proposal.mutationId);
-        inFlightProposalRef.current = null;
-        setVisibleMutationLabel("Northstar stopped an unacknowledged adjustment");
-        return;
       }
-      const retryInterval = proposal.received
-        ? NORTHSTAR_HEALTH_POLICY.acknowledgement.retryAfterReceiptMs
-        : NORTHSTAR_HEALTH_POLICY.acknowledgement.retryBeforeReceiptMs;
-      if (now - proposal.lastDispatchedAt < retryInterval) return;
-      const batch = (current.mutationJournal ?? []).find(
-        (candidate) => candidate.mutationId === proposal.mutationId,
-      );
-      if (!batch) return;
-      dispatchMutationProposal({ proposal, batch, artifact: current });
+
+      void postAcknowledgement({
+        status: "rejected",
+        terminalStatus: "timed_out",
+        lifecycleName: "revision.timed_out",
+        authorityState: "candidate-timed-out",
+        transportPhase: proposal.received ? "application" : "delivery",
+        transportOutcome,
+        proposal,
+        browserRevisionId: proposal.baseRevisionId ?? browserRevisionRef.current,
+        reason: detail,
+        message: {
+          type: "northstar.artifact.mutation-rejected",
+          artifactId: current.artifactId,
+          surfaceId: current.surfaceId ?? current.artifactId,
+          revisionId: proposal.revisionId,
+          browserRevisionId: proposal.baseRevisionId ?? browserRevisionRef.current,
+          baseRevisionId: proposal.baseRevisionId,
+          proposalId: proposal.proposalId,
+          ackToken: proposal.ackToken,
+          mutationId: proposal.mutationId,
+          message: detail,
+          review: latestReviewRef.current,
+          size: latestSizeRef.current,
+        },
+      }).catch((error: unknown) => {
+        console.warn("Northstar could not publish the transport containment receipt; the accepted artboard remains mounted.", error);
+      }).finally(() => {
+        if (inFlightProposalRef.current?.ackToken === proposal.ackToken) {
+          inFlightProposalRef.current = null;
+        }
+        setVisibleMutationLabel("Northstar preserved the last verified artboard");
+      });
     }, NORTHSTAR_HEALTH_POLICY.acknowledgement.pumpIntervalMs);
     return () => window.clearInterval(interval);
-  }, [dispatchMutationProposal, onLifecycleEvent, postAcknowledgement, pumpNextMutation]);
+  }, [postAcknowledgement, pumpNextMutation]);
 
   useEffect(() => {
     if (!dragShieldActive) return;
@@ -766,6 +885,45 @@ function CodeArtifactHostImpl({
       const current = latestArtifactRef.current;
       if (!current || event.data.artifactId !== current.artifactId) return;
 
+      if (event.data.type === "northstar.artifact.transport-probe-ack") {
+        const proposal = inFlightProposalRef.current;
+        if (
+          proposal
+          && !proposal.terminalizing
+          && event.data.probeId === proposal.probeId
+          && event.data.ackToken === proposal.ackToken
+          && event.data.proposalId === proposal.proposalId
+          && event.data.mutationId === proposal.mutationId
+          && event.data.frameInstanceId === frameInstanceIdRef.current
+        ) {
+          proposal.probeAcknowledgedAt = Date.now();
+          onLifecycleEvent({
+            name: "transport.probe_acknowledged",
+            artifactId: current.artifactId,
+            revisionId: proposal.revisionId,
+            ackToken: proposal.ackToken,
+            proposalId: proposal.proposalId,
+            mutationId: proposal.mutationId,
+            browserRevisionId: browserRevisionRef.current,
+            authorityState: "candidate-staged",
+            acceptedRevisionId: browserRevisionRef.current,
+            candidateRevisionId: proposal.revisionId,
+            frameInstanceId: frameInstanceIdRef.current,
+            surfaceMountCount: surfaceMountCountRef.current,
+            transportPhase: "delivery",
+            transportOutcome: "probe-acknowledged",
+            payloadBytes: proposal.payloadBytes,
+            firstSentAt: proposal.firstSentAt,
+            deliveryDeadlineAt: proposal.deliveryDeadlineAt,
+            probeId: proposal.probeId,
+            probeAcknowledgedAt: proposal.probeAcknowledgedAt,
+            frameLoadCount: proposal.frameLoadCount,
+            timestamp: proposal.probeAcknowledgedAt,
+          });
+        }
+        return;
+      }
+
       const terminalForEvent = event.data.ackToken
         ? terminalProposalByAckTokenRef.current.get(event.data.ackToken)
         : undefined;
@@ -773,6 +931,7 @@ function CodeArtifactHostImpl({
         terminalForEvent?.status === "timed_out"
         && (event.data.type === "northstar.artifact.mutation-applied"
           || event.data.type === "northstar.artifact.mutation-rejected"
+          || event.data.type === "northstar.artifact.mutation-received"
           || event.data.type === "northstar.artifact.runtime-error")
       ) {
         const lateEventKey = `${event.data.ackToken}:${event.data.type}:${event.data.mutationId ?? "none"}`;
@@ -890,6 +1049,8 @@ function CodeArtifactHostImpl({
         ) {
           proposal.received = true;
           proposal.receivedAt = Date.now();
+          proposal.terminalDeadlineAt = proposal.receivedAt
+            + NORTHSTAR_HEALTH_POLICY.acknowledgement.terminalTimeoutMs;
           onLifecycleEvent({
             name: "revision.received",
             artifactId: current.artifactId,
@@ -903,6 +1064,15 @@ function CodeArtifactHostImpl({
             candidateRevisionId: proposal.revisionId,
             frameInstanceId: frameInstanceIdRef.current,
             surfaceMountCount: surfaceMountCountRef.current,
+            transportPhase: "delivery",
+            payloadBytes: proposal.payloadBytes,
+            firstSentAt: proposal.firstSentAt,
+            deliveryDeadlineAt: proposal.deliveryDeadlineAt,
+            terminalDeadlineAt: proposal.terminalDeadlineAt,
+            probeId: proposal.probeId,
+            probeAcknowledgedAt: proposal.probeAcknowledgedAt,
+            receivedAt: proposal.receivedAt,
+            frameLoadCount: proposal.frameLoadCount,
             timestamp: proposal.receivedAt,
           });
         }
@@ -1098,8 +1268,18 @@ function CodeArtifactHostImpl({
         }
         if (event.data.review) { latestReviewRef.current = event.data.review; onRuntimeReview(event.data.review); }
         setVisibleMutationLabel("Northstar is repairing this rejected adjustment");
+        const transportDeadlineExpired = event.data.message?.startsWith(
+          "NORTHSTAR_TRANSPORT_DELIVERY_DEADLINE_EXPIRED",
+        ) === true;
         void postAcknowledgement({
           status: "rejected",
+          terminalStatus: transportDeadlineExpired ? "timed_out" : undefined,
+          lifecycleName: transportDeadlineExpired ? "revision.timed_out" : undefined,
+          authorityState: transportDeadlineExpired ? "candidate-timed-out" : undefined,
+          transportPhase: transportDeadlineExpired ? "delivery" : undefined,
+          transportOutcome: transportDeadlineExpired
+            ? "delivery-deadline-expired-before-application"
+            : undefined,
           message: {
             ...event.data,
             revisionId: rejectedProposal?.revisionId ?? event.data.revisionId,
@@ -1264,6 +1444,9 @@ function CodeArtifactHostImpl({
               width: geometry.intrinsicWidth,
               height: geometry.intrinsicHeight,
               pointerEvents: liveInteractionEnabled && !dragShieldActive ? "auto" : "none",
+            }}
+            onLoad={() => {
+              frameLoadCountRef.current += 1;
             }}
             onError={() => {
               console.warn("Northstar isolated surface emitted a load error; retaining the continuously mounted frame.");

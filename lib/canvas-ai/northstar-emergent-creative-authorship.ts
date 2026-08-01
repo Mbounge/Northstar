@@ -32,7 +32,7 @@ import type {
 } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
 
 export const NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION =
-  "northstar.emergent-creative-authorship.v3.5" as const;
+  "northstar.emergent-creative-authorship.v3.6" as const;
 
 type ModelAuthoredOperation = Exclude<
   NorthstarArtboardMutationOperation,
@@ -112,6 +112,8 @@ export interface NorthstarEmergentCreativeAct {
     role: NorthstarEvidenceRole;
     reason: string;
   }>;
+  /** Deterministic policy repairs applied before the mutation reaches the browser. */
+  sanitizationRepairs: string[];
 }
 
 const mutationSchema = NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA as unknown as {
@@ -274,8 +276,98 @@ const DIMENSION_STYLE_KEYS = new Set([
 ]);
 
 const ROOT_NODE_IDS = new Set(["artboard", "__root__"]);
-const ROOT_SELECTOR = /(?:^|,|\s)(?:\.ns-artifact|\[data-ns-node-id\s*=\s*["']artboard["']\]|#artboard|:root|html|body)\s*\{([^}]*)\}/gi;
-const DIMENSION_DECLARATION = /(?:^|;)\s*(?:width|height|min-width|min-height|max-width|max-height|inline-size|block-size|min-inline-size|min-block-size|max-inline-size|max-block-size)\s*:/i;
+const CSS_RULE = /([^{}]+)\{([^{}]*)\}/g;
+const DIMENSION_DECLARATION = /(^|;)\s*(width|height|min-width|min-height|max-width|max-height|inline-size|block-size|min-inline-size|min-block-size|max-inline-size|max-block-size)\s*:[^;}]*(?=;|$)/gi;
+
+function isPermanentArtboardSelector(selector: string): boolean {
+  const value = selector.trim();
+  if (!value || /[>+~\s]/.test(value)) return false;
+  return /^(?:\.ns-artifact|\[data-ns-node-id\s*=\s*["']artboard["']\]|#artboard|:root|html|body)(?:$|[.#:]|\[)/i.test(value);
+}
+
+function stripRootDimensionDeclarations(css: string): { css: string; removedProperties: string[] } {
+  const removedProperties: string[] = [];
+  const repairedCss = css.replace(CSS_RULE, (rule, selectorText: string, declarations: string) => {
+    const selectors = selectorText.split(",").map((selector) => selector.trim()).filter(Boolean);
+    const rootSelectors = selectors.filter(isPermanentArtboardSelector);
+    if (rootSelectors.length === 0) return rule;
+    const nonRootSelectors = selectors.filter((selector) => !isPermanentArtboardSelector(selector));
+    const repairedDeclarations = declarations
+      .replace(
+        DIMENSION_DECLARATION,
+        (declaration, prefix: string, property: string) => {
+          removedProperties.push(property.toLowerCase());
+          return "";
+        },
+      )
+      .replace(/^\s*;+/, "")
+      .replace(/;{2,}/g, ";")
+      .trim();
+    const repairedRules: string[] = [];
+    if (repairedDeclarations) repairedRules.push(`${rootSelectors.join(",")}{${repairedDeclarations}}`);
+    if (nonRootSelectors.length > 0) repairedRules.push(`${nonRootSelectors.join(",")}{${declarations}}`);
+    return repairedRules.join("");
+  });
+  return {
+    css: repairedCss,
+    removedProperties: Array.from(new Set(removedProperties)),
+  };
+}
+
+function repairModelAuthoredArtboardSizing(
+  operations: NorthstarArtboardMutationOperation[],
+): { operations: NorthstarArtboardMutationOperation[]; repairs: string[] } {
+  const repairs: string[] = [];
+  const repaired = operations.flatMap<NorthstarArtboardMutationOperation>((operation) => {
+    if (operation.op === "request-space") {
+      repairs.push("Ignored a model-authored request-space operation; canonical geometry remains content-derived.");
+      return [];
+    }
+    if (operation.op === "set-styles" && ROOT_NODE_IDS.has(operation.targetId)) {
+      const styles = Object.fromEntries(
+        Object.entries(operation.styles ?? {}).filter(([key]) => !DIMENSION_STYLE_KEYS.has(key.trim().toLowerCase())),
+      );
+      const removed = Object.keys(operation.styles ?? {}).filter((key) =>
+        DIMENSION_STYLE_KEYS.has(key.trim().toLowerCase()),
+      );
+      if (removed.length > 0) {
+        repairs.push(`Removed runtime-owned root sizing styles: ${removed.join(", ")}.`);
+      }
+      return Object.keys(styles).length > 0 ? [{ ...operation, styles }] : [];
+    }
+    if (operation.op === "set-css-layer") {
+      const result = stripRootDimensionDeclarations(operation.css);
+      if (result.removedProperties.length > 0) {
+        repairs.push(`Removed runtime-owned root sizing declarations from CSS: ${result.removedProperties.join(", ")}.`);
+      }
+      return [{ ...operation, css: result.css }];
+    }
+    return [operation];
+  });
+  return { operations: repaired, repairs: Array.from(new Set(repairs)).slice(0, 12) };
+}
+
+function assertNoModelAuthoredArtboardSizing(operations: NorthstarArtboardMutationOperation[]): void {
+  for (const operation of operations) {
+    if (operation.op === "request-space") {
+      throw new Error("Internal invariant: request-space survived creative-source sanitization.");
+    }
+    if (operation.op === "set-styles" && ROOT_NODE_IDS.has(operation.targetId)) {
+      const offending = Object.keys(operation.styles ?? {}).filter((key) =>
+        DIMENSION_STYLE_KEYS.has(key.trim().toLowerCase()),
+      );
+      if (offending.length > 0) {
+        throw new Error(`Internal invariant: root sizing styles survived sanitization (${offending.join(", ")}).`);
+      }
+    }
+    if (operation.op === "set-css-layer") {
+      const verification = stripRootDimensionDeclarations(operation.css);
+      if (verification.removedProperties.length > 0) {
+        throw new Error("Internal invariant: root sizing declarations survived CSS sanitization.");
+      }
+    }
+  }
+}
 
 function cleanText(value: unknown, maxLength: number): string {
   return typeof value === "string"
@@ -290,39 +382,6 @@ function cleanTextList(value: unknown, maxItems: number, maxLength: number): str
       .map((item) => cleanText(item, maxLength))
       .filter(Boolean),
   )).slice(0, maxItems);
-}
-
-function assertNoModelAuthoredArtboardSizing(
-  operations: NorthstarArtboardMutationOperation[],
-): void {
-  for (const operation of operations) {
-    if (operation.op === "request-space") {
-      throw new Error(
-        "The creative model may not request or control artboard dimensions. Artboard bounds are derived from rendered content by the runtime.",
-      );
-    }
-    if (operation.op === "set-styles" && ROOT_NODE_IDS.has(operation.targetId)) {
-      const offending = Object.keys(operation.styles ?? {}).filter((key) =>
-        DIMENSION_STYLE_KEYS.has(key.trim().toLowerCase()),
-      );
-      if (offending.length > 0) {
-        throw new Error(
-          `The creative model may not set root artboard dimensions (${offending.join(", ")}).`,
-        );
-      }
-    }
-    if (operation.op === "set-css-layer") {
-      let match: RegExpExecArray | null;
-      ROOT_SELECTOR.lastIndex = 0;
-      while ((match = ROOT_SELECTOR.exec(operation.css))) {
-        if (DIMENSION_DECLARATION.test(match[1])) {
-          throw new Error(
-            "The creative model may not set root artboard dimensions in CSS. The runtime owns content-derived sizing.",
-          );
-        }
-      }
-    }
-  }
 }
 
 function collectAffectedNodeIds(draft: NorthstarArtboardMutationDraft): string[] {
@@ -586,14 +645,16 @@ export function sanitizeNorthstarEmergentCreativeAct(
     ),
     context?.semanticSnapshot,
   );
-  const rawOperations = [
+  const authoredOperations = [
     ...directSourceOperations,
     ...(Array.isArray(draft.exactActions)
       ? draft.exactActions as NorthstarArtboardMutationOperation[]
       : []),
   ];
+  const sizingRepair = repairModelAuthoredArtboardSizing(authoredOperations);
+  const rawOperations = sizingRepair.operations;
   if (rawOperations.length === 0) {
-    throw new Error("The creative model returned no executable source revision.");
+    throw new Error("The creative model returned no executable source revision after runtime-owned geometry controls were removed.");
   }
   assertProtectedEvidenceOperations({ operations: rawOperations, protectedEvidenceNodeIds });
   assertNoModelAuthoredArtboardSizing(rawOperations);
@@ -619,10 +680,13 @@ export function sanitizeNorthstarEmergentCreativeAct(
   };
   assertNoModelAuthoredArtboardSizing(mutation.operations);
 
+  const repairedSourceCss = rawOperations.find((operation) =>
+    operation.op === "set-css-layer" && operation.layerId === "northstar-creative-source"
+  );
   const sourceFiles = draft.sourceEdit ? {
     targetId: cleanSourceId(draft.sourceEdit.targetId) || "presentation",
     html: typeof draft.sourceEdit.html === "string" ? draft.sourceEdit.html.trim().slice(0, 80000) : "",
-    css: typeof draft.sourceEdit.css === "string" ? draft.sourceEdit.css.slice(0, 60000) : "",
+    css: repairedSourceCss?.op === "set-css-layer" ? repairedSourceCss.css : "",
     javascript: typeof draft.sourceEdit.javascript === "string" ? draft.sourceEdit.javascript.slice(0, 80000) : "",
   } : undefined;
 
@@ -639,19 +703,43 @@ export function sanitizeNorthstarEmergentCreativeAct(
     mutation,
     affectedNodeIds: collectAffectedNodeIds(mutation),
     evidenceRoles: collectEvidenceRoles(mutation, context),
+    sanitizationRepairs: sizingRepair.repairs,
   };
+}
+
+function isRootGeometryMagnitudeClaim(value: string): boolean {
+  if (!/(?:artboard|canvas|viewport)/i.test(value)) return false;
+  if (!/(?:width|height|dimensions?|bounds?|footprint|size|px)/i.test(value)) return false;
+  if (/(?:overflow|clipp|overlap|nan|infinite|empty|missing|required node|asset)/i.test(value)) return false;
+  return /(?:execution fault|unusable|too (?:large|tall|wide)|standard|force|reset|set|constrain|\d{3,6}\s*(?:px|[x×]))/i.test(value);
+}
+
+function isForbiddenRootSizingRecommendation(value: string): boolean {
+  return /(?:force|reset|set|constrain|standard(?:ize)?)\b[^.]{0,120}(?:artboard|canvas|viewport)?[^.]{0,80}(?:width|height|dimensions?|\d{3,6}\s*(?:px|[x×]))/i.test(value)
+    || /(?:artboard|canvas|viewport)[^.]{0,100}\d{3,6}\s*[x×]\s*\d{3,6}/i.test(value);
 }
 
 export function sanitizeNorthstarEmergentCreativeCritique(
   draft: NorthstarEmergentCreativeCritiqueDraft,
 ): NorthstarEmergentCreativeCritique {
+  const rawWeaknesses = cleanTextList(draft?.whatStillWeak, 12, 500);
+  const rawDefects = cleanTextList(draft?.implementationDefects, 12, 500);
+  const geometryMagnitudeConcerns = rawDefects.filter(isRootGeometryMagnitudeClaim);
+  const recommendedNextMove = cleanText(draft?.recommendedNextMove, 1600);
   return {
     summary: cleanText(draft?.summary, 1600) || "The rendered creative act was inspected against the exact verified artboard.",
     observedEffect: cleanText(draft?.observedEffect, 1600) || "The browser-visible effect requires further interpretation.",
     whatImproved: cleanTextList(draft?.whatImproved, 12, 500),
-    whatStillWeak: cleanTextList(draft?.whatStillWeak, 12, 500),
-    implementationDefects: cleanTextList(draft?.implementationDefects, 12, 500),
-    recommendedNextMove: cleanText(draft?.recommendedNextMove, 1600) || "Continue from the exact render only when another material improvement is justified.",
+    whatStillWeak: Array.from(new Set([
+      ...rawWeaknesses,
+      ...geometryMagnitudeConcerns.map((item) =>
+        `Composition scale or density concern: ${item} Resolve it by curating, relocating, or restructuring authored content; never by setting root artboard dimensions.`
+      ),
+    ])).slice(0, 12),
+    implementationDefects: rawDefects.filter((item) => !isRootGeometryMagnitudeClaim(item)),
+    recommendedNextMove: isForbiddenRootSizingRecommendation(recommendedNextMove)
+      ? "Curate and restructure the authored content to improve hierarchy and density. Keep the permanent artboard root dimension-free and let canonical runtime measurement derive the resulting bounds."
+      : recommendedNextMove || "Continue from the exact render only when another material improvement is justified.",
     continueWorking: draft?.continueWorking !== false,
   };
 }

@@ -163,12 +163,12 @@ function normalizeCapture(){
   document.documentElement.dataset.northstarRenderReady='true';document.body.style.visibility='visible';
 }
 Promise.all([document.fonts?.ready||Promise.resolve(),...Array.from(document.images).map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.addEventListener('load',resolve,{once:true});img.addEventListener('error',resolve,{once:true});}))]).then(()=>requestAnimationFrame(()=>requestAnimationFrame(normalizeCapture)));
-setTimeout(normalizeCapture,7000);
+setTimeout(normalizeCapture,2200);
 </script></body></html>`;
 }
 
 function chromiumCandidates(): string[] {
-  return [
+  return Array.from(new Set([
     process.env.NORTHSTAR_CHROMIUM_EXECUTABLE_PATH,
     process.env.CHROME_EXECUTABLE_PATH,
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -180,17 +180,41 @@ function chromiumCandidates(): string[] {
     "chromium",
     "chromium-browser",
     "google-chrome",
-  ].filter((value): value is string => Boolean(value));
+  ].filter((value): value is string => Boolean(value))));
+}
+
+class NorthstarChromiumUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NorthstarChromiumUnavailableError";
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function runChromium(command: string, args: string[], timeoutMs: number): Promise<string> {
-  if (command.startsWith("/") && !existsSync(command)) throw new Error(`Chromium executable not found at ${command}`);
+  if (command.startsWith("/") && !existsSync(command)) {
+    throw new NorthstarChromiumUnavailableError(`Chromium executable not found at ${command}`);
+  }
   return await new Promise<string>((resolve, reject) => {
     const detached = process.platform !== "win32";
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       detached,
     });
+    let settled = false;
+    const resolveOnce = (value: string) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const rejectOnce = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     const killTree = () => {
       try {
         if (detached && child.pid) process.kill(-child.pid, "SIGKILL");
@@ -205,13 +229,20 @@ async function runChromium(command: string, args: string[], timeoutMs: number): 
     child.stderr.on("data", (chunk: unknown) => { stderr += String(chunk).slice(0, 4_000); });
     const timer = setTimeout(() => {
       killTree();
-      reject(new Error(`Chromium render capture timed out after ${timeoutMs}ms.`));
+      rejectOnce(new Error(`Chromium render capture timed out after ${timeoutMs}ms while using ${command}.`));
     }, timeoutMs);
-    child.once("error", (error: Error) => { clearTimeout(timer); reject(error); });
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      if (error.code === "ENOENT") {
+        rejectOnce(new NorthstarChromiumUnavailableError(`Chromium executable ${command} is not available on PATH.`));
+        return;
+      }
+      rejectOnce(new Error(`Chromium launch failed using ${command}: ${error.message}`));
+    });
     child.once("exit", (code: number | null) => {
       clearTimeout(timer);
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`Chromium exited with code ${code}. ${stderr.trim().slice(0, 1_500)}`));
+      if (code === 0) resolveOnce(stdout);
+      else rejectOnce(new Error(`Chromium exited with code ${code} while using ${command}. ${stderr.trim().slice(0, 1_500)}`));
     });
   });
 }
@@ -229,6 +260,15 @@ export async function captureNorthstarArtifactPng(input: {
 }): Promise<NorthstarRenderedArtifactPng> {
   const baseWidth = Math.max(720, Math.min(2400, Math.round(input.width)));
   const baseHeight = Math.max(540, Math.min(6000, Math.round(input.height)));
+  const totalTimeoutMs = Math.max(1_000, input.timeoutMs ?? 28_000);
+  const deadlineAt = Date.now() + totalTimeoutMs;
+  const remainingBudget = (phase: string): number => {
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) {
+      throw new Error(`Chromium render capture exceeded its ${totalTimeoutMs}ms total budget during ${phase}.`);
+    }
+    return remaining;
+  };
   const directory = await mkdtemp(path.join(tmpdir(), "northstar-render-"));
   const htmlPath = path.join(directory, "artifact.html");
   const pngPath = path.join(directory, "artifact.png");
@@ -237,36 +277,47 @@ export async function captureNorthstarArtifactPng(input: {
     let commandUsed: string | undefined;
     let measuredWidth = baseWidth;
     let measuredHeight = baseHeight;
-    let lastError: unknown;
+    const unavailableCommands: string[] = [];
     const commonArgs = [
       "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
       "--disable-background-networking", "--disable-component-update", "--disable-extensions",
       "--disable-sync", "--metrics-recording-only", "--no-first-run", "--hide-scrollbars",
       "--allow-file-access-from-files", "--run-all-compositor-stages-before-draw",
-      "--virtual-time-budget=8000",
+      "--virtual-time-budget=3200",
     ];
     for (const command of chromiumCandidates()) {
       try {
-        const dumped = await runChromium(command, [...commonArgs, "--dump-dom", `file://${htmlPath}`], input.timeoutMs ?? 28_000);
+        const dumped = await runChromium(
+          command,
+          [...commonArgs, "--dump-dom", `file://${htmlPath}`],
+          remainingBudget("DOM measurement"),
+        );
         const match = dumped.match(/id="northstar-capture-size"[^>]*data-width="(\d+)"[^>]*data-height="(\d+)"/i);
         if (match) {
           measuredWidth = Math.max(1, Math.min(1920, Number(match[1]) || baseWidth));
           measuredHeight = Math.max(1, Math.min(5000, Number(match[2]) || baseHeight));
         }
         commandUsed = command;
-        lastError = undefined;
         break;
       } catch (error) {
-        lastError = error;
+        if (error instanceof NorthstarChromiumUnavailableError) {
+          unavailableCommands.push(command);
+          continue;
+        }
+        throw new Error(`Northstar render capture failed using ${command}: ${errorMessage(error)}`);
       }
     }
-    if (!commandUsed) throw lastError;
+    if (!commandUsed) {
+      throw new Error(
+        `No Chromium executable is available for Northstar render capture. Checked: ${unavailableCommands.join(", ") || "no configured candidates"}.`,
+      );
+    }
     await runChromium(commandUsed, [
       ...commonArgs,
       `--window-size=${measuredWidth},${measuredHeight}`,
       `--screenshot=${pngPath}`,
       `file://${htmlPath}`,
-    ], input.timeoutMs ?? 28_000);
+    ], remainingBudget("PNG capture"));
     const bytes = await readFile(pngPath);
     if (bytes.length < 1_000) throw new Error("Chromium produced an empty artifact screenshot.");
     return { mimeType: "image/png", data: bytes.toString("base64"), width: measuredWidth, height: measuredHeight };
