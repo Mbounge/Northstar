@@ -41,6 +41,195 @@ Do not learn accidental similarities as rules: fixed rails, matrices, screenshot
 A successful artifact feels unmistakably Northstar while being structurally original for the exact problem. Full private artboards are forbidden. Alternative ideas exist only as provisional reasoning until they are tested through visible, reversible moves on the one canonical living artboard.
 `.trim();
 
+
+export const NORTHSTAR_NATIVE_DESIGN_AUTHORSHIP_VERSION =
+  "northstar.native-design-authorship.v1" as const;
+
+export const NORTHSTAR_NATIVE_DESIGN_AUTHORSHIP_PROTOCOL = `
+NORTHSTAR NATIVE DESIGN AUTHORSHIP
+
+Northstar has a coherent visual language before any prior artboard, research flow, or screenshot exists. Apply this language by default, then preserve and extend the intentional visual decisions already present in the exact current artboard.
+
+Default Northstar design language:
+- artboard, not webpage: compose one intentional visual scene with a clear reading path; do not fall back to a generic vertical document stack unless the user explicitly asks for a document
+- editorial hierarchy: one decisive focal statement, clearly subordinate supporting text, restrained micro-labels, and deliberate scale contrast
+- disciplined spacing: use a consistent rhythm, strong alignment, controlled density, and whitespace that separates meaning rather than creating accidental emptiness
+- restrained surfaces: quiet white or soft-lilac fields, charcoal typography, a limited connective accent, subtle borders or depth only when they clarify grouping or interaction
+- purposeful composition: preserve established grids, lanes, sequences, and group relationships; originality comes from the argument and exact content, not from discarding a coherent composition
+- image discipline: treat screenshots and images as authored visual evidence, never as unrestricted generic media
+- local-first transformation: change the smallest existing semantic region that can express the next consequential improvement; use a whole-composition rewrite only when the current structure cannot satisfy the user objective
+
+Screenshot and image defaults:
+- preserve intrinsic aspect ratio and complete inspectability
+- use contained, controlled media frames rather than full-width expansion
+- preserve current rendered size, crop, spacing, card treatment, grouping, app identity, and sequence order
+- treat the completed research evidence field as fixed source material: add analysis and narrative around it instead of reflowing or restyling it
+- change a screenshot's presentation only when the user explicitly requests that exact change
+- do not make a mobile screenshot the dominant artboard-sized surface by accident
+- do not crop, mask, overlap, use as a background, or switch to object-fit cover without explicit visual intent
+- do not turn a horizontal evidence sequence into a vertical page flow merely because normal HTML block flow is convenient
+
+Current-artboard authority:
+- the exact browser-committed HTML, CSS, SVG, imagery, semantic structure, and rendered pixels are the primary design precedent for the next action
+- preserve successful typography, palette, spacing, surfaces, layout topology, media treatment, and reading order by default
+- never treat an existing Northstar artboard as disposable scaffolding
+- references teach quality, not permission to abandon the current visual system
+- when a broader structural change is genuinely necessary, state what remains, what changes, and why before authoring it
+
+The model authors the source. The runtime only transports, measures, commits, or restores it. Therefore visual continuity, media scale, spacing, grouping, and composition must be correct in the authored HTML/CSS/SVG itself.
+`.trim();
+
+export interface NorthstarCurrentDesignReading {
+  version: typeof NORTHSTAR_NATIVE_DESIGN_AUTHORSHIP_VERSION;
+  authority: string;
+  nativeDefaults: {
+    composition: string;
+    typography: string;
+    spacing: string;
+    surfaces: string;
+    media: string;
+  };
+  sourceSignals: {
+    fontFamilies: string[];
+    designTokens: string[];
+    spacingValues: string[];
+    layoutModes: string[];
+  };
+  editableRegionIds: string[];
+  evidenceGroups: Array<{
+    regionId: string;
+    sequenceId: string;
+    appName: string;
+    flowName: string;
+    evidenceNodeIds: string[];
+    sequenceOrder: string[];
+  }>;
+  evidenceNodes: Array<{
+    nodeId: string;
+    evidenceId: string;
+    groupId?: string;
+    sequenceId?: string;
+    sequenceIndex?: number;
+    currentRole?: string;
+  }>;
+  instruction: string;
+}
+
+function compactUniqueStrings(values: Iterable<string>, maximum: number): string[] {
+  return Array.from(new Set(
+    Array.from(values)
+      .map((value) => value.trim().replace(/\s+/g, " "))
+      .filter(Boolean),
+  )).slice(0, maximum);
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+    : [];
+}
+
+function extractCssDesignSignals(document: NorthstarWebArtifactDocument): NorthstarCurrentDesignReading["sourceSignals"] {
+  const css = [
+    document.css,
+    ...Object.values(document.cssLayers ?? {}),
+  ].join("\n");
+
+  const fontFamilies = compactUniqueStrings(
+    Array.from(css.matchAll(/font-family\s*:\s*([^;}{]+)/gi), (match) => match[1]),
+    8,
+  );
+  const designTokens = compactUniqueStrings(
+    Array.from(
+      css.matchAll(/(--(?:ns-)?[\w-]*(?:color|accent|ink|muted|surface|background|line|shadow)[\w-]*)\s*:\s*([^;}{]+)/gi),
+      (match) => `${match[1]}: ${match[2]}`,
+    ),
+    16,
+  );
+  const spacingValues = compactUniqueStrings(
+    Array.from(
+      css.matchAll(/(?:^|[;{])\s*(?:gap|row-gap|column-gap|padding(?:-[\w-]+)?|margin(?:-[\w-]+)?)\s*:\s*([^;}{]+)/gi),
+      (match) => match[1],
+    ),
+    16,
+  );
+  const layoutModes = compactUniqueStrings([
+    /\bdisplay\s*:\s*grid\b/i.test(css) ? "grid" : "",
+    /\bdisplay\s*:\s*(?:inline-)?flex\b/i.test(css) ? "flex" : "",
+    /\bflex-wrap\s*:\s*nowrap\b/i.test(css) ? "non-wrapping sequences" : "",
+    /\bgrid-auto-flow\s*:\s*column\b/i.test(css) ? "column-flow grid" : "",
+    /\bposition\s*:\s*absolute\b/i.test(css) ? "positioned composition" : "",
+  ], 8);
+
+  return {
+    fontFamilies,
+    designTokens,
+    spacingValues,
+    layoutModes,
+  };
+}
+
+export function buildNorthstarCurrentDesignReading(input: {
+  document: NorthstarWebArtifactDocument;
+  editableSurface?: unknown;
+}): NorthstarCurrentDesignReading {
+  const surface = recordValue(input.editableSurface);
+  const flowRegions = Array.isArray(surface?.flowRegions) ? surface.flowRegions : [];
+  const evidenceNodes = Array.isArray(surface?.evidenceNodes) ? surface.evidenceNodes : [];
+
+  return {
+    version: NORTHSTAR_NATIVE_DESIGN_AUTHORSHIP_VERSION,
+    authority: "The exact current canonical artboard is the primary design precedent. Continue it; do not reinterpret it as disposable source material.",
+    nativeDefaults: {
+      composition: "Intentional artboard composition with a clear focal point and reading path; never generic vertical document flow by default.",
+      typography: "Confident editorial hierarchy with restrained supporting copy and lucid micro-labels.",
+      spacing: "Consistent rhythm, exact alignment, controlled density, and purposeful whitespace.",
+      surfaces: "Quiet premium fields, charcoal type, limited connective accent, and boundaries only when they explain meaning.",
+      media: "Contained aspect-ratio-preserving frames, stable grouping and sequence, comparable sibling scale, and no accidental full-width screenshot enlargement.",
+    },
+    sourceSignals: extractCssDesignSignals(input.document),
+    editableRegionIds: stringArray(surface?.availableRegionIds).slice(0, 240),
+    evidenceGroups: flowRegions.flatMap((entry) => {
+      const region = recordValue(entry);
+      const regionId = typeof region?.nodeId === "string" ? region.nodeId : "";
+      const sequenceId = typeof region?.sequenceNodeId === "string" ? region.sequenceNodeId : "";
+      if (!regionId || !sequenceId) return [];
+      return [{
+        regionId,
+        sequenceId,
+        appName: typeof region?.appName === "string" ? region.appName : "",
+        flowName: typeof region?.flowName === "string" ? region.flowName : "",
+        evidenceNodeIds: stringArray(region?.evidenceNodeIds).slice(0, 80),
+        sequenceOrder: stringArray(region?.evidenceIds).slice(0, 80),
+      }];
+    }),
+    evidenceNodes: evidenceNodes.flatMap((entry) => {
+      const node = recordValue(entry);
+      const nodeId = typeof node?.nodeId === "string" ? node.nodeId : "";
+      const evidenceId = typeof node?.evidenceId === "string" ? node.evidenceId : "";
+      if (!nodeId || !evidenceId) return [];
+      const sequenceIndex = typeof node?.index === "number" && Number.isFinite(node.index)
+        ? node.index
+        : undefined;
+      return [{
+        nodeId,
+        evidenceId,
+        groupId: typeof node?.flowNodeId === "string" ? node.flowNodeId : undefined,
+        sequenceId: typeof node?.sequenceNodeId === "string" ? node.sequenceNodeId : undefined,
+        sequenceIndex,
+        currentRole: typeof node?.currentRole === "string" ? node.currentRole : undefined,
+      }];
+    }).slice(0, 240),
+    instruction: "Use these facts to preserve the current design language and media choreography. Target only supplied existing node IDs unless the same action explicitly creates a new semantic node.",
+  };
+}
+
 export const NORTHSTAR_FLOW_REFERENCE_PROTOCOL = `
 NORTHSTAR REFERENCE-FLOW PROTOCOL
 

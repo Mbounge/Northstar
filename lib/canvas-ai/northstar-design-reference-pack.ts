@@ -114,14 +114,15 @@ export function loadNorthstarDesignReferenceParts(input?: {
           "The following images are unlabeled taste conditioning only.",
           "Infer the shared standard of strategic communication, evidence clarity, typography, restraint, spatial confidence, originality, and finish across the complete set.",
           "Do not classify the images, select a family, copy a composition, reproduce a component arrangement, or infer that any visible structure is required.",
-          "Invent the right artifact for the current user problem from first principles.",
+          "The exact current canonical artboard is the primary design precedent. These references set the quality floor; they never justify discarding successful current typography, spacing, media treatment, grouping, sequence, or composition.",
+          "Invent the right artifact for the current user problem from first principles while continuing the established Northstar design language.",
         ].join("\n\n"),
       }];
       for (const reference of NORTHSTAR_DESIGN_REFERENCES) {
         parts.push(await imagePart(reference.file));
       }
       parts.push({
-        text: "REFERENCE IMAGES COMPLETE. Treat them as a quality bar, not as options or instructions. Return to the current evidence, user intent, and rendered artboard and invent what belongs there.",
+        text: "REFERENCE IMAGES COMPLETE. Treat them as a quality bar, not as options or instructions. The current rendered artboard remains the authoritative design precedent. Improve it without replacing its successful visual language merely to appear novel.",
       });
       return parts;
     }
@@ -131,7 +132,7 @@ export function loadNorthstarDesignReferenceParts(input?: {
         text: [
           "NORTHSTAR EIGHT-IMAGE FEW-SHOT IDENTITY PACK",
           "The next eight images are always-on visual identity references. They are not the current artifact and they are not templates.",
-          "Infer shared taste, clarity, evidence choreography, spatial confidence, and finish across the set. Deliberately avoid copying any one image's layout, module order, component shapes, or named composition.",
+          "Infer shared taste, clarity, evidence choreography, spatial confidence, and finish across the set. Deliberately avoid copying any one image's layout, module order, component shapes, or named composition. When an artboard already exists, preserve its successful visual system and use the references only to raise craft within that system.",
           NORTHSTAR_VISUAL_DNA,
         ].join("\n\n"),
       },

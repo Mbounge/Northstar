@@ -12,6 +12,7 @@ import type {
   NorthstarArtifactViewingIntent,
   NorthstarCommittedSemanticNode,
 } from "@/lib/canvas-artifacts/types";
+import { buildNorthstarCurrentDesignReading } from "@/lib/canvas-ai/northstar-design-intelligence";
 import {
   buildNorthstarEmergentDesignBehaviorAddendum,
   NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA,
@@ -32,7 +33,7 @@ import type {
 } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
 
 export const NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION =
-  "northstar.emergent-creative-authorship.v3.6" as const;
+  "northstar.emergent-creative-authorship.v3.7" as const;
 
 type ModelAuthoredOperation = Exclude<
   NorthstarArtboardMutationOperation,
@@ -48,9 +49,31 @@ export interface NorthstarCreativeSourceEditDraft {
   retireNodeIds?: string[];
 }
 
+export type NorthstarCreativeChangeScope = "local" | "regional" | "whole-composition";
+
+export interface NorthstarCreativeDesignContinuityDraft {
+  preserve?: string[];
+  change?: string[];
+  scope?: NorthstarCreativeChangeScope;
+  targetNodeIds?: string[];
+  topologyChange?: boolean;
+  topologyChangeReason?: string;
+}
+
+export interface NorthstarCreativeDesignContinuity {
+  preserve: string[];
+  change: string[];
+  scope: NorthstarCreativeChangeScope;
+  targetNodeIds: string[];
+  topologyChange: boolean;
+  topologyChangeReason: string;
+}
+
 export interface NorthstarEmergentCreativeActDraft {
   /** The problem-specific design contract authored in the same model response as its executable source. */
   designIntelligence?: NorthstarEmergentDesignIntelligenceDraft;
+  /** Explicit continuity reasoning performed before source authorship in this same response. */
+  designContinuity?: NorthstarCreativeDesignContinuityDraft;
   intention?: string;
   viewerUnderstanding?: string;
   whyThisMoveNow?: string;
@@ -97,6 +120,7 @@ export interface NorthstarEmergentCreativeCritique {
 
 export interface NorthstarEmergentCreativeAct {
   designIntelligence: NorthstarEmergentDesignIntelligence;
+  designContinuity: NorthstarCreativeDesignContinuity;
   noveltyReceipt: NorthstarNoveltyReceipt;
   sourceFiles?: { targetId: string; html: string; css: string; javascript: string };
   intention: string;
@@ -141,6 +165,7 @@ export const NORTHSTAR_EMERGENT_CREATIVE_ACT_JSON_SCHEMA = {
   additionalProperties: false,
   required: [
     "designIntelligence",
+    "designContinuity",
     "intention",
     "viewerUnderstanding",
     "whyThisMoveNow",
@@ -154,6 +179,34 @@ export const NORTHSTAR_EMERGENT_CREATIVE_ACT_JSON_SCHEMA = {
   ],
   properties: {
     designIntelligence: NORTHSTAR_EMERGENT_DESIGN_INTELLIGENCE_JSON_SCHEMA,
+    designContinuity: {
+      type: "object",
+      additionalProperties: false,
+      required: ["preserve", "change", "scope", "targetNodeIds", "topologyChange", "topologyChangeReason"],
+      properties: {
+        preserve: {
+          type: "array",
+          minItems: 1,
+          maxItems: 16,
+          items: { type: "string", minLength: 1, maxLength: 360 },
+        },
+        change: {
+          type: "array",
+          minItems: 1,
+          maxItems: 12,
+          items: { type: "string", minLength: 1, maxLength: 360 },
+        },
+        scope: { type: "string", enum: ["local", "regional", "whole-composition"] },
+        targetNodeIds: {
+          type: "array",
+          minItems: 1,
+          maxItems: 24,
+          items: { type: "string", minLength: 1, maxLength: 120 },
+        },
+        topologyChange: { type: "boolean" },
+        topologyChangeReason: { type: "string", maxLength: 900 },
+      },
+    },
     intention: { type: "string", minLength: 1, maxLength: 1800 },
     viewerUnderstanding: { type: "string", minLength: 1, maxLength: 1200 },
     whyThisMoveNow: { type: "string", minLength: 1, maxLength: 1200 },
@@ -382,6 +435,41 @@ function cleanTextList(value: unknown, maxItems: number, maxLength: number): str
       .map((item) => cleanText(item, maxLength))
       .filter(Boolean),
   )).slice(0, maxItems);
+}
+
+function sanitizeNorthstarCreativeDesignContinuity(
+  value: NorthstarCreativeDesignContinuityDraft | undefined,
+  draft: NorthstarEmergentCreativeActDraft,
+): NorthstarCreativeDesignContinuity {
+  const scope: NorthstarCreativeChangeScope = value?.scope === "whole-composition"
+    ? "whole-composition"
+    : value?.scope === "regional"
+      ? "regional"
+      : "local";
+  const targetNodeIds = cleanTextList(value?.targetNodeIds, 24, 120);
+  const preserve = cleanTextList(value?.preserve, 16, 360);
+  const change = cleanTextList(value?.change, 12, 360);
+  const sourceTarget = cleanSourceId(draft.sourceEdit?.targetId) || "presentation";
+  const topologyChange = Boolean(value?.topologyChange || scope === "whole-composition");
+
+  return {
+    preserve: preserve.length
+      ? preserve
+      : [
+          "The current artboard's successful typography, palette, spacing rhythm, surfaces, reading order, and media treatment.",
+          "Grounded evidence identity, grouping, sequence order, aspect ratio, and approximate relative screenshot scale.",
+        ],
+    change: change.length
+      ? change
+      : [cleanText(draft.intention, 360) || "Advance the objective with one consequential source edit."],
+    scope,
+    targetNodeIds: targetNodeIds.length ? targetNodeIds : [sourceTarget],
+    topologyChange,
+    topologyChangeReason: topologyChange
+      ? cleanText(value?.topologyChangeReason, 900)
+        || "The current structure cannot express the required viewer outcome without a broader composition change."
+      : "",
+  };
 }
 
 function collectAffectedNodeIds(draft: NorthstarArtboardMutationDraft): string[] {
@@ -626,6 +714,10 @@ export function sanitizeNorthstarEmergentCreativeAct(
       groundedEvidenceIds: context?.groundedEvidenceIds ?? [],
     },
   );
+  const designContinuity = sanitizeNorthstarCreativeDesignContinuity(
+    draft.designContinuity,
+    draft,
+  );
   const noveltyReceipt = assessNorthstarStructuralNovelty({
     signature: designIntelligence.premiumPlan.noveltySignature,
     recentSignatures: context?.recentCreativeSignatures ?? [],
@@ -692,6 +784,7 @@ export function sanitizeNorthstarEmergentCreativeAct(
 
   return {
     designIntelligence,
+    designContinuity,
     noveltyReceipt,
     sourceFiles,
     intention: cleanText(draft.intention, 1800) || mutation.visualStrategy,
@@ -803,6 +896,7 @@ Describe in open language what actually changed, what became clearer or weaker, 
 Put only source faults directly corroborated by the structured production-browser receipt in implementationDefects: browser-proven clipping, obscured or missing required evidence, broken/missing source content, invalid protected identity, unsafe overlap, or runtime/asset failure. Never classify incomplete cinema coverage, a simplified reveal, a changed intrinsic width, hypothetical smaller-display behavior, taste, hierarchy, originality, synthesis, or broader polish as implementationDefects; place those in whatStillWeak.
 Judge the artifact against the user request, grounded evidence, the before render, the after render, sampled exact compositor cinema frames, the stable premium-workspace frame, and the model's declared intention.
 Do not repeat the authored intention as if it were visual evidence. Claims such as "screens are smaller," "evidence is secondary," "layout is precise," "everything is collision-free," or "the work fits in one frame" must agree with the structured outer-canvas measurements and the actual workspace image. When intention and pixels disagree, describe the contradiction plainly.
+Compare the before and after result for design continuity: typography, palette, spacing rhythm, surfaces, major region relationships, reading order, screenshot grouping, authoritative sequence order, intrinsic aspect ratio, and relative display scale. Generic vertical reflow, accidental full-width media, or one mobile screenshot becoming the dominant artboard surface are creative regressions unless the authored act explicitly and successfully justified them.
 Every grounded screenshot must remain present and fully inspectable. Cropping, masking, clipping, object-fit cover, collapsed containers, or a replacement that silently loses an evidence identity are implementation defects; proportional resizing, movement, annotation, and model-authored transformation are allowed.
 Treat browser-proven accidental blank teardown, a half-materialized final state, clipped/obscured evidence, or host-background leakage inside the authored surface as implementation defects. Treat uncovered cinema nodes, generic, trivial, or semantically unmotivated choreography, and responsive opportunities without a measured failure as creative weaknesses in whatStillWeak rather than inventing a required beat grammar.
 Do not propose artboard dimensions or infer failure merely because intrinsic dimensions changed. The runtime owns content-derived sizing and reports actual clipping or overflow separately.
@@ -834,7 +928,7 @@ export function buildNorthstarEmergentCritiqueContext(input: {
     remainingProcessNeeds: input.openProcessNeeds,
     runtimeReview: input.runtimeReview,
     previousCritiques: input.previousCritiques,
-    instruction: "Inspect the complete before/after result and any exact compositor cinema frames directly. Explain whether the act materially improved communication, whether the source-to-source transition remained visually continuous, and what, if anything, the creative agent should do next.",
+    instruction: "Inspect the complete before/after result and any exact compositor cinema frames directly. Explain whether the act materially improved communication and preserved or intentionally evolved the current typography, palette, spacing, topology, screenshot grouping, sequence, aspect ratio, and relative scale. Do not credit intended hierarchy when the pixels contradict it. When fresh pixels are unavailable, state that limitation and make only source-grounded claims.",
   });
 }
 
@@ -885,38 +979,48 @@ CREATIVE AUTHORITY
 - Invent the right visual artifact from the user request, current evidence, research, and exact rendered artboard. Return designIntelligence and the source that visibly executes it in this same response; there is no later template-selection or design-planning call.
 - There are no visual families, templates, archetypes, component recipes, prescribed module orders, or card systems to choose from.
 - Do not imitate a reference composition. Infer the shared level of taste, finish, clarity, restraint, evidence choreography, and originality, then create what this problem uniquely needs.
-- The inherited layout is disposable presentation scaffolding. Preserve truth, evidence identities, provenance, the permanent artboard root, and runtime safety—not the current screenshot rows, title placement, card language, module boundaries, or analytical furniture.
-- You may add, remove, rewrite, regroup, reorder, restyle, connect, annotate, simplify, or substantially recompose content inside the existing artboard. Use destructive reconstruction when it is the clearest route to the governing visual idea.
-- The permanent presentation node is a deliberately replaceable creative layer. You may set-html on presentation, introduce a new composition shell, then move real grounded evidence nodes into it. When replacing presentation, recreate the semantic anchors data-ns-node-id="synthesis" and data-ns-node-id="decision" somewhere meaningful inside the new composition so later reasoning and publication can continue. The evidence reservoir is source material, not the final layout; it remains a quiet native inspectable source ledger. Move the representative evidence needed for this visible stage into the presentation and leave unplaced grounded evidence safely inspectable for later stages; do not force the entire evidence corpus into one monolithic first commit.
+- The exact current artboard is the primary design precedent. Preserve its successful typography, palette, spacing, surfaces, screenshot scale, grouping, sequence, layout topology, and reading order unless this action has a specific reason to change one of them.
+- You may add, rewrite, restyle, connect, annotate, simplify, move, or recompose content inside the existing artboard. Prefer a local edit, then a regional edit. Use a whole-composition rewrite only when the current structure cannot satisfy the user objective and explain that necessity in designContinuity.
+- The presentation node is available for a genuinely necessary whole-composition change, but it is not the default target. Target the smallest existing semantic region that can express the next improvement. When a whole presentation rewrite is necessary, preserve or deliberately recreate the semantic anchors data-ns-node-id="synthesis" and data-ns-node-id="decision", and preserve the current artboard's successful design language unless the user explicitly requested a different one.
 - Cards, panels, pills, borders, rounded boxes, and filled regions are never neutral defaults. Use a boundary only when the boundary itself clarifies grouping, proof, comparison, interaction, or meaning. Open surface, typography, evidence, lines, paths, scale, overlap, rhythm, and negative space are first-class design materials.
-- Low, Medium, and High share the same publication-quality floor. Thinking depth changes persistence, not the ambition or intelligence of the visual solution.
+- Low, Medium, and High share the same publication-quality floor. Thinking depth changes deliberation depth per decision, not the ambition, design language, or number of actions available.
 - Work directly from the exact browser-committed source. Edit HTML, CSS, SVG, semantic DOM movement, and safe JavaScript cumulatively. Return the smallest consequential stage promptly: deterministic code normalizes and preflights it, then the mounted browser performs its only runtime execution and either commits atomically or restores the accepted revision. Broader creative opportunities belong to the next visible stage so the user experiences the artboard evolving.
+
+DESIGN CONTINUITY DECLARATION
+- Return designContinuity before sourceEdit in the same JSON response.
+- preserve must name concrete current decisions that remain authoritative: typography, palette, spacing rhythm, surfaces, major region relationships, reading order, screenshot scale, grouping, and sequence as applicable.
+- change must name only what this action visibly changes.
+- scope is local, regional, or whole-composition. Use local by default.
+- targetNodeIds must use exact IDs supplied in the editable surface, unless the same sourceEdit explicitly creates a new semantic node.
+- topologyChange is false unless the action intentionally changes the major reading path or group orientation. When true, topologyChangeReason must explain why the current topology cannot satisfy the objective.
+- Do not claim preservation and then replace the full presentation, discard the current CSS language, enlarge screenshots indiscriminately, or turn horizontal evidence sequences into generic vertical flow.
 
 TRUTH AND EVIDENCE
 - Every factual claim, metric, screenshot, quotation, and conclusion must remain grounded in the supplied research and evidence.
 - Never invent evidence IDs, asset URLs, metrics, source claims, or unsupported certainty.
-- Preserve protected screenshots and their provenance even when their presentation changes.
+- Preserve protected screenshots, provenance, aspect ratio, grouping, sequence order, and approximate relative display scale even when their presentation changes.
 - Author relationships, annotations, diagrams, and analytical forms directly in HTML, CSS, SVG, or safe JavaScript. The runtime does not classify or grade them as primitives.
 - Browser geometry helpers are optional callable capabilities exposed through Northstar.measure and Northstar.routeBetween. They return geometry or a structured runtime error; they never become compiler-owned visual obligations.
 - Separate observed facts from interpretation. Do not claim conversion lift, retention impact, drop-off rates, optimization outcomes, or causal business effects unless those values or outcomes are present in grounded research. Qualitative encodings must be labeled as interpretive and tied to exact observed steps.
 
 EXECUTION
-- Use sourceEdit as the primary visual coding output. targetId is normally presentation; html is the complete cumulative inner HTML/SVG source for that creative surface; css is the complete cumulative creative CSS layer; javascript is the complete cumulative safe vanilla-JavaScript module. The runtime may translate these files into atomic transport operations, but the files—not a primitive template—are the authored source of truth.
+- Use sourceEdit as the primary visual coding output. targetId should be the smallest supplied semantic region that can express the action; use presentation only for a justified whole-composition change. html is the complete cumulative inner HTML/SVG source for that target; css is the complete cumulative creative CSS layer; javascript is the complete cumulative safe vanilla-JavaScript module. The runtime may translate these files into atomic transport operations, but the files—not a primitive template—are the authored source of truth.
 - sourceEdit.javascript must be deterministic and synchronous, use only the supplied Northstar/data/creative/reviews arguments, may inspect geometry through Northstar.measure and Northstar.routeBetween, install interaction listeners through Northstar.query/queryAll, and return one cleanup function when it installs listeners. Do not use ambient browser globals, timers, asynchronous work, networking, navigation, storage, or cross-context messaging.
-- Every grounded evidence screen is permanent for this run. You may move, resize proportionally, annotate, connect, sequence, or transform every screen, but you may not remove, retire, hide, replace, omit, crop, mask, or visually truncate any evidence identity. The complete screenshot surface must remain inspectable; do not fade evidence below a legible supporting level.
+- The complete ordered evidence flow is the canonical research record for this run, not a pool of representative screenshots to prune. The runtime review's evidenceRegistry.presentationManifest identifies each screen's node, flow, order, current geometry, aspect ratio, crop, and transform. Keep every original screen in its flow, complete and inspectable, with its existing premium treatment. Design may annotate, connect, regroup, frame, or add new analytical regions to this evidence, but it must not replace the canonical field with a shorter selected subset.
+- Creative emphasis is additive. You may copy a grounded screen into a separate analytical, comparative, or annotated region when that makes a specific insight clearer, but mark the new node with data-ns-derived-from-evidence containing the source evidence ID. A derived copy is a citation or detail view: it never replaces, hides, demotes, or stands in for the original screen in the canonical flow. On the first design act, retain the canonical research section while freely making visibly meaningful annotations, connectors, labels, spacers, paths, relationships, or new analytical regions around, between, or after its screens. A new synthesis may be placed below the research section when useful, but that is one compositional option, not a requirement. Do not target or replace the artboard root, presentation, evidence reservoir, working flow, or a flow sequence merely to make a comparison. Let the artboard grow when the composition needs additional space instead of clearing research to make room. Use sourceEdit.placements when deliberately moving original screens as a group. Preserve each original screen's intrinsic aspect ratio, complete image surface, app/flow identity, and premium card treatment while doing so.
 - sourceEdit.placements names only grounded evidence nodes you intentionally move. The runtime automatically preserves every unmentioned protected evidence node, reuses an exact semantic placeholder or surviving parent when available, and otherwise retains its prior artboard-relative geometry inside the replacement surface.
 - Use exactActions only for additional exact DOM movement, attributes, or bindings that should accompany the source revision.
 - New HTML elements must receive unique data-ns-node-id values.
-- For a structural rebuild, author the complete replacement source yourself and list only the evidence moves that are part of your design. The runtime owns survival of all other protected nodes; it does not invent your shell, lane, frame, hierarchy, or layout.
-- You may author safe HTML fragments, SVG, typography, CSS, visual relationships, evidence choreography, grounded charts, graphs, plots, diagrams, maps, timelines, image crops, masks, editorial compositions, and hybrids. No medium is preferred or required; choose the one that best communicates grounded truth.
-- Execute the governing idea as a coherent whole scene. Do not translate an ambitious visual thesis into a few labels placed around the inherited grid.
+- For a necessary structural rebuild, author the complete replacement source yourself and list only the evidence moves that are part of your design. A structural rebuild is exceptional: designContinuity must name what remains authoritative, what changes, and why the current topology cannot satisfy the objective.
+- You may author safe HTML fragments, SVG, typography, CSS, visual relationships, evidence choreography, grounded charts, graphs, plots, diagrams, maps, timelines, editorial compositions, and hybrids. Crop or mask ordinary photos and illustrations only when explicitly intentional; never crop or mask grounded product screenshots. No medium is preferred or required; choose the one that best communicates grounded truth.
+- Execute the governing idea coherently at the scope this action actually requires. A local or regional improvement is valid when it materially advances the objective and preserves a strong existing scene.
 - Keep factual relationships grounded in exact evidence identities. You decide whether they appear through source structure, typography, proximity, SVG, animation, or safe JavaScript.
 - Use any authored spatial technique the composition needs inside the creative surface. Browser measurement may inform your source through Northstar.measure and Northstar.routeBetween, but it does not prescribe placement or visual form.
 - Decide the scope and structure of each meaningful stage yourself. The runtime will not require lanes, synthesis regions, decision regions, or any predefined communication reflow.
 - Quantitative graphics must use grounded values, honest units/scales, and traceable evidence. Qualitative graphics must be labeled as interpretation. You author the SVG, HTML, CSS, and interaction directly; no compiler generates or grades the visual form.
 - The authored HTML, CSS, SVG, JavaScript, and evidence choreography are the sole visual authority. Deterministic code may validate safety, truth, identity, and execution, but it may not reinterpret the design through a primitive system.
 - Give every required premium narrative beat one visible node whose data-ns-narrative-beat-id and data-ns-communication-role exactly match designIntelligence.premiumPlan. Give every required analytical intent one visible node whose data-ns-analysis-id matches and whose data-ns-source-ids lists the exact grounded evidence IDs. Mark at least one unmistakable focal node data-ns-visual-priority="hero" or "primary".
-- Structural novelty is mandatory across completed artboards, including repeated runs of the same prompt. Novelty means a materially different information topology, dominant geometry, reading path, medium combination, title integration, evidence treatment, and signature behavior—not merely new colors, copy, decoration, or reordered cards.
+- Originality is problem-specific, not a requirement to replace a strong current structure. The composition signature records information topology, dominant geometry, reading path, medium combination, title integration, evidence treatment, and signature behavior; it never authorizes continuity-breaking novelty for its own sake.
 - The premium contract is semantic, not a layout template. Invent the spatial form for this exact argument, while making every declared beat and analytical intent browser-verifiable.
 
 
@@ -951,7 +1055,7 @@ NORTHSTAR CREATIVE CONSTITUTION
 - Aim for an artifact that feels premium, original, calm, strategically intelligent, and unusually well resolved for this exact user—not merely valid or tidy.
 - A cleaner evidence grid, a thesis inside a rounded rectangle, or a new strip of cards is not a governing visual idea. Do not stop at organized inventory.
 - Fidelity is mandatory: the spatial logic, signature move, medium strategy, scene execution plan, precision strategy, and evidence choreography you form must be visibly realized in the authored source.
-- Prefer one decisive structural reconstruction over several timid additions when the current scene still contradicts the governing idea.
+- Prefer the smallest consequential source change that visibly advances the governing idea. Escalate from local to regional to whole-composition only when the current structure genuinely prevents the required result.
 - The visual argument must survive when explanatory prose and container chrome are mentally removed.
 
 Return only the required JSON object. The cumulative source revision must visibly execute the intention you describe.
@@ -1050,14 +1154,18 @@ export function buildNorthstarEmergentCreativeContext(input: {
       editableSurface: input.editableSurface,
       runtimeReview: input.runtimeReview,
     },
+    currentDesignAuthorship: buildNorthstarCurrentDesignReading({
+      document: input.artifact.document,
+      editableSurface: input.editableSurface,
+    }),
     groundedResearch: input.groundedResearch,
     provisionalPriorCreativeDirection: {
       value: input.creativeDirection,
-      instruction: "This is historical context, not a binding visual direction. Abandon or transform it when the current evidence and render support a better idea.",
+      instruction: "This is secondary historical context. The exact current artboard is the primary design precedent; preserve its successful design language unless the current evidence clearly requires a change.",
     },
     acceptedCreativeHistory: input.acceptedHistory.slice(-12),
     previousRejectedAttempt: input.priorCritique,
-    instruction: "Author the single most consequential next visual change. Do not select a predefined visual family. Return concrete operations and let the runtime own all artboard sizing.",
+    instruction: "Author the single most consequential next visual change against the exact current design language. Prefer the smallest existing semantic target that can express it. Return designContinuity and concrete source operations; let the runtime own all artboard sizing.",
   });
 }
 
@@ -1106,6 +1214,10 @@ export function buildNorthstarAdaptiveCreativeContext(input: {
       editableSurface: input.editableSurface,
       runtimeReview: input.runtimeReview,
     },
+    currentDesignAuthorship: buildNorthstarCurrentDesignReading({
+      document: input.artifact.document,
+      editableSurface: input.editableSurface,
+    }),
     groundedResearch: input.groundedResearch,
     deterministicSceneObservations: {
       blocking: input.sceneObservations.blocking,
@@ -1119,26 +1231,26 @@ export function buildNorthstarAdaptiveCreativeContext(input: {
     firstCreativeActExecutionContract: input.acceptedCreativeActCount === 0
       ? {
           groundedFlowNodeIds: input.requiredFirstActFlowNodeIds ?? [],
-          instruction: "Every grounded screen in these flows must remain present and inspectable in every cumulative source revision. Recompose, move, proportionally resize, annotate, sequence, or transform them as the design requires, but list placements only for screens you intentionally move. The runtime automatically inherits all unmentioned protected screens and resolves aliases to canonical identities. Never crop, mask, truncate, or trim a screenshot surface.",
+          instruction: "Every grounded screen in these flows must remain present and inspectable in every cumulative source revision. At the research-to-design handoff, preserve its current rendered size, crop, spacing, card treatment, flow grouping, and authoritative sequence order. Keep the complete research/evidence board in the composition while freely making visibly meaningful annotations, connectors, labels, spacers, paths, relationships, regroupings, or new analytical regions around, between, or after its screens. A new synthesis may be placed below the research section when useful, but that is one compositional option, not a requirement. Do not target or replace the artboard root, presentation, evidence reservoir, a flow, or its sequence merely to make the comparison. Let the artboard grow when needed instead of clearing research to make room. Change a screen's presentation only when the user explicitly calls for that exact change. Never crop, mask, overlap, use as a background, switch to object-fit cover, truncate, resize, normalize, or turn a mobile screenshot into an artboard-dominant poster.",
         }
       : undefined,
     permanentCreativeSurfaceContract: {
       presentationNodeId: "presentation",
       requiredPresentationAnchors: [],
       evidenceReservoirNodeId: "evidence-reservoir",
-      instruction: "The presentation node may be destructively reconstructed, but every grounded screen is permanent. The evidence reservoir may be reorganized, moved, annotated, proportionally scaled, sequenced, or integrated into the presentation; no evidence node may be omitted, retired, hidden, replaced, cropped, masked, or visually truncated.",
+      instruction: "The presentation node is available only for a justified whole-composition change. Prefer the smallest existing semantic region. Preserve every grounded screen, current grouping, sequence, aspect ratio, and relative scale unless designContinuity explicitly names a deliberate evidentiary change.",
     },
     previousRejectedOrWeakAttempt: input.priorCritique,
     instruction: [
       "Re-observe the whole artifact and edit the exact browser-committed HTML/CSS/SVG/DOM source toward the smallest consequential stage worth committing now.",
       "Do not choose from or infer an implementation-owned visual family, template, composition recipe, or obligation sequence.",
-      "You may continue, redirect, simplify, or substantially recompose prior work when the exact render and evidence justify it.",
+      "You may continue, redirect, simplify, or recompose prior work when the exact render and evidence justify it, but continuity with a strong current artboard is the default.",
       input.acceptedCreativeActCount === 0
-        ? "This is the first creative act: materially recompose the presentation and transform the choreography of the complete grounded evidence set. Do not merely add a thesis card, edit the title, or preserve the screenshot wall as the governing composition. Author the strongest HTML/CSS/SVG structure directly, preserve every screen, and use hierarchy, annotations, sequencing, interaction, or spatial transformation to prevent the evidence from becoming an equal-weight wall. Use Northstar.measure or Northstar.routeBetween from safe JavaScript only when browser geometry helps the design; the model remains responsible for how the result is expressed."
-        : "Build directly on the latest browser-verified composition, but destroy or replace weak earlier work when the governing idea demands it.",
-      "Use sourceEdit as the visual coding surface: target the replaceable presentation region and return its complete cumulative inner HTML/SVG, complete cumulative creative CSS layer, and complete cumulative safe JavaScript module. List placements only for grounded evidence nodes you intentionally move; the runtime automatically preserves unmentioned protected screens through exact placeholders, surviving parents, or geometry-preserving fallback placement. Use exactActions only for additional exact DOM actions. Browser geometry helpers are callable from sourceEdit.javascript and are not declarative design contracts. Runtime-owned measurement controls outer sizing and resolves evidence aliases before execution.",
+        ? "This is the first creative act. Study the exact current artboard and make the smallest consequential source edit that advances the objective. Preserve its successful typography, palette, spacing, surfaces, screenshot scale, grouping, and sequence. A local or regional edit is valid; use a whole-composition rewrite only when the current topology cannot express the required result."
+        : "Build directly on the latest browser-verified composition. Preserve every successful design decision and repair weak earlier work at the smallest effective scope.",
+      "Use sourceEdit as the visual coding surface: target the smallest existing semantic region that can express this action and return that target's complete cumulative inner HTML/SVG plus the cumulative creative CSS and safe JavaScript needed for the current revision. Use presentation only when designContinuity.scope is whole-composition and topologyChangeReason explains why. List placements only for grounded evidence nodes you intentionally move; the runtime preserves unmentioned protected screens. Use exactActions only for precise supplemental DOM actions. Runtime-owned measurement controls outer sizing and resolves evidence aliases before execution.",
       "Author charts, diagrams, matrices, timelines, annotations, connectors, evidence fields, and custom analytical forms directly in safe HTML/CSS/SVG/JavaScript when that best serves the idea. No runtime primitive catalogue, placement grammar, or minimum-instance contract may govern the composition.",
-      "Return a purposeful constructionPlan for the cinema layer. Every materially changed region should have a stable semantic identity and the important visual evolution should unfold in perceptible beats, while incomplete animation coverage remains non-blocking and the browser always settles to the exact authored final state.",
+      "Return a compact constructionPlan that names the materially changed semantic regions and settles to the exact authored final state. Do not use presentation metadata to justify broad source replacement.",
       input.acceptedCreativeActCount > 0
         ? "When this stage could plausibly be the ending, resolve or remove working-only hypothesis chrome inside the authored scene itself. Publication will mark the exact accepted browser revision as verified; it will not run a separate cleanup mutation."
         : "The first stage may remain visibly exploratory while establishing a consequential evidence composition.",
@@ -1146,7 +1258,7 @@ export function buildNorthstarAdaptiveCreativeContext(input: {
         ? "Continue from the supplied canonical source files instead of reconstructing from memory. Preserve every valid HTML, CSS, safe JavaScript interaction, SVG fragment, and grounded evidence move unless exact browser feedback proves it wrong."
         : "Author the first executable source stage from the current browser-committed document now.",
       "A statically safe stage is dispatched immediately to the mounted browser. Leave broader hierarchy, synthesis, and polish opportunities for the next visible stage instead of hiding the creative evolution inside one long call.",
-      "Choose any source structure that best communicates the result. No named region, lane, matrix, synthesis block, decision block, or placement grammar is required by the runtime.",
+      "Choose source structure that best communicates the result while preserving current successful regions and using exact supplied node IDs. A new region must be explicitly created before it is referenced.",
       "Use only evidence-supported language. Qualitative comparisons may interpret observed steps, but must not masquerade as measured conversion, retention, or drop-off data.",
     ].join(" "),
   });
@@ -1185,9 +1297,11 @@ export function buildNorthstarAdaptiveCritiqueContext(input: {
     adaptiveCreativeMemory: input.creativeMemory,
     instruction: [
       "Inspect the before and after images directly.",
-      "Explain whether the accepted act materially improved the artifact for the user and whether another consequential act is genuinely worthwhile.",
+      "Explain whether the applied act materially improved the artifact for the user and preserved or intentionally evolved the current typography, palette, spacing, topology, screenshot grouping, sequence, aspect ratio, and relative scale.",
+      "Do not praise intended hierarchy, balance, or screenshot treatment when the rendered pixels contradict it. Generic vertical reflow, accidental full-width media, and giant mobile screenshots are design weaknesses unless explicitly and successfully justified.",
       "A decision to continue must name a specific unresolved communication opportunity in open language.",
       "A decision to stop must mean the artifact is already clear, grounded, operationally healthy, and unlikely to improve materially with another act.",
+      "When fresh before/after pixels are unavailable, state that limitation and do not claim visual success from source intent alone.",
     ].join(" "),
   });
 }

@@ -1524,14 +1524,14 @@ The blueprint is an evidence and editorial brief for a generated standard-web ar
 
 North Star is a first-principles problem solver. The research ledger records screenshots that were actually inspected visually, observations, hypotheses, open questions, corrections, and decisions. Use that proof of work. Do not compose from labels alone when inspected observations are available.
 
-The final artifact must be easy to digest even when the research was extensive. Curate aggressively. Broader evidence, rejected paths, hypotheses, and sources must remain inspectable through a designed research trail inside the same artifact.
+The final artifact must be easy to digest even when the research was extensive. Distill the narrative and create hierarchy, but retain every ordered screen belonging to each selected flow as the canonical research trail inside the same artifact. A concise comparison may feature selected screens in additional annotated, analytical, or detail regions; those are derived citations and never replace, hide, or reduce the original flow sequences.
 
 Rules:
 1. Never invent apps, flows, screenshots, facts, or claims. Use only supplied grounded results, inspected observations, and canvas evidence.
 2. Select evidence by exact screenshot IDs from the ledger. A screenshot can support a claim only when its observation materially supports it.
-3. Keep the main presentation restrained: quick work usually shows 1-3 evidence items, balanced 3-7, deep up to 12 only when necessary.
+3. Keep the main presentation restrained through hierarchy, annotation, and spatial choreography—not by removing canonical flow screens. Use selected screens as focal citations only in addition to the complete ordered flow sequences.
 4. Put objectives, unknowns, hypotheses, corrections, rejected directions, decisions, and verification notes into workingNotes as structured research input for the code artifact.
-5. Put representative inspected screenshots into workingEvidenceIds so the generated artifact can expose a designed research trail.
+5. Put every inspected screenshot that belongs to a selected ordered flow into workingEvidenceIds so the generated artifact retains the complete research trail. You may separately identify focal evidence for synthesis, but a focal set must never substitute for the full flow.
 6. Choose a visual structure from the actual problem and evidence. Do not default every comparison to two equal columns.
 7. Define explicit normalized layout regions. x, y, w, and h are percentages of the artifact canvas from 0 to 100. Regions may be asymmetric, but intended section regions must not overlap or hide one another.
 8. Reserve clear negative space between major sections and make the reading order obvious. The main takeaway must remain visible and must not sit beneath another region.
@@ -1549,7 +1549,7 @@ Rules:
 20. Use section kind "reference-flow" when an ordered captured flow is central to the explanation. Give it appName, flowName, and every ordered evidence ID that belongs to that flow. Preserve semantic sequence order, but let creative authorship choose horizontal, vertical, wrapped, radial, editorial, or multi-row geometry. Screens must remain complete and inspectable without compulsory screenshot cards or permanent captions.
 21. Use "matrix" or "table" only when row-by-row comparison materially clarifies the decision. Encode each criteria row as pipe-delimited cells, for example "Dimension | App A | App B". Do not force a table into unrelated work.
 22. Use "chart" only for observed or supplied values. For qualitative screenshot evidence, use observed stage distribution rather than invented conversion rates.
-23. Research and final communication evolve inside one artifact. Distill the research as understanding improves; do not switch into a separate fixed dashboard template.
+23. Research and final communication evolve inside one artifact. Distill the surrounding argument as understanding improves, while retaining complete canonical flow sequences; do not switch into a separate fixed dashboard template.
 24. Avoid repeating the previous artifact's region skeleton unless the same structure is demonstrably best for this problem. Every major region must earn its place through the objective and evidence.
 25. Prefer direct, full-frame screenshot filmstrips for ordered journeys. Do not request screenshot cards, duplicated captions, or decorative chrome around every image.
 26. Return only the CompositionBlueprint JSON object.
@@ -11510,7 +11510,7 @@ function buildDeterministicCompositionBlueprintRecovery({
     subtitle: "Grounded comparison of the selected onboarding journeys",
     summary: comparisonBody,
     visualStrategy:
-      "Use a coherent evidence-to-decision story with representative ordered flows, concise synthesis, and an inspectable research trail inside the same artifact.",
+      "Use a coherent evidence-to-decision story with complete ordered flows as the permanent research trail. Build concise synthesis and any focal or derived evidence views around—not instead of—that trail inside the same artifact.",
     researchDigest:
       researchLedger.coverageSummary ||
       `North Star grounded ${researchLedger.observations.length} screen observations across ${selectedFlows.length} authoritative flows.`,

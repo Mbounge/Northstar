@@ -31,14 +31,14 @@ function designDraft() {
     ],
     emotionalRegister: "Confident, editorial, slightly provocative, and calm enough for executive reading.",
     signatureMove: "A single continuous tension path changes thickness as the journeys exchange trust for speed.",
-    existingStructureVerdict: "Destroy the equal-weight screenshot rows and the boxed thesis strip; preserve only grounded evidence and useful identity cues.",
-    destructiveRecompositionIntent: "Rebuild the presentation around the tension path and move decisive evidence into it while leaving the remaining source material inspectable.",
+    existingStructureContinuity: "Preserve the editorial typography, restrained palette, controlled screenshot scale, Awin/Whop grouping, authoritative sequence order, and horizontal evidence choreography.",
+    structuralChangeThreshold: "Use a regional change around the thesis and decisive proof. A whole-composition rewrite is unnecessary because the current lanes already express the comparison.",
     surfaceAndContainerStrategy: "Use the open surface, typography, rules, and evidence itself. Add a boundary only where it represents a real proof cluster.",
     antiGenericStrategy: "No dashboard, screenshot wall, scorecard, row of cards, or generic recommendation band.",
-    divergenceFromRecentWork: "Use one continuous tension field rather than the repeated evidence rows and boxed thesis language visible in recent runs.",
-    firstCreativeAct: "Replace the presentation layer, create the tension path, and move the two decisive evidence nodes into the new composition.",
+    continuityAndOriginality: "Use one continuous tension cue to clarify this exact trade-off while retaining the current Northstar artboard language and evidence lanes.",
+    firstCreativeAct: "Add the tension cue and promote the two decisive proof points inside the existing composition.",
     mediumAndRepresentationStrategy: "Use a continuous SVG tension field with embedded evidence because the central relationship is spatial; do not add a chart unless grounded values make quantitative comparison clearer.",
-    sceneExecutionPlan: "Replace the presentation shell, establish one tension path, anchor decisive evidence to exact points, create synthesis and decision endpoints, and demote remaining sources into the reservoir.",
+    sceneExecutionPlan: "Preserve the current presentation shell, establish one tension path in the comparison region, anchor decisive evidence to exact points, and refine synthesis and decision endpoints.",
     precisionAndLegibilityStrategy: "Keep all labels readable at the full-board scale, bind callouts to exact semantic endpoints, and prevent connector or crop collisions.",
     visualizationIntegrityPlan: "Any quantitative encoding must use only grounded values with explicit labels and provenance; qualitative tension remains visually encoded without fabricated numbers.",
     publicationStandard: [
@@ -98,8 +98,8 @@ test("the novelty anchor changes with the exact revision without encoding a styl
   assert.equal(first.length, 20);
 });
 
-test("the first creative act must recompose presentation and evidence rather than add one card", () => {
-  const weak = validateNorthstarFirstCreativeActAmbition({
+test("the first creative act may be local when it meaningfully advances the current artboard", () => {
+  const local = validateNorthstarFirstCreativeActAmbition({
     operationSummaries: [
       { op: "set-text", targetId: "title", introducedSemanticIds: [] },
       { op: "insert-html", targetId: "artboard", introducedSemanticIds: ["strategic-thesis"] },
@@ -107,28 +107,26 @@ test("the first creative act must recompose presentation and evidence rather tha
     groundedEvidenceNodeIds: new Set(["evidence-awin-1"]),
     acceptedActCount: 0,
   });
-  assert.ok(weak.some((issue) => /presentation/i.test(issue)));
-  assert.ok(weak.some((issue) => /evidence/i.test(issue)));
+  assert.deepEqual(local, []);
 
-  const strong = validateNorthstarFirstCreativeActAmbition({
-    operationSummaries: [
-      { op: "set-html", targetId: "presentation", introducedSemanticIds: ["synthesis", "decision", "tension-path"] },
-      { op: "move", targetId: "evidence-awin-1", parentId: "tension-path", introducedSemanticIds: [] },
-      { op: "set-css-layer", introducedSemanticIds: [] },
-      { op: "set-attributes", targetId: "evidence-awin-1", introducedSemanticIds: [] },
-    ],
+  const empty = validateNorthstarFirstCreativeActAmbition({
+    operationSummaries: [],
     groundedEvidenceNodeIds: new Set(["evidence-awin-1"]),
     acceptedActCount: 0,
   });
-  assert.deepEqual(strong, []);
+  assert.ok(empty.some((issue) => /visible source change/i.test(issue)));
 });
 
-test("the design-intelligence instruction makes destructive recomposition and the universal quality floor explicit", () => {
+test("the design-intelligence instruction makes current-artboard continuity and the universal quality floor explicit", () => {
   const instruction = buildNorthstarEmergentDesignIntelligenceSystemInstruction();
-  assert.match(instruction, /current layout as disposable source material/i);
-  assert.match(instruction, /Low, Medium, and High change exploration time and persistence only/i);
+  assert.match(instruction, /treat the exact current artboard as the primary design precedent/i);
+  assert.match(instruction, /preserve intrinsic aspect ratio/i);
+  assert.match(instruction, /local, regional, or whole-composition/i);
+  assert.match(instruction, /Low, Medium, and High change deliberation depth per decision/i);
   assert.match(instruction, /Cards, panels, pills, borders, rounded boxes/i);
   assert.match(instruction, /No application-authored list of media, metaphors, structures, or styles exists/i);
+  assert.doesNotMatch(instruction, /current layout as disposable source material/i);
+  assert.doesNotMatch(instruction, /hard novelty pressure/i);
   assert.doesNotMatch(instruction, /editorial spread, cinematic storyboard/i);
 });
 

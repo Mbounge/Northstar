@@ -571,6 +571,21 @@ export interface NorthstarEvidenceRegistryReceipt {
   runtimeInheritedEvidenceIds: string[];
   unplacedEvidenceIds: string[];
   missingEvidenceIds: string[];
+  /** Browser-measured appearance contract for grounded evidence. */
+  presentationManifest?: Array<{
+    evidenceId: string;
+    nodeId?: string;
+    flowId?: string;
+    index: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    aspectRatio: number;
+    objectFit: string;
+    objectPosition: string;
+    transform: string;
+  }>;
 }
 
 export interface NorthstarArtifactMutationAcknowledgement {

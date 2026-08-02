@@ -296,12 +296,15 @@ function CodeArtifactHostImpl({
     mutationId: string;
     received: boolean;
     receivedAt?: number;
+    probeSentAt: number;
+    probeDeadlineAt: number;
     firstSentAt: number;
     deliveryDeadlineAt: number;
     terminalDeadlineAt?: number;
     payloadBytes: number;
     probeId: string;
     probeAcknowledgedAt?: number;
+    mutationMessage?: Record<string, unknown>;
     frameLoadCount: number;
     terminalizing: boolean;
   } | null>(null);
@@ -400,8 +403,8 @@ function CodeArtifactHostImpl({
     // while the iframe is busy obscures the original failure boundary and can
     // build an unbounded task queue inside the sandboxed surface.
     if (input.proposal.firstSentAt > 0) return true;
-    const firstSentAt = Date.now();
-    const deliveryDeadlineAt = firstSentAt + NORTHSTAR_HEALTH_POLICY.acknowledgement.deliveryTimeoutMs;
+    if (input.proposal.probeSentAt > 0) return true;
+    const probeSentAt = Date.now();
     const mutationMessage = {
       type: "northstar.artifact.apply-mutation",
       artifactId: input.artifact.artifactId,
@@ -414,32 +417,12 @@ function CodeArtifactHostImpl({
       layoutBaseWidth: input.artifact.layoutBaseWidth ?? input.artifact.preferredWidth,
       layoutBaseHeight: input.artifact.layoutBaseHeight ?? input.artifact.preferredHeight,
       assetUrls: input.artifact.dataBundle?.allowedAssetUrls ?? [],
-      deliveryDeadlineAt,
     };
-    input.proposal.firstSentAt = firstSentAt;
-    input.proposal.deliveryDeadlineAt = deliveryDeadlineAt;
+    input.proposal.probeSentAt = probeSentAt;
+    input.proposal.probeDeadlineAt = probeSentAt + NORTHSTAR_HEALTH_POLICY.acknowledgement.deliveryTimeoutMs;
+    input.proposal.mutationMessage = mutationMessage;
     input.proposal.payloadBytes = serializedMessageBytes(mutationMessage);
     input.proposal.frameLoadCount = frameLoadCountRef.current;
-    onLifecycleEvent({
-      name: "revision.sent",
-      artifactId: input.artifact.artifactId,
-      revisionId: input.proposal.revisionId,
-      ackToken: input.proposal.ackToken,
-      proposalId: input.proposal.proposalId,
-      mutationId: input.proposal.mutationId,
-      browserRevisionId: browserRevisionRef.current,
-      authorityState: "candidate-staged",
-      acceptedRevisionId: browserRevisionRef.current,
-      candidateRevisionId: input.proposal.revisionId,
-      frameInstanceId: frameInstanceIdRef.current,
-      surfaceMountCount: surfaceMountCountRef.current,
-      payloadBytes: input.proposal.payloadBytes,
-      firstSentAt,
-      deliveryDeadlineAt,
-      probeId: input.proposal.probeId,
-      frameLoadCount: input.proposal.frameLoadCount,
-      timestamp: firstSentAt,
-    });
     targetWindow.postMessage({
       type: "northstar.artifact.transport-probe",
       artifactId: input.artifact.artifactId,
@@ -450,7 +433,6 @@ function CodeArtifactHostImpl({
       revisionId: input.proposal.revisionId,
       mutationId: input.proposal.mutationId,
     }, "*");
-    targetWindow.postMessage(mutationMessage, "*");
     return true;
   }, [onLifecycleEvent]);
 
@@ -485,6 +467,8 @@ function CodeArtifactHostImpl({
       mutationId: next.mutationId,
       received: false,
       receivedAt: undefined,
+      probeSentAt: 0,
+      probeDeadlineAt: 0,
       firstSentAt: 0,
       deliveryDeadlineAt: 0,
       terminalDeadlineAt: undefined,
@@ -789,11 +773,13 @@ function CodeArtifactHostImpl({
         pumpNextMutation();
         return;
       }
-      if (proposal.terminalizing || proposal.firstSentAt <= 0) return;
+      if (proposal.terminalizing || proposal.probeSentAt <= 0) return;
       const now = Date.now();
       const deadlineAt = proposal.received
         ? proposal.terminalDeadlineAt
-        : proposal.deliveryDeadlineAt;
+        : proposal.firstSentAt > 0
+          ? proposal.deliveryDeadlineAt
+          : proposal.probeDeadlineAt;
       if (!deadlineAt || now <= deadlineAt) return;
 
       proposal.terminalizing = true;
@@ -897,6 +883,39 @@ function CodeArtifactHostImpl({
           && event.data.frameInstanceId === frameInstanceIdRef.current
         ) {
           proposal.probeAcknowledgedAt = Date.now();
+          if (proposal.firstSentAt <= 0 && proposal.mutationMessage) {
+            const targetWindow = frameRef.current?.contentWindow;
+            if (targetWindow) {
+              const firstSentAt = Date.now();
+              const deliveryDeadlineAt = firstSentAt + NORTHSTAR_HEALTH_POLICY.acknowledgement.deliveryTimeoutMs;
+              const mutationMessage = { ...proposal.mutationMessage, deliveryDeadlineAt };
+              proposal.firstSentAt = firstSentAt;
+              proposal.deliveryDeadlineAt = deliveryDeadlineAt;
+              proposal.payloadBytes = serializedMessageBytes(mutationMessage);
+              targetWindow.postMessage(mutationMessage, "*");
+              onLifecycleEvent({
+                name: "revision.sent",
+                artifactId: current.artifactId,
+                revisionId: proposal.revisionId,
+                ackToken: proposal.ackToken,
+                proposalId: proposal.proposalId,
+                mutationId: proposal.mutationId,
+                browserRevisionId: browserRevisionRef.current,
+                authorityState: "candidate-staged",
+                acceptedRevisionId: browserRevisionRef.current,
+                candidateRevisionId: proposal.revisionId,
+                frameInstanceId: frameInstanceIdRef.current,
+                surfaceMountCount: surfaceMountCountRef.current,
+                payloadBytes: proposal.payloadBytes,
+                firstSentAt,
+                deliveryDeadlineAt,
+                probeId: proposal.probeId,
+                probeAcknowledgedAt: proposal.probeAcknowledgedAt,
+                frameLoadCount: proposal.frameLoadCount,
+                timestamp: firstSentAt,
+              });
+            }
+          }
           onLifecycleEvent({
             name: "transport.probe_acknowledged",
             artifactId: current.artifactId,

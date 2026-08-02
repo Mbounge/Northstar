@@ -57,6 +57,16 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     ...dataBundle.screenshots.map((screen) => screen.imageUrl).filter((value): value is string => Boolean(value)),
     ...dataBundle.apps.map((app) => app.iconUrl).filter((value): value is string => Boolean(value)),
   ]));
+  // A surface often mounts before research has finished. The full research
+  // bundle then arrives through `update-context`, so seed the registry from
+  // both the package and the committed markup and keep it current at runtime.
+  const sourceEvidenceIds = Array.from(documentSource.html.matchAll(/data-ns-evidence-id\s*=\s*["']([^"']+)["']/gi))
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value));
+  const initialExpectedEvidenceIds = Array.from(new Set([
+    ...dataBundle.screenshots.map((screen) => screen.id),
+    ...sourceEvidenceIds,
+  ]));
 
   const initialAuthoredCssLayers = Object.entries(documentSource.cssLayers ?? {})
     .filter(([styleId]) => /^northstar-mutation-style-[a-zA-Z0-9_-]+$/.test(styleId))
@@ -80,7 +90,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const INITIAL_JOURNAL = ${safeJson(initialJournal)};
   const SHOULD_ANIMATE_INITIAL_MOUNT = ${safeJson(shouldAnimateInitialMount)};
   const ALLOWED_ASSETS = new Set(${safeJson(allowedAssetUrls)});
-  const EXPECTED_EVIDENCE_IDS = ${safeJson(Array.from(new Set(dataBundle.screenshots.map((screen) => screen.id))))};
+  // This must not be a mount-time constant. The iframe is intentionally kept
+  // mounted while research adds evidence, and update-context is the handoff
+  // that makes that evidence authoritative for every later design action.
+  const expectedEvidenceIds = new Set(${safeJson(initialExpectedEvidenceIds)});
   const registerAssets = (values) => {
     for (const value of Array.isArray(values) ? values : []) {
       if (typeof value === "string" && /^(?:https?:|data:|blob:)/i.test(value)) ALLOWED_ASSETS.add(value);
@@ -126,6 +139,49 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const origin = document.getElementById("northstar-artifact-origin");
   const root = document.getElementById("northstar-artifact-root");
   if (!stageSurface || !origin || !root) return;
+  const registerExpectedEvidence = (bundle) => {
+    for (const screen of Array.isArray(bundle?.screenshots) ? bundle.screenshots : []) {
+      const evidenceId = String(screen?.id || "").trim();
+      if (evidenceId) expectedEvidenceIds.add(evidenceId);
+    }
+  };
+  const markExpectedEvidenceAsProtected = () => {
+    root.querySelectorAll("[data-ns-evidence-id]").forEach((element) => {
+      const evidenceId = String(element.getAttribute("data-ns-evidence-id") || "").trim();
+      if (evidenceId && expectedEvidenceIds.has(evidenceId)) {
+        element.setAttribute("data-ns-protected-evidence", "true");
+      }
+    });
+  };
+  const captureCanonicalEvidenceNodes = () => {
+    const canonical = new Map();
+    root.querySelectorAll("[data-ns-evidence-id]").forEach((element) => {
+      const evidenceId = String(element.getAttribute("data-ns-evidence-id") || "").trim();
+      if (evidenceId && !canonical.has(evidenceId)) canonical.set(evidenceId, element);
+    });
+    return canonical;
+  };
+  const discardDuplicateEvidenceNodes = (canonical) => {
+    const retained = new Set();
+    root.querySelectorAll("[data-ns-evidence-id]").forEach((element) => {
+      const evidenceId = String(element.getAttribute("data-ns-evidence-id") || "").trim();
+      if (!evidenceId) return;
+      const preferred = canonical.get(evidenceId);
+      if (preferred?.isConnected) {
+        if (element !== preferred) element.remove();
+        retained.add(evidenceId);
+        return;
+      }
+      if (retained.has(evidenceId)) {
+        element.remove();
+        return;
+      }
+      retained.add(evidenceId);
+    });
+    markExpectedEvidenceAsProtected();
+  };
+  registerExpectedEvidence(currentData);
+  markExpectedEvidenceAsProtected();
   const prepaintFailsafe = window.setTimeout(() => root.removeAttribute("data-ns-prepaint"), 8_000);
 
   // Runtime-owned overlays are derived browser state. A historical snapshot may
@@ -1891,11 +1947,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     return width * height;
   };
   const captureEvidenceRegistryReceipt = () => {
+    const rootRect = root.getBoundingClientRect();
     const entries = Array.from(root.querySelectorAll("[data-ns-evidence-id]"))
-      .map((element) => {
+      .map((element, index) => {
         const evidenceId = String(element.getAttribute("data-ns-evidence-id") || "").trim();
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
+        const image = element.matches("img") ? element : element.querySelector("img");
+        const imageStyle = image ? getComputedStyle(image) : style;
         const visible = rect.width > 4
           && rect.height > 4
           && style.display !== "none"
@@ -1905,6 +1964,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           evidenceId,
           visible,
           runtimeInherited: element.hasAttribute("data-ns-runtime-inherited-placement"),
+          presentation: {
+            evidenceId,
+            nodeId: element.getAttribute("data-ns-node-id") || undefined,
+            flowId: element.closest("[data-ns-flow-id]")?.getAttribute("data-ns-flow-id") || undefined,
+            index,
+            x: Math.round((rect.left - rootRect.left) * 100) / 100,
+            y: Math.round((rect.top - rootRect.top) * 100) / 100,
+            width: Math.round(rect.width * 100) / 100,
+            height: Math.round(rect.height * 100) / 100,
+            aspectRatio: rect.height > 0 ? Math.round((rect.width / rect.height) * 10000) / 10000 : 0,
+            objectFit: imageStyle.objectFit || "fill",
+            objectPosition: imageStyle.objectPosition || "50% 50%",
+            transform: style.transform || "none",
+          },
         };
       })
       .filter((entry) => entry.evidenceId);
@@ -1914,12 +1987,13 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       entries.filter((entry) => entry.runtimeInherited).map((entry) => entry.evidenceId),
     ));
     return {
-      expectedEvidenceIds: EXPECTED_EVIDENCE_IDS.slice(),
+      expectedEvidenceIds: Array.from(expectedEvidenceIds),
       presentEvidenceIds,
       visibleEvidenceIds,
       runtimeInheritedEvidenceIds,
       unplacedEvidenceIds: runtimeInheritedEvidenceIds.slice(),
-      missingEvidenceIds: EXPECTED_EVIDENCE_IDS.filter((id) => !presentEvidenceIds.includes(id)),
+      missingEvidenceIds: Array.from(expectedEvidenceIds).filter((id) => !presentEvidenceIds.includes(id)),
+      presentationManifest: entries.map((entry) => entry.presentation),
     };
   };
   const visualSafetySnapshot = () => {
@@ -2240,13 +2314,6 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (!mechanicalOnly && before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
       return "Comparison completeness failed; a required comparison entity or evidence lane disappeared.";
     }
-    // Flow orientation and artboard whitespace are creative decisions. They remain
-    // measured and reported, but only catastrophic regressions may block commit.
-    const widthCollapsed = before.occupiedWidthRatio >= .52 && after.occupiedWidthRatio < Math.max(.22, before.occupiedWidthRatio * .42);
-    const heightCollapsed = before.occupiedHeightRatio >= .45 && after.occupiedHeightRatio < Math.max(.2, before.occupiedHeightRatio * .4);
-    const evidenceDestroyed = before.evidenceCount >= 4 && after.evidenceCount < Math.ceil(before.evidenceCount * .35) && after.evidenceArea < before.evidenceArea * .28;
-    if (widthCollapsed || heightCollapsed) return "The proposed recomposition catastrophically collapsed meaningful content.";
-    if (evidenceDestroyed) return "The proposed recomposition removed or collapsed too much grounded evidence at once.";
     return "";
   };
   const foundationJavascript = ${safeJson(documentSource.javascript)};
@@ -2557,9 +2624,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     // always re-derived and may expand or contract without an intent gate.
     requestedBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     const before = snapshotRects();
+    const canonicalEvidenceNodes = captureCanonicalEvidenceNodes();
     root.setAttribute("data-ns-mutating", "true");
     try {
       for (const operation of batch.operations || []) applyOperation(operation);
+      discardDuplicateEvidenceNodes(canonicalEvidenceNodes);
       enforceAssetPolicy(root);
       applyStage();
       currentRevisionId = revisionId || currentRevisionId;
@@ -3919,6 +3988,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       // Context may arrive before the associated mutation. Keep the current live revision
       // until that mutation is transactionally accepted by this browser surface.
       currentData = message.dataBundle || currentData;
+      registerExpectedEvidence(currentData);
+      markExpectedEvidenceAsProtected();
       currentCreative = message.creativeDirection ?? currentCreative;
       currentReviews = message.creativeReviews || currentReviews;
       currentPublicationState = message.publicationState ?? currentPublicationState;

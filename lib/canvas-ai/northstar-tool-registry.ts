@@ -414,7 +414,7 @@ export const NORTHSTAR_TOOL_REGISTRY: Record<
 
   prepare_composition_evidence: {
     name: "prepare_composition_evidence",
-    description: "Curate a diverse, grounded set of apps, flows, and representative screenshots for a complex visual composition.",
+    description: "Prepare complete, grounded ordered flows for a complex visual composition, with representative previews only as optional supplementary context.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1067,9 +1067,9 @@ const TOOL_DECISION_GUIDANCE: Partial<
   },
 
   prepare_composition_evidence: {
-    useWhen: "A multi-part composition needs a curated evidence set across one or more apps before North Star builds the final artifact.",
+    useWhen: "A multi-part composition needs complete ordered evidence flows across one or more apps before North Star builds the final artifact.",
     avoidWhen: "The user only wants to browse raw flow or screenshot results in Chat, or a single exact asset is already known.",
-    returns: "A diverse grounded bundle of candidate apps, flows, and representative screenshots suitable for comparison, journey, analysis, or strategy composition.",
+    returns: "A grounded bundle of complete ordered flows, plus optional representative previews, suitable for comparison, journey, analysis, or strategy composition.",
     usuallyFollowedBy: "create_artifact_shell and one add_artifact_section step per grounded subject.",
   },
   create_shape: {

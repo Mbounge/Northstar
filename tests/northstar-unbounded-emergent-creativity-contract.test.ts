@@ -21,12 +21,13 @@ test("design intelligence is formed from the first model-authored source act rat
   assert.match(route, /premiumPlan\.noveltySignature/);
 });
 
-test("the inherited evidence board is source material rather than the final composition", () => {
+test("the inherited evidence board remains the authoritative visual precedent while evidence stays editable", () => {
   assert.match(artifact, /data-ns-node-id="presentation"/);
   assert.match(artifact, /data-ns-node-id="evidence-reservoir"/);
-  assert.match(authorship, /inherited layout is disposable presentation scaffolding/i);
-  assert.match(authorship, /set-html on presentation/i);
-  assert.match(authorship, /evidence reservoir is source material/i);
+  assert.match(authorship, /exact current artboard is the primary design precedent/i);
+  assert.match(authorship, /target the smallest existing semantic region/i);
+  assert.match(authorship, /use a whole-composition rewrite only when/i);
+  assert.doesNotMatch(authorship, /inherited layout is disposable presentation scaffolding/i);
 });
 
 test("the model owns whether and how its governing idea is recomposed", () => {
@@ -34,8 +35,9 @@ test("the model owns whether and how its governing idea is recomposed", () => {
   assert.doesNotMatch(route, /creative\.act\.ambition_rejected/);
   assert.match(route, /creativeSourceAuthority: true/);
   assert.match(route, /No visual primitive, placement grammar, ambition score, or layout recipe was applied/);
-  assert.match(intelligence, /must materially recompose the presentation/i);
-  assert.match(intelligence, /must visibly transform the choreography of real grounded evidence/i);
+  assert.match(intelligence, /first creative act must visibly advance the objective/i);
+  assert.match(intelligence, /broad reconstruction is justified only when/i);
+  assert.doesNotMatch(intelligence, /must materially recompose the presentation/i);
 });
 
 test("all thinking levels share one creative publication bar", () => {

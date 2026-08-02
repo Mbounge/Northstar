@@ -202,8 +202,19 @@ export function sanitizeNorthstarVisualScenePlan(raw: unknown, input: { objectiv
   };
   const withoutThoughts = objects.filter((object) => !thoughtRoles.has(object.role));
   const normalizedObjects = [...withoutThoughts, hypothesis, currentTest];
-  const seen = new Set<string>();
-  const unique = normalizedObjects.filter((object) => !seen.has(object.id) && seen.add(object.id)).slice(0, 14);
+  // These roles render to fixed semantic IDs regardless of the model's object
+  // ID. Keep one of each so a valid model plan cannot produce duplicate DOM
+  // targets such as two `current-act` status cards.
+  const singletonRoles = new Set<NorthstarSceneRole>(["title", "framing", "status", "evidence-field"]);
+  const seenIds = new Set<string>();
+  const seenSingletonRoles = new Set<NorthstarSceneRole>();
+  const unique = normalizedObjects.filter((object) => {
+    if (seenIds.has(object.id)) return false;
+    if (singletonRoles.has(object.role) && seenSingletonRoles.has(object.role)) return false;
+    seenIds.add(object.id);
+    if (singletonRoles.has(object.role)) seenSingletonRoles.add(object.role);
+    return true;
+  }).slice(0, 14);
   return {
     sceneId: safeId(String(source.sceneId ?? "opening-scene"), "opening-scene"),
     threeSecondRead: String(source.threeSecondRead ?? input.objective).slice(0, 420),

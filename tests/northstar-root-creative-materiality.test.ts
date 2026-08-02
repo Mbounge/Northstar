@@ -113,7 +113,7 @@ test("incomplete descriptive metadata is repaired without suppressing executable
 
   assert.equal(result.evidenceChoreography.length, 2);
   assert.equal(result.publicationStandard.length, 3);
-  assert.match(result.firstCreativeAct, /materially transform/i);
+  assert.match(result.firstCreativeAct, /visibly advances the objective/i);
   assert.ok(result.normalizationRepairs.length >= 3);
 });
 

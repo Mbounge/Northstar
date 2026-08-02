@@ -142,7 +142,9 @@ test("the reserved final turn tells the model to consolidate the complete artboa
   assert.equal(context.thinkingModeContract.mode, "low");
   assert.equal(context.thinkingModeContract.providerThinkingLevel, "low");
   assert.match(context.instruction, /final completion turn/i);
-  assert.match(context.instruction, /broad cumulative transformation/i);
+  assert.match(context.instruction, /smallest scope/i);
+  assert.match(context.instruction, /preserve the current typography/i);
+  assert.match(context.instruction, /Return designContinuity first/i);
   assert.match(context.instruction, /Set continueWorking to false/i);
   assert.match(context.instruction, /Do not set or recommend root artboard dimensions/i);
   assert.match(context.canonicalGeometryContract.interpretation, /large finite artboard is not a runtime defect/i);

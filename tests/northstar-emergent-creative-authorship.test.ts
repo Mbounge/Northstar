@@ -25,12 +25,12 @@ function baseDraft(): CompleteCreativeActDraft {
       evidenceChoreography: [],
       emotionalRegister: "Calm, exact, premium, and editorial.",
       signatureMove: "One live tension path pulls decisive proof into focus.",
-      existingStructureVerdict: "Replace the equal-weight evidence wall.",
-      destructiveRecompositionIntent: "Rebuild the presentation while preserving every evidence identity.",
+      existingStructureContinuity: "Preserve the current editorial hierarchy, restrained palette, horizontal evidence sequence, and controlled screenshot scale.",
+      structuralChangeThreshold: "Use a regional proof-stage edit; the current artboard does not require a whole-composition replacement.",
       surfaceAndContainerStrategy: "Use open space and only meaningful boundaries.",
       antiGenericStrategy: "Avoid dashboard modules and equal-weight cards.",
-      divergenceFromRecentWork: "Use an asymmetric tension field rather than rows.",
-      firstCreativeAct: "Create the tension field and move proof into it.",
+      continuityAndOriginality: "Make the argument specific through an asymmetric tension cue while continuing the current Northstar visual language.",
+      firstCreativeAct: "Promote the strongest proof inside the existing evidence composition.",
       mediumAndRepresentationStrategy: "Use editorial HTML and SVG as one continuous scene.",
       sceneExecutionPlan: "Build thesis, evidence field, and resolution in one cumulative source.",
       precisionAndLegibilityStrategy: "Keep evidence complete and text readable at full-board scale.",
@@ -54,6 +54,17 @@ function baseDraft(): CompleteCreativeActDraft {
         analyticalIntents: [],
         publicationOutcomes: ["Understand the tension", "Inspect the proof", "Reach a grounded conclusion"],
       },
+    },
+    designContinuity: {
+      preserve: [
+        "Current typography, palette, spacing rhythm, and quiet surface treatment.",
+        "Awin evidence grouping, screenshot aspect ratio, sequence order, and controlled scale.",
+      ],
+      change: ["Promote one Awin proof point inside the existing presentation."],
+      scope: "regional",
+      targetNodeIds: ["presentation", "evidence-awin-1"],
+      topologyChange: false,
+      topologyChangeReason: "",
     },
     intention: "Turn the strongest proof into the visual center of gravity.",
     viewerUnderstanding: "Awin's trust burden and Whop's activation speed become immediately comparable.",
@@ -126,6 +137,8 @@ function baseDraft(): CompleteCreativeActDraft {
 
 test("the model-facing schema contains no visual-family or artboard-sizing controls", () => {
   const schema = JSON.stringify(NORTHSTAR_EMERGENT_CREATIVE_ACT_JSON_SCHEMA);
+  assert.match(schema, /designContinuity/);
+  assert.match(schema, /whole-composition/);
   for (const forbidden of [
     "archetype",
     "visualFamily",
@@ -146,6 +159,9 @@ test("the model-facing schema contains no visual-family or artboard-sizing contr
 
 test("sanitization forces runtime-owned geometry and preserves concrete creative operations", () => {
   const act = sanitizeNorthstarEmergentCreativeAct(baseDraft());
+  assert.equal(act.designContinuity.scope, "regional");
+  assert.equal(act.designContinuity.topologyChange, false);
+  assert.deepEqual(act.designContinuity.targetNodeIds, ["presentation", "evidence-awin-1"]);
   assert.equal(act.mutation.geometryIntent, "preserve");
   assert.equal(act.mutation.operations.length, 6);
   assert.equal(act.affectedNodeIds.includes("evidence-awin-1"), true);
