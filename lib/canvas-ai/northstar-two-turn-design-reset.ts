@@ -16,6 +16,10 @@ import {
   buildNorthstarCumulativeIntentAudit,
   type NorthstarCumulativeIntentAudit,
 } from "@/lib/canvas-ai/northstar-cumulative-intent-audit";
+import {
+  buildNorthstarRenderedIntegrityAudit,
+  type NorthstarRenderedIntegrityAudit,
+} from "@/lib/canvas-ai/northstar-rendered-integrity-audit";
 
 export const NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION =
   "northstar.artboard-benchmark.v1" as const;
@@ -212,6 +216,10 @@ export type NorthstarDesignResetTurnArchive = {
   cumulativeIntentAudit?: NorthstarCumulativeIntentAudit;
   /** Audit construction failures are archived without affecting the committed design turn. */
   cumulativeIntentAuditFailure?: string;
+  /** Audit-only rendered clearance, relationship, group, and attribution observations. */
+  renderedIntegrityAudit?: NorthstarRenderedIntegrityAudit;
+  /** Rendered-integrity construction failures are archived without affecting the committed design turn. */
+  renderedIntegrityAuditFailure?: string;
   repairHistory?: unknown[];
   failure?: string;
 };
@@ -966,6 +974,8 @@ export function buildNorthstarDesignResetTurnArchive(input: {
   const normalizedMutation = input.acceptedResponse?.mutation;
   let cumulativeIntentAudit: NorthstarCumulativeIntentAudit | undefined;
   let cumulativeIntentAuditFailure: string | undefined;
+  let renderedIntegrityAudit: NorthstarRenderedIntegrityAudit | undefined;
+  let renderedIntegrityAuditFailure: string | undefined;
   if (input.mutationBatch && input.afterPackage && input.afterAcknowledgement && afterSemanticGraph) {
     try {
       cumulativeIntentAudit = buildNorthstarCumulativeIntentAudit({
@@ -983,6 +993,19 @@ export function buildNorthstarDesignResetTurnArchive(input: {
       });
     } catch (error) {
       cumulativeIntentAuditFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (cumulativeIntentAudit) {
+      try {
+        renderedIntegrityAudit = buildNorthstarRenderedIntegrityAudit({
+          turn: input.turn,
+          package: input.afterPackage,
+          acknowledgement: input.afterAcknowledgement,
+          graph: afterSemanticGraph,
+          cumulativeIntentAudit,
+        });
+      } catch (error) {
+        renderedIntegrityAuditFailure = error instanceof Error ? error.message : String(error);
+      }
     }
   }
   return {
@@ -1033,6 +1056,8 @@ export function buildNorthstarDesignResetTurnArchive(input: {
     exactSourceDiff: afterSnapshot ? exactDocumentDiff(beforeSnapshot, afterSnapshot) : undefined,
     cumulativeIntentAudit,
     cumulativeIntentAuditFailure,
+    renderedIntegrityAudit,
+    renderedIntegrityAuditFailure,
     repairHistory: input.repairHistory,
     failure: input.failure,
   };
