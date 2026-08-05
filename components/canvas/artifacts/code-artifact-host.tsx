@@ -20,8 +20,10 @@ import type {
   NorthstarArtifactMutationAcknowledgement,
   NorthstarArtboardChangeKind,
   NorthstarArtboardMutationBatch,
+  NorthstarAuthoredDesignRelation,
   NorthstarEvidenceRegistryReceipt,
   NorthstarLiveSurfaceSnapshot,
+  NorthstarResolvedDesignRelation,
 } from "@/lib/canvas-artifacts/types";
 
 const MINIMUM_INTERACTIVE_ZOOM = 0.24;
@@ -66,6 +68,8 @@ interface ArtifactPointerMessage {
   loadedAssetUrls?: string[];
   missingAssetUrls?: string[];
   evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
+  authoredDesignRelations?: NorthstarAuthoredDesignRelation[];
+  resolvedDesignRelations?: NorthstarResolvedDesignRelation[];
   snapshot?: NorthstarLiveSurfaceSnapshot;
   rollbackDurationMs?: number;
   candidateDurationMs?: number;
@@ -618,6 +622,8 @@ function CodeArtifactHostImpl({
       loadedAssetUrls: input.message.loadedAssetUrls ?? [],
       missingAssetUrls: input.message.missingAssetUrls ?? [],
       evidenceRegistry: input.message.evidenceRegistry ?? input.message.review?.evidenceRegistry,
+      authoredDesignRelations: input.message.authoredDesignRelations,
+      resolvedDesignRelations: input.message.resolvedDesignRelations,
       snapshot: input.message.snapshot,
       rollbackDurationMs: input.message.rollbackDurationMs,
       candidateDurationMs: input.message.candidateDurationMs,
@@ -1044,6 +1050,8 @@ function CodeArtifactHostImpl({
             revisionId: event.data.revisionId ?? current.revisionId,
             size: acceptedReadySize,
             review: event.data.review,
+            authoredDesignRelations: event.data.authoredDesignRelations,
+            resolvedDesignRelations: event.data.resolvedDesignRelations,
             snapshot: event.data.snapshot,
           });
           void postAcknowledgement({ status: "ready", message: readyMessage })
@@ -1358,6 +1366,8 @@ function CodeArtifactHostImpl({
           mutationId: event.data.mutationId,
           size: acceptedAppliedSize,
           review: event.data.review,
+          authoredDesignRelations: event.data.authoredDesignRelations,
+          resolvedDesignRelations: event.data.resolvedDesignRelations,
           snapshot: event.data.snapshot,
         });
         if (event.data.mutationId) appliedMutationIdsRef.current.add(event.data.mutationId);

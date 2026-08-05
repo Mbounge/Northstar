@@ -157,7 +157,7 @@ export const NORTHSTAR_CANVAS_GLOBAL_VISUAL_RULES = [
   "Never flatten a finished artifact into one image. Use editable primitives and preserve evidence provenance.",
   "Do not give every element the same rounded card style. Choose radius, grid, editorial, diagram, or dense-table treatments according to the problem.",
   "No clipping, smudged images, orphan labels, unreadable text, accidental overlaps, broken containment, or off-canvas children may ship.",
-  "Screenshots that support claims must be large enough to understand or moved to a clearly labeled evidence layer.",
+  "Focal screenshots that support claims must be large enough to understand. Additive detail views may move elsewhere, but the complete ordered originals remain visible and inspectable in the canonical research/evidence record.",
   "A comparison must compare equivalent stages or explicitly label the asymmetry.",
 ] as const;
 
@@ -209,7 +209,7 @@ export const NORTHSTAR_COMPONENT_CONTRACTS: Record<NorthStarComponentPreset, Nor
     visualRules: [
       ...commonRules,
       "Preserve screenshot order and do not mix screenshots from another app.",
-      "When too dense, show representative hero moments and attach the full sequence to the evidence layer.",
+      "When dense, keep the full ordered sequence visible and inspectable as canonical evidence, then create additive representative hero copies, annotations, or detail views wherever they clarify the story. Never replace the sequence with the subset.",
     ],
   },
   "reference-flow": {
@@ -233,7 +233,7 @@ export const NORTHSTAR_COMPONENT_CONTRACTS: Record<NorthStarComponentPreset, Nor
     visualRules: [
       ...commonRules,
       "Use when the ordered flow itself is central to the reasoning.",
-      "Keep sequence labels and stage markers aligned above the exact screenshots.",
+      "Keep every original screenshot complete, traceable, and in authoritative sequence order; annotations, connectors, framing, proportional rescaling, and regrouping may evolve around that record.",
     ],
   },
   "evidence-strip": {

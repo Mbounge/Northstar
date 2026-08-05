@@ -5,6 +5,9 @@ import {
   type CanvasCodeArtifactBuildPhase,
   type NorthstarArtboardGeometryIntent,
   type NorthstarArtboardMutationBatch,
+  type NorthstarAuthoredDesignRelation,
+  type NorthstarDesignRelationGeometryMode,
+  type NorthstarDesignRelationReference,
   type NorthstarArtboardMutationOperation,
   type NorthstarConstructionBeat,
   type NorthstarConstructionBeatKind,
@@ -22,6 +25,7 @@ export interface NorthstarArtboardMutationDraft {
   geometryIntent: NorthstarArtboardGeometryIntent;
   transitionMs: number;
   operations: NorthstarArtboardMutationOperation[];
+  relations?: NorthstarAuthoredDesignRelation[];
   requiredPrimitives?: NorthstarRequiredPrimitive[];
   constructionPlan?: NorthstarConstructionPlan;
   /** Full authored DesignAct intention used only for deterministic promise fidelity checks. */
@@ -214,6 +218,42 @@ export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
         ],
       },
     },
+    relations: {
+      type: "array",
+      maxItems: 64,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 120 },
+          subjectId: { type: "string", minLength: 1, maxLength: 120 },
+          kind: { type: "string", minLength: 1, maxLength: 120 },
+          references: {
+            type: "array",
+            minItems: 1,
+            maxItems: 16,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                role: { type: "string", minLength: 1, maxLength: 80 },
+                nodeId: { type: "string", minLength: 1, maxLength: 120 },
+                anchor: { type: "string", minLength: 1, maxLength: 80 },
+                geometry: { type: "string", enum: ["border-box", "semantic-descendant-union"] },
+              },
+              required: ["role", "nodeId"],
+            },
+          },
+          parameters: {
+            type: "object",
+            maxProperties: 32,
+            additionalProperties: { type: ["string", "number", "boolean"] },
+          },
+          realizationPolicy: { type: "string", enum: ["live", "snapshot"] },
+        },
+        required: ["id", "subjectId", "kind", "references", "parameters", "realizationPolicy"],
+      },
+    },
     requiredPrimitives: {
       type: "array",
       maxItems: 24,
@@ -308,6 +348,7 @@ export const NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA = {
     "geometryIntent",
     "transitionMs",
     "operations",
+    "relations",
   ],
 } as const;
 
@@ -596,6 +637,58 @@ function sanitizeOperation(operation: NorthstarArtboardMutationOperation): North
   }
 }
 
+
+function canonicalNorthstarRelationRole(kind: string, role: string): string {
+  const normalized = role.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (kind === "connector-attachment") {
+    if (["source", "from", "start", "origin", "source-node", "source-reference", "from-node"].includes(normalized)) return "source";
+    if (["target", "to", "end", "destination", "target-node", "target-reference", "to-node"].includes(normalized)) return "target";
+  }
+  if (kind === "between-placement") {
+    if (["before", "first", "start", "left", "top", "previous"].includes(normalized)) return "before";
+    if (["after", "second", "end", "right", "bottom", "next"].includes(normalized)) return "after";
+  }
+  if (kind === "relative-placement" && ["reference", "target", "anchor", "reference-node", "relative-to"].includes(normalized)) return "reference";
+  return normalized || role.trim();
+}
+
+function sanitizeAuthoredDesignRelations(value: unknown): NorthstarAuthoredDesignRelation[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const relations = value.slice(0, 64).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const record = candidate as Record<string, unknown>;
+    const id = cleanId(record.id);
+    const subjectId = cleanId(record.subjectId);
+    const kind = cleanText(record.kind, 120);
+    if (!id || !subjectId || !kind) return [];
+    const references: NorthstarDesignRelationReference[] = (Array.isArray(record.references) ? record.references : []).slice(0, 16).flatMap((reference) => {
+      if (!reference || typeof reference !== "object" || Array.isArray(reference)) return [];
+      const ref = reference as Record<string, unknown>;
+      const authoredRole = cleanText(ref.role, 80);
+      const role = canonicalNorthstarRelationRole(kind, authoredRole);
+      const nodeId = cleanId(ref.nodeId);
+      if (!role || !nodeId) return [];
+      const anchor = cleanText(ref.anchor, 80);
+      const geometry: NorthstarDesignRelationGeometryMode | undefined = ref.geometry === "semantic-descendant-union" ? "semantic-descendant-union" : ref.geometry === "border-box" ? "border-box" : undefined;
+      return [{ role, nodeId, ...(anchor ? { anchor } : {}), ...(geometry ? { geometry } : {}) }];
+    });
+    if (references.length === 0) return [];
+    const parameters: Record<string, string | number | boolean> = {};
+    if (record.parameters && typeof record.parameters === "object" && !Array.isArray(record.parameters)) {
+      for (const [key, raw] of Object.entries(record.parameters as Record<string, unknown>).slice(0, 32)) {
+        if (typeof raw === "string") parameters[cleanText(key, 80)] = cleanText(raw, 500);
+        else if (typeof raw === "number" && Number.isFinite(raw)) parameters[cleanText(key, 80)] = raw;
+        else if (typeof raw === "boolean") parameters[cleanText(key, 80)] = raw;
+      }
+    }
+    return [{
+      id, subjectId, kind, references, parameters,
+      realizationPolicy: record.realizationPolicy === "snapshot" ? "snapshot" : "live",
+    } satisfies NorthstarAuthoredDesignRelation];
+  });
+  return relations.length ? relations : undefined;
+}
+
 export function sanitizeNorthstarArtboardMutationDraft(
   draft: NorthstarArtboardMutationDraft,
 ): NorthstarArtboardMutationDraft {
@@ -614,6 +707,7 @@ export function sanitizeNorthstarArtboardMutationDraft(
     geometryIntent,
     transitionMs: Math.max(80, Math.min(1200, Math.round(Number(draft.transitionMs) || 320))),
     operations,
+    relations: sanitizeAuthoredDesignRelations(draft.relations),
     requiredPrimitives: sanitizeRequiredPrimitives(draft.requiredPrimitives),
     constructionPlan: sanitizeConstructionPlan(draft.constructionPlan),
   };
@@ -742,6 +836,7 @@ export function createNorthstarArtboardMutationBatch(input: {
   minimumMovedNodes?: number;
   minimumResizedNodes?: number;
   executionPolicy?: NorthstarArtboardMutationBatch["executionPolicy"];
+  pixelStableNodeIds?: string[];
   /** Infrastructure-owned sequence for the persistent linear design session. */
   sequenceOverride?: number;
 }): NorthstarArtboardMutationBatch {
@@ -768,6 +863,7 @@ export function createNorthstarArtboardMutationBatch(input: {
     .update(JSON.stringify({
       sequence,
       operations: draft.operations,
+      relations: draft.relations,
       requiredPrimitives: draft.requiredPrimitives,
       constructionPlan: draft.constructionPlan,
       label: input.label,
@@ -786,6 +882,7 @@ export function createNorthstarArtboardMutationBatch(input: {
     geometryIntent: draft.geometryIntent,
     transitionMs: draft.transitionMs,
     operations: draft.operations,
+    relations: draft.relations,
     requiredPrimitives: draft.requiredPrimitives,
     constructionPlan: draft.constructionPlan,
     minimumMeaningfulChangedNodes: input.minimumMeaningfulChangedNodes,
@@ -804,6 +901,7 @@ export function createNorthstarArtboardMutationBatch(input: {
       ? undefined
       : Math.max(0, Math.floor(input.minimumResizedNodes)),
     executionPolicy: input.executionPolicy,
+    pixelStableNodeIds: Array.from(new Set((input.pixelStableNodeIds ?? []).map((value) => cleanId(value)))).slice(0, 240),
     createdAt: new Date().toISOString(),
   };
 }
@@ -825,6 +923,7 @@ export function appendNorthstarArtboardMutation(input: {
   minimumMovedNodes?: number;
   minimumResizedNodes?: number;
   executionPolicy?: NorthstarArtboardMutationBatch["executionPolicy"];
+  pixelStableNodeIds?: string[];
   sequenceOverride?: number;
 }): NorthstarGeneratedCodeArtifactPackage {
   const sanitized = sanitizeNorthstarArtboardMutationDraft(input.draft);
@@ -842,6 +941,7 @@ export function appendNorthstarArtboardMutation(input: {
     minimumMovedNodes: input.minimumMovedNodes,
     minimumResizedNodes: input.minimumResizedNodes,
     executionPolicy: input.executionPolicy,
+    pixelStableNodeIds: input.pixelStableNodeIds,
     sequenceOverride: input.sequenceOverride,
   });
   // Geometry is never estimated into the package. The mutation preserves the

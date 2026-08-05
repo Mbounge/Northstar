@@ -1,12 +1,16 @@
 // app/api/canvas-ai/route.ts
-// Northstar Canvas v0.9.0 — adaptive atomic source authorship and browser-owned delivery.
+// Northstar Canvas design reset — grounded research plus two exact audited model turns.
 
-import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
+import {
+  createClient,
+} from "@/lib/supabase/server";
 import {
   NORTHSTAR_AGENT_TOOL_NAMES,
   NORTHSTAR_DATA_TOOL_NAMES,
-  CANVAS_ACTION_TOOL_NAMES,
   getToolRegistryPromptSummary,
   isCanvasActionTool,
   type CanvasActionToolName,
@@ -21,43 +25,41 @@ import {
   validateNorthstarCapabilityPlan,
 } from "@/lib/canvas-ai/northstar-capabilities";
 import {
-  getNorthstarArtifactSourceDiagnostics,
   createNorthstarWorkingArtifactPackage,
   createNorthstarWorkingMutationPackage,
   prepareNorthstarArtboardRevisionForPublication,
 } from "@/lib/canvas-ai/northstar-code-artifact";
-import { NORTHSTAR_CANONICAL_EVIDENCE_SCENE_VERSION } from "@/lib/canvas-ai/northstar-canonical-evidence-scene";
+
 import {
-  appendNorthstarArtboardMutation,
-  buildDeterministicNorthstarArtboardMutationDraft,
-  type NorthstarArtboardMutationDraft,
-} from "@/lib/canvas-ai/northstar-artboard-mutations";
-import {
-  creativeBudgetForThinkingDepth,
-  buildNorthstarDesignBehaviorAddendum,
-} from "@/lib/canvas-ai/northstar-design-intelligence";
-import { loadNorthstarDesignReferenceParts } from "@/lib/canvas-ai/northstar-design-reference-pack";
-import {
-  captureNorthstarArtifactPng,
-  type NorthstarRenderedArtifactPng,
-} from "@/lib/canvas-ai/northstar-render-capture";
-import {
-  buildNorthstarUnavailableVisualObservation,
-  buildNorthstarVisualObservation,
-  buildNorthstarVisualObservationParts,
-  planNorthstarVisualDetailViews,
-  type NorthstarVisualObservation,
-} from "@/lib/canvas-ai/northstar-visual-observation";
+  NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+  NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN,
+  NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION,
+  buildNorthstarArtboardSemanticGraph,
+  buildNorthstarDesignResetModelInput,
+  buildNorthstarDesignResetSystemInstruction,
+  buildNorthstarDesignResetTurnArchive,
+  createNorthstarDesignResetCandidate,
+  northstarAuthoredRelationRealizationIssues,
+  northstarDesignResetSha256,
+  sanitizeNorthstarDesignResetModelResponse,
+  validateNorthstarDesignResetCandidate,
+  type NorthstarDesignResetProviderAttemptAudit,
+  type NorthstarDesignResetTurn,
+  type NorthstarDesignResetTurnArchive,
+} from "@/lib/canvas-ai/northstar-two-turn-design-reset";
+
+
+
+
 import {
   getNorthstarArtifactAcknowledgement,
   prepareNorthstarArtifactAcknowledgementWait,
   type NorthstarRealtimeClient,
 } from "@/lib/canvas-ai/northstar-artboard-ack";
-import { NorthstarArtboardActor } from "@/lib/canvas-ai/northstar-artboard-actor";
 import {
-  NORTHSTAR_LIVE_SOURCE_AUTHORSHIP_VERSION,
-  NorthstarLiveSourceAuthorship,
-} from "@/lib/canvas-ai/northstar-live-source-authorship";
+  NorthstarArtboardActor,
+} from "@/lib/canvas-ai/northstar-artboard-actor";
+
 import {
   prepareNorthstarRunCoordinationWait,
   type NorthstarRunCoordinationMessage,
@@ -68,10 +70,10 @@ import {
   decideNorthstarRunSettlement,
   type NorthstarTerminalServerState,
 } from "@/lib/canvas-ai/northstar-lifecycle-authority";
-import { sanitizeNorthstarLiveSnapshot } from "@/lib/canvas-ai/northstar-transaction-kernel";
 import {
-  NorthstarBudgetExceededError,
-  NorthstarDeterministicDesignActError,
+  sanitizeNorthstarLiveSnapshot,
+} from "@/lib/canvas-ai/northstar-transaction-kernel";
+import {
   NorthstarRunLifecycle,
   isNorthstarLineageRejection,
   isNorthstarNonMaterialCompositionalDeltaReason,
@@ -79,85 +81,30 @@ import {
   runNorthstarOperationWithTimeout,
   type NorthstarVisualDispatchResult,
 } from "@/lib/canvas-ai/northstar-run-health";
-import { compileNorthstarMutationDraft } from "@/lib/canvas-ai/northstar-mutation-compiler";
+
+
+
+
+
 import {
-  NORTHSTAR_LINEAR_DESIGN_SESSION_VERSION,
-  NorthstarLinearDesignSession,
-  buildNorthstarLinearCritiqueContext,
-  buildNorthstarLinearDesignContext,
-  northstarLinearCreativeSystemInstruction,
-  northstarLinearCritiqueSystemInstruction,
-} from "@/lib/canvas-ai/northstar-linear-design-session";
-import { validateNorthstarLinearDesignCandidate } from "@/lib/canvas-ai/northstar-linear-design-transaction";
-import { northstarThinkingModePolicy } from "@/lib/canvas-ai/northstar-thinking-mode-policy";
-import { alignNorthstarMutationToVisibleScene, prepareNorthstarEditorialPublicationDraft } from "@/lib/canvas-ai/northstar-living-thought-theatre";
-import {
-  NorthstarContinuousAuthorshipController,
   assessNorthstarCanonicalScene,
-  buildNorthstarCorrectionDirective,
   buildNorthstarFinalResponseInstruction,
   buildNorthstarFinalStateBrief,
-  buildNorthstarMoveContract,
-  preflightNorthstarMove,
   validateNorthstarDispatchSceneContinuity,
   reviewNorthstarBrowserCommit,
-  summarizeNorthstarMoveOperations,
   verifyNorthstarFinalResponse,
   type NorthstarFinalStateBrief,
   type NorthstarMoveContract,
-  type NorthstarObligationKey,
-  type NorthstarPreparedMove,
 } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
-import { buildNorthstarEditableSurfaceDescriptor } from "@/lib/canvas-ai/northstar-presentation-engine";
-import {
-  buildNorthstarEvidenceAliasRegistry,
-  northstarEvidenceAliasModelView,
-  remapNorthstarCreativeDraftAliases,
-  remapNorthstarDesignIntelligenceEvidenceAliases,
-  remapNorthstarEvidenceAliasList,
-  resolveNorthstarEvidenceAlias,
-} from "@/lib/canvas-ai/northstar-evidence-aliases";
-import {
-  NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION,
-  buildNorthstarAdaptiveCreativeContext,
-  buildNorthstarEmergentCreativeSystemInstruction,
-  buildNorthstarAdaptiveCritiqueContext,
-  buildNorthstarEmergentCritiqueSystemInstruction,
-  createNorthstarEmergentCreativeDirection,
-  sanitizeNorthstarEmergentCreativeAct,
-  sanitizeNorthstarEmergentCreativeCritique,
-  type NorthstarEmergentCreativeAct,
-  type NorthstarEmergentCreativeActDraft,
-  type NorthstarEmergentCreativeCritique,
-} from "@/lib/canvas-ai/northstar-emergent-creative-authorship";
-import { createNorthstarGeminiCreativeAdapter } from "@/lib/canvas-ai/northstar-gemini-creative-adapter";
-import {
-  northstarEmergentDiversityAnchor,
-  type NorthstarEmergentDesignIntelligence,
-} from "@/lib/canvas-ai/northstar-emergent-design-intelligence";
-import {
-  northstarPremiumSignatureModelView,
-} from "@/lib/canvas-ai/northstar-premium-design-contract";
-import {
-  buildNorthstarIndependentCreativeReviewContext,
-  buildNorthstarIndependentCreativeReviewSystemInstruction,
-  sanitizeNorthstarIndependentCreativeReview,
-  type NorthstarIndependentCreativeReview,
-} from "@/lib/canvas-ai/northstar-independent-creative-review";
-import {
-  NORTHSTAR_ADAPTIVE_CREATIVE_SESSION_VERSION,
-  NorthstarAdaptiveCreativeSession,
-  assessNorthstarAdaptiveReadiness,
-} from "@/lib/canvas-ai/northstar-adaptive-creative-session";
-import {
-  northstarCreativeCompletionBlocker,
-} from "@/lib/canvas-ai/northstar-creative-completion-invariant";
-import {
-  buildNorthstarCreativeClosureAdjudicationContext,
-  buildNorthstarCreativeClosureAdjudicationSystemInstruction,
-  sanitizeNorthstarCreativeClosureAdjudication,
-  type NorthstarCreativeClosureAdjudication,
-} from "@/lib/canvas-ai/northstar-creative-closure-adjudication";
+
+
+
+
+
+
+
+
+
 import {
   NORTHSTAR_VISUAL_SCENE_JSON_SCHEMA,
   buildNorthstarVisualSceneModelInput,
@@ -175,9 +122,11 @@ import {
   type CanvasCodeArtifactStage,
   type NorthstarArtifactMutationAcknowledgement,
   type NorthstarArtboardMutationBatch,
+  type NorthstarAuthoredDesignRelation,
   type NorthstarCreativeDirection,
   type NorthstarCreativeReview,
   type NorthstarGeneratedCodeArtifactPackage,
+  type NorthstarResolvedDesignRelation,
   type NorthstarWebArtifactDocument,
 } from "@/lib/canvas-artifacts/types";
 import {
@@ -619,6 +568,8 @@ type SelectedCodeArtifactContext = {
   thinkingDepth?: ThinkingDepth;
   document?: NorthstarWebArtifactDocument;
   mutationJournal?: NorthstarArtboardMutationBatch[];
+  authoredDesignRelations?: NorthstarAuthoredDesignRelation[];
+  resolvedDesignRelations?: NorthstarResolvedDesignRelation[];
   sourceTsx?: string;
   dataBundle?: CanvasCodeArtifactDataBundle;
   stagePlan?: CanvasCodeArtifactStage[];
@@ -1506,11 +1457,13 @@ Reject the blueprint when:
 - visible claims are not supported by inspected screenshots;
 - a requested subject lacks evidence;
 - comparison sections are not logically comparable;
-- too much evidence is shown;
+- the canonical research/evidence record is staged as an undifferentiated wall with no hierarchy, reading path, or visible relationship to synthesis;
 - the visual structure is generic when the problem calls for a more meaningful structure;
 - the main takeaway is unclear;
 - the unified artifact does not reveal meaningful proof of work through a designed research trail;
 - the layout would be confusing, crowded, or repetitive.
+
+The complete ordered research/evidence record is never itself “too much evidence” and is never a reason to prune screenshots. Critique how the evidence is choreographed, annotated, grouped, and related to the argument. The blueprint may edit or annotate the research region directly and may create additive focal copies or detail views elsewhere, but every original screen must remain complete, inspectable, and traceable in its canonical flow.
 
 When rejecting it, return a fully revised blueprint. Preserve grounded evidence IDs and never invent screenshots. Prefer a distinct problem-specific composition over a fixed template. Return only the required JSON.
 `.trim();
@@ -1524,14 +1477,14 @@ The blueprint is an evidence and editorial brief for a generated standard-web ar
 
 North Star is a first-principles problem solver. The research ledger records screenshots that were actually inspected visually, observations, hypotheses, open questions, corrections, and decisions. Use that proof of work. Do not compose from labels alone when inspected observations are available.
 
-The final artifact must be easy to digest even when the research was extensive. Distill the narrative and create hierarchy, but retain every ordered screen belonging to each selected flow as the canonical research trail inside the same artifact. A concise comparison may feature selected screens in additional annotated, analytical, or detail regions; those are derived citations and never replace, hide, or reduce the original flow sequences.
+The final artifact must be easy to digest even when the research was extensive. Distill the narrative and create hierarchy, but retain every ordered screen belonging to each selected flow as the canonical research trail inside the same artifact. Research may be annotated, connected, regrouped, reframed, or proportionally rescaled in place when that visibly improves communication. A concise comparison may also feature selected screens in additional annotated, analytical, or detail regions; those are derived citations and never replace, hide, demote, or reduce the original flow sequences. Synthesis may live above, below, beside, between, or within the research composition—the location is a creative decision, not a contract—but it must extend the evidence record rather than clear it and start over.
 
 Rules:
 1. Never invent apps, flows, screenshots, facts, or claims. Use only supplied grounded results, inspected observations, and canvas evidence.
 2. Select evidence by exact screenshot IDs from the ledger. A screenshot can support a claim only when its observation materially supports it.
-3. Keep the main presentation restrained through hierarchy, annotation, and spatial choreography—not by removing canonical flow screens. Use selected screens as focal citations only in addition to the complete ordered flow sequences.
+3. Keep the main presentation restrained through hierarchy, annotation, and spatial choreography—not by removing canonical flow screens. You may redesign the research region itself or use selected screens as focal citations elsewhere, but all originals remain complete and inspectable in their ordered flows.
 4. Put objectives, unknowns, hypotheses, corrections, rejected directions, decisions, and verification notes into workingNotes as structured research input for the code artifact.
-5. Put every inspected screenshot that belongs to a selected ordered flow into workingEvidenceIds so the generated artifact retains the complete research trail. You may separately identify focal evidence for synthesis, but a focal set must never substitute for the full flow.
+5. Put every inspected screenshot that belongs to a selected ordered flow into workingEvidenceIds so the generated artifact retains the complete research trail. You may separately identify focal evidence for synthesis, but a focal set must never substitute for the full flow. This evidence-continuity floor is identical at Low, Medium, and High thinking depth.
 6. Choose a visual structure from the actual problem and evidence. Do not default every comparison to two equal columns.
 7. Define explicit normalized layout regions. x, y, w, and h are percentages of the artifact canvas from 0 to 100. Regions may be asymmetric, but intended section regions must not overlap or hide one another.
 8. Reserve clear negative space between major sections and make the reading order obvious. The main takeaway must remain visible and must not sit beneath another region.
@@ -1540,7 +1493,7 @@ Rules:
 11. For comparisons, every app section must contain only that app's screenshots. Prefer stage-equivalent evidence. If symmetry is impossible, communicate the limitation rather than fabricating it.
 12. Honor the authoritative session scope supplied by tenant metadata. Do not substitute browsing evidence for an onboarding request or onboarding evidence for a browsing request unless the research explicitly adds it as labeled supporting context.
 13. Every final summary and section claim must be traceable to inspected evidence.
-14. The live artifact is also the polished investigative environment. It should reveal evidence, questions, hypotheses, corrections, and decisions through progressive disclosure without becoming an unstructured note dump.
+14. The live artifact is also the polished investigative environment. It should reveal evidence, questions, hypotheses, corrections, and decisions through progressive disclosure without making canonical evidence dependent on hidden interaction or turning the research record into an unstructured note dump.
 15. An executive summary is optional. Include decision-ready synthesis only when the objective, audience, or requested deliverable benefits from it. Do not add one merely because the task is complex.
 16. Preserve the requested execution depth, working visibility, and audience.
 17. Use a stable artifactId beginning with "artifact-".
@@ -1659,6 +1612,21 @@ function parseThinkingDepth(value: unknown): ThinkingDepth {
   return value === "low" || value === "high" ? value : "medium";
 }
 
+function assessDesignResetReadiness(
+  assessment: ReturnType<typeof assessNorthstarCanonicalScene>,
+) {
+  const blockingObservations = assessment.unresolved.filter((issue) =>
+    /root|surface|evidence|geometry|duplicate/i.test(issue),
+  );
+  return {
+    operationallyReady: blockingObservations.length === 0,
+    communicativelyReady: blockingObservations.length === 0,
+    blockingObservations,
+    advisoryObservations: assessment.unresolved.filter((issue) => !blockingObservations.includes(issue)),
+  };
+}
+
+
 function extractCodeArtifactContexts(value: unknown): SelectedCodeArtifactContext[] {
   if (!isRecord(value) || !Array.isArray(value.objects)) return [];
   const contexts: SelectedCodeArtifactContext[] = [];
@@ -1688,6 +1656,12 @@ function extractCodeArtifactContexts(value: unknown): SelectedCodeArtifactContex
       : undefined;
     const mutationJournal = Array.isArray(artifact.mutationJournal)
       ? (artifact.mutationJournal as unknown as NorthstarArtboardMutationBatch[])
+      : undefined;
+    const authoredDesignRelations = Array.isArray(artifact.authoredDesignRelations)
+      ? (artifact.authoredDesignRelations as unknown as NorthstarAuthoredDesignRelation[])
+      : undefined;
+    const resolvedDesignRelations = Array.isArray(artifact.resolvedDesignRelations)
+      ? (artifact.resolvedDesignRelations as unknown as NorthstarResolvedDesignRelation[])
       : undefined;
     const stagePlan = Array.isArray(artifact.stagePlan)
       ? (artifact.stagePlan as unknown as CanvasCodeArtifactStage[])
@@ -1722,6 +1696,8 @@ function extractCodeArtifactContexts(value: unknown): SelectedCodeArtifactContex
             : undefined,
       document,
       mutationJournal,
+      authoredDesignRelations,
+      resolvedDesignRelations,
       sourceTsx,
       dataBundle,
       stagePlan,
@@ -1780,6 +1756,8 @@ function generatedPackageFromSelectedArtifact(input: {
     visualStrategy: selected.visualStrategy ?? "Continuously refine the selected living artboard in place.",
     document: selected.document,
     mutationJournal: selected.mutationJournal ?? [],
+    authoredDesignRelations: selected.authoredDesignRelations,
+    resolvedDesignRelations: selected.resolvedDesignRelations,
     sourceTsx: selected.sourceTsx,
     preferredWidth: width,
     preferredHeight: height,
@@ -2593,6 +2571,136 @@ async function callGeminiJson<T>({
         kind: "unknown",
         retryable: false,
       });
+}
+
+
+class NorthstarAuditedModelCallError extends Error {
+  readonly audit: NorthstarDesignResetProviderAttemptAudit;
+  readonly causeValue: unknown;
+
+  constructor(message: string, audit: NorthstarDesignResetProviderAttemptAudit, causeValue?: unknown) {
+    super(message);
+    this.name = "NorthstarAuditedModelCallError";
+    this.audit = audit;
+    this.causeValue = causeValue;
+  }
+}
+
+async function callGeminiJsonOnceAudited<T>({
+  apiKey,
+  systemInstruction,
+  contents,
+  schema,
+  signal,
+  maxOutputTokens,
+  temperature,
+}: {
+  apiKey: string;
+  systemInstruction: string;
+  contents: unknown[];
+  schema: unknown;
+  signal: AbortSignal;
+  maxOutputTokens: number;
+  temperature: number;
+}): Promise<{ value: T; audit: NorthstarDesignResetProviderAttemptAudit }> {
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  const requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+  // Gemini rejects the full Northstar mutation schema as a provider-side
+  // responseJsonSchema with HTTP 400 INVALID_ARGUMENT. Keep the exact schema
+  // visible to the model and fully archived, but enforce it in the prompt and
+  // validate the returned JSON locally. This is still one model turn: there is
+  // no fallback model call, no placement repair, and no orchestrator-authored
+  // mutation.
+  const schemaInstruction = [
+    systemInstruction,
+    "",
+    "Return exactly one JSON object matching this schema. Do not include markdown or commentary:",
+    JSON.stringify(schema),
+  ].join("\n");
+  const requestBody = {
+    systemInstruction: { parts: [{ text: schemaInstruction }] },
+    contents,
+    generationConfig: {
+      temperature,
+      maxOutputTokens,
+      responseMimeType: "application/json",
+    },
+  };
+  const requestBodyText = JSON.stringify(requestBody);
+  const audit: NorthstarDesignResetProviderAttemptAudit = {
+    attempt: 1,
+    model: GEMINI_MODEL,
+    requestUrl,
+    requestBody,
+    requestBodyBytes: Buffer.byteLength(requestBodyText, "utf8"),
+    requestBodySha256: northstarDesignResetSha256(requestBodyText),
+    requestedAt: new Date().toISOString(),
+  };
+
+  try {
+    const response = await runNorthstarOperationWithTimeout({
+      label: "Northstar two-turn design reset model call",
+      timeoutMs: NORTHSTAR_MODEL_CALL_TIMEOUT_MS,
+      parentSignal: signal,
+      operation: (attemptSignal) => fetch(requestUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: requestBodyText,
+        cache: "no-store",
+        signal: attemptSignal,
+      }),
+    });
+    audit.completedAt = new Date().toISOString();
+    audit.responseStatus = response.status;
+    audit.responseHeaders = Object.fromEntries(response.headers.entries());
+    const payload = await response.json().catch(() => null) as unknown;
+    const providerPayloadText = JSON.stringify(payload);
+    audit.providerPayload = payload;
+    audit.providerPayloadBytes = Buffer.byteLength(providerPayloadText, "utf8");
+    audit.providerPayloadSha256 = northstarDesignResetSha256(providerPayloadText);
+
+    if (!response.ok) {
+      const payloadRecord = isRecord(payload) ? payload : undefined;
+      const providerError = payloadRecord && isRecord(payloadRecord.error) ? payloadRecord.error : undefined;
+      const message = getString(providerError?.message) || "The design reset model request could not be completed.";
+      const providerCode = getString(providerError?.status) || getString(providerError?.code);
+      const classified = classifyGeminiFailure({
+        status: response.status,
+        message,
+        providerCode,
+        retryAfterSeconds: parseRetryAfterSeconds(response.headers.get("retry-after")),
+      });
+      audit.error = classified.message;
+      throw classified;
+    }
+
+    const rawText = extractGeminiText(payload);
+    audit.rawModelText = rawText;
+    audit.rawModelTextBytes = Buffer.byteLength(rawText, "utf8");
+    audit.rawModelTextSha256 = northstarDesignResetSha256(rawText);
+    if (!rawText.trim()) {
+      const error = new GeminiCallError({
+        message: "The design reset model returned an empty response.",
+        status: 502,
+        kind: "invalid-response",
+        retryable: false,
+      });
+      audit.error = error.message;
+      throw error;
+    }
+    const value = parseJsonResponse<T>(rawText);
+    audit.parsedModelResponse = value;
+    return { value, audit };
+  } catch (error) {
+    if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    audit.completedAt ??= new Date().toISOString();
+    audit.error = message;
+    throw new NorthstarAuditedModelCallError(message, audit, error);
+  }
 }
 
 function collectSelectedVisualCandidates(selectedContext: unknown) {
@@ -6227,7 +6335,7 @@ type BlueprintCritiqueResponse = {
   revisedBlueprint: CompositionBlueprint;
 };
 
-type NorthstarLinearDesignDispatchResult =
+type NorthstarDesignResetDispatchResult =
   | {
       status: "applied";
       artifact: NorthstarGeneratedCodeArtifactPackage;
@@ -6261,6 +6369,7 @@ type CompositionResearchCallbacks = {
   failStep: (step: { id: string; tool: string; detail: string }) => void | Promise<void>;
   trace?: (name: string, data?: Record<string, unknown>, detail?: string) => void | Promise<void>;
   checkpoint?: (phase: CompositionRunCheckpoint["phase"], ledger: CompositionResearchLedger, toolResults: ToolResult[]) => void | Promise<void>;
+  archiveDesignTurn?: (archive: NorthstarDesignResetTurnArchive) => void | Promise<void>;
   getVisibleArtifact: () => NorthstarGeneratedCodeArtifactPackage | undefined;
   publishArtifact: (
     packageValue: NorthstarGeneratedCodeArtifactPackage,
@@ -6277,7 +6386,7 @@ type CompositionResearchCallbacks = {
     packageValue: NorthstarGeneratedCodeArtifactPackage,
     actionIndex: number,
     label: string,
-  ) => NorthstarLinearDesignDispatchResult | Promise<NorthstarLinearDesignDispatchResult>;
+  ) => NorthstarDesignResetDispatchResult | Promise<NorthstarDesignResetDispatchResult>;
   acquireCreativeLease?: (baseRevisionId: string) => Promise<string>;
   renewCreativeLease?: (leaseId: string) => Promise<void>;
   releaseCreativeLease?: (leaseId: string) => Promise<void>;
@@ -6502,6 +6611,8 @@ function materializeNorthstarCanonicalPackage(
     creativeLease: undefined,
     document: captured.document,
     mutationJournal: captured.mutationJournal,
+    authoredDesignRelations: acknowledgement?.authoredDesignRelations ?? packageValue.authoredDesignRelations,
+    resolvedDesignRelations: acknowledgement?.resolvedDesignRelations ?? packageValue.resolvedDesignRelations,
     preferredWidth: captured.width,
     preferredHeight: captured.height,
     runtimeReview: acknowledgement?.review ?? packageValue.runtimeReview,
@@ -7124,2793 +7235,491 @@ async function buildPolishedLiveArtifactPackage(input: {
   });
 }
 
-async function buildLinearDesignArtifactPackage({
+async function buildArtboardBenchmarkArtifactPackage({
   apiKey,
+  runId,
   artifactId,
-  message,
-  intent,
-  blueprint,
-  ledger,
-  dataBundle,
   thinkingDepth,
-  previousArtifact,
-  recentCreativeSignatures,
   callbacks,
   signal,
 }: {
   apiKey: string;
+  runId: string;
   artifactId: string;
-  message: string;
-  intent: SemanticIntentDecision;
-  blueprint: CompositionBlueprint;
-  ledger: CompositionResearchLedger;
-  dataBundle: CanvasCodeArtifactDataBundle;
   thinkingDepth: ThinkingDepth;
-  previousArtifact?: SelectedCodeArtifactContext;
-  recentCreativeSignatures: string[];
   callbacks: CompositionResearchCallbacks;
   signal: AbortSignal;
 }): Promise<NorthstarGeneratedCodeArtifactPackage> {
-  const objective = intent.objective || message;
-  const creativeModel = createNorthstarGeminiCreativeAdapter({
-    apiKey,
-    modelId: GEMINI_MODEL,
-    generateJson: callGeminiJson,
-  });
-  const designReferenceParts = await loadNorthstarDesignReferenceParts({ mode: "unlabeled-taste" });
-  const session = new NorthstarLinearDesignSession(objective, thinkingDepth);
-  const thinkingPolicy = northstarThinkingModePolicy(thinkingDepth);
-  const creativeDirection = createNorthstarEmergentCreativeDirection({
-    objective,
-    thinkingDepth,
-    prior: previousArtifact?.creativeDirection,
-  });
-  const evidenceSummary = {
-    screenshotCount: dataBundle.screenshots.length,
-    flowCount: dataBundle.flows.length,
-    appCount: dataBundle.apps.length,
-    hypothesisCount: dataBundle.hypotheses.length,
-    decisionCount: dataBundle.decisions.length,
-    coverageSummary: dataBundle.coverageSummary,
-  };
-  const observationCache = new Map<string, NorthstarVisualObservation>();
   let currentPackage = callbacks.getVisibleArtifact();
   if (!currentPackage) {
-    throw new Error("Northstar cannot enter the linear design loop before the existing research artboard is mounted.");
+    throw new Error("Northstar cannot start the design reset before the exact research artboard is mounted.");
   }
-  currentPackage = materializeNorthstarCanonicalPackage(
-    currentPackage,
-    callbacks.getLinearDesignAck?.(),
-  );
-  let priorCorrection: { critique: string; requiredChanges: string[] } | undefined;
-  let currentDesignIntelligence: NorthstarEmergentDesignIntelligence | undefined;
-  let completionReason:
-    | "model-declared-complete"
-    | "duration-final-action-committed"
-    | "duration-finalization-preserved-current"
-    | "operational-checkpoint-preserved-current"
-    | undefined;
-  let finalizationTurnStarted = false;
-  let continuationInterruptionDetail: string | undefined;
-  let consecutiveAuthoringFailures = 0;
-  let consecutiveCaptureFailures = 0;
-  let captureCircuitOpen = false;
 
-  const captureObservation = async (
-    artifact: NorthstarGeneratedCodeArtifactPackage,
-    acknowledgement?: NorthstarArtifactMutationAcknowledgement,
-  ): Promise<NorthstarVisualObservation> => {
-    const cached = observationCache.get(artifact.revisionId);
-    if (cached) return cached;
-    const surface = captureDocumentFromLiveAcknowledgement(artifact, acknowledgement);
-    if (captureCircuitOpen) {
-      const warning = "Server image capture is disabled for the remainder of this run after repeated infrastructure failures.";
-      const observation = buildNorthstarUnavailableVisualObservation({
-        revisionId: artifact.revisionId,
-        width: surface.width,
-        height: surface.height,
-        warning,
-        acknowledgement,
-      });
-      observationCache.set(artifact.revisionId, observation);
-      return observation;
-    }
-    const plannedViews = planNorthstarVisualDetailViews({
-      width: surface.width,
-      height: surface.height,
-      acknowledgement,
-      maximumViews: thinkingPolicy.optionalDetailViewCount,
-    });
-    let fullArtboard: NorthstarRenderedArtifactPng;
-    try {
-      fullArtboard = await captureNorthstarArtifactPng({
-        document: surface.document,
-        mutationJournal: surface.mutationJournal,
-        dataBundle: artifact.dataBundle,
-        creativeDirection,
-        creativeReviews: artifact.creativeReviews,
-        width: surface.width,
-        height: surface.height,
-        timeoutMs: 8_000,
-      });
-    } catch (error) {
-      const warning = error instanceof Error ? error.message : String(error);
-      consecutiveCaptureFailures += 1;
-      if (consecutiveCaptureFailures >= 2) {
-        captureCircuitOpen = true;
-        callbacks.trace?.("linear.design.observation_circuit_opened", {
-          revisionId: artifact.revisionId,
-          consecutiveCaptureFailures,
-          browserRevisionPreserved: true,
-          warning,
-        }, "Northstar disabled optional reconstructed image capture for the remainder of this run. Exact source, browser semantics, intrinsic geometry, and runtime review remain available without further capture delay.");
-      }
-      const observation = buildNorthstarUnavailableVisualObservation({
-        revisionId: artifact.revisionId,
-        width: surface.width,
-        height: surface.height,
-        warning,
-        acknowledgement,
-      });
-      observationCache.set(artifact.revisionId, observation);
-      callbacks.trace?.("linear.design.observation_degraded", {
-        revisionId: artifact.revisionId,
-        browserRevisionId: acknowledgement?.revisionId,
-        captureStatus: "unavailable",
-        browserRevisionPreserved: true,
-        warning,
-      }, "The accepted browser revision remains canonical. Northstar is continuing from exact source, semantic snapshot, intrinsic geometry, and runtime review because the optional server image capture was unavailable.");
-      return observation;
-    }
-
-    consecutiveCaptureFailures = 0;
-    const detailResults = await Promise.allSettled(plannedViews.map(async (view) => ({
-      ...view,
-      image: await captureNorthstarArtifactPng({
-        document: surface.document,
-        mutationJournal: surface.mutationJournal,
-        dataBundle: artifact.dataBundle,
-        creativeDirection,
-        creativeReviews: artifact.creativeReviews,
-        width: surface.width,
-        height: surface.height,
-        focusBounds: view.bounds,
-        timeoutMs: 5_000,
-      }),
-    })));
-    const detailViews = detailResults.flatMap((result, index) => {
-      if (result.status === "fulfilled") return [result.value];
-      const warning = result.reason instanceof Error ? result.reason.message : String(result.reason);
-      callbacks.trace?.("linear.design.detail_observation_skipped", {
-        revisionId: artifact.revisionId,
-        detailIndex: index,
-        browserRevisionPreserved: true,
-        warning,
-      }, "A detail crop was unavailable, so Northstar continued with the full accepted-artboard capture and browser semantic snapshot.");
-      return [];
-    });
-    const observation = buildNorthstarVisualObservation({
-      revisionId: artifact.revisionId,
-      fullArtboard,
-      detailViews,
-      acknowledgement,
-    });
-    observationCache.set(artifact.revisionId, observation);
-    return observation;
-  };
-
-  callbacks.trace?.("linear.design.started", {
+  callbacks.trace?.("design.reset.started", {
     artifactId,
     baseRevisionId: currentPackage.revisionId,
-    sessionVersion: NORTHSTAR_LINEAR_DESIGN_SESSION_VERSION,
-    thinkingDepth,
-    deliberation: thinkingPolicy.deliberation,
-    maxCreativeDurationMs: session.maxDurationMs,
-    finalizationReserveMs: session.finalizationReserveMs,
-    completionAuthority: "model-declared-or-reserved-final-turn",
-  }, "Northstar entered the design stage on the exact existing research artboard. There is no action-count limit. Research retrieval, evidence streaming, and the opening presentation remain unchanged.");
+    resetVersion: NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION,
+    requestedThinkingMode: thinkingDepth,
+    effectiveDesignMode: "fixed-seven-turn",
+    turnCount: 7,
+  }, "Northstar entered the cumulative artboard benchmark. Every thinking mode executes the same seven exact model turns through one design-engine path.");
 
-  while (true) {
+  let unresolvedTurn: NorthstarDesignResetTurn | undefined;
+  let previousCumulativeIntentAudit: NorthstarDesignResetTurnArchive["cumulativeIntentAudit"];
+  benchmarkTurns: for (const turn of [1, 2, 3, 4, 5, 6, 7] as const) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    let finalizationTurn = finalizationTurnStarted;
-    const basePackage = materializeNorthstarCanonicalPackage(
-      callbacks.getVisibleArtifact() ?? currentPackage,
-      callbacks.getLinearDesignAck?.(),
-    );
-    currentPackage = basePackage;
-    const descriptor = buildNorthstarEditableSurfaceDescriptor(basePackage);
-    const evidenceAliases = buildNorthstarEvidenceAliasRegistry(descriptor);
     const beforeAcknowledgement = callbacks.getLinearDesignAck?.();
-    const beforeObservation = await captureObservation(basePackage, beforeAcknowledgement);
-
-    // Observation can consume part of the active-design window. Re-evaluate only
-    // after the exact current revision has been assembled so a normal turn can
-    // never begin after the reserved completion window has opened.
-    if (!finalizationTurn && session.shouldEnterFinalization()) {
-      finalizationTurn = true;
-      finalizationTurnStarted = true;
-      callbacks.trace?.("linear.design.finalization_started", {
-        thinkingDepth,
-        appliedActionCount: session.appliedActionCount,
-        remainingDurationMs: session.remainingDurationMs(),
-        creativeDeadlineAt: session.creativeDeadlineAt,
-      }, "Northstar entered the reserved final completion turn. The model may make one broad cumulative transformation to finish the objective before this invocation closes.");
+    if (
+      !beforeAcknowledgement
+      || beforeAcknowledgement.artifactId !== currentPackage.artifactId
+      || beforeAcknowledgement.revisionId !== currentPackage.revisionId
+      || !beforeAcknowledgement.snapshot
+    ) {
+      throw new Error(`Design reset turn ${turn} requires the exact browser snapshot for revision ${currentPackage.revisionId}.`);
     }
-
-    const actionIndex = session.nextActionIndex;
+    const basePackage = materializeNorthstarCanonicalPackage(currentPackage, beforeAcknowledgement);
+    currentPackage = basePackage;
+    const turnInstruction = NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN[turn];
     const step = {
-      id: `linear-design-action-${actionIndex}`,
-      label: finalizationTurn
-        ? "Finalize the live design"
-        : actionIndex === 1
-          ? "Transform the existing research artboard"
-          : "Continue the live design",
+      id: `design-reset-turn-${turn}`,
+      label: turnInstruction,
       tool: "prepare_composition_evidence",
       icon: "write" as CanvasAIActivityIcon,
     };
-    await callbacks.extendPlan(
-      [step],
-      finalizationTurn
-        ? "Northstar is completing the current artboard in one broad final transformation for this invocation."
-        : "Northstar is designing directly on the exact existing premium artboard, one visible action at a time.",
-    );
+    await callbacks.extendPlan([step], "Run the exact cumulative artboard benchmark without redesigning the evidence artboard.");
     await callbacks.startStep(step);
 
-    const diversityAnchor = northstarEmergentDiversityAnchor({
-      runId: artifactId,
-      objective,
-      revisionId: basePackage.revisionId,
+    const systemInstruction = buildNorthstarDesignResetSystemInstruction();
+    const modelInput = buildNorthstarDesignResetModelInput({
+      turn,
+      artifact: basePackage,
+      acknowledgement: beforeAcknowledgement,
     });
-    const designIntelligenceContext = currentDesignIntelligence ?? {
-      diversityAnchor,
-      mode: "form-and-execute-premium-design-intelligence",
-      recentStructuralSignaturesToAvoid: recentCreativeSignatures.slice(-12),
-      qualityFloor: "identical across Low, Medium, and High",
-      instruction: finalizationTurn
-        ? "Use the exact current artboard and all accumulated design memory to execute the strongest complete final state in one broad cumulative response."
-        : "Form the current design direction and execute its single highest-value next action in the same response.",
+    const contents = [{
+      role: "user",
+      parts: [
+        { text: `EXACT CURRENT ARTBOARD\n${JSON.stringify(modelInput)}` },
+        { text: turnInstruction },
+      ],
+    }];
+    let providerAttempt: NorthstarDesignResetProviderAttemptAudit | undefined;
+    const providerAttempts: NorthstarDesignResetProviderAttemptAudit[] = [];
+    let rawParsedResponse: unknown;
+    let parsedResponse: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse> | undefined;
+    let candidate: NorthstarGeneratedCodeArtifactPackage | undefined;
+    let mutationBatch: NonNullable<NorthstarGeneratedCodeArtifactPackage["mutationJournal"]>[number] | undefined;
+    let dispatchResult: Extract<NorthstarDesignResetDispatchResult, { status: "applied" }> | undefined;
+    let repairIssues: string[] = [];
+    let repairContext: Record<string, unknown> | undefined;
+    const repairHistory: Array<Record<string, unknown>> = [];
+    const maximumRepairAttempts = 6;
+    const repeatedRepairFingerprintLimit = 1;
+    const repairFingerprintCounts = new Map<string, number>();
+    const rawRelationsFrom = (value: unknown): unknown[] => {
+      if (!isRecord(value) || !isRecord(value.mutation) || !Array.isArray(value.mutation.relations)) return [];
+      return value.mutation.relations;
+    };
+    const relationPipelineTrace = (
+      raw: unknown,
+      sanitized: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse> | undefined,
+      receipt: NorthstarArtifactMutationAcknowledgement | undefined,
+    ) => ({
+      rawModelRelations: rawRelationsFrom(raw),
+      sanitizedRelations: sanitized?.mutation.relations ?? [],
+      browserAuthoredRelations: receipt?.authoredDesignRelations ?? [],
+      browserResolvedRelations: receipt?.resolvedDesignRelations ?? [],
+      browserRealizationTraces: receipt?.review?.relationRealizationTraces ?? [],
+    });
+    const relationPipelineObservations = (trace: ReturnType<typeof relationPipelineTrace>): string[] => {
+      const relationId = (value: unknown): string | undefined =>
+        isRecord(value) && typeof value.id === "string" && value.id.trim() ? value.id.trim() : undefined;
+      const rawIds = trace.rawModelRelations.map(relationId).filter((value): value is string => Boolean(value));
+      const sanitizedIds = trace.sanitizedRelations.map((relation) => relation.id);
+      const browserIds = trace.browserAuthoredRelations.map((relation) => relation.id);
+      return [
+        ...rawIds.filter((id) => !sanitizedIds.includes(id)).map((id) =>
+          `Relation ${id} was present in the raw model response but was omitted during structural sanitization.`
+        ),
+        ...sanitizedIds.filter((id) => !browserIds.includes(id)).map((id) =>
+          `Relation ${id} survived sanitization but was absent from the browser-authored relation receipt.`
+        ),
+      ];
+    };
+    const repairHasStalled = (
+      stage: string,
+      issues: string[],
+      mutation?: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse>["mutation"],
+      receipt?: NorthstarArtifactMutationAcknowledgement,
+    ): boolean => {
+      const unresolvedRelations = (receipt?.review?.relationRealizationTraces ?? [])
+        .filter((trace) => trace.status !== "resolved")
+        .map((trace) => ({
+          relationId: trace.relationId,
+          kind: trace.kind,
+          realizationPolicy: trace.realizationPolicy,
+          subjectId: trace.subjectId,
+          canonicalReferences: trace.canonicalReferences,
+          primitiveNodeId: trace.primitiveNodeId,
+          primitiveFound: trace.primitiveFound,
+          failureStage: trace.failureStage,
+          status: trace.status,
+          message: trace.message,
+        }));
+      const fingerprint = JSON.stringify(unresolvedRelations.length
+        ? { stage, unresolvedRelations }
+        : {
+            stage,
+            issues: [...issues].sort(),
+            operations: mutation?.operations ?? null,
+            relations: mutation?.relations ?? null,
+          });
+      const count = (repairFingerprintCounts.get(fingerprint) ?? 0) + 1;
+      repairFingerprintCounts.set(fingerprint, count);
+      return count > repeatedRepairFingerprintLimit;
     };
 
-    let act: NorthstarEmergentCreativeAct | undefined;
-    let authoringFailure = "";
-    let transitionToFinalization = false;
-    const finalBrowserSettlementReserveMs = NORTHSTAR_BROWSER_ACK_TIMEOUT_MS + 8_000;
-    const minimumFinalAuthoringWindowMs = 15_000;
-    const remainingDurationMs = session.remainingDurationMs();
-    const finalAuthoringWindowMs = finalizationTurn && remainingDurationMs !== null
-      ? remainingDurationMs - finalBrowserSettlementReserveMs
-      : null;
-
-    if (finalizationTurn && finalAuthoringWindowMs !== null && finalAuthoringWindowMs < minimumFinalAuthoringWindowMs) {
-      completionReason = "duration-finalization-preserved-current";
-      await callbacks.completeStep({
-        id: step.id,
-        tool: step.tool,
-        detail: "Northstar preserved the exact current browser-acknowledged revision because the remaining invocation window could not safely fit another model response and browser commit.",
-      });
-      callbacks.trace?.("linear.design.finalization_preserved_current", {
-        actionIndex,
-        revisionId: basePackage.revisionId,
-        remainingDurationMs,
-        requiredSettlementReserveMs: finalBrowserSettlementReserveMs,
-      }, "The reserved completion window was no longer large enough to execute another atomic action safely, so Northstar finalized the exact current revision.");
-      break;
-    }
-
-    const maximumAuthorAttempts = finalizationTurn ? 1 : 2;
-    for (let authorAttempt = 1; authorAttempt <= maximumAuthorAttempts && !act; authorAttempt += 1) {
+    for (let repairAttempt = 0; repairAttempt < maximumRepairAttempts; repairAttempt += 1) {
+      const repairMessage = repairIssues.length > 0
+        ? {
+            role: "user",
+            parts: [{
+              text: [
+                "REPAIR THE PREVIOUS CANDIDATE AND RETURN THE COMPLETE TURN RESPONSE AGAIN.",
+                "Keep the same user intent and the same exact committed base revision. The visible design remains entirely your authorship.",
+                "The system is returning the complete observed result so you can correct the design. It is not choosing a replacement design.",
+                "Everything currently known to be wrong or unresolved:",
+                ...repairIssues.map((issue) => `- ${issue}`),
+                repairHistory.length
+                  ? `PREVIOUS REPAIR MEMORY\n${JSON.stringify(repairHistory.slice(-4).map((entry) => ({
+                      attempt: entry.attempt,
+                      stage: entry.stage,
+                      attemptedRevisionId: entry.attemptedRevisionId,
+                      issues: entry.issues,
+                      sanitizedMutation: entry.sanitizedMutation,
+                      relationPipelineTrace: entry.relationPipelineTrace,
+                    })))}`
+                  : "",
+                repairContext ? `COMPLETE FAILED-CANDIDATE CONTEXT\n${JSON.stringify(repairContext)}` : "",
+                "Correct all reported causes together, inspect the entire candidate for related problems, preserve all successful prior-turn work, and return one complete replacement mutation. Change the executable cause, not only the explanation or styling. You may remove an optional live relation and keep the visual relationship entirely model-authored when reactive attachment is unnecessary. Do not discuss the repair.",
+              ].join("\n"),
+            }],
+          }
+        : undefined;
       try {
-        const activeDesignRemainingMs = session.remainingActiveDesignMs();
-        const authoringTimeoutMs = finalizationTurn
-          ? Math.min(95_000, Math.max(minimumFinalAuthoringWindowMs, finalAuthoringWindowMs ?? 95_000))
-          : Math.min(95_000, Math.max(1_000, activeDesignRemainingMs ?? 95_000));
-        const rawAct = await runNorthstarModelStageWithTimeout({
-          stage: `${step.id}-author-${authorAttempt}`,
-          timeoutMs: authoringTimeoutMs,
-          parentSignal: signal,
-          run: (stageSignal) => creativeModel.authorCreativeAct({
-            systemInstruction: northstarLinearCreativeSystemInstruction(
-              buildNorthstarEmergentCreativeSystemInstruction({
-                designAddendum: "The attached reference images condition only the level of taste, finish, clarity, and originality. Preserve the exact existing Northstar surface and research foundation.",
-              }),
-            ),
-            parts: [
-              ...designReferenceParts,
-              {
-                text: buildNorthstarLinearDesignContext({
-                  objective,
-                  userRequest: message,
-                  audience: blueprint.audience,
-                  artifactType: blueprint.artifactType,
-                  thinkingDepth,
-                  artifact: {
-                    artifactId: basePackage.artifactId,
-                    revisionId: basePackage.revisionId,
-                    title: basePackage.title,
-                    description: basePackage.description,
-                    document: basePackage.document,
-                    mutationJournal: basePackage.mutationJournal ?? [],
-                  },
-                  renderedWidth: beforeObservation.fullArtboard.width,
-                  renderedHeight: beforeObservation.fullArtboard.height,
-                  editableSurface: descriptor,
-                  groundedResearch: {
-                    evidenceSummary,
-                    dataBundle,
-                    researchLedger: compactCompositionResearchContext(
-                      ledger,
-                      thinkingDepth === "high" ? "standard" : "minimal",
-                    ),
-                  },
-                  runtimeReview: beforeAcknowledgement?.review,
-                  memory: session.modelView(),
-                  evidenceAliases: northstarEvidenceAliasModelView(evidenceAliases),
-                  priorCorrection,
-                  designIntelligence: designIntelligenceContext,
-                  finalization: finalizationTurn ? {
-                    required: true,
-                    reason: "duration-window",
-                    remainingTimeMs: session.remainingDurationMs() ?? 0,
-                  } : undefined,
-                }),
-              },
-              ...buildNorthstarVisualObservationParts({
-                observation: beforeObservation,
-                acknowledgement: beforeAcknowledgement,
-                label: "CURRENT LIVING ARTBOARD",
-              }),
-            ],
-            signal: stageSignal,
-            maxOutputTokens: finalizationTurn ? 20_000 : 13_000,
-            temperature: 1,
-            thinkingLevel: thinkingPolicy.providerThinkingLevel,
-          }),
+        const audited = await callGeminiJsonOnceAudited<unknown>({
+          apiKey,
+          systemInstruction,
+          contents: repairMessage ? [...contents, repairMessage] : contents,
+          schema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+          signal,
+          maxOutputTokens: 32_000,
+          temperature: 0,
         });
-        const evidenceIdByNodeId = new Map(
-          descriptor.evidenceNodes.map((node) => [node.nodeId, node.evidenceId]),
-        );
-        for (const entry of evidenceAliases.entries) {
-          const evidenceId = evidenceIdByNodeId.get(entry.nodeId);
-          if (evidenceId) evidenceIdByNodeId.set(entry.alias, evidenceId);
-        }
-        const resolvedRawAct: NorthstarEmergentCreativeActDraft = {
-          ...rawAct,
-          designIntelligence: remapNorthstarDesignIntelligenceEvidenceAliases(
-            rawAct.designIntelligence,
-            evidenceAliases,
-            evidenceIdByNodeId,
-          ),
-          viewingIntent: rawAct.viewingIntent ? {
-            ...rawAct.viewingIntent,
-            primaryNodeIds: remapNorthstarEvidenceAliasList(rawAct.viewingIntent.primaryNodeIds, evidenceAliases),
-            supportingNodeIds: remapNorthstarEvidenceAliasList(rawAct.viewingIntent.supportingNodeIds, evidenceAliases),
-            intendedReadingPath: remapNorthstarEvidenceAliasList(rawAct.viewingIntent.intendedReadingPath, evidenceAliases),
-          } : rawAct.viewingIntent,
-          sourceEdit: rawAct.sourceEdit ? {
-            ...rawAct.sourceEdit,
-            targetId: resolveNorthstarEvidenceAlias(rawAct.sourceEdit.targetId, evidenceAliases) ?? rawAct.sourceEdit.targetId,
-            placements: rawAct.sourceEdit.placements?.map((placement) => ({
-              ...placement,
-              targetId: resolveNorthstarEvidenceAlias(placement.targetId, evidenceAliases) ?? placement.targetId,
-              parentId: resolveNorthstarEvidenceAlias(placement.parentId, evidenceAliases) ?? placement.parentId,
-              beforeId: resolveNorthstarEvidenceAlias(placement.beforeId, evidenceAliases) ?? placement.beforeId,
-            })),
-            retireNodeIds: remapNorthstarEvidenceAliasList(rawAct.sourceEdit.retireNodeIds, evidenceAliases),
-          } : rawAct.sourceEdit,
-        };
-        act = sanitizeNorthstarEmergentCreativeAct(resolvedRawAct, {
-          evidenceIdByNodeId,
-          protectedEvidenceNodeIds: descriptor.evidenceNodes.map((node) => node.nodeId),
-          semanticSnapshot: beforeAcknowledgement?.snapshot?.semanticNodes,
-          diversityAnchor,
-          groundedEvidenceIds: descriptor.evidenceNodes.map((node) => node.evidenceId),
-          recentCreativeSignatures,
-          requireStructuralNovelty: actionIndex === 1,
+        providerAttempt = { ...audited.audit, attempt: providerAttempts.length + 1 };
+        providerAttempts.push(providerAttempt);
+        rawParsedResponse = audited.value;
+        parsedResponse = sanitizeNorthstarDesignResetModelResponse({
+          raw: rawParsedResponse,
+          turn,
+          baseRevisionId: basePackage.revisionId,
         });
-        act = {
-          ...act,
-          mutation: remapNorthstarCreativeDraftAliases(act.mutation, evidenceAliases),
-          affectedNodeIds: remapNorthstarEvidenceAliasList(act.affectedNodeIds, evidenceAliases) ?? [],
-        };
-        consecutiveAuthoringFailures = 0;
       } catch (error) {
-        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-        authoringFailure = error instanceof Error ? error.message : String(error);
-        if (!finalizationTurn && session.shouldEnterFinalization()) {
-          transitionToFinalization = true;
+        const failedAudit = error instanceof NorthstarAuditedModelCallError ? error.audit : undefined;
+        if (failedAudit) {
+          providerAttempt = { ...failedAudit, attempt: providerAttempts.length + 1 };
+          providerAttempts.push(providerAttempt);
+        }
+        repairIssues = [error instanceof Error ? error.message : String(error)];
+        repairContext = {
+          stage: "model-boundary",
+          committedBaseRevisionId: basePackage.revisionId,
+          instruction: turnInstruction,
+          providerAudit: failedAudit,
+          previousRepairAttempts: repairHistory.slice(-3),
+        };
+        repairHistory.push({
+          attempt: repairAttempt + 1,
+          stage: "model-boundary",
+          issues: repairIssues,
+          providerAudit: failedAudit,
+        });
+        if (repairHasStalled("model-boundary", repairIssues)) {
+          callbacks.trace?.("design.reset.repair_stalled", {
+            turn,
+            revisionId: basePackage.revisionId,
+            attempt: repairAttempt + 1,
+            issues: repairIssues,
+          }, "Northstar stopped repeating an identical model-boundary repair request and preserved the last browser-verified revision.");
           break;
         }
-        const geometryPolicyFailure = /(?:root artboard dimensions|request or control artboard dimensions|runtime owns content-derived sizing)/i.test(authoringFailure);
-        priorCorrection = {
-          critique: `The previous source payload did not become one executable action against revision ${basePackage.revisionId}. ${authoringFailure}`,
-          requiredChanges: geometryPolicyFailure ? [
-            "Keep the permanent artboard root dimension-free. Do not set width, height, min/max size, inline/block size, request-space, or a standard viewport.",
-            "Achieve the intended scale reduction by curating, relocating, resizing, or restructuring authored child content. Canonical runtime measurement will derive the new bounds.",
-            "Return one cumulative source edit against the unchanged current presentation and preserve every grounded evidence identity.",
-          ] : [
-            "Return one cumulative source edit against the unchanged current presentation.",
-            "Preserve all grounded evidence identities and do not recreate the research foundation or outer artboard shell.",
-            "Correct only the schema, target, or executable source problem described above.",
-          ],
-        };
-      }
-    }
-
-    if (!act && transitionToFinalization) {
-      await callbacks.completeStep({
-        id: step.id,
-        tool: step.tool,
-        detail: "The active design window closed before another ordinary action completed. Northstar is moving directly to the reserved final completion turn on the unchanged current revision.",
-      });
-      callbacks.trace?.("linear.design.active_turn_yielded_to_finalization", {
-        actionIndex,
-        revisionId: basePackage.revisionId,
-        reason: authoringFailure,
-        remainingDurationMs: session.remainingDurationMs(),
-      }, "An ordinary design action reached the finalization boundary before producing an executable mutation. The current revision remains unchanged and the reserved completion turn will run next.");
-      continue;
-    }
-
-    if (!act) {
-      const detail = authoringFailure || "Northstar could not author an executable design action.";
-      callbacks.trace?.("linear.design.authoring_failed", { actionIndex, baseRevisionId: basePackage.revisionId, reason: detail, finalizationTurn });
-      if (finalizationTurn) {
-        completionReason = "duration-finalization-preserved-current";
-        await callbacks.completeStep({
-          id: step.id,
-          tool: step.tool,
-          detail: "Northstar retained the exact current browser-acknowledged revision because the reserved final response could not be authored safely.",
-        });
-        callbacks.trace?.("linear.design.finalization_preserved_current", {
-          actionIndex,
+        callbacks.trace?.("design.reset.internal_repair_requested", {
+          turn,
           revisionId: basePackage.revisionId,
-          reason: detail,
-        }, "The reserved final action could not be authored safely, so Northstar finalized the exact last browser-acknowledged revision instead of failing the run.");
-        break;
-      }
-
-      consecutiveAuthoringFailures += 1;
-      session.recordAuthoringFailure({
-        baseRevisionId: basePackage.revisionId,
-        intention: priorCorrection?.requiredChanges.join(" ") || "Repair the invalid authored action",
-        runtimeIssues: [detail],
-      });
-      await callbacks.failStep({ id: step.id, tool: step.tool, detail });
-
-      const remainingActiveDesignMs = session.remainingActiveDesignMs();
-      const finalizationIsDue = session.maxDurationMs !== null && (
-        session.shouldEnterFinalization()
-        || (remainingActiveDesignMs !== null && remainingActiveDesignMs <= minimumFinalAuthoringWindowMs)
-        || consecutiveAuthoringFailures >= 2
-      );
-      if (finalizationIsDue) {
-        finalizationTurnStarted = true;
-        callbacks.trace?.("linear.design.authoring_recovery_to_finalization", {
-          actionIndex,
-          revisionId: basePackage.revisionId,
-          consecutiveAuthoringFailures,
-          remainingActiveDesignMs,
-          reason: detail,
-        }, "A correctable authoring error could not be resolved inside the ordinary design window. The exact current revision remains canonical and Northstar will use the reserved final completion turn next.");
+          attempt: repairAttempt + 1,
+          issues: repairIssues,
+        }, "Northstar silently requested another model-authored candidate after a model-boundary failure.");
         continue;
       }
 
-      if (consecutiveAuthoringFailures >= 3) {
-        continuationInterruptionDetail = `Northstar paused after ${consecutiveAuthoringFailures} consecutive non-executable authoring responses. The exact browser-acknowledged revision remains resumable. Last error: ${detail}`;
-        callbacks.trace?.("linear.design.authoring_checkpoint_preserved", {
-          actionIndex,
-          revisionId: basePackage.revisionId,
-          consecutiveAuthoringFailures,
-          browserRevisionPreserved: true,
-          reason: detail,
-        }, continuationInterruptionDetail);
-        break;
-      }
-      continue;
-    }
-
-    currentDesignIntelligence = act.designIntelligence;
-    session.setDesignDirection(act.designIntelligence.governingVisualIdea);
-    const compiled = compileNorthstarMutationDraft({
-      previous: basePackage,
-      draft: act.mutation,
-      semanticSnapshot: beforeAcknowledgement?.snapshot?.semanticNodes,
-      authoritativeNodeIds: [
-        "artboard",
-        "presentation",
-        "evidence",
-        "evidence-reservoir",
-        "synthesis",
-        "decision",
-        ...descriptor.evidenceNodes.map((node) => node.nodeId),
-        ...descriptor.flowRegions.flatMap((flow) => [flow.nodeId, flow.sequenceNodeId]),
-      ],
-      creativeSourceAuthority: true,
-      executionPolicy: "linear-design",
-    });
-    const executableDraft = alignNorthstarMutationToVisibleScene(
-      compiled.draft,
-      basePackage.document.html,
-      beforeAcknowledgement?.snapshot?.semanticNodes,
-      [
-        "artboard",
-        "presentation",
-        "evidence",
-        "evidence-reservoir",
-        "synthesis",
-        "decision",
-        ...descriptor.evidenceNodes.map((node) => node.nodeId),
-        ...descriptor.flowRegions.flatMap((flow) => [flow.nodeId, flow.sequenceNodeId]),
-      ],
-    );
-    if (executableDraft.operations.length === 0) {
-      const detail = compiled.diagnostics.map((entry) => `${entry.code}: ${entry.message}`).join(" ")
-        || "The authored action contained no executable operations.";
-      if (!act.continueWorking) {
-        completionReason = "model-declared-complete";
-        await callbacks.completeStep({
-          id: step.id,
-          tool: step.tool,
-          detail: "Northstar inspected the exact current artboard and declared it complete without requiring another mutation.",
+      candidate = createNorthstarDesignResetCandidate({ base: basePackage, response: parsedResponse });
+      mutationBatch = candidate.mutationJournal?.at(-1);
+      const attemptedDispatch = await callbacks.applyDesignAction(candidate, turn, parsedResponse.understanding);
+      if (attemptedDispatch.status !== "applied") {
+        const receipt = attemptedDispatch.acknowledgement;
+        const pipelineTrace = relationPipelineTrace(rawParsedResponse, parsedResponse, receipt);
+        const pipelineObservations = relationPipelineObservations(pipelineTrace);
+        const unresolvedRelationTraces = (receipt?.review?.relationRealizationTraces ?? [])
+          .filter((trace) => trace.status !== "resolved");
+        const relationshipFocusedRepair = pipelineObservations.length > 0
+          || unresolvedRelationTraces.length > 0
+          || (receipt?.review?.authoredInterferencePairs?.length ?? 0) > 0;
+        const relationTraceSummary = unresolvedRelationTraces.slice(0, 8).map((trace) =>
+          `${trace.relationId}: stage=${trace.failureStage}, status=${trace.status}, `
+          + `received=${trace.receivedReferences.map((reference) => `${reference.role}:${reference.nodeId}`).join(", ") || "none"}, `
+          + `canonical=${trace.canonicalReferences.map((reference) => `${reference.role}:${reference.nodeId}`).join(", ") || "none"}`
+          + `${trace.primitiveNodeId ? `, primitive=${trace.primitiveNodeId}, found=${String(trace.primitiveFound)}` : ""}`
+          + `${trace.message ? `, message=${trace.message}` : ""}`
+        );
+        const regionIntrusionSummary = (receipt?.review?.semanticRegionIntrusions ?? [])
+          .slice(0, 8)
+          .map((entry) =>
+            `${entry.additionId} refers to ${entry.intendedFlowId} but intrudes into ${entry.intrudedFlowId}; `
+            + `addition bounds left=${entry.additionBounds.left}, top=${entry.additionBounds.top}, width=${entry.additionBounds.width}, height=${entry.additionBounds.height}; `
+            + `overlap left=${entry.overlapBounds.left}, top=${entry.overlapBounds.top}, width=${entry.overlapBounds.width}, height=${entry.overlapBounds.height}`
+          );
+        const continuitySummary = (receipt?.review?.authoredContinuityObservations ?? [])
+          .filter((entry) => entry.visualAttribution === "weakened")
+          .slice(0, 8)
+          .map((entry) =>
+            `${entry.additionId} still targets ${entry.targetNodeIds.join(", ")} but ${entry.reason.toLowerCase()}; `
+            + `addition bounds left=${entry.additionBounds.left}, top=${entry.additionBounds.top}, width=${entry.additionBounds.width}, height=${entry.additionBounds.height}; `
+            + `center distance=${entry.centerDistance}`
+          );
+        const interferenceSummary = (receipt?.review?.authoredInterferencePairs ?? [])
+          .slice(0, 8)
+          .map((entry) => {
+            const bounds = entry.obstacleBounds
+              ? ` obstacle bounds left=${entry.obstacleBounds.left}, top=${entry.obstacleBounds.top}, width=${entry.obstacleBounds.width}, height=${entry.obstacleBounds.height}`
+              : "";
+            const crossing = entry.firstHitPoint && entry.lastHitPoint
+              ? ` crossing from (${entry.firstHitPoint.x}, ${entry.firstHitPoint.y}) to (${entry.lastHitPoint.x}, ${entry.lastHitPoint.y})`
+              : "";
+            return `${entry.primitiveId} crosses ${entry.obstacleId};${bounds}${crossing}`;
+          });
+        repairIssues = [
+          attemptedDispatch.detail,
+          receipt?.reason ? `Browser reason: ${receipt.reason}` : "",
+          ...(receipt?.review?.geometryFacts?.integrityFailures ?? []).map((issue) => `Browser geometry integrity: ${issue}`),
+          ...(!relationshipFocusedRepair ? (receipt?.review?.premiumDesignAudit?.blockingReasons ?? []).map((issue) => `Browser communication review: ${issue}`) : []),
+          ...(!relationshipFocusedRepair ? (receipt?.review?.premiumDesignAudit?.advisories ?? []).map((issue) => `Browser communication advisory: ${issue}`) : []),
+          ...(receipt?.review?.advisoryDeliveryIssues ?? [])
+            .filter((issue) => !relationshipFocusedRepair || /relation|connector|reference|primitive|attachment|interference/i.test(issue))
+            .map((issue) => `Browser delivery observation: ${issue}`),
+          ...pipelineObservations.map((issue) => `Relationship pipeline observation: ${issue}`),
+          relationTraceSummary.length
+            ? `Relationship realization trace: ${relationTraceSummary.join(" | ")}. This is an optional reactive dependency trace, not a required visual form. Preserve the visual intent and either repair the exact dependency fields or remove the optional relation while keeping a clear model-authored relationship.`
+            : "",
+          regionIntrusionSummary.length
+            ? `Semantic-region interference summary: ${regionIntrusionSummary.join(" | ")}. Preserve all evidence and intended meaning, then revise your own composition so each addition remains clearly associated with its intended evidence flow and outside unrelated evidence territory.`
+            : "",
+          continuitySummary.length
+            ? `Cumulative continuity summary: ${continuitySummary.join(" | ")}. Preserve evidence, semantic identity, meaning, target references, and provenance. Recompose the affected prior additions together with the current design change so the whole artboard remains congruent; exact prior coordinates and visual form are not protected.`
+            : "",
+          interferenceSummary.length
+            ? `Visual interference summary: ${interferenceSummary.join(" | ")}. These are the smallest independently meaningful obstacles observed by the browser. Preserve relationship meaning and evidence, then revise your own route or composition so the crossings are removed.`
+            : "",
+          ...(receipt?.review?.geometryFacts?.hiddenEvidenceNodeIds ?? []).map((nodeId) => `Protected evidence is hidden: ${nodeId}`),
+          ...(receipt?.review?.geometryFacts?.partiallyClippedEvidenceNodeIds ?? []).map((nodeId) => `Protected evidence is partially clipped: ${nodeId}`),
+          ...(receipt?.review?.geometryFacts?.croppedEvidenceNodeIds ?? []).map((nodeId) => `Protected evidence is cropped: ${nodeId}`),
+          ...(receipt?.evidenceRegistry?.missingEvidenceIds ?? []).map((evidenceId) => `Expected evidence is missing: ${evidenceId}`),
+          ...(receipt?.evidenceRegistry?.unplacedEvidenceIds ?? []).map((evidenceId) => `Expected evidence is unplaced: ${evidenceId}`),
+          ...(receipt?.resolvedDesignRelations ?? [])
+            .filter((relation) => relation.status !== "resolved")
+            .map((relation) => `Authored relation ${relation.relationId} is ${relation.status}${relation.message ? `: ${relation.message}` : ""}`),
+        ].filter((issue, index, all): issue is string => Boolean(issue) && all.indexOf(issue) === index);
+        repairContext = {
+          stage: attemptedDispatch.status,
+          committedBaseRevisionId: basePackage.revisionId,
+          attemptedRevisionId: candidate.revisionId,
+          instruction: turnInstruction,
+          rawModelResponse: rawParsedResponse,
+          completeModelResponse: parsedResponse,
+          completeMutation: parsedResponse.mutation,
+          candidateSource: candidate.document,
+          candidateMutationJournal: candidate.mutationJournal,
+          browserReceipt: receipt,
+          exactCommittedBaseSource: beforeAcknowledgement.snapshot,
+          exactCommittedBaseSemanticGraph: buildNorthstarArtboardSemanticGraph({ artifact: basePackage, acknowledgement: beforeAcknowledgement }),
+          relationPipelineTrace: pipelineTrace,
+          previousRepairAttempts: repairHistory.slice(-3),
+        };
+        repairHistory.push({
+          attempt: repairAttempt + 1,
+          stage: attemptedDispatch.status,
+          attemptedRevisionId: candidate.revisionId,
+          issues: repairIssues,
+          rawModelResponse: rawParsedResponse,
+          sanitizedMutation: parsedResponse.mutation,
+          candidateSource: candidate.document,
+          browserReceipt: receipt,
+          relationPipelineTrace: pipelineTrace,
         });
-        callbacks.trace?.("linear.design.completed_as_is", {
-          actionIndex,
-          revisionId: basePackage.revisionId,
-          finalizationTurn,
-        }, "The model declared the current browser-acknowledged revision complete as-is.");
-        break;
+        if (repairHasStalled(attemptedDispatch.status, repairIssues, parsedResponse.mutation, receipt)) {
+          callbacks.trace?.("design.reset.repair_stalled", {
+            turn,
+            baseRevisionId: basePackage.revisionId,
+            attemptedRevisionId: candidate.revisionId,
+            attempt: repairAttempt + 1,
+            issues: repairIssues,
+          }, "Northstar stopped repeating an identical browser repair request and preserved the last browser-verified revision.");
+          break;
+        }
+        callbacks.trace?.("design.reset.internal_repair_requested", {
+          turn,
+          baseRevisionId: basePackage.revisionId,
+          attemptedRevisionId: candidate.revisionId,
+          attempt: repairAttempt + 1,
+          issues: repairIssues,
+        }, "The browser preserved the last committed revision and Northstar silently requested a corrected model-authored turn.");
+        continue;
       }
-      if (finalizationTurn) {
-        completionReason = "duration-finalization-preserved-current";
-        await callbacks.completeStep({
-          id: step.id,
-          tool: step.tool,
-          detail: "Northstar retained the exact current browser-acknowledged revision because the final completion response did not require a safe executable change.",
-        });
-        callbacks.trace?.("linear.design.finalization_preserved_current", {
-          actionIndex,
-          revisionId: basePackage.revisionId,
-          reason: detail,
-        }, "The reserved final response produced no safe executable delta, so Northstar finalized the exact current revision without treating the run as failed.");
-        break;
-      }
-      session.recordExecutionFailure({
-        baseRevisionId: basePackage.revisionId,
-        intention: act.intention,
-        visibleChange: act.mutation.visibleChange,
-        viewerUnderstanding: act.viewerUnderstanding,
-        runtimeIssues: [detail],
-      });
-      priorCorrection = {
-        critique: detail,
-        requiredChanges: ["Repair the exact source action against the unchanged current revision and keep the same design direction unless the render suggests a better one."],
-      };
-      await callbacks.failStep({ id: step.id, tool: step.tool, detail });
-      continue;
-    }
 
-    const candidate = appendNorthstarArtboardMutation({
-      previous: basePackage,
-      draft: executableDraft,
-      label: act.intention,
-      phase: "analysis",
-      intent: act.viewerUnderstanding,
-      verified: false,
-      diagnostics: [
-        `Linear design action ${actionIndex}: ${act.intention}`,
-        ...act.sanitizationRepairs.map((repair) => `Authorship repair: ${repair}`),
-        ...compiled.repairs.slice(-8),
-      ],
-      allowTextOnly: true,
-      executionPolicy: "linear-design",
-      sequenceOverride: actionIndex,
-    });
-    const dispatchResult = await callbacks.applyDesignAction(candidate, actionIndex, act.intention);
-    if (dispatchResult.status === "transport-unknown") {
-      continuationInterruptionDetail = dispatchResult.detail;
-      await callbacks.failStep({
-        id: step.id,
-        tool: step.tool,
-        detail: `${dispatchResult.detail} The last browser-acknowledged revision remains canonical.`,
-      });
-      callbacks.trace?.("linear.design.transport_interrupted", {
-        actionIndex,
-        baseRevisionId: basePackage.revisionId,
-        attemptedRevisionId: candidate.revisionId,
-        preservedRevisionId: basePackage.revisionId,
-      }, dispatchResult.detail);
+      const appliedRelationTrace = relationPipelineTrace(rawParsedResponse, parsedResponse, attemptedDispatch.acknowledgement);
+      const browserIssues = [
+        ...relationPipelineObservations(appliedRelationTrace),
+        ...northstarAuthoredRelationRealizationIssues(parsedResponse, attemptedDispatch.acknowledgement),
+      ];
+      if (
+        appliedRelationTrace.rawModelRelations.length > 0
+        || appliedRelationTrace.sanitizedRelations.length > 0
+        || appliedRelationTrace.browserRealizationTraces.length > 0
+      ) {
+        callbacks.trace?.("design.reset.authored_relation_observations", {
+          turn,
+          baseRevisionId: basePackage.revisionId,
+          attemptedRevisionId: candidate.revisionId,
+          attempt: repairAttempt + 1,
+          issues: browserIssues,
+          relationPipelineTrace: appliedRelationTrace,
+          acknowledgement: attemptedDispatch.acknowledgement,
+        }, "Northstar recorded the complete non-blocking realization trace for relations the model chose to author.");
+      }
+
+      dispatchResult = attemptedDispatch;
       break;
     }
-    if (dispatchResult.status === "execution-failed") {
-      session.recordExecutionFailure({
-        baseRevisionId: basePackage.revisionId,
-        attemptedRevisionId: candidate.revisionId,
-        intention: act.intention,
-        visibleChange: executableDraft.visibleChange,
-        viewerUnderstanding: act.viewerUnderstanding,
-        runtimeIssues: [dispatchResult.detail],
-      });
-      priorCorrection = {
-        critique: `The browser could not execute the last action. The artboard remains on ${basePackage.revisionId}. ${dispatchResult.detail}`,
-        requiredChanges: [
-          "Repair the exact failed action against the unchanged current source.",
-          "Preserve successful prior work and the current design direction unless a stronger direction is now evident.",
-        ],
-      };
-      if (finalizationTurn) {
-        completionReason = "duration-finalization-preserved-current";
-        await callbacks.completeStep({
-          id: step.id,
-          tool: step.tool,
-          detail: "The reserved final mutation could not be committed, so Northstar retained the exact prior browser-acknowledged revision as the final state.",
-        });
-        callbacks.trace?.("linear.design.finalization_preserved_current", {
-          actionIndex,
-          attemptedRevisionId: candidate.revisionId,
-          revisionId: basePackage.revisionId,
-          reason: dispatchResult.detail,
-        }, "The browser rejected the reserved final action, so Northstar finalized the exact prior browser-acknowledged revision without failing the run.");
-        break;
+
+    if (!dispatchResult || !parsedResponse || !candidate || !providerAttempt) {
+      const diagnosticDetail = repairIssues.length
+        ? `Unable to produce an accurate design turn after ${maximumRepairAttempts} model-authored attempts: ${repairIssues.join("; ")}`
+        : `Unable to produce an accurate design turn after ${maximumRepairAttempts} model-authored attempts.`;
+      if (providerAttempt) {
+        await callbacks.archiveDesignTurn?.(buildNorthstarDesignResetTurnArchive({
+          runId,
+          artifactId,
+          turn,
+          requestedThinkingMode: thinkingDepth,
+          instruction: turnInstruction,
+          status: "model-failed",
+          beforePackage: basePackage,
+          beforeAcknowledgement,
+          systemInstruction,
+          contents,
+          responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+          providerAttempt,
+          providerAttempts,
+          rawParsedResponse,
+          acceptedResponse: parsedResponse,
+          candidateBeforeBrowser: candidate,
+          mutationBatch,
+          previousCumulativeIntentAudit,
+          repairHistory,
+          failure: diagnosticDetail,
+        }));
       }
-      await callbacks.failStep({ id: step.id, tool: step.tool, detail: dispatchResult.detail });
-      continue;
+      await callbacks.completeStep({
+        id: step.id,
+        tool: step.tool,
+        detail: `Preserved the last valid artboard revision after ${maximumRepairAttempts} silent model correction attempts.`,
+      });
+      callbacks.trace?.("design.reset.repair_exhausted", {
+        turn,
+        revisionId: basePackage.revisionId,
+        attempts: providerAttempts.length,
+        issues: repairIssues,
+      }, diagnosticDetail);
+      unresolvedTurn = turn;
+      break benchmarkTurns;
     }
+
+    if (!dispatchResult.acknowledgement.snapshot) {
+      throw new Error(`Design reset turn ${turn} committed without an exact browser source-after snapshot.`);
+    }
+    if (!providerAttempt) throw new Error("The design reset lost its exact provider audit after dispatch.");
+    const turnArchive = buildNorthstarDesignResetTurnArchive({
+      runId,
+      artifactId,
+      turn,
+      requestedThinkingMode: thinkingDepth,
+      instruction: turnInstruction,
+      status: "committed",
+      beforePackage: basePackage,
+      beforeAcknowledgement,
+      systemInstruction,
+      contents,
+      responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+      providerAttempt,
+      providerAttempts,
+      rawParsedResponse,
+      acceptedResponse: parsedResponse,
+      candidateBeforeBrowser: candidate,
+      mutationBatch,
+      previousCumulativeIntentAudit,
+      repairHistory,
+      afterPackage: dispatchResult.artifact,
+      afterAcknowledgement: dispatchResult.acknowledgement,
+    });
+    await callbacks.archiveDesignTurn?.(turnArchive);
+    previousCumulativeIntentAudit = turnArchive.cumulativeIntentAudit ?? previousCumulativeIntentAudit;
 
     currentPackage = dispatchResult.artifact;
-    observationCache.delete(currentPackage.revisionId);
-    const memoryBeforeCritique = session.modelView();
-    const transitionCritique = (reason: string): NorthstarEmergentCreativeCritique => ({
-      summary: reason,
-      observedEffect: "The exact browser-acknowledged revision remains canonical and is ready for the next model decision.",
-      whatImproved: memoryBeforeCritique.currentStrengths,
-      whatStillWeak: memoryBeforeCritique.currentWeaknesses,
-      implementationDefects: memoryBeforeCritique.unresolvedImplementationDefects,
-      recommendedNextMove: memoryBeforeCritique.lastRecommendedMove ?? "Review the exact current artboard and complete the remaining objective.",
-      continueWorking: true,
-    });
-
-    let critique: NorthstarEmergentCreativeCritique;
-    if (finalizationTurn) {
-      critique = {
-        summary: "The reserved final completion action was committed by the browser.",
-        observedEffect: "The exact browser-acknowledged revision is the completed state for this invocation.",
-        whatImproved: memoryBeforeCritique.currentStrengths,
-        whatStillWeak: [],
-        implementationDefects: [],
-        recommendedNextMove: "",
-        continueWorking: false,
-      };
-    } else if (session.shouldEnterFinalization()) {
-      critique = transitionCritique(
-        "The browser committed this action as the active-design window closed. Northstar will use the reserved final turn to consolidate the remaining work.",
-      );
-    } else {
-      try {
-        const afterObservation = await captureObservation(currentPackage, dispatchResult.acknowledgement);
-        if (session.shouldEnterFinalization()) {
-          critique = transitionCritique(
-            "The browser committed and observed this action as the active-design window closed. Northstar will now use the reserved final turn.",
-          );
-        } else {
-          const critiqueTimeoutMs = Math.min(
-            55_000,
-            Math.max(1_000, session.remainingActiveDesignMs() ?? 55_000),
-          );
-          const rawCritique = await runNorthstarModelStageWithTimeout({
-            stage: `${step.id}-critique`,
-            timeoutMs: critiqueTimeoutMs,
-            parentSignal: signal,
-            run: (stageSignal) => creativeModel.critiqueRenderedAct({
-              systemInstruction: northstarLinearCritiqueSystemInstruction(),
-              parts: [
-                ...designReferenceParts,
-                ...buildNorthstarVisualObservationParts({
-                  observation: beforeObservation,
-                  acknowledgement: beforeAcknowledgement,
-                  label: "BEFORE — CURRENT ARTBOARD",
-                }),
-                ...buildNorthstarVisualObservationParts({
-                  observation: afterObservation,
-                  acknowledgement: dispatchResult.acknowledgement,
-                  label: "AFTER — APPLIED ACTION",
-                }),
-                {
-                  text: buildNorthstarLinearCritiqueContext({
-                    objective,
-                    userRequest: message,
-                    intention: act.intention,
-                    viewerUnderstanding: act.viewerUnderstanding,
-                    visibleChange: executableDraft.visibleChange,
-                    groundedResearch: { evidenceSummary, dataBundle },
-                    runtimeReview: dispatchResult.acknowledgement.review,
-                    memory: memoryBeforeCritique,
-                  }),
-                },
-              ],
-              signal: stageSignal,
-              maxOutputTokens: 5_500,
-              temperature: 1,
-              thinkingLevel: thinkingPolicy.providerThinkingLevel,
-            }),
-          });
-          critique = sanitizeNorthstarEmergentCreativeCritique(rawCritique);
-        }
-      } catch (error) {
-        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-        const detail = error instanceof Error ? error.message : String(error);
-        critique = transitionCritique(
-          `The optional rendered critique was unavailable after the browser committed this action. ${detail}`,
-        );
-        callbacks.trace?.("linear.design.critique_degraded", {
-          actionIndex,
-          revisionId: currentPackage.revisionId,
-          browserRevisionPreserved: true,
-          finalizationDue: session.shouldEnterFinalization(),
-          warning: detail,
-        }, "The accepted revision remains canonical. Northstar will continue from exact source, browser semantics, runtime review, and retained design memory because the optional critique call was unavailable.");
-      }
-    }
-
-    session.recordApplied({
-      baseRevisionId: basePackage.revisionId,
-      revisionId: currentPackage.revisionId,
-      intention: act.intention,
-      visibleChange: executableDraft.visibleChange,
-      viewerUnderstanding: act.viewerUnderstanding,
-      observedEffect: critique.observedEffect,
-      strengths: critique.whatImproved,
-      weaknesses: critique.whatStillWeak,
-      implementationDefects: critique.implementationDefects,
-      runtimeIssues: dispatchResult.acknowledgement.reason ? [dispatchResult.acknowledgement.reason] : [],
-      recommendedNextMove: critique.recommendedNextMove,
-    });
-    currentPackage = {
-      ...currentPackage,
-      creativeDirection: {
-        ...creativeDirection,
-        diversityKey: diversityAnchor,
-        recentSignaturesAvoided: recentCreativeSignatures.slice(-24),
-        selectedConcept: {
-          ...creativeDirection.selectedConcept,
-          id: `linear-${act.noveltyReceipt.fingerprint}`,
-          name: "Linear living-artboard direction",
-          oneLine: act.designIntelligence.threeSecondRead,
-          visualGrammar: act.designIntelligence.spatialLogic,
-          visualMetaphor: act.designIntelligence.governingVisualIdea,
-          narrativeArc: act.designIntelligence.editorialArgument,
-          interactionModel: act.designIntelligence.signatureMove,
-          evidenceStrategy: act.designIntelligence.evidenceChoreography.map((entry) => `${entry.evidenceId}: ${entry.roleInArgument}`).join(" · "),
-          compositionLanguage: act.designIntelligence.mediumAndRepresentationStrategy,
-          typographyMood: act.designIntelligence.emotionalRegister,
-          colorLogic: act.designIntelligence.surfaceAndContainerStrategy,
-          signature: northstarPremiumSignatureModelView(act.designIntelligence.premiumPlan.noveltySignature),
-          risks: act.designIntelligence.publicationStandard.slice(0, 12),
-        },
-      },
-      diagnostics: [
-        ...currentPackage.diagnostics,
-        `Applied linear design action ${actionIndex}.`,
-        `Self-critique: ${critique.summary}`,
-        ...critique.whatStillWeak.map((item) => `Design weakness: ${item}`),
-        ...critique.implementationDefects.map((item) => `Implementation defect: ${item}`),
-      ].slice(-60),
-    };
-    priorCorrection = critique.continueWorking ? {
-      critique: critique.summary,
-      requiredChanges: [
-        ...critique.whatStillWeak,
-        ...critique.implementationDefects,
-        critique.recommendedNextMove,
-      ].filter(Boolean),
-    } : undefined;
     await callbacks.completeStep({
       id: step.id,
       tool: step.tool,
-      detail: `Applied visible design action ${actionIndex}: ${act.intention}`,
+      detail: `Committed design reset turn ${turn}: ${turnInstruction}.`,
     });
-    callbacks.trace?.("linear.design.action_applied", {
-      actionIndex,
+    callbacks.trace?.("design.reset.turn_committed", {
+      turn,
       baseRevisionId: basePackage.revisionId,
       revisionId: currentPackage.revisionId,
-      continueWorking: critique.continueWorking,
-      memory: session.modelView(),
-    }, critique.observedEffect);
-    if (finalizationTurn) {
-      completionReason = "duration-final-action-committed";
-      callbacks.trace?.("linear.design.finalization_completed", {
-        actionIndex,
-        revisionId: currentPackage.revisionId,
-        appliedActionCount: session.appliedActionCount,
-        modelContinueWorking: act.continueWorking,
-      }, "The model's reserved final completion action was committed and became the canonical final revision for this invocation.");
-      break;
-    }
-    if (!critique.continueWorking) {
-      completionReason = "model-declared-complete";
-      break;
-    }
+      mutationId: mutationBatch?.mutationId,
+      requestedThinkingMode: thinkingDepth,
+      effectiveDesignMode: "fixed-seven-turn",
+    }, `The browser committed ${turnInstruction.toLowerCase()} from the exact model-authored patch.`);
   }
 
-  if (!continuationInterruptionDetail && session.appliedActionCount === 0) {
-    if (!completionReason) {
-      throw new Error("Northstar could not apply the first visible design transformation to the existing research artboard.");
-    }
-  }
-  if (!continuationInterruptionDetail && !completionReason) {
-    completionReason = "operational-checkpoint-preserved-current";
-    callbacks.trace?.("linear.design.operational_checkpoint_preserved", {
-      revisionId: currentPackage.revisionId,
-      appliedActionCount: session.appliedActionCount,
-      authoringFailureCount: session.authoringFailureCount,
-      executionFailureCount: session.executionFailureCount,
-      browserRevisionPreserved: true,
-    }, "Northstar preserved the exact last browser-acknowledged revision as a successful resumable checkpoint because the continuation ended outside the normal model-completion or reserved-finalization paths.");
-  }
-
-  const result = materializeNorthstarCanonicalPackage(
-    callbacks.getVisibleArtifact() ?? currentPackage,
-    callbacks.getLinearDesignAck?.(),
-  );
+  const finalAcknowledgement = callbacks.getLinearDesignAck?.();
+  const result = materializeNorthstarCanonicalPackage(currentPackage, finalAcknowledgement);
   return {
     ...result,
-    creativeDirection: currentPackage.creativeDirection ?? result.creativeDirection,
-    provisional: Boolean(continuationInterruptionDetail),
-    publicationState: continuationInterruptionDetail ? "working" : "verified",
+    provisional: Boolean(unresolvedTurn),
+    publicationState: unresolvedTurn ? "working" : "verified",
     diagnostics: [
       ...result.diagnostics,
-      continuationInterruptionDetail
-        ? `Linear design continuation paused after preserving ${session.appliedActionCount} browser-acknowledged action(s): ${continuationInterruptionDetail}`
-        : `Linear design session completed by ${completionReason} with ${session.appliedActionCount} applied action(s), ${session.authoringFailureCount} repaired authoring failure(s), and ${session.executionFailureCount} browser execution failure(s).`,
-      `Linear design memory: ${JSON.stringify(session.modelView())}`,
+      unresolvedTurn
+        ? `${NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION} preserved the last valid revision while turn ${unresolvedTurn} remained unresolved after silent model correction.`
+        : `${NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION} completed exactly seven benchmark turns.`,
+      "Turn 1 model instruction: Place a Hello World card below the research.",
+      "Turn 2 model instruction: Place a Hello World 2 card to the right of the research and vertically center-align it with the research.",
+      "Turn 3 model instruction: Construct a visual relationship between the first Awin screenshot and the first Whop screenshot.",
+      "Turn 4 model instruction: Create equal space between the first and second Awin screenshots and insert an annotation in that space.",
+      "Turn 5 model instruction: Add an explanation to the Awin screenshot where the user chooses their role.",
+      "Turn 6 model instruction: Make the Awin and Whop onboarding flows easier to distinguish as separate groups.",
+      "Turn 7 model instruction: Create a new analysis area below the current onboarding flows and reuse the Awin screenshot where the user chooses their role there. Preserve the original evidence and make the reused view clearly part of the new analysis area.",
     ].slice(-60),
   };
 }
 
-async function buildGeneratedCodeArtifactPackage({
-  apiKey,
-  artifactId,
-  message,
-  intent,
-  conversationSummary,
-  blueprint,
-  ledger,
-  dataBundle,
-  thinkingDepth,
-  previousArtifact,
-  recentCreativeSignatures,
-  callbacks,
-  signal,
-}: {
-  apiKey: string;
-  artifactId: string;
-  message: string;
-  intent: SemanticIntentDecision;
-  conversationSummary: string;
-  blueprint: CompositionBlueprint;
-  ledger: CompositionResearchLedger;
-  dataBundle: CanvasCodeArtifactDataBundle;
-  thinkingDepth: ThinkingDepth;
-  previousArtifact?: SelectedCodeArtifactContext;
-  recentCreativeSignatures: string[];
-  callbacks: CompositionResearchCallbacks;
-  signal: AbortSignal;
-}): Promise<NorthstarGeneratedCodeArtifactPackage> {
-  const budget = creativeBudgetForThinkingDepth(thinkingDepth);
-  const designReferenceParts = await loadNorthstarDesignReferenceParts({ mode: "unlabeled-taste" });
-
-  // No visual concept, family, archetype, or composition is selected before the
-  // model sees and works on the exact living artboard. This compatibility object
-  // carries persistence metadata only; accepted live creative acts author the design.
-  const creativeDirection = createNorthstarEmergentCreativeDirection({
-    objective: intent.objective || message,
-    thinkingDepth,
-    prior: previousArtifact?.creativeDirection,
-  });
-  callbacks.trace?.("creative.authorship.ready", {
-    provider: "google",
-    model: GEMINI_MODEL,
-    thinkingDepth,
-    priorDirectionRetained: Boolean(previousArtifact?.creativeDirection),
-    referenceMode: "unlabeled-taste",
-  }, "The creative model will discover the visual direction progressively from evidence and the exact browser-visible artboard; no visual option was preselected.");
-
-  let currentPackage = callbacks.getVisibleArtifact() ?? createNorthstarWorkingArtifactPackage({
-    artifactId,
-    objective: intent.objective || message,
-    audience: blueprint.audience,
-    artifactType: blueprint.artifactType,
-    dataBundle,
-    phase: "analysis",
-    thinkingDepth,
-    parentRevisionId: previousArtifact?.revisionId,
-    creativeDirection,
-    message: blueprint.summary || blueprint.subtitle || blueprint.title,
-    scenePlan: deterministicNorthstarVisualScenePlan({ objective: intent.objective || message, dataBundle }),
-  });
-
-  const evidenceSummary = {
-    referencePackVersion: "northstar-eight-reference-pack.v0.4.8.5.1",
-    identityRule: "All eight gold-standard references condition every autonomous move; none is a template.",
-    screenshotCount: dataBundle.screenshots.length,
-    flowCount: dataBundle.flows.length,
-    appCount: dataBundle.apps.length,
-    hypothesisCount: dataBundle.hypotheses.length,
-    decisionCount: dataBundle.decisions.length,
-    coverageSummary: dataBundle.coverageSummary,
-  };
-  // The legacy controller remains the transaction-state recorder and settlement
-  // guard. It no longer schedules creative obligations or dictates visual order.
-  const authorship = new NorthstarContinuousAuthorshipController({
-    runId: artifactId,
-    objective: intent.objective || message,
-  });
-  const adaptiveSession = new NorthstarAdaptiveCreativeSession(
-    thinkingDepth,
-    Date.now(),
-    intent.objective || message,
-  );
-  let visibleMutationCount = 0;
-  let moveIndex = 0;
-  let latestReviewSummary = "The canonical artboard is entering adaptive creative authorship.";
-  let finalVerified = false;
-  let finalKnownLimitations: string[] = [];
-  let priorCritique: { critique: string; requiredChanges: string[] } | undefined;
-  let latestRenderedCritique: NorthstarEmergentCreativeCritique | undefined;
-  let latestIndependentReview: NorthstarIndependentCreativeReview | undefined;
-  let latestClosureAdjudication: NorthstarCreativeClosureAdjudication | undefined;
-  let terminalSettleWithNotes = false;
-  const acceptedMoveFingerprints = new Set<string>();
-  const rejectedMoveFingerprints = new Set<string>();
-  const successfulMoves: Array<{ label: string; visibleChange: string; operationKind: string }> = [];
-  const systemRepairReasonCodes = new Set([
-    "CANONICAL_REGION_REMOVAL_BLOCKED",
-    "MISSING_TARGET",
-    "MISSING_RELATIONSHIP_ENDPOINT",
-    "DUPLICATE_SEMANTIC_ID",
-    "PROTECTED_EVIDENCE_REPLACEMENT_INCOMPLETE",
-    "ROOT_REPLACEMENT_BLOCKED",
-    "ROOT_REMOVAL_BLOCKED",
-    "REASONING_FLOW_INVALID",
-    "EMPTY_MOVE",
-    "NON_MATERIAL_MOVE",
-    "MUTATION_JOURNAL_APPEND_INVALID",
-    "PUBLICATION_PREPARATION_REJECTED",
-    "ACTOR_PROPOSAL_REJECTED",
-    "BROWSER_LINEAGE_REJECTED",
-    "STALE_BASE_REVISION",
-  ]);
-  const systemRepairDispatchFailures = new Map<string, number>();
-  const maximumRepeatedSystemDispatchRepairs = 2; // one exact browser-informed correction, never an open-ended retry loop
-
-  const buildRejectedDesignCritique = (input: {
-    prepared: NorthstarPreparedMove;
-    acknowledgement?: NorthstarArtifactMutationAcknowledgement;
-    dispatchResult?: NorthstarVisualDispatchResult;
-    browserIssues?: string[];
-  }): { critique: string; requiredChanges: string[] } => {
-    const acknowledgement = input.acknowledgement;
-    const review = acknowledgement?.review as unknown as Record<string, unknown> | undefined;
-    const metric = (key: string): unknown => review?.[key];
-    const rejectionFamily = normalizeNorthstarRejectionFamily(
-      acknowledgement?.reason ?? input.browserIssues?.[0],
-    );
-    const geometryCorrection = rejectionFamily === "analysis-lane-overlap"
-      ? [
-          "Use normal document flow and a structurally different composition; do not place analysis inside occupied evidence geometry.",
-          "Reduce density, change the relationship, or choose different proof when the prior composition was too crowded.",
-        ]
-      : rejectionFamily === "protected-evidence-overlap"
-        ? [
-            "Keep analytical material outside protected screenshot bounds and reference evidence semantically rather than overlaying it.",
-            "Simplify or recompose in normal flow instead of using synthetic overlay behavior.",
-          ]
-        : rejectionFamily === "insufficient-semantic-change"
-          ? [
-              "Make a materially different compositional decision rather than a copy, color, or metadata-only change.",
-              "Reconsider the reading path, evidence choreography, spatial structure, or governing visual idea from the exact current render.",
-            ]
-          : rejectionFamily === "operational-audit-regression"
-            ? [
-                "Preserve every operationally healthy property of the verified parent; do not add clipping, internal scrolling, missing media, or spatial hard failures.",
-                "Repair only the concrete browser failure in the retained HTML, CSS, SVG, or JavaScript. Use Northstar.measure or Northstar.routeBetween when geometry is useful, or redesign the visual directly in source.",
-                "Recompose the content naturally inside runtime-derived bounds instead of trying to control the outer artboard.",
-              ]
-            : [];
-    const critiquePacket = {
-      rejectedStrategy: {
-        fingerprint: input.prepared.fingerprint,
-        label: input.prepared.contract.label,
-        diagnosis: input.prepared.contract.diagnosis,
-        intention: input.prepared.contract.intent,
-        expectedVisibleDelta: input.prepared.contract.expectedVisibleDelta,
-        expectedSemanticDelta: input.prepared.contract.expectedSemanticDelta,
-        affectedNodeIds: input.prepared.contract.affectedNodeIds,
-        mutationVisualStrategy: input.prepared.draft.visualStrategy,
-        mutationVisibleChange: input.prepared.draft.visibleChange,
-        operationKinds: input.prepared.draft.operations.map((operation) => operation.op),
-      },
-      dispatchResult: input.dispatchResult
-        ? {
-            status: input.dispatchResult.status,
-            stage: input.dispatchResult.stage,
-            reasonCode: input.dispatchResult.reasonCode,
-            browserDispatched: input.dispatchResult.browserDispatched,
-            detail: input.dispatchResult.detail,
-            operationIndex: input.dispatchResult.status === "rejected" ? input.dispatchResult.operationIndex : undefined,
-            operation: input.dispatchResult.status === "rejected" ? input.dispatchResult.operation : undefined,
-            targetId: input.dispatchResult.status === "rejected" ? input.dispatchResult.targetId : undefined,
-          }
-        : undefined,
-      browserResult: {
-        rejectionFamily,
-        reason: acknowledgement?.reason,
-        issues: input.browserIssues ?? [],
-        changeKinds: acknowledgement?.changeKinds ?? [],
-        changedNodeIds: acknowledgement?.changedNodeIds ?? [],
-        meaningfulChangedNodeIds: acknowledgement?.meaningfulChangedNodeIds ?? [],
-        changedAreaRatio: metric("changedAreaRatio"),
-        spatiallyChangedNodeCount: metric("spatiallyChangedNodeCount"),
-        movedNodeCount: metric("movedNodeCount"),
-        resizedNodeCount: metric("resizedNodeCount"),
-        addedNodeCount: metric("addedNodeCount"),
-        removedNodeCount: metric("removedNodeCount"),
-      },
-    };
-    return {
-      critique: JSON.stringify(critiquePacket),
-      requiredChanges: [
-        `Do not repeat rejected strategy fingerprint ${input.prepared.fingerprint}.`,
-        "Re-observe the entire exact committed artboard and choose a materially different next creative act.",
-        "Use real semantic targets and grounded evidence; do not follow a fixed obligation, layout family, or component recipe.",
-        "Do not request or set artboard dimensions; runtime content measurement owns the iframe and outer Canvas geometry together.",
-        ...(input.dispatchResult && !input.dispatchResult.browserDispatched
-          ? [
-              `The candidate was rejected before browser dispatch at ${input.dispatchResult.stage} (${input.dispatchResult.reasonCode}).`,
-              `Correct the exact pre-dispatch failure: ${input.dispatchResult.detail}`,
-            ]
-          : []),
-        ...geometryCorrection,
-        ...buildNorthstarCorrectionDirective({
-          contract: input.prepared.contract,
-          acknowledgement,
-          browserIssues: input.browserIssues ?? (acknowledgement?.reason ? [acknowledgement.reason] : []),
-        }),
-      ],
-    };
-  };
-
-  const creativeModel = createNorthstarGeminiCreativeAdapter({
-    apiKey,
-    modelId: GEMINI_MODEL,
-    generateJson: callGeminiJson,
-  });
-  const creativeObservationCache = new Map<string, NorthstarVisualObservation>();
-  let emergentDesignIntelligence: NorthstarEmergentDesignIntelligence | undefined;
-  let designIntelligenceNeedsRevisit = true;
-
-  const captureCreativeObservation = async (input: {
-    artifact: NorthstarGeneratedCodeArtifactPackage;
-    acknowledgement?: NorthstarArtifactMutationAcknowledgement;
-    includeDetails: boolean;
-  }): Promise<NorthstarVisualObservation> => {
-    const cached = creativeObservationCache.get(input.artifact.revisionId);
-    if (cached && (cached.captureStatus === "unavailable" || cached.detailViews.length > 0 || !input.includeDetails)) {
-      return input.includeDetails ? cached : { ...cached, detailViews: [] };
-    }
-    const surface = captureDocumentFromLiveAcknowledgement(input.artifact, input.acknowledgement);
-    const maximumViews = !input.includeDetails
-      ? 0
-      : thinkingDepth === "high"
-        ? 2
-        : thinkingDepth === "medium"
-          ? 1
-          : 0;
-    const plannedViews = planNorthstarVisualDetailViews({
-      width: surface.width,
-      height: surface.height,
-      acknowledgement: input.acknowledgement,
-      maximumViews,
-    });
-    let fullArtboard: NorthstarRenderedArtifactPng;
-    try {
-      fullArtboard = await captureNorthstarArtifactPng({
-        document: surface.document,
-        mutationJournal: surface.mutationJournal,
-        dataBundle: input.artifact.dataBundle,
-        creativeDirection,
-        creativeReviews: input.artifact.creativeReviews,
-        width: surface.width,
-        height: surface.height,
-        timeoutMs: 8_000,
-      });
-    } catch (error) {
-      const warning = error instanceof Error ? error.message : String(error);
-      const observation = buildNorthstarUnavailableVisualObservation({
-        revisionId: input.artifact.revisionId,
-        width: surface.width,
-        height: surface.height,
-        warning,
-        acknowledgement: input.acknowledgement,
-      });
-      creativeObservationCache.set(input.artifact.revisionId, observation);
-      callbacks.trace?.("creative.observation.degraded", {
-        revisionId: input.artifact.revisionId,
-        browserRevisionId: input.acknowledgement?.revisionId,
-        captureStatus: "unavailable",
-        browserRevisionPreserved: true,
-        warning,
-      }, "The accepted browser revision remains canonical. Creative authorship is continuing from exact source, semantic snapshot, intrinsic geometry, and runtime review because optional server image capture was unavailable.");
-      return observation;
-    }
-
-    const detailResults = await Promise.allSettled(plannedViews.map(async (planned) => ({
-      ...planned,
-      image: await captureNorthstarArtifactPng({
-        document: surface.document,
-        mutationJournal: surface.mutationJournal,
-        dataBundle: input.artifact.dataBundle,
-        creativeDirection,
-        creativeReviews: input.artifact.creativeReviews,
-        width: surface.width,
-        height: surface.height,
-        focusBounds: planned.bounds,
-        timeoutMs: 5_000,
-      }),
-    })));
-    const detailViews = detailResults.flatMap((result, index) => {
-      if (result.status === "fulfilled") return [result.value];
-      const warning = result.reason instanceof Error ? result.reason.message : String(result.reason);
-      callbacks.trace?.("creative.detail_observation.skipped", {
-        revisionId: input.artifact.revisionId,
-        detailIndex: index,
-        browserRevisionPreserved: true,
-        warning,
-      }, "A detail crop was unavailable, so creative authorship continued with the full accepted-artboard capture and browser semantic snapshot.");
-      return [];
-    });
-    const observation = buildNorthstarVisualObservation({
-      revisionId: input.artifact.revisionId,
-      fullArtboard,
-      detailViews,
-      acknowledgement: input.acknowledgement,
-    });
-    creativeObservationCache.set(input.artifact.revisionId, observation);
-    return observation;
-  };
-
-
-  const prepareLiveSourceMove = async (
-    base: NorthstarGeneratedCodeArtifactPackage,
-    creativeLeaseId?: string,
-  ): Promise<NorthstarPreparedMove> => {
-    let acknowledgement = callbacks.getLastMutationAck?.();
-    let canonicalBase = materializeNorthstarCanonicalPackage(base, acknowledgement);
-    let assessment = assessNorthstarCanonicalScene(canonicalBase, acknowledgement);
-    let readiness = assessNorthstarAdaptiveReadiness(assessment);
-    let descriptor = buildNorthstarEditableSurfaceDescriptor(canonicalBase);
-    let evidenceAliases = buildNorthstarEvidenceAliasRegistry(descriptor);
-    const expectedGroundedScreenCount = new Set(
-      canonicalBase.dataBundle.screenshots.map((screen) => screen.id),
-    ).size;
-    const dataHasGroundedEvidence = expectedGroundedScreenCount > 0;
-    const dataHasGroundedFlows = canonicalBase.dataBundle.flows.length > 0;
-    if (
-      (dataHasGroundedEvidence && descriptor.evidenceNodes.length < expectedGroundedScreenCount)
-      || (dataHasGroundedFlows && descriptor.flowRegions.length === 0)
-    ) {
-      const detail = [
-        "Northstar cannot begin adaptive creative authorship because the committed creative surface is incomplete.",
-        `Committed revision: ${canonicalBase.revisionId}.`,
-        `Data bundle: ${expectedGroundedScreenCount} unique screenshots and ${canonicalBase.dataBundle.flows.length} flows.`,
-        `Editable surface: ${descriptor.evidenceNodes.length} evidence nodes and ${descriptor.flowRegions.length} flow regions.`,
-        "The run stopped before invoking the creative model so it could not invent targets against stale or missing evidence.",
-      ].join(" ");
-      callbacks.trace?.("creative.context.invalid", {
-        baseRevisionId: canonicalBase.revisionId,
-        dataScreenshotCount: expectedGroundedScreenCount,
-        dataFlowCount: canonicalBase.dataBundle.flows.length,
-        editableEvidenceCount: descriptor.evidenceNodes.length,
-        editableFlowCount: descriptor.flowRegions.length,
-        code: "CREATIVE_SURFACE_UNAVAILABLE",
-      }, detail);
-      throw new NorthstarBudgetExceededError("creative-surface-unavailable", 1, detail);
-    }
-
-    const step = {
-      id: `author-adaptive-creative-act-${moveIndex + 1}`,
-      label: "Author the next material visual act",
-      tool: "prepare_composition_evidence",
-      icon: "plan" as CanvasAIActivityIcon,
-    };
-    await callbacks.extendPlan(
-      [step],
-      "Northstar is observing the exact committed artboard and deciding its next creative act emergently. No visual template or archetype is being selected, and no family or obligation sequence is being imposed.",
-    );
-    await callbacks.startStep(step);
-    callbacks.trace?.("creative.act.started", {
-      baseRevisionId: canonicalBase.revisionId,
-      editableEvidenceCount: descriptor.evidenceNodes.length,
-      editableFlowCount: descriptor.flowRegions.length,
-      authorshipVersion: NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION,
-      adaptiveSessionVersion: NORTHSTAR_ADAPTIVE_CREATIVE_SESSION_VERSION,
-      providerId: creativeModel.providerId,
-      modelId: creativeModel.modelId,
-      session: adaptiveSession.snapshot(),
-      readiness,
-    });
-
-    // Progress-only feedback is noncanonical. It never creates a proposal, revision,
-    // acknowledgement, mutation-journal entry, or persistence obligation. The client
-    // presents it while the next directly visible source stage is authored.
-    const cueText = latestRenderedCritique?.recommendedNextMove
-      ?? readiness.advisoryObservations[0]
-      ?? "Northstar is composing the next evidence-grounded visual stage.";
-    callbacks.trace?.("creative.stage.authoring", {
-      artifactId: canonicalBase.artifactId,
-      revisionId: canonicalBase.revisionId,
-      moveIndex: moveIndex + 1,
-      cueText,
-      evidenceAliases: northstarEvidenceAliasModelView(evidenceAliases).entries.slice(0, 12),
-    }, cueText);
-
-    // Phase 3.2 has no hidden render branch. The model gets the exact accepted
-    // browser source and at most a small deterministic normalization retry. The
-    // first candidate that passes static safety/preflight is dispatched directly
-    // to the mounted browser, which alone may commit or restore the revision.
-    const sourceAuthorship = new NorthstarLiveSourceAuthorship({
-      baseRevisionId: canonicalBase.revisionId,
-      baseFiles: canonicalBase.document,
-      maximumNormalizationAttempts: thinkingDepth === "high" ? 3 : 2,
-    });
-    let correctionContext = priorCritique;
-
-    while (sourceAuthorship.hasRemainingAttempts()) {
-      const preparationAttempt = sourceAuthorship.beginAttempt();
-      if (creativeLeaseId) await callbacks.renewCreativeLease?.(creativeLeaseId);
-      try {
-        adaptiveSession.assertCanAttempt();
-      } catch (error) {
-        throw new NorthstarBudgetExceededError(
-          "adaptive-creative-session",
-          adaptiveSession.budget.maximumTotalAttempts,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-      adaptiveSession.noteAttempt();
-      const observation = await captureCreativeObservation({
-        artifact: canonicalBase,
-        acknowledgement,
-        includeDetails: true,
-      });
-      const render = observation.fullArtboard;
-      const diversityAnchor = northstarEmergentDiversityAnchor({
-        runId: artifactId,
-        objective: intent.objective || message,
-        revisionId: canonicalBase.revisionId,
-      });
-      const formDesignIntelligenceInline = !emergentDesignIntelligence || designIntelligenceNeedsRevisit;
-      const designIntelligence = emergentDesignIntelligence && !formDesignIntelligenceInline
-        ? emergentDesignIntelligence
-        : {
-            diversityAnchor,
-            mode: emergentDesignIntelligence
-              ? "reconsider-and-execute-premium-design-intelligence"
-              : "form-and-execute-premium-design-intelligence",
-            priorDesignIntelligence: emergentDesignIntelligence,
-            recentStructuralSignaturesToAvoid: recentCreativeSignatures.slice(-12),
-            qualityFloor: "identical across Low, Medium, and High",
-            instruction: "Author a complete designIntelligence object and the cumulative source that visibly realizes its premiumPlan in this same response. The structural signature must materially diverge from recent work.",
-          };
-      if (formDesignIntelligenceInline) {
-        callbacks.trace?.("creative.design_intelligence.forming_inline", {
-          revisionId: canonicalBase.revisionId,
-          diversityAnchor,
-          thinkingDepth,
-          priorDesignIntelligence: Boolean(emergentDesignIntelligence),
-        }, "Northstar is forming the governing visual idea and executable cumulative source revision in one model call instead of making the user wait through a separate planning pass.");
-      }
-
-      let rawAct: NorthstarEmergentCreativeActDraft;
-      try {
-        rawAct = await runNorthstarModelStageWithTimeout({
-          stage: step.id,
-          timeoutMs: adaptiveSession.budget.authoringTimeoutMs,
-          parentSignal: signal,
-          run: (stageSignal) => creativeModel.authorCreativeAct({
-            systemInstruction: buildNorthstarEmergentCreativeSystemInstruction({
-              designAddendum: "The attached reference images are unlabeled taste conditioning only. Infer their shared standard of finish and communication without copying, naming, or selecting any visible structure from them.",
-            }),
-            parts: [
-              ...designReferenceParts,
-              {
-                text: buildNorthstarAdaptiveCreativeContext({
-                  objective: intent.objective || message,
-                  userRequest: message,
-                  audience: blueprint.audience,
-                  artifactType: blueprint.artifactType,
-                  thinkingDepth,
-                  artifact: canonicalBase,
-                  renderedWidth: render.width,
-                  renderedHeight: render.height,
-                  editableSurface: {
-                    ...descriptor,
-                    evidenceAliases: northstarEvidenceAliasModelView(evidenceAliases),
-                  },
-                  groundedResearch: {
-                    evidenceSummary,
-                    dataBundle,
-                    researchLedger: compactCompositionResearchContext(
-                      ledger,
-                      thinkingDepth === "high" ? "standard" : "minimal",
-                    ),
-                  },
-                  sceneObservations: {
-                    blocking: readiness.blockingObservations,
-                    advisory: readiness.advisoryObservations,
-                  },
-                  creativeMemory: adaptiveSession.snapshot(),
-                  designIntelligence,
-                  acceptedCreativeActCount: adaptiveSession.snapshot().acceptedActCount,
-                  requiredFirstActFlowNodeIds: descriptor.flowRegions.map((flow) =>
-                    evidenceAliases.nodeIdToAlias.get(flow.nodeId) ?? flow.nodeId,
-                  ),
-                  priorCritique: correctionContext,
-                  sourceAuthorship: {
-                    ...sourceAuthorship.modelView(),
-                    visibleCommitCadence: authorship.cadenceState(),
-                  },
-                  runtimeReview: acknowledgement?.review,
-                }),
-              },
-              ...buildNorthstarVisualObservationParts({
-                observation,
-                acknowledgement,
-                label: "CURRENT VERIFIED ARTBOARD",
-              }),
-            ],
-            signal: stageSignal,
-            maxOutputTokens: adaptiveSession.budget.authoringOutputTokens,
-            temperature: adaptiveSession.budget.authoringTemperature,
-          }),
-        });
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-        const reason = error instanceof Error ? error.message : String(error);
-        if (sourceAuthorship.hasRemainingAttempts()) {
-          adaptiveSession.reclassifyLastAttemptAsSystemRepair();
-          correctionContext = {
-            critique: `The source-authoring response could not be parsed or completed against browser revision ${canonicalBase.revisionId}. ${reason}`,
-            requiredChanges: [
-              "Return one valid cumulative source revision against the unchanged exact canonical scene.",
-              "Keep the governing visual idea concrete, use the supplied short evidence aliases, and author the visual directly in HTML/CSS/SVG/JavaScript without any primitive contract.",
-            ],
-          };
-          callbacks.trace?.("creative.source.normalization_retry", {
-            baseRevisionId: canonicalBase.revisionId,
-            attempt: preparationAttempt,
-            phase: "authoring",
-            reason,
-            nextAttempt: sourceAuthorship.attempt + 1,
-          }, "The authoring payload was not executable. Northstar is making one bounded source correction against the unchanged browser revision.");
-          continue;
-        }
-        callbacks.trace?.("creative.act.authoring_failed", {
-          baseRevisionId: canonicalBase.revisionId,
-          attempt: preparationAttempt,
-          reason,
-          retried: false,
-        }, "The cumulative source payload remained invalid after its bounded normalization retry; the accepted browser revision was never touched.");
-        throw new NorthstarDeterministicDesignActError({
-          phase: "authoring",
-          code: "NORTHSTAR_TYPED_DESIGN_ACT_AUTHORING_FAILED",
-          message: `Northstar could not author one executable cumulative source revision for the exact browser scene. ${reason}`,
-          cause: error,
-        });
-      }
-
-      sourceAuthorship.rememberDraft(rawAct.sourceEdit);
-      const creativeBaseSemanticSnapshot = acknowledgement?.revisionId === canonicalBase.revisionId
-        ? acknowledgement.snapshot?.semanticNodes
-        : undefined;
-      let act: NorthstarEmergentCreativeAct;
-      try {
-        const evidenceIdByNodeId = new Map(
-          descriptor.evidenceNodes.map((node) => [node.nodeId, node.evidenceId]),
-        );
-        for (const entry of evidenceAliases.entries) {
-          const evidenceId = evidenceIdByNodeId.get(entry.nodeId);
-          if (evidenceId) evidenceIdByNodeId.set(entry.alias, evidenceId);
-        }
-        const resolvedRawAct: NorthstarEmergentCreativeActDraft = {
-          ...rawAct,
-          designIntelligence: remapNorthstarDesignIntelligenceEvidenceAliases(
-            rawAct.designIntelligence,
-            evidenceAliases,
-            evidenceIdByNodeId,
-          ),
-          viewingIntent: rawAct.viewingIntent ? {
-            ...rawAct.viewingIntent,
-            primaryNodeIds: remapNorthstarEvidenceAliasList(rawAct.viewingIntent.primaryNodeIds, evidenceAliases),
-            supportingNodeIds: remapNorthstarEvidenceAliasList(rawAct.viewingIntent.supportingNodeIds, evidenceAliases),
-            intendedReadingPath: remapNorthstarEvidenceAliasList(rawAct.viewingIntent.intendedReadingPath, evidenceAliases),
-          } : rawAct.viewingIntent,
-          sourceEdit: rawAct.sourceEdit ? {
-            ...rawAct.sourceEdit,
-            targetId: resolveNorthstarEvidenceAlias(rawAct.sourceEdit.targetId, evidenceAliases) ?? rawAct.sourceEdit.targetId,
-            placements: rawAct.sourceEdit.placements?.map((placement) => ({
-              ...placement,
-              targetId: resolveNorthstarEvidenceAlias(placement.targetId, evidenceAliases) ?? placement.targetId,
-              parentId: resolveNorthstarEvidenceAlias(placement.parentId, evidenceAliases) ?? placement.parentId,
-              beforeId: resolveNorthstarEvidenceAlias(placement.beforeId, evidenceAliases) ?? placement.beforeId,
-            })),
-            retireNodeIds: remapNorthstarEvidenceAliasList(rawAct.sourceEdit.retireNodeIds, evidenceAliases),
-          } : rawAct.sourceEdit,
-        };
-        act = sanitizeNorthstarEmergentCreativeAct(resolvedRawAct, {
-          evidenceIdByNodeId,
-          protectedEvidenceNodeIds: descriptor.evidenceNodes.map((node) => node.nodeId),
-          semanticSnapshot: creativeBaseSemanticSnapshot,
-          diversityAnchor,
-          groundedEvidenceIds: descriptor.evidenceNodes.map((node) => node.evidenceId),
-          recentCreativeSignatures,
-          requireStructuralNovelty: formDesignIntelligenceInline,
-        });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        if (sourceAuthorship.hasRemainingAttempts()) {
-          adaptiveSession.reclassifyLastAttemptAsSystemRepair();
-          correctionContext = {
-            critique: `The source revision could not be normalized against browser revision ${canonicalBase.revisionId}. ${reason}`,
-            requiredChanges: [
-              "Preserve the same governing idea but return schema-valid operations and construction beats.",
-              "Use direct authored markup and safe JavaScript capabilities for distinctive visuals; do not return runtime-owned visual bindings.",
-              `Use only these supplied evidence aliases in descriptive metadata and source: ${evidenceAliases.entries.map((entry) => entry.alias).join(", ")}. The runtime resolves them to canonical evidence identities.`,
-            ],
-          };
-          callbacks.trace?.("creative.source.normalization_retry", {
-            baseRevisionId: canonicalBase.revisionId,
-            attempt: preparationAttempt,
-            phase: "sanitization",
-            reason,
-            nextAttempt: sourceAuthorship.attempt + 1,
-          }, "The source contract needed normalization. Northstar is making one bounded correction against the unchanged browser revision.");
-          continue;
-        }
-        callbacks.trace?.("creative.act.invalid", {
-          baseRevisionId: canonicalBase.revisionId,
-          attempt: preparationAttempt,
-          reason,
-          retried: false,
-        }, "The cumulative source response was not executable; Northstar preserved the accepted browser artboard and stopped the bounded correction.");
-        throw new NorthstarDeterministicDesignActError({
-          phase: "sanitization",
-          code: "NORTHSTAR_TYPED_DESIGN_ACT_INVALID",
-          message: `The model response could not be normalized into the live source contract. ${reason}`,
-          cause: error,
-        });
-      }
-
-      const inheritedEvidencePlacements = act.mutation.operations
-        .filter((operation) => operation.op === "recompose-region")
-        .flatMap((operation) => operation.placements)
-        .filter((placement) => placement.runtimeInherited);
-      if (inheritedEvidencePlacements.length > 0) {
-        callbacks.trace?.("creative.evidence_placements.inherited", {
-          baseRevisionId: canonicalBase.revisionId,
-          inheritedCount: inheritedEvidencePlacements.length,
-          geometryPreservedCount: inheritedEvidencePlacements.filter((placement) => placement.preserveGeometry).length,
-          nodeIds: inheritedEvidencePlacements.map((placement) => placement.targetId),
-        }, "The runtime preserved unmentioned protected evidence automatically instead of rejecting the creative source revision.");
-      }
-
-      act = {
-        ...act,
-        sourceFiles: act.sourceFiles
-          ? {
-              ...act.sourceFiles,
-              targetId: resolveNorthstarEvidenceAlias(act.sourceFiles.targetId, evidenceAliases) ?? act.sourceFiles.targetId,
-            }
-          : undefined,
-        mutation: remapNorthstarCreativeDraftAliases(act.mutation, evidenceAliases),
-        affectedNodeIds: remapNorthstarEvidenceAliasList(act.affectedNodeIds, evidenceAliases) ?? [],
-      };
-      emergentDesignIntelligence = act.designIntelligence;
-      designIntelligenceNeedsRevisit = false;
-      creativeDirection.diversityKey = diversityAnchor;
-      creativeDirection.recentSignaturesAvoided = recentCreativeSignatures.slice(-24);
-      creativeDirection.selectedConcept = {
-        ...creativeDirection.selectedConcept,
-        id: `emergent-${act.designIntelligence.premiumPlan.noveltySignature.fingerprint}`,
-        name: "Emergent premium authorship",
-        oneLine: act.designIntelligence.threeSecondRead,
-        visualGrammar: act.designIntelligence.spatialLogic,
-        visualMetaphor: act.designIntelligence.governingVisualIdea,
-        narrativeArc: act.designIntelligence.editorialArgument,
-        interactionModel: act.designIntelligence.signatureMove,
-        evidenceStrategy: act.designIntelligence.evidenceChoreography
-          .map((entry) => `${entry.evidenceId}: ${entry.roleInArgument}`)
-          .join(" · "),
-        compositionLanguage: act.designIntelligence.mediumAndRepresentationStrategy,
-        typographyMood: act.designIntelligence.emotionalRegister,
-        colorLogic: act.designIntelligence.surfaceAndContainerStrategy,
-        signature: northstarPremiumSignatureModelView(
-          act.designIntelligence.premiumPlan.noveltySignature,
-        ),
-        risks: [
-          ...act.designIntelligence.premiumPlan.publicationOutcomes,
-          ...act.designIntelligence.publicationStandard,
-        ].slice(0, 12),
-      };
-      callbacks.trace?.("creative.design_intelligence.formed_inline", {
-        revisionId: canonicalBase.revisionId,
-        diversityAnchor,
-        governingVisualIdea: emergentDesignIntelligence.governingVisualIdea,
-        signatureMove: emergentDesignIntelligence.signatureMove,
-        evidenceChoreographyCount: emergentDesignIntelligence.evidenceChoreography.length,
-        premiumContractVersion: emergentDesignIntelligence.premiumPlan.version,
-        designFingerprint: act.noveltyReceipt.fingerprint,
-        maximumRecentSimilarity: act.noveltyReceipt.maximumSimilarity,
-        materiallyDistinct: act.noveltyReceipt.materiallyDistinct,
-        requiredNarrativeBeatCount: emergentDesignIntelligence.premiumPlan.requiredBeatIds.length,
-        analyticalIntentCount: emergentDesignIntelligence.premiumPlan.analyticalIntents.length,
-        contractRepairCount: emergentDesignIntelligence.premiumPlan.normalizationRepairs.length,
-        contractRepairs: emergentDesignIntelligence.premiumPlan.normalizationRepairs,
-      }, emergentDesignIntelligence.governingVisualIdea);
-
-      const activeDesignIntelligence = emergentDesignIntelligence ?? designIntelligence;
-      const operationSummaries = summarizeNorthstarMoveOperations(act.mutation);
-      callbacks.trace?.("creative.act.received", {
-        baseRevisionId: canonicalBase.revisionId,
-        intention: act.intention,
-        viewerUnderstanding: act.viewerUnderstanding,
-        operationCount: act.mutation.operations.length,
-        operationSummaries,
-        constructionPlan: act.mutation.constructionPlan,
-        declaredAffectedNodeIds: act.affectedNodeIds,
-        modelExpectsMoreWork: act.continueWorking,
-        governingVisualIdea: activeDesignIntelligence.governingVisualIdea,
-        signatureMove: activeDesignIntelligence.signatureMove,
-        attempt: preparationAttempt + 1,
-      }, act.intention);
-
-      // Deterministic compilation verifies only executable transaction integrity,
-      // evidence identity, and browser safety. It does not grade the ambition or
-      // visual form of the model-authored source revision.
-
-      const latestAcknowledgement = callbacks.getLastMutationAck?.();
-      const latestVisible = callbacks.getVisibleArtifact() ?? canonicalBase;
-      const latestCanonical = materializeNorthstarCanonicalPackage(latestVisible, latestAcknowledgement);
-      if (latestCanonical.revisionId !== canonicalBase.revisionId) {
-        canonicalBase = latestCanonical;
-        acknowledgement = latestAcknowledgement;
-        assessment = assessNorthstarCanonicalScene(canonicalBase, acknowledgement);
-        readiness = assessNorthstarAdaptiveReadiness(assessment);
-        throw new NorthstarDeterministicDesignActError({
-          phase: "scene-advanced",
-          code: "NORTHSTAR_TYPED_DESIGN_ACT_SCENE_ADVANCED",
-          message: "The canonical artboard advanced while the source revision was being authored. Northstar did not apply or retry a stale transaction.",
-        });
-      }
-
-      const liveSemanticSnapshot = creativeBaseSemanticSnapshot;
-      const authoritativeSceneNodeIds = Array.from(new Set([
-        "artboard",
-        "presentation",
-        "evidence",
-        "evidence-reservoir",
-        "synthesis",
-        "decision",
-        ...descriptor.evidenceNodes.map((node) => node.nodeId),
-        ...descriptor.flowRegions.flatMap((flow) => [flow.nodeId, flow.sequenceNodeId]),
-      ].filter(Boolean)));
-      // Compile the complete model-authored transaction before visible-scene
-      // alignment. The compiler needs the full set-html -> nested set-html ->
-      // move sequence in order to form one atomic evidence-preserving
-      // recomposition; filtering first used to discard those dependencies.
-      const compiled = compileNorthstarMutationDraft({
-        previous: canonicalBase,
-        draft: act.mutation,
-        semanticSnapshot: liveSemanticSnapshot,
-        authoritativeNodeIds: authoritativeSceneNodeIds,
-        creativeSourceAuthority: true,
-      });
-      const executableDraft = alignNorthstarMutationToVisibleScene(
-        compiled.draft,
-        canonicalBase.document.html,
-        liveSemanticSnapshot,
-        authoritativeSceneNodeIds,
-      );
-      const compilerHardFailures = compiled.diagnostics.filter((diagnostic) => diagnostic.severity === "hard");
-      const compilerRepairableFailures = compiled.diagnostics.filter((diagnostic) => diagnostic.severity === "repairable");
-      if (executableDraft.operations.length === 0) {
-        const issues = [...compilerHardFailures, ...compilerRepairableFailures];
-        const reason = issues.map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`).join(" ")
-          || "The compiler produced no material executable operations for the exact scene.";
-        if (sourceAuthorship.hasRemainingAttempts()) {
-          adaptiveSession.reclassifyLastAttemptAsSystemRepair();
-          correctionContext = {
-            critique: `The source transaction did not compile into a material scene change. ${reason}`,
-            requiredChanges: [
-              "Repair the cumulative source revision surgically against the unchanged browser revision; preserve its governing idea and every valid evidence move.",
-              "Use direct HTML/CSS/SVG/JavaScript source for the complete composition. Correct only source, evidence-placement, or executable runtime errors.",
-              "Ensure the final operation list materially changes structure, evidence choreography, analysis, or synthesis rather than only copy or metadata.",
-            ],
-          };
-          callbacks.trace?.("creative.source.normalization_retry", {
-            baseRevisionId: canonicalBase.revisionId,
-            attempt: preparationAttempt,
-            phase: "compilation",
-            issues: issues.map((diagnostic) => ({
-              code: diagnostic.code,
-              severity: diagnostic.severity,
-              message: diagnostic.message,
-            })),
-            compilerRepairs: compiled.repairs,
-            nextAttempt: sourceAuthorship.attempt + 1,
-          }, "The source did not compile into a material transaction. Northstar is making one bounded correction before live dispatch.");
-          continue;
-        }
-        callbacks.trace?.("creative.act.deterministic_realization_failed", {
-          baseRevisionId: canonicalBase.revisionId,
-          issues: issues.map((diagnostic) => diagnostic.message),
-          operationSummaries,
-          compilerRepairs: compiled.repairs,
-          attempt: preparationAttempt,
-        }, "The cumulative source still could not be compiled after its bounded normalization retry; the browser revision remained untouched.");
-        throw new NorthstarDeterministicDesignActError({
-          phase: "realization",
-          code: compilerHardFailures.length > 0
-            ? "NORTHSTAR_DESIGN_ACT_INTEGRITY_BLOCKED"
-            : "NORTHSTAR_DESIGN_ACT_REALIZATION_FAILED",
-          message: reason,
-        });
-      }
-
-      const compiledOperationSummaries = summarizeNorthstarMoveOperations(executableDraft);
-      callbacks.trace?.("creative.source_authority.compiled", {
-        baseRevisionId: canonicalBase.revisionId,
-        operationSummaries: compiledOperationSummaries,
-        compilerDiagnostics: compiled.diagnostics,
-        compilerRepairs: compiled.repairs,
-      }, "The cumulative model-authored source passed only safety, evidence-identity, and executable-transaction compilation. No visual primitive, placement grammar, ambition score, or layout recipe was applied.");
-      const contract = buildNorthstarMoveContract({
-        baseRevisionId: canonicalBase.revisionId,
-        obligation: "creative-progress",
-        operationKind: "recompose-scene",
-        phase: "analysis",
-        label: act.mutation.title,
-        diagnosis: act.whyThisMoveNow,
-        intent: act.intention,
-        expectedVisibleDelta: act.mutation.visibleChange,
-        expectedSemanticDelta: act.viewerUnderstanding,
-        affectedNodeIds: act.affectedNodeIds,
-        evidenceRoles: act.evidenceRoles,
-        modelSourceAuthority: true,
-        geometryRequirements: [
-          "Let one runtime-derived content measurement control both iframe and outer Canvas geometry.",
-          "Do not introduce internal scrolling, clipping, protected-evidence overlap, or root dimension control.",
-        ],
-        acceptanceCriteria: act.successCriteria.length > 0
-          ? act.successCriteria
-          : [
-              "The browser verifies a material visible and semantic change.",
-              "The exact grounded evidence and provenance remain intact.",
-              "The result remains readable, asset-complete, and free of hard spatial regressions.",
-            ],
-      });
-      const preflight = preflightNorthstarMove({
-        artifact: canonicalBase,
-        contract,
-        draft: executableDraft,
-        semanticSnapshot: liveSemanticSnapshot,
-        authoritativeNodeIds: authoritativeSceneNodeIds,
-        acceptedFingerprints: acceptedMoveFingerprints,
-        rejectedFingerprints: rejectedMoveFingerprints,
-      });
-
-      if (preflight.accepted) {
-        const preparedMove: NorthstarPreparedMove = {
-          contract,
-          draft: executableDraft,
-          impactRequirements: northstarVisualImpactRequirements("creative-progress"),
-          diagnostics: [
-            `${NORTHSTAR_EMERGENT_CREATIVE_AUTHORSHIP_VERSION}: ${act.intention}`,
-            `${NORTHSTAR_ADAPTIVE_CREATIVE_SESSION_VERSION}: act ${adaptiveSession.snapshot().acceptedActCount + 1}.`,
-            `${NORTHSTAR_LIVE_SOURCE_AUTHORSHIP_VERSION}: direct mounted-browser delivery.`,
-            `Viewer understanding: ${act.viewerUnderstanding}`,
-            `Live visual authorship: ${executableDraft.constructionPlan?.beats.length ?? 0} construction beats over one atomic transaction.`,
-            `Creative provider: ${creativeModel.providerId}/${creativeModel.modelId}.`,
-          ],
-          preparedAt: Date.now(),
-          baseRevisionId: canonicalBase.revisionId,
-          fingerprint: preflight.fingerprint,
-          expectedChangedNodeIds: [...new Set([
-            ...act.affectedNodeIds,
-            ...preflight.targetIds,
-            ...preflight.insertedIds,
-          ])],
-        };
-
-        callbacks.trace?.("creative.live_source.candidate_ready", {
-          version: NORTHSTAR_LIVE_SOURCE_AUTHORSHIP_VERSION,
-          baseRevisionId: canonicalBase.revisionId,
-          fingerprint: preflight.fingerprint,
-          targetIds: preflight.targetIds,
-          insertedIds: preflight.insertedIds,
-          operationSummaries: preflight.operationSummaries,
-          operationCount: executableDraft.operations.length,
-          compilerRepairs: compiled.repairs,
-          compilerDiagnostics: compiled.diagnostics,
-          constructionPlan: executableDraft.constructionPlan,
-          normalizationAttempts: preparationAttempt,
-          authoringLatencyMs: sourceAuthorship.elapsedMs(),
-          hiddenRuntimeExecutions: 0,
-          atomicValidationExecutions: 1,
-          candidateVisibility: "shielded-until-settlement",
-        }, "The cumulative HTML/CSS/SVG/JavaScript source passed deterministic safety preflight and will now be validated atomically inside the mounted browser.");
-
-        await callbacks.completeStep({
-          id: step.id,
-          tool: step.tool,
-          detail: `Authored one safe cumulative source stage with ${executableDraft.operations.length} concrete operations for direct mounted-browser verification.`,
-        });
-        return preparedMove;
-      }
-      const compilerRepairContext = compiled.repairs.slice(-10);
-      const reason = [
-        ...preflight.issues,
-        ...compilerRepairContext.map((repair) => `Compiler: ${repair}`),
-      ].join(" ");
-      if (sourceAuthorship.hasRemainingAttempts()) {
-        adaptiveSession.reclassifyLastAttemptAsSystemRepair();
-        correctionContext = {
-          critique: `The source candidate failed deterministic final-state preflight before live dispatch. ${reason}`,
-          requiredChanges: [
-            "Surgically repair the source transaction against the same browser revision.",
-            "Preserve every valid grounded evidence move and the governing visual idea.",
-            "Correct only the exact missing target, duplicate identity, unsafe replacement, evidence-preservation, or materiality issue reported above.",
-          ],
-        };
-        callbacks.trace?.("creative.source.normalization_retry", {
-          baseRevisionId: canonicalBase.revisionId,
-          fingerprint: preflight.fingerprint,
-          issues: preflight.issues,
-          issueDetails: preflight.issueDetails,
-          operationSummaries: preflight.operationSummaries,
-          compilerRepairs: compiled.repairs,
-          attempt: preparationAttempt,
-          nextAttempt: sourceAuthorship.attempt + 1,
-        }, "The failed static preflight did not touch the artboard. Northstar is making one bounded source correction against the same browser revision.");
-        continue;
-      }
-      callbacks.trace?.("creative.act.preflight_rejected", {
-        baseRevisionId: canonicalBase.revisionId,
-        fingerprint: preflight.fingerprint,
-        issues: preflight.issues,
-        issueDetails: preflight.issueDetails,
-        targetIds: preflight.targetIds,
-        insertedIds: preflight.insertedIds,
-        declaredAffectedNodeIds: preflight.declaredAffectedNodeIds,
-        derivedAffectedNodeIds: preflight.derivedAffectedNodeIds,
-        unresolvedDeclaredAffectedNodeIds: preflight.unresolvedDeclaredAffectedNodeIds,
-        operationSummaries: preflight.operationSummaries,
-        compilerRepairs: compiled.repairs,
-        attempt: preparationAttempt,
-        retried: true,
-      }, "The cumulative source revision still failed deterministic preflight after its bounded correction; the accepted browser revision was never touched.");
-      throw new NorthstarDeterministicDesignActError({
-        phase: "preflight",
-        code: "NORTHSTAR_TYPED_DESIGN_ACT_PREFLIGHT_FAILED",
-        message: `The cumulative source revision could not pass deterministic preflight against the exact browser scene. ${reason}`,
-      });
-    }
-
-    throw new NorthstarDeterministicDesignActError({
-      phase: "preflight",
-      code: "NORTHSTAR_TYPED_DESIGN_ACT_NOT_PREPARED",
-      message: "Northstar could not prepare a statically safe live source revision within its bounded normalization attempts. The accepted browser artboard was preserved.",
-    });
-  };
-
-  let readyForPublication = false;
-  while (!readyForPublication) {
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const visible = callbacks.getVisibleArtifact() ?? currentPackage;
-    const liveAck = callbacks.getLastMutationAck?.();
-    const canonical = materializeNorthstarCanonicalPackage(visible, liveAck);
-    currentPackage = canonical;
-    const assessment = assessNorthstarCanonicalScene(canonical, liveAck);
-    authorship.reconcile(assessment, canonical.revisionId);
-    const continuation = adaptiveSession.decideContinuation(
-      assessment,
-      latestRenderedCritique,
-      latestIndependentReview,
-      latestClosureAdjudication,
-    );
-    const sessionSnapshot = adaptiveSession.snapshot();
-    callbacks.trace?.("creative.session.observed", {
-      revisionId: canonical.revisionId,
-      decision: continuation,
-      session: sessionSnapshot,
-    }, continuation.reason);
-    callbacks.trace?.("creative.session.continuation_decided", {
-      revisionId: canonical.revisionId,
-      thinkingDepth,
-      acceptedActCount: sessionSnapshot.acceptedActCount,
-      authorContinueWorking: latestRenderedCritique?.continueWorking ?? null,
-      authorWeaknessCount: latestRenderedCritique?.whatStillWeak.length ?? 0,
-      reviewerMaterialImprovementAvailable: latestIndependentReview?.materialImprovementAvailable ?? null,
-      reviewerPublicationReady: latestIndependentReview?.publicationReady ?? null,
-      reviewerStructuralBlockerCount: latestIndependentReview?.structuralBlockers.length ?? 0,
-      reviewerProblemCount: latestIndependentReview?.unresolvedProblems.length ?? 0,
-      continueWorking: continuation.continueWorking,
-      readyForPublication: continuation.readyForPublication,
-      settleWithNotes: continuation.settleWithNotes,
-      closureDecision: latestClosureAdjudication?.decision ?? null,
-      reasonCode: continuation.reasonCode,
-      knownLimitationCount: continuation.knownLimitations.length,
-    }, continuation.reason);
-
-    if (!continuation.continueWorking) {
-      if (continuation.readyForPublication || continuation.settleWithNotes) {
-        readyForPublication = true;
-        terminalSettleWithNotes = continuation.settleWithNotes;
-        latestReviewSummary = continuation.reason;
-        finalKnownLimitations = continuation.knownLimitations;
-        break;
-      }
-      throw new NorthstarBudgetExceededError(
-        "adaptive-creative-readiness",
-        adaptiveSession.budget.maximumAcceptedActs,
-        `${continuation.reason} ${continuation.readiness.blockingObservations.join(" ")}`.trim(),
-      );
-    }
-
-    const creativeLeaseId = await callbacks.acquireCreativeLease?.(canonical.revisionId);
-    let creativeLeaseReleased = false;
-    const releaseCreativeLease = async () => {
-      if (!creativeLeaseId || creativeLeaseReleased) return;
-      creativeLeaseReleased = true;
-      await callbacks.releaseCreativeLease?.(creativeLeaseId);
-    };
-    let prepared: NorthstarPreparedMove;
-    try {
-      prepared = await prepareLiveSourceMove(canonical, creativeLeaseId);
-    } catch (error) {
-      await releaseCreativeLease();
-      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      const reason = error instanceof Error ? error.message : String(error);
-      const currentSession = adaptiveSession.snapshot();
-      const canSettleVerifiedArtifact =
-        currentSession.acceptedActCount > 0
-        && continuation.readiness.operationallyReady;
-
-      if (canSettleVerifiedArtifact) {
-        const settlementReason = `Northstar preserved the latest browser-verified creative result because the next creative continuation could not be prepared safely; publication-quality closure remains unresolved. ${reason}`;
-        await callbacks.completeStep({
-          id: `author-adaptive-creative-act-${moveIndex + 1}`,
-          tool: "prepare_composition_evidence",
-          detail: "No additional safe material act was prepared. Northstar retained the latest verified artifact and recorded the remaining refinements as known limitations.",
-        });
-        callbacks.trace?.("creative.session.continuation_abandoned", {
-          revisionId: canonical.revisionId,
-          thinkingDepth,
-          acceptedActCount: currentSession.acceptedActCount,
-          errorType: error instanceof NorthstarBudgetExceededError ? "budget-or-preflight-exhausted" : "preparation-error",
-          errorMessage: reason,
-          readyForPublication: canSettleVerifiedArtifact,
-          knownLimitations: continuation.knownLimitations,
-          session: currentSession,
-        }, settlementReason);
-        readyForPublication = true;
-        terminalSettleWithNotes = true;
-        latestReviewSummary = settlementReason;
-        finalKnownLimitations = Array.from(new Set([
-          ...continuation.knownLimitations,
-          `The next creative continuation was abandoned safely: ${reason}`,
-        ])).slice(0, 18);
-        break;
-      }
-
-      if (error instanceof NorthstarBudgetExceededError || error instanceof NorthstarDeterministicDesignActError) {
-        await callbacks.failStep({
-          id: `author-adaptive-creative-act-${moveIndex + 1}`,
-          tool: "prepare_composition_evidence",
-          detail: reason,
-        });
-        throw error;
-      }
-      const repeated = adaptiveSession.recordRejectedAct({
-        revisionId: canonical.revisionId,
-        reason,
-      });
-      callbacks.trace?.("creative.session.preparation_stalled", {
-        revisionId: canonical.revisionId,
-        repeated,
-        session: adaptiveSession.snapshot(),
-      }, reason);
-      if (repeated >= adaptiveSession.budget.maximumRepeatedFailureFingerprints) {
-        throw new NorthstarBudgetExceededError(
-          "adaptive-creative-preparation-stalled",
-          repeated,
-          `Northstar stopped retrying the unchanged committed scene and failure condition. ${reason}`,
-        );
-      }
-      priorCritique = {
-        critique: reason,
-        requiredChanges: ["Re-observe the exact browser-acknowledged scene and author a materially different safe act."],
-      };
-      await delayWithSignal(350, signal);
-      continue;
-    }
-
-    const dispatchBaseAcknowledgement = callbacks.getLastMutationAck?.();
-    const dispatchBase = materializeNorthstarCanonicalPackage(
-      callbacks.getVisibleArtifact() ?? canonical,
-      dispatchBaseAcknowledgement,
-    );
-    if (dispatchBase.revisionId !== prepared.baseRevisionId) {
-      await releaseCreativeLease();
-      throw new NorthstarDeterministicDesignActError({
-        phase: "scene-advanced",
-        code: "NORTHSTAR_PREPARED_STAGE_SCENE_ADVANCED",
-        message: `The visible artboard advanced from ${prepared.baseRevisionId} to ${dispatchBase.revisionId} during source authorship. Northstar did not dispatch a stale stage.`,
-      });
-    }
-
-    let candidate!: NorthstarGeneratedCodeArtifactPackage;
-    let dispatchResult!: NorthstarVisualDispatchResult;
-    try {
-      authorship.beginTransaction(prepared.contract);
-      authorship.advanceTransaction("applying");
-      candidate = appendNorthstarArtboardMutation({
-        previous: {
-          ...dispatchBase,
-          creativeDirection,
-        },
-        draft: prepared.draft,
-        label: prepared.contract.label,
-        phase: toNorthstarMutationBuildPhase(prepared.contract.phase),
-        intent: `${prepared.contract.intent} ${prepared.contract.expectedSemanticDelta}`,
-        ...(prepared.impactRequirements ?? northstarVisualImpactRequirements("creative-progress")),
-        diagnostics: [
-          `Northstar adaptive creative act: ${prepared.draft.visibleChange}`,
-          `Move contract ${prepared.contract.contractId} prepared against ${prepared.baseRevisionId}.`,
-          ...(prepared.diagnostics ?? []),
-        ],
-      });
-      authorship.advanceTransaction("visible", candidate.revisionId);
-      callbacks.trace?.("creative.live_source.dispatched", {
-        version: NORTHSTAR_LIVE_SOURCE_AUTHORSHIP_VERSION,
-        baseRevisionId: dispatchBase.revisionId,
-        candidateRevisionId: candidate.revisionId,
-        fingerprint: prepared.fingerprint,
-        preparedToDispatchMs: Math.max(0, Date.now() - prepared.preparedAt),
-        mountedBrowserExecutions: 1,
-        hiddenRuntimeExecutions: 0,
-        atomicValidationExecutions: 1,
-        candidateVisibility: "shielded-until-settlement",
-      }, "The source candidate entered an atomic validation transaction in the existing mounted artboard; the accepted revision remains visible until settlement.");
-      dispatchResult = await callbacks.publishArtifact(
-        candidate,
-        2,
-        prepared.contract.label,
-        prepared.expectedChangedNodeIds,
-        (materialized, acknowledgement) => {
-          const postAssessment = assessNorthstarCanonicalScene(materialized, acknowledgement);
-          const postReadiness = assessNorthstarAdaptiveReadiness(postAssessment);
-          return {
-            accepted: postReadiness.operationallyReady,
-            issues: postReadiness.blockingObservations,
-          };
-        },
-        creativeLeaseId,
-      );
-    } finally {
-      await releaseCreativeLease();
-    }
-    if (dispatchResult.status !== "committed") {
-      const rejectedAck = dispatchResult.acknowledgement
-        ?? callbacks.getLastRejectedMutationAck?.()
-        ?? callbacks.getLastMutationAck?.();
-      authorship.advanceTransaction("rejected", candidate.revisionId);
-      authorship.advanceTransaction("restored", dispatchBase.revisionId);
-      const reason = dispatchResult.detail;
-      callbacks.trace?.("creative.live_source.rejected", {
-        version: NORTHSTAR_LIVE_SOURCE_AUTHORSHIP_VERSION,
-        baseRevisionId: dispatchBase.revisionId,
-        candidateRevisionId: candidate.revisionId,
-        fingerprint: prepared.fingerprint,
-        reasonCode: dispatchResult.reasonCode,
-        stage: dispatchResult.stage,
-        browserDispatched: dispatchResult.browserDispatched,
-        restoredRevisionId: dispatchBase.revisionId,
-      }, `The mounted browser did not commit the candidate and retained ${dispatchBase.revisionId}. ${reason}`);
-      const targetId = dispatchResult.status === "rejected" ? dispatchResult.targetId : undefined;
-      const rejectionFamily = normalizeNorthstarRejectionFamily(reason);
-      const systemRepairRequired = systemRepairReasonCodes.has(dispatchResult.reasonCode)
-        || [
-          "analysis-lane-overlap",
-          "protected-evidence-overlap",
-          "operational-audit-regression",
-        ].includes(rejectionFamily);
-
-      if (dispatchResult.reasonCode === "BROWSER_VERIFIED_NOOP") {
-        currentPackage = callbacks.getVisibleArtifact() ?? dispatchBase;
-        const retainedAssessment = assessNorthstarCanonicalScene(currentPackage, rejectedAck);
-        const retainedReadiness = assessNorthstarAdaptiveReadiness(retainedAssessment);
-        if (adaptiveSession.snapshot().acceptedActCount > 0 && retainedReadiness.operationallyReady) {
-          readyForPublication = true;
-          terminalSettleWithNotes = true;
-          latestReviewSummary = "The proposed creative continuation was already represented by the browser-verified artboard. Northstar retained the accepted revision, but it will not claim publication-quality closure until the model's unresolved creative outcome has been adjudicated.";
-          finalKnownLimitations = Array.from(new Set([
-            ...finalKnownLimitations,
-            reason,
-          ])).slice(0, 18);
-          callbacks.trace?.("creative.session.optional_noop_settled", {
-            revisionId: currentPackage.revisionId,
-            candidateRevisionId: candidate.revisionId,
-            fingerprint: prepared.fingerprint,
-            readyForPublication: true,
-            session: adaptiveSession.snapshot(),
-          }, latestReviewSummary);
-          break;
-        }
-      }
-
-      if (systemRepairRequired) {
-        adaptiveSession.reclassifyLastAttemptAsSystemRepair();
-        const repairKey = `${dispatchBase.revisionId}:${rejectionFamily}:${targetId ?? "none"}`;
-        const repeated = (systemRepairDispatchFailures.get(repairKey) ?? 0) + 1;
-        systemRepairDispatchFailures.set(repairKey, repeated);
-        if (repeated >= 2) designIntelligenceNeedsRevisit = true;
-        priorCritique = {
-          critique: [
-            "The creative intention remains valid, but the executable transaction was rejected by a deterministic continuity, lineage, or compiler invariant.",
-            `Dispatch stage: ${dispatchResult.stage}.`,
-            `Reason code: ${dispatchResult.reasonCode}.`,
-            reason,
-          ].join(" "),
-          requiredChanges: [
-            "Retain the same governing visual intention and repair only the transaction against the exact restored browser revision.",
-            "Declare placements only for grounded evidence you intentionally move. The runtime automatically inherits every other protected evidence node across a containing-region reconstruction.",
-            "Use targets and parent nodes that exist either in the restored scene or are introduced earlier in the same atomic transaction.",
-            ...(rejectionFamily === "analysis-lane-overlap"
-              ? [
-                  "Repair the actual browser collision in the retained source while preserving the model's visual intention. The runtime does not prescribe lanes, regions, or a normal-flow composition.",
-                  "Keep protected evidence readable; choose any layout, SVG, or interaction strategy that resolves the collision without changing evidence truth.",
-                ]
-              : []),
-            ...(rejectionFamily === "protected-evidence-overlap"
-              ? ["Keep protected evidence readable and choose your own source-level annotation, layout, SVG, or interaction solution."]
-              : []),
-            ...(rejectionFamily === "operational-audit-regression"
-              ? [
-                  "Repair the exact browser audit failure in the retained source. Do not change the design merely to satisfy a runtime visual grammar; only safety, evidence integrity, and executable browser state are mandatory.",
-                  "Use direct HTML/CSS/SVG/JavaScript or the optional geometry helpers according to your own design decision.",
-                ]
-              : []),
-            "Do not request or set artboard dimensions; runtime content measurement owns the iframe and outer Canvas geometry together.",
-          ],
-        };
-        callbacks.trace?.("creative.act.dispatch_system_repair_requested", {
-          baseRevisionId: dispatchBase.revisionId,
-          candidateRevisionId: candidate.revisionId,
-          fingerprint: prepared.fingerprint,
-          repeated,
-          maximumRepeatedSystemDispatchRepairs,
-          reason,
-          dispatchStage: dispatchResult.stage,
-          reasonCode: dispatchResult.reasonCode,
-          rejectionFamily,
-          browserDispatched: dispatchResult.browserDispatched,
-          operationIndex: dispatchResult.status === "rejected" ? dispatchResult.operationIndex : undefined,
-          operation: dispatchResult.status === "rejected" ? dispatchResult.operation : undefined,
-          targetId,
-          session: adaptiveSession.snapshot(),
-        }, "Northstar retained the creative intention and requested a deterministic transaction repair without consuming the creative rejection budget.");
-        currentPackage = callbacks.getVisibleArtifact() ?? dispatchBase;
-
-        if (repeated >= maximumRepeatedSystemDispatchRepairs) {
-          const restoredAssessment = assessNorthstarCanonicalScene(currentPackage, callbacks.getLastMutationAck?.());
-          const restoredReadiness = assessNorthstarAdaptiveReadiness(restoredAssessment);
-          if (adaptiveSession.snapshot().acceptedActCount > 0 && restoredReadiness.operationallyReady) {
-            readyForPublication = true;
-            terminalSettleWithNotes = true;
-            latestReviewSummary = `Northstar preserved the latest browser-verified operational artboard after ${repeated} deterministic transaction-repair attempts could not safely advance the creative continuation. Publication metadata remains deferred.`;
-            finalKnownLimitations = Array.from(new Set([
-              ...finalKnownLimitations,
-              reason,
-              `Optional transaction repair stopped after ${repeated} repeated ${dispatchResult.reasonCode} result${repeated === 1 ? "" : "s"}.`,
-            ])).slice(0, 18);
-            break;
-          }
-          throw new NorthstarBudgetExceededError(
-            "adaptive-system-repair-stalled",
-            repeated,
-            `Northstar could not establish the first safe browser transaction after ${repeated} deterministic repair attempts. ${reason}`,
-          );
-        }
-        continue;
-      }
-
-      rejectedMoveFingerprints.add(prepared.fingerprint);
-      authorship.recordRejectedMove(prepared.fingerprint);
-      designIntelligenceNeedsRevisit = true;
-      const repeated = adaptiveSession.recordRejectedAct({
-        revisionId: dispatchBase.revisionId,
-        fingerprint: prepared.fingerprint,
-        reason,
-        attemptedIntention: prepared.contract.intent,
-      });
-      priorCritique = buildRejectedDesignCritique({
-        prepared,
-        acknowledgement: rejectedAck,
-        dispatchResult,
-        browserIssues: [reason],
-      });
-      callbacks.trace?.(
-        dispatchResult.browserDispatched ? "creative.act.rejected" : "creative.act.dispatch_rejected",
-        {
-          baseRevisionId: dispatchBase.revisionId,
-          candidateRevisionId: candidate.revisionId,
-          fingerprint: prepared.fingerprint,
-          repeated,
-          reason,
-          dispatchStage: dispatchResult.stage,
-          reasonCode: dispatchResult.reasonCode,
-          browserDispatched: dispatchResult.browserDispatched,
-          operationIndex: dispatchResult.status === "rejected" ? dispatchResult.operationIndex : undefined,
-          operation: dispatchResult.status === "rejected" ? dispatchResult.operation : undefined,
-          targetId,
-        },
-        reason,
-      );
-      currentPackage = callbacks.getVisibleArtifact() ?? dispatchBase;
-      continue;
-    }
-
-    const committedAck = callbacks.getLastMutationAck?.();
-    const committed = materializeNorthstarCanonicalPackage(callbacks.getVisibleArtifact() ?? candidate, committedAck);
-    const browserReview = reviewNorthstarBrowserCommit({
-      acknowledgement: committedAck,
-      expectedMutationId: candidate.mutationJournal?.at(-1)?.mutationId,
-      expectedChangedNodeIds: prepared.expectedChangedNodeIds,
-    });
-    if (!browserReview.accepted) {
-      rejectedMoveFingerprints.add(prepared.fingerprint);
-      authorship.advanceTransaction("rejected", committed.revisionId);
-      authorship.advanceTransaction("restored", dispatchBase.revisionId);
-      authorship.recordRejectedMove(prepared.fingerprint);
-      designIntelligenceNeedsRevisit = true;
-      const reason = browserReview.issues.join(" ");
-      const repeated = adaptiveSession.recordRejectedAct({
-        revisionId: dispatchBase.revisionId,
-        fingerprint: prepared.fingerprint,
-        reason,
-        attemptedIntention: prepared.contract.intent,
-      });
-      priorCritique = buildRejectedDesignCritique({
-        prepared,
-        acknowledgement: committedAck,
-        browserIssues: browserReview.issues,
-      });
-      callbacks.trace?.("creative.act.browser_review_rejected", {
-        baseRevisionId: dispatchBase.revisionId,
-        candidateRevisionId: committed.revisionId,
-        fingerprint: prepared.fingerprint,
-        repeated,
-        issues: browserReview.issues,
-      });
-      currentPackage = callbacks.getVisibleArtifact() ?? dispatchBase;
-      continue;
-    }
-
-    currentPackage = committed;
-    callbacks.trace?.("creative.live_source.committed", {
-      version: NORTHSTAR_LIVE_SOURCE_AUTHORSHIP_VERSION,
-      baseRevisionId: dispatchBase.revisionId,
-      revisionId: committed.revisionId,
-      browserRevisionId: committedAck?.browserRevisionId,
-      fingerprint: prepared.fingerprint,
-      preparedToCommitMs: Math.max(0, Date.now() - prepared.preparedAt),
-      firstCreativeTransformation: visibleMutationCount === 0,
-      mountedBrowserExecutions: 1,
-      hiddenRuntimeExecutions: 0,
-      atomicValidationExecutions: 1,
-      candidateVisibility: "revealed-after-commit",
-    }, "The mounted browser verified the source stage and atomically revealed it as the new accepted artboard.");
-    visibleMutationCount += 1;
-    moveIndex += 1;
-    acceptedMoveFingerprints.add(prepared.fingerprint);
-    authorship.advanceTransaction("browser-reviewed", committed.revisionId);
-    authorship.advanceTransaction("accepted", committed.revisionId);
-    authorship.recordAcceptedMove(prepared.fingerprint, committed.revisionId);
-    adaptiveSession.recordAcceptedAct({
-      revisionId: committed.revisionId,
-      fingerprint: prepared.fingerprint,
-      intention: prepared.contract.intent,
-      viewerUnderstanding: prepared.contract.expectedSemanticDelta,
-      visibleChange: prepared.draft.visibleChange,
-      affectedNodeIds: prepared.expectedChangedNodeIds,
-      operationKinds: prepared.draft.operations.map((operation) => operation.op),
-    });
-    successfulMoves.push({
-      label: prepared.contract.label,
-      visibleChange: prepared.draft.visibleChange,
-      operationKind: prepared.contract.operationKind,
-    });
-    priorCritique = undefined;
-    latestClosureAdjudication = undefined;
-
-    const postAssessment = assessNorthstarCanonicalScene(committed, committedAck);
-    const postReadiness = assessNorthstarAdaptiveReadiness(postAssessment);
-    const premiumDesignAudit = committedAck?.review?.premiumDesignAudit;
-    callbacks.trace?.("creative.premium_design.browser_audited", {
-      revisionId: committed.revisionId,
-      ready: premiumDesignAudit?.ready ?? false,
-      designFingerprint: premiumDesignAudit?.designFingerprint,
-      realizedNarrativeBeatCount: premiumDesignAudit?.realizedNarrativeBeatCount ?? 0,
-      requiredNarrativeBeatCount: premiumDesignAudit?.requiredNarrativeBeatCount ?? 0,
-      realizedAnalysisCount: premiumDesignAudit?.realizedAnalysisCount ?? 0,
-      requiredAnalysisCount: premiumDesignAudit?.requiredAnalysisCount ?? 0,
-      focalNodeCount: premiumDesignAudit?.focalNodeCount ?? 0,
-      minimumReadableTextPx: premiumDesignAudit?.minimumReadableTextPx ?? 0,
-      evidenceRoleDiversity: premiumDesignAudit?.evidenceRoleDiversity ?? 0,
-      repeatedContainerRatio: premiumDesignAudit?.repeatedContainerRatio ?? 0,
-      renderedStructureFingerprint: premiumDesignAudit?.renderedStructureFingerprint,
-      repeatsRecentRenderedStructure: premiumDesignAudit?.repeatsRecentRenderedStructure ?? false,
-      blockingReasons: premiumDesignAudit?.blockingReasons ?? [],
-      advisories: premiumDesignAudit?.advisories ?? [],
-    }, premiumDesignAudit?.ready
-      ? "The mounted browser verified that the authored premium narrative contract exists in the rendered pixels."
-      : "The source stage committed safely, but its declared premium narrative still needs visible completion before publication.");
-    latestReviewSummary = `${prepared.contract.label} was committed and is now being judged from the exact rendered result.`;
-    currentPackage = {
-      ...currentPackage,
-      diagnostics: [
-        ...currentPackage.diagnostics,
-        latestReviewSummary,
-        `Adaptive session accepted act ${adaptiveSession.snapshot().acceptedActCount}.`,
-        ...(premiumDesignAudit
-          ? [
-              `Premium browser audit: ${premiumDesignAudit.realizedNarrativeBeatCount}/${premiumDesignAudit.requiredNarrativeBeatCount} narrative beats and ${premiumDesignAudit.realizedAnalysisCount}/${premiumDesignAudit.requiredAnalysisCount} required analyses realized; publication-ready=${premiumDesignAudit.ready}.`,
-            ]
-          : []),
-      ].slice(-80),
-      provisional: true,
-      publicationState: "working",
-    };
-
-    const beforeObservation = await captureCreativeObservation({
-      artifact: dispatchBase,
-      acknowledgement: dispatchBaseAcknowledgement,
-      includeDetails: false,
-    });
-    const capturedAfterObservation = await captureCreativeObservation({
-      artifact: committed,
-      acknowledgement: committedAck,
-      includeDetails: true,
-    });
-    const afterObservation = capturedAfterObservation;
-    callbacks.trace?.("creative.visual_observation.captured", {
-      revisionId: committed.revisionId,
-      fullWidth: afterObservation.fullArtboard.width,
-      fullHeight: afterObservation.fullArtboard.height,
-      detailViewCount: afterObservation.detailViews.length,
-      changedNodeIds: afterObservation.changedNodeIds,
-      meaningfulChangedNodeIds: afterObservation.meaningfulChangedNodeIds,
-    });
-
-    let renderedCritique: NorthstarEmergentCreativeCritique;
-    try {
-      const rawCritique = await runNorthstarModelStageWithTimeout({
-        stage: `critique-adaptive-creative-act-${moveIndex}`,
-        timeoutMs: adaptiveSession.budget.critiqueTimeoutMs,
-        parentSignal: signal,
-        run: (stageSignal) => creativeModel.critiqueRenderedAct({
-          systemInstruction: buildNorthstarEmergentCritiqueSystemInstruction(),
-          parts: [
-            ...designReferenceParts,
-            ...buildNorthstarVisualObservationParts({
-              observation: beforeObservation,
-              acknowledgement: liveAck,
-              label: "BEFORE — EXACT VERIFIED ARTBOARD",
-            }),
-            ...buildNorthstarVisualObservationParts({
-              observation: afterObservation,
-              acknowledgement: committedAck,
-              label: "AFTER — EXACT ACCEPTED ARTBOARD",
-            }),
-            {
-              text: buildNorthstarAdaptiveCritiqueContext({
-                userRequest: message,
-                objective: intent.objective || message,
-                intention: prepared.contract.intent,
-                viewerUnderstanding: prepared.contract.expectedSemanticDelta,
-                visibleChange: prepared.draft.visibleChange,
-                groundedResearch: { evidenceSummary, dataBundle },
-                sceneObservations: {
-                  blocking: postReadiness.blockingObservations,
-                  advisory: postReadiness.advisoryObservations,
-                },
-                runtimeReview: committedAck?.review,
-                creativeMemory: adaptiveSession.snapshot(),
-              }),
-            },
-          ],
-          signal: stageSignal,
-          maxOutputTokens: adaptiveSession.budget.critiqueOutputTokens,
-          temperature: budget.critiqueTemperature,
-        }),
-      });
-      renderedCritique = sanitizeNorthstarEmergentCreativeCritique(rawCritique);
-    } catch (error) {
-      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      renderedCritique = {
-        summary: "The author critique was unavailable, so Northstar retained the exact committed browser result and used deterministic readiness observations.",
-        observedEffect: prepared.draft.visibleChange,
-        whatImproved: [],
-        whatStillWeak: postReadiness.advisoryObservations,
-        recommendedNextMove: postReadiness.advisoryObservations[0]
-          ?? "Do not force another mutation unless the next observation identifies a material communication improvement.",
-        continueWorking: !postReadiness.communicativelyReady,
-        implementationDefects: [],
-      };
-    }
-
-    latestRenderedCritique = renderedCritique;
-    adaptiveSession.recordCritique(committed.revisionId, renderedCritique);
-
-    let independentReview: NorthstarIndependentCreativeReview;
-    const shouldRunIndependentReview = postReadiness.communicativelyReady
-      || renderedCritique.continueWorking === false
-      || adaptiveSession.snapshot().acceptedActCount >= 2
-      || thinkingDepth === "high";
-    if (!shouldRunIndependentReview) {
-      independentReview = {
-        interpretation: "Independent publication review is deferred until the artifact reaches a communicatively mature stage; the accepted browser revision remains canonical meanwhile.",
-        strongestAspect: renderedCritique.whatImproved[0]
-          ?? "The latest stage is browser-verified and materially advances the grounded composition.",
-        unresolvedProblems: renderedCritique.whatStillWeak,
-        evidenceCommunicationAssessment: renderedCritique.observedEffect,
-        recommendedIntervention: renderedCritique.recommendedNextMove,
-        materialImprovementAvailable: renderedCritique.continueWorking,
-        publicationReady: false,
-        governingVisualIdeaAssessment: "The governing idea remains under active model authorship; independent publication scoring is intentionally deferred.",
-        evidenceTransformationAssessment: renderedCritique.observedEffect,
-        containerAndSurfaceAssessment: "The browser accepted the exact stage without a hard operational regression.",
-        originalityAssessment: "Originality will be independently reviewed when the composition is mature enough for publication judgment.",
-        mediumFitnessAssessment: "The author remains free to change medium or representation in the next stage.",
-        precisionAndLegibilityAssessment: "Browser measurements remain authoritative for operational legibility; final editorial precision is still being authored.",
-        governingIdeaFidelityAssessment: "The author critic, not an early publication gate, guides the next stage.",
-        memorableAuthorshipAssessment: "Deferred until the visual argument has reached a stable ending.",
-        universalQualityBarMet: false,
-        qualityScores: {
-          informationHierarchy: 0,
-          evidenceLegibility: 0,
-          analyticalDepth: 0,
-          structuralOriginality: 0,
-          compositionCoherence: 0,
-          craftPrecision: 0,
-          decisionUsefulness: 0,
-        },
-        minimumQualityScore: 0,
-        structuralBlockers: [],
-        rationale: "Deferring a redundant model review keeps the living artboard moving instead of making the user wait after every accepted stage.",
-      };
-      callbacks.trace?.("creative.independent_review.deferred", {
-        revisionId: committed.revisionId,
-        acceptedActCount: adaptiveSession.snapshot().acceptedActCount,
-        authorContinueWorking: renderedCritique.continueWorking,
-      }, independentReview.rationale);
-    } else try {
-      const rawReview = await runNorthstarModelStageWithTimeout({
-        stage: `independent-review-adaptive-creative-act-${moveIndex}`,
-        timeoutMs: adaptiveSession.budget.independentReviewTimeoutMs,
-        parentSignal: signal,
-        run: (stageSignal) => creativeModel.reviewCreativeArtifact({
-          systemInstruction: buildNorthstarIndependentCreativeReviewSystemInstruction(),
-          parts: [
-            ...designReferenceParts,
-            ...buildNorthstarVisualObservationParts({
-              observation: afterObservation,
-              acknowledgement: committedAck,
-              label: "ARTIFACT UNDER INDEPENDENT REVIEW",
-            }),
-            {
-              text: buildNorthstarIndependentCreativeReviewContext({
-                userRequest: message,
-                objective: intent.objective || message,
-                authoredIntention: prepared.contract.intent,
-                authoredVisibleChange: prepared.draft.visibleChange,
-                groundedResearch: { evidenceSummary, dataBundle },
-                operationalObservations: {
-                  blocking: postReadiness.blockingObservations,
-                  advisory: postReadiness.advisoryObservations,
-                  runtimeReview: committedAck?.review,
-                },
-                creativeJournal: adaptiveSession.snapshot().creativeJournal,
-                designIntelligence: emergentDesignIntelligence,
-              }),
-            },
-          ],
-          signal: stageSignal,
-          maxOutputTokens: adaptiveSession.budget.independentReviewOutputTokens,
-          temperature: adaptiveSession.budget.independentReviewTemperature,
-        }),
-      });
-      independentReview = sanitizeNorthstarIndependentCreativeReview(rawReview);
-    } catch (error) {
-      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      independentReview = {
-        interpretation: renderedCritique.summary,
-        strongestAspect: renderedCritique.whatImproved[0]
-          ?? "The latest candidate is browser-verified and preserves the grounded artifact.",
-        unresolvedProblems: renderedCritique.whatStillWeak,
-        evidenceCommunicationAssessment: renderedCritique.observedEffect,
-        recommendedIntervention: renderedCritique.recommendedNextMove,
-        materialImprovementAvailable: false,
-        publicationReady: postReadiness.operationallyReady,
-        governingVisualIdeaAssessment: "The independent review was unavailable; the browser-verified operational result remains the delivery authority.",
-        evidenceTransformationAssessment: "The independent review was unavailable; any further evidence-transformation recommendation is advisory.",
-        containerAndSurfaceAssessment: "The independent review was unavailable; deterministic browser safety and evidence integrity still passed.",
-        originalityAssessment: "The independent review was unavailable, so originality was not independently scored.",
-        mediumFitnessAssessment: "The independent review was unavailable, so medium fitness remains an advisory unknown.",
-        precisionAndLegibilityAssessment: "The independent review was unavailable; browser geometry and asset verification remain authoritative for delivery.",
-        governingIdeaFidelityAssessment: "The independent review was unavailable, so governing-idea fidelity was not independently scored.",
-        memorableAuthorshipAssessment: "The independent review was unavailable, so memorable authorship was not independently scored.",
-        universalQualityBarMet: false,
-        qualityScores: {
-          informationHierarchy: 0,
-          evidenceLegibility: 0,
-          analyticalDepth: 0,
-          structuralOriginality: 0,
-          compositionCoherence: 0,
-          craftPrecision: 0,
-          decisionUsefulness: 0,
-        },
-        minimumQualityScore: 0,
-        structuralBlockers: [],
-        rationale: "The isolated review call was unavailable. Northstar records that limitation without revoking a browser-verified, operationally healthy result.",
-      };
-    }
-
-    latestIndependentReview = independentReview;
-    adaptiveSession.recordIndependentReview(committed.revisionId, independentReview);
-
-    const closureAdjudicationRequired = renderedCritique.continueWorking === false
-      && (
-        !postReadiness.communicativelyReady
-        || renderedCritique.whatStillWeak.length > 0
-        || independentReview.publicationReady !== true
-        || independentReview.universalQualityBarMet !== true
-        || independentReview.structuralBlockers.length > 0
-        || independentReview.unresolvedProblems.length > 0
-      );
-    if (closureAdjudicationRequired) {
-      try {
-        const rawClosure = await runNorthstarModelStageWithTimeout({
-          stage: `creative-closure-adjudication-${moveIndex}`,
-          timeoutMs: Math.min(42_000, adaptiveSession.budget.critiqueTimeoutMs),
-          parentSignal: signal,
-          run: (stageSignal) => creativeModel.adjudicateCreativeClosure({
-            systemInstruction: buildNorthstarCreativeClosureAdjudicationSystemInstruction(),
-            parts: [
-              ...designReferenceParts,
-              ...buildNorthstarVisualObservationParts({
-                observation: afterObservation,
-                acknowledgement: committedAck,
-                label: "EXACT BROWSER RESULT FOR CREATIVE CLOSURE",
-              }),
-              {
-                text: buildNorthstarCreativeClosureAdjudicationContext({
-                  userRequest: message,
-                  objective: intent.objective || message,
-                  authoredIntent: {
-                    intention: prepared.contract.intent,
-                    viewerUnderstanding: prepared.contract.expectedSemanticDelta,
-                    visibleChange: prepared.draft.visibleChange,
-                    successCriteria: prepared.contract.acceptanceCriteria,
-                  },
-                  authorCritique: {
-                    rendered: renderedCritique,
-                  },
-                  independentReview,
-                  runtimeReview: committedAck?.review,
-                  geometryFacts: committedAck?.review?.geometryFacts,
-                  creativeMemory: adaptiveSession.snapshot(),
-                  operationalReadiness: postReadiness,
-                }),
-              },
-            ],
-            signal: stageSignal,
-            maxOutputTokens: Math.min(3_200, adaptiveSession.budget.critiqueOutputTokens),
-            temperature: Math.min(0.62, adaptiveSession.budget.authoringTemperature),
-          }),
-        });
-        latestClosureAdjudication = sanitizeNorthstarCreativeClosureAdjudication(rawClosure);
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-        latestClosureAdjudication = sanitizeNorthstarCreativeClosureAdjudication({
-          decision: "continue",
-          intendedOutcomeSatisfied: false,
-          renderedResultMatchesIntent: false,
-          viewerOutcomeResolved: false,
-          unresolvedMaterialProblems: [
-            ...renderedCritique.whatStillWeak,
-            ...independentReview.unresolvedProblems,
-            ...independentReview.structuralBlockers,
-          ].slice(0, 16),
-          reviewResponses: independentReview.structuralBlockers.map((issue) => ({
-            issue,
-            disposition: "accept" as const,
-            response: "Closure adjudication was unavailable, so the blocker remains unresolved and must return to the creative source loop.",
-          })),
-          nextCreativeMove: independentReview.recommendedIntervention || renderedCritique.recommendedNextMove,
-          closureRationale: "The closure adjudication call was unavailable while material creative issues remained. Northstar must continue rather than falsely publish the current revision.",
-        });
-      }
-      callbacks.trace?.("creative.closure.adjudicated", {
-        revisionId: committed.revisionId,
-        decision: latestClosureAdjudication.decision,
-        intendedOutcomeSatisfied: latestClosureAdjudication.intendedOutcomeSatisfied,
-        renderedResultMatchesIntent: latestClosureAdjudication.renderedResultMatchesIntent,
-        viewerOutcomeResolved: latestClosureAdjudication.viewerOutcomeResolved,
-        unresolvedMaterialProblems: latestClosureAdjudication.unresolvedMaterialProblems,
-        reviewResponses: latestClosureAdjudication.reviewResponses,
-        nextCreativeMove: latestClosureAdjudication.nextCreativeMove,
-      }, latestClosureAdjudication.closureRationale);
-    }
-
-    if (
-      renderedCritique.continueWorking
-      || latestClosureAdjudication?.decision === "continue"
-      || !independentReview.publicationReady
-      || independentReview.universalQualityBarMet !== true
-      || independentReview.structuralBlockers.length > 0
-    ) {
-      designIntelligenceNeedsRevisit = true;
-    }
-    const changeAreaRatio = Number(committedAck?.review?.changedAreaRatio ?? 0);
-    const structuralOperationCount = prepared.draft.operations.filter((operation) =>
-      operation.op === "insert-html"
-      || operation.op === "set-html"
-      || operation.op === "recompose-region"
-      || operation.op === "move"
-      || operation.op === "remove"
-    ).length;
-    if (changeAreaRatio >= 0.45 || structuralOperationCount >= 4 || prepared.expectedChangedNodeIds.length >= 12) {
-      callbacks.trace?.("creative.revision.major", {
-        revisionId: committed.revisionId,
-        changedAreaRatio: changeAreaRatio,
-        structuralOperationCount,
-        changedNodeCount: prepared.expectedChangedNodeIds.length,
-      }, "The accepted act materially reconsidered a large portion of the living artifact.");
-    }
-
-    const unresolvedCreativeProblems = Array.from(new Set([
-      ...renderedCritique.whatStillWeak,
-      ...independentReview.unresolvedProblems,
-      ...independentReview.structuralBlockers,
-      ...(latestClosureAdjudication?.unresolvedMaterialProblems ?? []),
-      ...postReadiness.blockingObservations,
-      ...adaptiveSession.snapshot().creativeJournal.cosmeticDriftWarnings,
-    ].filter(Boolean))).slice(0, 18);
-    const creativeWorkStillRequired = renderedCritique.continueWorking
-      || latestClosureAdjudication?.decision === "continue"
-      || !postReadiness.communicativelyReady
-      || independentReview.publicationReady !== true
-      || independentReview.universalQualityBarMet !== true
-      || independentReview.structuralBlockers.length > 0;
-    if (creativeWorkStillRequired) {
-      priorCritique = {
-        critique: [
-          renderedCritique.summary,
-          renderedCritique.observedEffect,
-          `Independent review: ${independentReview.interpretation}`,
-          independentReview.rationale,
-          latestClosureAdjudication
-            ? `Creative closure decision: ${latestClosureAdjudication.decision}. ${latestClosureAdjudication.closureRationale}`
-            : "The exact rendered result still requires creative closure adjudication.",
-        ].filter(Boolean).join(" "),
-        requiredChanges: [
-          ...unresolvedCreativeProblems,
-          latestClosureAdjudication?.nextCreativeMove,
-          renderedCritique.recommendedNextMove,
-          independentReview.governingVisualIdeaAssessment,
-          independentReview.evidenceTransformationAssessment,
-          independentReview.containerAndSurfaceAssessment,
-          independentReview.originalityAssessment,
-          independentReview.recommendedIntervention,
-          "Choose the next source-level visual solution yourself. Do not satisfy this feedback by adding a prescribed component or reverting to an implementation-owned design grammar.",
-        ].filter((value): value is string => Boolean(value)).slice(0, 24),
-      };
-    } else {
-      priorCritique = undefined;
-    }
-    currentPackage = {
-      ...currentPackage,
-      diagnostics: [
-        ...currentPackage.diagnostics,
-        `Adaptive author critic: ${renderedCritique.summary}`,
-        `Independent creative review: ${independentReview.interpretation}`,
-        ...(unresolvedCreativeProblems.length > 0
-          ? [`Creative limitations still visible: ${unresolvedCreativeProblems.join(" | ")}`]
-          : []),
-      ].slice(-80),
-    };
-    callbacks.trace?.("creative.act.critiqued", {
-      revisionId: committed.revisionId,
-      continueWorking: renderedCritique.continueWorking,
-      whatImproved: renderedCritique.whatImproved,
-      whatStillWeak: renderedCritique.whatStillWeak,
-      recommendedNextMove: renderedCritique.recommendedNextMove,
-      session: adaptiveSession.snapshot(),
-    }, renderedCritique.summary);
-    callbacks.trace?.("creative.act.independently_reviewed", {
-      revisionId: committed.revisionId,
-      materialImprovementAvailable: independentReview.materialImprovementAvailable,
-      publicationReady: independentReview.publicationReady,
-      structuralBlockers: independentReview.structuralBlockers,
-      governingVisualIdeaAssessment: independentReview.governingVisualIdeaAssessment,
-      evidenceTransformationAssessment: independentReview.evidenceTransformationAssessment,
-      containerAndSurfaceAssessment: independentReview.containerAndSurfaceAssessment,
-      originalityAssessment: independentReview.originalityAssessment,
-      mediumFitnessAssessment: independentReview.mediumFitnessAssessment,
-      precisionAndLegibilityAssessment: independentReview.precisionAndLegibilityAssessment,
-      governingIdeaFidelityAssessment: independentReview.governingIdeaFidelityAssessment,
-      memorableAuthorshipAssessment: independentReview.memorableAuthorshipAssessment,
-      universalQualityBarMet: independentReview.universalQualityBarMet,
-      qualityScores: independentReview.qualityScores,
-      minimumQualityScore: independentReview.minimumQualityScore,
-      unresolvedProblems: independentReview.unresolvedProblems,
-      recommendedIntervention: independentReview.recommendedIntervention,
-      session: adaptiveSession.snapshot(),
-    }, independentReview.interpretation);
-
-  }
-
-  // Publication is a metadata transition on the exact last browser-verified
-  // revision. It does not author, compile, dispatch, animate, acknowledge, or
-  // roll back another visual mutation. Working-only material must be resolved by
-  // the final accepted creative stage; publication cannot rewrite a successful
-  // scene at the last moment.
-  const publicationAcknowledgement = callbacks.getLastMutationAck?.();
-  const publicationBase = materializeNorthstarCanonicalPackage(
-    callbacks.getVisibleArtifact() ?? currentPackage,
-    publicationAcknowledgement,
-  );
-  const publicationAssessment = assessNorthstarCanonicalScene(
-    publicationBase,
-    publicationAcknowledgement,
-  );
-  const publicationReadiness = assessNorthstarAdaptiveReadiness(publicationAssessment);
-  const operationalRevisionPreserved = publicationReadiness.operationallyReady
-    && publicationAcknowledgement?.status === "applied"
-    && publicationAcknowledgement.revisionId === publicationBase.revisionId;
-  const creativeCompletionState = {
-    operationallyReady: operationalRevisionPreserved,
-    acceptedActCount: adaptiveSession.snapshot().acceptedActCount,
-  };
-  const creativeCompletionBlocker = northstarCreativeCompletionBlocker(
-    creativeCompletionState,
-  );
-
-  if (creativeCompletionBlocker) {
-    callbacks.trace?.("creative.completion.blocked", {
-      artifactId: publicationBase.artifactId,
-      revisionId: publicationBase.revisionId,
-      acceptedActCount: creativeCompletionState.acceptedActCount,
-      operationalRevisionPreserved,
-      publicationVerified: false,
-      terminalSettlementAllowed: false,
-      reason: creativeCompletionBlocker,
-    }, creativeCompletionBlocker);
-    throw new NorthstarBudgetExceededError(
-      "creative-materiality",
-      1,
-      `Northstar could not settle the artboard because ${creativeCompletionBlocker} ${publicationReadiness.blockingObservations.join(" ")}`.trim(),
-    );
-  }
-
-  // Creative closure was already decided by the lifecycle authority inside the
-  // adaptive loop. Publication may verify browser facts, but it must not
-  // independently reinterpret the model/reviewer/closure evidence.
-  const canVerifyPublication = !terminalSettleWithNotes
-    && publicationReadiness.communicativelyReady
-    && publicationAssessment.publicationClean;
-
-  if (canVerifyPublication) {
-    currentPackage = {
-      ...publicationBase,
-      provisional: false,
-      publicationState: "verified",
-      diagnostics: [
-        ...publicationBase.diagnostics,
-        "Publication verified as metadata on the exact last browser-acknowledged, communicatively resolved, source-clean revision; no final visual mutation was introduced.",
-        ...(publicationReadiness.advisoryObservations.length > 0
-          ? [`Advisory publication notes: ${publicationReadiness.advisoryObservations.join(" | ")}`]
-          : []),
-      ].slice(-80),
-    };
-    finalVerified = true;
-    callbacks.trace?.("publication.metadata_verified", {
-      artifactId: currentPackage.artifactId,
-      revisionId: currentPackage.revisionId,
-      publicationState: currentPackage.publicationState,
-      communicativelyReady: publicationReadiness.communicativelyReady,
-      publicationClean: publicationAssessment.publicationClean,
-      advisoryObservations: publicationReadiness.advisoryObservations,
-    }, "The exact last browser-verified artboard was marked published only after communication and authored-source cleanliness were both verified.");
-  } else {
-    const deferredNotes = Array.from(new Set([
-      ...publicationReadiness.advisoryObservations,
-      ...(!publicationReadiness.communicativelyReady
-        ? ["The strongest operational revision still has communicative refinement available."]
-        : []),
-      ...(!publicationAssessment.publicationClean
-        ? ["Working-only source language or active process chrome remains in the authored scene."]
-        : []),
-      ...(terminalSettleWithNotes
-        ? ["The exact operational revision was preserved because the creative budget or safe continuation ended before publication-quality closure."]
-        : []),
-    ])).filter(Boolean);
-    finalKnownLimitations = Array.from(new Set([
-      ...finalKnownLimitations,
-      ...deferredNotes,
-    ])).slice(0, 18);
-    currentPackage = {
-      ...publicationBase,
-      provisional: false,
-      publicationState: "working",
-      diagnostics: [
-        ...publicationBase.diagnostics,
-        "The strongest exact browser-verified revision was preserved and settled without falsely promoting publication metadata.",
-        ...(deferredNotes.length > 0
-          ? [`Publication metadata deferred: ${deferredNotes.join(" | ")}`]
-          : []),
-      ].slice(-80),
-    };
-    finalVerified = false;
-    callbacks.trace?.("publication.metadata_deferred", {
-      artifactId: currentPackage.artifactId,
-      revisionId: currentPackage.revisionId,
-      operationalRevisionPreserved: true,
-      communicativelyReady: publicationReadiness.communicativelyReady,
-      publicationClean: publicationAssessment.publicationClean,
-      terminalSettleWithNotes,
-      closureDecision: latestClosureAdjudication?.decision ?? null,
-      notes: deferredNotes,
-    }, "Optional final refinement did not erase the strongest operational revision; the run will settle as completed with notes rather than claiming a false publication.");
-  }
-  authorship.markSettled(currentPackage.revisionId);
-
-  callbacks.trace?.("creative.session.converged", {
-    revisionId: currentPackage.revisionId,
-    finalVerified,
-    knownLimitations: finalKnownLimitations,
-    independentReview: latestIndependentReview,
-    session: adaptiveSession.snapshot(),
-  }, latestReviewSummary);
-
-
-  return {
-    ...currentPackage,
-    creativeDirection,
-    diagnostics: [
-      ...currentPackage.diagnostics,
-      `Northstar v0.7.0 committed ${visibleMutationCount} browser-reviewed material visual transactions on one continuously mounted artboard.`,
-      latestReviewSummary,
-      ...(finalKnownLimitations.length > 0
-        ? [`Known creative limitations at convergence: ${finalKnownLimitations.join(" | ")}`]
-        : []),
-      `Phase 3 creative journal: ${JSON.stringify(adaptiveSession.snapshot().creativeJournal)}`,
-    ].slice(-80),
-    provisional: false,
-    publicationState: finalVerified ? "verified" : "working",
-  };
-}
 function sanitizeObservation(
   value: CompositionEvidenceObservation,
   knownScreens: Map<string, GroundedCompositionScreen>,
@@ -11589,7 +9398,7 @@ async function buildCompositionBlueprint({
   ) => {
     const raw = await callGeminiJson<CompositionBlueprint>({
       apiKey,
-      systemInstruction: `${COMPOSITION_SYSTEM_INSTRUCTION}\n\n${buildNorthstarDesignBehaviorAddendum()}`,
+      systemInstruction: COMPOSITION_SYSTEM_INSTRUCTION,
       contents: [
         {
           role: "user",
@@ -12000,9 +9809,9 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false;
-      let compositionUsedLinearDesign = false;
-      let linearDesignLastRevisionId: string | undefined;
-      let linearDesignPublicationVerified = true;
+      let compositionUsedDesignReset = false;
+      let designResetLastRevisionId: string | undefined;
+      let designResetPublicationVerified = true;
       let lifecycleServerState: NorthstarTerminalServerState = {
         publicationRequired: false,
         publicationVerified: true,
@@ -12015,7 +9824,7 @@ export async function POST(request: NextRequest) {
         if (closed || request.signal.aborted) return;
         if (runLifecycle.terminal() && event !== "error") return;
         try {
-          controller.enqueue(encodeSseEvent(event, normalizeNorthstarDisplayPayload(data)));
+          controller.enqueue(encodeSseEvent(event, event === "design.audit.archive" ? data : normalizeNorthstarDisplayPayload(data)));
           if (event === "run.completed" || event === "run.completed_with_notes") runLifecycle.finish("complete");
           if (event === "run.incomplete") runLifecycle.finish("incomplete");
           if (event === "run.blocked") runLifecycle.finish("blocked");
@@ -12929,7 +10738,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               materialCreativeCommit = false,
             ) => {
               const assessment = assessNorthstarCanonicalScene(artifact, acknowledgement);
-              const readiness = assessNorthstarAdaptiveReadiness(assessment);
+              const readiness = assessDesignResetReadiness(assessment);
               if (materialCreativeCommit) {
                 acceptedCreativeActCount += 1;
                 materialCreativeRevisionId = artifact.revisionId;
@@ -13530,25 +11339,25 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             };
 
 
-            let linearDesignDispatchQueue: Promise<void> = Promise.resolve();
-            const dispatchLinearDesignAction = async (
+            let designResetDispatchQueue: Promise<void> = Promise.resolve();
+            const dispatchDesignResetAction = async (
               packageValue: NorthstarGeneratedCodeArtifactPackage,
               actionIndex: number,
               label: string,
-            ): Promise<NorthstarLinearDesignDispatchResult> => {
+            ): Promise<NorthstarDesignResetDispatchResult> => {
               let releaseQueue!: () => void;
-              const previousQueue = linearDesignDispatchQueue;
-              linearDesignDispatchQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
+              const previousQueue = designResetDispatchQueue;
+              designResetDispatchQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
               await previousQueue;
               try {
                 const base = lastLiveArtifactPackage;
                 if (!base) {
                   return { status: "execution-failed", detail: "The existing research artboard is not mounted." };
                 }
-                const candidateValidation = validateNorthstarLinearDesignCandidate({
+                const candidateValidation = validateNorthstarDesignResetCandidate({
                   base,
                   candidate: packageValue,
-                  actionIndex,
+                  turn: actionIndex as NorthstarDesignResetTurn,
                 });
                 const batch = candidateValidation.batch;
                 if (!candidateValidation.ok || !batch) {
@@ -13569,7 +11378,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   creativeLease: undefined,
                 };
                 delete dispatchPackage.creativeLease;
-                const activityStepId = `linear-design-action-${actionIndex}`;
+                const activityStepId = `design-reset-turn-${actionIndex}`;
                 const step: PlannerStep = {
                   id: activityStepId,
                   label,
@@ -13647,14 +11456,14 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 delete materialized.creativeLease;
                 lastLiveArtifactPackage = materialized;
                 lastLiveArtifactRevisionId = materialized.revisionId;
-                linearDesignLastRevisionId = materialized.revisionId;
+                designResetLastRevisionId = materialized.revisionId;
                 lastLiveMutationAck = acknowledgement;
                 lastLiveRejectedMutationAck = undefined;
                 toolResults.push({
                   stepId: activityStepId,
                   tool: "compose_visual_scene",
                   label,
-                  detail: `Applied visible linear design action ${actionIndex}.`,
+                  detail: `Applied design reset turn ${actionIndex}.`,
                   objectIds: [],
                   data: {
                     canvasAction: {
@@ -13669,7 +11478,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 send("server.trace", {
                   runId,
                   traceId,
-                  name: "linear.design.browser_applied",
+                  name: "design.reset.browser_applied",
                   detail: label,
                   data: {
                     actionIndex,
@@ -13908,6 +11717,9 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               trace(name, data, detail) {
                 send("server.trace", { runId, traceId, name, data, detail });
               },
+              archiveDesignTurn(archive) {
+                send("design.audit.archive", archive);
+              },
               getVisibleArtifact() {
                 return lastLiveArtifactPackage;
               },
@@ -13922,7 +11734,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 );
               },
               async applyDesignAction(packageValue, actionIndex, label) {
-                return dispatchLinearDesignAction(packageValue, actionIndex, label);
+                return dispatchDesignResetAction(packageValue, actionIndex, label);
               },
               async acquireCreativeLease(baseRevisionId) {
                 const snapshot = liveArtboardActor.snapshot();
@@ -14092,24 +11904,18 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   toolResults,
                   catalog: await getDataCatalog(),
                 });
-            compositionUsedLinearDesign = true;
-            linearDesignLastRevisionId = lastLiveArtifactPackage?.revisionId;
-            const codeArtifactPackage = await buildLinearDesignArtifactPackage({
+            compositionUsedDesignReset = true;
+            designResetLastRevisionId = lastLiveArtifactPackage?.revisionId;
+            const codeArtifactPackage = await buildArtboardBenchmarkArtifactPackage({
               apiKey,
+              runId,
               artifactId: compositionArtifactId,
-              message,
-              intent: semanticIntent,
-              blueprint,
-              ledger: compositionResearchLedger,
-              dataBundle: codeArtifactDataBundle,
               thinkingDepth,
-              previousArtifact: selectedCodeArtifact,
-              recentCreativeSignatures,
               callbacks: researchCallbacks,
               signal: request.signal,
             });
             const finalCodeArtifactPackage: NorthstarGeneratedCodeArtifactPackage = codeArtifactPackage;
-            linearDesignPublicationVerified = finalCodeArtifactPackage.publicationState === "verified"
+            designResetPublicationVerified = finalCodeArtifactPackage.publicationState === "verified"
               && finalCodeArtifactPackage.provisional !== true;
             const finalAcknowledgement = lastLiveMutationAck;
             const finalSceneAssessment = assessNorthstarCanonicalScene(finalCodeArtifactPackage, finalAcknowledgement);
@@ -14120,11 +11926,13 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               assessment: finalSceneAssessment,
             });
             compositionFinalStateBrief = finalStateBrief;
-            compositionFinalAnswer = scrubInternalIds(await generateNorthstarCompositionFinalResponse({
-              apiKey,
-              brief: finalStateBrief,
-              signal: request.signal,
-            }), validObjectIds);
+            compositionFinalAnswer = designResetPublicationVerified
+              ? scrubInternalIds(await generateNorthstarCompositionFinalResponse({
+                  apiKey,
+                  brief: finalStateBrief,
+                  signal: request.signal,
+                }), validObjectIds)
+              : "The current browser-verified artboard remains active while the unresolved design continuation stays internal.";
 
             const compositionSteps = buildCompositionActionSteps(
               blueprint,
@@ -14240,10 +12048,10 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             emitCompositionCheckpoint("building", compositionResearchLedger, toolResults);
           }
 
-          if (requestedCanvasActionCount > 0 && compositionUsedLinearDesign) {
+          if (requestedCanvasActionCount > 0 && compositionUsedDesignReset) {
             const expectedFinalRevisionId = compositionFinalStateBrief?.verifiedRevisionId
-              ?? linearDesignLastRevisionId;
-            const publicationVerified = linearDesignPublicationVerified;
+              ?? designResetLastRevisionId;
+            const publicationVerified = designResetPublicationVerified;
             send("assistant.final", {
               runId,
               answer: compositionFinalAnswer,
@@ -14273,20 +12081,20 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               },
             });
             sendServerTrace("request", "completed", traceStartedAt, {
-              outcome: publicationVerified ? "completed" : "completed_with_notes",
+              outcome: publicationVerified ? "completed" : "incomplete",
               finalRevisionId: expectedFinalRevisionId,
-              designRuntime: "linear-living-artboard",
+              designRuntime: "seven-turn-artboard-benchmark",
             });
-            send(publicationVerified ? "run.completed" : "run.completed_with_notes", {
+            send(publicationVerified ? "run.completed" : "run.incomplete", {
               runId,
               mode: planner.mode,
               expectedFinalRevisionId,
-              terminalState: publicationVerified ? "completed" : "completed_with_notes",
-              designRuntime: "linear-living-artboard",
+              terminalState: publicationVerified ? "completed" : "incomplete",
+              designRuntime: "seven-turn-artboard-benchmark",
               publicationVerified,
               detail: publicationVerified
                 ? "Northstar completed the design loop on the last visible browser-applied revision."
-                : "Northstar preserved the last browser-acknowledged revision and stopped only the remaining design continuation after a transport interruption.",
+                : "Northstar preserved the last browser-verified artboard while an unresolved model-authored continuation remained internal.",
             });
             close();
             return;
@@ -14649,7 +12457,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
           });
           close();
         } catch (error) {
-          if (compositionUsedLinearDesign) {
+          if (compositionUsedDesignReset) {
             const cancelled = request.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
             const detail = cancelled
               ? "The user stopped Northstar. The last browser-applied artboard revision remains visible."
@@ -14657,22 +12465,22 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 ? summarizeGeminiFailure(error)
                 : error instanceof Error
                   ? error.message
-                  : "The linear design loop could not continue.";
-            const revisionId = linearDesignLastRevisionId;
+                  : "The cumulative artboard benchmark could not continue.";
+            const revisionId = designResetLastRevisionId;
             send("server.trace", {
               runId,
               traceId,
-              name: cancelled ? "linear.design.cancelled" : "linear.design.incomplete",
+              name: cancelled ? "design.reset.cancelled" : "design.reset.incomplete",
               detail,
               data: {
-                designRuntime: "linear-living-artboard",
+                designRuntime: "seven-turn-artboard-benchmark",
                 revisionId,
                 browserRevisionPreserved: Boolean(revisionId),
               },
             });
             sendServerTrace("request", "failed", traceStartedAt, {
               outcome: cancelled ? "cancelled" : "incomplete",
-              designRuntime: "linear-living-artboard",
+              designRuntime: "seven-turn-artboard-benchmark",
               finalRevisionId: revisionId,
               error: detail,
             });

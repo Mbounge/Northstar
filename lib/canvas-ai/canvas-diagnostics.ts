@@ -39,6 +39,16 @@ export type NorthstarCandidateSourceArchive = {
   mutationBatch: NorthstarArtboardMutationBatch;
 };
 const candidateSourceArchives = new Map<string, NorthstarCandidateSourceArchive>();
+
+export type NorthstarDesignTurnAuditArchive = {
+  schema: string;
+  runId: string;
+  artifactId: string;
+  turn: number;
+  recordedAt: string;
+  [key: string]: unknown;
+};
+const designTurnAuditArchives: NorthstarDesignTurnAuditArchive[] = [];
 const listeners = new Set<() => void>();
 const sensitiveKeyPattern = new RegExp(policy.sensitiveKeyPattern, "i");
 const bulkyKeyPattern = new RegExp(policy.bulkyKeyPattern, "i");
@@ -170,6 +180,12 @@ export function recordNorthstarCandidateSourceArchive(
     if (!oldestRevisionId) break;
     candidateSourceArchives.delete(oldestRevisionId);
   }
+}
+
+export function recordNorthstarDesignTurnAuditArchive(archive: NorthstarDesignTurnAuditArchive) {
+  designTurnAuditArchives.push(structuredClone(archive));
+  while (designTurnAuditArchives.length > 12) designTurnAuditArchives.shift();
+  listeners.forEach((listener) => listener());
 }
 
 export function settleNorthstarCandidateSourceArchive(input: {
@@ -631,6 +647,7 @@ export function summarizeNorthstarRunOutcome(
 export function clearCanvasDiagnostics() {
   events.length = 0;
   candidateSourceArchives.clear();
+  designTurnAuditArchives.length = 0;
   listeners.forEach((listener) => listener());
 }
 
@@ -724,7 +741,7 @@ export function getCanvasRunTelemetry(sourceEvents: CanvasDiagnosticEvent[] = ev
 
 export function exportCanvasDiagnostics() {
   return JSON.stringify({
-    schema: "northstar.canvas-diagnostics.v3",
+    schema: "northstar.canvas-diagnostics.v4",
     exportedAt: new Date().toISOString(),
     policy: {
       version: NORTHSTAR_HEALTH_POLICY.version,
@@ -735,9 +752,11 @@ export function exportCanvasDiagnostics() {
       maxObjectKeys: policy.maxObjectKeys,
       payloadMode: "sanitized",
       candidateSourcePayloadMode: "exact-browser-executable-source",
+      designTurnAuditPayloadMode: "exact-model-boundary-and-browser-source",
     },
     telemetry: getCanvasRunTelemetry(),
     events,
     candidateSourceArchives: Array.from(candidateSourceArchives.values()),
+    designTurnAuditArchives,
   }, null, 2);
 }

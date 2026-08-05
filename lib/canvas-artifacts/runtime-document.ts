@@ -48,6 +48,15 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const initialJournal = artifact.pendingAckToken
     ? mutationJournal.slice(0, -1)
     : mutationJournal;
+  const initialAuthoredDesignRelationMap = new Map(
+    (artifact.authoredDesignRelations ?? []).map((relation) => [relation.id, relation]),
+  );
+  for (const batch of initialJournal) {
+    for (const relation of batch.relations ?? []) {
+      initialAuthoredDesignRelationMap.set(relation.id, relation);
+    }
+  }
+  const initialAuthoredDesignRelations = Array.from(initialAuthoredDesignRelationMap.values());
   const initialRevisionId = artifact.pendingAckToken
     ? artifact.parentRevisionId ?? artifact.revisionId
     : artifact.revisionId;
@@ -88,6 +97,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   let activeStageIndex = ${activeStageIndex};
   const STAGES = ${safeJson(stages)};
   const INITIAL_JOURNAL = ${safeJson(initialJournal)};
+  const INITIAL_AUTHORED_DESIGN_RELATIONS = ${safeJson(initialAuthoredDesignRelations)};
   const SHOULD_ANIMATE_INITIAL_MOUNT = ${safeJson(shouldAnimateInitialMount)};
   const ALLOWED_ASSETS = new Set(${safeJson(allowedAssetUrls)});
   // This must not be a mount-time constant. The iframe is intentionally kept
@@ -323,15 +333,52 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     scope.querySelectorAll?.("a[href]").forEach((element) => element.removeAttribute("href"));
   };
 
+  const syncAuthoredSurfaceExtension = () => {
+    const artboard = authoredArtboard();
+    if (!artboard) return;
+    let style = document.getElementById("northstar-authored-surface-extension");
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "northstar-authored-surface-extension";
+      style.setAttribute("data-ns-runtime-owned", "true");
+      document.head.appendChild(style);
+    }
+    const artboardRect = artboard.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    const artboardLeft = artboardRect.left - rootRect.left;
+    const artboardTop = artboardRect.top - rootRect.top;
+    const minX = Math.min(artboardLeft, Number(requestedBounds.minX) || 0);
+    const minY = Math.min(artboardTop, Number(requestedBounds.minY) || 0);
+    const maxX = Math.max(artboardRect.right - rootRect.left, Number(requestedBounds.maxX) || 0);
+    const maxY = Math.max(artboardRect.bottom - rootRect.top, Number(requestedBounds.maxY) || 0);
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+    style.textContent = '[data-ns-node-id="artboard"]{overflow:visible!important;isolation:isolate!important}'
+      + '[data-ns-node-id="artboard"]::before{content:"";position:absolute;pointer-events:none;box-sizing:border-box;z-index:-1;left:' + (minX - artboardLeft) + 'px;top:' + (minY - artboardTop) + 'px;width:' + width + 'px;height:' + height + 'px;background:inherit;border-radius:inherit}';
+  };
+
   const requestSpace = (request = {}) => {
     const left = Math.max(0, Number(request.left) || 0);
     const top = Math.max(0, Number(request.top) || 0);
     const right = Math.max(0, Number(request.right) || 0);
     const bottom = Math.max(0, Number(request.bottom) || 0);
-    requestedBounds.minX = Math.min(requestedBounds.minX, -left);
-    requestedBounds.minY = Math.min(requestedBounds.minY, -top);
-    requestedBounds.maxX = Math.max(requestedBounds.maxX, canonicalLayoutBaseWidth + right);
-    requestedBounds.maxY = Math.max(requestedBounds.maxY, canonicalLayoutBaseHeight + bottom);
+    const acceptedBounds = committedCanonicalGeometry?.contentBounds || {
+      minX: 0,
+      minY: 0,
+      maxX: canonicalLayoutBaseWidth,
+      maxY: canonicalLayoutBaseHeight,
+    };
+    // Literal edge growth: requested space extends the currently accepted world
+    // rectangle. It never substitutes the authored layout base or asks CSS to
+    // redistribute existing content inside a smaller responsive container.
+    requestedBounds.minX = Math.min(requestedBounds.minX, acceptedBounds.minX - left);
+    requestedBounds.minY = Math.min(requestedBounds.minY, acceptedBounds.minY - top);
+    requestedBounds.maxX = Math.max(requestedBounds.maxX, acceptedBounds.maxX + right);
+    requestedBounds.maxY = Math.max(requestedBounds.maxY, acceptedBounds.maxY + bottom);
+    // Extend the authored white surface independently from the artboard's local
+    // layout box. Existing descendants keep the exact same containing-block
+    // geometry while the visible source-owned surface grows around them.
+    syncAuthoredSurfaceExtension();
     queueContentSize();
   };
 
@@ -832,6 +879,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         relationshipLayer.appendChild(leader);
       }
 
+      const authoredRelationshipNodes = Array.from(root.querySelectorAll('[data-ns-authored-relationship="true"][data-ns-source-node-id][data-ns-target-node-id]'))
+        .filter((element) => !element.closest("[data-ns-spatial-system]"));
       const metadataNodes = Array.from(root.querySelectorAll("[data-ns-relationship-id][data-ns-source-id], [data-ns-relationship-id][data-ns-source-node-id]"))
         .filter((element) => !element.closest("[data-ns-spatial-system]"))
         .sort((a, b) => {
@@ -954,8 +1003,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         crossingCount,
         hardFailureCount,
         softIssueCount,
-        annotationCount: annotations.length,
-        relationshipCount: metadataNodes.length,
+        annotationCount: annotations.length + root.querySelectorAll('[data-ns-authored-annotation="true"]').length,
+        relationshipCount: metadataNodes.length + authoredRelationshipNodes.length,
       };
       return lastSpatialAudit;
     } catch (error) {
@@ -1351,12 +1400,21 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       const rawSy = next.height > 0 ? prior.rect.height / next.height : 1;
       const moved = Math.abs(dx) > .5 || Math.abs(dy) > .5 || Math.abs(rawSx - 1) > .01 || Math.abs(rawSy - 1) > .01;
       if (moved) {
-        const safeUniformScale = isVisualEvidenceLeaf(element, element.getAttribute?.("data-ns-node-id"))
+        const protectedEvidence = Boolean(element.closest?.('[data-ns-protected-evidence="true"]'))
+          || element.getAttribute?.("data-ns-protected-evidence") === "true"
+          || isVisualEvidenceLeaf(element, element.getAttribute?.("data-ns-node-id"));
+        const safeUniformScale = !protectedEvidence
           && rawSx >= .62 && rawSx <= 1.62 && rawSy >= .62 && rawSy <= 1.62
           && Math.abs(rawSx - rawSy) <= .18
             ? Math.max(.62, Math.min(1.62, (rawSx + rawSy) / 2))
             : 1;
         const initialTransform = "translate(" + dx + "px," + dy + "px)" + (Math.abs(safeUniformScale - 1) > .01 ? " scale(" + safeUniformScale + ")" : "");
+        if (protectedEvidence) {
+          return [
+            { offset: 0, transformOrigin: "top left", transform: initialTransform, opacity: Math.max(.9, prior.opacity || 1), filter: "none" },
+            { offset: 1, transformOrigin: "top left", transform: "none", opacity: 1, filter: "none" },
+          ];
+        }
         return [
           { offset: 0, transformOrigin: "top left", transform: initialTransform, opacity: Math.max(.72, prior.opacity || 1), filter: "saturate(.9)" },
           { offset: .82, transformOrigin: "top left", transform: "translate(0,-2px) scale(1.003)", opacity: 1, filter: "saturate(1.02)" },
@@ -1572,6 +1630,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       root.removeAttribute("data-ns-construction-beat");
       root.removeAttribute("data-ns-construction-beat-index");
       beforeConstructionSnapshot = null;
+      queueAuthoredRelationResolution();
       solveSpatialSystem();
       queueContentSize();
     };
@@ -1844,12 +1903,23 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       const normalizedClasses = Array.from(element.classList || []).sort();
       const normalizedStyles = semanticStyles(element);
       const normalizedText = normalizeSemanticText(element.textContent);
+      const rootRect = root.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
+      const bounds = {
+        left: Math.round((rect.left - rootRect.left) * 100) / 100,
+        top: Math.round((rect.top - rootRect.top) * 100) / 100,
+        right: Math.round((rect.right - rootRect.left) * 100) / 100,
+        bottom: Math.round((rect.bottom - rootRect.top) * 100) / 100,
+        width: Math.round(rect.width * 100) / 100,
+        height: Math.round(rect.height * 100) / 100,
+      };
       const childNodeIds = Array.from(element.children || [])
         .map((child) => child.getAttribute?.("data-ns-node-id") || "")
         .filter(Boolean);
       return {
         nodeId,
         parentId: parent?.getAttribute("data-ns-node-id") || undefined,
+        bounds,
         normalizedText,
         normalizedAttributes,
         normalizedClasses,
@@ -1887,6 +1957,44 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     });
     return snapshot;
   };
+  const expandPixelStableNodeIds = (rootIds = []) => {
+    const stable = new Set();
+    for (const rootId of Array.isArray(rootIds) ? rootIds : []) {
+      const element = nodeById(rootId);
+      if (!element) continue;
+      const ownId = element.getAttribute("data-ns-node-id");
+      if (ownId) stable.add(ownId);
+      element.querySelectorAll("[data-ns-node-id]").forEach((child) => {
+        const childId = child.getAttribute("data-ns-node-id");
+        if (childId) stable.add(childId);
+      });
+    }
+    return Array.from(stable);
+  };
+  const pixelStableFailure = (stableIds, before, after) => {
+    const failures = [];
+    const tolerance = 0.6;
+    for (const id of Array.isArray(stableIds) ? stableIds : []) {
+      const beforeNode = before.get(id);
+      const afterNode = after.get(id);
+      if (!beforeNode || !afterNode) { failures.push(id + " was removed or could not be measured"); continue; }
+      const semanticBefore = { ...beforeNode, rect: undefined };
+      const semanticAfter = { ...afterNode, rect: undefined };
+      if (JSON.stringify(semanticBefore) !== JSON.stringify(semanticAfter)) {
+        failures.push(id + " source or rendered semantics changed");
+        continue;
+      }
+      const beforeRect = beforeNode.rect || [];
+      const afterRect = afterNode.rect || [];
+      const labels = ["x", "y", "width", "height"];
+      const changed = labels.filter((_, index) => Math.abs(Number(afterRect[index] || 0) - Number(beforeRect[index] || 0)) > tolerance);
+      if (changed.length) failures.push(id + " changed " + changed.join("/"));
+    }
+    return failures.length
+      ? "Pixel-stable reference geometry changed: " + failures.slice(0, 16).join(", ") + "."
+      : "";
+  };
+
   const diffSemanticSnapshots = (before, after) => {
     const changed = [];
     const ids = new Set([...before.keys(), ...after.keys()]);
@@ -1946,6 +2054,27 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
     return width * height;
   };
+  const paintedMediaGeometry = (image, imageStyle) => {
+    if (!image) return { width: 0, height: 0, aspectRatio: 0, naturalAspectRatio: 0 };
+    const rect = image.getBoundingClientRect();
+    const naturalWidth = Number(image.naturalWidth || 0);
+    const naturalHeight = Number(image.naturalHeight || 0);
+    const naturalAspectRatio = naturalWidth > 0 && naturalHeight > 0 ? naturalWidth / naturalHeight : 0;
+    const objectFit = String(imageStyle?.objectFit || "fill").toLowerCase();
+    let width = Math.max(0, rect.width);
+    let height = Math.max(0, rect.height);
+    if (naturalAspectRatio > 0 && (objectFit === "contain" || objectFit === "scale-down")) {
+      const containerAspectRatio = width > 0 && height > 0 ? width / height : 0;
+      if (containerAspectRatio > naturalAspectRatio) width = height * naturalAspectRatio;
+      else if (containerAspectRatio > 0) height = width / naturalAspectRatio;
+    }
+    return {
+      width,
+      height,
+      aspectRatio: width > 0 && height > 0 ? width / height : 0,
+      naturalAspectRatio,
+    };
+  };
   const captureEvidenceRegistryReceipt = () => {
     const rootRect = root.getBoundingClientRect();
     const entries = Array.from(root.querySelectorAll("[data-ns-evidence-id]"))
@@ -1955,6 +2084,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const style = getComputedStyle(element);
         const image = element.matches("img") ? element : element.querySelector("img");
         const imageStyle = image ? getComputedStyle(image) : style;
+        const media = paintedMediaGeometry(image, imageStyle);
+        const runtimeInherited = element.hasAttribute("data-ns-runtime-inherited-placement");
         const visible = rect.width > 4
           && rect.height > 4
           && style.display !== "none"
@@ -1963,7 +2094,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         return {
           evidenceId,
           visible,
-          runtimeInherited: element.hasAttribute("data-ns-runtime-inherited-placement"),
+          runtimeInherited,
           presentation: {
             evidenceId,
             nodeId: element.getAttribute("data-ns-node-id") || undefined,
@@ -1974,9 +2105,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             width: Math.round(rect.width * 100) / 100,
             height: Math.round(rect.height * 100) / 100,
             aspectRatio: rect.height > 0 ? Math.round((rect.width / rect.height) * 10000) / 10000 : 0,
+            mediaWidth: Math.round(media.width * 100) / 100,
+            mediaHeight: Math.round(media.height * 100) / 100,
+            mediaAspectRatio: Math.round(media.aspectRatio * 10000) / 10000,
+            naturalAspectRatio: Math.round(media.naturalAspectRatio * 10000) / 10000,
             objectFit: imageStyle.objectFit || "fill",
             objectPosition: imageStyle.objectPosition || "50% 50%",
             transform: style.transform || "none",
+            runtimeInherited,
           },
         };
       })
@@ -1998,6 +2134,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   };
   const visualSafetySnapshot = () => {
     const rootRect = root.getBoundingClientRect();
+    const evidenceRegistryReceipt = captureEvidenceRegistryReceipt();
     const singletonRoleForElement = (element) => {
       const source = [
         element.getAttribute("data-ns-role") || "",
@@ -2041,6 +2178,25 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       }))
       .filter((item) => item.rect.width > 4 && item.rect.height > 4);
     const evidenceRects = evidenceItems.map((item) => item.rect);
+    const unionRects = (rects) => {
+      if (!rects.length) return null;
+      const left = Math.min(...rects.map((rect) => rect.left));
+      const top = Math.min(...rects.map((rect) => rect.top));
+      const right = Math.max(...rects.map((rect) => rect.right));
+      const bottom = Math.max(...rects.map((rect) => rect.bottom));
+      return { left, top, right, bottom, width: right - left, height: bottom - top };
+    };
+    const evidenceTerritoriesByFlow = new Map();
+    for (const item of evidenceItems) {
+      const flowId = item.element.closest("[data-ns-flow-id]")?.getAttribute("data-ns-flow-id") || "";
+      if (!flowId) continue;
+      const entries = evidenceTerritoriesByFlow.get(flowId) || [];
+      entries.push(item.rect);
+      evidenceTerritoriesByFlow.set(flowId, entries);
+    }
+    const evidenceTerritories = Array.from(evidenceTerritoriesByFlow.entries())
+      .map(([flowId, rects]) => ({ flowId, rect: unionRects(rects) }))
+      .filter((entry) => entry.rect && entry.rect.width > 4 && entry.rect.height > 4);
     const evidenceCollisionPairs = [];
     for (let index = 0; index < evidenceItems.length; index += 1) {
       for (let otherIndex = index + 1; otherIndex < evidenceItems.length; otherIndex += 1) {
@@ -2054,6 +2210,245 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         ));
         if (overlapArea / smallerArea > 0.08) {
           evidenceCollisionPairs.push([first.id, second.id]);
+        }
+      }
+    }
+    const semanticRegionIntrusions = [];
+    const authoredAdditionCandidates = semantic.filter((item) => {
+      if (item.element.matches("svg,path,line,polyline,polygon")) return false;
+      const id = item.id.toLowerCase();
+      const role = (item.element.getAttribute("data-ns-role") || "").toLowerCase();
+      return item.element.hasAttribute("data-ns-authored-annotation")
+        || item.element.hasAttribute("data-ns-authored-callout")
+        || item.element.hasAttribute("data-ns-explains-node-id")
+        || /(?:annotation|callout|caption|explanation|comment|remark|note|card|label)/.test(id + " " + role);
+    });
+    const resolveFlowForNodeId = (nodeId) => {
+      if (!nodeId) return "";
+      try {
+        return root.querySelector('[data-ns-node-id="' + CSS.escape(nodeId) + '"]')
+          ?.closest("[data-ns-flow-id]")?.getAttribute("data-ns-flow-id") || "";
+      } catch {
+        return "";
+      }
+    };
+    const intendedFlowForAddition = (item) => {
+      const explicitTargetIds = [
+        item.element.getAttribute("data-ns-explains-node-id"),
+        item.element.getAttribute("data-ns-between-before-node-id"),
+        item.element.getAttribute("data-ns-between-after-node-id"),
+      ].filter(Boolean);
+      for (const nodeId of explicitTargetIds) {
+        const flowId = resolveFlowForNodeId(nodeId);
+        if (flowId) return flowId;
+      }
+      for (const relation of authoredDesignRelations.values()) {
+        if (relation.subjectId !== item.id) continue;
+        for (const reference of relation.references || []) {
+          const flowId = resolveFlowForNodeId(reference.nodeId);
+          if (flowId) return flowId;
+        }
+      }
+      return "";
+    };
+    const rectIntersection = (a, b) => {
+      const left = Math.max(a.left, b.left);
+      const top = Math.max(a.top, b.top);
+      const right = Math.min(a.right, b.right);
+      const bottom = Math.min(a.bottom, b.bottom);
+      if (right <= left || bottom <= top) return null;
+      return { left, top, right, bottom, width: right - left, height: bottom - top };
+    };
+    for (const addition of authoredAdditionCandidates) {
+      const intendedFlowId = intendedFlowForAddition(addition);
+      if (!intendedFlowId) continue;
+      for (const territory of evidenceTerritories) {
+        if (territory.flowId === intendedFlowId) continue;
+        const overlap = rectIntersection(addition.rect, territory.rect);
+        if (!overlap) continue;
+        const overlapArea = overlap.width * overlap.height;
+        const additionArea = Math.max(1, addition.rect.width * addition.rect.height);
+        if (overlapArea < 16 || overlapArea / additionArea < 0.02) continue;
+        semanticRegionIntrusions.push({
+          additionId: addition.id,
+          intendedFlowId,
+          intrudedFlowId: territory.flowId,
+          additionBounds: { left: Number(addition.rect.left.toFixed(2)), top: Number(addition.rect.top.toFixed(2)), width: Number(addition.rect.width.toFixed(2)), height: Number(addition.rect.height.toFixed(2)) },
+          regionBounds: { left: Number(territory.rect.left.toFixed(2)), top: Number(territory.rect.top.toFixed(2)), width: Number(territory.rect.width.toFixed(2)), height: Number(territory.rect.height.toFixed(2)) },
+          overlapBounds: { left: Number(overlap.left.toFixed(2)), top: Number(overlap.top.toFixed(2)), width: Number(overlap.width.toFixed(2)), height: Number(overlap.height.toFixed(2)) },
+          overlapArea: Number(overlapArea.toFixed(2)),
+        });
+      }
+    }
+    const authoredContinuityObservations = [];
+    const distanceBetweenCenters = (a, b) => {
+      const ax = a.left + a.width / 2;
+      const ay = a.top + a.height / 2;
+      const bx = b.left + b.width / 2;
+      const by = b.top + b.height / 2;
+      return Math.hypot(ax - bx, ay - by);
+    };
+    const containsCenter = (outer, inner) => {
+      const x = inner.left + inner.width / 2;
+      const y = inner.top + inner.height / 2;
+      return x >= outer.left && x <= outer.right && y >= outer.top && y <= outer.bottom;
+    };
+    const targetNodeIdsForAddition = (item) => {
+      const targetIds = new Set([
+        item.element.getAttribute("data-ns-explains-node-id"),
+        item.element.getAttribute("data-ns-source-node-id"),
+        item.element.getAttribute("data-ns-target-node-id"),
+        item.element.getAttribute("data-ns-between-before-node-id"),
+        item.element.getAttribute("data-ns-between-after-node-id"),
+      ].filter(Boolean));
+      for (const relation of authoredDesignRelations.values()) {
+        if (relation.subjectId !== item.id) continue;
+        for (const reference of relation.references || []) if (reference.nodeId) targetIds.add(reference.nodeId);
+      }
+      return Array.from(targetIds);
+    };
+    for (const addition of authoredAdditionCandidates) {
+      const targetNodeIds = targetNodeIdsForAddition(addition);
+      if (!targetNodeIds.length) continue;
+      const targetElements = targetNodeIds.flatMap((nodeId) => {
+        try {
+          const element = root.querySelector('[data-ns-node-id="' + CSS.escape(nodeId) + '"]');
+          return element ? [element] : [];
+        } catch { return []; }
+      });
+      if (!targetElements.length) continue;
+      const targetRects = targetElements.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 1 && rect.height > 1);
+      const targetBounds = unionRects(targetRects);
+      if (!targetBounds) continue;
+      const targetFlowElement = targetElements.map((element) => element.closest("[data-ns-flow-id]")).find(Boolean);
+      const targetFlowId = targetFlowElement?.getAttribute("data-ns-flow-id") || "";
+      const targetRegionRect = targetFlowElement?.getBoundingClientRect();
+      const outsideTargetRegion = Boolean(targetRegionRect && !containsCenter(targetRegionRect, addition.rect));
+      const centerDistance = distanceBetweenCenters(addition.rect, targetBounds);
+      const targetScale = Math.max(1, Math.hypot(targetBounds.width, targetBounds.height));
+      const weakenedByDistance = centerDistance > targetScale * 1.75;
+      const weakened = outsideTargetRegion || weakenedByDistance;
+      authoredContinuityObservations.push({
+        additionId: addition.id,
+        targetNodeIds,
+        intendedFlowId: targetFlowId || undefined,
+        targetRegionId: targetFlowElement?.getAttribute("data-ns-node-id") || undefined,
+        additionBounds: { left: Number(addition.rect.left.toFixed(2)), top: Number(addition.rect.top.toFixed(2)), width: Number(addition.rect.width.toFixed(2)), height: Number(addition.rect.height.toFixed(2)) },
+        targetBounds: { left: Number(targetBounds.left.toFixed(2)), top: Number(targetBounds.top.toFixed(2)), width: Number(targetBounds.width.toFixed(2)), height: Number(targetBounds.height.toFixed(2)) },
+        centerDistance: Number(centerDistance.toFixed(2)),
+        outsideTargetRegion,
+        visualAttribution: weakened ? "weakened" : "clear",
+        reason: outsideTargetRegion
+          ? "The addition center is outside the rendered region containing its semantic target after cumulative layout."
+          : weakenedByDistance
+            ? "The addition is now substantially farther from its semantic target, weakening visual attribution."
+            : "The addition remains visually attributable to its semantic target.",
+      });
+    }
+    const authoredInterferencePairs = [];
+    const relationshipElements = Array.from(root.querySelectorAll(
+      '[data-ns-authored-relationship="true"], [data-ns-relationship-id], [data-ns-node-id*="connector" i]'
+    ));
+    const relationshipPrimitives = Array.from(new Set(relationshipElements.flatMap((relationshipElement) => {
+      const directPrimitive = relationshipElement.matches("path,line,polyline,polygon")
+        ? [relationshipElement]
+        : [];
+      return [...directPrimitive, ...Array.from(relationshipElement.querySelectorAll("path,line,polyline,polygon"))];
+    })));
+    const explanatoryObstacleCandidates = semantic.filter((item) => {
+      if (item.element.matches("svg,path,line,polyline,polygon")) return false;
+      const id = item.id.toLowerCase();
+      const role = (item.element.getAttribute("data-ns-role") || "").toLowerCase();
+      const text = (item.element.textContent || "").trim();
+      const explicitlyAuthoredReadable = item.element.hasAttribute("data-ns-authored-annotation")
+        || item.element.hasAttribute("data-ns-authored-callout")
+        || item.element.hasAttribute("data-ns-explains-node-id")
+        || /(?:annotation|callout|caption|label|explanation|comment|remark|note|card)/.test(id + " " + role);
+      const leafReadableText = Boolean(text)
+        && !item.element.querySelector("[data-ns-node-id]")
+        && !item.element.closest("[data-ns-evidence-id], [data-ns-protected-evidence]");
+      return explicitlyAuthoredReadable || leafReadableText;
+    });
+    // Prefer the smallest independently meaningful obstacle. Structural wrappers
+    // often inherit all descendant text and would otherwise produce duplicate,
+    // misleading reports such as evidence-reservoir + evidence + flow wrapper for
+    // the same physical crossing.
+    const explanatoryObstacles = explanatoryObstacleCandidates.filter((item) => !explanatoryObstacleCandidates.some((other) => (
+      other !== item
+      && item.element.contains(other.element)
+      && other.rect.width > 1
+      && other.rect.height > 1
+    )));
+    const pointInsideRect = (point, rect, inset = 1.5) => point.x > rect.left + inset
+      && point.x < rect.right - inset
+      && point.y > rect.top + inset
+      && point.y < rect.bottom - inset;
+    for (const primitive of relationshipPrimitives) {
+      const owner = primitive.closest('[data-ns-authored-relationship="true"], [data-ns-relationship-id], [data-ns-node-id*="connector" i]') || primitive;
+      const relationshipId = owner.getAttribute("data-ns-node-id")
+        || owner.getAttribute("data-ns-relationship-id")
+        || "authored-relationship";
+      const primitiveId = primitive.getAttribute("data-ns-node-id") || relationshipId;
+      const sourceNodeId = owner.getAttribute("data-ns-source-node-id") || "";
+      const targetNodeId = owner.getAttribute("data-ns-target-node-id") || "";
+      let samplePoints = [];
+      try {
+        if (typeof primitive.getTotalLength === "function" && typeof primitive.getPointAtLength === "function") {
+          const totalLength = primitive.getTotalLength();
+          const sampleCount = Math.max(12, Math.min(160, Math.ceil(totalLength / 6)));
+          const matrix = primitive.getScreenCTM?.();
+          for (let sampleIndex = 1; sampleIndex < sampleCount; sampleIndex += 1) {
+            const localPoint = primitive.getPointAtLength((totalLength * sampleIndex) / sampleCount);
+            const screenPoint = matrix && typeof DOMPoint === "function"
+              ? new DOMPoint(localPoint.x, localPoint.y).matrixTransform(matrix)
+              : localPoint;
+            samplePoints.push({ x: screenPoint.x, y: screenPoint.y });
+          }
+        }
+      } catch {}
+      if (!samplePoints.length && primitive.tagName.toLowerCase() === "line") {
+        const x1 = Number(primitive.getAttribute("x1") || 0);
+        const y1 = Number(primitive.getAttribute("y1") || 0);
+        const x2 = Number(primitive.getAttribute("x2") || 0);
+        const y2 = Number(primitive.getAttribute("y2") || 0);
+        const matrix = primitive.getScreenCTM?.();
+        for (let sampleIndex = 1; sampleIndex < 24; sampleIndex += 1) {
+          const localPoint = { x: x1 + ((x2 - x1) * sampleIndex) / 24, y: y1 + ((y2 - y1) * sampleIndex) / 24 };
+          const screenPoint = matrix && typeof DOMPoint === "function"
+            ? new DOMPoint(localPoint.x, localPoint.y).matrixTransform(matrix)
+            : localPoint;
+          samplePoints.push({ x: screenPoint.x, y: screenPoint.y });
+        }
+      }
+      if (!samplePoints.length) continue;
+      for (const obstacle of explanatoryObstacles) {
+        if (obstacle.element === owner || obstacle.element === primitive || owner.contains(obstacle.element)) continue;
+        if (obstacle.id === sourceNodeId || obstacle.id === targetNodeId) continue;
+        if (sourceNodeId && obstacle.element.closest('[data-ns-node-id="' + CSS.escape(sourceNodeId) + '"]')) continue;
+        if (targetNodeId && obstacle.element.closest('[data-ns-node-id="' + CSS.escape(targetNodeId) + '"]')) continue;
+        const hitPoints = samplePoints.filter((point) => pointInsideRect(point, obstacle.rect));
+        const hitCount = hitPoints.length;
+        if (hitCount >= 2) {
+          authoredInterferencePairs.push({
+            relationshipId,
+            primitiveId,
+            obstacleId: obstacle.id || "authored-content",
+            hitCount,
+            obstacleBounds: {
+              left: Number(obstacle.rect.left.toFixed(2)),
+              top: Number(obstacle.rect.top.toFixed(2)),
+              width: Number(obstacle.rect.width.toFixed(2)),
+              height: Number(obstacle.rect.height.toFixed(2)),
+            },
+            firstHitPoint: {
+              x: Number(hitPoints[0].x.toFixed(2)),
+              y: Number(hitPoints[0].y.toFixed(2)),
+            },
+            lastHitPoint: {
+              x: Number(hitPoints[hitPoints.length - 1].x.toFixed(2)),
+              y: Number(hitPoints[hitPoints.length - 1].y.toFixed(2)),
+            },
+          });
         }
       }
     }
@@ -2264,6 +2659,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       declaredStructureFailures,
       duplicateSingletonRoles,
       evidenceCollisionPairs,
+      authoredInterferencePairs,
+      semanticRegionIntrusions,
+      authoredContinuityObservations,
+      runtimeInheritedEvidenceIds: evidenceRegistryReceipt.runtimeInheritedEvidenceIds,
+      evidencePresentationManifest: evidenceRegistryReceipt.presentationManifest,
       flowTopologyViolations: Array.from(new Set(flowTopologyViolations)),
       contentBounds: { left, top, right, bottom },
     };
@@ -2273,6 +2673,50 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       const previous = new Set(prior || []);
       return (next || []).filter((value) => !previous.has(value));
     };
+    const runtimeInheritedEvidenceIds = after.runtimeInheritedEvidenceIds || [];
+    if (runtimeInheritedEvidenceIds.length) {
+      return "Grounded evidence was left on runtime-inherited overlay geometry instead of being authored into the new composition: "
+        + runtimeInheritedEvidenceIds.slice(0, 8).join(", ")
+        + ". Use exact evidence placeholders or explicit placements in the intended semantic lane.";
+    }
+    const beforeEvidenceById = new Map(
+      (before.evidencePresentationManifest || []).map((entry) => [entry.evidenceId, entry]),
+    );
+    const afterEvidence = after.evidencePresentationManifest || [];
+    const distortedEvidenceIds = afterEvidence
+      .filter((entry) => {
+        const naturalAspectRatio = Number(entry.naturalAspectRatio || 0);
+        const mediaAspectRatio = Number(entry.mediaAspectRatio || 0);
+        if (!(naturalAspectRatio > 0) || !(mediaAspectRatio > 0)) return false;
+        const ratio = mediaAspectRatio / naturalAspectRatio;
+        return ratio < .88 || ratio > 1.14;
+      })
+      .map((entry) => entry.evidenceId);
+    if (distortedEvidenceIds.length) {
+      return "Grounded screenshots were non-proportionally distorted: "
+        + distortedEvidenceIds.slice(0, 8).join(", ")
+        + ". Preserve each screenshot's intrinsic aspect ratio and complete image surface.";
+    }
+    const abruptScaleChanges = afterEvidence.flatMap((entry) => {
+      const previous = beforeEvidenceById.get(entry.evidenceId);
+      if (!previous) return [];
+      const beforeWidth = Number(previous.mediaWidth || previous.width || 0);
+      const beforeHeight = Number(previous.mediaHeight || previous.height || 0);
+      const afterWidth = Number(entry.mediaWidth || entry.width || 0);
+      const afterHeight = Number(entry.mediaHeight || entry.height || 0);
+      if (!(beforeWidth > 0) || !(beforeHeight > 0) || !(afterWidth > 0) || !(afterHeight > 0)) return [];
+      const widthRatio = afterWidth / beforeWidth;
+      const heightRatio = afterHeight / beforeHeight;
+      if (widthRatio >= .38 && widthRatio <= 2.65 && heightRatio >= .38 && heightRatio <= 2.65) return [];
+      return [{ evidenceId: entry.evidenceId, widthRatio, heightRatio }];
+    });
+    const comparableEvidenceCount = afterEvidence.filter((entry) => beforeEvidenceById.has(entry.evidenceId)).length;
+    const abruptScaleThreshold = Math.max(4, Math.ceil(comparableEvidenceCount * .4));
+    if (abruptScaleChanges.length >= abruptScaleThreshold) {
+      return "The canonical evidence field changed scale too abruptly in one action ("
+        + abruptScaleChanges.length + " of " + comparableEvidenceCount + " screens). "
+        + "Rescale the ordered flow proportionally in a stable regional step, or create additive focal copies for emphasis.";
+    }
     const newDuplicateRoles = (after.duplicateSingletonRoles || []).filter((entry) =>
       !(before.duplicateSingletonRoles || []).some((previous) => previous.role === entry.role && previous.owners.join("|") === entry.owners.join("|"))
     );
@@ -2280,7 +2724,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       return "Canonical artboard role uniqueness regressed; new duplicate singleton regions appeared: " + newDuplicateRoles.map((entry) => entry.role + " [" + entry.owners.join(", ") + "]").join("; ");
     }
     const newUnsafeEvidenceOverlays = newlyAdded(after.unsafeEvidenceOverlayIds, before.unsafeEvidenceOverlayIds);
-    if (!mechanicalOnly && newUnsafeEvidenceOverlays.length) {
+    if (newUnsafeEvidenceOverlays.length) {
       return "A new synthetic overlay obscured protected evidence: " + newUnsafeEvidenceOverlays.join(", ");
     }
     const newIncoherentRegions = newlyAdded(after.incoherentMajorRegionIds, before.incoherentMajorRegionIds);
@@ -2296,9 +2740,52 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const newEvidenceCollisionPairs = (after.evidenceCollisionPairs || []).filter(
       (pair) => !beforeEvidenceCollisionKeys.has(pair.slice().sort().join("|")),
     );
-    if (!mechanicalOnly && newEvidenceCollisionPairs.length) {
+    if (newEvidenceCollisionPairs.length) {
       return "New protected-evidence collisions appeared in the visible composition: "
         + newEvidenceCollisionPairs.map((pair) => pair.join(" ↔ ")).join(", ");
+    }
+    const regionIntrusionKey = (entry) => [entry.additionId, entry.intendedFlowId, entry.intrudedFlowId].join("|");
+    const beforeRegionIntrusions = new Map(
+      (before.semanticRegionIntrusions || []).map((entry) => [regionIntrusionKey(entry), Number(entry.overlapArea || 0)]),
+    );
+    const newSemanticRegionIntrusions = (after.semanticRegionIntrusions || []).filter((entry) => {
+      const priorArea = beforeRegionIntrusions.get(regionIntrusionKey(entry));
+      if (priorArea === undefined) return true;
+      return Number(entry.overlapArea || 0) > Math.max(priorArea + 16, priorArea * 1.1);
+    });
+    if (newSemanticRegionIntrusions.length) {
+      return "New authored content intruded into an unrelated evidence-flow territory: "
+        + newSemanticRegionIntrusions.slice(0, 8)
+          .map((entry) => entry.additionId + " refers to " + entry.intendedFlowId + " but overlaps " + entry.intrudedFlowId)
+          .join("; ")
+        + ". Preserve all evidence and intended meaning, then reposition, redesign, or create more space so the addition remains clearly associated with its intended flow.";
+    }
+    const continuityKey = (entry) => entry.additionId + "|" + (entry.targetRegionId || "") + "|" + (entry.targetNodeIds || []).join(",");
+    const beforeContinuity = new Map((before.authoredContinuityObservations || []).map((entry) => [continuityKey(entry), entry]));
+    const weakenedContinuity = (after.authoredContinuityObservations || []).filter((entry) => {
+      if (entry.visualAttribution !== "weakened") return false;
+      const prior = beforeContinuity.get(continuityKey(entry));
+      if (!prior) return true;
+      if (prior.visualAttribution !== "weakened") return true;
+      return Number(entry.centerDistance || 0) > Math.max(Number(prior.centerDistance || 0) + 24, Number(prior.centerDistance || 0) * 1.15);
+    });
+    if (weakenedContinuity.length) {
+      return "Cumulative semantic continuity weakened for prior authored additions: "
+        + weakenedContinuity.slice(0, 8).map((entry) => entry.additionId + " still refers to " + entry.targetNodeIds.join(", ") + " but " + entry.reason.toLowerCase()).join("; ")
+        + ". Preserve evidence, semantic identity, meaning, targets, and provenance; recompose the affected authored additions and the current change together so attribution and group membership remain clear.";
+    }
+    const interferenceKey = (entry) => [entry.relationshipId, entry.primitiveId, entry.obstacleId].join("|");
+    const beforeInterferenceKeys = new Set((before.authoredInterferencePairs || []).map(interferenceKey));
+    const newAuthoredInterferencePairs = (after.authoredInterferencePairs || []).filter(
+      (entry) => !beforeInterferenceKeys.has(interferenceKey(entry)),
+    );
+    if (newAuthoredInterferencePairs.length) {
+      return "New visual interference appeared between authored relationships and readable artboard content: "
+        + newAuthoredInterferencePairs
+          .slice(0, 8)
+          .map((entry) => entry.primitiveId + " crosses " + entry.obstacleId)
+          .join("; ")
+        + ". Preserve the relationship meaning and all evidence, then reroute, reposition, redesign, or create more space so every addition remains visually independent and understandable.";
     }
     // Content extending beyond the previous authored shell is not a safety
     // failure. The canonical geometry compiler expands the runtime background,
@@ -2311,7 +2798,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (!mechanicalOnly && newDeclaredStructureFailures.length) {
       return "The transaction newly claimed a completed structure that was not fully visible: " + newDeclaredStructureFailures.join(", ");
     }
-    if (!mechanicalOnly && before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
+    if (before.comparisonEntityCount >= 2 && after.comparisonEntityCount < 2) {
       return "Comparison completeness failed; a required comparison entity or evidence lane disappeared.";
     }
     return "";
@@ -2371,6 +2858,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
   const captureLiveSnapshot = () => {
     const authoredRoot = root.cloneNode(true);
     authoredRoot.querySelectorAll?.('[data-ns-runtime-owned="true"],[data-ns-spatial-system]').forEach((element) => element.remove());
+    clearRuntimeRelationRealization(null, authoredRoot);
     authoredRoot.querySelectorAll?.('[data-ns-runtime-inherited-placement],[data-ns-runtime-inherited-style]')
       .forEach((element) => clearRuntimeInheritedPlacement(element));
     authoredRoot.querySelectorAll?.('[data-ns-runtime-inherited-parent-style]')
@@ -2402,8 +2890,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       if (operation.op === "set-styles" || operation.op === "set-classes" || operation.op === "set-css-layer") kinds.add("style");
       if (operation.op === "set-runtime-module") kinds.add("content");
       if (operation.op === "request-space") kinds.add("geometry");
-      if (operation.op === "set-styles" && Object.keys(operation.styles || {}).some((key) => /width|height|flex-basis|font-size|transform|scale/i.test(key))) kinds.add("scale");
-      if (operation.op === "set-css-layer" && /(?:width|height|flex-basis|font-size|transform|scale)\s*:/i.test(operation.css || "")) kinds.add("scale");
+      if (operation.op === "set-styles") {
+        const styles = operation.styles || {};
+        const changesSize = Object.keys(styles).some((key) => /^(?:width|height|min-width|max-width|min-height|max-height|flex-basis|font-size|scale)$/i.test(key));
+        const transformScales = typeof styles.transform === "string" && /(?:^|\s)scale(?:3d|x|y)?\s*\(/i.test(styles.transform);
+        if (changesSize || transformScales) kinds.add("scale");
+        if (typeof styles.transform === "string" && /(?:^|\s)translate(?:3d|x|y)?\s*\(/i.test(styles.transform)) kinds.add("position");
+      }
+      if (operation.op === "set-css-layer") {
+        const css = operation.css || "";
+        if (/(?:^|[;{])\s*(?:width|height|min-width|max-width|min-height|max-height|flex-basis|font-size|scale)\s*:/i.test(css)
+          || /transform\s*:[^;{}]*\bscale(?:3d|x|y)?\s*\(/i.test(css)) kinds.add("scale");
+        if (/transform\s*:[^;{}]*\btranslate(?:3d|x|y)?\s*\(/i.test(css)) kinds.add("position");
+      }
     }
     if (Math.abs(afterBounds.width - beforeBounds.width) > 2 || Math.abs(afterBounds.height - beforeBounds.height) > 2 || afterBounds.minX !== beforeBounds.minX || afterBounds.minY !== beforeBounds.minY) kinds.add("geometry");
     if ((batch.requiredAssetUrls || []).length) kinds.add("assets");
@@ -2428,6 +2927,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (canonicalGeometryMutationId === mutationId) canonicalGeometryMutationId = null;
     root.innerHTML = transaction.html;
     restoreStyleState(transaction.styles);
+    replaceDesignRelationMap(authoredDesignRelations, transaction.authoredDesignRelations || []);
+    replaceDesignRelationMap(resolvedDesignRelations, transaction.resolvedDesignRelations || []);
+    refreshRelationResizeObserver();
     requestedBounds = { ...transaction.requestedBounds };
     restoreCanonicalGeometry(transaction.canonicalGeometry, transaction.canonicalLayoutContext);
     currentRevisionId = transaction.revisionId;
@@ -2438,6 +2940,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     mutationTransactions.delete(mutationId);
     enforceAssetPolicy(root);
     applyStage();
+    resolveAuthoredSpatialDependencies(currentRevisionId);
     executeRuntimeModule("northstar-creative-source", transaction.authoredJavascript);
     endAtomicCandidateValidation(mutationId);
     queueContentSize();
@@ -2593,6 +3096,684 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
   };
 
+  const authoredDesignRelations = new Map();
+  const resolvedDesignRelations = new Map();
+  const runtimeRelationMutationTargets = new WeakSet();
+  let relationResizeObserver = null;
+  let resolvingAuthoredRelations = false;
+  let queueAuthoredRelationResolution = () => {};
+
+  const cloneDesignRelationRecords = (values) => Array.from(values || []).map((value) => structuredClone(value));
+  const authoredDesignRelationRecords = () => cloneDesignRelationRecords(authoredDesignRelations.values());
+  const resolvedDesignRelationRecords = () => cloneDesignRelationRecords(resolvedDesignRelations.values());
+
+  const canonicalRelationRole = (kind, role) => {
+    const normalized = String(role || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (kind === "connector-attachment") {
+      if (["source", "from", "start", "origin", "source-node", "source-reference", "from-node"].includes(normalized)) return "source";
+      if (["target", "to", "end", "destination", "target-node", "target-reference", "to-node"].includes(normalized)) return "target";
+    }
+    if (kind === "between-placement") {
+      if (["before", "first", "start", "left", "top", "previous"].includes(normalized)) return "before";
+      if (["after", "second", "end", "right", "bottom", "next"].includes(normalized)) return "after";
+    }
+    if (kind === "relative-placement" && ["reference", "target", "anchor", "reference-node", "relative-to"].includes(normalized)) return "reference";
+    return normalized || String(role || "").trim();
+  };
+
+  const canonicalRelationReferences = (relation) => (relation.references || []).map((reference) => ({
+    ...reference,
+    role: canonicalRelationRole(relation.kind, reference.role),
+  }));
+
+  const relationRealizationTraceRecords = () => authoredDesignRelationRecords().map((relation) => {
+    const receivedReferences = cloneDesignRelationRecords(relation.references || []);
+    const canonicalReferences = canonicalRelationReferences(relation);
+    const resolved = resolvedDesignRelations.get(relation.id);
+    const subject = nodeById(relation.subjectId);
+    const missingReferenceNodeIds = canonicalReferences
+      .filter((reference) => !nodeById(reference.nodeId))
+      .map((reference) => reference.nodeId);
+    const primitiveNodeId = relation.kind === "connector-attachment" ? String(relation.parameters?.primitiveNodeId || "") : "";
+    const primitive = relation.kind === "connector-attachment"
+      ? (primitiveNodeId ? nodeById(primitiveNodeId) : subject?.querySelector?.("line,path,polyline"))
+      : null;
+    const status = resolved?.status || "missing";
+    let failureStage = "none";
+    if (!subject) failureStage = "subject";
+    else if (missingReferenceNodeIds.length || (relation.kind === "connector-attachment" && (!canonicalReferences.some((reference) => reference.role === "source") || !canonicalReferences.some((reference) => reference.role === "target")))) failureStage = "reference";
+    else if (relation.kind === "connector-attachment" && !primitive) failureStage = "primitive";
+    else if (status !== "resolved") failureStage = "resolver";
+    return {
+      relationId: relation.id,
+      kind: relation.kind,
+      realizationPolicy: relation.realizationPolicy,
+      subjectId: relation.subjectId,
+      receivedReferences,
+      canonicalReferences,
+      subjectFound: Boolean(subject),
+      missingReferenceNodeIds,
+      ...(relation.kind === "connector-attachment" ? { primitiveNodeId: primitiveNodeId || undefined, primitiveFound: Boolean(primitive) } : {}),
+      status,
+      failureStage,
+      message: resolved?.message,
+    };
+  });
+
+  const replaceDesignRelationMap = (target, records) => {
+    target.clear();
+    for (const record of records || []) {
+      if (record?.id) target.set(record.id, structuredClone(record));
+      else if (record?.relationId) target.set(record.relationId, structuredClone(record));
+    }
+  };
+
+  const markRuntimeRelationMutation = (element) => {
+    if (!(element instanceof Element)) return;
+    runtimeRelationMutationTargets.add(element);
+    window.setTimeout(() => runtimeRelationMutationTargets.delete(element), 0);
+  };
+
+  const readRuntimeRelationState = (element, attributeName) => {
+    try { return JSON.parse(element.getAttribute(attributeName) || "{}"); }
+    catch { return {}; }
+  };
+
+  const writeRuntimeRelationState = (element, attributeName, state) => {
+    markRuntimeRelationMutation(element);
+    if (Object.keys(state).length) element.setAttribute(attributeName, JSON.stringify(state));
+    else element.removeAttribute(attributeName);
+  };
+
+  const applyRuntimeRelationStyle = (element, relationId, name, value) => {
+    if (!(element instanceof HTMLElement || element instanceof SVGElement) || !element.style) return;
+    const attributeName = "data-ns-runtime-relation-style";
+    const state = readRuntimeRelationState(element, attributeName);
+    const current = state[name];
+    if (!current || current.relationId !== relationId) {
+      state[name] = {
+        relationId,
+        priorValue: element.style.getPropertyValue(name),
+        priorPriority: element.style.getPropertyPriority(name),
+        appliedValue: "",
+        appliedPriority: "",
+      };
+    }
+    const nextValue = String(value);
+    if (element.style.getPropertyValue(name) !== nextValue || element.style.getPropertyPriority(name) !== "") {
+      markRuntimeRelationMutation(element);
+      element.style.setProperty(name, nextValue);
+    }
+    state[name].appliedValue = nextValue;
+    state[name].appliedPriority = "";
+    writeRuntimeRelationState(element, attributeName, state);
+  };
+
+  const clearRuntimeRelationStyles = (element, relationIds) => {
+    if (!(element instanceof HTMLElement || element instanceof SVGElement) || !element.style) return;
+    const attributeName = "data-ns-runtime-relation-style";
+    const state = readRuntimeRelationState(element, attributeName);
+    let changed = false;
+    for (const [name, entry] of Object.entries(state)) {
+      if (relationIds && !relationIds.has(entry.relationId)) continue;
+      const currentValue = element.style.getPropertyValue(name);
+      const currentPriority = element.style.getPropertyPriority(name);
+      if (currentValue === String(entry.appliedValue || "") && currentPriority === String(entry.appliedPriority || "")) {
+        markRuntimeRelationMutation(element);
+        if (entry.priorValue) element.style.setProperty(name, String(entry.priorValue), String(entry.priorPriority || ""));
+        else element.style.removeProperty(name);
+      }
+      delete state[name];
+      changed = true;
+    }
+    if (changed) writeRuntimeRelationState(element, attributeName, state);
+  };
+
+  const applyRuntimeRelationAttribute = (element, relationId, name, value) => {
+    if (!(element instanceof Element)) return;
+    const attributeName = "data-ns-runtime-relation-attributes";
+    const state = readRuntimeRelationState(element, attributeName);
+    const current = state[name];
+    if (!current || current.relationId !== relationId) {
+      state[name] = {
+        relationId,
+        hadPrior: element.hasAttribute(name),
+        priorValue: element.getAttribute(name),
+        appliedValue: "",
+      };
+    }
+    const nextValue = String(value);
+    if (element.getAttribute(name) !== nextValue) {
+      markRuntimeRelationMutation(element);
+      element.setAttribute(name, nextValue);
+    }
+    state[name].appliedValue = nextValue;
+    writeRuntimeRelationState(element, attributeName, state);
+  };
+
+  const clearRuntimeRelationAttributes = (element, relationIds) => {
+    if (!(element instanceof Element)) return;
+    const attributeName = "data-ns-runtime-relation-attributes";
+    const state = readRuntimeRelationState(element, attributeName);
+    let changed = false;
+    for (const [name, entry] of Object.entries(state)) {
+      if (relationIds && !relationIds.has(entry.relationId)) continue;
+      if (element.getAttribute(name) === String(entry.appliedValue || "")) {
+        markRuntimeRelationMutation(element);
+        if (entry.hadPrior) element.setAttribute(name, String(entry.priorValue ?? ""));
+        else element.removeAttribute(name);
+      }
+      delete state[name];
+      changed = true;
+    }
+    if (changed) writeRuntimeRelationState(element, attributeName, state);
+  };
+
+  const clearRuntimeRelationRealization = (relationIds = null, scope = root) => {
+    const styleNodes = [];
+    const attributeNodes = [];
+    if (scope instanceof Element && scope.hasAttribute("data-ns-runtime-relation-style")) styleNodes.push(scope);
+    if (scope instanceof Element && scope.hasAttribute("data-ns-runtime-relation-attributes")) attributeNodes.push(scope);
+    scope.querySelectorAll?.("[data-ns-runtime-relation-style]").forEach((element) => styleNodes.push(element));
+    scope.querySelectorAll?.("[data-ns-runtime-relation-attributes]").forEach((element) => attributeNodes.push(element));
+    styleNodes.forEach((element) => clearRuntimeRelationStyles(element, relationIds));
+    attributeNodes.forEach((element) => clearRuntimeRelationAttributes(element, relationIds));
+  };
+
+  const refreshRelationResizeObserver = () => {
+    if (!relationResizeObserver) return;
+    relationResizeObserver.disconnect();
+    relationResizeObserver.observe(root);
+    const observed = new Set([root]);
+    for (const relation of authoredDesignRelations.values()) {
+      if (relation.realizationPolicy === "snapshot") continue;
+      const subject = nodeById(relation.subjectId);
+      if (subject && !observed.has(subject)) { observed.add(subject); relationResizeObserver.observe(subject); }
+      for (const reference of relation.references || []) {
+        const node = nodeById(reference.nodeId);
+        if (node && !observed.has(node)) { observed.add(node); relationResizeObserver.observe(node); }
+      }
+    }
+  };
+
+  const registerAuthoredDesignRelations = (relations) => {
+    for (const relation of relations || []) {
+      if (!relation?.id || !relation?.subjectId || !relation?.kind) continue;
+      authoredDesignRelations.set(relation.id, structuredClone(relation));
+    }
+    refreshRelationResizeObserver();
+  };
+
+  registerAuthoredDesignRelations(INITIAL_AUTHORED_DESIGN_RELATIONS);
+
+  const rectRecord = (rect, rootRect = root.getBoundingClientRect()) => ({
+    x: rect.left - rootRect.left,
+    y: rect.top - rootRect.top,
+    width: rect.width,
+    height: rect.height,
+    right: rect.right - rootRect.left,
+    bottom: rect.bottom - rootRect.top,
+  });
+
+  const normalizedClientRect = (rect) => ({
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  });
+
+  const unionClientRects = (rects) => {
+    const visible = rects.filter((rect) => rect && rect.width > 0 && rect.height > 0);
+    if (!visible.length) return null;
+    const left = Math.min(...visible.map((rect) => rect.left));
+    const top = Math.min(...visible.map((rect) => rect.top));
+    const right = Math.max(...visible.map((rect) => rect.right));
+    const bottom = Math.max(...visible.map((rect) => rect.bottom));
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  };
+
+  const referenceGeometryMode = (reference, parameters) => {
+    if (reference.geometry === "semantic-descendant-union" || reference.geometry === "border-box") return reference.geometry;
+    if (parameters.referenceGeometry === "semantic-descendant-union" || parameters.referenceGeometry === "border-box") return parameters.referenceGeometry;
+    return reference.nodeId === "evidence" ? "semantic-descendant-union" : "border-box";
+  };
+
+  const geometryRectForReference = (reference, parameters, excludedSubject = null) => {
+    const own = normalizedClientRect(reference.node.getBoundingClientRect());
+    if (referenceGeometryMode(reference, parameters) !== "semantic-descendant-union") return own;
+    const descendants = Array.from(reference.node.querySelectorAll("[data-ns-node-id]"))
+      .filter((element) => !excludedSubject || (element !== excludedSubject && !excludedSubject.contains(element)))
+      .filter((element) => element.getAttribute("data-ns-authored-relationship") !== "true")
+      .filter((element) => element.getAttribute("data-ns-authored-annotation") !== "true")
+      .filter((element) => element.getAttribute("data-ns-runtime-owned") !== "true")
+      .filter((element) => !element.closest("[data-ns-spatial-system]"))
+      .map((element) => normalizedClientRect(element.getBoundingClientRect()));
+    return unionClientRects([own, ...descendants]) || own;
+  };
+
+  const pointForAnchor = (rect, anchor) => {
+    const normalized = String(anchor || "center").toLowerCase().replace(/[_\s]+/g, "-");
+    let x = rect.left + rect.width / 2;
+    let y = rect.top + rect.height / 2;
+    if (normalized.includes("left")) x = rect.left;
+    else if (normalized.includes("right")) x = rect.right;
+    if (normalized.includes("top")) y = rect.top;
+    else if (normalized.includes("bottom")) y = rect.bottom;
+    return { x, y };
+  };
+
+  const transformedAncestorIssue = (subject) => {
+    let ancestor = subject.offsetParent instanceof Element ? subject.offsetParent : subject.parentElement;
+    while (ancestor) {
+      const transform = getComputedStyle(ancestor).transform;
+      if (transform && transform !== "none") {
+        try {
+          const matrix = new DOMMatrixReadOnly(transform);
+          if (Math.abs(matrix.b) > 0.000001 || Math.abs(matrix.c) > 0.000001) {
+            return "Rotated or skewed containing blocks are not supported for CSS position realization.";
+          }
+        } catch {
+          return "The containing-block transform could not be interpreted safely.";
+        }
+      }
+      if (ancestor === root) break;
+      ancestor = ancestor.parentElement;
+    }
+    return "";
+  };
+
+  const containingBlockGeometry = (subject) => {
+    const parent = subject.offsetParent instanceof Element ? subject.offsetParent : root;
+    const rect = parent.getBoundingClientRect();
+    const width = Number(parent.offsetWidth || parent.clientWidth || rect.width || 1);
+    const height = Number(parent.offsetHeight || parent.clientHeight || rect.height || 1);
+    return {
+      parent,
+      rect,
+      scaleX: width > 0 ? rect.width / width : 1,
+      scaleY: height > 0 ? rect.height / height : 1,
+    };
+  };
+
+  const placeSubjectEdge = (subject, relationId, axis, desiredClientValue) => {
+    if (!(subject instanceof HTMLElement)) {
+      return { ok: false, message: "CSS position relations require an HTML subject." };
+    }
+    const computed = getComputedStyle(subject);
+    if (computed.position === "static") {
+      return { ok: false, message: "CSS position relations require a positioned subject." };
+    }
+    const transformIssue = transformedAncestorIssue(subject);
+    if (transformIssue) return { ok: false, message: transformIssue };
+    const currentRect = subject.getBoundingClientRect();
+    const containingBlock = containingBlockGeometry(subject);
+    const property = axis === "x" ? "left" : "top";
+    const currentClientValue = axis === "x" ? currentRect.left : currentRect.top;
+    const scale = axis === "x" ? containingBlock.scaleX : containingBlock.scaleY;
+    if (!Number.isFinite(scale) || Math.abs(scale) < 0.000001) {
+      return { ok: false, message: "The subject containing block has a non-finite coordinate scale." };
+    }
+    const computedValue = Number.parseFloat(computed.getPropertyValue(property));
+    const fallback = axis === "x" ? subject.offsetLeft : subject.offsetTop;
+    const baseLocalValue = Number.isFinite(computedValue) ? computedValue : Number(fallback || 0);
+    const nextLocalValue = baseLocalValue + (desiredClientValue - currentClientValue) / scale;
+    if (!Number.isFinite(nextLocalValue)) {
+      return { ok: false, message: "The resolved local position was not finite." };
+    }
+    applyRuntimeRelationStyle(subject, relationId, property, nextLocalValue + "px");
+    return {
+      ok: true,
+      localValue: nextLocalValue,
+      containingBlock: rectRecord(containingBlock.rect),
+    };
+  };
+
+  const svgPointForClientPoint = (primitive, point) => {
+    try {
+      const matrix = primitive.getScreenCTM?.();
+      if (matrix) {
+        const local = new DOMPoint(point.x, point.y).matrixTransform(matrix.inverse());
+        if (Number.isFinite(local.x) && Number.isFinite(local.y)) return { x: local.x, y: local.y };
+      }
+    } catch {}
+    const svg = primitive.ownerSVGElement || primitive.closest?.("svg");
+    const rect = svg?.getBoundingClientRect?.();
+    if (!rect) return point;
+    return { x: point.x - rect.left, y: point.y - rect.top };
+  };
+
+  const relationChannels = (relation) => {
+    const parameters = relation.parameters || {};
+    if (relation.kind === "connector-attachment") return ["connector"];
+    if (relation.kind === "relative-placement") {
+      const side = String(parameters.side || "right");
+      const channels = [side === "right" || side === "left" ? "x" : "y"];
+      if ((side === "right" || side === "left") && ["top", "center", "bottom"].includes(String(parameters.alignY || ""))) channels.push("y");
+      if ((side === "above" || side === "below") && ["left", "center", "right"].includes(String(parameters.alignX || ""))) channels.push("x");
+      return channels;
+    }
+    if (relation.kind === "between-placement") {
+      const axis = String(parameters.axis || "x");
+      const channels = [axis === "y" ? "y" : "x"];
+      const crossAlign = String(parameters.crossAlign || (axis === "x" ? parameters.alignY : parameters.alignX) || "preserve");
+      if (crossAlign !== "preserve") channels.push(axis === "x" ? "y" : "x");
+      return channels;
+    }
+    return [];
+  };
+
+  const resolveAuthoredSpatialDependencies = (revisionId, options = {}) => {
+    if (resolvingAuthoredRelations) return resolvedDesignRelationRecords();
+    resolvingAuthoredRelations = true;
+    try {
+      const liveOnly = options.liveOnly === true;
+      const targetRelations = Array.from(authoredDesignRelations.values())
+        .filter((relation) => !liveOnly || relation.realizationPolicy !== "snapshot");
+      const targetIds = new Set(targetRelations.map((relation) => relation.id));
+      clearRuntimeRelationRealization(targetIds);
+      targetIds.forEach((id) => resolvedDesignRelations.delete(id));
+
+      const relationById = new Map(targetRelations.map((relation) => [relation.id, relation]));
+      const relationIdsBySubject = new Map();
+      for (const relation of targetRelations) {
+        const values = relationIdsBySubject.get(relation.subjectId) || [];
+        values.push(relation.id);
+        relationIdsBySubject.set(relation.subjectId, values);
+      }
+
+      const conflictIds = new Set();
+      const ownerByChannel = new Map();
+      for (const relation of targetRelations) {
+        for (const channel of relationChannels(relation)) {
+          const key = relation.subjectId + "::" + channel;
+          const prior = ownerByChannel.get(key);
+          if (prior && prior !== relation.id) { conflictIds.add(prior); conflictIds.add(relation.id); }
+          else ownerByChannel.set(key, relation.id);
+        }
+      }
+
+      const dependencyIds = new Map();
+      for (const relation of targetRelations) {
+        const dependencies = new Set();
+        for (const reference of relation.references || []) {
+          for (const dependencyId of relationIdsBySubject.get(reference.nodeId) || []) {
+            if (dependencyId !== relation.id) dependencies.add(dependencyId);
+          }
+          if (referenceGeometryMode(reference, relation.parameters || {}) === "semantic-descendant-union") {
+            const referenceNode = nodeById(reference.nodeId);
+            if (referenceNode) {
+              for (const candidate of targetRelations) {
+                if (candidate.id === relation.id) continue;
+                const candidateSubject = nodeById(candidate.subjectId);
+                if (candidateSubject && referenceNode.contains(candidateSubject)) dependencies.add(candidate.id);
+              }
+            }
+          }
+        }
+        dependencyIds.set(relation.id, dependencies);
+      }
+
+      const visitState = new Map();
+      const order = [];
+      const cycleIds = new Set();
+      const stack = [];
+      const visit = (relationId) => {
+        const state = visitState.get(relationId);
+        if (state === "done") return;
+        if (state === "visiting") {
+          const start = Math.max(0, stack.indexOf(relationId));
+          stack.slice(start).forEach((id) => cycleIds.add(id));
+          cycleIds.add(relationId);
+          return;
+        }
+        visitState.set(relationId, "visiting");
+        stack.push(relationId);
+        for (const dependencyId of dependencyIds.get(relationId) || []) visit(dependencyId);
+        stack.pop();
+        visitState.set(relationId, "done");
+        order.push(relationId);
+      };
+      targetRelations.forEach((relation) => visit(relation.id));
+
+      const rootRect = root.getBoundingClientRect();
+      const unresolved = (relation, inputBounds, status, message, outputGeometry = {}) => {
+        resolvedDesignRelations.set(relation.id, {
+          relationId: relation.id,
+          revisionId,
+          inputBounds,
+          outputGeometry,
+          status,
+          message,
+        });
+      };
+
+      for (const relationId of order) {
+        const relation = relationById.get(relationId);
+        if (!relation) continue;
+        if (conflictIds.has(relationId)) {
+          unresolved(relation, {}, "conflicted", "Multiple authored relations control the same subject geometry channel.");
+          continue;
+        }
+        if (cycleIds.has(relationId)) {
+          unresolved(relation, {}, "cyclic", "Design relation cycle detected.");
+          continue;
+        }
+
+        const subject = nodeById(relation.subjectId);
+        const canonicalReferences = canonicalRelationReferences(relation);
+        const references = Object.fromEntries(canonicalReferences.map((reference) => [reference.role, { ...reference, node: nodeById(reference.nodeId) }]));
+        if (!subject) {
+          unresolved(relation, {}, "unresolved", "Relation subject was not found: " + relation.subjectId + ".");
+          continue;
+        }
+        const missingReferences = canonicalReferences.filter((reference) => !nodeById(reference.nodeId));
+        if (missingReferences.length) {
+          unresolved(
+            relation,
+            {},
+            "unresolved",
+            "Relation reference node(s) were not found: " + missingReferences.map((reference) => reference.role + "=" + reference.nodeId).join(", ") + ".",
+          );
+          continue;
+        }
+
+        const parameters = relation.parameters || {};
+        const inputRects = Object.fromEntries(Object.entries(references).map(([role, reference]) => [role, geometryRectForReference(reference, parameters, subject)]));
+        const inputBounds = Object.fromEntries(Object.entries(inputRects).map(([role, rect]) => [role, rectRecord(rect, rootRect)]));
+        let outputGeometry = {};
+        let failure = "";
+
+        if (relation.kind === "relative-placement") {
+          const reference = references.reference || Object.values(references)[0];
+          const refRect = inputRects[reference.role] || geometryRectForReference(reference, parameters, subject);
+          const ownRect = subject.getBoundingClientRect();
+          const side = String(parameters.side || "right");
+          const offsetX = Number(parameters.offsetX || 0);
+          const offsetY = Number(parameters.offsetY || 0);
+          const appliedLocalGeometry = {};
+
+          if (side === "right" || side === "left") {
+            const desiredLeft = side === "right" ? refRect.right + offsetX : refRect.left - ownRect.width - offsetX;
+            const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
+            if (!placedX.ok) failure = placedX.message;
+            else appliedLocalGeometry.left = placedX.localValue;
+            const alignY = String(parameters.alignY || "preserve");
+            if (!failure && alignY !== "preserve") {
+              const current = subject.getBoundingClientRect();
+              const desiredTop = alignY === "top" ? refRect.top + offsetY
+                : alignY === "bottom" ? refRect.bottom - current.height + offsetY
+                : refRect.top + refRect.height / 2 - current.height / 2 + offsetY;
+              const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
+              if (!placedY.ok) failure = placedY.message;
+              else appliedLocalGeometry.top = placedY.localValue;
+            }
+          } else if (side === "below" || side === "above") {
+            const desiredTop = side === "below" ? refRect.bottom + offsetY : refRect.top - ownRect.height - offsetY;
+            const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
+            if (!placedY.ok) failure = placedY.message;
+            else appliedLocalGeometry.top = placedY.localValue;
+            const alignX = String(parameters.alignX || "preserve");
+            if (!failure && alignX !== "preserve") {
+              const current = subject.getBoundingClientRect();
+              const desiredLeft = alignX === "left" ? refRect.left + offsetX
+                : alignX === "right" ? refRect.right - current.width + offsetX
+                : refRect.left + refRect.width / 2 - current.width / 2 + offsetX;
+              const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
+              if (!placedX.ok) failure = placedX.message;
+              else appliedLocalGeometry.left = placedX.localValue;
+            }
+          } else {
+            failure = "Unsupported relative-placement side: " + side + ".";
+          }
+          outputGeometry = { side, offsetX, offsetY, referenceGeometry: referenceGeometryMode(reference, parameters), ...appliedLocalGeometry };
+        } else if (relation.kind === "connector-attachment") {
+          const sourceReferences = canonicalReferences.filter((reference) => reference.role === "source");
+          const targetReferences = canonicalReferences.filter((reference) => reference.role === "target");
+          const source = references.source;
+          const target = references.target;
+          if (sourceReferences.length !== 1 || targetReferences.length !== 1 || !source || !target) {
+            const receivedRoles = (relation.references || []).map((reference) => String(reference.role || "")).filter(Boolean);
+            const canonicalRoles = canonicalReferences.map((reference) => reference.role).filter(Boolean);
+            failure = "connector-attachment requires exactly one source and one target reference; received roles [" + receivedRoles.join(", ") + "] and canonical roles [" + canonicalRoles.join(", ") + "].";
+          } else {
+            const sourceRect = inputRects.source;
+            const targetRect = inputRects.target;
+            const startClient = pointForAnchor(sourceRect, source.anchor || String(parameters.sourceAnchor || "center"));
+            const endClient = pointForAnchor(targetRect, target.anchor || String(parameters.targetAnchor || "center"));
+            const primitiveId = String(parameters.primitiveNodeId || "");
+            const primitive = primitiveId ? nodeById(primitiveId) : subject.querySelector("line,path,polyline");
+            if (!primitive) {
+              failure = "The authored connector primitive was not found.";
+            } else {
+              const start = svgPointForClientPoint(primitive, startClient);
+              const end = svgPointForClientPoint(primitive, endClient);
+              const tagName = primitive.tagName.toLowerCase();
+              if (tagName === "line") {
+                applyRuntimeRelationAttribute(primitive, relation.id, "x1", start.x);
+                applyRuntimeRelationAttribute(primitive, relation.id, "y1", start.y);
+                applyRuntimeRelationAttribute(primitive, relation.id, "x2", end.x);
+                applyRuntimeRelationAttribute(primitive, relation.id, "y2", end.y);
+              } else if (tagName === "path") {
+                const authoredPath = primitive.getAttribute("d") || "";
+                const number = "[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:e[-+]?\\d+)?";
+                const movePattern = new RegExp("^(\\s*[Mm]\\s*)" + number + "([ ,]+)" + number, "i");
+                const endpointPattern = new RegExp("(" + number + ")([ ,]+)(" + number + ")(\\s*)$");
+                if (!movePattern.test(authoredPath) || !endpointPattern.test(authoredPath) || /[Zz]\s*$/.test(authoredPath)) {
+                  failure = "The authored SVG path must be open and expose a first and final endpoint.";
+                } else {
+                  const withStart = authoredPath.replace(movePattern, "$1" + start.x + "$2" + start.y);
+                  const withEndpoints = withStart.replace(endpointPattern, end.x + "$2" + end.y + "$4");
+                  applyRuntimeRelationAttribute(primitive, relation.id, "d", withEndpoints);
+                }
+              } else if (tagName === "polyline") {
+                const authoredPoints = (primitive.getAttribute("points") || "").trim().split(/\s+/).filter(Boolean);
+                if (authoredPoints.length < 2) {
+                  failure = "The authored polyline must expose at least two points.";
+                } else {
+                  authoredPoints[0] = start.x + "," + start.y;
+                  authoredPoints[authoredPoints.length - 1] = end.x + "," + end.y;
+                  applyRuntimeRelationAttribute(primitive, relation.id, "points", authoredPoints.join(" "));
+                }
+              } else {
+                failure = "The connector primitive must expose editable SVG endpoints (line, open path, or polyline).";
+              }
+              outputGeometry = {
+                startX: start.x,
+                startY: start.y,
+                endX: end.x,
+                endY: end.y,
+                sourceWorldX: startClient.x - rootRect.left,
+                sourceWorldY: startClient.y - rootRect.top,
+                targetWorldX: endClient.x - rootRect.left,
+                targetWorldY: endClient.y - rootRect.top,
+              };
+            }
+          }
+        } else if (relation.kind === "between-placement") {
+          const before = references.before;
+          const after = references.after;
+          if (!before || !after) {
+            failure = "between-placement requires before and after references.";
+          } else {
+            const beforeRect = inputRects.before;
+            const afterRect = inputRects.after;
+            const ownRect = subject.getBoundingClientRect();
+            const axis = String(parameters.axis || "x") === "y" ? "y" : "x";
+            const crossAlign = String(parameters.crossAlign || (axis === "x" ? parameters.alignY : parameters.alignX) || "preserve");
+            const appliedLocalGeometry = {};
+            if (axis === "x") {
+              const desiredLeft = (beforeRect.right + afterRect.left - ownRect.width) / 2;
+              const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
+              if (!placedX.ok) failure = placedX.message;
+              else appliedLocalGeometry.left = placedX.localValue;
+              if (!failure && crossAlign !== "preserve") {
+                const current = subject.getBoundingClientRect();
+                const referenceCenter = (beforeRect.top + beforeRect.height / 2 + afterRect.top + afterRect.height / 2) / 2;
+                const desiredTop = crossAlign === "start" || crossAlign === "top" ? Math.min(beforeRect.top, afterRect.top)
+                  : crossAlign === "end" || crossAlign === "bottom" ? Math.max(beforeRect.bottom, afterRect.bottom) - current.height
+                  : referenceCenter - current.height / 2;
+                const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
+                if (!placedY.ok) failure = placedY.message;
+                else appliedLocalGeometry.top = placedY.localValue;
+              }
+            } else {
+              const desiredTop = (beforeRect.bottom + afterRect.top - ownRect.height) / 2;
+              const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
+              if (!placedY.ok) failure = placedY.message;
+              else appliedLocalGeometry.top = placedY.localValue;
+              if (!failure && crossAlign !== "preserve") {
+                const current = subject.getBoundingClientRect();
+                const referenceCenter = (beforeRect.left + beforeRect.width / 2 + afterRect.left + afterRect.width / 2) / 2;
+                const desiredLeft = crossAlign === "start" || crossAlign === "left" ? Math.min(beforeRect.left, afterRect.left)
+                  : crossAlign === "end" || crossAlign === "right" ? Math.max(beforeRect.right, afterRect.right) - current.width
+                  : referenceCenter - current.width / 2;
+                const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
+                if (!placedX.ok) failure = placedX.message;
+                else appliedLocalGeometry.left = placedX.localValue;
+              }
+            }
+            const realized = subject.getBoundingClientRect();
+            outputGeometry = {
+              axis,
+              crossAlign,
+              leftGap: realized.left - beforeRect.right,
+              rightGap: afterRect.left - realized.right,
+              topGap: realized.top - beforeRect.bottom,
+              bottomGap: afterRect.top - realized.bottom,
+              gapDelta: axis === "x"
+                ? Math.abs((realized.left - beforeRect.right) - (afterRect.left - realized.right))
+                : Math.abs((realized.top - beforeRect.bottom) - (afterRect.top - realized.bottom)),
+              ...appliedLocalGeometry,
+            };
+          }
+        } else {
+          failure = "No resolver is registered for relation kind " + relation.kind + ".";
+        }
+
+        if (failure) {
+          clearRuntimeRelationRealization(new Set([relation.id]));
+          unresolved(relation, inputBounds, "unresolved", failure, outputGeometry);
+          continue;
+        }
+        const outputBounds = rectRecord(subject.getBoundingClientRect(), rootRect);
+        resolvedDesignRelations.set(relation.id, {
+          relationId: relation.id,
+          revisionId,
+          inputBounds,
+          outputBounds,
+          outputGeometry,
+          status: "resolved",
+        });
+      }
+
+      root.__northstarResolvedDesignRelations = resolvedDesignRelationRecords();
+      return root.__northstarResolvedDesignRelations;
+    } finally {
+      resolvingAuthoredRelations = false;
+    }
+  };
   const applyMutationBatch = async (batch, revisionId, acknowledge = true, proposal = null) => {
     if (!batch || appliedMutationIds.has(batch.mutationId) || cancelledMutationIds.has(batch.mutationId)) return;
     if (proposal?.baseRevisionId && proposal.baseRevisionId !== currentRevisionId) {
@@ -2612,17 +3793,25 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       revisionId: currentRevisionId,
       mutationId: currentMutationId,
       beforeSnapshot: semanticSnapshot(),
+      pixelStableNodeIds: expandPixelStableNodeIds(batch.pixelStableNodeIds),
       beforeBounds: getContentBounds(),
       canonicalGeometry: committedCanonicalGeometry ? { ...committedCanonicalGeometry } : null,
       canonicalLayoutContext: { width: canonicalLayoutBaseWidth, height: canonicalLayoutBaseHeight },
       beforeVisualSafety: visualSafetySnapshot(),
       beforeAudit: collectRuntimeAudit(),
+      authoredDesignRelations: authoredDesignRelationRecords(),
+      resolvedDesignRelations: resolvedDesignRelationRecords(),
     };
     rememberMutationTransaction(batch.mutationId, transaction);
+    registerAuthoredDesignRelations(batch.relations);
     if (acknowledge) beginAtomicCandidateValidation(batch.mutationId);
-    // request-space belongs only to this authored revision. Geometry itself is
-    // always re-derived and may expand or contract without an intent gate.
-    requestedBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    // Begin from the exact accepted world rectangle. request-space may only
+    // extend these edges; it must never fall back to the smaller authored layout
+    // base and trigger a responsive recomposition of existing content.
+    const acceptedBounds = committedCanonicalGeometry?.contentBounds || {
+      minX: 0, minY: 0, maxX: canonicalLayoutBaseWidth, maxY: canonicalLayoutBaseHeight,
+    };
+    requestedBounds = { ...acceptedBounds };
     const before = snapshotRects();
     const canonicalEvidenceNodes = captureCanonicalEvidenceNodes();
     root.setAttribute("data-ns-mutating", "true");
@@ -2631,6 +3820,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       discardDuplicateEvidenceNodes(canonicalEvidenceNodes);
       enforceAssetPolicy(root);
       applyStage();
+      resolveAuthoredSpatialDependencies(revisionId || currentRevisionId);
       currentRevisionId = revisionId || currentRevisionId;
       currentMutationId = batch.mutationId;
     } catch (error) {
@@ -2670,6 +3860,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       root.removeAttribute("data-ns-mutating");
       return;
     }
+    resolveAuthoredSpatialDependencies(currentRevisionId, { liveOnly: true });
+    solveSpatialSystem();
     root.removeAttribute("data-ns-mutating");
     if (acknowledge) {
       pendingAcknowledgement = {
@@ -2749,6 +3941,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             loadedAssetUrls: loadedAssetUrls(),
             missingAssetUrls: missingRequiredAssets(item.batch?.requiredAssetUrls || []),
             evidenceRegistry: captureEvidenceRegistryReceipt(),
+            authoredDesignRelations: authoredDesignRelationRecords(),
+            resolvedDesignRelations: resolvedDesignRelationRecords(),
             snapshot: captureLiveSnapshot(),
             restoredSize: captureSettledContentSize(currentRevisionId, currentMutationId, canonicalGeometrySequence + 1),
             rollbackDurationMs: rollbackReceipt?.rollbackDurationMs,
@@ -3074,6 +4268,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (size.borderRadius) stageSurface.style.borderRadius = size.borderRadius;
     origin.style.transform = "translate(" + (-size.contentBounds.minX) + "px," + (-size.contentBounds.minY) + "px)";
     committedCanonicalGeometry = size;
+    syncAuthoredSurfaceExtension();
   };
 
   const restoreCanonicalGeometry = (size, layoutContext) => {
@@ -3142,16 +4337,34 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const geometryMode = syncIntrinsicGeometryMode();
     const rootRect = root.getBoundingClientRect();
     const artboard = geometryMode.artboard;
-    const artboardRect = artboard?.getBoundingClientRect?.();
+    const authoredArtboardRect = artboard?.getBoundingClientRect?.();
     const localBounds = (rect) => ({
       minX: rect.left - rootRect.left,
       minY: rect.top - rootRect.top,
       maxX: rect.right - rootRect.left,
       maxY: rect.bottom - rootRect.top,
     });
-    const artboardBounds = artboardRect
-      ? localBounds(artboardRect)
+    const authoredArtboardBounds = authoredArtboardRect
+      ? localBounds(authoredArtboardRect)
       : { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    const artboardBounds = authoredArtboardRect
+      ? {
+        minX: Math.min(authoredArtboardBounds.minX, Number(requestedBounds.minX) || 0),
+        minY: Math.min(authoredArtboardBounds.minY, Number(requestedBounds.minY) || 0),
+        maxX: Math.max(authoredArtboardBounds.maxX, Number(requestedBounds.maxX) || 0),
+        maxY: Math.max(authoredArtboardBounds.maxY, Number(requestedBounds.maxY) || 0),
+      }
+      : { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    const artboardRect = authoredArtboardRect
+      ? {
+        left: rootRect.left + artboardBounds.minX,
+        top: rootRect.top + artboardBounds.minY,
+        right: rootRect.left + artboardBounds.maxX,
+        bottom: rootRect.top + artboardBounds.maxY,
+        width: artboardBounds.maxX - artboardBounds.minX,
+        height: artboardBounds.maxY - artboardBounds.minY,
+      }
+      : undefined;
     const semanticElements = Array.from(root.querySelectorAll("[data-ns-node-id]"))
       .filter((element) => element !== artboard && !element.closest("[data-ns-spatial-system]") && !element.closest('[data-ns-runtime-owned="true"]'))
       .filter((element) => {
@@ -3630,8 +4843,13 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const geometryFacts = collectGeometryFacts(bounds);
     const premiumDesignAudit = collectPremiumDesignAudit();
     const evidenceRegistry = captureEvidenceRegistryReceipt();
-    const evidenceCollisionPairs = visualSafetySnapshot().evidenceCollisionPairs || [];
-    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0) + Number(spatialAudit.hardFailureCount || 0) + Number(spatialAudit.softIssueCount || 0) + requiredPrimitiveAudit.failureCount + geometryFacts.integrityFailures.length + evidenceRegistry.missingEvidenceIds.length + evidenceCollisionPairs.length;
+    const visualSafety = visualSafetySnapshot();
+    const evidenceCollisionPairs = visualSafety.evidenceCollisionPairs || [];
+    const authoredInterferencePairs = visualSafety.authoredInterferencePairs || [];
+    const semanticRegionIntrusions = visualSafety.semanticRegionIntrusions || [];
+    const authoredContinuityObservations = visualSafety.authoredContinuityObservations || [];
+    const relationRealizationTraces = relationRealizationTraceRecords();
+    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0) + Number(spatialAudit.hardFailureCount || 0) + Number(spatialAudit.softIssueCount || 0) + requiredPrimitiveAudit.failureCount + geometryFacts.integrityFailures.length + evidenceRegistry.missingEvidenceIds.length + evidenceCollisionPairs.length + authoredInterferencePairs.length + semanticRegionIntrusions.length + authoredContinuityObservations.filter((entry) => entry.visualAttribution === "weakened").length;
     const review = {
       revisionId: currentRevisionId, mutationId: currentMutationId, stageIndex: activeStageIndex, evaluatedAt: new Date().toISOString(),
       rootWidth: bounds.width, rootHeight: bounds.height, elementCount: elements.length,
@@ -3644,6 +4862,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       premiumDesignAudit,
       evidenceRegistry,
       evidenceCollisionPairs,
+      authoredInterferencePairs,
+      semanticRegionIntrusions,
+      authoredContinuityObservations,
+      relationRealizationTraces,
       spatialSnapshot: {
         artifactId: ARTIFACT_ID,
         revisionId: currentRevisionId,
@@ -3687,7 +4909,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       if (!initialReady) {
         initialReady = true;
         lastPublishedGeometryFingerprint = size.authoredStateFingerprint || size.geometryTransactionId || "initial";
-        parent.postMessage({ type: "northstar.artifact.ready", artifactId: ARTIFACT_ID, surfaceId: SURFACE_ID, revisionId: currentRevisionId, mutationId: currentMutationId, appliedMutationIds: Array.from(appliedMutationIds), size, review, changedNodeIds: [], meaningfulChangedNodeIds: [], changeKinds: [], requiredAssetUrls: [], loadedAssetUrls: loadedAssetUrls(), missingAssetUrls: [], evidenceRegistry: review.evidenceRegistry, snapshot: captureLiveSnapshot() }, "*");
+        parent.postMessage({ type: "northstar.artifact.ready", artifactId: ARTIFACT_ID, surfaceId: SURFACE_ID, revisionId: currentRevisionId, mutationId: currentMutationId, appliedMutationIds: Array.from(appliedMutationIds), size, review, changedNodeIds: [], meaningfulChangedNodeIds: [], changeKinds: [], requiredAssetUrls: [], loadedAssetUrls: loadedAssetUrls(), missingAssetUrls: [], evidenceRegistry: review.evidenceRegistry, authoredDesignRelations: authoredDesignRelationRecords(), resolvedDesignRelations: resolvedDesignRelationRecords(), snapshot: captureLiveSnapshot() }, "*");
       } else if (!pendingAcknowledgement) {
         const publicationFingerprint = size.authoredStateFingerprint || size.geometryTransactionId || String(size.sequence || 0);
         if (publicationFingerprint !== lastPublishedGeometryFingerprint) {
@@ -3750,11 +4972,28 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           ? "The candidate introduced new operational layout regressions: " + hardIssueFailures.join(", ") + "."
           : "";
         const linearDesignExecution = acknowledgement.batch.executionPolicy === "linear-design";
+        const candidateAuthoredRelations = authoredDesignRelationRecords();
+        const candidateResolvedRelations = resolvedDesignRelationRecords();
+        const candidateResolvedById = new Map(candidateResolvedRelations.map((relation) => [relation.relationId, relation]));
+        const unresolvedLiveRelations = candidateAuthoredRelations
+          .filter((relation) => relation.realizationPolicy === "live")
+          .map((relation) => ({ authored: relation, resolved: candidateResolvedById.get(relation.id) }))
+          .filter((entry) => !entry.resolved || entry.resolved.status !== "resolved");
+        const relationAdvisoryReasons = unresolvedLiveRelations.map((entry) =>
+          "Optional live relation " + entry.authored.id + " was not realized (" + (entry.resolved?.status || "missing")
+            + (entry.resolved?.message ? ": " + entry.resolved.message : "")
+            + "). The authored visual result remains eligible to commit; the model may keep it visual-only or repair the reactive dependency on a later turn."
+        );
         const afterVisualSafety = visualSafetySnapshot();
         const visualSafetyReason = visualSafetyFailure(
           acknowledgement.transaction.beforeVisualSafety || afterVisualSafety,
           afterVisualSafety,
           linearDesignExecution,
+        );
+        const pixelStableReason = pixelStableFailure(
+          acknowledgement.transaction.pixelStableNodeIds,
+          acknowledgement.transaction.beforeSnapshot,
+          afterSnapshot,
         );
         const geometryIntegrityFailures = review.geometryFacts?.integrityFailures || [];
         // Authored-shell coverage and overflow observations are advisory. The
@@ -3772,7 +5011,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const constructionCoverageReason = acknowledgement.batch.constructionPlan?.strictCoverage !== false && constructionResult?.completed && !constructionResult?.timedOut && !constructionResult?.recovered && (constructionResult?.uncoveredNodeIds || []).length > 0
           ? "The cinema layer simplified the reveal because it could not stage every changed node: " + constructionResult.uncoveredNodeIds.slice(0, 12).join(", ") + "."
           : "";
-        const rejectedReason = geometryIntegrityReason
+        const rejectedReason = linearDesignExecution
+          ? ""
+          : pixelStableReason
+          ? pixelStableReason
+          : geometryIntegrityReason
           ? geometryIntegrityReason
           : visualSafetyReason
           ? visualSafetyReason
@@ -3780,9 +5023,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           ? essentialPrimitiveAuditReason
           : missingAssets.length
           ? "Required evidence assets did not load: " + missingAssets.join(", ")
-          : linearDesignExecution
-            ? ""
-            : diff.meaningful.length < minimumMeaningful
+          : diff.meaningful.length < minimumMeaningful
               ? "The proposed adjustment did not visibly change enough semantic content."
               : textOnly && acknowledgement.batch.allowTextOnly !== true
                 ? "The proposed adjustment changed only copy or cosmetic styling when a compositional move was required."
@@ -3801,6 +5042,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           if (canonicalGeometryMutationId === acknowledgement.mutationId) canonicalGeometryMutationId = null;
           root.innerHTML = acknowledgement.transaction.html;
           restoreStyleState(acknowledgement.transaction.styles);
+          replaceDesignRelationMap(authoredDesignRelations, acknowledgement.transaction.authoredDesignRelations || []);
+          replaceDesignRelationMap(resolvedDesignRelations, acknowledgement.transaction.resolvedDesignRelations || []);
+          refreshRelationResizeObserver();
           requestedBounds = { ...acknowledgement.transaction.requestedBounds };
           restoreCanonicalGeometry(acknowledgement.transaction.canonicalGeometry, acknowledgement.transaction.canonicalLayoutContext);
           currentRevisionId = rollbackRevisionId;
@@ -3808,6 +5052,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           mutationTransactions.delete(acknowledgement.mutationId);
           enforceAssetPolicy(root);
           applyStage();
+          resolveAuthoredSpatialDependencies(currentRevisionId);
           executeRuntimeModule("northstar-creative-source", acknowledgement.transaction.authoredJavascript);
           endAtomicCandidateValidation(acknowledgement.mutationId);
           const rollbackDurationMs = Math.max(0, performance.now() - rollbackStartedAt);
@@ -3828,7 +5073,26 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             mutationId: acknowledgement.mutationId,
             message: rejectedReason,
             size,
-            review: { ...review, hardFailureCount: hardIssues, hardIssueDeltas, beforeAudit: { overflowElementCount: beforeAudit.overflowElementCount, clippedTextCount: beforeAudit.clippedTextCount, missingImageCount: beforeAudit.missingImageCount, internalScrollElementCount: beforeAudit.internalScrollElementCount, spatialHardFailureCount: beforeAudit.spatialAudit?.hardFailureCount || 0 }, requiredAssetCount: requiredAssets.length, missingRequiredAssetCount: missingAssets.length, meaningfulChangedNodeCount: diff.meaningful.length, visualDeltaScore: visualImpact.changedAreaRatio, ...visualImpact },
+            review: {
+              ...review,
+              hardFailureCount: hardIssues,
+              hardIssueDeltas: {
+                ...hardIssueDeltas,
+              },
+              spatialAudit: {
+                ...(review.spatialAudit || {}),
+                hardFailureCount: Number(review.spatialAudit?.hardFailureCount || 0),
+                unresolvedRelationshipIds: Array.from(new Set([
+                  ...(review.spatialAudit?.unresolvedRelationshipIds || []),
+                ])),
+              },
+              beforeAudit: { overflowElementCount: beforeAudit.overflowElementCount, clippedTextCount: beforeAudit.clippedTextCount, missingImageCount: beforeAudit.missingImageCount, internalScrollElementCount: beforeAudit.internalScrollElementCount, spatialHardFailureCount: beforeAudit.spatialAudit?.hardFailureCount || 0 },
+              requiredAssetCount: requiredAssets.length,
+              missingRequiredAssetCount: missingAssets.length,
+              meaningfulChangedNodeCount: diff.meaningful.length,
+              visualDeltaScore: visualImpact.changedAreaRatio,
+              ...visualImpact,
+            },
             changedNodeIds: diff.changed,
             meaningfulChangedNodeIds: diff.meaningful,
             changeKinds,
@@ -3836,6 +5100,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             loadedAssetUrls: loadedAssetUrls(),
             missingAssetUrls: missingAssets,
             evidenceRegistry: review.evidenceRegistry,
+            authoredDesignRelations: candidateAuthoredRelations,
+            resolvedDesignRelations: candidateResolvedRelations,
             snapshot: captureLiveSnapshot(),
             restoredSize,
             rollbackDurationMs,
@@ -3881,7 +5147,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
               missingRequiredAssetCount: 0,
               meaningfulChangedNodeCount: diff.meaningful.length,
               visualDeltaScore: visualImpact.changedAreaRatio,
-              advisoryDeliveryIssues: [primitiveAuditReason, constructionCoverageReason, ...geometryIntegrityFailures].filter(Boolean),
+              advisoryDeliveryIssues: [primitiveAuditReason, constructionCoverageReason, ...geometryIntegrityFailures, ...relationAdvisoryReasons].filter(Boolean),
+              relationRealizationTraces: relationRealizationTraceRecords(),
               ...visualImpact,
             },
             changedNodeIds: diff.changed,
@@ -3891,6 +5158,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             loadedAssetUrls: loadedAssetUrls(),
             missingAssetUrls: [],
             evidenceRegistry: review.evidenceRegistry,
+            authoredDesignRelations: authoredDesignRelationRecords(),
+            resolvedDesignRelations: resolvedDesignRelationRecords(),
             snapshot: captureLiveSnapshot(),
           };
           postTerminalMutation(acknowledgement.mutationId, terminalMessage);
@@ -3936,20 +5205,37 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     sizeFrame = requestAnimationFrame(() => requestAnimationFrame(() => { void compileQueuedCanonicalGeometry(); }));
   };
 
+  let relationResolutionFrame = 0;
+  queueAuthoredRelationResolution = () => {
+    if (!Array.from(authoredDesignRelations.values()).some((relation) => relation.realizationPolicy !== "snapshot")) return;
+    cancelAnimationFrame(relationResolutionFrame);
+    relationResolutionFrame = requestAnimationFrame(() => requestAnimationFrame(() => {
+      resolveAuthoredSpatialDependencies(currentRevisionId, { liveOnly: true });
+      solveSpatialSystem();
+      queueContentSize();
+    }));
+  };
+
   const observer = new MutationObserver((records) => {
     const externalChange = records.some((record) => {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
-      return !target?.closest?.("[data-ns-spatial-system]");
+      if (!target || runtimeRelationMutationTargets.has(target)) return false;
+      return !target.closest?.("[data-ns-spatial-system]");
     });
     if (!externalChange) return;
     enforceAssetPolicy(root);
+    queueAuthoredRelationResolution();
     queueContentSize();
   });
   observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
-  new ResizeObserver(queueContentSize).observe(root);
-  document.addEventListener("load", queueContentSize, true);
-  document.fonts?.ready?.then(queueContentSize).catch(() => undefined);
-  window.addEventListener("resize", queueContentSize);
+  relationResizeObserver = new ResizeObserver(() => {
+    queueAuthoredRelationResolution();
+    queueContentSize();
+  });
+  refreshRelationResizeObserver();
+  document.addEventListener("load", () => { queueAuthoredRelationResolution(); queueContentSize(); }, true);
+  document.fonts?.ready?.then(() => { queueAuthoredRelationResolution(); queueContentSize(); }).catch(() => undefined);
+  window.addEventListener("resize", () => { queueAuthoredRelationResolution(); queueContentSize(); });
 
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -4036,6 +5322,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           loadedAssetUrls: loadedAssetUrls(),
           missingAssetUrls: [],
           evidenceRegistry: captureEvidenceRegistryReceipt(),
+          authoredDesignRelations: authoredDesignRelationRecords(),
+          resolvedDesignRelations: resolvedDesignRelationRecords(),
           snapshot: captureLiveSnapshot(),
         };
         postTerminalMutation(mutationId, expiredMessage);
@@ -4080,6 +5368,8 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           loadedAssetUrls: loadedAssetUrls(),
           missingAssetUrls: [],
           evidenceRegistry: captureEvidenceRegistryReceipt(),
+          authoredDesignRelations: authoredDesignRelationRecords(),
+          resolvedDesignRelations: resolvedDesignRelationRecords(),
           snapshot: captureLiveSnapshot(),
         };
         postTerminalMutation(mutationId, lineageMessage);
@@ -4138,8 +5428,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         }, "*");
       }
     }
+    resolveAuthoredSpatialDependencies(currentRevisionId);
+    refreshRelationResizeObserver();
     queueContentSize();
-    [40, 120, 260, 520, 900, 1500].forEach((delay) => setTimeout(queueContentSize, delay));
+    [40, 120, 260, 520, 900, 1500].forEach((delay) => setTimeout(() => { queueAuthoredRelationResolution(); queueContentSize(); }, delay));
   })();
 })();
 `;

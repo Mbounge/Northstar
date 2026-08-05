@@ -260,6 +260,54 @@ export interface NorthstarSpatialSnapshot {
   layoutVersion: number;
 }
 
+
+export type NorthstarDesignRelationGeometryMode =
+  | "border-box"
+  | "semantic-descendant-union";
+
+export interface NorthstarDesignRelationReference {
+  role: string;
+  nodeId: string;
+  anchor?: string;
+  /** Exact browser geometry represented by this semantic reference. */
+  geometry?: NorthstarDesignRelationGeometryMode;
+}
+
+export interface NorthstarAuthoredDesignRelation {
+  id: string;
+  subjectId: string;
+  kind: string;
+  references: NorthstarDesignRelationReference[];
+  parameters: Record<string, string | number | boolean>;
+  realizationPolicy: "live" | "snapshot";
+}
+
+export interface NorthstarResolvedDesignRelation {
+  relationId: string;
+  revisionId: string;
+  inputBounds: Record<string, NorthstarSpatialRect>;
+  outputBounds?: NorthstarSpatialRect;
+  outputGeometry?: Record<string, string | number | boolean>;
+  status: "resolved" | "unresolved" | "conflicted" | "cyclic";
+  message?: string;
+}
+
+export interface NorthstarRelationRealizationTrace {
+  relationId: string;
+  kind: string;
+  realizationPolicy: "live" | "snapshot";
+  subjectId: string;
+  receivedReferences: NorthstarDesignRelationReference[];
+  canonicalReferences: NorthstarDesignRelationReference[];
+  subjectFound: boolean;
+  missingReferenceNodeIds: string[];
+  primitiveNodeId?: string;
+  primitiveFound?: boolean;
+  status: "resolved" | "unresolved" | "conflicted" | "cyclic" | "missing";
+  failureStage: "none" | "subject" | "reference" | "primitive" | "resolver";
+  message?: string;
+}
+
 export interface NorthstarArtboardMutationBatch {
   schema: typeof NORTHSTAR_ARTBOARD_MUTATION_SCHEMA;
   mutationId: string;
@@ -272,6 +320,8 @@ export interface NorthstarArtboardMutationBatch {
   geometryIntent: NorthstarArtboardGeometryIntent;
   transitionMs: number;
   operations: NorthstarArtboardMutationOperation[];
+  /** Model-authored spatial and semantic intent, stored independently from markup and runtime geometry. */
+  relations?: NorthstarAuthoredDesignRelation[];
   /** Exact semantic deliverables promised by the authored DesignAct. */
   requiredPrimitives?: NorthstarRequiredPrimitive[];
   /** Browser-owned perceptual choreography over one atomic final transaction. */
@@ -297,6 +347,8 @@ export interface NorthstarArtboardMutationBatch {
    * observations for the next model action.
    */
   executionPolicy?: "legacy-gated" | "linear-design";
+  /** Node roots whose source and browser geometry must remain identical for this transaction. */
+  pixelStableNodeIds?: string[];
   createdAt: string;
 }
 
@@ -536,6 +588,8 @@ export interface CanvasCodeArtifactContentSize {
 export interface NorthstarCommittedSemanticNode {
   nodeId: string;
   parentId?: string;
+  /** Exact browser-measured world-space bounds at snapshot commit time. */
+  bounds?: { left: number; top: number; right: number; bottom: number; width: number; height: number };
   normalizedText: string;
   normalizedAttributes: Record<string, string>;
   normalizedClasses: string[];
@@ -582,9 +636,15 @@ export interface NorthstarEvidenceRegistryReceipt {
     width: number;
     height: number;
     aspectRatio: number;
+    /** Browser-estimated painted screenshot surface after object-fit is applied. */
+    mediaWidth?: number;
+    mediaHeight?: number;
+    mediaAspectRatio?: number;
+    naturalAspectRatio?: number;
     objectFit: string;
     objectPosition: string;
     transform: string;
+    runtimeInherited?: boolean;
   }>;
 }
 
@@ -613,6 +673,8 @@ export interface NorthstarArtifactMutationAcknowledgement {
   loadedAssetUrls: string[];
   missingAssetUrls: string[];
   evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
+  authoredDesignRelations?: NorthstarAuthoredDesignRelation[];
+  resolvedDesignRelations?: NorthstarResolvedDesignRelation[];
   snapshot?: NorthstarLiveSurfaceSnapshot;
   /** Browser-measured time spent restoring the accepted DOM after rejecting this candidate. */
   rollbackDurationMs?: number;
@@ -713,6 +775,8 @@ export interface CanvasCodeArtifactRuntimeReview {
   geometryFacts?: CanvasCodeArtifactGeometryFacts;
   /** Non-blocking cinema or optional analytical-binding issues retained for the next model observation. */
   advisoryDeliveryIssues?: string[];
+  /** End-to-end browser trace for every model-authored reactive dependency. */
+  relationRealizationTraces?: NorthstarRelationRealizationTrace[];
   changedAreaRatio?: number;
   spatiallyChangedNodeCount?: number;
   movedNodeCount?: number;
@@ -724,6 +788,58 @@ export interface CanvasCodeArtifactRuntimeReview {
   evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
   /** Browser-measured collisions between distinct protected evidence nodes. */
   evidenceCollisionPairs?: Array<[string, string]>;
+  /**
+   * Browser observations where a model-authored relationship primitive crosses
+   * readable authored content. These observations describe the rendered result
+   * so the model can revise its own route or composition; the runtime never
+   * chooses a replacement route.
+   */
+  authoredInterferencePairs?: Array<{
+    relationshipId: string;
+    primitiveId: string;
+    obstacleId: string;
+    hitCount: number;
+    obstacleBounds?: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    };
+    firstHitPoint?: { x: number; y: number };
+    lastHitPoint?: { x: number; y: number };
+  }>;
+  /**
+   * Browser observations where an authored explanatory object associated with one
+   * evidence flow intrudes into the collective protected territory of another
+   * flow. This is cumulative composition feedback; it does not prescribe a fix.
+   */
+  semanticRegionIntrusions?: Array<{
+    additionId: string;
+    intendedFlowId: string;
+    intrudedFlowId: string;
+    additionBounds: { left: number; top: number; width: number; height: number };
+    regionBounds: { left: number; top: number; width: number; height: number };
+    overlapBounds: { left: number; top: number; width: number; height: number };
+    overlapArea: number;
+  }>;
+  /**
+   * Cumulative semantic-continuity observations for authored additions whose
+   * target remains valid but whose visual membership or attribution weakened
+   * after a later design turn. The runtime reports geometry only; the model
+   * owns any recomposition.
+   */
+  authoredContinuityObservations?: Array<{
+    additionId: string;
+    targetNodeIds: string[];
+    intendedFlowId?: string;
+    targetRegionId?: string;
+    additionBounds: { left: number; top: number; width: number; height: number };
+    targetBounds?: { left: number; top: number; width: number; height: number };
+    centerDistance: number;
+    outsideTargetRegion: boolean;
+    visualAttribution: "clear" | "weakened";
+    reason: string;
+  }>;
   /** Browser-measured realization of the model-authored premium narrative contract. */
   premiumDesignAudit?: NorthstarPremiumDesignAudit;
 }
@@ -750,6 +866,10 @@ export interface NorthstarGeneratedCodeArtifactPackage {
   document: NorthstarWebArtifactDocument;
   /** The document is mounted once. Every later visible change is appended here and replayed on that same surface. */
   mutationJournal?: NorthstarArtboardMutationBatch[];
+  /** Canonical model-authored relation registry retained after journal materialization. */
+  authoredDesignRelations?: NorthstarAuthoredDesignRelation[];
+  /** Latest browser-resolved state for authored relations. Never substituted for authored source. */
+  resolvedDesignRelations?: NorthstarResolvedDesignRelation[];
   surfaceId?: string;
   /** Unique token for the browser acknowledgement required before the server may advance. */
   pendingAckToken?: string;
@@ -797,6 +917,10 @@ export interface CanvasCodeArtifactPayload {
   runtimeUrl?: string;
   document?: NorthstarWebArtifactDocument;
   mutationJournal?: NorthstarArtboardMutationBatch[];
+  /** Canonical model-authored relation registry retained after journal materialization. */
+  authoredDesignRelations?: NorthstarAuthoredDesignRelation[];
+  /** Latest browser-resolved state for authored relations. Never substituted for authored source. */
+  resolvedDesignRelations?: NorthstarResolvedDesignRelation[];
   surfaceId?: string;
   pendingAckToken?: string;
   creativeLease?: NorthstarCreativeLeaseClaim;
@@ -835,6 +959,10 @@ export interface CanvasCodeArtifactRevisionPatch {
   runtimeUrl?: string;
   document?: NorthstarWebArtifactDocument;
   mutationJournal?: NorthstarArtboardMutationBatch[];
+  /** Canonical model-authored relation registry retained after journal materialization. */
+  authoredDesignRelations?: NorthstarAuthoredDesignRelation[];
+  /** Latest browser-resolved state for authored relations. Never substituted for authored source. */
+  resolvedDesignRelations?: NorthstarResolvedDesignRelation[];
   surfaceId?: string;
   pendingAckToken?: string;
   creativeLease?: NorthstarCreativeLeaseClaim;
@@ -903,6 +1031,8 @@ export function createCanvasCodeArtifactPayloadFromPackage(
     description: packageValue.description,
     document: packageValue.document,
     mutationJournal: packageValue.mutationJournal ?? [],
+    authoredDesignRelations: packageValue.authoredDesignRelations,
+    resolvedDesignRelations: packageValue.resolvedDesignRelations,
     surfaceId: packageValue.surfaceId ?? packageValue.artifactId,
     pendingAckToken: packageValue.pendingAckToken,
     creativeLease: packageValue.creativeLease,

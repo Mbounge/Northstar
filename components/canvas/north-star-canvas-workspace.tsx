@@ -100,6 +100,7 @@ import {
   getCanvasRunTelemetry,
   recordCanvasDiagnostic,
   recordNorthstarCandidateSourceArchive,
+  recordNorthstarDesignTurnAuditArchive,
   settleNorthstarCandidateSourceArchive,
   subscribeCanvasDiagnostics,
   summarizeCanvasDiagnosticSeverities,
@@ -18204,6 +18205,31 @@ function ChatWorkspacePanel({
           return;
         }
 
+        if (eventName === "design.audit.archive") {
+          if (
+            typeof payload.schema === "string"
+            && typeof payload.runId === "string"
+            && typeof payload.artifactId === "string"
+            && typeof payload.turn === "number"
+            && typeof payload.recordedAt === "string"
+          ) {
+            recordNorthstarDesignTurnAuditArchive(payload as Parameters<typeof recordNorthstarDesignTurnAuditArchive>[0]);
+            recordCanvasDiagnostic({
+              phase: "action",
+              name: "design.audit.archive_recorded",
+              runId: payload.runId,
+              detail: `Recorded the complete model boundary and before/after source archive for design turn ${payload.turn}.`,
+              data: {
+                artifactId: payload.artifactId,
+                turn: payload.turn,
+                status: payload.status,
+                schema: payload.schema,
+              },
+            });
+          }
+          return;
+        }
+
         if (eventName === "server.trace") {
           const traceName = typeof payload.name === "string" ? payload.name : "server.trace";
           const traceData = payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
@@ -19000,9 +19026,9 @@ function ChatWorkspacePanel({
             references: [],
             suggestedActions: [],
             showSuggestedActions: false,
-            runStatus: "blocked",
+            runStatus: "completed_with_notes",
             streaming: false,
-            error: true,
+            error: false,
             activity: (current.activity ?? []).map((item) =>
               item.status === "pending" || item.status === "running"
                 ? { ...item, status: "cancelled" as const }

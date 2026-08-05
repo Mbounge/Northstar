@@ -4,6 +4,8 @@ import type {
   CanvasCodeArtifactIntrinsicBounds,
   CanvasCodeArtifactPayload,
   CanvasCodeArtifactRuntimeReview,
+  NorthstarAuthoredDesignRelation,
+  NorthstarResolvedDesignRelation,
   NorthstarLiveSurfaceSnapshot,
 } from "@/lib/canvas-artifacts/types";
 
@@ -190,6 +192,8 @@ export type NorthstarBrowserCommit = {
   mutationId?: string;
   size?: CanvasCodeArtifactContentSize;
   review?: CanvasCodeArtifactRuntimeReview;
+  authoredDesignRelations?: NorthstarAuthoredDesignRelation[];
+  resolvedDesignRelations?: NorthstarResolvedDesignRelation[];
   snapshot?: NorthstarLiveSurfaceSnapshot;
 };
 
@@ -265,6 +269,8 @@ export function materializeNorthstarBrowserCommit(
         }
       : artifact.document,
     mutationJournal: snapshot ? [] : artifact.mutationJournal,
+    authoredDesignRelations: commit.authoredDesignRelations ?? artifact.authoredDesignRelations,
+    resolvedDesignRelations: commit.resolvedDesignRelations ?? artifact.resolvedDesignRelations,
     pendingAckToken: undefined,
     creativeLease: undefined,
     preferredWidth,
