@@ -9,12 +9,14 @@ import {
 import type {
   NorthstarArtifactMutationAcknowledgement,
   NorthstarArtboardMutationBatch,
+  NorthstarAuthoredDesignRelation,
   NorthstarGeneratedCodeArtifactPackage,
   NorthstarLiveSurfaceSnapshot,
 } from "@/lib/canvas-artifacts/types";
 import {
   buildNorthstarCumulativeIntentAudit,
   type NorthstarCumulativeIntentAudit,
+  type NorthstarCollateralGeometryFinding,
 } from "@/lib/canvas-ai/northstar-cumulative-intent-audit";
 import {
   buildNorthstarRenderedIntegrityAudit,
@@ -23,6 +25,21 @@ import {
 
 export const NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION =
   "northstar.artboard-benchmark.v1" as const;
+
+// Patch 3A keeps the live artboard as the only design surface. A model turn is
+// applied first; Patch 1/2 review the exact browser result afterwards. There is
+// no hidden review candidate or promotion phase in this protocol.
+export const NORTHSTAR_PATCH_3A_DIRECT_LIVE_REVIEW_VERSION =
+  "northstar.patch3a.direct-live-review.v1" as const;
+export const NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS = 5_000 as const;
+export const NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION =
+  "northstar.patch3b.live-repair-loop.v1" as const;
+export const NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION =
+  "northstar.patch3b.repair-memory-addon.v1" as const;
+export const NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION =
+  "northstar.patch3b.collateral-change-addon.v1" as const;
+export const NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION =
+  "northstar.patch3b.reactive-aware-convergence-addon.v1" as const;
 
 export type NorthstarDesignResetTurn = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
@@ -73,8 +90,10 @@ export type NorthstarArtboardSemanticGraph = {
     preservation: "permanent" | "editable" | "derived";
     continuity?: {
       source: "unchanged";
-      bounds: "unchanged";
-      internalLayout: "unchanged";
+      evidenceIdentity: "unchanged";
+      itemDimensions: "unchanged";
+      itemOrder: "unchanged";
+      placement: "recomposable-when-needed";
       visualAppearance: "unchanged";
     };
   }>;
@@ -107,11 +126,11 @@ export type NorthstarArtboardSemanticGraph = {
     rightOf: string;
     verticalCenterAlignment: string;
     authoritativeSpatialAnchors: string;
-    relationshipBetween: string;
+    evidenceIntegrity: string;
+    spatialRecomposition: string;
     worldSpaceObjectTopology: string;
     authoredNodeIdentity: string;
     authoredRelationshipProvenance: string;
-    equalSpaceWithAnnotation: string;
     authoredAnnotationProvenance: string;
     reactiveSpatialDependencies: string;
   };
@@ -179,7 +198,8 @@ export type NorthstarDesignResetTurnArchive = {
   sourceBefore: {
     revisionId: string;
     package: NorthstarGeneratedCodeArtifactPackage;
-    snapshot: NorthstarLiveSurfaceSnapshot;
+    snapshot?: NorthstarLiveSurfaceSnapshot;
+    observationSource: "browser-snapshot" | "canonical-package";
     acknowledgement: NorthstarArtifactMutationAcknowledgement;
     sourceSha256: string;
     semanticGraph: NorthstarArtboardSemanticGraph;
@@ -200,7 +220,8 @@ export type NorthstarDesignResetTurnArchive = {
   sourceAfter?: {
     revisionId: string;
     package: NorthstarGeneratedCodeArtifactPackage;
-    snapshot: NorthstarLiveSurfaceSnapshot;
+    snapshot?: NorthstarLiveSurfaceSnapshot;
+    observationSource: "browser-snapshot" | "canonical-package";
     acknowledgement: NorthstarArtifactMutationAcknowledgement;
     sourceSha256: string;
     semanticGraph: NorthstarArtboardSemanticGraph;
@@ -223,6 +244,237 @@ export type NorthstarDesignResetTurnArchive = {
   repairHistory?: unknown[];
   failure?: string;
 };
+
+export type NorthstarLiveRepairFinding = {
+  key: string;
+  source: "cumulative-intent" | "rendered-integrity";
+  kind: string;
+  status: string;
+  subjectNodeId?: string;
+  relatedNodeIds: string[];
+  detail: string;
+  measurement?: Record<string, string | number | boolean>;
+  collateralGeometryChanges?: NorthstarCollateralGeometryFinding[];
+};
+
+export type NorthstarLiveRepairOutcome = {
+  status: "resolved" | "partial-progress" | "no-progress" | "same-findings-changed-measurements" | "changed-defects";
+  resolvedFindingKeys: string[];
+  remainingFindingKeys: string[];
+  introducedFindingKeys: string[];
+  unchangedMeasurementFindingKeys: string[];
+  changedMeasurements: Array<{
+    findingKey: string;
+    before: Record<string, string | number | boolean>;
+    after: Record<string, string | number | boolean>;
+  }>;
+};
+
+/** Mechanical identity only: prose changes cannot disguise the same executable repair. */
+export function northstarLiveRepairExecutableFingerprint(mutation: NorthstarArtboardMutationDraft): string {
+  const executable = JSON.stringify({
+    geometryIntent: mutation.geometryIntent,
+    operations: mutation.operations,
+    relations: mutation.relations ?? [],
+  });
+  return createHash("sha256").update(executable).digest("hex");
+}
+
+/**
+ * Compares observed defect sets without deciding what visual solution is good.
+ * The designer receives the raw before/after measurements and interprets them.
+ */
+export function summarizeNorthstarLiveRepairOutcome(
+  before: NorthstarLiveRepairFinding[],
+  after: NorthstarLiveRepairFinding[],
+): NorthstarLiveRepairOutcome {
+  const beforeByKey = new Map(before.map((finding) => [finding.key, finding]));
+  const afterByKey = new Map(after.map((finding) => [finding.key, finding]));
+  const resolvedFindingKeys = [...beforeByKey.keys()].filter((key) => !afterByKey.has(key)).sort();
+  const remainingFindingKeys = [...beforeByKey.keys()].filter((key) => afterByKey.has(key)).sort();
+  const introducedFindingKeys = [...afterByKey.keys()].filter((key) => !beforeByKey.has(key)).sort();
+  const unchangedMeasurementFindingKeys: string[] = [];
+  const changedMeasurements: NorthstarLiveRepairOutcome["changedMeasurements"] = [];
+  for (const key of remainingFindingKeys) {
+    const beforeMeasurement = beforeByKey.get(key)?.measurement ?? {};
+    const afterMeasurement = afterByKey.get(key)?.measurement ?? {};
+    if (JSON.stringify(beforeMeasurement) === JSON.stringify(afterMeasurement)) {
+      unchangedMeasurementFindingKeys.push(key);
+    } else {
+      changedMeasurements.push({ findingKey: key, before: beforeMeasurement, after: afterMeasurement });
+    }
+  }
+  let status: NorthstarLiveRepairOutcome["status"];
+  if (after.length === 0) status = "resolved";
+  else if (resolvedFindingKeys.length > 0) status = "partial-progress";
+  else if (introducedFindingKeys.length > 0) status = "changed-defects";
+  else if (changedMeasurements.length > 0) status = "same-findings-changed-measurements";
+  else status = "no-progress";
+  return {
+    status,
+    resolvedFindingKeys,
+    remainingFindingKeys,
+    introducedFindingKeys,
+    unchangedMeasurementFindingKeys,
+    changedMeasurements,
+  };
+}
+
+function northstarReactiveRelationChannels(relation: NorthstarAuthoredDesignRelation): string[] {
+  const parameters = relation.parameters ?? {};
+  if (relation.kind === "connector-attachment") return ["connector"];
+  if (relation.kind === "relative-placement") {
+    const side = String(parameters.side ?? "right");
+    const channels = [side === "right" || side === "left" ? "x" : "y"];
+    if ((side === "right" || side === "left") && ["top", "center", "bottom"].includes(String(parameters.alignY ?? ""))) channels.push("y");
+    if ((side === "above" || side === "below") && ["left", "center", "right"].includes(String(parameters.alignX ?? ""))) channels.push("x");
+    return channels;
+  }
+  if (relation.kind === "between-placement") {
+    const axis = String(parameters.axis ?? "x") === "y" ? "y" : "x";
+    const crossAlign = String(parameters.crossAlign ?? (axis === "x" ? parameters.alignY : parameters.alignX) ?? "preserve");
+    return crossAlign === "preserve" ? [axis] : [axis, axis === "x" ? "y" : "x"];
+  }
+  return [];
+}
+
+export type NorthstarReactiveRelationConflict = {
+  subjectId: string;
+  channel: string;
+  existingRelationId: string;
+  competingRelationId: string;
+};
+
+/** Mechanical dependency-protocol check only; it never selects or rewrites a relation. */
+export function findNorthstarNewReactiveRelationConflicts(input: {
+  existingRelations: NorthstarAuthoredDesignRelation[];
+  proposedRelations: NorthstarAuthoredDesignRelation[];
+}): NorthstarReactiveRelationConflict[] {
+  const conflictMap = (relations: NorthstarAuthoredDesignRelation[]) => {
+    const owners = new Map<string, string>();
+    const conflicts = new Map<string, NorthstarReactiveRelationConflict>();
+    for (const relation of relations) {
+      for (const channel of northstarReactiveRelationChannels(relation)) {
+        const ownerKey = `${relation.subjectId}::${channel}`;
+        const priorId = owners.get(ownerKey);
+        if (!priorId || priorId === relation.id) {
+          owners.set(ownerKey, relation.id);
+          continue;
+        }
+        const ids = [priorId, relation.id].sort();
+        const key = `${ownerKey}::${ids.join("::")}`;
+        conflicts.set(key, {
+          subjectId: relation.subjectId,
+          channel,
+          existingRelationId: ids[0],
+          competingRelationId: ids[1],
+        });
+      }
+    }
+    return conflicts;
+  };
+  const before = conflictMap(input.existingRelations);
+  const finalById = new Map(input.existingRelations.map((relation) => [relation.id, relation]));
+  for (const relation of input.proposedRelations) finalById.set(relation.id, relation);
+  return [...conflictMap([...finalById.values()]).entries()]
+    .filter(([key]) => !before.has(key))
+    .map(([, conflict]) => conflict)
+    .sort((a, b) => `${a.subjectId}:${a.channel}:${a.competingRelationId}`.localeCompare(`${b.subjectId}:${b.channel}:${b.competingRelationId}`));
+}
+
+function currentTurnAffectedNodeIds(audit: NorthstarCumulativeIntentAudit): Set<string> {
+  const affectedCommitmentIds = new Set([
+    ...audit.affectedComposition.directCommitmentIds,
+    ...audit.affectedComposition.continuityDependentCommitmentIds,
+    ...audit.affectedComposition.spatiallyExposedCommitmentIds,
+  ]);
+  return new Set([
+    ...audit.directEditScope.directNodeIds,
+    ...audit.directEditScope.introducedNodeIds,
+    ...audit.directEditScope.containerContextNodeIds,
+    ...audit.directEditScope.relationSubjectNodeIds,
+    ...audit.directEditScope.relationReferenceNodeIds,
+    ...audit.directEditScope.structuralMemberNodeIds,
+    ...audit.affectedComposition.continuityAnchorNodeIds,
+    ...audit.affectedComposition.geometryChangedNodeIds,
+    ...audit.affectedComposition.dependencyPaths.flatMap((path) => [path.fromNodeId, path.toNodeId].filter((value): value is string => Boolean(value))),
+    ...audit.activeCommitmentLedger
+      .filter((commitment) => affectedCommitmentIds.has(commitment.commitmentId))
+      .map((commitment) => commitment.nodeId),
+  ]);
+}
+
+/**
+ * Patch 3B turns Patch 1/2 observations into model feedback without turning the
+ * runtime into a designer. Only high-confidence rendered findings that touch
+ * this mutation's affected composition are actionable. A finding already owned
+ * by the current repair loop remains actionable until it disappears, even when
+ * a weak correction failed to touch the original subject.
+ */
+export function selectNorthstarLiveRepairFindings(input: {
+  cumulativeIntentAudit?: NorthstarCumulativeIntentAudit;
+  renderedIntegrityAudit?: NorthstarRenderedIntegrityAudit;
+  carryFindingKeys?: Iterable<string>;
+}): NorthstarLiveRepairFinding[] {
+  if (!input.cumulativeIntentAudit) return [];
+  const affectedNodeIds = currentTurnAffectedNodeIds(input.cumulativeIntentAudit);
+  const carryFindingKeys = new Set(input.carryFindingKeys ?? []);
+  const findings: NorthstarLiveRepairFinding[] = [];
+
+  const collateralChanges = input.cumulativeIntentAudit.affectedComposition.collateralGeometryFindings ?? [];
+  if (collateralChanges.length > 0) {
+    const maxCenterDisplacement = Math.max(...collateralChanges.map((change) => change.delta.centerDistance));
+    const maxSizeChange = Math.max(...collateralChanges.flatMap((change) => [Math.abs(change.delta.width), Math.abs(change.delta.height)]));
+    findings.push({
+      key: "intent:unexplained-collateral-geometry-change",
+      source: "cumulative-intent",
+      kind: "unexplained-collateral-geometry-change",
+      status: "unresolved",
+      relatedNodeIds: collateralChanges.map((change) => change.nodeId),
+      detail: `${collateralChanges.length} pre-existing rendered node(s) materially changed geometry outside the composition explained by this turn. Preserve the turn's successful objective while repairing this collateral displacement; the runtime is reporting the before/after geometry, not prescribing a layout solution.`,
+      measurement: {
+        changedNodeCount: collateralChanges.length,
+        maxCenterDisplacementPx: maxCenterDisplacement,
+        maxSizeChangePx: maxSizeChange,
+      },
+      collateralGeometryChanges: collateralChanges,
+    });
+  }
+
+  for (const warning of input.cumulativeIntentAudit.resolutionWarnings) {
+    const key = `intent:${warning.code}:${warning.nodeId ?? "turn"}:${warning.detail}`;
+    // A graph-level inference warning without an exact authored subject is
+    // diagnostic context, not a design instruction. Repair only warnings tied
+    // to a concrete affected node (or one already owned by this repair loop).
+    if ((!warning.nodeId || !affectedNodeIds.has(warning.nodeId)) && !carryFindingKeys.has(key)) continue;
+    findings.push({
+      key,
+      source: "cumulative-intent",
+      kind: warning.code,
+      status: "unresolved",
+      subjectNodeId: warning.nodeId,
+      relatedNodeIds: warning.candidateNodeIds ?? [],
+      detail: warning.detail,
+    });
+  }
+
+  for (const finding of input.renderedIntegrityAudit?.highConfidenceFindings ?? []) {
+    const touchesAffectedComposition = affectedNodeIds.has(finding.subjectNodeId)
+      || finding.relatedNodeIds.some((nodeId) => affectedNodeIds.has(nodeId));
+    if (!touchesAffectedComposition && !carryFindingKeys.has(finding.findingId)) continue;
+    findings.push({
+      key: finding.findingId,
+      source: "rendered-integrity",
+      kind: finding.kind,
+      status: finding.status,
+      subjectNodeId: finding.subjectNodeId,
+      relatedNodeIds: finding.relatedNodeIds,
+      detail: finding.rationale,
+      measurement: finding.measurement,
+    });
+  }
+  return findings.sort((first, second) => first.key.localeCompare(second.key));
+}
 
 export const NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA = {
   type: "object",
@@ -274,6 +526,26 @@ function sourceHash(snapshot: NorthstarLiveSurfaceSnapshot): string {
   }));
 }
 
+function canonicalPackageSnapshot(artifact: NorthstarGeneratedCodeArtifactPackage): NorthstarLiveSurfaceSnapshot {
+  return {
+    html: artifact.document.html,
+    css: artifact.document.css,
+    cssLayers: artifact.document.cssLayers ?? {},
+    javascript: artifact.document.javascript ?? "",
+    creativeJavascript: artifact.document.creativeJavascript ?? "",
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+function strongestSourceObservation(input: {
+  artifact: NorthstarGeneratedCodeArtifactPackage;
+  acknowledgement: NorthstarArtifactMutationAcknowledgement;
+}): { snapshot: NorthstarLiveSurfaceSnapshot; source: "browser-snapshot" | "canonical-package" } {
+  return input.acknowledgement.snapshot
+    ? { snapshot: input.acknowledgement.snapshot, source: "browser-snapshot" }
+    : { snapshot: canonicalPackageSnapshot(input.artifact), source: "canonical-package" };
+}
+
 export function northstarDesignResetSourceHash(snapshot: NorthstarLiveSurfaceSnapshot): string {
   return sourceHash(snapshot);
 }
@@ -313,8 +585,7 @@ export function buildNorthstarArtboardSemanticGraph(input: {
   artifact: NorthstarGeneratedCodeArtifactPackage;
   acknowledgement: NorthstarArtifactMutationAcknowledgement;
 }): NorthstarArtboardSemanticGraph {
-  const snapshot = input.acknowledgement.snapshot;
-  if (!snapshot) throw new Error("Cannot build semantic graph without the exact browser snapshot.");
+  const { snapshot } = strongestSourceObservation(input);
   const snapshotRecord = snapshot as unknown as Record<string, unknown>;
   const semanticNodesRaw = Array.isArray(snapshotRecord.semanticNodes) ? snapshotRecord.semanticNodes : [];
   const registry = isRecord(snapshotRecord.evidenceRegistry)
@@ -449,7 +720,7 @@ export function buildNorthstarArtboardSemanticGraph(input: {
       },
     ],
     regions: [
-      { regionId: "research", conceptId: "research", rootNodeId: researchRootId, memberNodeIds: evidenceNodeIds, bounds: researchBounds, anchors: anchorsFromBounds(researchBounds), preservation: "permanent", continuity: { source: "unchanged", bounds: "unchanged", internalLayout: "unchanged", visualAppearance: "unchanged" } },
+      { regionId: "research", conceptId: "research", rootNodeId: researchRootId, memberNodeIds: evidenceNodeIds, bounds: researchBounds, anchors: anchorsFromBounds(researchBounds), preservation: "permanent", continuity: { source: "unchanged", evidenceIdentity: "unchanged", itemDimensions: "unchanged", itemOrder: "unchanged", placement: "recomposable-when-needed", visualAppearance: "unchanged" } },
       ...flowGroups.map((flow) => ({
         regionId: `flow:${flow.flowId}`,
         conceptId: `flow:${flow.flowId}`,
@@ -458,7 +729,7 @@ export function buildNorthstarArtboardSemanticGraph(input: {
         bounds: flow.bounds,
         anchors: flow.anchors,
         preservation: "permanent" as const,
-        continuity: { source: "unchanged" as const, bounds: "unchanged" as const, internalLayout: "unchanged" as const, visualAppearance: "unchanged" as const },
+        continuity: { source: "unchanged" as const, evidenceIdentity: "unchanged" as const, itemDimensions: "unchanged" as const, itemOrder: "unchanged" as const, placement: "recomposable-when-needed" as const, visualAppearance: "unchanged" as const },
       })),
       { regionId: "working-reasoning", conceptId: "working-reasoning", rootNodeId: "reasoning-zone", memberNodeIds: [], preservation: "editable" },
     ],
@@ -469,15 +740,15 @@ export function buildNorthstarArtboardSemanticGraph(input: {
     vocabulary: {
       research: "Resolve to node evidence and all canonical evidence descendants, never reasoning-zone or presentation.",
       workingReasoning: "Resolve to reasoning-zone; it is distinct from research.",
-      below: "In artboard world space, add new content outside the existing research footprint with its top edge beyond the research bottom edge. Expand the artboard downward. Do not move, resize, reflow, restyle, wrap, or otherwise transform research to make room.",
-      rightOf: "In artboard world space, add new content outside the existing research footprint with its left edge beyond the research right edge. Expand the artboard to the right. Do not move, resize, reflow, restyle, wrap, or otherwise transform research to make room.",
+      below: "For an explicit directional extension, below means the subject's rendered top is beyond the referenced region's rendered bottom. Preserve that reference while satisfying the requested relation unless the instruction also asks to modify it; request additional artboard space when needed.",
+      rightOf: "For an explicit directional extension, right means the subject's rendered left is beyond the referenced region's rendered right. Preserve that reference while satisfying the requested relation unless the instruction also asks to modify it; request additional artboard space when needed.",
       verticalCenterAlignment: "Vertically center-align means the rendered vertical center of the new node equals the authoritative anchors.centerY of the reference region. Do not recompute centerY from top, bottom, or height. Do not guess the new node height. Author a self-measuring CSS relationship that remains exact after layout, such as placing the node top at anchors.centerY and translating the node by -50% of its own rendered height, or another equivalently exact authored relationship.",
       authoritativeSpatialAnchors: "Each measured node and region exposes authoritative anchors: left, top, right, bottom, centerX, and centerY. Use these values directly for relational geometry. Do not recalculate them from rounded bounds.",
-      relationshipBetween: "Construct a new authored visual relationship whose endpoints resolve to the authoritative anchors of the two named evidence items. Keep both source screenshots pixel-stable. The model chooses the connector form, path, label, styling, dimensions, and implementation.",
+      evidenceIntegrity: "Protected evidence keeps its source identity, content, rendered dimensions, visual appearance, visibility, and sequence order. Protection does not freeze x/y position: intact evidence may be explicitly translated when the current composition needs space, while unrelated evidence remains stable.",
+      spatialRecomposition: "Every design objective has the same spatial agency. Use current rendered measurements to decide whether the intended communication fits. If it does not, create space by explicitly recomposing the smallest coherent affected structure, update dependent authored work, and request artboard growth when useful. No content type or benchmark objective receives a privileged movement recipe.",
       worldSpaceObjectTopology: "Every independently positioned artboard-world object is authored as a direct child of the canonical artboard root node artboard. Reference regions such as evidence are anchors for geometry and meaning, not parents for external world-space objects.",
       authoredNodeIdentity: "Every authored visual object must have a unique data-ns-node-id attribute. The semantic graph, browser measurements, later design turns, diagnostics, and source diffs use data-ns-node-id as the stable object identity; an HTML id attribute alone is not sufficient.",
       authoredRelationshipProvenance: "A model-authored relationship object carries data-ns-authored-relationship=\"true\", data-ns-source-node-id, and data-ns-target-node-id on the authored relationship object itself. These attributes describe provenance only; they do not choose, route, style, validate, repair, or replace the model-authored visual treatment. Every independently addressable visual primitive inside the relationship also carries its own unique data-ns-node-id.",
-      equalSpaceWithAnnotation: "Create a larger gap between the two named adjacent screenshots, place the new annotation inside that gap, and make the rendered horizontal distance from the first screenshot to the annotation equal to the rendered horizontal distance from the annotation to the second screenshot. The model chooses the gap size, annotation size, styling, and implementation. Preserve screenshot order, dimensions, content, and appearance. Move only the minimum necessary Awin sequence suffix; keep the Whop flow and unrelated artboard content unchanged. Expand the artboard to the right if the authored layout needs more room.",
       authoredAnnotationProvenance: "A model-authored gap annotation carries data-ns-authored-annotation=\"true\", data-ns-between-before-node-id, and data-ns-between-after-node-id on the annotation object itself. These attributes describe which adjacent evidence nodes bound the annotated gap; they do not choose placement, validate spacing, or repair the model-authored result.",
       reactiveSpatialDependencies: "Spatial intent persists across turns in mutation.relations, which is the canonical model-authored dependency graph. References declare exact semantic node identities, anchors, and geometry modes; parameters declare only the axes, alignments, and offsets chosen by the model. The browser realizes live relations from current rendered geometry without changing the canonical authored source and without inventing styling, spacing, routing, dimensions, or cross-axis alignment.",
     },
@@ -504,31 +775,41 @@ The user will give you one short design instruction, the complete current artboa
 
 First resolve every noun, spatial relation, and alignment instruction through the semantic graph. Research always means the canonical evidence region rooted at node evidence; reasoning-zone and presentation are explicitly not research. The graph's bounds and anchors describe the current committed revision, but every persistent dependency must also be authored in mutation.relations so it survives later geometry changes.
 
-Treat communication quality and evidence safety as part of every design decision, on every turn. Anything you add must be clear, readable, and understandable from the rendered artboard itself. When an addition refers to specific evidence, its content and visual treatment must make that reference understandable without relying on diagnostics. General comments, synthesis, or remarks may address the whole artifact without pointing to one exact node. Never place cards, annotations, labels, text, filled shapes, or decorative surfaces over protected evidence pixels. Do not crop, cover, dim, restyle, replace, or visually contaminate evidence. Create negative space, move only explicitly editable authored material, or expand the artboard when your design needs room.
+Treat communication quality and evidence safety as part of every design decision, on every turn. Anything you add must be clear, readable, and understandable from the rendered artboard itself. When an addition refers to specific evidence, its content and visual treatment must make that reference understandable without relying on diagnostics. General comments, synthesis, or remarks may address the whole artifact without pointing to one exact node. Never place cards, annotations, labels, text, filled shapes, or decorative surfaces over protected evidence pixels. Do not crop, cover, dim, restyle, replace, distort, or visually contaminate evidence.
+
+Treat the current layout as a composition you can solve, not as a field of immovable obstacles. Evidence protection preserves each evidence item's source identity, content, rendered dimensions, visual appearance, visibility, and sequence order; it does not freeze its x/y position forever. When the current objective cannot read cleanly in the available space, create deliberate negative space by recomposing the smallest coherent affected structure necessary. You may translate an intact screenshot, a sequence suffix, or a whole evidence flow when that supporting movement is necessary to make the requested communication clear, provided you preserve evidence integrity and order and explicitly author the movement. Move dependent authored annotations or relationships with the affected composition, and request artboard growth when useful. Keep unrelated regions stable. Never move content merely to make the board different or to avoid solving the requested design problem.
+
+Use the same spatial problem-solving ability on every turn. Before choosing coordinates for a new object, inspect the occupied space around its semantic target and ask whether the complete composition has enough room for the object, its attribution, and existing relationships. If not, plan the space first: decide which smallest coherent surrounding structure can move, how much negative space the communication needs, which prior authored relationships must be rerouted or repositioned, and whether the artboard should grow. Then author the whole coordinated change in one mutation. A local coordinate tweak is not inherently safer than moving a coherent row or flow; choose the solution that produces the clearest complete rendered composition with the least necessary disruption.
+
+Before authoring any placement, perform a simple fit test from the current rendered measurements. On the placement axis, required span is the planned outer size of the new or moved subject plus the clear space its treatment needs; available span is the actual empty distance from the intended target edge to the nearest relevant occupied object or semantic-region edge. If available span is smaller than required span, that local placement does not fit. Do not try nearby coordinates inside the same insufficient space. Create enough room first by explicitly moving the smallest coherent affected structure, request artboard growth when useful, or choose a materially different treatment whose footprint actually fits. This is design reasoning you perform from the supplied measurements, not a runtime layout rule. Apply the fit test on the first attempt, not only after a collision is reported.
+
+Intentional movement must be mechanically explicit in the mutation. If you expect several pre-existing objects to move, explicitly move their coherent containing structure when that is truly the intended unit, or explicitly target every intended moved object. Do not change margin, gap, flex growth/shrink, grid tracks, wrapping, or another normal-flow constraint on one child as a proxy for making its siblings move: that delegates composition to browser reflow and can silently translate or resize unrelated evidence. Prefer explicit positional translation/repositioning for intact evidence. Preserve every protected evidence item's measured border-box width and height exactly while translating it. Request outer artboard space separately when needed. Before returning, compare the objects you intend to move with their current measured bounds and make sure every expected movement has an explicit owner and no protected evidence dimensions changed as a side effect.
 
 Before returning a mutation, review the exact current source, browser acknowledgement, semantic graph, rendered bounds, evidence registry, and prior model-authored additions together. Check the whole candidate you intend to author: wording, visual attribution, hierarchy, clipping, overflow, contrast, evidence interference, relation continuity, preservation, and artboard containment. Correct every issue you can identify in the same complete response. The system is your rendering, measurement, memory, and recovery partner; it does not choose the design and it does not block a visual approach merely because it differs from a template.
 
-Continuity is evaluated on every turn. Preserve evidence, semantic identity, meaning, target references, and provenance, but do not freeze prior authored coordinates when the current instruction changes their surrounding region or hierarchy. Prior authored additions attached to affected nodes or regions are available for model-authored recomposition. Reassess their placement, visual membership, hierarchy, and relationship treatment as part of the complete cumulative design whenever the new turn changes their context. Unrelated authored work remains stable.
+Continuity is evaluated on every turn. Preserve evidence identity and pixels, semantic identity, meaning, target references, and provenance, but do not freeze spatial coordinates when the current instruction requires a coherent affected-area recomposition. Prior authored additions attached to affected nodes or regions are available for model-authored recomposition, and intact evidence items may be translated when necessary to create the space that recomposition requires. Reassess placement, visual membership, hierarchy, spacing, and relationship treatment as part of the complete cumulative design whenever the new turn changes their context. Unrelated authored work remains stable.
 
-A visual relationship does not require a runtime relation. Choose the best visual expression of the intent yourself: spatial arrangement, grouping, alignment, repeated emphasis, labels, brackets, connectors, insets, comparison regions, or any other authored form. mutation.relations is optional and exists only when you intentionally want geometry to remain reactive after later movement or restructuring. An unresolved optional relation is reported as a non-blocking continuity observation; it does not invalidate an otherwise safe model-authored visual result.
+A visual relationship does not require a runtime relation unless the instruction explicitly declares below, right-of, or equal-space-between placement. For other intent, choose among spatial arrangement, grouping, alignment, repeated emphasis, labels, brackets, connectors, insets, comparison regions, and other open-ended visual treatments; mutation.relations is optional. Explicit spatial instructions require one authored relation as the positioning authority. Ground it in the exact semantic node identified by grounding.resolvedNodeId and choose its geometry mode from that semantic target: border-box for the object's own rendered box, or semantic-descendant-union for the complete rendered subtree. A below/above relation must declare alignX; a left/right relation must declare alignY. Do not search coordinates: redundant model-authored positional CSS and repeated continuation space requests are mechanically discarded before rendering.
 
-A relation is typed model-authored intent, separate from HTML and separate from browser-resolved geometry. The model chooses every subject, reference, anchor, geometry mode, controlled axis, alignment, offset, dimension, style, route, and amount of artboard growth. The browser only realizes the exact declared relation against current rendered geometry. It does not infer missing relationships, choose cross-axis alignment, invent spacing, route connectors, resize annotations, or repair a design. Use realizationPolicy "live" only for dependencies that must follow references on later turns. Use reference geometry "semantic-descendant-union" when a relation targets the complete research region rooted at evidence; use "border-box" for individual screenshots. Do not rely on optional data-ns-* markup attributes as the canonical dependency record.
+A relation is typed model-authored intent, separate from HTML and separate from browser-resolved geometry. The model chooses every subject, reference, anchor, geometry mode, controlled axis, alignment, offset, dimension, style, route, and amount of artboard growth. The browser only realizes the exact declared relation against current rendered geometry. It does not infer missing relationships, choose cross-axis alignment, invent spacing, route connectors, resize annotations, or repair a design. Use realizationPolicy "live" only for dependencies that must follow references on later turns. Use reference geometry "semantic-descendant-union" when a relation targets the complete research region rooted at evidence; use "border-box" for individual screenshots. A relation id is the stable update identity: when correcting an existing dependency, reuse that exact id so the authored definition is replaced instead of stacking another controller onto the same subject geometry channel. Do not rely on optional data-ns-* markup attributes as the canonical dependency record.
 
-For relative-placement, declare kind "relative-placement", the dependent subjectId, a reference with role "reference", and parameters containing the authored side, offsets, and any required alignment. For a card to the right of research and vertically centered, declare side "right" and alignY "center" against evidence with geometry "semantic-descendant-union". For a card below research, declare side "below" against the same complete research geometry and declare alignX only when you intend to control the horizontal axis. The browser measures the subject's actual rendered size, converts world geometry into its real containing-block coordinate space, preserves authored transforms, and re-resolves the live relation after later reference movement or resizing.
+For an explicit below or right-of instruction, declare kind "relative-placement" with the dependent subjectId and the exact grounded node as role "reference". The browser takes a static subject out of normal flow, measures the subject's actual rendered size, converts the declared world relationship into its real containing-block coordinate space, and owns CSS geometry on the controlled axes. Declare cross-axis alignment so the subject remains visually attached to its reference.
 
-When your chosen design uses a reactive connector, author the complete SVG treatment yourself and declare kind "connector-attachment" with exactly one source reference, exactly one target reference, their anchors, and primitiveNodeId. The canonical roles are source and target; common semantic aliases such as from/to and start/end are normalized without changing your design. The runtime may update only the endpoint geometry of an authored SVG line, polyline, or supported open path; it does not choose the connector form, path, label, stroke, route, styling, or dimensions. The source screenshots remain pixel-stable. Put data-ns-authored-relationship="true", data-ns-source-node-id, and data-ns-target-node-id on the relationship object for observational provenance, and give each addressable primitive its own data-ns-node-id. If reactive attachment is unnecessary, omit connector-attachment and keep the relationship entirely visual.
+When your chosen design uses a reactive connector, author the complete SVG treatment yourself and declare kind "connector-attachment" with exactly one source reference, exactly one target reference, their anchors, and primitiveNodeId. The canonical roles are source and target; common semantic aliases such as from/to and start/end are normalized without changing your design. The runtime may update only the endpoint geometry of an authored SVG line, polyline, or supported open path; it does not choose the connector form, path, label, stroke, route, styling, dimensions, or whether surrounding content should move. Referenced evidence follows the same integrity and recomposition rules as on every other design turn. Put data-ns-authored-relationship="true", data-ns-source-node-id, and data-ns-target-node-id on the relationship object for observational provenance, and give each addressable primitive its own data-ns-node-id. If reactive attachment is unnecessary, omit connector-attachment and keep the relationship entirely visual.
 
-For an annotation between adjacent screenshots, first author enough positive horizontal room by moving only the minimum necessary suffix and requesting any needed rightward artboard growth. Then declare kind "between-placement" with before and after references using geometry "border-box", parameters axis "x" and crossAlign "center", and realizationPolicy "live". The runtime centers the annotation's actual rendered border box between the two current screenshot edges and centers it on their row because that cross-axis intent was explicitly authored. It does not choose the gap size, annotation dimensions, content, styling, or suffix movement. Put data-ns-authored-annotation="true", data-ns-between-before-node-id, and data-ns-between-after-node-id on the annotation for provenance. The annotation must communicate an observation or explanation, not merely label the gap.
+For an explicit equal-space-between instruction, declare kind "between-placement" with the two exact grounded evidence nodes as before and after references, the authored axis, and crossAlign so the annotation remains visually attached to the pair. The runtime centers the subject's rendered border box between their current edges and owns CSS geometry on the controlled axes. Use the same fit, evidence-integrity, explicit-movement, and smallest-coherent-recomposition reasoning used for every other design objective.
 
-When you reuse evidence in a new analysis area, preserve the original evidence instance in place. Treat the reused view as a new authored presentation instance with its own unique data-ns-node-id, while keeping its provenance attached to the original evidence through exact evidence references and source-node provenance such as data-ns-source-node-id. Reused evidence is not a new source. Preserve source identity and make it understandable from the rendered artboard that the new view is a reuse, inset, copy, crop, or detail of existing evidence rather than newly introduced evidence.
+When a design reuses existing evidence in another authored context, preserve the original evidence instance and treat the reused view as a distinct authored presentation instance with its own unique data-ns-node-id. Keep provenance attached to the original evidence through exact evidence references and source-node provenance such as data-ns-source-node-id. Reused evidence is not a new source. This is an evidence-integrity rule, not a placement recipe; choose its composition using the same general spatial reasoning as every other addition.
 
 Every independently positioned artboard-world object should be a direct child of the canonical artboard root node artboard unless the authored topology intentionally uses a nested positioned container; relation realization must remain correct in either topology. Every authored visual object must carry a unique data-ns-node-id. Use focused set-styles or set-attributes operations for existing nodes instead of replacing an entire evidence sequence.
 
-Existing authored regions are stable reference content. A request to add something below or to the right of a region means external extension in artboard world space unless the user explicitly asks to modify that region. The referenced region must remain pixel-stable: its source, bounds, internal layout, order, scale, styling, and visual appearance do not change. Never create room by shrinking, moving, reflowing, wrapping, restyling, or recomposing the referenced region. Expand the artboard in the requested direction and place the new authored content outside the unchanged region footprint.
+When the current instruction uses an existing region as an explicit directional reference, preserve that reference for the requested relation. In particular, a request to add something below or to the right of a region means external extension in artboard world space unless the user explicitly asks to modify that region. For that directional objective, the referenced region stays fixed: its source, bounds, internal layout, order, scale, styling, and visual appearance do not change. Expand the artboard in the requested direction and place the new authored content outside the unchanged region footprint. This directional-reference rule does not globally freeze evidence placement for later objectives whose affected composition genuinely needs spatial recomposition.
 
 Declare that grounding in your response. Decide the complete authored solution yourself, including HTML, CSS, SVG, JavaScript, visual style, dimensions, spacing, layout method, placement, and amount of artboard expansion. Read the exact source and current measurements rather than relying on assumptions. Use request-space to author the required outer artboard growth. New content placed outside a pixel-stable reference region must be taken out of normal document flow with model-authored world-space positioning (for example position:absolute with explicit left/top coordinates chosen from the measured graph). A normal-flow sibling can reflow the reference and is therefore not a valid artboard-world extension. You may use insert-html with position afterend on an anchor node when that is the correct source relationship; do not append to a convenient ancestor when it cannot produce the requested world-space relationship.
 
-Make only the requested design change. Do not perform unrelated redesign work. Return the exact source mutation you chose in the required JSON schema. Nothing will calculate placement, select styling, add markup, repair your design, or rewrite your mutation after you respond. If the browser reports a problem, you will receive the complete candidate, exact committed base, and all available measured issues so you can author a full corrected replacement. Return JSON only.`;
+When a post-render repair includes same-turn attempt memory, reason about failed design strategies rather than merely trying unused coordinates. Read the prior mutations together with their measured before/after findings. A repeated local-placement strategy remains the same strategy even when its x/y values differ. Moving only the same failing subject remains one subject-only placement strategy even when its side or offset changes. If that subject-only strategy has already rendered while actionable findings remained, run the fit test again before touching its coordinates. Do not move that subject alone again unless you are authoring a materially different treatment whose new footprint demonstrably fits the measured available span and resolves the whole constraint. Otherwise stop searching nearby coordinates and broaden the affected composition: create the missing space, explicitly move the smallest coherent surrounding structure, and update dependent authored relationships together. Trading an overlap below the target for an overlap to its right is not progress toward a viable composition. If an earlier attempt used browser reflow as an indirect movement mechanism and produced collateral translation or resizing, restore protected evidence dimensions first, then explicitly author the intended positions for the coherent affected structure; do not oscillate between natural-flow and absolute/translated strategy families. Use the measured before/after results to choose a materially different composition. Do not repeat a strategy family that the live artboard has already shown cannot satisfy the whole set of findings.
+
+Make only the requested design change. Do not perform unrelated redesign work. Return the exact source mutation you chose in the required JSON schema. The protocol boundary may canonicalize unambiguous relation-role aliases, retain an accepted continuation's relation identity and references, and remove positional CSS owned by a live relation. Those mechanical steps never choose placement, styling, content, routing, or composition. Your resulting mutation is applied directly to the live artboard. If the post-render audit finds a communication defect caused or worsened by the turn, your next call for that same turn starts from that exact live revision with the measured defects attached. Preserve the original turn objective and author an incremental correction to the current live artboard. When same-turn repair memory is attached, treat it as authoritative history of already attempted rendered results: use its before/after evidence to avoid repeating ineffective executable moves, while choosing the next design solution yourself. The next design objective does not begin until those actionable findings are resolved. Return JSON only.`;
 }
 
 
@@ -674,7 +955,9 @@ function buildNorthstarContinuityContext(input: {
     priorAuthoredAdditions: additions,
     affectedAuthoredAdditions: affectedAdditions,
     protectedEvidenceNodeIds: [...evidenceIds],
-    editableForRecompositionNodeIds: affectedAdditions.map((item) => item.nodeId),
+    evidencePositionPolicy: "recomposable-when-needed",
+    recomposableEvidenceNodeIds: [...evidenceIds],
+    recomposableAuthoredNodeIds: affectedAdditions.map((item) => item.nodeId),
     unrelatedAuthoredNodeIds: additions.filter((item) => !affectedAdditions.includes(item)).map((item) => item.nodeId),
     browserContinuityObservations: input.acknowledgement.review?.authoredContinuityObservations ?? [],
   };
@@ -685,10 +968,8 @@ export function buildNorthstarDesignResetModelInput(input: {
   artifact: NorthstarGeneratedCodeArtifactPackage;
   acknowledgement: NorthstarArtifactMutationAcknowledgement;
 }): unknown {
-  const snapshot = input.acknowledgement.snapshot;
-  if (!snapshot) {
-    throw new Error("The design reset requires the exact browser source snapshot before every model turn.");
-  }
+  const observation = strongestSourceObservation(input);
+  const snapshot = observation.snapshot;
   const semanticGraph = buildNorthstarArtboardSemanticGraph(input);
   const instruction = NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN[input.turn];
   const focus = resolveNorthstarInstructionFocus({ instruction, graph: semanticGraph });
@@ -718,7 +999,8 @@ export function buildNorthstarDesignResetModelInput(input: {
     },
     groundingInstruction: "Resolve the exact subject, objects, and collective regions named by the instruction from these candidates and the complete graph. The candidate ranking is semantic assistance, not a design decision. You may select a lower-ranked candidate when the source and browser state support it.",
     structuralInstruction: "For requests about groups, flows, sections, boundaries, or new analysis areas, reason from collective region membership and rendered bounds. The provided pair geometry is observational. Choose the visual treatment yourself and declare no runtime relation unless your authored result genuinely needs a persistent dependency.",
-    preservationInstruction: "Preserve evidence source, dimensions, order, visibility, provenance, and unrelated prior work unless the instruction explicitly grants authority to change them. When reusing evidence, preserve the original instance and create a distinct authored presentation instance for the reused view. Create negative space or artboard growth instead of obscuring evidence.",
+    preservationInstruction: "Preserve evidence source identity, content, dimensions, order, visibility, appearance, and provenance. Evidence placement is not globally frozen: when the current objective needs space, you may explicitly translate the smallest coherent affected evidence structure while keeping each item intact and keeping unrelated regions stable. When reusing evidence, preserve the original instance and create a distinct authored presentation instance for the reused view.",
+    compositionInstruction: "Solve the complete affected composition, not just the new object's coordinates. Before placing anything, compare required span (planned subject outer size plus intended clearance) with the measured available empty span on the placement axis. If it does not fit, create deliberate negative space by explicitly moving the smallest coherent surrounding structure, reposition dependent authored work, and grow the artboard when useful; do not search coordinates inside the same insufficient space. Every expected movement of pre-existing content must have an explicit mutation owner (the object itself or its genuinely coherent container); never rely on flex/grid/margin/gap reflow of one child to move siblings. Preserve protected evidence border-box width and height exactly. Prefer one coordinated spatial plan over repeated local collision avoidance.",
   };
   return {
     resetVersion: NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION,
@@ -735,8 +1017,15 @@ export function buildNorthstarDesignResetModelInput(input: {
     currentArtboard: {
       package: input.artifact,
       browserAcknowledgement: input.acknowledgement,
-      browserMaterializedSource: snapshot,
+      browserMaterializedSource: observation.source === "browser-snapshot" ? snapshot : undefined,
+      canonicalSource: snapshot,
       sourceSha256: sourceHash(snapshot),
+      observationAvailability: {
+        canonicalSource: "available",
+        browserAcknowledgement: input.acknowledgement.status === "ready" ? "missing" : "current",
+        browserGeometry: input.acknowledgement.snapshot?.semanticNodes?.length ? "available" : "missing",
+        browserSnapshot: observation.source === "browser-snapshot" ? "available" : "missing",
+      },
     },
     designPartnerContext: {
       appliesToEveryTurn: true,
@@ -754,9 +1043,14 @@ export function buildNorthstarDesignResetModelInput(input: {
         "Can a viewer understand why each addition is present and what it refers to?",
         "Does any text, card, label, annotation, fill, or decoration obscure protected evidence?",
         "Does any connector, leader, bracket, line, or relationship mark cross text, cards, annotations, labels, or other readable authored content in a way that creates ambiguity?",
+        "Is there actually enough negative space for this addition and its attribution, or should I first move the smallest coherent surrounding row, sequence, or flow to create it?",
+        "On the intended placement axis, is measured available empty span at least the planned subject outer size plus clearance? If not, create space before choosing coordinates.",
+        "Am I treating an existing x/y position as sacred even though evidence identity, pixels, dimensions, appearance, and order could be preserved while the intact item or flow is translated?",
+        "Does every pre-existing object I expect to move have an explicit movement owner in this mutation, or am I relying on normal-flow reflow to move siblings for me?",
+        "Did any protected evidence border-box width or height change? If so, restore its exact measured dimensions before returning the mutation.",
         "After this turn, do all earlier additions still read clearly together, or should you reroute, reposition, redesign, or create more space while preserving their meaning?",
         "Did this turn change the context of any prior authored addition, and if so did you recompose that affected addition while preserving its identity, meaning, target, and provenance?",
-        "Did the mutation preserve evidence source, size, order, visibility, and unrelated prior work?",
+        "Did the mutation preserve evidence source, size, order, visibility, appearance, and unrelated prior work while limiting supporting movement to the smallest coherent affected structure?",
         "Did the design create enough negative space or artboard growth instead of compressing or covering content?",
         "Will every authored live relation remain understandable and attached after browser realization?",
       ],
@@ -768,6 +1062,8 @@ export function sanitizeNorthstarDesignResetModelResponse(input: {
   raw: unknown;
   turn: NorthstarDesignResetTurn;
   baseRevisionId: string;
+  continuation?: boolean;
+  existingRelations?: NorthstarAuthoredDesignRelation[];
 }): NorthstarDesignResetModelResponse {
   // The reset intentionally performs no semantic, placement, preservation, or
   // implementation-style validation before execution. The model response is
@@ -778,7 +1074,7 @@ export function sanitizeNorthstarDesignResetModelResponse(input: {
   const mutation = sanitizeNorthstarArtboardMutationDraft(
     (isRecord(raw.mutation) ? raw.mutation : { operations: [] }) as unknown as NorthstarArtboardMutationDraft,
   );
-  return {
+  const response: NorthstarDesignResetModelResponse = {
     turn: input.turn,
     observedBaseRevisionId: input.baseRevisionId,
     understanding: typeof raw.understanding === "string" ? raw.understanding.trim() : "",
@@ -813,6 +1109,202 @@ export function sanitizeNorthstarDesignResetModelResponse(input: {
     },
     mutation,
   };
+  const normalized = normalizeNorthstarSpatialAuthority({
+    response,
+    continuation: input.continuation,
+    existingRelations: input.existingRelations,
+  });
+  if (normalized.issues.length) throw new Error(normalized.issues.join(" "));
+  return normalized.response;
+}
+
+const POSITION_STYLE_CHANNELS = {
+  x: new Set(["left", "right", "margin-left", "margin-right", "transform", "translate"]),
+  y: new Set(["top", "bottom", "margin-top", "margin-bottom", "transform", "translate"]),
+} as const;
+
+export function normalizeNorthstarSpatialAuthority(input: {
+  response: NorthstarDesignResetModelResponse;
+  continuation?: boolean;
+  existingRelations?: NorthstarAuthoredDesignRelation[];
+}): { response: NorthstarDesignResetModelResponse; issues: string[]; normalizedFields: string[] } {
+  const response = structuredClone(input.response);
+  const requested = response.grounding.requestedRelation;
+  const issues: string[] = [];
+  const normalizedFields: string[] = [];
+  const groundedIds = response.grounding.evidenceNodeIds.slice(0, 2);
+  const canonicalRolesFor = (relation: NorthstarAuthoredDesignRelation): string[] | undefined => {
+    if (relation.kind === "relative-placement" && relation.references.length === 1) {
+      const referenceId = relation.references[0].nodeId;
+      if (referenceId === response.grounding.resolvedNodeId || response.grounding.evidenceNodeIds.includes(referenceId)) return ["reference"];
+    }
+    if (groundedIds.length !== 2 || relation.references.length !== 2) return undefined;
+    const receivedIds = relation.references.map((reference) => reference.nodeId);
+    if (new Set(receivedIds).size !== 2 || groundedIds.some((nodeId) => !receivedIds.includes(nodeId))) return undefined;
+    if (relation.kind === "between-placement") return receivedIds.map((nodeId) => nodeId === groundedIds[0] ? "before" : "after");
+    if (relation.kind === "connector-attachment") return receivedIds.map((nodeId) => nodeId === groundedIds[0] ? "source" : "target");
+    return undefined;
+  };
+  response.mutation.relations = (response.mutation.relations ?? []).map((relation) => {
+    const roles = canonicalRolesFor(relation);
+    if (!roles) return relation;
+    const references = relation.references.map((reference, index) => {
+      if (reference.role === roles[index]) return reference;
+      normalizedFields.push(`relation.${relation.id}.references.${index}.role`);
+      return { ...reference, role: roles[index] };
+    });
+    return { ...relation, references };
+  });
+
+  if (input.continuation && input.existingRelations?.length) {
+    const proposed = [...(response.mutation.relations ?? [])];
+    for (const contract of input.existingRelations) {
+      let index = proposed.findIndex((relation) => relation.id === contract.id || relation.subjectId === contract.subjectId);
+      if (index < 0 && input.existingRelations.length === 1 && proposed.length === 1) index = 0;
+      if (index < 0) {
+        proposed.push(structuredClone(contract));
+        normalizedFields.push(`continuation.relation.${contract.id}.inherited`);
+        continue;
+      }
+      const candidate = proposed[index];
+      const preserved = {
+        ...candidate,
+        id: contract.id,
+        subjectId: contract.subjectId,
+        kind: contract.kind,
+        references: structuredClone(contract.references),
+        realizationPolicy: contract.realizationPolicy,
+      };
+      if (candidate.id !== contract.id) normalizedFields.push(`continuation.relation.${contract.id}.id`);
+      if (candidate.subjectId !== contract.subjectId) normalizedFields.push(`continuation.relation.${contract.id}.subjectId`);
+      if (candidate.kind !== contract.kind) normalizedFields.push(`continuation.relation.${contract.id}.kind`);
+      if (JSON.stringify(candidate.references) !== JSON.stringify(contract.references)) normalizedFields.push(`continuation.relation.${contract.id}.references`);
+      if (candidate.realizationPolicy !== contract.realizationPolicy) normalizedFields.push(`continuation.relation.${contract.id}.realizationPolicy`);
+      proposed[index] = preserved;
+    }
+    response.mutation.relations = proposed;
+  }
+
+  const isSpatialKind = (kind: NorthstarAuthoredDesignRelation["kind"]): kind is "relative-placement" | "between-placement" =>
+    kind === "relative-placement" || kind === "between-placement";
+  const proposedSpatialRelations = (response.mutation.relations ?? []).filter((relation) => isSpatialKind(relation.kind));
+  const continuationContracts = input.continuation
+    ? (input.existingRelations ?? []).filter((relation) => isSpatialKind(relation.kind))
+    : [];
+  const requestedKind = requested === "equal-space-with-annotation"
+    ? "between-placement"
+    : requested === "below" || requested === "right-of"
+      ? "relative-placement"
+      : undefined;
+  const kind = continuationContracts.length === 1
+    ? continuationContracts[0].kind
+    : proposedSpatialRelations.length === 1
+      ? proposedSpatialRelations[0].kind
+      : requestedKind;
+  if (!kind) return { response, issues, normalizedFields: [...new Set(normalizedFields)] };
+  let relations = (response.mutation.relations ?? []).filter((relation) => relation.kind === kind);
+  if (input.continuation && continuationContracts.length === 1) {
+    const contract = continuationContracts[0];
+    if (kind === "relative-placement") {
+      const reference = contract.references.find((candidate) => candidate.role === "reference");
+      if (reference && response.grounding.resolvedNodeId !== reference.nodeId) {
+        response.grounding.resolvedNodeId = reference.nodeId;
+        normalizedFields.push("continuation.grounding.resolvedNodeId");
+      }
+    } else {
+      const referenceIds = contract.references
+        .filter((candidate) => candidate.role === "before" || candidate.role === "after")
+        .sort((a, b) => a.role === "before" ? -1 : b.role === "before" ? 1 : 0)
+        .map((candidate) => candidate.nodeId);
+      if (referenceIds.length === 2 && JSON.stringify(response.grounding.evidenceNodeIds.slice(0, 2)) !== JSON.stringify(referenceIds)) {
+        response.grounding.evidenceNodeIds = referenceIds;
+        normalizedFields.push("continuation.grounding.evidenceNodeIds");
+      }
+    }
+  }
+  if (relations.length !== 1) {
+    return { response, issues: [`Spatial authority requires exactly one ${kind} relation.`], normalizedFields };
+  }
+  const relation = relations[0];
+  if (kind === "relative-placement") {
+    const reference = relation.references.find((candidate) => candidate.role === "reference");
+    const side = String(relation.parameters?.side ?? "");
+    const explicitExpectedSide = requested === "below" ? "below" : requested === "right-of" ? "right" : undefined;
+    const groundedReferenceIds = new Set(response.grounding.evidenceNodeIds);
+    if (!reference) {
+      issues.push("A relative-placement relation must declare one reference node.");
+    } else if (explicitExpectedSide && reference.nodeId !== response.grounding.resolvedNodeId) {
+      issues.push(`The spatial relation must reference exact grounded node ${response.grounding.resolvedNodeId}.`);
+    } else if (!explicitExpectedSide && groundedReferenceIds.size > 0 && !groundedReferenceIds.has(reference.nodeId)) {
+      issues.push("The relative-placement relation must reference one of the grounded evidence nodes.");
+    }
+    if (!["above", "below", "left", "right"].includes(side)) issues.push("A relative-placement relation must declare side as above, below, left, or right.");
+    if (explicitExpectedSide && side !== explicitExpectedSide) issues.push(`The spatial relation side must be ${explicitExpectedSide}.`);
+    if ((side === "above" || side === "below") && !["left", "center", "right"].includes(String(relation.parameters?.alignX ?? ""))) {
+      issues.push("A vertical directional relation must declare alignX as left, center, or right.");
+    }
+    if ((side === "left" || side === "right") && !["top", "center", "bottom"].includes(String(relation.parameters?.alignY ?? ""))) {
+      issues.push("A horizontal directional relation must declare alignY as top, center, or bottom.");
+    }
+  } else {
+    const referenceIds = new Set(relation.references.filter((candidate) => candidate.role === "before" || candidate.role === "after").map((candidate) => candidate.nodeId));
+    const expectedIds = response.grounding.evidenceNodeIds.slice(0, 2);
+    if (expectedIds.length !== 2 || expectedIds.some((nodeId) => !referenceIds.has(nodeId))) {
+      issues.push("The between-placement relation must use the two exact grounded evidence nodes.");
+    }
+    if (!String(relation.parameters?.crossAlign ?? relation.parameters?.alignY ?? relation.parameters?.alignX ?? "")) {
+      issues.push("A between-placement relation must declare crossAlign.");
+    }
+  }
+  if (input.continuation && input.existingRelations?.length) {
+    const prior = input.existingRelations.find((candidate) => candidate.id === relation.id);
+    if (!prior || prior.kind !== relation.kind || JSON.stringify(prior.references) !== JSON.stringify(relation.references)) {
+      issues.push("A continuation must reuse the existing relation id, kind, and references.");
+    }
+  }
+  const channels = northstarReactiveRelationChannels(relation).filter((channel): channel is "x" | "y" => channel === "x" || channel === "y");
+  const controlledStyles = new Set(channels.flatMap((channel) => [...POSITION_STYLE_CHANNELS[channel]]));
+  response.mutation.operations = response.mutation.operations.map((operation) => {
+    if (input.continuation && operation.op === "request-space") {
+      normalizedFields.push("continuation.request-space");
+      return { ...operation, left: 0, top: 0, right: 0, bottom: 0 };
+    }
+    if (operation.op === "set-styles" && operation.targetId === relation.subjectId) {
+      const styles = Object.fromEntries(Object.entries(operation.styles).filter(([name]) => !controlledStyles.has(name.toLowerCase())));
+      for (const name of Object.keys(operation.styles)) if (!(name in styles)) normalizedFields.push(`set-styles.${relation.subjectId}.${name}`);
+      return { ...operation, styles };
+    }
+    if (operation.op === "insert-html" || operation.op === "set-html" || operation.op === "recompose-region") {
+      const escapedId = relation.subjectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const tagPattern = new RegExp(`(<[^>]*data-ns-node-id=["']${escapedId}["'][^>]*style=["'])([^"']*)(["'][^>]*>)`, "i");
+      const html = operation.html.replace(tagPattern, (_tag, before, style, after) => {
+        const kept = String(style).split(";").filter((declaration) => {
+          const name = declaration.split(":", 1)[0].trim().toLowerCase();
+          if (!controlledStyles.has(name)) return true;
+          normalizedFields.push(`inline-style.${relation.subjectId}.${name}`);
+          return false;
+        }).join(";");
+        return before + kept + after;
+      });
+      return { ...operation, html };
+    }
+    return operation;
+  });
+  if (input.continuation) {
+    const contract = continuationContracts.find((candidate) => candidate.id === relation.id);
+    const relationParametersChanged = Boolean(contract)
+      && JSON.stringify(contract?.parameters ?? {}) !== JSON.stringify(relation.parameters ?? {});
+    const hasEffectiveOperation = response.mutation.operations.some((operation) => {
+      if (operation.op === "set-styles") return Object.keys(operation.styles).length > 0;
+      if (operation.op === "request-space") return Boolean(operation.left || operation.top || operation.right || operation.bottom);
+      return true;
+    });
+    const strippedControlledCoordinate = normalizedFields.some((field) => field.startsWith(`set-styles.${relation.subjectId}.`) || field.startsWith(`inline-style.${relation.subjectId}.`));
+    if (strippedControlledCoordinate && !hasEffectiveOperation && !relationParametersChanged) {
+      issues.push("The continuation attempted only coordinates owned by the live relation. Change relation parameters or the writable surrounding composition instead.");
+    }
+  }
+  return { response, issues: [...new Set(issues)], normalizedFields: [...new Set(normalizedFields)] };
 }
 
 export function northstarAuthoredRelationRealizationIssues(
@@ -964,10 +1456,10 @@ export function buildNorthstarDesignResetTurnArchive(input: {
   failure?: string;
 }): NorthstarDesignResetTurnArchive {
   const beforeSnapshot = input.beforeAcknowledgement.snapshot;
-  if (!beforeSnapshot) throw new Error("Cannot archive a design reset turn without its exact source-before snapshot.");
+  const beforeObservation = strongestSourceObservation({ artifact: input.beforePackage, acknowledgement: input.beforeAcknowledgement });
   const afterSnapshot = input.afterAcknowledgement?.snapshot;
   const beforeSemanticGraph = buildNorthstarArtboardSemanticGraph({ artifact: input.beforePackage, acknowledgement: input.beforeAcknowledgement });
-  const afterSemanticGraph = afterSnapshot && input.afterPackage && input.afterAcknowledgement
+  const afterSemanticGraph = input.afterPackage && input.afterAcknowledgement
     ? buildNorthstarArtboardSemanticGraph({ artifact: input.afterPackage, acknowledgement: input.afterAcknowledgement })
     : undefined;
   const rawMutation = isRecord(input.rawParsedResponse) ? input.rawParsedResponse.mutation : undefined;
@@ -1023,8 +1515,9 @@ export function buildNorthstarDesignResetTurnArchive(input: {
       revisionId: input.beforePackage.revisionId,
       package: input.beforePackage,
       snapshot: beforeSnapshot,
+      observationSource: beforeObservation.source,
       acknowledgement: input.beforeAcknowledgement,
-      sourceSha256: sourceHash(beforeSnapshot),
+      sourceSha256: sourceHash(beforeObservation.snapshot),
       semanticGraph: beforeSemanticGraph,
     },
     modelBoundary: {
@@ -1042,18 +1535,19 @@ export function buildNorthstarDesignResetTurnArchive(input: {
     modelAuthoredPatch: input.acceptedResponse?.mutation,
     appliedMutationBatch: input.mutationBatch,
     candidateBeforeBrowser: input.candidateBeforeBrowser,
-    sourceAfter: afterSnapshot && input.afterPackage && input.afterAcknowledgement
+    sourceAfter: input.afterPackage && input.afterAcknowledgement
       ? {
           revisionId: input.afterPackage.revisionId,
           package: input.afterPackage,
           snapshot: afterSnapshot,
+          observationSource: afterSnapshot ? "browser-snapshot" : "canonical-package",
           acknowledgement: input.afterAcknowledgement,
-          sourceSha256: sourceHash(afterSnapshot),
+          sourceSha256: sourceHash(strongestSourceObservation({ artifact: input.afterPackage, acknowledgement: input.afterAcknowledgement }).snapshot),
           semanticGraph: afterSemanticGraph!,
         }
       : undefined,
     semanticGraphDiff: afterSemanticGraph ? semanticGraphDiff(beforeSemanticGraph, afterSemanticGraph) : undefined,
-    exactSourceDiff: afterSnapshot ? exactDocumentDiff(beforeSnapshot, afterSnapshot) : undefined,
+    exactSourceDiff: beforeSnapshot && afterSnapshot ? exactDocumentDiff(beforeSnapshot, afterSnapshot) : undefined,
     cumulativeIntentAudit,
     cumulativeIntentAuditFailure,
     renderedIntegrityAudit,

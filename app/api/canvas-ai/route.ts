@@ -33,20 +33,37 @@ import {
 import {
   NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
   NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN,
+  NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS,
+  NORTHSTAR_PATCH_3A_DIRECT_LIVE_REVIEW_VERSION,
+  NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
+  NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
+  NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
+  NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
   NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION,
   buildNorthstarArtboardSemanticGraph,
   buildNorthstarDesignResetModelInput,
   buildNorthstarDesignResetSystemInstruction,
   buildNorthstarDesignResetTurnArchive,
   createNorthstarDesignResetCandidate,
+  findNorthstarNewReactiveRelationConflicts,
   northstarAuthoredRelationRealizationIssues,
   northstarDesignResetSha256,
+  northstarLiveRepairExecutableFingerprint,
+  normalizeNorthstarSpatialAuthority,
   sanitizeNorthstarDesignResetModelResponse,
+  selectNorthstarLiveRepairFindings,
+  summarizeNorthstarLiveRepairOutcome,
   validateNorthstarDesignResetCandidate,
   type NorthstarDesignResetProviderAttemptAudit,
   type NorthstarDesignResetTurn,
   type NorthstarDesignResetTurnArchive,
 } from "@/lib/canvas-ai/northstar-two-turn-design-reset";
+import {
+  createNorthstarTurnWriteScope,
+  extendNorthstarTurnWriteScope,
+  validateNorthstarContinuationWriteScope,
+  type NorthstarTurnWriteScope,
+} from "@/lib/canvas-ai/northstar-turn-write-scope";
 
 
 
@@ -7266,16 +7283,50 @@ async function buildArtboardBenchmarkArtifactPackage({
 
   let unresolvedTurn: NorthstarDesignResetTurn | undefined;
   let previousCumulativeIntentAudit: NorthstarDesignResetTurnArchive["cumulativeIntentAudit"];
+  const canonicalObservationAcknowledgement = (
+    artifact: NorthstarGeneratedCodeArtifactPackage,
+  ): NorthstarArtifactMutationAcknowledgement => ({
+    schema: "northstar.artboard-ack.v1",
+    ackToken: `canonical-observation:${artifact.revisionId}`,
+    artifactId: artifact.artifactId,
+    surfaceId: artifact.surfaceId ?? artifact.artifactId,
+    revisionId: artifact.revisionId,
+    browserRevisionId: artifact.revisionId,
+    status: "ready",
+    review: artifact.runtimeReview,
+    changedNodeIds: [],
+    meaningfulChangedNodeIds: [],
+    changeKinds: [],
+    requiredAssetUrls: [],
+    loadedAssetUrls: [],
+    missingAssetUrls: [],
+    authoredDesignRelations: artifact.authoredDesignRelations ?? [],
+    resolvedDesignRelations: artifact.resolvedDesignRelations ?? [],
+    acknowledgedAt: new Date().toISOString(),
+  });
   benchmarkTurns: for (const turn of [1, 2, 3, 4, 5, 6, 7] as const) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const beforeAcknowledgement = callbacks.getLinearDesignAck?.();
+    const visibleTurnStartedAt = Date.now();
+    const liveAcknowledgement = callbacks.getLinearDesignAck?.();
     if (
-      !beforeAcknowledgement
-      || beforeAcknowledgement.artifactId !== currentPackage.artifactId
-      || beforeAcknowledgement.revisionId !== currentPackage.revisionId
-      || !beforeAcknowledgement.snapshot
+      liveAcknowledgement
+      && (
+        liveAcknowledgement.artifactId !== currentPackage.artifactId
+        || liveAcknowledgement.revisionId !== currentPackage.revisionId
+      )
     ) {
-      throw new Error(`Design reset turn ${turn} requires the exact browser snapshot for revision ${currentPackage.revisionId}.`);
+      throw new Error(`Design reset turn ${turn} cannot continue because browser revision ${liveAcknowledgement.revisionId} does not match canonical revision ${currentPackage.revisionId}.`);
+    }
+    const beforeAcknowledgement = liveAcknowledgement ?? canonicalObservationAcknowledgement(currentPackage);
+    if (!liveAcknowledgement || !beforeAcknowledgement.snapshot) {
+      callbacks.trace?.("design.reset.observation_degraded", {
+        turn,
+        revisionId: currentPackage.revisionId,
+        canonicalSourceAvailable: true,
+        browserAcknowledgementAvailable: Boolean(liveAcknowledgement),
+        browserSnapshotAvailable: Boolean(beforeAcknowledgement.snapshot),
+        browserGeometryAvailable: Boolean(beforeAcknowledgement.snapshot?.semanticNodes?.length),
+      }, "Northstar kept the living artboard active using canonical source because optional browser observation was unavailable. Revision authority remains unchanged.");
     }
     const basePackage = materializeNorthstarCanonicalPackage(currentPackage, beforeAcknowledgement);
     currentPackage = basePackage;
@@ -7309,6 +7360,9 @@ async function buildArtboardBenchmarkArtifactPackage({
     let candidate: NorthstarGeneratedCodeArtifactPackage | undefined;
     let mutationBatch: NonNullable<NorthstarGeneratedCodeArtifactPackage["mutationJournal"]>[number] | undefined;
     let dispatchResult: Extract<NorthstarDesignResetDispatchResult, { status: "applied" }> | undefined;
+    let liveReviewedArchive: NorthstarDesignResetTurnArchive | undefined;
+    let turnWriteScope: NorthstarTurnWriteScope | undefined;
+    let turnRelationContracts: NorthstarAuthoredDesignRelation[] = [];
     let repairIssues: string[] = [];
     let repairContext: Record<string, unknown> | undefined;
     const repairHistory: Array<Record<string, unknown>> = [];
@@ -7462,6 +7516,11 @@ async function buildArtboardBenchmarkArtifactPackage({
       }
 
       candidate = createNorthstarDesignResetCandidate({ base: basePackage, response: parsedResponse });
+      turnWriteScope = createNorthstarTurnWriteScope({
+        mutation: parsedResponse.mutation,
+        acknowledgement: beforeAcknowledgement,
+      });
+      turnRelationContracts = structuredClone(parsedResponse.mutation.relations ?? []);
       mutationBatch = candidate.mutationJournal?.at(-1);
       const attemptedDispatch = await callbacks.applyDesignAction(candidate, turn, parsedResponse.understanding);
       if (attemptedDispatch.status !== "applied") {
@@ -7606,6 +7665,54 @@ async function buildArtboardBenchmarkArtifactPackage({
       }
 
       dispatchResult = attemptedDispatch;
+
+      // Patch 3A: the browser-applied artboard is the review surface. Build
+      // Patch 1 + Patch 2 from that exact acknowledgement immediately after
+      // application. This review does not stage, hide, promote, replay, or
+      // otherwise gate the mutation that is already on the live artboard.
+      const reviewStartedAt = Date.now();
+      liveReviewedArchive = buildNorthstarDesignResetTurnArchive({
+        runId,
+        artifactId,
+        turn,
+        requestedThinkingMode: thinkingDepth,
+        instruction: turnInstruction,
+        status: "committed",
+        beforePackage: basePackage,
+        beforeAcknowledgement,
+        systemInstruction,
+        contents,
+        responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+        providerAttempt,
+        providerAttempts,
+        rawParsedResponse,
+        acceptedResponse: parsedResponse,
+        candidateBeforeBrowser: candidate,
+        mutationBatch,
+        previousCumulativeIntentAudit,
+        repairHistory,
+        afterPackage: attemptedDispatch.artifact,
+        afterAcknowledgement: attemptedDispatch.acknowledgement,
+      });
+      const reviewDurationMs = Date.now() - reviewStartedAt;
+      const visibleApplyDurationMs = Date.now() - visibleTurnStartedAt;
+      callbacks.trace?.("design.reset.live_artboard_reviewed", {
+        patch: NORTHSTAR_PATCH_3A_DIRECT_LIVE_REVIEW_VERSION,
+        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
+        turn,
+        baseRevisionId: basePackage.revisionId,
+        revisionId: attemptedDispatch.artifact.revisionId,
+        mutationId: mutationBatch?.mutationId,
+        visibleApplyDurationMs,
+        visibleLatencyTargetMs: NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS,
+        withinVisibleLatencyTarget: visibleApplyDurationMs < NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS,
+        reviewDurationMs,
+        cumulativeIntentAuditFailure: liveReviewedArchive.cumulativeIntentAuditFailure,
+        renderedIntegrityAuditFailure: liveReviewedArchive.renderedIntegrityAuditFailure,
+        affectedComposition: liveReviewedArchive.cumulativeIntentAudit?.affectedComposition,
+        highConfidenceFindings: liveReviewedArchive.renderedIntegrityAudit?.highConfidenceFindings ?? [],
+        informationalObservationCount: liveReviewedArchive.renderedIntegrityAudit?.informationalObservations.length ?? 0,
+      }, "The model-authored turn is already on the live artboard; Patch 1 and Patch 2 inspected that exact rendered revision in place.");
       break;
     }
 
@@ -7652,11 +7759,499 @@ async function buildArtboardBenchmarkArtifactPackage({
       break benchmarkTurns;
     }
 
+    // Patch 3B: Patch 1/2 have now observed the exact live artboard. When that
+    // observation identifies a high-confidence defect in this turn's affected
+    // composition, keep the same turn active and let the same design model edit
+    // the current live revision. There is no candidate surface or promotion
+    // protocol: every correction is another ordinary live artboard mutation.
+    // Patch 3B reactive-aware convergence: four ordinary repair passes were an
+    // arbitrary product limit, not a design invariant. Keep the turn alive
+    // while rendered results continue changing; retain only an emergency model
+    // attempt ceiling and a separate circuit breaker for repeated rendered
+    // no-progress results.
+    const emergencyLiveRepairAttemptLimit = 12;
+    const maximumConsecutiveNoProgressRenders = 4;
+    let consecutiveNoProgressRenders = 0;
+    let liveRepairFailure: string | undefined;
+    let previousLiveRepairIssue: string | undefined;
+    const liveRepairMemory: Array<Record<string, unknown>> = [];
+    const ineffectiveRepairFingerprints = new Set<string>();
+    let liveRepairFindings = selectNorthstarLiveRepairFindings({
+      cumulativeIntentAudit: liveReviewedArchive?.cumulativeIntentAudit,
+      renderedIntegrityAudit: liveReviewedArchive?.renderedIntegrityAudit,
+    }).filter((finding) => {
+      if (!turnWriteScope) return false;
+      const writable = new Set([...turnWriteScope.writableExistingNodeIds, ...turnWriteScope.introducedNodeIds]);
+      return Boolean(finding.subjectNodeId && writable.has(finding.subjectNodeId))
+        || finding.relatedNodeIds.some((nodeId) => writable.has(nodeId));
+    });
+    if (
+      !liveReviewedArchive?.cumulativeIntentAudit
+      || !liveReviewedArchive.renderedIntegrityAudit
+      || liveReviewedArchive.cumulativeIntentAuditFailure
+      || liveReviewedArchive.renderedIntegrityAuditFailure
+    ) {
+      callbacks.trace?.("design.reset.review_observation_degraded", {
+        turn,
+        revisionId: dispatchResult.artifact.revisionId,
+        cumulativeIntentAuditAvailable: Boolean(liveReviewedArchive?.cumulativeIntentAudit),
+        renderedIntegrityAuditAvailable: Boolean(liveReviewedArchive?.renderedIntegrityAudit),
+        cumulativeIntentAuditFailure: liveReviewedArchive?.cumulativeIntentAuditFailure,
+        renderedIntegrityAuditFailure: liveReviewedArchive?.renderedIntegrityAuditFailure,
+      }, "Optional post-render review was unavailable. Northstar preserved the browser-applied revision and did not convert an observation failure into a design failure.");
+    }
+
+    for (
+      let liveRepairPass = 1;
+      !liveRepairFailure && liveRepairFindings.length > 0 && liveRepairPass <= emergencyLiveRepairAttemptLimit;
+      liveRepairPass += 1
+    ) {
+      const repairBasePackage = dispatchResult.artifact;
+      const repairBaseAcknowledgement = dispatchResult.acknowledgement;
+      const triggeringFindings = liveRepairFindings;
+      const carryFindingKeys = triggeringFindings.map((finding) => finding.key);
+      callbacks.trace?.("design.reset.live_repair_requested", {
+        patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
+        addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
+        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
+        convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
+        turn,
+        repairPass: liveRepairPass,
+        revisionId: repairBasePackage.revisionId,
+        originalInstruction: turnInstruction,
+        findings: triggeringFindings,
+        turnWriteScope,
+        repairMemory: liveRepairMemory,
+        consecutiveNoProgressRenders,
+      }, "Patch 1/2 found a current-turn communication defect on the live artboard. The same designer will correct that rendered revision before the next turn.");
+
+      const repairModelInput = buildNorthstarDesignResetModelInput({
+        turn,
+        artifact: repairBasePackage,
+        acknowledgement: repairBaseAcknowledgement,
+      });
+      const reactiveRepairContext = {
+        purpose: "The browser realizes model-authored spatial dependencies from current rendered geometry. Its realized coordinates are consequences of the authored dependency graph, not independent design decisions.",
+        authoredRelations: repairBaseAcknowledgement.authoredDesignRelations ?? [],
+        resolvedRelations: repairBaseAcknowledgement.resolvedDesignRelations ?? [],
+        realizationTraces: repairBaseAcknowledgement.review?.relationRealizationTraces ?? [],
+      };
+      const repairContents = [{
+        role: "user",
+        parts: [
+          { text: `EXACT CURRENT LIVE ARTBOARD\n${JSON.stringify(repairModelInput)}` },
+          { text: `ORIGINAL TURN OBJECTIVE\n${turnInstruction}` },
+          {
+            text: [
+              "POST-RENDER REPAIR",
+              "Your previous action is already visible on the live artboard above. Keep the same turn active and preserve its original objective.",
+              "Patch 1/2 measured the rendered result and found these concrete defects in the composition affected by this turn:",
+              JSON.stringify(triggeringFindings),
+              `ENFORCED TURN WRITE SCOPE\n${JSON.stringify(turnWriteScope ? {
+                baseRevisionId: turnWriteScope.baseRevisionId,
+                writableExistingNodeIds: turnWriteScope.writableExistingNodeIds,
+                introducedNodeIds: turnWriteScope.introducedNodeIds,
+                insertionContainerNodeIds: turnWriteScope.insertionContainerNodeIds,
+              } : {})}`,
+              "Only the listed existing, introduced, and insertion-container nodes are writable. Every other current node is a fixed obstacle and protected prior work. Resolve findings by editing the writable side only. A mutation targeting any other node will be rejected before rendering.",
+              `AFFECTED COMPOSITION\n${JSON.stringify(liveReviewedArchive?.cumulativeIntentAudit?.affectedComposition ?? {})}`,
+              `REACTIVE DEPENDENCY STATE\n${JSON.stringify(reactiveRepairContext)}`,
+              liveRepairMemory.length > 0 ? `SAME-TURN REPAIR MEMORY\n${JSON.stringify(liveRepairMemory)}` : "",
+              previousLiveRepairIssue ? `PREVIOUS REPAIR ATTEMPT ISSUE\n${previousLiveRepairIssue}` : "",
+              "The repair memory is evidence from attempts already rendered on this same live artboard. Compare the before/after findings and measurements. Do not repeat an executable repair recorded as ineffective; if it left the defect in place, choose a materially different composition. The memory reports outcomes and does not prescribe your design solution.",
+              "A collateral-geometry finding is a measured continuity obligation to pre-turn rendered content that this objective did not need to change. It remains unresolved until that collateral displacement is repaired, even when your repair directly edits those nodes. Decide the repair composition yourself.",
+              "Treat reactive geometry as the faithful consequence of the authored dependency graph. If a correct existing live relation produces geometry you dislike, repair the authored cause or surrounding composition rather than fighting the realized coordinates. If the dependency itself needs correction, reuse its exact relation id; relation ids are update identities. Do not invent a second relation id that controls the same subject geometry channel.",
+              "Resolve all of these defects together while preserving protected evidence, semantic meaning, provenance, and successful prior work.",
+              "You own the design solution. Reposition, reroute, resize, restyle, or recompose the affected authored area as you judge appropriate; the runtime will not choose a layout or visual treatment for you.",
+              "Author an incremental mutation from the exact current live revision, not from an earlier version of the turn. Do not discuss the repair. Return the complete required JSON response only.",
+            ].join("\n"),
+          },
+        ],
+      }];
+
+      let repairRawResponse: unknown;
+      let repairResponse: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse> | undefined;
+      try {
+        const auditedRepair = await callGeminiJsonOnceAudited<unknown>({
+          apiKey,
+          systemInstruction,
+          contents: repairContents,
+          schema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+          signal,
+          maxOutputTokens: 32_000,
+          temperature: 0,
+        });
+        providerAttempt = { ...auditedRepair.audit, attempt: providerAttempts.length + 1 };
+        providerAttempts.push(providerAttempt);
+        repairRawResponse = auditedRepair.value;
+        repairResponse = sanitizeNorthstarDesignResetModelResponse({
+          raw: repairRawResponse,
+          turn,
+          baseRevisionId: repairBasePackage.revisionId,
+          continuation: true,
+          existingRelations: turnRelationContracts,
+        });
+      } catch (error) {
+        const failedAudit = error instanceof NorthstarAuditedModelCallError ? error.audit : undefined;
+        if (failedAudit) providerAttempts.push({ ...failedAudit, attempt: providerAttempts.length + 1 });
+        const detail = error instanceof Error ? error.message : String(error);
+        const repeatedModelFailure = detail === previousLiveRepairIssue;
+        previousLiveRepairIssue = detail;
+        liveRepairMemory.push({
+          repairPass: liveRepairPass,
+          outcome: "model-failure",
+          baseRevisionId: repairBasePackage.revisionId,
+          triggeringFindings,
+          detail,
+          repeatedModelFailure,
+        });
+        repairHistory.push({
+          stage: "live-artboard-model-repair",
+          repairPass: liveRepairPass,
+          baseRevisionId: repairBasePackage.revisionId,
+          triggeringFindings,
+          error: detail,
+        });
+        callbacks.trace?.("design.reset.live_repair_retry", {
+          turn,
+          repairPass: liveRepairPass,
+          revisionId: repairBasePackage.revisionId,
+          detail,
+          repeatedModelFailure,
+        }, "The live artboard remains authoritative while the same-turn repair model call is retried.");
+        if (repeatedModelFailure || liveRepairPass === emergencyLiveRepairAttemptLimit) {
+          liveRepairFailure = repeatedModelFailure ? `The repair model repeated the same model-boundary failure: ${detail}` : detail;
+          break;
+        }
+        continue;
+      }
+
+      if (!turnWriteScope) {
+        liveRepairFailure = "The turn lost its frozen continuation write scope.";
+        break;
+      }
+      const activeTurnWriteScope = turnWriteScope;
+      const normalizedSpatialAuthority = normalizeNorthstarSpatialAuthority({
+        response: repairResponse,
+        continuation: true,
+        existingRelations: turnRelationContracts,
+      });
+      if (normalizedSpatialAuthority.issues.length) {
+        const detail = normalizedSpatialAuthority.issues.join(" ");
+        const repeatedAuthorityFailure = detail === previousLiveRepairIssue;
+        previousLiveRepairIssue = detail;
+        repairHistory.push({
+          stage: "live-artboard-spatial-authority-skipped",
+          repairPass: liveRepairPass,
+          baseRevisionId: repairBasePackage.revisionId,
+          attemptedMutation: repairResponse.mutation,
+          issues: normalizedSpatialAuthority.issues,
+          repeatedAuthorityFailure,
+        });
+        callbacks.trace?.("design.reset.spatial_authority_rejected", {
+          turn,
+          repairPass: liveRepairPass,
+          revisionId: repairBasePackage.revisionId,
+          issues: normalizedSpatialAuthority.issues,
+          repeatedAuthorityFailure,
+        }, "Northstar kept the current revision instead of rendering an incomplete spatial contract.");
+        if (repeatedAuthorityFailure || liveRepairPass === emergencyLiveRepairAttemptLimit) {
+          liveRepairFailure = repeatedAuthorityFailure
+            ? `The repair model repeated the same incomplete spatial contract: ${detail}`
+            : detail;
+          break;
+        }
+        continue;
+      }
+      repairResponse = normalizedSpatialAuthority.response;
+      if (normalizedSpatialAuthority.normalizedFields.length) {
+        callbacks.trace?.("design.reset.spatial_authority_normalized", {
+          turn,
+          repairPass: liveRepairPass,
+          revisionId: repairBasePackage.revisionId,
+          normalizedFields: normalizedSpatialAuthority.normalizedFields,
+        }, "Northstar removed redundant coordinates and cumulative space growth while retaining the model-authored relation.");
+      }
+      const writeScopeValidation = validateNorthstarContinuationWriteScope({
+        scope: activeTurnWriteScope,
+        mutation: repairResponse.mutation,
+      });
+      if (!writeScopeValidation.valid) {
+        const detail = `The continuation attempted to modify protected prior work: ${writeScopeValidation.violations.join(" ")}`;
+        previousLiveRepairIssue = detail;
+        liveRepairMemory.push({
+          repairPass: liveRepairPass,
+          outcome: "protected-write-rejected",
+          baseRevisionId: repairBasePackage.revisionId,
+          attemptedMutation: repairResponse.mutation,
+          violations: writeScopeValidation.violations,
+          detail,
+        });
+        callbacks.trace?.("design.reset.protected_write_rejected", {
+          turn,
+          repairPass: liveRepairPass,
+          revisionId: repairBasePackage.revisionId,
+          turnWriteScope: activeTurnWriteScope,
+          violations: writeScopeValidation.violations,
+        }, "Northstar rejected a continuation that attempted to turn protected prior work into part of the current objective.");
+        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = detail;
+        continue;
+      }
+
+      const reactiveConflicts = findNorthstarNewReactiveRelationConflicts({
+        existingRelations: repairBaseAcknowledgement.authoredDesignRelations ?? [],
+        proposedRelations: repairResponse.mutation.relations ?? [],
+      });
+      if (reactiveConflicts.length > 0) {
+        const detail = `This repair would add competing authored controllers to an existing reactive geometry channel: ${JSON.stringify(reactiveConflicts)}. The browser was not asked to render the known protocol conflict. Inspect the existing dependency state and, when correcting an existing dependency, reuse its exact relation id instead of stacking another controller.`;
+        previousLiveRepairIssue = detail;
+        const memoryEntry = {
+          repairPass: liveRepairPass,
+          outcome: "reactive-relation-conflict-preflight",
+          baseRevisionId: repairBasePackage.revisionId,
+          attemptedMutation: repairResponse.mutation,
+          triggeringFindings,
+          reactiveConflicts,
+          detail,
+        };
+        liveRepairMemory.push(memoryEntry);
+        repairHistory.push({ stage: "live-artboard-reactive-conflict-skipped", ...memoryEntry });
+        callbacks.trace?.("design.reset.live_repair_reactive_conflict_skipped", {
+          patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
+          convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
+          turn,
+          ...memoryEntry,
+          repairMemory: liveRepairMemory,
+        }, "The repair model attempted to stack a competing reactive controller. The current live artboard remained untouched and the same designer will correct its dependency authorship.");
+        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = detail;
+        continue;
+      }
+
+      const repairFingerprint = northstarLiveRepairExecutableFingerprint(repairResponse.mutation);
+      if (ineffectiveRepairFingerprints.has(repairFingerprint)) {
+        const detail = `Executable repair ${repairFingerprint} exactly repeats a same-turn repair that already rendered without clearing the defects. It was not rendered again.`;
+        previousLiveRepairIssue = detail;
+        const memoryEntry = {
+          repairPass: liveRepairPass,
+          outcome: "duplicate-known-ineffective-repair",
+          baseRevisionId: repairBasePackage.revisionId,
+          executableFingerprint: repairFingerprint,
+          attemptedMutation: repairResponse.mutation,
+          triggeringFindings,
+          detail,
+        };
+        liveRepairMemory.push(memoryEntry);
+        repairHistory.push({ stage: "live-artboard-duplicate-repair-skipped", ...memoryEntry });
+        callbacks.trace?.("design.reset.live_repair_duplicate_skipped", {
+          patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
+          addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
+          collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
+          convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
+          turn,
+          ...memoryEntry,
+          repairMemory: liveRepairMemory,
+        }, "The model repeated an executable repair already proven ineffective on this live artboard. Northstar skipped the redundant render and kept the same turn active.");
+        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = detail;
+        continue;
+      }
+
+      const repairCandidate = createNorthstarDesignResetCandidate({ base: repairBasePackage, response: repairResponse });
+      const repairMutationBatch = repairCandidate.mutationJournal?.at(-1);
+      const repairDispatch = await callbacks.applyDesignAction(repairCandidate, turn, repairResponse.understanding);
+      if (repairDispatch.status !== "applied") {
+        previousLiveRepairIssue = repairDispatch.acknowledgement?.reason || repairDispatch.detail;
+        liveRepairMemory.push({
+          repairPass: liveRepairPass,
+          outcome: "browser-apply-failure",
+          baseRevisionId: repairBasePackage.revisionId,
+          executableFingerprint: repairFingerprint,
+          attemptedMutation: repairResponse.mutation,
+          triggeringFindings,
+          detail: repairDispatch.detail,
+        });
+        repairHistory.push({
+          stage: "live-artboard-browser-repair",
+          repairPass: liveRepairPass,
+          baseRevisionId: repairBasePackage.revisionId,
+          attemptedRevisionId: repairCandidate.revisionId,
+          triggeringFindings,
+          detail: repairDispatch.detail,
+          acknowledgement: repairDispatch.acknowledgement,
+        });
+        callbacks.trace?.("design.reset.live_repair_retry", {
+          turn,
+          repairPass: liveRepairPass,
+          revisionId: repairBasePackage.revisionId,
+          attemptedRevisionId: repairCandidate.revisionId,
+          detail: repairDispatch.detail,
+        }, "The browser preserved the current live revision after a repair execution failure; the turn will not advance.");
+        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = repairDispatch.detail;
+        continue;
+      }
+
+      previousLiveRepairIssue = undefined;
+      const repairReviewStartedAt = Date.now();
+      const repairReviewedArchive = buildNorthstarDesignResetTurnArchive({
+        runId,
+        artifactId,
+        turn,
+        requestedThinkingMode: thinkingDepth,
+        instruction: turnInstruction,
+        status: "committed",
+        beforePackage: repairBasePackage,
+        beforeAcknowledgement: repairBaseAcknowledgement,
+        systemInstruction,
+        contents: repairContents,
+        responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+        providerAttempt,
+        providerAttempts,
+        rawParsedResponse: repairRawResponse,
+        acceptedResponse: repairResponse,
+        candidateBeforeBrowser: repairCandidate,
+        mutationBatch: repairMutationBatch,
+        previousCumulativeIntentAudit: liveReviewedArchive?.cumulativeIntentAudit ?? previousCumulativeIntentAudit,
+        repairHistory,
+        afterPackage: repairDispatch.artifact,
+        afterAcknowledgement: repairDispatch.acknowledgement,
+      });
+      const repairReviewDurationMs = Date.now() - repairReviewStartedAt;
+      if (
+        !repairReviewedArchive.cumulativeIntentAudit
+        || !repairReviewedArchive.renderedIntegrityAudit
+        || repairReviewedArchive.cumulativeIntentAuditFailure
+        || repairReviewedArchive.renderedIntegrityAuditFailure
+      ) {
+        callbacks.trace?.("design.reset.review_observation_degraded", {
+          turn,
+          repairPass: liveRepairPass,
+          revisionId: repairDispatch.artifact.revisionId,
+          cumulativeIntentAuditAvailable: Boolean(repairReviewedArchive.cumulativeIntentAudit),
+          renderedIntegrityAuditAvailable: Boolean(repairReviewedArchive.renderedIntegrityAudit),
+          cumulativeIntentAuditFailure: repairReviewedArchive.cumulativeIntentAuditFailure,
+          renderedIntegrityAuditFailure: repairReviewedArchive.renderedIntegrityAuditFailure,
+        }, "Optional repair review was unavailable. Northstar preserved the browser-applied revision and did not convert an observation failure into a design failure.");
+      }
+
+      const remainingFindings = selectNorthstarLiveRepairFindings({
+        cumulativeIntentAudit: repairReviewedArchive.cumulativeIntentAudit,
+        renderedIntegrityAudit: repairReviewedArchive.renderedIntegrityAudit,
+        carryFindingKeys,
+      }).filter((finding) => {
+        const writable = new Set([...activeTurnWriteScope.writableExistingNodeIds, ...activeTurnWriteScope.introducedNodeIds, ...writeScopeValidation.introducedNodeIds]);
+        return Boolean(finding.subjectNodeId && writable.has(finding.subjectNodeId))
+          || finding.relatedNodeIds.some((nodeId) => writable.has(nodeId));
+      });
+      const repairOutcome = summarizeNorthstarLiveRepairOutcome(triggeringFindings, remainingFindings);
+      consecutiveNoProgressRenders = repairOutcome.status === "no-progress"
+        ? consecutiveNoProgressRenders + 1
+        : 0;
+      const memoryEntry = {
+        repairPass: liveRepairPass,
+        outcome: repairOutcome.status,
+        baseRevisionId: repairBasePackage.revisionId,
+        revisionId: repairDispatch.artifact.revisionId,
+        executableFingerprint: repairFingerprint,
+        attemptedMutation: repairResponse.mutation,
+        beforeFindings: triggeringFindings,
+        afterFindings: remainingFindings,
+        comparison: repairOutcome,
+      };
+      liveRepairMemory.push(memoryEntry);
+      if (remainingFindings.length > 0) {
+        ineffectiveRepairFingerprints.add(repairFingerprint);
+        previousLiveRepairIssue = `Repair pass ${liveRepairPass} rendered but did not clear all current-turn findings. Outcome: ${repairOutcome.status}. Do not repeat executable repair ${repairFingerprint}; use the same-turn repair memory and choose a materially different composition.`;
+      } else {
+        previousLiveRepairIssue = undefined;
+      }
+      repairHistory.push({
+        stage: "live-artboard-post-render-review",
+        repairPass: liveRepairPass,
+        baseRevisionId: repairBasePackage.revisionId,
+        revisionId: repairDispatch.artifact.revisionId,
+        triggeringFindings,
+        remainingFindings,
+        mutation: repairResponse.mutation,
+        executableFingerprint: repairFingerprint,
+        repairOutcome,
+        reviewDurationMs: repairReviewDurationMs,
+      });
+      rawParsedResponse = repairRawResponse;
+      parsedResponse = repairResponse;
+      candidate = repairCandidate;
+      mutationBatch = repairMutationBatch;
+      dispatchResult = repairDispatch;
+      turnWriteScope = extendNorthstarTurnWriteScope(activeTurnWriteScope, writeScopeValidation.introducedNodeIds);
+      liveReviewedArchive = repairReviewedArchive;
+      liveRepairFindings = remainingFindings;
+
+      if (remainingFindings.length > 0 && consecutiveNoProgressRenders >= maximumConsecutiveNoProgressRenders) {
+        liveRepairFailure = `The same designer produced ${consecutiveNoProgressRenders} consecutive browser-rendered repairs with no measured change to the outstanding findings. The current live artboard was preserved and the turn was stopped by the convergence circuit breaker.`;
+        callbacks.trace?.("design.reset.live_repair_stagnated", {
+          patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
+          convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
+          turn,
+          repairPass: liveRepairPass,
+          revisionId: repairDispatch.artifact.revisionId,
+          consecutiveNoProgressRenders,
+          findings: remainingFindings,
+          repairMemory: liveRepairMemory,
+        }, "Northstar stopped only after repeated rendered no-progress results; it did not advance to the next design objective.");
+      }
+
+      callbacks.trace?.("design.reset.live_repair_reviewed", {
+        patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
+        addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
+        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
+        convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
+        turn,
+        repairPass: liveRepairPass,
+        baseRevisionId: repairBasePackage.revisionId,
+        revisionId: repairDispatch.artifact.revisionId,
+        reviewDurationMs: repairReviewDurationMs,
+        triggeringFindings,
+        remainingFindings,
+        executableFingerprint: repairFingerprint,
+        repairOutcome,
+        repairMemory: liveRepairMemory,
+        consecutiveNoProgressRenders,
+      }, remainingFindings.length === 0
+        ? "The same-turn correction resolved the actionable live-artboard findings. The next design objective may begin."
+        : "The repaired live artboard still has actionable findings owned by this turn. The same designer will correct it again before advancing.");
+    }
+
+    if (liveRepairFailure || liveRepairFindings.length > 0) {
+      const detail = liveRepairFailure
+        ? `Patch 1/2 could not close design reset turn ${turn}: ${liveRepairFailure}`
+        : `Design reset turn ${turn} still has ${liveRepairFindings.length} actionable live-artboard finding(s) at the ${emergencyLiveRepairAttemptLimit}-attempt repair circuit breaker.`;
+      unresolvedTurn = turn;
+      currentPackage = dispatchResult.artifact;
+      if (liveReviewedArchive) await callbacks.archiveDesignTurn?.({ ...liveReviewedArchive, failure: detail });
+      await callbacks.completeStep({
+        id: step.id,
+        tool: step.tool,
+        detail: `Preserved the current live artboard and stopped before the next objective because turn ${turn} still requires design repair.`,
+      });
+      callbacks.trace?.("design.reset.live_repair_unresolved", {
+        patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
+        addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
+        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
+        convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
+        turn,
+        revisionId: currentPackage.revisionId,
+        findings: liveRepairFindings,
+        repairMemory: liveRepairMemory,
+        detail,
+      }, "Northstar did not advance to the next design objective with unresolved current-turn communication defects.");
+      break benchmarkTurns;
+    }
+
     if (!dispatchResult.acknowledgement.snapshot) {
       throw new Error(`Design reset turn ${turn} committed without an exact browser source-after snapshot.`);
     }
     if (!providerAttempt) throw new Error("The design reset lost its exact provider audit after dispatch.");
-    const turnArchive = buildNorthstarDesignResetTurnArchive({
+    // Reuse the review that was built directly from the first live browser
+    // result. Do not re-audit a second surface or reconstruct a candidate.
+    const turnArchive = liveReviewedArchive ?? buildNorthstarDesignResetTurnArchive({
       runId,
       artifactId,
       turn,
@@ -9455,7 +10050,17 @@ async function buildCompositionBlueprint({
       blueprint = await createBlueprint(undefined, "minimal");
     } catch (secondError) {
       if (signal.aborted || (secondError instanceof DOMException && secondError.name === "AbortError")) throw secondError;
-      throw secondError;
+      throwIfGeminiInfrastructureError(secondError);
+      console.warn(
+        "North Star replaced an ungroundable model blueprint with the deterministic blueprint derived from verified evidence:",
+        secondError,
+      );
+      blueprint = buildDeterministicCompositionBlueprintRecovery({
+        intent,
+        message,
+        researchLedger,
+        toolResults,
+      });
     }
   }
   const settings = compositionResearchSettings(blueprint.executionDepth);

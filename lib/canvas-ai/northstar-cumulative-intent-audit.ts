@@ -81,6 +81,22 @@ export type NorthstarCumulativeIntentResolutionWarning = {
   candidateEvidenceIds?: string[];
 };
 
+export type NorthstarCollateralGeometryFinding = {
+  nodeId: string;
+  originTurn: number;
+  changeKind: "position-only" | "size-or-shape";
+  explicitlyOwnedInCurrentMutation?: boolean;
+  baselineBounds: NorthstarAuditRect;
+  renderedBounds: NorthstarAuditRect;
+  delta: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    centerDistance: number;
+  };
+};
+
 export type NorthstarCumulativeIntentCommitment = {
   commitmentId: string;
   nodeId: string;
@@ -151,6 +167,8 @@ export type NorthstarCumulativeIntentAudit = {
     unrelatedCommitmentIds: string[];
     continuityAnchorNodeIds: string[];
     geometryChangedNodeIds: string[];
+    /** Pre-existing rendered geometry changed without being owned by this turn. */
+    collateralGeometryFindings?: NorthstarCollateralGeometryFinding[];
     dependencyPaths: NorthstarCumulativeIntentDependencyPath[];
     spatialExposurePairs: Array<{
       changedNodeId: string;
@@ -374,6 +392,36 @@ function geometryChanged(before: NorthstarAuditRect | undefined, after: Northsta
   return ["left", "top", "right", "bottom", "width", "height"].some((key) =>
     Math.abs(before[key as keyof NorthstarAuditRect] - after[key as keyof NorthstarAuditRect]) > 0.5
   );
+}
+
+function collateralGeometryDelta(before: NorthstarAuditRect, after: NorthstarAuditRect): NorthstarCollateralGeometryFinding["delta"] {
+  const round = (value: number) => Math.round(value * 100) / 100;
+  const beforeCenterX = before.left + (before.width / 2);
+  const beforeCenterY = before.top + (before.height / 2);
+  const afterCenterX = after.left + (after.width / 2);
+  const afterCenterY = after.top + (after.height / 2);
+  return {
+    left: round(after.left - before.left),
+    top: round(after.top - before.top),
+    width: round(after.width - before.width),
+    height: round(after.height - before.height),
+    centerDistance: round(Math.hypot(afterCenterX - beforeCenterX, afterCenterY - beforeCenterY)),
+  };
+}
+
+function materiallyDifferentGeometry(before: NorthstarAuditRect, after: NorthstarAuditRect): boolean {
+  const delta = collateralGeometryDelta(before, after);
+  return Math.max(Math.abs(delta.left), Math.abs(delta.top), Math.abs(delta.width), Math.abs(delta.height)) > 1;
+}
+
+function collateralGeometryChangeKind(
+  before: NorthstarAuditRect,
+  after: NorthstarAuditRect,
+): NorthstarCollateralGeometryFinding["changeKind"] {
+  const delta = collateralGeometryDelta(before, after);
+  return Math.max(Math.abs(delta.width), Math.abs(delta.height)) > 1
+    ? "size-or-shape"
+    : "position-only";
 }
 
 function intersectionArea(a: NorthstarAuditRect | undefined, b: NorthstarAuditRect | undefined): number {
@@ -1166,6 +1214,102 @@ export function buildNorthstarCumulativeIntentAudit(input: BuildNorthstarCumulat
   }
 
   const afterNodes = snapshotNodeMap(input.afterAcknowledgement);
+  // Patch 3B collateral-change addon: the browser is the authority for what
+  // actually moved. A pre-existing semantic node becomes a repair obligation
+  // only when its rendered geometry changed materially and the current turn
+  // did not directly own that node, its containing edit, or a continuity
+  // dependant. Same-turn repairs carry the original pre-turn bounds until the
+  // collateral displacement is genuinely removed or a later repair explicitly
+  // takes ownership of a position-only recomposition. Protected evidence may
+  // be translated deliberately, but a width/height change remains collateral
+  // even when the evidence node itself is an explicit edit target.
+  const explainedGeometryNodeIds = new Set<string>([
+    ...scope.directNodeIds,
+    ...scope.containerContextNodeIds,
+    ...scope.relationSubjectNodeIds,
+    ...structuralMembers,
+    ...ledger.active
+      .filter((commitment) => directCommitmentIds.has(commitment.commitmentId) || continuityDependentCommitmentIds.has(commitment.commitmentId))
+      .map((commitment) => commitment.nodeId),
+  ]);
+  if (scope.artboardExpansionRequested) explainedGeometryNodeIds.add("artboard");
+  // Semantic region bounds are derived from their rendered members. A region
+  // changing because this turn intentionally moved one of those members is an
+  // expected collective consequence, not independent collateral movement.
+  for (const region of input.afterGraph.regions) {
+    if (region.memberNodeIds.some((nodeId) => directNodes.has(nodeId) || structuralMembers.has(nodeId))) {
+      explainedGeometryNodeIds.add(region.rootNodeId);
+    }
+  }
+
+  const protectedEvidenceRootIds = new Set<string>([
+    ...input.beforeGraph.evidenceItems.map((item) => item.nodeId),
+    ...input.afterGraph.evidenceItems.map((item) => item.nodeId),
+  ]);
+  const isProtectedEvidenceGeometryNode = (nodeId: string) =>
+    protectedEvidenceRootIds.has(nodeId)
+    || [...ancestorSet(nodeId, afterNodes)].some((ancestorId) => protectedEvidenceRootIds.has(ancestorId));
+  const isExplicitlyOwnedNow = (nodeId: string) =>
+    explainedGeometryNodeIds.has(nodeId)
+    || [...ancestorSet(nodeId, afterNodes)].some((ancestorId) => directNodes.has(ancestorId));
+
+  const collateralByNodeId = new Map<string, NorthstarCollateralGeometryFinding>();
+  const explicitlyResolvedPriorCollateralNodeIds = new Set<string>();
+  const previousAudit = input.previousAudit;
+  if (previousAudit && Object.is(previousAudit.turn, input.turn)) {
+    for (const priorFinding of previousAudit.affectedComposition.collateralGeometryFindings ?? []) {
+      const renderedBounds = afterBounds.get(priorFinding.nodeId);
+      if (!renderedBounds || !materiallyDifferentGeometry(priorFinding.baselineBounds, renderedBounds)) continue;
+      const explicitlyOwnedInCurrentMutation = isExplicitlyOwnedNow(priorFinding.nodeId);
+      const changeKind = collateralGeometryChangeKind(priorFinding.baselineBounds, renderedBounds);
+      // A repair is allowed to deliberately adopt a translation that began as
+      // collateral. This is how the model can recompose a suffix/row instead of
+      // being forced back to stale coordinates. Evidence integrity is stricter:
+      // explicit ownership never excuses a changed rendered width or height.
+      if (explicitlyOwnedInCurrentMutation && (!isProtectedEvidenceGeometryNode(priorFinding.nodeId) || changeKind === "position-only")) {
+        explicitlyResolvedPriorCollateralNodeIds.add(priorFinding.nodeId);
+        continue;
+      }
+      collateralByNodeId.set(priorFinding.nodeId, {
+        nodeId: priorFinding.nodeId,
+        originTurn: priorFinding.originTurn,
+        changeKind,
+        explicitlyOwnedInCurrentMutation,
+        baselineBounds: priorFinding.baselineBounds,
+        renderedBounds,
+        delta: collateralGeometryDelta(priorFinding.baselineBounds, renderedBounds),
+      });
+    }
+  }
+
+  const preExistingSemanticNodeIds = stableUnique([
+    ...input.beforeGraph.nodes.map((node) => node.nodeId),
+    ...input.beforeGraph.evidenceItems.map((item) => item.nodeId),
+    ...input.beforeGraph.regions.map((region) => region.rootNodeId),
+  ]);
+  for (const nodeId of preExistingSemanticNodeIds) {
+    if (collateralByNodeId.has(nodeId) || explicitlyResolvedPriorCollateralNodeIds.has(nodeId)) continue;
+    const baselineBounds = beforeBounds.get(nodeId);
+    const renderedBounds = afterBounds.get(nodeId);
+    if (!baselineBounds || !renderedBounds || !materiallyDifferentGeometry(baselineBounds, renderedBounds)) continue;
+    const explicitlyOwnedInCurrentMutation = isExplicitlyOwnedNow(nodeId);
+    const changeKind = collateralGeometryChangeKind(baselineBounds, renderedBounds);
+    // Explicit movement is valid recomposition. Explicit evidence resizing is
+    // not: evidence dimensions are a protected integrity property, so surface
+    // that damage even when the mutation directly targeted the evidence item.
+    if (explicitlyOwnedInCurrentMutation && (!isProtectedEvidenceGeometryNode(nodeId) || changeKind === "position-only")) continue;
+    collateralByNodeId.set(nodeId, {
+      nodeId,
+      originTurn: input.turn,
+      changeKind,
+      explicitlyOwnedInCurrentMutation,
+      baselineBounds,
+      renderedBounds,
+      delta: collateralGeometryDelta(baselineBounds, renderedBounds),
+    });
+  }
+  const collateralGeometryFindings = [...collateralByNodeId.values()].sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+
   const afterHtmlIndex = htmlAssetIndex(input.afterPackage.document.html);
   const spatiallyExposedCommitmentIds = new Set<string>();
   const spatialExposurePairs: NorthstarCumulativeIntentAudit["affectedComposition"]["spatialExposurePairs"] = [];
@@ -1210,6 +1354,7 @@ export function buildNorthstarCumulativeIntentAudit(input: BuildNorthstarCumulat
 
   const warnings: string[] = [];
   if (scope.globalPresentationMutation) warnings.push("The current mutation contains a global CSS or runtime-module edit; node-level scope cannot fully represent its reach.");
+  if (collateralGeometryFindings.length > 0) warnings.push(`${collateralGeometryFindings.length} pre-existing rendered node(s) changed geometry outside the current turn's explained composition.`);
   if (!everyActiveCommitmentClassifiedExactlyOnce) warnings.push("At least one active commitment was classified into zero or multiple affected-composition categories.");
   const missingPaths = [...continuityDependentCommitmentIds, ...spatiallyExposedCommitmentIds]
     .filter((commitmentId) => {
@@ -1240,6 +1385,7 @@ export function buildNorthstarCumulativeIntentAudit(input: BuildNorthstarCumulat
       unrelatedCommitmentIds,
       continuityAnchorNodeIds: stableUnique(continuityAnchorNodeIds),
       geometryChangedNodeIds,
+      collateralGeometryFindings,
       dependencyPaths: dependencyPaths
         .filter((path, index, all) => all.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(path)) === index)
         .sort((a, b) => `${a.toNodeId}:${a.fromNodeId ?? ""}:${a.reason}`.localeCompare(`${b.toNodeId}:${b.fromNodeId ?? ""}:${b.reason}`)),

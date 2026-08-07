@@ -3342,7 +3342,6 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
 
   const geometryRectForReference = (reference, parameters, excludedSubject = null) => {
     const own = normalizedClientRect(reference.node.getBoundingClientRect());
-    if (referenceGeometryMode(reference, parameters) !== "semantic-descendant-union") return own;
     const descendants = Array.from(reference.node.querySelectorAll("[data-ns-node-id]"))
       .filter((element) => !excludedSubject || (element !== excludedSubject && !excludedSubject.contains(element)))
       .filter((element) => element.getAttribute("data-ns-authored-relationship") !== "true")
@@ -3350,7 +3349,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       .filter((element) => element.getAttribute("data-ns-runtime-owned") !== "true")
       .filter((element) => !element.closest("[data-ns-spatial-system]"))
       .map((element) => normalizedClientRect(element.getBoundingClientRect()));
-    return unionClientRects([own, ...descendants]) || own;
+    const union = unionClientRects([own, ...descendants]) || own;
+    if (referenceGeometryMode(reference, parameters) === "semantic-descendant-union") return union;
+    // A declared border box remains the baseline, but live visual overflow is
+    // part of the reference's occupied geometry. Transformed descendants do
+    // not enlarge getBoundingClientRect() on their container, so ignoring them
+    // would leave dependent objects behind even while the visible subtree moves.
+    const computed = getComputedStyle(reference.node);
+    const clipsX = computed.overflowX === "hidden" || computed.overflowX === "clip";
+    const clipsY = computed.overflowY === "hidden" || computed.overflowY === "clip";
+    const left = clipsX ? own.left : Math.min(own.left, union.left);
+    const right = clipsX ? own.right : Math.max(own.right, union.right);
+    const top = clipsY ? own.top : Math.min(own.top, union.top);
+    const bottom = clipsY ? own.bottom : Math.max(own.bottom, union.bottom);
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
   };
 
   const pointForAnchor = (rect, anchor) => {
@@ -3401,9 +3413,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (!(subject instanceof HTMLElement)) {
       return { ok: false, message: "CSS position relations require an HTML subject." };
     }
-    const computed = getComputedStyle(subject);
+    let computed = getComputedStyle(subject);
     if (computed.position === "static") {
-      return { ok: false, message: "CSS position relations require a positioned subject." };
+      applyRuntimeRelationStyle(subject, relationId, "position", "absolute");
+      computed = getComputedStyle(subject);
     }
     const transformIssue = transformedAncestorIssue(subject);
     if (transformIssue) return { ok: false, message: transformIssue };
@@ -3643,7 +3656,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             const startClient = pointForAnchor(sourceRect, source.anchor || String(parameters.sourceAnchor || "center"));
             const endClient = pointForAnchor(targetRect, target.anchor || String(parameters.targetAnchor || "center"));
             const primitiveId = String(parameters.primitiveNodeId || "");
-            const primitive = primitiveId ? nodeById(primitiveId) : subject.querySelector("line,path,polyline");
+            const declaredPrimitive = primitiveId ? nodeById(primitiveId) : null;
+            const primitive = declaredPrimitive?.matches?.("line,path,polyline")
+              ? declaredPrimitive
+              : declaredPrimitive?.querySelector?.("line,path,polyline") || subject.querySelector("line,path,polyline");
             if (!primitive) {
               failure = "The authored connector primitive was not found.";
             } else {

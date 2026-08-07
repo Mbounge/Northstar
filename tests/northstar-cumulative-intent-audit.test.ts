@@ -319,6 +319,149 @@ test("editing one evidence item does not fan out through all region siblings", (
   assert.ok(!result.affectedComposition.geometryChangedNodeIds.includes("awin-1"));
 });
 
+test("a local turn reports material geometry drift of pre-existing content outside its explained scope", () => {
+  const beforeGraph = graph();
+  const afterGraph = graph({ nodeBounds: { "awin-2": rect(150, 10, 80, 100) } });
+  const result = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-text", targetId: "hello-card", text: "Hello World" }] }),
+    beforeGraph,
+    afterGraph,
+    afterNodes: snapshotNodes({ movedAwin2: true }),
+  }));
+
+  const finding = result.affectedComposition.collateralGeometryFindings?.find((entry) => entry.nodeId === "awin-2");
+  assert.ok(finding);
+  assert.equal(finding.originTurn, 6);
+  assert.equal(finding.baselineBounds.left, 120);
+  assert.equal(finding.renderedBounds.left, 150);
+  assert.equal(finding.delta.left, 30);
+  assert.equal(finding.changeKind, "position-only");
+  assert.equal(finding.explicitlyOwnedInCurrentMutation, false);
+  assert.ok(!result.affectedComposition.collateralGeometryFindings?.some((entry) => entry.nodeId === "hello-card"));
+});
+
+test("geometry directly owned by the turn is not mislabeled as collateral", () => {
+  const result = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-styles", targetId: "awin-2", styles: { left: "150px" } }] }),
+    beforeGraph: graph(),
+    afterGraph: graph({ nodeBounds: { "awin-2": rect(150, 10, 80, 100) } }),
+    afterNodes: snapshotNodes({ movedAwin2: true }),
+  }));
+  assert.ok(!result.affectedComposition.collateralGeometryFindings?.some((entry) => entry.nodeId === "awin-2"));
+});
+
+test("directly targeting protected evidence does not excuse a rendered size change", () => {
+  const resizedAwin2 = snapshotNodes().map((node) => node.nodeId === "awin-2"
+    ? { ...node, bounds: rect(150, 10, 70, 100) }
+    : node);
+  const result = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-styles", targetId: "awin-2", styles: { left: "150px", width: "70px" } }] }),
+    beforeGraph: graph(),
+    afterGraph: graph({ nodeBounds: { "awin-2": rect(150, 10, 70, 100) } }),
+    afterNodes: resizedAwin2,
+  }));
+  const finding = result.affectedComposition.collateralGeometryFindings?.find((entry) => entry.nodeId === "awin-2");
+  assert.ok(finding);
+  assert.equal(finding.changeKind, "size-or-shape");
+  assert.equal(finding.explicitlyOwnedInCurrentMutation, true);
+  assert.equal(finding.delta.width, -10);
+});
+
+test("derived collective region bounds may change when the turn intentionally moves a region member", () => {
+  const result = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-styles", targetId: "awin-2", styles: { left: "150px" } }] }),
+    beforeGraph: graph(),
+    afterGraph: graph({
+      evidenceBounds: rect(0, 0, 530, 300),
+      awinBounds: rect(0, 0, 250, 130),
+      nodeBounds: { "awin-2": rect(150, 10, 80, 100) },
+    }),
+    afterNodes: snapshotNodes({ movedAwin2: true }),
+  }));
+  const collateralNodeIds = result.affectedComposition.collateralGeometryFindings?.map((entry) => entry.nodeId) ?? [];
+  assert.ok(!collateralNodeIds.includes("awin-2"));
+  assert.ok(!collateralNodeIds.includes("flow-awin"));
+  assert.ok(!collateralNodeIds.includes("evidence"));
+});
+
+test("derived collective region drift remains collateral when an unrelated turn moved the member", () => {
+  const result = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-text", targetId: "hello-card", text: "Hello World" }] }),
+    beforeGraph: graph(),
+    afterGraph: graph({
+      evidenceBounds: rect(0, 0, 530, 300),
+      awinBounds: rect(0, 0, 250, 130),
+      nodeBounds: { "awin-2": rect(150, 10, 80, 100) },
+    }),
+    afterNodes: snapshotNodes({ movedAwin2: true }),
+  }));
+  const collateralNodeIds = result.affectedComposition.collateralGeometryFindings?.map((entry) => entry.nodeId) ?? [];
+  assert.ok(collateralNodeIds.includes("awin-2"));
+  assert.ok(collateralNodeIds.includes("flow-awin"));
+  assert.ok(collateralNodeIds.includes("evidence"));
+});
+
+test("same-turn repair may explicitly adopt a position-only collateral displacement", () => {
+  const shiftedGraph = graph({ nodeBounds: { "awin-2": rect(150, 10, 80, 100) } });
+  const initial = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-text", targetId: "hello-card", text: "Hello World" }] }),
+    beforeGraph: graph(),
+    afterGraph: shiftedGraph,
+    afterNodes: snapshotNodes({ movedAwin2: true }),
+  }));
+  assert.ok(initial.affectedComposition.collateralGeometryFindings?.some((entry) => entry.nodeId === "awin-2"));
+
+  const stillShifted = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-styles", targetId: "awin-2", styles: { left: "150px" } }] }),
+    beforeGraph: shiftedGraph,
+    afterGraph: shiftedGraph,
+    beforeNodes: snapshotNodes({ movedAwin2: true }),
+    afterNodes: snapshotNodes({ movedAwin2: true }),
+    previous: initial,
+  }));
+  assert.ok(!stillShifted.affectedComposition.collateralGeometryFindings?.some((entry) => entry.nodeId === "awin-2"));
+});
+
+test("same-turn repair carries protected evidence size damage until exact dimensions are restored", () => {
+  const resizedGraph = graph({ nodeBounds: { "awin-2": rect(150, 10, 70, 100) } });
+  const resizedNodes = snapshotNodes().map((node) => node.nodeId === "awin-2"
+    ? { ...node, bounds: rect(150, 10, 70, 100) }
+    : node);
+  const initial = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-text", targetId: "hello-card", text: "Hello World" }] }),
+    beforeGraph: graph(),
+    afterGraph: resizedGraph,
+    afterNodes: resizedNodes,
+  }));
+  assert.equal(
+    initial.affectedComposition.collateralGeometryFindings?.find((entry) => entry.nodeId === "awin-2")?.changeKind,
+    "size-or-shape",
+  );
+
+  const explicitlyMovedButStillResized = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-styles", targetId: "awin-2", styles: { left: "160px", width: "70px" } }] }),
+    beforeGraph: resizedGraph,
+    afterGraph: graph({ nodeBounds: { "awin-2": rect(160, 10, 70, 100) } }),
+    beforeNodes: resizedNodes,
+    afterNodes: resizedNodes.map((node) => node.nodeId === "awin-2" ? { ...node, bounds: rect(160, 10, 70, 100) } : node),
+    previous: initial,
+  }));
+  const carried = explicitlyMovedButStillResized.affectedComposition.collateralGeometryFindings?.find((entry) => entry.nodeId === "awin-2");
+  assert.ok(carried);
+  assert.equal(carried.changeKind, "size-or-shape");
+  assert.equal(carried.explicitlyOwnedInCurrentMutation, true);
+
+  const restored = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-styles", targetId: "awin-2", styles: { left: "160px", width: "80px" } }] }),
+    beforeGraph: resizedGraph,
+    afterGraph: graph({ nodeBounds: { "awin-2": rect(160, 10, 80, 100) } }),
+    beforeNodes: resizedNodes,
+    afterNodes: snapshotNodes().map((node) => node.nodeId === "awin-2" ? { ...node, bounds: rect(160, 10, 80, 100) } : node),
+    previous: explicitlyMovedButStillResized,
+  }));
+  assert.ok(!restored.affectedComposition.collateralGeometryFindings?.some((entry) => entry.nodeId === "awin-2"));
+});
+
 test("collective-anchor dependants are included only when the collective bounds actually change", () => {
   const unchanged = buildNorthstarCumulativeIntentAudit(auditInput({
     currentMutation: batch({ operations: [{ op: "set-styles", targetId: "flow-awin", styles: { background: "#eef" } }] }),

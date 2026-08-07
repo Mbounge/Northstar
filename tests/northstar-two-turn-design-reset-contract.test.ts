@@ -63,18 +63,36 @@ test("the orchestrator does not choose card styling, coordinates, or layout", ()
   assert.match(systemInstruction, /The model chooses every subject, reference, anchor, geometry mode, controlled axis, alignment, offset, dimension, style, route/);
   assert.match(systemInstruction, /measures the subject's actual rendered size/);
   assert.match(systemInstruction, /real containing-block coordinate space/);
-  assert.match(systemInstruction, /preserves authored transforms/);
+  assert.match(systemInstruction, /owns CSS geometry on the controlled axes/);
   assert.doesNotMatch(systemInstruction, /left:\s*2450|top:\s*123|width:\s*300|request only bottom|request only right|card center|research center/);
   assert.doesNotMatch(reset, /design-reset-hello-world|cssLayerId|RESET_CARD_BY_TURN/);
   assert.match(reset, /mutation: NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA/);
 });
 
-test("each model turn receives the complete current package and browser-materialized source", () => {
+test("each model turn receives canonical source plus the strongest optional browser observation", () => {
   assert.match(reset, /package: input\.artifact/);
   assert.match(reset, /browserAcknowledgement: input\.acknowledgement/);
-  assert.match(reset, /browserMaterializedSource: snapshot/);
+  assert.match(reset, /browserMaterializedSource: observation\.source === "browser-snapshot" \? snapshot : undefined/);
+  assert.match(reset, /canonicalSource: snapshot/);
+  assert.match(reset, /observationAvailability/);
   assert.match(reset, /sourceSha256: sourceHash\(snapshot\)/);
   assert.match(route, /EXACT CURRENT ARTBOARD\\n\$\{JSON\.stringify\(modelInput\)\}/);
+});
+
+test("optional observation failure never becomes an artboard liveness prerequisite", () => {
+  assert.doesNotMatch(reset, /requires the exact browser source snapshot before every model turn/);
+  assert.doesNotMatch(reset, /Cannot build semantic graph without the exact browser snapshot/);
+  assert.doesNotMatch(reset, /Cannot archive a design reset turn without its exact source-before snapshot/);
+  assert.match(reset, /canonicalPackageSnapshot/);
+  assert.match(route, /design\.reset\.observation_degraded/);
+  assert.match(route, /design\.reset\.review_observation_degraded/);
+  assert.match(route, /did not convert an observation failure into a design failure/);
+});
+
+test("revision disagreement remains a hard authority boundary", () => {
+  assert.match(route, /browser revision \$\{liveAcknowledgement\.revisionId\} does not match canonical revision/);
+  assert.match(route, /liveAcknowledgement\.artifactId !== currentPackage\.artifactId/);
+  assert.match(route, /liveAcknowledgement\.revisionId !== currentPackage\.revisionId/);
 });
 
 test("diagnostics retain exact model requests, responses, before and after code, and diffs", () => {
@@ -127,7 +145,7 @@ test("turn three resolves exact cross-flow evidence through the common focus pat
 test("turn four resolves adjacent evidence through the common focus path", () => {
   assert.match(reset, /betweenPlacement:/);
   assert.match(reset, /centered between two exact references/);
-  assert.match(reset, /Preserve evidence source, dimensions, order, visibility/);
+  assert.match(reset, /Preserve evidence source identity, content, dimensions, order, visibility, appearance, and provenance/);
   assert.match(reset, /data-ns-authored-annotation/);
 });
 
@@ -163,11 +181,23 @@ test("communication quality and evidence safety guide every authored turn", () =
   assert.match(reset, /Anything you add must be clear, readable, and understandable from the rendered artboard itself/);
   assert.match(reset, /General comments, synthesis, or remarks may address the whole artifact/);
   assert.match(reset, /Never place cards, annotations, labels, text, filled shapes, or decorative surfaces over protected evidence pixels/);
-  assert.match(reset, /Create negative space, move only explicitly editable authored material, or expand the artboard/);
+  assert.match(reset, /Treat the current layout as a composition you can solve, not as a field of immovable obstacles/);
+  assert.match(reset, /create deliberate negative space by recomposing the smallest coherent affected structure necessary/);
   assert.match(reset, /designPartnerContext/);
   assert.match(reset, /protectedEvidenceNodeIds/);
   assert.match(reset, /currentEvidencePresentation/);
   assert.match(reset, /authoringQuestions/);
+  assert.match(reset, /Intentional movement must be mechanically explicit in the mutation/);
+  assert.match(reset, /Do not change margin, gap, flex growth\/shrink, grid tracks, wrapping/);
+  assert.match(reset, /Preserve every protected evidence item's measured border-box width and height exactly/);
+  assert.match(reset, /every expected movement has an explicit owner/);
+  assert.match(reset, /do not oscillate between natural-flow and absolute\/translated strategy families/);
+  assert.match(reset, /perform a simple fit test from the current rendered measurements/);
+  assert.match(reset, /required span is the planned outer size/);
+  assert.match(reset, /available span is smaller than required span/);
+  assert.match(reset, /Moving only the same failing subject remains one subject-only placement strategy/);
+  assert.match(reset, /Do not move that subject alone again unless/);
+  assert.match(reset, /Trading an overlap below the target for an overlap to its right/);
 });
 
 test("every turn uses the same general semantic focus resolver", () => {
@@ -178,6 +208,24 @@ test("every turn uses the same general semantic focus resolver", () => {
   assert.match(reset, /The full graph and browser state are available on every turn/);
   assert.doesNotMatch(reset, /const instructionResolution = input\.turn ===/);
   assert.doesNotMatch(reset, /regionId: "awin-flow"|regionId: "whop-flow"|requestedRelation: "groups-flows"/);
+});
+
+test("composition strategy is general instead of benchmark-specific", () => {
+  assert.match(reset, /No content type or benchmark objective receives a privileged movement recipe/);
+  assert.match(reset, /Referenced evidence follows the same integrity and recomposition rules as on every other design turn/);
+  assert.match(reset, /Use the same fit, evidence-integrity, explicit-movement, and smallest-coherent-recomposition reasoning used for every other design objective/);
+  assert.doesNotMatch(reset, /Move only the minimum necessary Awin sequence suffix/);
+  assert.doesNotMatch(reset, /keep the Whop flow and unrelated artboard content unchanged/);
+  assert.doesNotMatch(reset, /For an annotation between adjacent screenshots, first author enough positive horizontal room/);
+  assert.doesNotMatch(reset, /The source screenshots remain pixel-stable/);
+});
+
+test("protected evidence is explicitly position-recomposable without weakening integrity", () => {
+  assert.match(reset, /evidencePositionPolicy: "recomposable-when-needed"/);
+  assert.match(reset, /recomposableEvidenceNodeIds: \[\.\.\.evidenceIds\]/);
+  assert.match(reset, /recomposableAuthoredNodeIds: affectedAdditions\.map/);
+  assert.match(reset, /Protection does not freeze x\/y position/);
+  assert.doesNotMatch(reset, /editableForRecompositionNodeIds/);
 });
 
 test("turn six tests structural grouping without forcing a relation or visual form", () => {
@@ -192,8 +240,8 @@ test("turn six tests structural grouping without forcing a relation or visual fo
 
 test("turn seven tests evidence reuse in a new analysis area while preserving provenance", () => {
   assert.match(reset, /Create a new analysis area below the current onboarding flows and reuse the Awin screenshot where the user chooses their role there/);
-  assert.match(reset, /preserve the original evidence instance in place/);
-  assert.match(reset, /new authored presentation instance/);
+  assert.match(reset, /preserve the original evidence instance/);
+  assert.match(reset, /distinct authored presentation instance/);
   assert.match(reset, /data-ns-source-node-id/);
   assert.match(reset, /Reused evidence is not a new source/);
   assert.match(reset, /preserve the original instance and create a distinct authored presentation instance for the reused view/);
@@ -208,14 +256,34 @@ test("the reset forwards the model mutation without candidate-policy validation"
   assert.doesNotMatch(reset, /pixelStableNodeIds: \["evidence"\]/);
 });
 
-test("semantic graph describes an infinite artboard and immutable research footprint", () => {
+test("semantic graph protects evidence integrity while allowing necessary spatial recomposition", () => {
   assert.match(reset, /expansionModel: "infinite-world-space"/);
   assert.match(reset, /source: "unchanged"/);
-  assert.match(reset, /bounds: "unchanged"/);
-  assert.match(reset, /internalLayout: "unchanged"/);
+  assert.match(reset, /evidenceIdentity: "unchanged"/);
+  assert.match(reset, /itemDimensions: "unchanged"/);
+  assert.match(reset, /itemOrder: "unchanged"/);
+  assert.match(reset, /placement: "recomposable-when-needed"/);
   assert.match(reset, /visualAppearance: "unchanged"/);
+  assert.doesNotMatch(reset, /continuity: \{ source: "unchanged", bounds: "unchanged"/);
   assert.match(reset, /design-reset-turn-archive\.v5/);
   assert.match(reset, /northstar\.artboard-benchmark\.v1/);
+});
+
+test("every turn receives general compositional space-making agency", () => {
+  assert.match(reset, /Treat the current layout as a composition you can solve, not as a field of immovable obstacles/);
+  assert.match(reset, /create deliberate negative space by recomposing the smallest coherent affected structure necessary/);
+  assert.match(reset, /translate an intact screenshot, a sequence suffix, or a whole evidence flow/);
+  assert.match(reset, /Use the same spatial problem-solving ability on every turn/);
+  assert.match(reset, /Solve the complete affected composition, not just the new object's coordinates/);
+  assert.match(reset, /This directional-reference rule does not globally freeze evidence placement for later objectives/);
+  assert.doesNotMatch(reset, /Create negative space, move only explicitly editable authored material/);
+});
+
+test("post-render repair must escalate beyond a repeatedly failed local placement strategy", () => {
+  assert.match(reset, /reason about failed design strategies rather than merely trying unused coordinates/);
+  assert.match(reset, /A repeated local-placement strategy remains the same strategy even when its x\/y values differ/);
+  assert.match(reset, /stop searching nearby coordinates and broaden the affected composition/);
+  assert.match(reset, /Do not repeat a strategy family that the live artboard has already shown cannot satisfy the whole set of findings/);
 });
 
 
@@ -285,7 +353,7 @@ test("authored spatial dependencies are explicit, live, coordinate-safe, and sou
   assert.match(reset, /mutation\.relations/);
   assert.match(reset, /semantic-descendant-union/);
   assert.match(reset, /border-box/);
-  assert.match(reset, /crossAlign "center"/);
+  assert.match(reset, /crossAlign so the annotation remains visually attached to the pair/);
   assert.match(reset, /realizationPolicy "live"/);
   assert.match(runtime, /const resolveAuthoredSpatialDependencies = \(revisionId, options = \{\}\) =>/);
   assert.match(runtime, /const containingBlockGeometry = \(subject\) =>/);
@@ -441,7 +509,7 @@ test("every design turn carries cumulative semantic continuity and recomposition
   assert.match(reset, /appliesToEveryTurn: true/);
   assert.match(reset, /affectedAuthoredAdditions/);
   assert.match(reset, /visualFormAndPlacementRecomposable: true/);
-  assert.match(reset, /Preserve evidence, semantic identity, meaning, target references, and provenance/);
+  assert.match(reset, /Preserve evidence identity and pixels, semantic identity, meaning, target references, and provenance/);
   assert.doesNotMatch(reset, /turn === 6[\s\S]*continuity/i);
   assert.match(runtime, /const authoredContinuityObservations = \[\]/);
   assert.match(runtime, /Cumulative semantic continuity weakened for prior authored additions/);
