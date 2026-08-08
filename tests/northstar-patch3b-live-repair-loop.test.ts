@@ -171,7 +171,8 @@ test("Patch 3B is a direct live apply-review-repair loop with no promotion proto
   assert.ok(reviewed >= 0 && repairRequested > reviewed && repairApplied > repairRequested && repairReviewed > repairApplied);
   assert.match(route, /artifact: repairBasePackage,\s*acknowledgement: repairBaseAcknowledgement/);
   assert.match(route, /carryFindingKeys/);
-  assert.match(route, /break benchmarkTurns/);
+  assert.doesNotMatch(route, /break (?:benchmarkTurns|objectiveQueue)/);
+  assert.match(route, /continue objectiveQueue/);
   assert.doesNotMatch(route, /reviewBeforeCommit/);
   assert.doesNotMatch(route, /decision:\s*"promote"/);
   assert.match(reset, /northstar\.patch3b\.live-repair-loop\.v1/);

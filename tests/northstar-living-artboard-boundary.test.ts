@@ -47,7 +47,7 @@ const acknowledgement = {
 } satisfies NorthstarArtifactMutationAcknowledgement;
 
 test("canonical package source keeps model input alive without a browser snapshot", () => {
-  const input = buildNorthstarDesignResetModelInput({ turn: 1, artifact, acknowledgement }) as Record<string, any>;
+  const input = buildNorthstarDesignResetModelInput({ turn: 1, instruction: "Place an ordinary card.", artifact, acknowledgement }) as Record<string, any>;
   assert.equal(input.currentArtboard.canonicalSource.html, artifact.document.html);
   assert.equal(input.currentArtboard.browserMaterializedSource, undefined);
   assert.deepEqual(input.currentArtboard.observationAvailability, {

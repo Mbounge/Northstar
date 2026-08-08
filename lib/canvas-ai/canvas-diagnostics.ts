@@ -53,6 +53,120 @@ const listeners = new Set<() => void>();
 const sensitiveKeyPattern = new RegExp(policy.sensitiveKeyPattern, "i");
 const bulkyKeyPattern = new RegExp(policy.bulkyKeyPattern, "i");
 
+type DiagnosticPayloadEntry = {
+  sha256: string;
+  bytes: number;
+  encoding: "json";
+  value: unknown;
+};
+
+type DiagnosticPayloadReference = {
+  _diagnosticPayloadRef: string;
+  sha256: string;
+  bytes: number;
+};
+
+const exactPayloadKeys = new Set([
+  "package",
+  "snapshot",
+  "semanticGraph",
+  "contents",
+  "responseSchema",
+  "rawParsedResponse",
+  "acceptedResponse",
+  "modelAuthoredPatch",
+  "appliedMutationBatch",
+  "candidateBeforeBrowser",
+  "exactSourceDiff",
+  "repairHistory",
+]);
+
+function sha256Hex(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  const words: number[] = [];
+  const bitLength = bytes.length * 8;
+  for (let index = 0; index < bytes.length; index += 1) {
+    words[index >> 2] = (words[index >> 2] ?? 0) | bytes[index] << (24 - (index % 4) * 8);
+  }
+  words[bitLength >> 5] = (words[bitLength >> 5] ?? 0) | 0x80 << (24 - bitLength % 32);
+  words[((bitLength + 64 >> 9) << 4) + 15] = bitLength;
+  const constants: number[] = [];
+  const initial: number[] = [];
+  let prime = 2;
+  while (constants.length < 64) {
+    let isPrime = true;
+    for (let factor = 2; factor * factor <= prime; factor += 1) {
+      if (prime % factor === 0) { isPrime = false; break; }
+    }
+    if (isPrime) {
+      if (initial.length < 8) initial.push((Math.sqrt(prime) % 1 * 0x100000000) | 0);
+      constants.push((Math.cbrt(prime) % 1 * 0x100000000) | 0);
+    }
+    prime += 1;
+  }
+  const hash = initial;
+  const rotate = (word: number, amount: number) => word >>> amount | word << 32 - amount;
+  for (let offset = 0; offset < words.length; offset += 16) {
+    const schedule = Array.from({ length: 16 }, (_, index) => words[offset + index] ?? 0);
+    const state = hash.slice();
+    for (let index = 0; index < 64; index += 1) {
+      if (index >= 16) {
+        const a = schedule[index - 15];
+        const b = schedule[index - 2];
+        schedule[index] = (schedule[index - 16]
+          + (rotate(a, 7) ^ rotate(a, 18) ^ a >>> 3)
+          + schedule[index - 7]
+          + (rotate(b, 17) ^ rotate(b, 19) ^ b >>> 10)) | 0;
+      }
+      const choice = state[4] & state[5] ^ ~state[4] & state[6];
+      const majority = state[0] & state[1] ^ state[0] & state[2] ^ state[1] & state[2];
+      const temp1 = (state[7] + (rotate(state[4], 6) ^ rotate(state[4], 11) ^ rotate(state[4], 25)) + choice + constants[index] + schedule[index]) | 0;
+      const temp2 = ((rotate(state[0], 2) ^ rotate(state[0], 13) ^ rotate(state[0], 22)) + majority) | 0;
+      state.pop();
+      state.unshift((temp1 + temp2) | 0);
+      state[4] = (state[4] + temp1) | 0;
+    }
+    for (let index = 0; index < 8; index += 1) hash[index] = (hash[index] + state[index]) | 0;
+  }
+  return hash.map((word) => (word >>> 0).toString(16).padStart(8, "0")).join("");
+}
+
+function compactDiagnosticExportValue(
+  value: unknown,
+  payloads: Map<string, DiagnosticPayloadEntry>,
+  key = "",
+): unknown {
+  const storePayload = (payload: unknown): DiagnosticPayloadReference => {
+    const serialized = JSON.stringify(payload);
+    const sha256 = sha256Hex(serialized);
+    if (!payloads.has(sha256)) {
+      payloads.set(sha256, {
+        sha256,
+        bytes: new TextEncoder().encode(serialized).byteLength,
+        encoding: "json",
+        value: payload,
+      });
+    }
+    const stored = payloads.get(sha256)!;
+    return { _diagnosticPayloadRef: `sha256:${sha256}`, sha256, bytes: stored.bytes };
+  };
+
+  if (exactPayloadKeys.has(key) && value !== undefined) return storePayload(value);
+  if (Array.isArray(value)) return value.map((item) => compactDiagnosticExportValue(item, payloads));
+  if (!value || typeof value !== "object") return value;
+
+  const source = value as Record<string, unknown>;
+  const providerAudit = typeof source.requestBodySha256 === "string" && typeof source.requestUrl === "string";
+  const output: Record<string, unknown> = {};
+  for (const [childKey, childValue] of Object.entries(source)) {
+    if (providerAudit && (childKey === "requestBody" || childKey === "providerPayload" || childKey === "rawModelText")) {
+      continue;
+    }
+    output[childKey] = compactDiagnosticExportValue(childValue, payloads, childKey);
+  }
+  return output;
+}
+
 function makeEventId() {
   return `diag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -740,8 +854,14 @@ export function getCanvasRunTelemetry(sourceEvents: CanvasDiagnosticEvent[] = ev
 }
 
 export function exportCanvasDiagnostics() {
+  const payloads = new Map<string, DiagnosticPayloadEntry>();
+  const compactedCandidateArchives = compactDiagnosticExportValue(
+    Array.from(candidateSourceArchives.values()),
+    payloads,
+  );
+  const compactedDesignTurnArchives = compactDiagnosticExportValue(designTurnAuditArchives, payloads);
   return JSON.stringify({
-    schema: "northstar.canvas-diagnostics.v4",
+    schema: "northstar.canvas-diagnostics.v5",
     exportedAt: new Date().toISOString(),
     policy: {
       version: NORTHSTAR_HEALTH_POLICY.version,
@@ -751,12 +871,14 @@ export function exportCanvasDiagnostics() {
       maxArrayItems: policy.maxArrayItems,
       maxObjectKeys: policy.maxObjectKeys,
       payloadMode: "sanitized",
-      candidateSourcePayloadMode: "exact-browser-executable-source",
-      designTurnAuditPayloadMode: "exact-model-boundary-and-browser-source",
+      candidateSourcePayloadMode: "content-addressed-exact-browser-executable-source",
+      designTurnAuditPayloadMode: "content-addressed-boundaries-with-provider-wire-metadata",
+      providerWirePayloadMode: "hash-byte-count-and-status-only",
     },
     telemetry: getCanvasRunTelemetry(),
     events,
-    candidateSourceArchives: Array.from(candidateSourceArchives.values()),
-    designTurnAuditArchives,
+    candidateSourceArchives: compactedCandidateArchives,
+    designTurnAuditArchives: compactedDesignTurnArchives,
+    payloads: Object.fromEntries(payloads),
   }, null, 2);
 }

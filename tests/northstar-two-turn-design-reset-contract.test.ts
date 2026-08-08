@@ -11,6 +11,7 @@ const workspace = fs.readFileSync(path.join(root, "components/canvas/north-star-
 const runtime = fs.readFileSync(path.join(root, "lib/canvas-artifacts/runtime-document.ts"), "utf8");
 const mutations = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-artboard-mutations.ts"), "utf8");
 const artifactTypes = fs.readFileSync(path.join(root, "lib/canvas-artifacts/types.ts"), "utf8");
+const benchmarkFixture = fs.readFileSync(path.join(root, "lib/canvas-ai/northstar-artboard-benchmark-fixture.ts"), "utf8");
 
 const removedDesignFiles = [
   "northstar-linear-design-session.ts",
@@ -40,16 +41,12 @@ test("the old model-facing design stack is physically removed", () => {
   assert.doesNotMatch(route, /buildLinearDesignArtifactPackage|NorthstarLinearDesignSession/);
 });
 
-test("all thinking modes execute the same seven cumulative benchmark instructions", () => {
-  assert.match(reset, /1: "Place a Hello World card below the research\."/);
-  assert.match(reset, /2: "Place a Hello World 2 card to the right of the research and vertically center-align it with the research\."/);
-  assert.match(reset, /3: "Construct a visual relationship between the first Awin screenshot and the first Whop screenshot\."/);
-  assert.match(reset, /4: "Create equal space between the first and second Awin screenshots and insert an annotation in that space\."/);
-  assert.match(reset, /5: "Add an explanation to the Awin screenshot where the user chooses their role\."/);
-  assert.match(reset, /6: "Make the Awin and Whop onboarding flows easier to distinguish as separate groups\."/);
-  assert.match(reset, /7: "Create a new analysis area below the current onboarding flows and reuse the Awin screenshot where the user chooses their role there\. Preserve the original evidence and make the reused view clearly part of the new analysis area\."/);
-  assert.match(route, /for \(const turn of \[1, 2, 3, 4, 5, 6, 7\] as const\)/);
-  assert.match(route, /effectiveDesignMode: "fixed-seven-turn"/);
+test("the benchmark is input to the same generic production objective queue", () => {
+  assert.match(benchmarkFixture, /Place a Hello World card below the research/);
+  assert.doesNotMatch(reset, /Hello World|NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN/);
+  assert.match(route, /for \(const \[objectiveOffset, turnInstruction\] of objectives\.entries\(\)\)/);
+  assert.match(route, /effectiveDesignMode: "ordered-objective-queue"/);
+  assert.doesNotMatch(route, /for \(const turn of \[1, 2, 3, 4, 5, 6, 7\]/);
   assert.match(route, /temperature: 0/);
 });
 
@@ -95,7 +92,7 @@ test("revision disagreement remains a hard authority boundary", () => {
   assert.match(route, /liveAcknowledgement\.revisionId !== currentPackage\.revisionId/);
 });
 
-test("diagnostics retain exact model requests, responses, before and after code, and diffs", () => {
+test("diagnostics retain exact runtime evidence through content-addressed boundary payloads", () => {
   assert.match(reset, /requestBody: unknown/);
   assert.match(reset, /providerPayload\?: unknown/);
   assert.match(reset, /rawModelText\?: string/);
@@ -105,8 +102,10 @@ test("diagnostics retain exact model requests, responses, before and after code,
   assert.match(reset, /sourceAfter\?:[\s\S]*package: NorthstarGeneratedCodeArtifactPackage/);
   assert.match(reset, /exactSourceDiff\?: NorthstarExactDocumentDiff/);
   assert.match(reset, /modelAuthoredPatch\?: NorthstarArtboardMutationDraft/);
-  assert.match(diagnostics, /northstar\.canvas-diagnostics\.v4/);
-  assert.match(diagnostics, /designTurnAuditPayloadMode: "exact-model-boundary-and-browser-source"/);
+  assert.match(diagnostics, /northstar\.canvas-diagnostics\.v5/);
+  assert.match(diagnostics, /designTurnAuditPayloadMode: "content-addressed-boundaries-with-provider-wire-metadata"/);
+  assert.match(diagnostics, /providerWirePayloadMode: "hash-byte-count-and-status-only"/);
+  assert.match(diagnostics, /payloads: Object\.fromEntries\(payloads\)/);
   assert.match(diagnostics, /designTurnAuditArchives/);
   assert.match(workspace, /eventName === "design\.audit\.archive"/);
   assert.match(workspace, /recordNorthstarDesignTurnAuditArchive/);
@@ -167,8 +166,8 @@ test("semantic graphs and graph diffs are archived before and after each turn", 
 });
 
 test("the persistent design context stays cumulative while prompts remain simple", () => {
-  assert.match(reset, /1: "Place a Hello World card below the research\."/);
-  assert.match(reset, /6: "Make the Awin and Whop onboarding flows easier to distinguish as separate groups\."/);
+  assert.match(benchmarkFixture, /Place a Hello World card below the research/);
+  assert.match(benchmarkFixture, /Make the Awin and Whop onboarding flows easier to distinguish as separate groups/);
   assert.match(reset, /The full graph and browser state are available on every turn/);
   assert.match(reset, /availableSpatialRelations:/);
   assert.match(reset, /designPartnerContext/);
@@ -210,8 +209,8 @@ test("every turn uses the same general semantic focus resolver", () => {
   assert.doesNotMatch(reset, /regionId: "awin-flow"|regionId: "whop-flow"|requestedRelation: "groups-flows"/);
 });
 
-test("composition strategy is general instead of benchmark-specific", () => {
-  assert.match(reset, /No content type or benchmark objective receives a privileged movement recipe/);
+test("composition strategy is universal instead of objective-specific", () => {
+  assert.match(reset, /No objective receives a privileged movement recipe/);
   assert.match(reset, /Referenced evidence follows the same integrity and recomposition rules as on every other design turn/);
   assert.match(reset, /Use the same fit, evidence-integrity, explicit-movement, and smallest-coherent-recomposition reasoning used for every other design objective/);
   assert.doesNotMatch(reset, /Move only the minimum necessary Awin sequence suffix/);
@@ -229,7 +228,7 @@ test("protected evidence is explicitly position-recomposable without weakening i
 });
 
 test("turn six tests structural grouping without forcing a relation or visual form", () => {
-  assert.match(reset, /Make the Awin and Whop onboarding flows easier to distinguish as separate groups/);
+  assert.match(benchmarkFixture, /Make the Awin and Whop onboarding flows easier to distinguish as separate groups/);
   assert.match(reset, /For requests about groups, flows, sections, boundaries, or new analysis areas/);
   assert.match(reset, /Choose the visual treatment yourself/);
   assert.match(reset, /declare no runtime relation unless your authored result genuinely needs a persistent dependency/);
@@ -239,7 +238,7 @@ test("turn six tests structural grouping without forcing a relation or visual fo
 
 
 test("turn seven tests evidence reuse in a new analysis area while preserving provenance", () => {
-  assert.match(reset, /Create a new analysis area below the current onboarding flows and reuse the Awin screenshot where the user chooses their role there/);
+  assert.match(benchmarkFixture, /Create a new analysis area below the current onboarding flows and reuse the Awin screenshot where the user chooses their role there/);
   assert.match(reset, /preserve the original evidence instance/);
   assert.match(reset, /distinct authored presentation instance/);
   assert.match(reset, /data-ns-source-node-id/);
@@ -266,7 +265,7 @@ test("semantic graph protects evidence integrity while allowing necessary spatia
   assert.match(reset, /visualAppearance: "unchanged"/);
   assert.doesNotMatch(reset, /continuity: \{ source: "unchanged", bounds: "unchanged"/);
   assert.match(reset, /design-reset-turn-archive\.v5/);
-  assert.match(reset, /northstar\.artboard-benchmark\.v1/);
+  assert.match(reset, /northstar\.production-design-loop\.v1/);
 });
 
 test("every turn receives general compositional space-making agency", () => {
@@ -300,7 +299,7 @@ test("optional live relation failures are observed without blocking model-author
   assert.match(runtime, /const unresolvedLiveRelations = candidateAuthoredRelations/);
   assert.match(runtime, /const relationAdvisoryReasons = unresolvedLiveRelations/);
   assert.match(runtime, /The authored visual result remains eligible to commit/);
-  assert.match(runtime, /const rejectedReason = linearDesignExecution[\s\S]*?\? ""/);
+  assert.match(runtime, /const rejectedReason = additiveExpansionCollateralReason[\s\S]*?: linearDesignExecution[\s\S]*?\? ""/);
   assert.doesNotMatch(runtime, /designRelationIntegrityReason/);
   assert.match(runtime, /relationRealizationTraces: relationRealizationTraceRecords\(\)/);
   assert.match(runtime, /authoredDesignRelations: authoredDesignRelationRecords\(\)/);
@@ -455,9 +454,9 @@ test("translation is diagnosed as position rather than scale", () => {
   assert.doesNotMatch(runtime, /width\|height\|flex-basis\|font-size\|transform\|scale\/i/);
 });
 
-test("the completed benchmark reports its seven-turn runtime name", () => {
-  assert.match(route, /designRuntime: "seven-turn-artboard-benchmark"/);
-  assert.doesNotMatch(route, /designRuntime: "two-turn-design-reset"/);
+test("completion reports the universal production objective queue", () => {
+  assert.match(route, /designRuntime: "production-objective-queue"/);
+  assert.doesNotMatch(route, /designRuntime: "(?:seven-turn-artboard-benchmark|two-turn-design-reset)"/);
 });
 
 test("cumulative visual review reports authored relationship paths crossing readable content", () => {
@@ -497,6 +496,13 @@ test("partial benchmark runs are reported truthfully without a red user-facing f
   assert.match(workspace, /if \(eventName === "run\.incomplete"\)/);
   assert.match(workspace, /runStatus: "completed_with_notes"/);
   assert.match(workspace, /error: false/);
+});
+
+test("an unresolved objective never blocks later objectives in the production pipeline", () => {
+  assert.match(route, /const unresolvedTurns: NorthstarDesignResetTurn\[\] = \[\]/);
+  assert.doesNotMatch(route, /break (?:benchmarkTurns|objectiveQueue)/);
+  assert.match(route, /unresolvedTurns\.push\(turn\)[\s\S]*continue objectiveQueue/);
+  assert.match(route, /attempted every queued objective while preserving browser-verified state/);
 });
 
 

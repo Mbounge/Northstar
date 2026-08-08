@@ -54,6 +54,29 @@ export type NorthstarMeasuredRepairScope = {
   reason: "no-current-turn-finding" | "no-measured-flow" | "measured-flow-suffix";
 };
 
+export type NorthstarSpatialFeasibilityContext = {
+  minimumClearance: number;
+  subjects: NorthstarSpatialFeasibilityNode[];
+  anchors: NorthstarSpatialFeasibilityNode[];
+  obstacles: NorthstarSpatialFeasibilityNode[];
+  containers: NorthstarSpatialFeasibilityNode[];
+  availableClearanceBySubject: Array<{
+    subjectNodeId: string;
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+    blockers: Partial<Record<"top" | "right" | "bottom" | "left", string>>;
+  }>;
+};
+
+export type NorthstarSpatialFeasibilityNode = {
+  nodeId: string;
+  parentId?: string;
+  bounds: { left: number; top: number; right: number; bottom: number; width: number; height: number };
+  protected: boolean;
+};
+
 type RepairFindingLike = {
   subjectNodeId?: string;
   kind?: string;
@@ -76,6 +99,290 @@ function dominantFlowAxis(nodes: Array<NorthstarCommittedSemanticNode & { bounds
   const centersX = nodes.map((node) => node.bounds.left + node.bounds.width / 2);
   const centersY = nodes.map((node) => node.bounds.top + node.bounds.height / 2);
   return Math.max(...centersX) - Math.min(...centersX) >= Math.max(...centersY) - Math.min(...centersY) ? "x" : "y";
+}
+
+function spatialNode(
+  node: NorthstarCommittedSemanticNode,
+  protectedNodeIds: Set<string>,
+): NorthstarSpatialFeasibilityNode | undefined {
+  if (!directlyMeasured(node)) return undefined;
+  return { nodeId: node.nodeId, parentId: node.parentId, bounds: node.bounds, protected: protectedNodeIds.has(node.nodeId) };
+}
+
+function ancestorIds(nodeId: string, byId: Map<string, NorthstarCommittedSemanticNode>): Set<string> {
+  const ancestors = new Set<string>();
+  let parentId = byId.get(nodeId)?.parentId;
+  while (parentId && !ancestors.has(parentId)) {
+    ancestors.add(parentId);
+    parentId = byId.get(parentId)?.parentId;
+  }
+  return ancestors;
+}
+
+function independentlyPaintedObstacle(
+  node: NorthstarCommittedSemanticNode,
+  childCounts: Map<string, number>,
+  structuralAncestorIds: Set<string>,
+): boolean {
+  if (structuralAncestorIds.has(node.nodeId)) return false;
+  const attributeNames = new Set(Object.keys(node.normalizedAttributes));
+  if (attributeNames.has("data-ns-authored-relationship")) return false;
+  if ((childCounts.get(node.nodeId) ?? 0) === 0) return true;
+  return attributeNames.has("data-ns-evidence-id") || attributeNames.has("data-ns-authored-annotation");
+}
+
+function axisClearance(input: {
+  subject: NorthstarSpatialFeasibilityNode;
+  container?: NorthstarSpatialFeasibilityNode;
+  obstacles: NorthstarSpatialFeasibilityNode[];
+}): NorthstarSpatialFeasibilityContext["availableClearanceBySubject"][number] {
+  const { subject, container, obstacles } = input;
+  const clearances = {
+    top: container ? Math.max(0, subject.bounds.top - container.bounds.top) : Number.MAX_SAFE_INTEGER,
+    right: container ? Math.max(0, container.bounds.right - subject.bounds.right) : Number.MAX_SAFE_INTEGER,
+    bottom: container ? Math.max(0, container.bounds.bottom - subject.bounds.bottom) : Number.MAX_SAFE_INTEGER,
+    left: container ? Math.max(0, subject.bounds.left - container.bounds.left) : Number.MAX_SAFE_INTEGER,
+  };
+  const blockers: Partial<Record<"top" | "right" | "bottom" | "left", string>> = {};
+  for (const obstacle of obstacles) {
+    const overlapX = Math.min(subject.bounds.right, obstacle.bounds.right) - Math.max(subject.bounds.left, obstacle.bounds.left);
+    const overlapY = Math.min(subject.bounds.bottom, obstacle.bounds.bottom) - Math.max(subject.bounds.top, obstacle.bounds.top);
+    const candidates: Array<["top" | "right" | "bottom" | "left", number]> = [];
+    if (overlapX > 0 && obstacle.bounds.bottom <= subject.bounds.top) candidates.push(["top", subject.bounds.top - obstacle.bounds.bottom]);
+    if (overlapX > 0 && obstacle.bounds.top >= subject.bounds.bottom) candidates.push(["bottom", obstacle.bounds.top - subject.bounds.bottom]);
+    if (overlapY > 0 && obstacle.bounds.right <= subject.bounds.left) candidates.push(["left", subject.bounds.left - obstacle.bounds.right]);
+    if (overlapY > 0 && obstacle.bounds.left >= subject.bounds.right) candidates.push(["right", obstacle.bounds.left - subject.bounds.right]);
+    for (const [side, distance] of candidates) {
+      if (distance < clearances[side]) {
+        clearances[side] = distance;
+        blockers[side] = obstacle.nodeId;
+      }
+    }
+  }
+  return { subjectNodeId: subject.nodeId, ...clearances, blockers };
+}
+
+/** Browser facts only. The model remains responsible for choosing a composition. */
+export function buildNorthstarSpatialFeasibilityContext(input: {
+  scope: NorthstarTurnWriteScope;
+  acknowledgement: NorthstarArtifactMutationAcknowledgement;
+  findings: RepairFindingLike[];
+  minimumClearance?: number;
+}): NorthstarSpatialFeasibilityContext {
+  const nodes = input.acknowledgement.snapshot?.semanticNodes ?? [];
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+  const protectedNodeIds = new Set(input.scope.protectedNodeIds);
+  const childCounts = new Map<string, number>();
+  for (const node of nodes) if (node.parentId) childCounts.set(node.parentId, (childCounts.get(node.parentId) ?? 0) + 1);
+  const subjectIds = unique(input.findings.flatMap((finding) => finding.subjectNodeId ? [finding.subjectNodeId] : []));
+  const anchorIds = unique(input.scope.relationReferenceNodeIds);
+  const explicitlyRelatedIds = new Set(input.findings.flatMap((finding) => finding.relatedNodeIds));
+  const focusIds = unique([...subjectIds, ...anchorIds, ...explicitlyRelatedIds]);
+  const structuralAncestorIds = new Set(focusIds.flatMap((nodeId) => [...ancestorIds(nodeId, byId)]));
+  const focusNodes = focusIds.map((nodeId) => byId.get(nodeId)).filter(directlyMeasured);
+  const nearbyProtected = nodes.filter((node) => {
+    if (!protectedNodeIds.has(node.nodeId) || !directlyMeasured(node)) return false;
+    if (subjectIds.includes(node.nodeId)) return false;
+    if (!independentlyPaintedObstacle(node, childCounts, structuralAncestorIds)) return false;
+    if (explicitlyRelatedIds.has(node.nodeId)) return true;
+    if (anchorIds.includes(node.nodeId)) return false;
+    return focusNodes.some((focus) => {
+      const horizontal = Math.max(0, Math.max(focus.bounds.left, node.bounds.left) - Math.min(focus.bounds.right, node.bounds.right));
+      const vertical = Math.max(0, Math.max(focus.bounds.top, node.bounds.top) - Math.min(focus.bounds.bottom, node.bounds.bottom));
+      return Math.hypot(horizontal, vertical) <= 256;
+    });
+  });
+  const subjects = subjectIds.map((nodeId) => byId.get(nodeId)).filter(Boolean).map((node) => spatialNode(node!, protectedNodeIds)).filter(Boolean) as NorthstarSpatialFeasibilityNode[];
+  const anchors = anchorIds.map((nodeId) => byId.get(nodeId)).filter(Boolean).map((node) => spatialNode(node!, protectedNodeIds)).filter(Boolean) as NorthstarSpatialFeasibilityNode[];
+  const obstacles = nearbyProtected.map((node) => spatialNode(node, protectedNodeIds)).filter(Boolean) as NorthstarSpatialFeasibilityNode[];
+  const containerIds = unique(subjects.flatMap((subject) => subject.parentId ? [subject.parentId] : []));
+  const containers = containerIds.map((nodeId) => byId.get(nodeId)).filter(Boolean).map((node) => spatialNode(node!, protectedNodeIds)).filter(Boolean) as NorthstarSpatialFeasibilityNode[];
+  return {
+    minimumClearance: input.minimumClearance ?? 12,
+    subjects,
+    anchors,
+    obstacles,
+    containers,
+    availableClearanceBySubject: subjects.map((subject) => axisClearance({
+      subject,
+      container: containers.find((container) => container.nodeId === subject.parentId),
+      obstacles,
+    })),
+  };
+}
+
+function signedCssPixels(value: string | null | undefined): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = value.trim().match(/^(-?\d+(?:\.\d+)?)px$/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+function intersectionArea(
+  first: NorthstarSpatialFeasibilityNode["bounds"],
+  second: NorthstarSpatialFeasibilityNode["bounds"],
+): number {
+  return Math.max(0, Math.min(first.right, second.right) - Math.max(first.left, second.left))
+    * Math.max(0, Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top));
+}
+
+function finiteParameter(value: string | number | boolean | undefined, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function proposedRelationBounds(input: {
+  relation: NonNullable<NorthstarArtboardMutationDraft["relations"]>[number];
+  subject: NorthstarSpatialFeasibilityNode;
+  nodes: Map<string, NorthstarSpatialFeasibilityNode>;
+}): { bounds?: NorthstarSpatialFeasibilityNode["bounds"]; violations: string[] } {
+  const { relation, subject, nodes } = input;
+  const parameters = relation.parameters ?? {};
+  const referenceForRole = (role: string) => {
+    const reference = relation.references.find((candidate) => candidate.role === role);
+    return reference ? nodes.get(reference.nodeId) : undefined;
+  };
+  const sizedBounds = (left: number, top: number) => ({
+    left,
+    top,
+    width: subject.bounds.width,
+    height: subject.bounds.height,
+    right: left + subject.bounds.width,
+    bottom: top + subject.bounds.height,
+  });
+
+  if (relation.kind === "relative-placement") {
+    const reference = referenceForRole("reference")
+      ?? relation.references.map((candidate) => nodes.get(candidate.nodeId)).find(Boolean);
+    if (!reference) return { violations: [] };
+    const side = String(parameters.side ?? "right");
+    const offsetX = finiteParameter(parameters.offsetX);
+    const offsetY = finiteParameter(parameters.offsetY);
+    let left = subject.bounds.left;
+    let top = subject.bounds.top;
+    if (side === "right" || side === "left") {
+      left = side === "right" ? reference.bounds.right + offsetX : reference.bounds.left - subject.bounds.width - offsetX;
+      const alignY = String(parameters.alignY ?? "preserve");
+      if (alignY === "top") top = reference.bounds.top + offsetY;
+      else if (alignY === "bottom") top = reference.bounds.bottom - subject.bounds.height + offsetY;
+      else if (alignY === "center") top = reference.bounds.top + reference.bounds.height / 2 - subject.bounds.height / 2 + offsetY;
+    } else if (side === "below" || side === "above") {
+      top = side === "below" ? reference.bounds.bottom + offsetY : reference.bounds.top - subject.bounds.height - offsetY;
+      const alignX = String(parameters.alignX ?? "preserve");
+      if (alignX === "left") left = reference.bounds.left + offsetX;
+      else if (alignX === "right") left = reference.bounds.right - subject.bounds.width + offsetX;
+      else if (alignX === "center") left = reference.bounds.left + reference.bounds.width / 2 - subject.bounds.width / 2 + offsetX;
+    } else {
+      return { violations: [`Relation ${relation.id} has unsupported relative-placement side ${side}.`] };
+    }
+    return { bounds: sizedBounds(left, top), violations: [] };
+  }
+
+  if (relation.kind === "between-placement") {
+    const before = referenceForRole("before");
+    const after = referenceForRole("after");
+    if (!before || !after) return { violations: [] };
+    const axis = String(parameters.axis ?? "x") === "y" ? "y" : "x";
+    const availableSpan = axis === "x"
+      ? Math.max(0, after.bounds.left - before.bounds.right)
+      : Math.max(0, after.bounds.top - before.bounds.bottom);
+    const requiredSpan = axis === "x" ? subject.bounds.width : subject.bounds.height;
+    const violations = availableSpan + 0.75 < requiredSpan
+      ? [`Relation ${relation.id} cannot fit ${relation.subjectId} in its declared ${axis}-axis gap: ${Math.round(availableSpan * 100) / 100}px available, ${Math.round(requiredSpan * 100) / 100}px required.`]
+      : [];
+    let left = subject.bounds.left;
+    let top = subject.bounds.top;
+    const crossAlign = String(parameters.crossAlign ?? (axis === "x" ? parameters.alignY : parameters.alignX) ?? "preserve");
+    if (axis === "x") {
+      left = (before.bounds.right + after.bounds.left - subject.bounds.width) / 2;
+      const center = (before.bounds.top + before.bounds.height / 2 + after.bounds.top + after.bounds.height / 2) / 2;
+      if (crossAlign === "start" || crossAlign === "top") top = Math.min(before.bounds.top, after.bounds.top);
+      else if (crossAlign === "end" || crossAlign === "bottom") top = Math.max(before.bounds.bottom, after.bounds.bottom) - subject.bounds.height;
+      else if (crossAlign === "center") top = center - subject.bounds.height / 2;
+    } else {
+      top = (before.bounds.bottom + after.bounds.top - subject.bounds.height) / 2;
+      const center = (before.bounds.left + before.bounds.width / 2 + after.bounds.left + after.bounds.width / 2) / 2;
+      if (crossAlign === "start" || crossAlign === "left") left = Math.min(before.bounds.left, after.bounds.left);
+      else if (crossAlign === "end" || crossAlign === "right") left = Math.max(before.bounds.right, after.bounds.right) - subject.bounds.width;
+      else if (crossAlign === "center") left = center - subject.bounds.width / 2;
+    }
+    return { bounds: sizedBounds(left, top), violations };
+  }
+
+  return { violations: [] };
+}
+
+/** Reject only collisions exactly predictable from explicit px geometry. */
+export function preflightNorthstarPredictableSpatialFeasibility(input: {
+  mutation: NorthstarArtboardMutationDraft;
+  context: NorthstarSpatialFeasibilityContext;
+}): { feasible: boolean; violations: string[] } {
+  const byId = new Map([...input.context.subjects, ...input.context.anchors, ...input.context.obstacles, ...input.context.containers].map((node) => [node.nodeId, node]));
+  const violations: string[] = [];
+  const proposedBySubject = new Map<string, NorthstarSpatialFeasibilityNode["bounds"]>();
+  for (const operation of input.mutation.operations) {
+    if (operation.op !== "set-styles") continue;
+    const current = byId.get(operation.targetId);
+    if (!current || !input.context.subjects.some((subject) => subject.nodeId === operation.targetId)) continue;
+    const parent = current.parentId ? byId.get(current.parentId) : undefined;
+    const leftValue = signedCssPixels(operation.styles.left);
+    const topValue = signedCssPixels(operation.styles.top);
+    const rightValue = signedCssPixels(operation.styles.right);
+    const bottomValue = signedCssPixels(operation.styles.bottom);
+    const width = signedCssPixels(operation.styles.width) ?? current.bounds.width;
+    const height = signedCssPixels(operation.styles.height) ?? current.bounds.height;
+    const left = leftValue !== undefined
+      ? (parent?.bounds.left ?? 0) + leftValue
+      : rightValue !== undefined && parent
+        ? parent.bounds.right - rightValue - width
+        : current.bounds.left;
+    const top = topValue !== undefined
+      ? (parent?.bounds.top ?? 0) + topValue
+      : bottomValue !== undefined && parent
+        ? parent.bounds.bottom - bottomValue - height
+        : current.bounds.top;
+    if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue;
+    const proposed = { left, top, width, height, right: left + width, bottom: top + height };
+    proposedBySubject.set(operation.targetId, proposed);
+  }
+  for (const relation of input.mutation.relations ?? []) {
+    const subject = byId.get(relation.subjectId);
+    if (!subject || !input.context.subjects.some((candidate) => candidate.nodeId === relation.subjectId)) continue;
+    const predicted = proposedRelationBounds({ relation, subject, nodes: byId });
+    violations.push(...predicted.violations);
+    if (predicted.bounds) proposedBySubject.set(relation.subjectId, predicted.bounds);
+  }
+  for (const [subjectNodeId, proposed] of proposedBySubject) {
+    const current = byId.get(subjectNodeId);
+    if (!current) continue;
+    for (const obstacle of input.context.obstacles) {
+      if (obstacle.nodeId === subjectNodeId) continue;
+      const before = intersectionArea(current.bounds, obstacle.bounds);
+      const after = intersectionArea(proposed, obstacle.bounds);
+      if (after > 1 && (before <= 1 || after >= before - 1)) {
+        violations.push(`${subjectNodeId} would intersect protected obstacle ${obstacle.nodeId} by ${Math.round(after * 100) / 100}px² (before ${Math.round(before * 100) / 100}px²).`);
+      }
+    }
+    const container = current.parentId ? byId.get(current.parentId) : undefined;
+    if (container) {
+      const requestedSpace = input.mutation.operations.reduce((total, operation) => operation.op === "request-space"
+        ? {
+          left: total.left + (operation.left ?? 0),
+          top: total.top + (operation.top ?? 0),
+          right: total.right + (operation.right ?? 0),
+          bottom: total.bottom + (operation.bottom ?? 0),
+        }
+        : total, { left: 0, top: 0, right: 0, bottom: 0 });
+      const usable = {
+        left: container.bounds.left - requestedSpace.left,
+        top: container.bounds.top - requestedSpace.top,
+        right: container.bounds.right + requestedSpace.right,
+        bottom: container.bounds.bottom + requestedSpace.bottom,
+      };
+      if (proposed.left < usable.left - 1 || proposed.top < usable.top - 1 || proposed.right > usable.right + 1 || proposed.bottom > usable.bottom + 1) {
+        violations.push(`${subjectNodeId} would fall outside container ${container.nodeId} after declared request-space.`);
+      }
+    }
+  }
+  return { feasible: violations.length === 0, violations: unique(violations) };
 }
 
 /** Freeze continuation authority from the first accepted action of a turn. */

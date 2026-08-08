@@ -50,6 +50,33 @@ test("strategy fingerprint collapses numeric escalation of the same operation sh
   assert.equal(first, escalated);
 });
 
+test("strategy fingerprint cannot be evaded with geometry intent or relation-id churn", () => {
+  const first = mutation("First", "850px");
+  first.geometryIntent = "recompose";
+  first.relations = [{
+    id: "first-controller",
+    subjectId: "awin-role-annotation",
+    kind: "adjacent",
+    references: [{ role: "target", nodeId: "awin-role-screen" }],
+    parameters: {},
+    realizationPolicy: "live",
+  }];
+  const renamed = mutation("Second", "900px");
+  renamed.geometryIntent = "expand-both";
+  renamed.relations = [{
+    id: "renamed-controller",
+    subjectId: "awin-role-annotation",
+    kind: "adjacent",
+    references: [{ role: "target", nodeId: "awin-role-screen" }],
+    parameters: {},
+    realizationPolicy: "live",
+  }];
+  assert.equal(
+    northstarLiveRepairStrategyFingerprint(first),
+    northstarLiveRepairStrategyFingerprint(renamed),
+  );
+});
+
 test("repair outcome exposes raw before/after measurement changes without inventing a layout verdict", () => {
   const before = [
     finding("overlap", { intersectionArea: 7665.84, coveringCoverageRatio: 0.4 }),
@@ -86,4 +113,17 @@ test("3B addon feeds cumulative rendered memory and skips known-ineffective exac
   assert.match(route, /repairMemory: liveRepairMemory/);
   assert.match(route, /NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION/);
   assert.doesNotMatch(route, /decision:\s*"promote"/);
+});
+
+test("a browser-proven ineffective strategy terminates locally instead of draining provider quota", () => {
+  const route = fs.readFileSync(path.join(process.cwd(), "app/api/canvas-ai/route.ts"), "utf8");
+  const guardStart = route.indexOf("if (ineffectiveRepairStrategyFingerprints.has(repairStrategyFingerprint))");
+  const exactRepeatGuard = route.indexOf("if (ineffectiveRepairFingerprints.has(repairFingerprint))", guardStart);
+  const guard = route.slice(guardStart, exactRepeatGuard);
+  assert.ok(guardStart >= 0 && exactRepeatGuard > guardStart);
+  assert.match(guard, /liveRepairFailure = detail;/);
+  assert.match(guard, /break;/);
+  assert.doesNotMatch(guard, /continue;/);
+  assert.match(route, /PROVEN INEFFECTIVE STRATEGIES/);
+  assert.match(route, /another request would be repetition rather than learning/);
 });

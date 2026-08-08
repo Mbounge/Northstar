@@ -1,4 +1,4 @@
-// Northstar cumulative artboard benchmark — exact, fully audited model turns.
+// Northstar production design loop — one universal path for every objective.
 import { createHash } from "node:crypto";
 import {
   NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA,
@@ -23,8 +23,8 @@ import {
   type NorthstarRenderedIntegrityAudit,
 } from "@/lib/canvas-ai/northstar-rendered-integrity-audit";
 
-export const NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION =
-  "northstar.artboard-benchmark.v1" as const;
+export const NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION =
+  "northstar.production-design-loop.v1" as const;
 
 // Patch 3A keeps the live artboard as the only design surface. A model turn is
 // applied first; Patch 1/2 review the exact browser result afterwards. There is
@@ -41,17 +41,9 @@ export const NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION =
 export const NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION =
   "northstar.patch3b.reactive-aware-convergence-addon.v1" as const;
 
-export type NorthstarDesignResetTurn = 1 | 2 | 3 | 4 | 5 | 6 | 7;
-
-export const NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN = {
-  1: "Place a Hello World card below the research.",
-  2: "Place a Hello World 2 card to the right of the research and vertically center-align it with the research.",
-  3: "Construct a visual relationship between the first Awin screenshot and the first Whop screenshot.",
-  4: "Create equal space between the first and second Awin screenshots and insert an annotation in that space.",
-  5: "Add an explanation to the Awin screenshot where the user chooses their role.",
-  6: "Make the Awin and Whop onboarding flows easier to distinguish as separate groups.",
-  7: "Create a new analysis area below the current onboarding flows and reuse the Awin screenshot where the user chooses their role there. Preserve the original evidence and make the reused view clearly part of the new analysis area.",
-} as const satisfies Record<NorthstarDesignResetTurn, string>;
+// A sequence number is telemetry, never policy. Any positive objective index is
+// accepted and the engine must not branch on a particular value.
+export type NorthstarDesignResetTurn = number;
 
 
 export type NorthstarSemanticRelation = "below" | "right-of" | "relationship-between" | "equal-space-with-annotation" | "explains" | "reuses" | "none";
@@ -186,12 +178,12 @@ export type NorthstarDesignResetModelResponse = {
 
 export type NorthstarDesignResetTurnArchive = {
   schema: "northstar.design-reset-turn-archive.v5";
-  resetVersion: typeof NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION;
+  resetVersion: typeof NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION;
   runId: string;
   artifactId: string;
   turn: NorthstarDesignResetTurn;
   requestedThinkingMode: "low" | "medium" | "high";
-  effectiveDesignMode: "fixed-seven-turn";
+  effectiveDesignMode: "ordered-objective-queue";
   instruction: string;
   status: "model-failed" | "dispatch-failed" | "committed";
   recordedAt: string;
@@ -283,22 +275,37 @@ export function northstarLiveRepairExecutableFingerprint(mutation: NorthstarArtb
 /** Mechanical strategy identity: catches numeric escalation of the same repair shape. */
 export function northstarLiveRepairStrategyFingerprint(mutation: NorthstarArtboardMutationDraft): string {
   const strategy = {
-    geometryIntent: mutation.geometryIntent,
     operations: mutation.operations.map((operation) => {
-      if (operation.op !== "set-styles") {
-        return "targetId" in operation ? { op: operation.op, targetId: operation.targetId } : { op: operation.op };
+      if (operation.op === "set-styles") {
+        return {
+          op: operation.op,
+          targetId: operation.targetId,
+          properties: Object.keys(operation.styles).map((property) => property.toLowerCase()).sort(),
+        };
       }
-      return {
-        op: operation.op,
-        targetId: operation.targetId,
-        properties: Object.keys(operation.styles).map((property) => property.toLowerCase()).sort(),
-      };
+      if (operation.op === "set-attributes") {
+        return {
+          op: operation.op,
+          targetId: operation.targetId,
+          properties: Object.keys(operation.attributes).map((property) => property.toLowerCase()).sort(),
+        };
+      }
+      if (operation.op === "move") {
+        return { op: operation.op, targetId: operation.targetId, parentId: operation.parentId };
+      }
+      if (operation.op === "insert-html") {
+        return { op: operation.op, targetId: operation.targetId, position: operation.position };
+      }
+      if (operation.op === "set-css-layer") return { op: operation.op, layerId: operation.layerId };
+      if (operation.op === "set-runtime-module") return { op: operation.op, moduleId: operation.moduleId };
+      return "targetId" in operation ? { op: operation.op, targetId: operation.targetId } : { op: operation.op };
     }),
     relations: (mutation.relations ?? []).map((relation) => ({
-      id: relation.id,
       subjectId: relation.subjectId,
       kind: relation.kind,
-      referenceRoles: relation.references.map((reference) => reference.role).sort(),
+      references: relation.references
+        .map((reference) => ({ role: reference.role, nodeId: reference.nodeId }))
+        .sort((a, b) => `${a.role}:${a.nodeId}`.localeCompare(`${b.role}:${b.nodeId}`)),
     })),
   };
   return createHash("sha256").update(JSON.stringify(strategy)).digest("hex");
@@ -504,7 +511,7 @@ export const NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    turn: { type: "integer", enum: [1, 2, 3, 4, 5, 6, 7] },
+    turn: { type: "integer", minimum: 1 },
     observedBaseRevisionId: { type: "string", minLength: 1 },
     understanding: { type: "string", minLength: 1, maxLength: 1200 },
     grounding: {
@@ -721,7 +728,7 @@ export function buildNorthstarArtboardSemanticGraph(input: {
       {
         conceptId: "research",
         label: "Research",
-        definition: "The complete canonical evidence area containing the ordered Awin and Whop flows. This is the referent for the words research, evidence, and research section in the two-turn benchmark.",
+        definition: "The complete canonical evidence area containing the ordered flows. This is the referent for requests that name the research or evidence area.",
         canonicalNodeIds: [researchRootId],
         aliases: ["research", "evidence", "research section", "evidence reservoir", "grounded evidence"],
         exclusions: ["presentation", "reasoning-zone", "thought-primary", "thought-secondary", "synthesis", "decision"],
@@ -769,7 +776,7 @@ export function buildNorthstarArtboardSemanticGraph(input: {
       verticalCenterAlignment: "Vertically center-align means the rendered vertical center of the new node equals the authoritative anchors.centerY of the reference region. Do not recompute centerY from top, bottom, or height. Do not guess the new node height. Author a self-measuring CSS relationship that remains exact after layout, such as placing the node top at anchors.centerY and translating the node by -50% of its own rendered height, or another equivalently exact authored relationship.",
       authoritativeSpatialAnchors: "Each measured node and region exposes authoritative anchors: left, top, right, bottom, centerX, and centerY. Use these values directly for relational geometry. Do not recalculate them from rounded bounds.",
       evidenceIntegrity: "Protected evidence keeps its source identity, content, rendered dimensions, visual appearance, visibility, and sequence order. Protection does not freeze x/y position: intact evidence may be explicitly translated when the current composition needs space, while unrelated evidence remains stable.",
-      spatialRecomposition: "Every design objective has the same spatial agency. Use current rendered measurements to decide whether the intended communication fits. If it does not, create space by explicitly recomposing the smallest coherent affected structure, update dependent authored work, and request artboard growth when useful. No content type or benchmark objective receives a privileged movement recipe.",
+      spatialRecomposition: "Every design objective has the same spatial agency. Use current rendered measurements to decide whether the intended communication fits. If it does not, create space by explicitly recomposing the smallest coherent affected structure, update dependent authored work, and request artboard growth when useful. No objective receives a privileged movement recipe.",
       worldSpaceObjectTopology: "Every independently positioned artboard-world object is authored as a direct child of the canonical artboard root node artboard. Reference regions such as evidence are anchors for geometry and meaning, not parents for external world-space objects.",
       authoredNodeIdentity: "Every authored visual object must have a unique data-ns-node-id attribute. The semantic graph, browser measurements, later design turns, diagnostics, and source diffs use data-ns-node-id as the stable object identity; an HTML id attribute alone is not sufficient.",
       authoredRelationshipProvenance: "A model-authored relationship object carries data-ns-authored-relationship=\"true\", data-ns-source-node-id, and data-ns-target-node-id on the authored relationship object itself. These attributes describe provenance only; they do not choose, route, style, validate, repair, or replace the model-authored visual treatment. Every independently addressable visual primitive inside the relationship also carries its own unique data-ns-node-id.",
@@ -991,13 +998,14 @@ function buildNorthstarContinuityContext(input: {
 
 export function buildNorthstarDesignResetModelInput(input: {
   turn: NorthstarDesignResetTurn;
+  instruction: string;
   artifact: NorthstarGeneratedCodeArtifactPackage;
   acknowledgement: NorthstarArtifactMutationAcknowledgement;
 }): unknown {
   const observation = strongestSourceObservation(input);
   const snapshot = observation.snapshot;
   const semanticGraph = buildNorthstarArtboardSemanticGraph(input);
-  const instruction = NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN[input.turn];
+  const instruction = input.instruction;
   const focus = resolveNorthstarInstructionFocus({ instruction, graph: semanticGraph });
   const continuityContext = buildNorthstarContinuityContext({ graph: semanticGraph, acknowledgement: input.acknowledgement, focus });
   const instructionResolution = {
@@ -1029,9 +1037,9 @@ export function buildNorthstarDesignResetModelInput(input: {
     compositionInstruction: "Solve the complete affected composition, not just the new object's coordinates. Before placing anything, compare required span (planned subject outer size plus intended clearance) with the measured available empty span on the placement axis. If it does not fit, create deliberate negative space by explicitly moving the smallest coherent surrounding structure, reposition dependent authored work, and grow the artboard when useful; do not search coordinates inside the same insufficient space. Every expected movement of pre-existing content must have an explicit mutation owner (the object itself or its genuinely coherent container); never rely on flex/grid/margin/gap reflow of one child to move siblings. Preserve protected evidence border-box width and height exactly. Prefer one coordinated spatial plan over repeated local collision avoidance.",
   };
   return {
-    resetVersion: NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION,
+    resetVersion: NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION,
     turn: input.turn,
-    instruction: NORTHSTAR_DESIGN_RESET_INSTRUCTION_BY_TURN[input.turn],
+    instruction,
     semanticContract: {
       authoritative: true,
       graph: semanticGraph,
@@ -1375,7 +1383,7 @@ export function createNorthstarDesignResetCandidate(input: {
     intent: input.response.understanding,
     verified: false,
     diagnostics: [
-      `${NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION} turn ${input.response.turn}.`,
+      `${NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION} turn ${input.response.turn}.`,
       `Exact accepted model mutation: ${JSON.stringify(input.response.mutation)}`,
     ],
     allowTextOnly: true,
@@ -1528,12 +1536,12 @@ export function buildNorthstarDesignResetTurnArchive(input: {
   }
   return {
     schema: "northstar.design-reset-turn-archive.v5",
-    resetVersion: NORTHSTAR_TWO_TURN_DESIGN_RESET_VERSION,
+    resetVersion: NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION,
     runId: input.runId,
     artifactId: input.artifactId,
     turn: input.turn,
     requestedThinkingMode: input.requestedThinkingMode,
-    effectiveDesignMode: "fixed-seven-turn",
+    effectiveDesignMode: "ordered-objective-queue",
     instruction: input.instruction,
     status: input.status,
     recordedAt: new Date().toISOString(),

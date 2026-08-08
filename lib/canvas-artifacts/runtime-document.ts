@@ -1995,6 +1995,46 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       : "";
   };
 
+  const additiveExpansionCollateralFailure = (batch, before, after) => {
+    const operations = Array.isArray(batch?.operations) ? batch.operations : [];
+    const additiveExpansion = /^expand-/i.test(String(batch?.geometryIntent || ""))
+      && operations.some((operation) => operation.op === "insert-html")
+      && operations.every((operation) => operation.op === "insert-html" || operation.op === "request-space");
+    if (!additiveExpansion) return "";
+
+    const tolerance = 1.25;
+    const changed = [];
+    for (const [id, beforeNode] of before.entries()) {
+      if (id === "artboard") continue;
+      const afterNode = after.get(id);
+      if (!afterNode) {
+        changed.push(id + " was removed");
+        continue;
+      }
+      const prior = beforeNode.rect || [];
+      const next = afterNode.rect || [];
+      const labels = ["x", "y", "width", "height"];
+      const deltas = labels.map((_, index) => Number(next[index] || 0) - Number(prior[index] || 0));
+      const material = labels.filter((_, index) => Math.abs(deltas[index]) > tolerance);
+      if (material.length) {
+        changed.push(id + " changed " + material.map((label) => {
+          const delta = deltas[labels.indexOf(label)];
+          return label + " " + (delta >= 0 ? "+" : "") + Math.round(delta * 10) / 10 + "px";
+        }).join(", "));
+      }
+    }
+
+    const beforeArtboard = before.get("artboard")?.rect || [];
+    const afterArtboard = after.get("artboard")?.rect || [];
+    const contracted = Number(afterArtboard[2] || 0) + tolerance < Number(beforeArtboard[2] || 0)
+      || Number(afterArtboard[3] || 0) + tolerance < Number(beforeArtboard[3] || 0);
+    if (!contracted && changed.length === 0) return "";
+    return "Additive outer-space expansion caused collateral geometry changes before commit: "
+      + (contracted ? "the artboard contracted despite an expansion intent; " : "")
+      + changed.slice(0, 12).join("; ")
+      + ". Keep every pre-existing node at its accepted x/y/width/height, isolate the new subject from normal flow, and expand only the requested outer edge.";
+  };
+
   const diffSemanticSnapshots = (before, after) => {
     const changed = [];
     const ids = new Set([...before.keys(), ...after.keys()]);
@@ -2992,6 +3032,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     element.style.setProperty("position", appliedValue, "important");
   };
 
+  let pendingExternalRelationSubjectIds = new Set();
+  const isolatePendingExternalRelationSubjects = (fragment) => {
+    if (!fragment?.querySelectorAll || pendingExternalRelationSubjectIds.size === 0) return;
+    fragment.querySelectorAll("[data-ns-node-id]").forEach((element) => {
+      const nodeId = element.getAttribute("data-ns-node-id");
+      if (!nodeId || !pendingExternalRelationSubjectIds.has(nodeId) || !element.style) return;
+      // Keep a newly inserted external relation subject out of grid/flex flow
+      // during the layout pass that precedes relation realization.
+      element.style.setProperty("position", "absolute", "important");
+      element.style.setProperty("margin", "0px", "important");
+    });
+  };
+
   const applyOperation = (operation) => {
     if (!operation || typeof operation.op !== "string") return;
     if (operation.op === "request-space") { requestSpace(operation); return; }
@@ -3063,6 +3116,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     if (operation.op === "insert-html") {
       const fragment = sanitizeFragment(operation.html);
+      isolatePendingExternalRelationSubjects(fragment);
       if (operation.position === "afterbegin") target.prepend(fragment);
       else if (operation.position === "beforeend") target.append(fragment);
       else if (operation.position === "beforebegin") target.before(fragment);
@@ -3885,6 +3939,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     };
     rememberMutationTransaction(batch.mutationId, transaction);
     registerAuthoredDesignRelations(batch.relations);
+    pendingExternalRelationSubjectIds = new Set((batch.relations || [])
+      .filter((relation) => relation?.kind === "relative-placement"
+        && ["above", "below", "left", "right"].includes(String(relation?.parameters?.side || "").toLowerCase()))
+      .map((relation) => String(relation.subjectId || ""))
+      .filter(Boolean));
     if (acknowledge) beginAtomicCandidateValidation(batch.mutationId);
     // Begin from the exact accepted world rectangle. request-space may only
     // extend these edges; it must never fall back to the smaller authored layout
@@ -3898,6 +3957,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     root.setAttribute("data-ns-mutating", "true");
     try {
       for (const operation of batch.operations || []) applyOperation(operation);
+      pendingExternalRelationSubjectIds = new Set();
       discardDuplicateEvidenceNodes(canonicalEvidenceNodes);
       enforceAssetPolicy(root);
       applyStage();
@@ -3905,6 +3965,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       currentRevisionId = revisionId || currentRevisionId;
       currentMutationId = batch.mutationId;
     } catch (error) {
+      pendingExternalRelationSubjectIds = new Set();
       rollbackMutation(batch.mutationId);
       root.removeAttribute("data-ns-mutating");
       throw error;
@@ -5076,6 +5137,11 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           acknowledgement.transaction.beforeSnapshot,
           afterSnapshot,
         );
+        const additiveExpansionCollateralReason = additiveExpansionCollateralFailure(
+          acknowledgement.batch,
+          acknowledgement.transaction.beforeSnapshot,
+          afterSnapshot,
+        );
         const geometryIntegrityFailures = review.geometryFacts?.integrityFailures || [];
         // Authored-shell coverage and overflow observations are advisory. The
         // runtime-owned canonical surface is the exact geometry envelope, so a
@@ -5092,7 +5158,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const constructionCoverageReason = acknowledgement.batch.constructionPlan?.strictCoverage !== false && constructionResult?.completed && !constructionResult?.timedOut && !constructionResult?.recovered && (constructionResult?.uncoveredNodeIds || []).length > 0
           ? "The cinema layer simplified the reveal because it could not stage every changed node: " + constructionResult.uncoveredNodeIds.slice(0, 12).join(", ") + "."
           : "";
-        const rejectedReason = linearDesignExecution
+        const rejectedReason = additiveExpansionCollateralReason
+          ? additiveExpansionCollateralReason
+          : linearDesignExecution
           ? ""
           : pixelStableReason
           ? pixelStableReason
