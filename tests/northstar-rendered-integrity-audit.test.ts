@@ -523,7 +523,12 @@ test("reports members outside a painted group even when overflow is visible", ()
   const observation = result.groupCongruenceObservations.find((item) => item.groupNodeId === "flow-awin" && item.memberNodeId === "awin-2");
   assert.equal(observation?.status, "detached");
   assert.equal(observation?.overflowVisible, true);
-  assert.ok(result.highConfidenceFindings.some((finding) => finding.kind === "group-congruence" && finding.subjectNodeId === "awin-2"));
+  const finding = result.highConfidenceFindings.find((item) => item.kind === "group-congruence" && item.subjectNodeId === "awin-2");
+  assert.ok(finding);
+  assert.equal(finding?.measurement.groupLeft, 0);
+  assert.equal(finding?.measurement.memberRight, 310);
+  assert.equal(finding?.measurement.requiredContainerWidth, 310);
+  assert.equal(finding?.measurement.overflowRight, 90);
 });
 
 test("reports weakened target attribution when an explanation enters a competing semantic group", () => {

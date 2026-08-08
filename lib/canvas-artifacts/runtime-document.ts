@@ -3436,10 +3436,50 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       return { ok: false, message: "The resolved local position was not finite." };
     }
     applyRuntimeRelationStyle(subject, relationId, property, nextLocalValue + "px");
+    const realizedRect = subject.getBoundingClientRect();
+    const realizedClientValue = axis === "x" ? realizedRect.left : realizedRect.top;
+    const realizationError = Math.abs(realizedClientValue - desiredClientValue);
+    const preview = {
+      axis,
+      desiredArtboardEdge: desiredClientValue,
+      realizedArtboardEdge: realizedClientValue,
+      realizationError,
+      requestedLocalEdge: nextLocalValue,
+      containingBlock: rectRecord(containingBlock.rect),
+      containingBlockScale: { x: containingBlock.scaleX, y: containingBlock.scaleY },
+    };
+    if (!Number.isFinite(realizedClientValue) || realizationError > 0.75) {
+      return {
+        ok: false,
+        message: "The relation preview could not realize the requested artboard edge in the subject's containing-block coordinate space.",
+        preview,
+      };
+    }
     return {
       ok: true,
       localValue: nextLocalValue,
       containingBlock: rectRecord(containingBlock.rect),
+      preview,
+    };
+  };
+
+  const placementPreviewReceipt = (subject, placements) => {
+    const subjectRect = subject.getBoundingClientRect();
+    const containingBlock = containingBlockGeometry(subject);
+    const realizedPlacements = placements.filter(Boolean);
+    return {
+      coordinateAuthority: "browser-containing-block-v1",
+      subjectArtboardBounds: rectRecord(subjectRect, root.getBoundingClientRect()),
+      subjectLocalBounds: {
+        left: subject.offsetLeft,
+        top: subject.offsetTop,
+        width: subject.offsetWidth,
+        height: subject.offsetHeight,
+      },
+      containingBlockNodeId: containingBlock.parent.getAttribute?.("data-ns-node-id") || "artboard",
+      containingBlockArtboardBounds: rectRecord(containingBlock.rect, root.getBoundingClientRect()),
+      placements: realizedPlacements,
+      verified: realizedPlacements.every((placement) => placement.realizationError <= 0.75),
     };
   };
 
@@ -3606,12 +3646,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           const offsetX = Number(parameters.offsetX || 0);
           const offsetY = Number(parameters.offsetY || 0);
           const appliedLocalGeometry = {};
+          const placementPreviews = [];
 
           if (side === "right" || side === "left") {
             const desiredLeft = side === "right" ? refRect.right + offsetX : refRect.left - ownRect.width - offsetX;
             const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
             if (!placedX.ok) failure = placedX.message;
             else appliedLocalGeometry.left = placedX.localValue;
+            if (placedX.preview) placementPreviews.push(placedX.preview);
             const alignY = String(parameters.alignY || "preserve");
             if (!failure && alignY !== "preserve") {
               const current = subject.getBoundingClientRect();
@@ -3621,12 +3663,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
               const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
               if (!placedY.ok) failure = placedY.message;
               else appliedLocalGeometry.top = placedY.localValue;
+              if (placedY.preview) placementPreviews.push(placedY.preview);
             }
           } else if (side === "below" || side === "above") {
             const desiredTop = side === "below" ? refRect.bottom + offsetY : refRect.top - ownRect.height - offsetY;
             const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
             if (!placedY.ok) failure = placedY.message;
             else appliedLocalGeometry.top = placedY.localValue;
+            if (placedY.preview) placementPreviews.push(placedY.preview);
             const alignX = String(parameters.alignX || "preserve");
             if (!failure && alignX !== "preserve") {
               const current = subject.getBoundingClientRect();
@@ -3636,11 +3680,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
               const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
               if (!placedX.ok) failure = placedX.message;
               else appliedLocalGeometry.left = placedX.localValue;
+              if (placedX.preview) placementPreviews.push(placedX.preview);
             }
           } else {
             failure = "Unsupported relative-placement side: " + side + ".";
           }
-          outputGeometry = { side, offsetX, offsetY, referenceGeometry: referenceGeometryMode(reference, parameters), ...appliedLocalGeometry };
+          outputGeometry = {
+            side,
+            offsetX,
+            offsetY,
+            referenceGeometry: referenceGeometryMode(reference, parameters),
+            ...appliedLocalGeometry,
+            placementPreview: placementPreviewReceipt(subject, placementPreviews),
+          };
         } else if (relation.kind === "connector-attachment") {
           const sourceReferences = canonicalReferences.filter((reference) => reference.role === "source");
           const targetReferences = canonicalReferences.filter((reference) => reference.role === "target");
@@ -3719,11 +3771,13 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
             const axis = String(parameters.axis || "x") === "y" ? "y" : "x";
             const crossAlign = String(parameters.crossAlign || (axis === "x" ? parameters.alignY : parameters.alignX) || "preserve");
             const appliedLocalGeometry = {};
+            const placementPreviews = [];
             if (axis === "x") {
               const desiredLeft = (beforeRect.right + afterRect.left - ownRect.width) / 2;
               const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
               if (!placedX.ok) failure = placedX.message;
               else appliedLocalGeometry.left = placedX.localValue;
+              if (placedX.preview) placementPreviews.push(placedX.preview);
               if (!failure && crossAlign !== "preserve") {
                 const current = subject.getBoundingClientRect();
                 const referenceCenter = (beforeRect.top + beforeRect.height / 2 + afterRect.top + afterRect.height / 2) / 2;
@@ -3733,12 +3787,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
                 const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
                 if (!placedY.ok) failure = placedY.message;
                 else appliedLocalGeometry.top = placedY.localValue;
+                if (placedY.preview) placementPreviews.push(placedY.preview);
               }
             } else {
               const desiredTop = (beforeRect.bottom + afterRect.top - ownRect.height) / 2;
               const placedY = placeSubjectEdge(subject, relation.id, "y", desiredTop);
               if (!placedY.ok) failure = placedY.message;
               else appliedLocalGeometry.top = placedY.localValue;
+              if (placedY.preview) placementPreviews.push(placedY.preview);
               if (!failure && crossAlign !== "preserve") {
                 const current = subject.getBoundingClientRect();
                 const referenceCenter = (beforeRect.left + beforeRect.width / 2 + afterRect.left + afterRect.width / 2) / 2;
@@ -3748,12 +3804,20 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
                 const placedX = placeSubjectEdge(subject, relation.id, "x", desiredLeft);
                 if (!placedX.ok) failure = placedX.message;
                 else appliedLocalGeometry.left = placedX.localValue;
+                if (placedX.preview) placementPreviews.push(placedX.preview);
               }
             }
             const realized = subject.getBoundingClientRect();
+            const availableSpan = axis === "x"
+              ? Math.max(0, afterRect.left - beforeRect.right)
+              : Math.max(0, afterRect.top - beforeRect.bottom);
+            const requiredSpan = axis === "x" ? ownRect.width : ownRect.height;
             outputGeometry = {
               axis,
               crossAlign,
+              availableSpan,
+              requiredSpan,
+              fitsDeclaredGap: availableSpan + 0.75 >= requiredSpan,
               leftGap: realized.left - beforeRect.right,
               rightGap: afterRect.left - realized.right,
               topGap: realized.top - beforeRect.bottom,
@@ -3762,6 +3826,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
                 ? Math.abs((realized.left - beforeRect.right) - (afterRect.left - realized.right))
                 : Math.abs((realized.top - beforeRect.bottom) - (afterRect.top - realized.bottom)),
               ...appliedLocalGeometry,
+              placementPreview: placementPreviewReceipt(subject, placementPreviews),
             };
           }
         } else {

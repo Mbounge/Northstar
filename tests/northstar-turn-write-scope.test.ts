@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   createNorthstarTurnWriteScope,
+  expandNorthstarMeasuredRepairScope,
   validateNorthstarContinuationWriteScope,
 } from "../lib/canvas-ai/northstar-turn-write-scope";
 import type { NorthstarArtboardMutationDraft } from "../lib/canvas-ai/northstar-artboard-mutations";
@@ -60,6 +61,106 @@ test("global continuation mutations are rejected before browser dispatch", () =>
     mutation: mutation([{ op: "set-css-layer", layerId: "global", css: "*{margin:0}" }]),
   });
   assert.equal(result.valid, false);
+});
+
+test("a measured obstruction grants translation-only authority to the downstream semantic flow", () => {
+  const measuredAcknowledgement = {
+    revisionId: "revision-1",
+    snapshot: {
+      semanticNodes: [
+        { nodeId: "sequence", parentId: "artboard", bounds: { left: 0, top: 0, right: 600, bottom: 200, width: 600, height: 200 } },
+        { nodeId: "screen-a", parentId: "sequence", bounds: { left: 0, top: 0, right: 100, bottom: 180, width: 100, height: 180 } },
+        { nodeId: "screen-b", parentId: "sequence", bounds: { left: 120, top: 0, right: 220, bottom: 180, width: 100, height: 180 } },
+        { nodeId: "screen-c", parentId: "sequence", bounds: { left: 240, top: 0, right: 340, bottom: 180, width: 100, height: 180 } },
+        { nodeId: "other-flow-card", parentId: "other-sequence", bounds: { left: 120, top: 240, right: 220, bottom: 420, width: 100, height: 180 } },
+      ],
+    },
+  } as unknown as NorthstarArtifactMutationAcknowledgement;
+  const firstMutation: NorthstarArtboardMutationDraft = {
+    ...mutation([{ op: "insert-html", targetId: "sequence", position: "beforeend", html: '<aside data-ns-node-id="new-callout">Callout</aside>' }]),
+    relations: [{
+      id: "callout-placement",
+      subjectId: "new-callout",
+      kind: "relative-placement",
+      references: [{ role: "target", nodeId: "screen-a" }],
+      parameters: { side: "right", gap: 20 },
+      realizationPolicy: "live",
+    }],
+  };
+  const frozen = createNorthstarTurnWriteScope({ acknowledgement: measuredAcknowledgement, mutation: firstMutation });
+  const preflight = expandNorthstarMeasuredRepairScope({
+    scope: frozen,
+    acknowledgement: measuredAcknowledgement,
+    findings: [{ subjectNodeId: "new-callout", relatedNodeIds: ["screen-b", "other-flow-card"] }],
+  });
+  assert.equal(preflight.reason, "measured-flow-suffix");
+  assert.deepEqual(preflight.anchorNodeIds, ["screen-a"]);
+  assert.deepEqual(preflight.supportingMovementNodeIds, ["screen-b", "screen-c"]);
+  assert.equal(preflight.supportingMovementNodeIds.includes("other-flow-card"), false);
+
+  const translated = validateNorthstarContinuationWriteScope({
+    scope: preflight.scope,
+    mutation: mutation([
+      { op: "set-styles", targetId: "screen-b", styles: { transform: "translateX(140px)" } },
+      { op: "set-styles", targetId: "screen-c", styles: { transform: "translateX(140px)" } },
+    ]),
+  });
+  assert.equal(translated.valid, true);
+  const resized = validateNorthstarContinuationWriteScope({
+    scope: preflight.scope,
+    mutation: mutation([{ op: "set-styles", targetId: "screen-b", styles: { width: "60px" } }]),
+  });
+  assert.equal(resized.valid, false);
+  assert.match(resized.violations.join(" "), /movement-only authority/);
+  const rewritten = validateNorthstarContinuationWriteScope({
+    scope: preflight.scope,
+    mutation: mutation([{ op: "set-text", targetId: "screen-b", text: "changed" }]),
+  });
+  assert.equal(rewritten.valid, false);
+});
+
+test("group repairs receive an exact bounded container contract", () => {
+  const measuredAcknowledgement = {
+    revisionId: "revision-1",
+    snapshot: {
+      semanticNodes: [
+        { nodeId: "flow", parentId: "artboard", bounds: { left: 0, top: 0, right: 500, bottom: 200, width: 500, height: 200 } },
+        { nodeId: "detached-member", parentId: "flow", bounds: { left: 0, top: 0, right: 620, bottom: 180, width: 620, height: 180 } },
+      ],
+    },
+  } as unknown as NorthstarArtifactMutationAcknowledgement;
+  const scope = createNorthstarTurnWriteScope({
+    acknowledgement: measuredAcknowledgement,
+    mutation: mutation([{ op: "set-styles", targetId: "flow", styles: { background: "#fff" } }]),
+  });
+  const preflight = expandNorthstarMeasuredRepairScope({
+    scope,
+    acknowledgement: measuredAcknowledgement,
+    findings: [{
+      kind: "group-congruence",
+      subjectNodeId: "detached-member",
+      relatedNodeIds: ["flow"],
+      measurement: {
+        requiredContainerWidth: 620,
+        requiredContainerHeight: 200,
+        overflowLeft: 0,
+        overflowTop: 0,
+        overflowRight: 120,
+        overflowBottom: 0,
+      },
+    }],
+  });
+  assert.equal(preflight.measuredContainerContracts[0]?.requiredWidth, 620);
+  assert.equal(validateNorthstarContinuationWriteScope({
+    scope: preflight.scope,
+    mutation: mutation([{ op: "set-styles", targetId: "flow", styles: { width: "640px" } }]),
+  }).valid, true);
+  const oversized = validateNorthstarContinuationWriteScope({
+    scope: preflight.scope,
+    mutation: mutation([{ op: "set-styles", targetId: "flow", styles: { width: "7500px" } }]),
+  });
+  assert.equal(oversized.valid, false);
+  assert.match(oversized.violations.join(" "), /outside the measured containment contract/);
 });
 
 test("the route validates scope before constructing the repair candidate", () => {

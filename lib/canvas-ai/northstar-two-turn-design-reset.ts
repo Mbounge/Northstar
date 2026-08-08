@@ -280,6 +280,30 @@ export function northstarLiveRepairExecutableFingerprint(mutation: NorthstarArtb
   return createHash("sha256").update(executable).digest("hex");
 }
 
+/** Mechanical strategy identity: catches numeric escalation of the same repair shape. */
+export function northstarLiveRepairStrategyFingerprint(mutation: NorthstarArtboardMutationDraft): string {
+  const strategy = {
+    geometryIntent: mutation.geometryIntent,
+    operations: mutation.operations.map((operation) => {
+      if (operation.op !== "set-styles") {
+        return "targetId" in operation ? { op: operation.op, targetId: operation.targetId } : { op: operation.op };
+      }
+      return {
+        op: operation.op,
+        targetId: operation.targetId,
+        properties: Object.keys(operation.styles).map((property) => property.toLowerCase()).sort(),
+      };
+    }),
+    relations: (mutation.relations ?? []).map((relation) => ({
+      id: relation.id,
+      subjectId: relation.subjectId,
+      kind: relation.kind,
+      referenceRoles: relation.references.map((reference) => reference.role).sort(),
+    })),
+  };
+  return createHash("sha256").update(JSON.stringify(strategy)).digest("hex");
+}
+
 /**
  * Compares observed defect sets without deciding what visual solution is good.
  * The designer receives the raw before/after measurements and interprets them.
@@ -792,6 +816,8 @@ Continuity is evaluated on every turn. Preserve evidence identity and pixels, se
 A visual relationship does not require a runtime relation unless the instruction explicitly declares below, right-of, or equal-space-between placement. For other intent, choose among spatial arrangement, grouping, alignment, repeated emphasis, labels, brackets, connectors, insets, comparison regions, and other open-ended visual treatments; mutation.relations is optional. Explicit spatial instructions require one authored relation as the positioning authority. Ground it in the exact semantic node identified by grounding.resolvedNodeId and choose its geometry mode from that semantic target: border-box for the object's own rendered box, or semantic-descendant-union for the complete rendered subtree. A below/above relation must declare alignX; a left/right relation must declare alignY. Do not search coordinates: redundant model-authored positional CSS and repeated continuation space requests are mechanically discarded before rendering.
 
 A relation is typed model-authored intent, separate from HTML and separate from browser-resolved geometry. The model chooses every subject, reference, anchor, geometry mode, controlled axis, alignment, offset, dimension, style, route, and amount of artboard growth. The browser only realizes the exact declared relation against current rendered geometry. It does not infer missing relationships, choose cross-axis alignment, invent spacing, route connectors, resize annotations, or repair a design. Use realizationPolicy "live" only for dependencies that must follow references on later turns. Use reference geometry "semantic-descendant-union" when a relation targets the complete research region rooted at evidence; use "border-box" for individual screenshots. A relation id is the stable update identity: when correcting an existing dependency, reuse that exact id so the authored definition is replaced instead of stacking another controller onto the same subject geometry channel. Do not rely on optional data-ns-* markup attributes as the canonical dependency record.
+
+Every resolved CSS placement relation returns a browser-authored placementPreview receipt. It reports the subject in artboard coordinates and in its actual containing-block coordinates, the containing-block identity and scale, each requested and realized edge, the realization error, and whether a between-placement subject fits the declared gap. Treat that receipt as the only coordinate authority. Never copy artboard left/top values into a nested positioned container. On a continuation, preserve the same relation contract and correct the authored surrounding composition when fitsDeclaredGap is false; do not remove the relation and search with raw coordinates.
 
 For an explicit below or right-of instruction, declare kind "relative-placement" with the dependent subjectId and the exact grounded node as role "reference". The browser takes a static subject out of normal flow, measures the subject's actual rendered size, converts the declared world relationship into its real containing-block coordinate space, and owns CSS geometry on the controlled axes. Declare cross-axis alignment so the subject remains visually attached to its reference.
 

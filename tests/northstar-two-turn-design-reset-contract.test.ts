@@ -359,6 +359,14 @@ test("authored spatial dependencies are explicit, live, coordinate-safe, and sou
   assert.match(runtime, /const containingBlockGeometry = \(subject\) =>/);
   assert.match(runtime, /const placeSubjectEdge = \(subject, relationId, axis, desiredClientValue\) =>/);
   assert.match(runtime, /baseLocalValue \+ \(desiredClientValue - currentClientValue\) \/ scale/);
+  assert.match(runtime, /const placementPreviewReceipt = \(subject, placements\) =>/);
+  assert.match(runtime, /coordinateAuthority: "browser-containing-block-v1"/);
+  assert.match(runtime, /desiredArtboardEdge: desiredClientValue/);
+  assert.match(runtime, /realizedArtboardEdge: realizedClientValue/);
+  assert.match(runtime, /realizationError > 0\.75/);
+  assert.match(runtime, /fitsDeclaredGap: availableSpan \+ 0\.75 >= requiredSpan/);
+  assert.match(reset, /Treat that receipt as the only coordinate authority/);
+  assert.match(reset, /do not remove the relation and search with raw coordinates/);
   assert.match(runtime, /clearRuntimeRelationRealization\(null, authoredRoot\)/);
   assert.match(runtime, /data-ns-runtime-relation-style/);
   assert.match(runtime, /data-ns-runtime-relation-attributes/);

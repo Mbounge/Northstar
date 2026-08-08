@@ -49,6 +49,7 @@ import {
   northstarAuthoredRelationRealizationIssues,
   northstarDesignResetSha256,
   northstarLiveRepairExecutableFingerprint,
+  northstarLiveRepairStrategyFingerprint,
   normalizeNorthstarSpatialAuthority,
   sanitizeNorthstarDesignResetModelResponse,
   selectNorthstarLiveRepairFindings,
@@ -60,6 +61,7 @@ import {
 } from "@/lib/canvas-ai/northstar-two-turn-design-reset";
 import {
   createNorthstarTurnWriteScope,
+  expandNorthstarMeasuredRepairScope,
   extendNorthstarTurnWriteScope,
   validateNorthstarContinuationWriteScope,
   type NorthstarTurnWriteScope,
@@ -7776,6 +7778,7 @@ async function buildArtboardBenchmarkArtifactPackage({
     let previousLiveRepairIssue: string | undefined;
     const liveRepairMemory: Array<Record<string, unknown>> = [];
     const ineffectiveRepairFingerprints = new Set<string>();
+    const ineffectiveRepairStrategyFingerprints = new Set<string>();
     let liveRepairFindings = selectNorthstarLiveRepairFindings({
       cumulativeIntentAudit: liveReviewedArchive?.cumulativeIntentAudit,
       renderedIntegrityAudit: liveReviewedArchive?.renderedIntegrityAudit,
@@ -7810,6 +7813,16 @@ async function buildArtboardBenchmarkArtifactPackage({
       const repairBaseAcknowledgement = dispatchResult.acknowledgement;
       const triggeringFindings = liveRepairFindings;
       const carryFindingKeys = triggeringFindings.map((finding) => finding.key);
+      if (!turnWriteScope) {
+        liveRepairFailure = "The turn lost its frozen continuation write scope.";
+        break;
+      }
+      const measuredRepairScope = expandNorthstarMeasuredRepairScope({
+        scope: turnWriteScope,
+        acknowledgement: repairBaseAcknowledgement,
+        findings: triggeringFindings,
+      });
+      turnWriteScope = measuredRepairScope.scope;
       callbacks.trace?.("design.reset.live_repair_requested", {
         patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
         addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
@@ -7821,6 +7834,7 @@ async function buildArtboardBenchmarkArtifactPackage({
         originalInstruction: turnInstruction,
         findings: triggeringFindings,
         turnWriteScope,
+        measuredRepairScope,
         repairMemory: liveRepairMemory,
         consecutiveNoProgressRenders,
       }, "Patch 1/2 found a current-turn communication defect on the live artboard. The same designer will correct that rendered revision before the next turn.");
@@ -7852,8 +7866,12 @@ async function buildArtboardBenchmarkArtifactPackage({
                 writableExistingNodeIds: turnWriteScope.writableExistingNodeIds,
                 introducedNodeIds: turnWriteScope.introducedNodeIds,
                 insertionContainerNodeIds: turnWriteScope.insertionContainerNodeIds,
+                relationReferenceNodeIds: turnWriteScope.relationReferenceNodeIds,
+                supportingMovementNodeIds: turnWriteScope.supportingMovementNodeIds,
+                measuredContainerContracts: turnWriteScope.measuredContainerContracts,
               } : {})}`,
-              "Only the listed existing, introduced, and insertion-container nodes are writable. Every other current node is a fixed obstacle and protected prior work. Resolve findings by editing the writable side only. A mutation targeting any other node will be rejected before rendering.",
+              `MEASURED REFLOW PREFLIGHT\n${JSON.stringify(measuredRepairScope)}`,
+              "Existing and introduced nodes retain ordinary write authority. Supporting movement nodes are a browser-measured semantic flow suffix or detached group member and have translation-only authority: they may receive only positional set-styles properties. Measured container contracts are geometry-only and bounded by the reported required dimensions; if the required growth is larger than the safe bound, translate the detached member back into its measured container instead of escalating the container. Resolve the member/container correction in one mutation. Do not alter supporting content, appearance, order, or relations. Every other current node is protected prior work.",
               `AFFECTED COMPOSITION\n${JSON.stringify(liveReviewedArchive?.cumulativeIntentAudit?.affectedComposition ?? {})}`,
               `REACTIVE DEPENDENCY STATE\n${JSON.stringify(reactiveRepairContext)}`,
               liveRepairMemory.length > 0 ? `SAME-TURN REPAIR MEMORY\n${JSON.stringify(liveRepairMemory)}` : "",
@@ -7926,10 +7944,6 @@ async function buildArtboardBenchmarkArtifactPackage({
         continue;
       }
 
-      if (!turnWriteScope) {
-        liveRepairFailure = "The turn lost its frozen continuation write scope.";
-        break;
-      }
       const activeTurnWriteScope = turnWriteScope;
       const normalizedSpatialAuthority = normalizeNorthstarSpatialAuthority({
         response: repairResponse,
@@ -8028,6 +8042,30 @@ async function buildArtboardBenchmarkArtifactPackage({
       }
 
       const repairFingerprint = northstarLiveRepairExecutableFingerprint(repairResponse.mutation);
+      const repairStrategyFingerprint = northstarLiveRepairStrategyFingerprint(repairResponse.mutation);
+      if (ineffectiveRepairStrategyFingerprints.has(repairStrategyFingerprint)) {
+        const detail = `Repair strategy ${repairStrategyFingerprint} repeats a same-turn strategy that already rendered without clearing the measured defect. Change the operation shape or use the exact measured container contract; numeric escalation of the same strategy is not a new repair.`;
+        previousLiveRepairIssue = detail;
+        const memoryEntry = {
+          repairPass: liveRepairPass,
+          outcome: "duplicate-known-ineffective-strategy",
+          baseRevisionId: repairBasePackage.revisionId,
+          executableFingerprint: repairFingerprint,
+          strategyFingerprint: repairStrategyFingerprint,
+          attemptedMutation: repairResponse.mutation,
+          triggeringFindings,
+          detail,
+        };
+        liveRepairMemory.push(memoryEntry);
+        repairHistory.push({ stage: "live-artboard-duplicate-strategy-skipped", ...memoryEntry });
+        callbacks.trace?.("design.reset.live_repair_strategy_skipped", {
+          patch: "northstar.patch2c1.container-coherent-reflow.v1",
+          turn,
+          ...memoryEntry,
+        }, "Northstar rejected a repeated same-turn repair strategy before rendering; the living artboard remains the last verified revision.");
+        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = detail;
+        continue;
+      }
       if (ineffectiveRepairFingerprints.has(repairFingerprint)) {
         const detail = `Executable repair ${repairFingerprint} exactly repeats a same-turn repair that already rendered without clearing the defects. It was not rendered again.`;
         previousLiveRepairIssue = detail;
@@ -8036,6 +8074,7 @@ async function buildArtboardBenchmarkArtifactPackage({
           outcome: "duplicate-known-ineffective-repair",
           baseRevisionId: repairBasePackage.revisionId,
           executableFingerprint: repairFingerprint,
+          strategyFingerprint: repairStrategyFingerprint,
           attemptedMutation: repairResponse.mutation,
           triggeringFindings,
           detail,
@@ -8137,7 +8176,7 @@ async function buildArtboardBenchmarkArtifactPackage({
         renderedIntegrityAudit: repairReviewedArchive.renderedIntegrityAudit,
         carryFindingKeys,
       }).filter((finding) => {
-        const writable = new Set([...activeTurnWriteScope.writableExistingNodeIds, ...activeTurnWriteScope.introducedNodeIds, ...writeScopeValidation.introducedNodeIds]);
+        const writable = new Set([...activeTurnWriteScope.writableExistingNodeIds, ...activeTurnWriteScope.introducedNodeIds, ...activeTurnWriteScope.supportingMovementNodeIds, ...writeScopeValidation.introducedNodeIds]);
         return Boolean(finding.subjectNodeId && writable.has(finding.subjectNodeId))
           || finding.relatedNodeIds.some((nodeId) => writable.has(nodeId));
       });
@@ -8151,6 +8190,7 @@ async function buildArtboardBenchmarkArtifactPackage({
         baseRevisionId: repairBasePackage.revisionId,
         revisionId: repairDispatch.artifact.revisionId,
         executableFingerprint: repairFingerprint,
+        strategyFingerprint: repairStrategyFingerprint,
         attemptedMutation: repairResponse.mutation,
         beforeFindings: triggeringFindings,
         afterFindings: remainingFindings,
@@ -8159,6 +8199,7 @@ async function buildArtboardBenchmarkArtifactPackage({
       liveRepairMemory.push(memoryEntry);
       if (remainingFindings.length > 0) {
         ineffectiveRepairFingerprints.add(repairFingerprint);
+        ineffectiveRepairStrategyFingerprints.add(repairStrategyFingerprint);
         previousLiveRepairIssue = `Repair pass ${liveRepairPass} rendered but did not clear all current-turn findings. Outcome: ${repairOutcome.status}. Do not repeat executable repair ${repairFingerprint}; use the same-turn repair memory and choose a materially different composition.`;
       } else {
         previousLiveRepairIssue = undefined;

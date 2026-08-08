@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   northstarLiveRepairExecutableFingerprint,
+  northstarLiveRepairStrategyFingerprint,
   summarizeNorthstarLiveRepairOutcome,
   type NorthstarLiveRepairFinding,
 } from "../lib/canvas-ai/northstar-two-turn-design-reset";
@@ -41,6 +42,12 @@ test("executable repair fingerprint ignores prose but changes with executable ge
   assert.equal(first, renamed);
   assert.notEqual(first, moved);
   assert.match(first, /^[a-f0-9]{64}$/);
+});
+
+test("strategy fingerprint collapses numeric escalation of the same operation shape", () => {
+  const first = northstarLiveRepairStrategyFingerprint(mutation("Grow container", "850px"));
+  const escalated = northstarLiveRepairStrategyFingerprint(mutation("Grow container again", "7500px"));
+  assert.equal(first, escalated);
 });
 
 test("repair outcome exposes raw before/after measurement changes without inventing a layout verdict", () => {
