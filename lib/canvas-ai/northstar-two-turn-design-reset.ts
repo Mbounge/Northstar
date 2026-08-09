@@ -22,6 +22,7 @@ import {
   buildNorthstarRenderedIntegrityAudit,
   type NorthstarRenderedIntegrityAudit,
 } from "@/lib/canvas-ai/northstar-rendered-integrity-audit";
+import { buildNorthstarObservedSpatialFacts } from "@/lib/canvas-ai/northstar-turn-write-scope";
 
 export const NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION =
   "northstar.production-design-loop.v1" as const;
@@ -98,6 +99,11 @@ export type NorthstarArtboardSemanticGraph = {
     flowId: string;
     index: number;
     evidenceId?: string;
+    appName?: string;
+    flowName?: string;
+    title?: string;
+    journeyStage?: string;
+    visibleCopy: string[];
     bounds?: { left: number; top: number; right: number; bottom: number; width: number; height: number };
     anchors?: { left: number; top: number; right: number; bottom: number; centerX: number; centerY: number };
   }>;
@@ -146,8 +152,34 @@ export type NorthstarDesignResetProviderAttemptAudit = {
   rawModelTextBytes?: number;
   rawModelTextSha256?: string;
   parsedModelResponse?: unknown;
+  usage?: NorthstarModelTokenUsage;
   error?: string;
 };
+
+export type NorthstarModelTokenUsage = {
+  promptTokenCount: number;
+  cachedContentTokenCount: number;
+  candidatesTokenCount: number;
+  thoughtsTokenCount: number;
+  totalTokenCount: number;
+};
+
+export function readNorthstarModelTokenUsage(payload: unknown): NorthstarModelTokenUsage | undefined {
+  if (!isRecord(payload) || !isRecord(payload.usageMetadata)) return undefined;
+  const usage = payload.usageMetadata;
+  const count = (key: string) => {
+    const value = usage[key];
+    return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+  };
+  const result = {
+    promptTokenCount: count("promptTokenCount"),
+    cachedContentTokenCount: count("cachedContentTokenCount"),
+    candidatesTokenCount: count("candidatesTokenCount"),
+    thoughtsTokenCount: count("thoughtsTokenCount"),
+    totalTokenCount: count("totalTokenCount"),
+  };
+  return Object.values(result).some((value) => value > 0) ? result : undefined;
+}
 
 export type NorthstarExactStringDiff = {
   unchangedPrefixLength: number;
@@ -727,14 +759,36 @@ export function buildNorthstarArtboardSemanticGraph(input: {
       ? (input.acknowledgement as unknown as Record<string, unknown>).evidenceRegistry as Record<string, unknown>
       : {};
   const manifest = Array.isArray(registry.presentationManifest) ? registry.presentationManifest : [];
+  // Persisted legacy artifacts and focused contract tests can legitimately omit
+  // the research bundle. Geometry observation must remain usable in that case.
+  const screenshots = input.artifact.dataBundle?.screenshots ?? [];
+  const screenshotsById = new Map(screenshots.map((screenshot) => [screenshot.id, screenshot]));
+  const flowsById = new Map((input.artifact.dataBundle?.flows ?? []).map((flow) => [flow.id, flow]));
+  const normalizeLookup = (value: string | undefined) => (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const evidenceItems = manifest.flatMap((entry) => {
     if (!isRecord(entry) || typeof entry.nodeId !== "string") return [];
     const bounds = rectFromUnknown(entry);
+    const flowId = typeof entry.flowId === "string" ? entry.flowId : "";
+    const index = finiteNumber(entry.index) ?? 0;
+    const evidenceId = typeof entry.evidenceId === "string" ? entry.evidenceId : undefined;
+    const flowScreenshotIds = flowsById.get(flowId)?.screenshotIds ?? [];
+    const screenshot = (evidenceId ? screenshotsById.get(evidenceId) : undefined)
+      ?? (flowScreenshotIds[index] ? screenshotsById.get(flowScreenshotIds[index]!) : undefined)
+      ?? (index > 0 && flowScreenshotIds[index - 1] ? screenshotsById.get(flowScreenshotIds[index - 1]!) : undefined)
+      ?? screenshots.find((candidate) =>
+        normalizeLookup(candidate.flowName) === normalizeLookup(flowId)
+        && (candidate.index ?? 0) === index
+      );
     return [{
       nodeId: entry.nodeId,
-      flowId: typeof entry.flowId === "string" ? entry.flowId : "",
-      index: finiteNumber(entry.index) ?? 0,
-      evidenceId: typeof entry.evidenceId === "string" ? entry.evidenceId : undefined,
+      flowId,
+      index,
+      evidenceId,
+      appName: screenshot?.appName,
+      flowName: screenshot?.flowName,
+      title: screenshot?.title,
+      journeyStage: screenshot?.journeyStage,
+      visibleCopy: screenshot?.visibleCopy.slice(0, 4).map((copy) => copy.slice(0, 160)) ?? [],
       bounds,
       anchors: anchorsFromBounds(bounds),
     }];
@@ -951,9 +1005,30 @@ When a post-render repair includes same-turn attempt memory, reason about failed
 Make only the requested design change. Do not perform unrelated redesign work. Return the exact source mutation you chose in the required JSON schema. The protocol boundary may canonicalize unambiguous relation-role aliases, retain an accepted continuation's relation identity and references, and remove positional CSS owned by a live relation. Those mechanical steps never choose placement, styling, content, routing, or composition. Your resulting mutation is applied directly to the live artboard. If the post-render audit finds a communication defect caused or worsened by the turn, your next call for that same turn starts from that exact live revision with the measured defects attached. Preserve the original turn objective and author an incremental correction to the current live artboard. When same-turn repair memory is attached, treat it as authoritative history of already attempted rendered results: use its before/after evidence to avoid repeating ineffective executable moves, while choosing the next design solution yourself. The next design objective does not begin until those actionable findings are resolved. Return JSON only.`;
 }
 
+export function buildNorthstarCompactDesignTurnSystemInstruction(): string {
+  return `You are editing one living Northstar artboard from its latest browser-measured revision.
+
+Resolve the supplied objective through singular observed design turns. Return either objective-complete, or exactly one executable mutation operation. After execution the browser will render and measure the result before you choose another action. Never predict a dependent second action in the same response.
+
+Use only the supplied compact context as factual state. Node ids, region membership, bounds, anchors, artboard bounds, relations, preservation rules, and the last browser outcome are authoritative. Ground every referenced subject in those ids. Do not invent missing geometry. If the objective cannot yet be completed safely from the available geometry, use the next action to create the required space or structure.
+
+The semantic evidence labels identify what each screenshot actually depicts. The observedSpatialFacts are browser measurements taken before this reasoning call. Use both together: first resolve the exact semantic referent, then test the intended outer footprint and clearance against the measured envelope, blockers, and gaps. Never insert an object merely because an instruction names a direction. If fit is not established, the one action for this turn must create adequate space; observe that result before placing the object.
+
+Preserve protected evidence identity, content, order, visibility, appearance, width, and height. Evidence may be explicitly translated only when the objective requires recomposing the smallest coherent affected structure. Keep unrelated regions stable. Never cover readable evidence or authored content. Before placement, compare the subject's intended footprint plus clearance against the measured gap or available artboard space. When it does not fit, create space or request artboard growth instead of searching nearby coordinates.
+
+Use mutation.relations for dependencies that must remain live after later geometry changes. Use relative-placement for explicit directional placement, between-placement for an object centered between two references, and connector-attachment only for an authored connector whose endpoints must follow references. The model chooses the design, dimensions, spacing, styling, route, and operation; the browser only realizes and measures declared intent.
+
+Inserted authored objects require unique data-ns-node-id values. Prefer focused operations against stable node ids. Do not replace or restyle whole evidence flows for a local change. Completion is valid only when the exact current revision visibly satisfies the objective and completionEvidence.remainingIssues is empty. Return JSON only.`;
+}
+
 
 function instructionTokens(value: string): Set<string> {
-  return new Set(value.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter((token) => token.length > 2));
+  const semanticStopWords = new Set([
+    "add", "align", "and", "are", "been", "being", "between", "center", "construct", "create", "equal", "from", "insert",
+    "into", "make", "move", "place", "reposition", "space", "that", "the", "their", "then", "these", "this", "those", "with",
+  ]);
+  return new Set(value.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/)
+    .filter((token) => token.length > 2 && !semanticStopWords.has(token)));
 }
 
 function focusScore(instruction: Set<string>, values: string[]): number {
@@ -961,6 +1036,11 @@ function focusScore(instruction: Set<string>, values: string[]): number {
   let score = 0;
   for (const token of instruction) if (candidate.has(token)) score += 1;
   return score;
+}
+
+function ordinalLabel(index: number): string {
+  return ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"][index]
+    ?? `item ${index + 1}`;
 }
 
 function regionPairGeometry(
@@ -1016,6 +1096,11 @@ function resolveNorthstarInstructionFocus(input: {
   });
   const evidenceCandidates = input.graph.evidenceItems.map((item) => {
     const nodes = input.graph.nodes.filter((node) => node.nodeId === item.nodeId || node.parentId === item.nodeId);
+    const suppliedSemanticText = [item.title, item.journeyStage, ...item.visibleCopy]
+      .filter((value): value is string => Boolean(value));
+    const semanticText = suppliedSemanticText.length
+      ? suppliedSemanticText
+      : nodes.map((node) => node.text.slice(0, 240)).filter(Boolean).slice(0, 4);
     return {
       kind: "evidence" as const,
       id: item.nodeId,
@@ -1024,8 +1109,23 @@ function resolveNorthstarInstructionFocus(input: {
       evidenceId: item.evidenceId,
       bounds: item.bounds,
       anchors: item.anchors,
-      semanticText: nodes.map((node) => node.text).filter(Boolean),
-      score: focusScore(tokens, [item.flowId, String(item.index), ...nodes.map((node) => node.text)]),
+      semanticText,
+      appName: item.appName,
+      flowName: item.flowName,
+      title: item.title,
+      journeyStage: item.journeyStage,
+      visibleCopy: item.visibleCopy,
+      ordinal: ordinalLabel(item.index),
+      score: focusScore(tokens, [
+        item.flowId,
+        item.appName ?? "",
+        item.flowName ?? "",
+        item.title ?? "",
+        item.journeyStage ?? "",
+        ordinalLabel(item.index),
+        String(item.index),
+        ...semanticText,
+      ]),
     };
   });
   const candidates = [...conceptCandidates, ...regionCandidates, ...evidenceCandidates]
@@ -1206,6 +1306,148 @@ export function buildNorthstarDesignResetModelInput(input: {
         "Did the design create enough negative space or artboard growth instead of compressing or covering content?",
         "Will every authored live relation remain understandable and attached after browser realization?",
       ],
+    },
+  };
+}
+
+export function buildNorthstarCompactDesignTurnContext(input: {
+  turn: NorthstarDesignResetTurn;
+  instruction: string;
+  artifact: NorthstarGeneratedCodeArtifactPackage;
+  acknowledgement: NorthstarArtifactMutationAcknowledgement;
+  objectiveProgress?: {
+    objectiveIndex: number;
+    designTurnIndex: number;
+    priorPlan?: NorthstarObjectiveActionPlan;
+    previousOutcome?: {
+      status: "applied" | "rejected";
+      actionId?: string;
+      detail: string;
+      revisionId?: string;
+    };
+  };
+}) {
+  const graph = buildNorthstarArtboardSemanticGraph(input);
+  const focus = resolveNorthstarInstructionFocus({ instruction: input.instruction, graph });
+  const maximumFocusScore = Math.max(0, ...focus.candidates.map((candidate) => candidate.score));
+  const exactFocusCandidates = focus.candidates.filter((candidate) => candidate.score === maximumFocusScore && candidate.score > 0);
+  const activeFocusCandidates = exactFocusCandidates.length ? exactFocusCandidates : focus.candidates.slice(0, 1);
+  const expandFocusCandidateNodeIds = (candidate: (typeof focus.candidates)[number]) => {
+    if (candidate.kind === "concept") {
+      const matchingRegions = graph.regions.filter((region) => region.conceptId === candidate.id);
+      return [
+        ...candidate.canonicalNodeIds,
+        ...matchingRegions.flatMap((region) => [region.rootNodeId, ...region.memberNodeIds]),
+      ];
+    }
+    if (candidate.kind === "region") return [candidate.rootNodeId, ...candidate.memberNodeIds];
+    return [candidate.id];
+  };
+  const relevantIds = new Set<string>();
+  for (const candidate of activeFocusCandidates) {
+    expandFocusCandidateNodeIds(candidate).forEach((id) => relevantIds.add(id));
+  }
+  const changedNodeIds = input.acknowledgement.meaningfulChangedNodeIds.length
+    ? input.acknowledgement.meaningfulChangedNodeIds
+    : input.acknowledgement.changedNodeIds;
+  changedNodeIds.forEach((id) => relevantIds.add(id));
+  for (const changedId of changedNodeIds) {
+    let parentId = graph.nodes.find((node) => node.nodeId === changedId)?.parentId;
+    while (parentId && !relevantIds.has(parentId)) {
+      relevantIds.add(parentId);
+      parentId = graph.nodes.find((node) => node.nodeId === parentId)?.parentId;
+    }
+  }
+  for (const relation of graph.relationships) {
+    if (relevantIds.has(relation.subjectId) || relevantIds.has(relation.objectId)) {
+      relevantIds.add(relation.subjectId);
+      relevantIds.add(relation.objectId);
+    }
+  }
+  const relevantNodes = graph.nodes.filter((node) =>
+    relevantIds.has(node.nodeId) || (node.parentId ? relevantIds.has(node.parentId) : false)
+  );
+  relevantNodes.forEach((node) => relevantIds.add(node.nodeId));
+  const priorPlan = input.objectiveProgress?.priorPlan;
+  const previousOutcome = input.objectiveProgress?.previousOutcome;
+  const spatialFocusNodeIds = [...new Set(activeFocusCandidates.flatMap(expandFocusCandidateNodeIds))];
+  const observedSpatialFacts = buildNorthstarObservedSpatialFacts({
+    acknowledgement: input.acknowledgement,
+    focusNodeIds: spatialFocusNodeIds,
+  });
+  const continuity = buildNorthstarContinuityContext({ graph, acknowledgement: input.acknowledgement, focus });
+  return {
+    schema: "northstar.compact-design-turn-context.v1" as const,
+    objective: input.instruction,
+    turn: input.turn,
+    objectiveIndex: input.objectiveProgress?.objectiveIndex,
+    revision: {
+      artifactId: input.artifact.artifactId,
+      revisionId: input.artifact.revisionId,
+      browserRevisionId: input.acknowledgement.browserRevisionId,
+      sourceSha256: graph.sourceSha256,
+    },
+    artboard: graph.artboard,
+    focus: {
+      candidates: focus.candidates.slice(0, 12),
+      regionPairs: focus.regionPairs,
+    },
+    relevantRegions: graph.regions.filter((region) =>
+      relevantIds.has(region.rootNodeId) || region.memberNodeIds.some((id) => relevantIds.has(id))
+    ),
+    relevantNodes: relevantNodes.map((node) => ({
+      ...node,
+      text: node.text.slice(0, 320),
+    })),
+    protectedEvidence: graph.evidenceItems.map(({ nodeId, flowId, index, evidenceId, appName, flowName, title, journeyStage, visibleCopy, bounds, anchors }) => ({
+      nodeId,
+      flowId,
+      index,
+      evidenceId,
+      appName,
+      flowName,
+      title,
+      journeyStage,
+      visibleCopy,
+      bounds,
+      anchors,
+    })),
+    semanticSpatialRules: graph.vocabulary,
+    observedSpatialFacts,
+    priorAuthoredObjects: continuity.priorAuthoredAdditions.map((addition) => ({
+      ...addition,
+      text: addition.text.slice(0, 320),
+    })),
+    relations: {
+      semantic: graph.relationships.filter((relation) =>
+        relevantIds.has(relation.subjectId) || relevantIds.has(relation.objectId)
+      ),
+      authored: input.acknowledgement.authoredDesignRelations ?? [],
+      resolved: input.acknowledgement.resolvedDesignRelations ?? [],
+    },
+    browserFindings: {
+      status: input.acknowledgement.status,
+      changedNodeIds,
+      interference: (input.acknowledgement.review?.authoredInterferencePairs ?? []).slice(0, 12),
+      continuity: (input.acknowledgement.review?.authoredContinuityObservations ?? []).slice(0, 12),
+    },
+    progress: {
+      objectiveSummary: priorPlan?.objectiveSummary,
+      plannedActions: priorPlan?.plannedActions.slice(0, 8) ?? [],
+      completedActions: priorPlan?.completedActions.slice(0, 8) ?? [],
+      previousOutcome: previousOutcome ? {
+        status: previousOutcome.status,
+        actionId: previousOutcome.actionId,
+        revisionId: previousOutcome.revisionId,
+        detail: previousOutcome.detail.slice(0, 2_000),
+      } : undefined,
+    },
+    rules: {
+      oneOperation: true,
+      observeBeforeNextAction: true,
+      protectedEvidenceDimensionsAreImmutable: true,
+      explicitMovementOnly: true,
+      preserveUnrelatedRegions: true,
     },
   };
 }

@@ -41,6 +41,8 @@ import {
   NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
   NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION,
   buildNorthstarArtboardSemanticGraph,
+  buildNorthstarCompactDesignTurnContext,
+  buildNorthstarCompactDesignTurnSystemInstruction,
   buildNorthstarDesignResetModelInput,
   buildNorthstarDesignResetSystemInstruction,
   buildNorthstarDesignResetTurnArchive,
@@ -51,6 +53,7 @@ import {
   northstarLiveRepairExecutableFingerprint,
   northstarLiveRepairStrategyFingerprint,
   normalizeNorthstarSpatialAuthority,
+  readNorthstarModelTokenUsage,
   sanitizeNorthstarDesignResetModelResponse,
   sanitizeNorthstarObjectiveDecisionResponse,
   selectNorthstarLiveRepairFindings,
@@ -59,6 +62,7 @@ import {
   type NorthstarDesignResetProviderAttemptAudit,
   type NorthstarDesignResetTurn,
   type NorthstarDesignResetTurnArchive,
+  type NorthstarModelTokenUsage,
 } from "@/lib/canvas-ai/northstar-two-turn-design-reset";
 import { NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES } from "@/lib/canvas-ai/northstar-artboard-benchmark-fixture";
 import {
@@ -70,6 +74,10 @@ import {
   validateNorthstarContinuationWriteScope,
   type NorthstarTurnWriteScope,
 } from "@/lib/canvas-ai/northstar-turn-write-scope";
+import {
+  deriveNorthstarObservedActionChannels,
+  findNorthstarRepeatedObservedActionChannels,
+} from "@/lib/canvas-ai/northstar-observed-action-ledger";
 
 
 
@@ -2704,6 +2712,7 @@ async function callGeminiJsonOnceAudited<T>({
     audit.providerPayload = payload;
     audit.providerPayloadBytes = Buffer.byteLength(providerPayloadText, "utf8");
     audit.providerPayloadSha256 = northstarDesignResetSha256(providerPayloadText);
+    audit.usage = readNorthstarModelTokenUsage(payload);
 
     if (!response.ok) {
       const payloadRecord = isRecord(payload) ? payload : undefined;
@@ -7278,6 +7287,23 @@ async function buildPolishedLiveArtifactPackage(input: {
   });
 }
 
+const emptyNorthstarModelTokenUsage = (): NorthstarModelTokenUsage => ({
+  promptTokenCount: 0,
+  cachedContentTokenCount: 0,
+  candidatesTokenCount: 0,
+  thoughtsTokenCount: 0,
+  totalTokenCount: 0,
+});
+
+function addNorthstarModelTokenUsage(
+  total: NorthstarModelTokenUsage,
+  usage: NorthstarModelTokenUsage | undefined,
+) {
+  if (!usage) return total;
+  for (const key of Object.keys(total) as Array<keyof NorthstarModelTokenUsage>) total[key] += usage[key];
+  return total;
+}
+
 async function runSingularObservedDesignObjectiveQueue({
   apiKey,
   runId,
@@ -7298,6 +7324,7 @@ async function runSingularObservedDesignObjectiveQueue({
   let currentPackage = callbacks.getVisibleArtifact();
   if (!currentPackage) throw new Error("Northstar cannot begin design work before the living artboard is mounted.");
   let designTurnIndex = 0;
+  const runUsage = emptyNorthstarModelTokenUsage();
   const canonicalAcknowledgement = (
     artifact: NorthstarGeneratedCodeArtifactPackage,
   ): NorthstarArtifactMutationAcknowledgement => ({
@@ -7345,8 +7372,9 @@ async function runSingularObservedDesignObjectiveQueue({
       revisionId?: string;
     } | undefined;
     let completed = false;
+    const observedActionChannels = new Set<string>();
 
-    for (let objectiveTurn = 1; objectiveTurn <= 12; objectiveTurn += 1) {
+    for (let objectiveTurn = 1; ; objectiveTurn += 1) {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
       const liveAcknowledgement = callbacks.getLinearDesignAck?.();
       if (liveAcknowledgement && (
@@ -7358,8 +7386,8 @@ async function runSingularObservedDesignObjectiveQueue({
       const acknowledgement = liveAcknowledgement ?? canonicalAcknowledgement(currentPackage);
       currentPackage = materializeNorthstarCanonicalPackage(currentPackage, acknowledgement);
       designTurnIndex += 1;
-      const systemInstruction = buildNorthstarDesignResetSystemInstruction();
-      const modelInput = buildNorthstarDesignResetModelInput({
+      const systemInstruction = buildNorthstarCompactDesignTurnSystemInstruction();
+      const modelInput = buildNorthstarCompactDesignTurnContext({
         turn: designTurnIndex,
         instruction,
         artifact: currentPackage,
@@ -7373,13 +7401,7 @@ async function runSingularObservedDesignObjectiveQueue({
       });
       const contents = [{
         role: "user",
-        parts: [
-          ...(previousOutcome ? [{
-            text: `LAST DESIGN TURN OUTCOME (authoritative; change strategy when rejected or unchanged)\n${JSON.stringify(previousOutcome)}`,
-          }] : []),
-          { text: `EXACT CURRENT ARTBOARD AND OBJECTIVE PROGRESS\n${JSON.stringify(modelInput)}` },
-          { text: instruction },
-        ],
+        parts: [{ text: JSON.stringify(modelInput) }],
       }];
       let decision: ReturnType<typeof sanitizeNorthstarObjectiveDecisionResponse>;
       try {
@@ -7389,9 +7411,20 @@ async function runSingularObservedDesignObjectiveQueue({
           contents,
           schema: NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA,
           signal,
-          maxOutputTokens: 32_000,
+          maxOutputTokens: 6_000,
           temperature: 0,
         });
+        addNorthstarModelTokenUsage(runUsage, audited.audit.usage);
+        await callbacks.trace?.("design.model_usage", {
+          objectiveIndex,
+          objectiveTurn,
+          designTurnIndex,
+          revisionId: currentPackage.revisionId,
+          requestBodyBytes: audited.audit.requestBodyBytes,
+          responseBodyBytes: audited.audit.providerPayloadBytes,
+          usage: audited.audit.usage,
+          cumulativeUsage: { ...runUsage },
+        }, "Recorded the exact provider usage for this compact design-turn request.");
         decision = sanitizeNorthstarObjectiveDecisionResponse({
           raw: audited.value,
           turn: designTurnIndex,
@@ -7400,21 +7433,31 @@ async function runSingularObservedDesignObjectiveQueue({
         });
       } catch (error) {
         if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+        const failedAudit = error instanceof NorthstarAuditedModelCallError ? error.audit : undefined;
+        addNorthstarModelTokenUsage(runUsage, failedAudit?.usage);
+        if (failedAudit) {
+          await callbacks.trace?.("design.model_usage", {
+            objectiveIndex,
+            objectiveTurn,
+            designTurnIndex,
+            revisionId: currentPackage.revisionId,
+            requestBodyBytes: failedAudit.requestBodyBytes,
+            responseBodyBytes: failedAudit.providerPayloadBytes,
+            usage: failedAudit.usage,
+            cumulativeUsage: { ...runUsage },
+            failed: true,
+          }, "Recorded provider usage for a design-turn response that failed locally.");
+        }
         if (northstarProviderInterruption(error)) throw error;
         const detail = error instanceof Error ? error.message : String(error);
-        previousOutcome = {
-          status: "rejected",
-          detail: `Model decision contract rejected: ${detail}`,
-          revisionId: currentPackage.revisionId,
-        };
         await callbacks.trace?.("design.objective_turn.contract_rejected", {
           objectiveIndex,
           objectiveTurn,
           designTurnIndex,
           revisionId: currentPackage.revisionId,
           detail,
-        }, "The living artboard was not changed. The current objective will retry from the same exact revision.");
-        continue;
+        }, "The living artboard was not changed. This objective receives no same-revision retry.");
+        break;
       }
       priorPlan = decision.objectivePlan;
 
@@ -7438,16 +7481,29 @@ async function runSingularObservedDesignObjectiveQueue({
         break;
       }
 
+      const proposedActionChannels = deriveNorthstarObservedActionChannels(decision.mutation);
+      const repeatedActionChannels = findNorthstarRepeatedObservedActionChannels(
+        observedActionChannels,
+        proposedActionChannels,
+      );
+      if (repeatedActionChannels.length) {
+        await callbacks.trace?.("design.objective_turn.non_convergent_action", {
+          objectiveIndex,
+          objectiveTurn,
+          designTurnIndex,
+          actionId: decision.action.actionId,
+          revisionId: currentPackage.revisionId,
+          proposedActionChannels,
+          repeatedActionChannels,
+          observedActionChannels: [...observedActionChannels],
+        }, "Fresh reasoning proposed semantic work already observed by the browser. The objective ends without a correction retry.");
+        break;
+      }
+
       const candidate = createNorthstarDesignResetCandidate({ base: currentPackage, response: decision });
       const dispatch = await callbacks.applyDesignAction(candidate, designTurnIndex, decision.action.intent);
       if (dispatch.status === "transport-unknown") throw new Error(dispatch.detail);
       if (dispatch.status === "execution-failed") {
-        previousOutcome = {
-          status: "rejected",
-          actionId: decision.action.actionId,
-          detail: dispatch.detail,
-          revisionId: currentPackage.revisionId,
-        };
         await callbacks.trace?.("design.objective_turn.rejected", {
           objectiveIndex,
           objectiveTurn,
@@ -7455,10 +7511,11 @@ async function runSingularObservedDesignObjectiveQueue({
           actionId: decision.action.actionId,
           revisionId: currentPackage.revisionId,
           detail: dispatch.detail,
-        }, "The browser kept the current revision; the next model turn will replan from it.");
-        continue;
+        }, "The browser kept the current revision. This objective receives no same-revision retry.");
+        break;
       }
       currentPackage = dispatch.artifact;
+      for (const channel of proposedActionChannels) observedActionChannels.add(channel);
       const changedNodeIds = dispatch.acknowledgement.meaningfulChangedNodeIds.length
         ? dispatch.acknowledgement.meaningfulChangedNodeIds
         : dispatch.acknowledgement.changedNodeIds;
@@ -7495,14 +7552,20 @@ async function runSingularObservedDesignObjectiveQueue({
       await callbacks.completeStep({
         id: step.id,
         tool: step.tool,
-        detail: "Preserved the latest browser-verified revision after the objective exhausted its operational turn budget.",
+        detail: "Preserved the latest browser-verified revision after the objective ended without completion.",
       });
       await callbacks.trace?.("design.objective_loop.unresolved", {
         objectiveIndex,
         revisionId: currentPackage.revisionId,
+        observedActionChannels: [...observedActionChannels],
       }, "The next objective will continue from the same browser-verified living artboard.");
     }
   }
+  await callbacks.trace?.("design.model_usage_summary", {
+    artifactId,
+    designTurnCount: designTurnIndex,
+    usage: runUsage,
+  }, "Recorded total provider usage for the universal design-objective loop.");
   return currentPackage;
 }
 

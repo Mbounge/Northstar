@@ -131,9 +131,35 @@ test("the active queue observes each applied action before another model decisio
   assert.match(loop, /currentPackage = dispatch\.artifact;/);
   assert.match(loop, /revisionId: currentPackage\.revisionId/);
   assert.match(loop, /design\.objective_turn\.contract_rejected/);
-  assert.match(loop, /LAST DESIGN TURN OUTCOME \(authoritative/);
+  assert.match(loop, /buildNorthstarCompactDesignTurnContext/);
+  assert.match(loop, /parts: \[\{ text: JSON\.stringify\(modelInput\) \}\]/);
+  assert.match(loop, /maxOutputTokens: 6_000/);
+  assert.doesNotMatch(loop, /LAST DESIGN TURN OUTCOME \(authoritative/);
+  assert.doesNotMatch(loop, /buildNorthstarDesignResetModelInput\(\{/);
+  assert.match(loop, /design\.model_usage_summary/);
   assert.match(loop, /meaningfulChangedNodeIds/);
   assert.match(loop, /if \(northstarProviderInterruption\(error\)\) throw error/);
   assert.doesNotMatch(loop, /NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES/);
   assert.match(route, /await runSingularObservedDesignObjectiveQueue\(\{/);
+});
+
+test("the active queue never spends another model call on an unchanged rejected revision", () => {
+  const route = readFileSync(new URL("../app/api/canvas-ai/route.ts", import.meta.url), "utf8");
+  const start = route.indexOf("async function runSingularObservedDesignObjectiveQueue");
+  const end = route.indexOf("async function runProductionDesignObjectiveQueue", start);
+  assert.ok(start >= 0 && end > start);
+  const loop = route.slice(start, end);
+  const contractFailure = loop.slice(
+    loop.indexOf('callbacks.trace?.("design.objective_turn.contract_rejected"'),
+    loop.indexOf("priorPlan = decision.objectivePlan"),
+  );
+  const executionFailure = loop.slice(
+    loop.indexOf('if (dispatch.status === "execution-failed")'),
+    loop.indexOf("currentPackage = dispatch.artifact"),
+  );
+  assert.match(contractFailure, /break;/);
+  assert.doesNotMatch(contractFailure, /continue;/);
+  assert.match(executionFailure, /break;/);
+  assert.doesNotMatch(executionFailure, /continue;/);
+  assert.match(loop, /if \(northstarProviderInterruption\(error\)\) throw error/);
 });

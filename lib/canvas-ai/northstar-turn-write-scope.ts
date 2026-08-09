@@ -77,6 +77,24 @@ export type NorthstarSpatialFeasibilityNode = {
   protected: boolean;
 };
 
+export type NorthstarObservedSpatialFacts = {
+  source: "browser-measurement";
+  minimumClearance: number;
+  worldBounds?: NorthstarSpatialFeasibilityNode["bounds"];
+  focusNodes: NorthstarSpatialFeasibilityNode[];
+  focusEnvelope?: NorthstarSpatialFeasibilityNode["bounds"];
+  nearbyObstacles: NorthstarSpatialFeasibilityNode[];
+  availableClearance: NorthstarSpatialFeasibilityContext["availableClearanceBySubject"];
+  measuredGaps: Array<{
+    parentId: string;
+    axis: "x" | "y";
+    beforeNodeId: string;
+    afterNodeId: string;
+    span: number;
+    crossAxisOverlap: number;
+  }>;
+};
+
 type RepairFindingLike = {
   subjectNodeId?: string;
   kind?: string;
@@ -160,6 +178,119 @@ function axisClearance(input: {
     }
   }
   return { subjectNodeId: subject.nodeId, ...clearances, blockers };
+}
+
+function unionBounds(nodes: NorthstarSpatialFeasibilityNode[]): NorthstarSpatialFeasibilityNode["bounds"] | undefined {
+  if (!nodes.length) return undefined;
+  const left = Math.min(...nodes.map((node) => node.bounds.left));
+  const top = Math.min(...nodes.map((node) => node.bounds.top));
+  const right = Math.max(...nodes.map((node) => node.bounds.right));
+  const bottom = Math.max(...nodes.map((node) => node.bounds.bottom));
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function overlaps(first: NorthstarSpatialFeasibilityNode["bounds"], second: NorthstarSpatialFeasibilityNode["bounds"]): boolean {
+  return Math.min(first.right, second.right) > Math.max(first.left, second.left)
+    && Math.min(first.bottom, second.bottom) > Math.max(first.top, second.top);
+}
+
+/**
+ * Pure browser facts for the next reasoning call. This is deliberately
+ * independent of repair findings and write scope: the model sees measured fit
+ * before it authors an operation, rather than discovering obstacles after it.
+ */
+export function buildNorthstarObservedSpatialFacts(input: {
+  acknowledgement: NorthstarArtifactMutationAcknowledgement;
+  focusNodeIds: string[];
+  minimumClearance?: number;
+}): NorthstarObservedSpatialFacts {
+  const nodes = input.acknowledgement.snapshot?.semanticNodes ?? [];
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+  const focusIds = new Set(input.focusNodeIds);
+  const protectedNodeIds = new Set(
+    (input.acknowledgement.evidenceRegistry?.presentationManifest ?? [])
+      .map((entry) => entry.nodeId)
+      .filter((nodeId): nodeId is string => Boolean(nodeId)),
+  );
+  const childCounts = new Map<string, number>();
+  for (const node of nodes) if (node.parentId) childCounts.set(node.parentId, (childCounts.get(node.parentId) ?? 0) + 1);
+  const structuralAncestorIds = new Set([...focusIds].flatMap((nodeId) => [...ancestorIds(nodeId, byId)]));
+  const focusNodes = [...focusIds]
+    .map((nodeId) => byId.get(nodeId))
+    .filter(directlyMeasured)
+    .map((node) => spatialNode(node, protectedNodeIds))
+    .filter(Boolean) as NorthstarSpatialFeasibilityNode[];
+  const focusEnvelope = unionBounds(focusNodes);
+  const allObstacles = nodes
+    .filter((node) => !focusIds.has(node.nodeId) && directlyMeasured(node))
+    .filter((node) => ![...ancestorIds(node.nodeId, byId)].some((ancestorId) => focusIds.has(ancestorId)))
+    .filter((node) => independentlyPaintedObstacle(node, childCounts, structuralAncestorIds))
+    .map((node) => spatialNode(node, protectedNodeIds))
+    .filter(Boolean) as NorthstarSpatialFeasibilityNode[];
+  const worldBounds = input.acknowledgement.size ? {
+    left: 0,
+    top: 0,
+    right: input.acknowledgement.size.intrinsicWidth,
+    bottom: input.acknowledgement.size.intrinsicHeight,
+    width: input.acknowledgement.size.intrinsicWidth,
+    height: input.acknowledgement.size.intrinsicHeight,
+  } : undefined;
+  const worldContainer = worldBounds ? {
+    nodeId: "artboard",
+    bounds: worldBounds,
+    protected: false,
+  } satisfies NorthstarSpatialFeasibilityNode : undefined;
+  const measuredSubjects = [
+    ...focusNodes,
+    ...(focusEnvelope ? [{ nodeId: "focus-envelope", bounds: focusEnvelope, protected: true }] : []),
+  ];
+  const availableClearance = measuredSubjects.map((subject) => axisClearance({
+    subject,
+    container: worldContainer,
+    obstacles: allObstacles,
+  }));
+  const blockerIds = new Set(availableClearance.flatMap((entry) => Object.values(entry.blockers).filter(Boolean) as string[]));
+  const nearbyObstacles = allObstacles.filter((obstacle) =>
+    blockerIds.has(obstacle.nodeId) || (focusEnvelope ? overlaps(focusEnvelope, obstacle.bounds) : false)
+  );
+  const siblingGroups = new Map<string, NorthstarSpatialFeasibilityNode[]>();
+  for (const focus of focusNodes) {
+    if (!focus.parentId) continue;
+    const group = siblingGroups.get(focus.parentId) ?? [];
+    group.push(focus);
+    siblingGroups.set(focus.parentId, group);
+  }
+  const measuredGaps = [...siblingGroups.entries()].flatMap(([parentId, group]) => {
+    if (group.length < 2) return [];
+    const measured = group.map((item) => byId.get(item.nodeId)).filter(directlyMeasured);
+    const axis = dominantFlowAxis(measured);
+    const ordered = [...group].sort((first, second) => axis === "x"
+      ? first.bounds.left - second.bounds.left
+      : first.bounds.top - second.bounds.top);
+    return ordered.slice(0, -1).map((before, index) => {
+      const after = ordered[index + 1]!;
+      return {
+        parentId,
+        axis,
+        beforeNodeId: before.nodeId,
+        afterNodeId: after.nodeId,
+        span: Math.max(0, axis === "x" ? after.bounds.left - before.bounds.right : after.bounds.top - before.bounds.bottom),
+        crossAxisOverlap: Math.max(0, axis === "x"
+          ? Math.min(before.bounds.bottom, after.bounds.bottom) - Math.max(before.bounds.top, after.bounds.top)
+          : Math.min(before.bounds.right, after.bounds.right) - Math.max(before.bounds.left, after.bounds.left)),
+      };
+    });
+  });
+  return {
+    source: "browser-measurement",
+    minimumClearance: input.minimumClearance ?? 12,
+    worldBounds,
+    focusNodes,
+    focusEnvelope,
+    nearbyObstacles,
+    availableClearance,
+    measuredGaps,
+  };
 }
 
 /** Browser facts only. The model remains responsible for choosing a composition. */
