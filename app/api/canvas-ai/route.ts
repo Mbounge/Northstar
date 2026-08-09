@@ -32,6 +32,7 @@ import {
 
 import {
   NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
+  NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA,
   NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS,
   NORTHSTAR_PATCH_3A_DIRECT_LIVE_REVIEW_VERSION,
   NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
@@ -51,6 +52,7 @@ import {
   northstarLiveRepairStrategyFingerprint,
   normalizeNorthstarSpatialAuthority,
   sanitizeNorthstarDesignResetModelResponse,
+  sanitizeNorthstarObjectiveDecisionResponse,
   selectNorthstarLiveRepairFindings,
   summarizeNorthstarLiveRepairOutcome,
   validateNorthstarDesignResetCandidate,
@@ -7276,6 +7278,234 @@ async function buildPolishedLiveArtifactPackage(input: {
   });
 }
 
+async function runSingularObservedDesignObjectiveQueue({
+  apiKey,
+  runId,
+  artifactId,
+  thinkingDepth,
+  callbacks,
+  signal,
+  objectives,
+}: {
+  apiKey: string;
+  runId: string;
+  artifactId: string;
+  thinkingDepth: ThinkingDepth;
+  callbacks: CompositionResearchCallbacks;
+  signal: AbortSignal;
+  objectives: readonly string[];
+}): Promise<NorthstarGeneratedCodeArtifactPackage> {
+  let currentPackage = callbacks.getVisibleArtifact();
+  if (!currentPackage) throw new Error("Northstar cannot begin design work before the living artboard is mounted.");
+  let designTurnIndex = 0;
+  const canonicalAcknowledgement = (
+    artifact: NorthstarGeneratedCodeArtifactPackage,
+  ): NorthstarArtifactMutationAcknowledgement => ({
+    schema: "northstar.artboard-ack.v1",
+    ackToken: `canonical-observation:${artifact.revisionId}`,
+    artifactId: artifact.artifactId,
+    surfaceId: artifact.surfaceId ?? artifact.artifactId,
+    revisionId: artifact.revisionId,
+    browserRevisionId: artifact.revisionId,
+    status: "ready",
+    review: artifact.runtimeReview,
+    changedNodeIds: [],
+    meaningfulChangedNodeIds: [],
+    changeKinds: [],
+    requiredAssetUrls: [],
+    loadedAssetUrls: [],
+    missingAssetUrls: [],
+    authoredDesignRelations: artifact.authoredDesignRelations ?? [],
+    resolvedDesignRelations: artifact.resolvedDesignRelations ?? [],
+    acknowledgedAt: new Date().toISOString(),
+  });
+
+  await callbacks.trace?.("design.objective_loop.started", {
+    artifactId,
+    baseRevisionId: currentPackage.revisionId,
+    objectiveCount: objectives.length,
+    architecture: "plan-one-action-observe-replan",
+  }, "Every objective now uses the same singular observed design-turn loop.");
+
+  for (const [objectiveOffset, instruction] of objectives.entries()) {
+    const objectiveIndex = objectiveOffset + 1;
+    const step = {
+      id: `design-objective-${objectiveIndex}`,
+      label: instruction,
+      tool: "prepare_composition_evidence",
+      icon: "write" as CanvasAIActivityIcon,
+    };
+    await callbacks.extendPlan([step], "Resolve the objective through singular browser-observed design turns.");
+    await callbacks.startStep(step);
+    let priorPlan: ReturnType<typeof sanitizeNorthstarObjectiveDecisionResponse>["objectivePlan"] | undefined;
+    let previousOutcome: {
+      status: "applied" | "rejected";
+      actionId?: string;
+      detail: string;
+      revisionId?: string;
+    } | undefined;
+    let completed = false;
+
+    for (let objectiveTurn = 1; objectiveTurn <= 12; objectiveTurn += 1) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const liveAcknowledgement = callbacks.getLinearDesignAck?.();
+      if (liveAcknowledgement && (
+        liveAcknowledgement.artifactId !== currentPackage.artifactId
+        || liveAcknowledgement.revisionId !== currentPackage.revisionId
+      )) {
+        throw new Error(`Browser revision ${liveAcknowledgement.revisionId} does not match canonical revision ${currentPackage.revisionId}.`);
+      }
+      const acknowledgement = liveAcknowledgement ?? canonicalAcknowledgement(currentPackage);
+      currentPackage = materializeNorthstarCanonicalPackage(currentPackage, acknowledgement);
+      designTurnIndex += 1;
+      const systemInstruction = buildNorthstarDesignResetSystemInstruction();
+      const modelInput = buildNorthstarDesignResetModelInput({
+        turn: designTurnIndex,
+        instruction,
+        artifact: currentPackage,
+        acknowledgement,
+        objectiveProgress: {
+          objectiveIndex,
+          designTurnIndex,
+          priorPlan,
+          previousOutcome,
+        },
+      });
+      const contents = [{
+        role: "user",
+        parts: [
+          ...(previousOutcome ? [{
+            text: `LAST DESIGN TURN OUTCOME (authoritative; change strategy when rejected or unchanged)\n${JSON.stringify(previousOutcome)}`,
+          }] : []),
+          { text: `EXACT CURRENT ARTBOARD AND OBJECTIVE PROGRESS\n${JSON.stringify(modelInput)}` },
+          { text: instruction },
+        ],
+      }];
+      let decision: ReturnType<typeof sanitizeNorthstarObjectiveDecisionResponse>;
+      try {
+        const audited = await callGeminiJsonOnceAudited<unknown>({
+          apiKey,
+          systemInstruction,
+          contents,
+          schema: NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA,
+          signal,
+          maxOutputTokens: 32_000,
+          temperature: 0,
+        });
+        decision = sanitizeNorthstarObjectiveDecisionResponse({
+          raw: audited.value,
+          turn: designTurnIndex,
+          baseRevisionId: currentPackage.revisionId,
+          existingRelations: acknowledgement.authoredDesignRelations,
+        });
+      } catch (error) {
+        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+        if (northstarProviderInterruption(error)) throw error;
+        const detail = error instanceof Error ? error.message : String(error);
+        previousOutcome = {
+          status: "rejected",
+          detail: `Model decision contract rejected: ${detail}`,
+          revisionId: currentPackage.revisionId,
+        };
+        await callbacks.trace?.("design.objective_turn.contract_rejected", {
+          objectiveIndex,
+          objectiveTurn,
+          designTurnIndex,
+          revisionId: currentPackage.revisionId,
+          detail,
+        }, "The living artboard was not changed. The current objective will retry from the same exact revision.");
+        continue;
+      }
+      priorPlan = decision.objectivePlan;
+
+      await callbacks.trace?.("design.objective_turn.decided", {
+        objectiveIndex,
+        objectiveTurn,
+        designTurnIndex,
+        revisionId: currentPackage.revisionId,
+        decision: decision.decision,
+        objectivePlan: decision.objectivePlan,
+        action: decision.decision === "execute-action" ? decision.action : undefined,
+      }, decision.understanding);
+
+      if (decision.decision === "objective-complete") {
+        completed = true;
+        await callbacks.completeStep({
+          id: step.id,
+          tool: step.tool,
+        detail: decision.completionRationale,
+        });
+        break;
+      }
+
+      const candidate = createNorthstarDesignResetCandidate({ base: currentPackage, response: decision });
+      const dispatch = await callbacks.applyDesignAction(candidate, designTurnIndex, decision.action.intent);
+      if (dispatch.status === "transport-unknown") throw new Error(dispatch.detail);
+      if (dispatch.status === "execution-failed") {
+        previousOutcome = {
+          status: "rejected",
+          actionId: decision.action.actionId,
+          detail: dispatch.detail,
+          revisionId: currentPackage.revisionId,
+        };
+        await callbacks.trace?.("design.objective_turn.rejected", {
+          objectiveIndex,
+          objectiveTurn,
+          designTurnIndex,
+          actionId: decision.action.actionId,
+          revisionId: currentPackage.revisionId,
+          detail: dispatch.detail,
+        }, "The browser kept the current revision; the next model turn will replan from it.");
+        continue;
+      }
+      currentPackage = dispatch.artifact;
+      const changedNodeIds = dispatch.acknowledgement.meaningfulChangedNodeIds.length
+        ? dispatch.acknowledgement.meaningfulChangedNodeIds
+        : dispatch.acknowledgement.changedNodeIds;
+      const review = dispatch.acknowledgement.review;
+      const observedIssues = [
+        ...(review?.authoredInterferencePairs ?? []).map((pair) => JSON.stringify(pair)),
+        ...(review?.authoredContinuityObservations ?? []).map((observation) => JSON.stringify(observation)),
+      ].slice(0, 12);
+      previousOutcome = {
+        status: "applied",
+        actionId: decision.action.actionId,
+        detail: JSON.stringify({
+          expectedSuccessSignal: decision.action.successSignal,
+          browserStatus: dispatch.acknowledgement.status,
+          changedNodeIds,
+          observedIssues,
+          instruction: observedIssues.length
+            ? "The action rendered, but these measured issues remain. Choose a materially different next operation."
+            : "Use the exact rendered geometry in the current acknowledgement to verify the success signal before declaring completion.",
+        }),
+        revisionId: currentPackage.revisionId,
+      };
+      await callbacks.trace?.("design.objective_turn.observed", {
+        objectiveIndex,
+        objectiveTurn,
+        designTurnIndex,
+        actionId: decision.action.actionId,
+        revisionId: currentPackage.revisionId,
+        acknowledgementStatus: dispatch.acknowledgement.status,
+      }, "The singular action rendered; the next model turn receives this exact browser revision.");
+    }
+
+    if (!completed) {
+      await callbacks.completeStep({
+        id: step.id,
+        tool: step.tool,
+        detail: "Preserved the latest browser-verified revision after the objective exhausted its operational turn budget.",
+      });
+      await callbacks.trace?.("design.objective_loop.unresolved", {
+        objectiveIndex,
+        revisionId: currentPackage.revisionId,
+      }, "The next objective will continue from the same browser-verified living artboard.");
+    }
+  }
+  return currentPackage;
+}
+
 async function runProductionDesignObjectiveQueue({
   apiKey,
   runId,
@@ -12729,7 +12959,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 });
             compositionUsedDesignReset = true;
             designResetLastRevisionId = lastLiveArtifactPackage?.revisionId;
-            const codeArtifactPackage = await runProductionDesignObjectiveQueue({
+            const codeArtifactPackage = await runSingularObservedDesignObjectiveQueue({
               apiKey,
               runId,
               artifactId: compositionArtifactId,

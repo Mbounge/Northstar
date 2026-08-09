@@ -168,6 +168,12 @@ export type NorthstarExactDocumentDiff = {
   };
 };
 
+export type NorthstarObjectiveActionPlan = {
+  objectiveSummary: string;
+  plannedActions: string[];
+  completedActions: string[];
+};
+
 export type NorthstarDesignResetModelResponse = {
   turn: NorthstarDesignResetTurn;
   observedBaseRevisionId: string;
@@ -175,6 +181,33 @@ export type NorthstarDesignResetModelResponse = {
   grounding: NorthstarDesignResetGrounding;
   mutation: NorthstarArtboardMutationDraft;
 };
+
+export type NorthstarDesignResetExecuteResponse = NorthstarDesignResetModelResponse & {
+  objectivePlan: NorthstarObjectiveActionPlan;
+  decision: "execute-action";
+  action: {
+    actionId: string;
+    intent: string;
+    successSignal: string;
+  };
+};
+
+export type NorthstarDesignResetCompleteResponse = {
+  turn: NorthstarDesignResetTurn;
+  observedBaseRevisionId: string;
+  understanding: string;
+  objectivePlan: NorthstarObjectiveActionPlan;
+  decision: "objective-complete";
+  completionRationale: string;
+  completionEvidence: {
+    satisfiedSignals: string[];
+    remainingIssues: string[];
+  };
+};
+
+export type NorthstarObjectiveDecisionResponse =
+  | NorthstarDesignResetExecuteResponse
+  | NorthstarDesignResetCompleteResponse;
 
 export type NorthstarDesignResetTurnArchive = {
   schema: "northstar.design-reset-turn-archive.v5";
@@ -535,6 +568,75 @@ export const NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA = {
   required: ["turn", "observedBaseRevisionId", "understanding", "grounding", "mutation"],
 } as const;
 
+export const NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    turn: { type: "integer", minimum: 1 },
+    observedBaseRevisionId: { type: "string", minLength: 1 },
+    understanding: { type: "string", minLength: 1, maxLength: 1200 },
+    objectivePlan: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        objectiveSummary: { type: "string", minLength: 1, maxLength: 1200 },
+        plannedActions: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, maxItems: 12 },
+        completedActions: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, maxItems: 12 },
+      },
+      required: ["objectiveSummary", "plannedActions", "completedActions"],
+    },
+    decision: { type: "string", enum: ["execute-action", "objective-complete"] },
+    action: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        actionId: { type: "string", minLength: 1, maxLength: 120 },
+        intent: { type: "string", minLength: 1, maxLength: 500 },
+        successSignal: { type: "string", minLength: 1, maxLength: 500 },
+      },
+      required: ["actionId", "intent", "successSignal"],
+    },
+    completionRationale: { type: "string", minLength: 1, maxLength: 1200 },
+    completionEvidence: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        satisfiedSignals: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, minItems: 1, maxItems: 12 },
+        remainingIssues: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, maxItems: 12 },
+      },
+      required: ["satisfiedSignals", "remainingIssues"],
+    },
+    grounding: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        conceptId: { type: "string", enum: ["research", "evidence-relationship", "evidence-gap-annotation", "evidence-explanation", "flow-structure", "evidence-reuse"] },
+        resolvedNodeId: { type: "string", minLength: 1, maxLength: 120 },
+        requestedRelation: { type: "string", enum: ["below", "right-of", "relationship-between", "equal-space-with-annotation", "explains", "reuses", "none"] },
+        placementSpace: { type: "string", enum: ["artboard-world"] },
+        referenceContinuity: { type: "string", enum: ["pixel-stable"] },
+        expansionDirection: { type: "string", enum: ["down", "right", "none"] },
+        evidenceNodeIds: { type: "array", items: { type: "string" }, minItems: 1 },
+        expectedPreservedNodeIds: { type: "array", items: { type: "string" }, minItems: 1 },
+        interpretation: { type: "string", minLength: 1, maxLength: 1200 },
+      },
+      required: ["conceptId", "resolvedNodeId", "requestedRelation", "placementSpace", "referenceContinuity", "expansionDirection", "evidenceNodeIds", "expectedPreservedNodeIds", "interpretation"],
+    },
+    mutation: {
+      ...NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA,
+      properties: {
+        ...NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA.properties,
+        operations: {
+          ...NORTHSTAR_ARTBOARD_MUTATION_JSON_SCHEMA.properties.operations,
+          minItems: 1,
+          maxItems: 1,
+        },
+      },
+    },
+  },
+  required: ["turn", "observedBaseRevisionId", "understanding", "objectivePlan", "decision"],
+} as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -802,6 +904,10 @@ function semanticGraphDiff(before: NorthstarArtboardSemanticGraph, after: Norths
 export function buildNorthstarDesignResetSystemInstruction(): string {
   return `You are editing the exact current source of one living Northstar artboard.
 
+Every artboard turn is singular. First form a provisional ordered plan for the current objective. Then either declare the objective complete from the exact current browser revision, or execute exactly one coherent visual action. Never combine dependent actions when the second action needs to observe the rendered result of the first. After an executed action, the browser will render and measure it and you will receive that exact new revision before choosing the next action. Replan from what actually happened, not from what you predicted. Continue one action at a time until the objective is visibly satisfied. Declare completion only when you can name the rendered success signals and completionEvidence.remainingIssues is empty.
+
+One singular action contains exactly one mutation operation. A relation may accompany that operation only when it is the positioning dependency for the same subject changed by that operation. It must not perform the next planned action. Creating space and placing content into that newly rendered space are separate actions. Creating a container and then populating it are separate actions. Positioning and then correcting that position are separate actions. This rule applies universally to every objective and is not benchmark-specific.
+
 The user will give you one short design instruction, the complete current artboard source, and an authoritative semantic-spatial graph derived from that exact committed revision. The graph defines stable concepts, regions, membership, exclusions, and current measured bounds.
 
 First resolve every noun, spatial relation, and alignment instruction through the semantic graph. Research always means the canonical evidence region rooted at node evidence; reasoning-zone and presentation are explicitly not research. The graph's bounds and anchors describe the current committed revision, but every persistent dependency must also be authored in mutation.relations so it survives later geometry changes.
@@ -810,7 +916,7 @@ Treat communication quality and evidence safety as part of every design decision
 
 Treat the current layout as a composition you can solve, not as a field of immovable obstacles. Evidence protection preserves each evidence item's source identity, content, rendered dimensions, visual appearance, visibility, and sequence order; it does not freeze its x/y position forever. When the current objective cannot read cleanly in the available space, create deliberate negative space by recomposing the smallest coherent affected structure necessary. You may translate an intact screenshot, a sequence suffix, or a whole evidence flow when that supporting movement is necessary to make the requested communication clear, provided you preserve evidence integrity and order and explicitly author the movement. Move dependent authored annotations or relationships with the affected composition, and request artboard growth when useful. Keep unrelated regions stable. Never move content merely to make the board different or to avoid solving the requested design problem.
 
-Use the same spatial problem-solving ability on every turn. Before choosing coordinates for a new object, inspect the occupied space around its semantic target and ask whether the complete composition has enough room for the object, its attribution, and existing relationships. If not, plan the space first: decide which smallest coherent surrounding structure can move, how much negative space the communication needs, which prior authored relationships must be rerouted or repositioned, and whether the artboard should grow. Then author the whole coordinated change in one mutation. A local coordinate tweak is not inherently safer than moving a coherent row or flow; choose the solution that produces the clearest complete rendered composition with the least necessary disruption.
+Use the same spatial problem-solving ability on every turn. Before choosing coordinates for a new object, inspect the occupied space around its semantic target and ask whether the complete composition has enough room for the object, its attribution, and existing relationships. If not, plan the space first: decide which smallest coherent surrounding structure can move, how much negative space the communication needs, which prior authored relationships must be rerouted or repositioned, and whether the artboard should grow. Then author only the next singular coordinated action. A local coordinate tweak is not inherently safer than moving a coherent row or flow; choose the action that moves the rendered composition toward the clearest complete result with the least necessary disruption.
 
 Before authoring any placement, perform a simple fit test from the current rendered measurements. On the placement axis, required span is the planned outer size of the new or moved subject plus the clear space its treatment needs; available span is the actual empty distance from the intended target edge to the nearest relevant occupied object or semantic-region edge. If available span is smaller than required span, that local placement does not fit. Do not try nearby coordinates inside the same insufficient space. Create enough room first by explicitly moving the smallest coherent affected structure, request artboard growth when useful, or choose a materially different treatment whose footprint actually fits. This is design reasoning you perform from the supplied measurements, not a runtime layout rule. Apply the fit test on the first attempt, not only after a collision is reported.
 
@@ -1001,6 +1107,17 @@ export function buildNorthstarDesignResetModelInput(input: {
   instruction: string;
   artifact: NorthstarGeneratedCodeArtifactPackage;
   acknowledgement: NorthstarArtifactMutationAcknowledgement;
+  objectiveProgress?: {
+    objectiveIndex: number;
+    designTurnIndex: number;
+    priorPlan?: NorthstarObjectiveActionPlan;
+    previousOutcome?: {
+      status: "applied" | "rejected";
+      actionId?: string;
+      detail: string;
+      revisionId?: string;
+    };
+  };
 }): unknown {
   const observation = strongestSourceObservation(input);
   const snapshot = observation.snapshot;
@@ -1040,6 +1157,7 @@ export function buildNorthstarDesignResetModelInput(input: {
     resetVersion: NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION,
     turn: input.turn,
     instruction,
+    objectiveProgress: input.objectiveProgress,
     semanticContract: {
       authoritative: true,
       graph: semanticGraph,
@@ -1063,7 +1181,7 @@ export function buildNorthstarDesignResetModelInput(input: {
     },
     designPartnerContext: {
       appliesToEveryTurn: true,
-      objective: "Help the model produce a complete, clear, readable, correctly attributed, evidence-safe result in one authored turn while preserving design ownership.",
+      objective: "Help the model reach a complete, clear, readable, correctly attributed, evidence-safe result through singular observed artboard actions while preserving design ownership.",
       protectedEvidenceNodeIds: semanticGraph.evidenceItems.map((item) => item.nodeId),
       currentEvidencePresentation: input.acknowledgement.evidenceRegistry?.presentationManifest ?? [],
       currentAuthoredInterferencePairs: input.acknowledgement.review?.authoredInterferencePairs ?? [],
@@ -1152,6 +1270,70 @@ export function sanitizeNorthstarDesignResetModelResponse(input: {
   return normalized.response;
 }
 
+export function sanitizeNorthstarObjectiveDecisionResponse(input: {
+  raw: unknown;
+  turn: NorthstarDesignResetTurn;
+  baseRevisionId: string;
+  existingRelations?: NorthstarAuthoredDesignRelation[];
+}): NorthstarObjectiveDecisionResponse {
+  const raw = isRecord(input.raw) ? input.raw : {};
+  if (raw.observedBaseRevisionId !== input.baseRevisionId) {
+    throw new Error(`The model observed revision ${String(raw.observedBaseRevisionId || "missing")} instead of current revision ${input.baseRevisionId}.`);
+  }
+  const planRaw = isRecord(raw.objectivePlan) ? raw.objectivePlan : {};
+  const cleanActions = (value: unknown): string[] => Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean).slice(0, 12)
+    : [];
+  const objectivePlan: NorthstarObjectiveActionPlan = {
+    objectiveSummary: typeof planRaw.objectiveSummary === "string" ? planRaw.objectiveSummary.trim() : "",
+    plannedActions: cleanActions(planRaw.plannedActions),
+    completedActions: cleanActions(planRaw.completedActions),
+  };
+  if (!objectivePlan.objectiveSummary) throw new Error("The model did not return an objective plan.");
+  const understanding = typeof raw.understanding === "string" ? raw.understanding.trim() : "";
+  if (raw.decision === "objective-complete") {
+    const completionRationale = typeof raw.completionRationale === "string" ? raw.completionRationale.trim() : "";
+    if (!completionRationale) throw new Error("The model declared completion without a rendered-state rationale.");
+    const evidenceRaw = isRecord(raw.completionEvidence) ? raw.completionEvidence : {};
+    const satisfiedSignals = cleanActions(evidenceRaw.satisfiedSignals);
+    const remainingIssues = cleanActions(evidenceRaw.remainingIssues);
+    if (!satisfiedSignals.length) throw new Error("The model declared completion without rendered success evidence.");
+    if (remainingIssues.length) throw new Error(`The model declared completion with unresolved issues: ${remainingIssues.join(" ")}`);
+    return {
+      turn: input.turn,
+      observedBaseRevisionId: input.baseRevisionId,
+      understanding,
+      objectivePlan,
+      decision: "objective-complete",
+      completionRationale,
+      completionEvidence: { satisfiedSignals, remainingIssues },
+    };
+  }
+  if (raw.decision !== "execute-action") throw new Error("The model must execute one action or declare the objective complete.");
+  const actionRaw = isRecord(raw.action) ? raw.action : {};
+  const action = {
+    actionId: typeof actionRaw.actionId === "string" ? actionRaw.actionId.trim() : "",
+    intent: typeof actionRaw.intent === "string" ? actionRaw.intent.trim() : "",
+    successSignal: typeof actionRaw.successSignal === "string" ? actionRaw.successSignal.trim() : "",
+  };
+  if (!action.actionId || !action.intent || !action.successSignal) throw new Error("The model did not define one complete singular action.");
+  const executable = sanitizeNorthstarDesignResetModelResponse({
+    raw,
+    turn: input.turn,
+    baseRevisionId: input.baseRevisionId,
+    existingRelations: input.existingRelations,
+  });
+  if (executable.mutation.operations.length !== 1) {
+    throw new Error(`A singular observed design turn must contain exactly one mutation operation; received ${executable.mutation.operations.length}. Split the objective and submit only the next operation.`);
+  }
+  const spatialRelations = (executable.mutation.relations ?? [])
+    .filter((relation) => relation.kind === "relative-placement" || relation.kind === "between-placement");
+  if (spatialRelations.length > 1) {
+    throw new Error("A singular observed design turn may establish at most one spatial positioning dependency for its one operation.");
+  }
+  return { ...executable, objectivePlan, decision: "execute-action", action };
+}
+
 const POSITION_STYLE_CHANNELS = {
   x: new Set(["left", "right", "margin-left", "margin-right", "transform", "translate"]),
   y: new Set(["top", "bottom", "margin-top", "margin-bottom", "transform", "translate"]),
@@ -1225,16 +1407,11 @@ export function normalizeNorthstarSpatialAuthority(input: {
   const continuationContracts = input.continuation
     ? (input.existingRelations ?? []).filter((relation) => isSpatialKind(relation.kind))
     : [];
-  const requestedKind = requested === "equal-space-with-annotation"
-    ? "between-placement"
-    : requested === "below" || requested === "right-of"
-      ? "relative-placement"
-      : undefined;
   const kind = continuationContracts.length === 1
     ? continuationContracts[0].kind
     : proposedSpatialRelations.length === 1
       ? proposedSpatialRelations[0].kind
-      : requestedKind;
+      : undefined;
   if (!kind) return { response, issues, normalizedFields: [...new Set(normalizedFields)] };
   let relations = (response.mutation.relations ?? []).filter((relation) => relation.kind === kind);
   if (input.continuation && continuationContracts.length === 1) {
