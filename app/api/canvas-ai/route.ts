@@ -31,57 +31,21 @@ import {
 } from "@/lib/canvas-ai/northstar-code-artifact";
 
 import {
-  NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
   NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA,
-  NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS,
-  NORTHSTAR_PATCH_3A_DIRECT_LIVE_REVIEW_VERSION,
-  NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
-  NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
-  NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
-  NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
-  NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION,
-  buildNorthstarArtboardSemanticGraph,
   buildNorthstarCompactDesignTurnContext,
   buildNorthstarCompactDesignTurnSystemInstruction,
-  buildNorthstarDesignResetModelInput,
-  buildNorthstarDesignResetSystemInstruction,
-  buildNorthstarDesignResetTurnArchive,
   createNorthstarDesignResetCandidate,
-  findNorthstarNewReactiveRelationConflicts,
-  northstarAuthoredRelationRealizationIssues,
   northstarDesignResetSha256,
-  northstarLiveRepairExecutableFingerprint,
-  northstarLiveRepairStrategyFingerprint,
-  normalizeNorthstarSpatialAuthority,
   readNorthstarModelTokenUsage,
-  sanitizeNorthstarDesignResetModelResponse,
   sanitizeNorthstarObjectiveDecisionResponse,
-  selectNorthstarLiveRepairFindings,
-  summarizeNorthstarLiveRepairOutcome,
   validateNorthstarDesignResetCandidate,
   type NorthstarDesignResetProviderAttemptAudit,
   type NorthstarDesignResetTurn,
   type NorthstarDesignResetTurnArchive,
   type NorthstarModelTokenUsage,
+  type NorthstarObservedObjectiveTurn,
 } from "@/lib/canvas-ai/northstar-two-turn-design-reset";
 import { NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES } from "@/lib/canvas-ai/northstar-artboard-benchmark-fixture";
-import {
-  buildNorthstarSpatialFeasibilityContext,
-  createNorthstarTurnWriteScope,
-  expandNorthstarMeasuredRepairScope,
-  extendNorthstarTurnWriteScope,
-  preflightNorthstarPredictableSpatialFeasibility,
-  validateNorthstarContinuationWriteScope,
-  type NorthstarTurnWriteScope,
-} from "@/lib/canvas-ai/northstar-turn-write-scope";
-import {
-  deriveNorthstarObservedActionChannels,
-  findNorthstarRepeatedObservedActionChannels,
-} from "@/lib/canvas-ai/northstar-observed-action-ledger";
-
-
-
-
 import {
   getNorthstarArtifactAcknowledgement,
   prepareNorthstarArtifactAcknowledgementWait,
@@ -125,7 +89,6 @@ import {
   reviewNorthstarBrowserCommit,
   verifyNorthstarFinalResponse,
   type NorthstarFinalStateBrief,
-  type NorthstarMoveContract,
 } from "@/lib/canvas-ai/northstar-continuous-visual-authorship";
 
 
@@ -2859,14 +2822,6 @@ async function fetchVisualPart(
     clearTimeout(timeout);
     outerSignal.removeEventListener("abort", abortFromOuter);
   }
-}
-
-function canvasHasArtifactRole(context: unknown, artifactId: string, role: string): boolean {
-  if (!artifactId) return false;
-  return collectObjects(context).some((object) => {
-    const semantic = isRecord(object.semantic) ? object.semantic : undefined;
-    return getString(semantic?.artifactId) === artifactId && getString(semantic?.role) === role;
-  });
 }
 
 function collectObjects(context: unknown, key = "objects"): Record<string, unknown>[] {
@@ -6459,45 +6414,6 @@ type NorthstarPreparedAcknowledgementWaitResult = {
   result: Promise<NorthstarAcknowledgementWaitResult>;
 };
 
-class NorthstarModelStageTimeoutError extends Error {
-  readonly stage: string;
-  readonly timeoutMs: number;
-
-  constructor(stage: string, timeoutMs: number) {
-    super(`Northstar model stage “${stage}” timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
-    this.name = "NorthstarModelStageTimeoutError";
-    this.stage = stage;
-    this.timeoutMs = timeoutMs;
-  }
-}
-
-async function runNorthstarModelStageWithTimeout<T>(input: {
-  stage: string;
-  timeoutMs: number;
-  parentSignal: AbortSignal;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<T> {
-  if (input.parentSignal.aborted) throw new DOMException("Aborted", "AbortError");
-  const controller = new AbortController();
-  const abortFromParent = () => controller.abort(input.parentSignal.reason);
-  input.parentSignal.addEventListener("abort", abortFromParent, { once: true });
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      input.run(controller.signal),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          controller.abort(new NorthstarModelStageTimeoutError(input.stage, input.timeoutMs));
-          reject(new NorthstarModelStageTimeoutError(input.stage, input.timeoutMs));
-        }, input.timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    input.parentSignal.removeEventListener("abort", abortFromParent);
-  }
-}
-
 function delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
   return new Promise<void>((resolve, reject) => {
@@ -6677,59 +6593,6 @@ function materializeNorthstarCanonicalPackage(
   };
   delete materialized.creativeLease;
   return materialized;
-}
-
-function toNorthstarMutationBuildPhase(
-  phase: NorthstarMoveContract["phase"],
-): CanvasCodeArtifactStage["phase"] {
-  return phase === "settlement" ? "refinement" : phase;
-}
-
-function northstarVisualImpactRequirements(
-  obligation: NorthstarMoveContract["obligation"],
-): Pick<
-  NorthstarArtboardMutationBatch,
-  | "minimumMeaningfulChangedNodes"
-  | "allowTextOnly"
-  | "requiredChangeKinds"
-  | "minimumChangedAreaRatio"
-  | "minimumSpatiallyChangedNodes"
-  | "minimumMovedNodes"
-  | "minimumResizedNodes"
-> {
-  if (obligation === "evidence-hierarchy") {
-    return {
-      minimumMeaningfulChangedNodes: 3,
-      allowTextOnly: false,
-      requiredChangeKinds: ["style"],
-      minimumChangedAreaRatio: 0.06,
-      minimumSpatiallyChangedNodes: 2,
-      minimumResizedNodes: 1,
-    };
-  }
-  if (obligation === "hypothesis-tested") {
-    return {
-      minimumMeaningfulChangedNodes: 2,
-      allowTextOnly: false,
-      requiredChangeKinds: ["structure"],
-      minimumChangedAreaRatio: 0.035,
-      minimumSpatiallyChangedNodes: 1,
-    };
-  }
-  if (obligation === "relationship-visible" || obligation === "synthesis" || obligation === "contextual-resolution") {
-    return {
-      minimumMeaningfulChangedNodes: 2,
-      allowTextOnly: false,
-      requiredChangeKinds: ["structure"],
-      minimumChangedAreaRatio: 0.04,
-      minimumSpatiallyChangedNodes: 1,
-    };
-  }
-  return {
-    minimumMeaningfulChangedNodes: 1,
-    allowTextOnly: false,
-    minimumChangedAreaRatio: 0.015,
-  };
 }
 
 function liveAcknowledgementPassed(
@@ -7306,17 +7169,13 @@ function addNorthstarModelTokenUsage(
 
 async function runSingularObservedDesignObjectiveQueue({
   apiKey,
-  runId,
   artifactId,
-  thinkingDepth,
   callbacks,
   signal,
   objectives,
 }: {
   apiKey: string;
-  runId: string;
   artifactId: string;
-  thinkingDepth: ThinkingDepth;
   callbacks: CompositionResearchCallbacks;
   signal: AbortSignal;
   objectives: readonly string[];
@@ -7346,6 +7205,59 @@ async function runSingularObservedDesignObjectiveQueue({
     resolvedDesignRelations: artifact.resolvedDesignRelations ?? [],
     acknowledgedAt: new Date().toISOString(),
   });
+  const compactRejectedBrowserReceipt = (
+    acknowledgement: NorthstarArtifactMutationAcknowledgement,
+    fallbackDetail: string,
+  ) => {
+    const review = acknowledgement.review;
+    const geometry = review?.geometryFacts;
+    return {
+      browserStatus: "rejected" as const,
+      rejectionReason: (acknowledgement.reason || fallbackDetail).slice(0, 600),
+      candidateRevisionId: acknowledgement.revisionId,
+      canonicalRestoredRevisionId: acknowledgement.browserRevisionId,
+      rollbackDurationMs: acknowledgement.rollbackDurationMs,
+      candidateDurationMs: acknowledgement.candidateDurationMs,
+      changedNodeIds: (
+        acknowledgement.meaningfulChangedNodeIds.length
+          ? acknowledgement.meaningfulChangedNodeIds
+          : acknowledgement.changedNodeIds
+      ).slice(0, 16),
+      candidateEnvelope: geometry ? {
+        artboardBounds: geometry.artboardBounds,
+        semanticContentBounds: geometry.semanticContentBounds,
+        rightGutterPx: geometry.rightGutterPx,
+        bottomGutterPx: geometry.bottomGutterPx,
+        unusedSpaceRatio: geometry.unusedSpaceRatio,
+        outOfBoundsNodeIds: geometry.outOfBoundsNodeIds.slice(0, 8),
+        clippedSemanticNodeIds: geometry.clippedSemanticNodeIds.slice(0, 8),
+      } : undefined,
+      blockingFacts: {
+        missingAssetUrls: acknowledgement.missingAssetUrls.slice(0, 8),
+        evidenceCollisionPairs: (review?.evidenceCollisionPairs ?? []).slice(0, 8),
+        authoredInterferencePairs: (review?.authoredInterferencePairs ?? []).slice(0, 6).map((entry) => ({
+          relationshipId: entry.relationshipId,
+          primitiveId: entry.primitiveId,
+          obstacleId: entry.obstacleId,
+        })),
+        semanticRegionIntrusions: (review?.semanticRegionIntrusions ?? []).slice(0, 6).map((entry) => ({
+          additionId: entry.additionId,
+          intendedFlowId: entry.intendedFlowId,
+          intrudedFlowId: entry.intrudedFlowId,
+          overlapArea: entry.overlapArea,
+        })),
+        weakenedContinuity: (review?.authoredContinuityObservations ?? [])
+          .filter((entry) => entry.visualAttribution === "weakened")
+          .slice(0, 6)
+          .map((entry) => ({
+            additionId: entry.additionId,
+            targetNodeIds: entry.targetNodeIds.slice(0, 8),
+            reason: entry.reason.slice(0, 240),
+          })),
+      },
+      instruction: "The provisional DOM was rolled back to the canonical revision. Do not repeat this action or search nearby coordinates. Choose one materially different singular action grounded in these measured facts.",
+    };
+  };
 
   await callbacks.trace?.("design.objective_loop.started", {
     artifactId,
@@ -7370,20 +7282,27 @@ async function runSingularObservedDesignObjectiveQueue({
       actionId?: string;
       detail: string;
       revisionId?: string;
+      browserReceipt?: Record<string, unknown>;
     } | undefined;
     let completed = false;
-    const observedActionChannels = new Set<string>();
+    const observedTurns: NorthstarObservedObjectiveTurn[] = [];
+    const rejectedActionFingerprints = new Set<string>();
 
     for (let objectiveTurn = 1; ; objectiveTurn += 1) {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
       const liveAcknowledgement = callbacks.getLinearDesignAck?.();
+      const observedBrowserRevisionId = liveAcknowledgement?.status === "rejected"
+        ? liveAcknowledgement.browserRevisionId
+        : liveAcknowledgement?.revisionId;
       if (liveAcknowledgement && (
         liveAcknowledgement.artifactId !== currentPackage.artifactId
-        || liveAcknowledgement.revisionId !== currentPackage.revisionId
+        || observedBrowserRevisionId !== currentPackage.revisionId
       )) {
-        throw new Error(`Browser revision ${liveAcknowledgement.revisionId} does not match canonical revision ${currentPackage.revisionId}.`);
+        throw new Error(`Browser revision ${observedBrowserRevisionId ?? liveAcknowledgement.revisionId} does not match canonical revision ${currentPackage.revisionId}.`);
       }
-      const acknowledgement = liveAcknowledgement ?? canonicalAcknowledgement(currentPackage);
+      const acknowledgement = liveAcknowledgement?.status === "rejected"
+        ? canonicalAcknowledgement(currentPackage)
+        : liveAcknowledgement ?? canonicalAcknowledgement(currentPackage);
       currentPackage = materializeNorthstarCanonicalPackage(currentPackage, acknowledgement);
       designTurnIndex += 1;
       const systemInstruction = buildNorthstarCompactDesignTurnSystemInstruction();
@@ -7397,6 +7316,7 @@ async function runSingularObservedDesignObjectiveQueue({
           designTurnIndex,
           priorPlan,
           previousOutcome,
+          observedTurns,
         },
       });
       const contents = [{
@@ -7476,34 +7396,35 @@ async function runSingularObservedDesignObjectiveQueue({
         await callbacks.completeStep({
           id: step.id,
           tool: step.tool,
-        detail: decision.completionRationale,
+          detail: decision.completionRationale,
         });
         break;
       }
 
-      const proposedActionChannels = deriveNorthstarObservedActionChannels(decision.mutation);
-      const repeatedActionChannels = findNorthstarRepeatedObservedActionChannels(
-        observedActionChannels,
-        proposedActionChannels,
-      );
-      if (repeatedActionChannels.length) {
-        await callbacks.trace?.("design.objective_turn.non_convergent_action", {
+      const baseRevisionId = currentPackage.revisionId;
+      const actionFingerprint = northstarDesignResetSha256(JSON.stringify({
+        geometryIntent: decision.mutation.geometryIntent,
+        operations: decision.mutation.operations,
+        relations: decision.mutation.relations ?? [],
+      }));
+      if (rejectedActionFingerprints.has(actionFingerprint)) {
+        await callbacks.trace?.("design.objective_turn.duplicate_rejected_action", {
           objectiveIndex,
           objectiveTurn,
           designTurnIndex,
           actionId: decision.action.actionId,
           revisionId: currentPackage.revisionId,
-          proposedActionChannels,
-          repeatedActionChannels,
-          observedActionChannels: [...observedActionChannels],
-        }, "Fresh reasoning proposed semantic work already observed by the browser. The objective ends without a correction retry.");
+          actionFingerprint,
+        }, "Stopped before browser dispatch because the model repeated an action that this exact canonical revision already rejected.");
         break;
       }
-
       const candidate = createNorthstarDesignResetCandidate({ base: currentPackage, response: decision });
       const dispatch = await callbacks.applyDesignAction(candidate, designTurnIndex, decision.action.intent);
       if (dispatch.status === "transport-unknown") throw new Error(dispatch.detail);
       if (dispatch.status === "execution-failed") {
+        const rejectedAcknowledgement = dispatch.acknowledgement;
+        const safelyRestored = rejectedAcknowledgement?.status === "rejected"
+          && rejectedAcknowledgement.browserRevisionId === currentPackage.revisionId;
         await callbacks.trace?.("design.objective_turn.rejected", {
           objectiveIndex,
           objectiveTurn,
@@ -7511,11 +7432,33 @@ async function runSingularObservedDesignObjectiveQueue({
           actionId: decision.action.actionId,
           revisionId: currentPackage.revisionId,
           detail: dispatch.detail,
-        }, "The browser kept the current revision. This objective receives no same-revision retry.");
-        break;
+          safelyRestored,
+        }, safelyRestored
+          ? "The provisional candidate failed browser feasibility and was rolled back. The next reason step receives its compact measured receipt."
+          : "The candidate did not return a verified rollback receipt, so progression stopped without changing the canonical artboard.");
+        if (!rejectedAcknowledgement || !safelyRestored) break;
+        rejectedActionFingerprints.add(actionFingerprint);
+        const receipt = compactRejectedBrowserReceipt(rejectedAcknowledgement, dispatch.detail);
+        observedTurns.push({
+          actionId: decision.action.actionId,
+          intent: decision.action.intent,
+          successSignal: decision.action.successSignal,
+          baseRevisionId,
+          observedRevisionId: currentPackage.revisionId,
+          changedNodeIds: receipt.changedNodeIds,
+          browserStatus: "rejected",
+          remainingFindings: [receipt.rejectionReason],
+        });
+        previousOutcome = {
+          status: "rejected",
+          actionId: decision.action.actionId,
+          detail: `The provisional action did not satisfy ${decision.action.successSignal}. The browser rolled it back and returned measured blocking facts.`,
+          revisionId: currentPackage.revisionId,
+          browserReceipt: receipt,
+        };
+        continue;
       }
       currentPackage = dispatch.artifact;
-      for (const channel of proposedActionChannels) observedActionChannels.add(channel);
       const changedNodeIds = dispatch.acknowledgement.meaningfulChangedNodeIds.length
         ? dispatch.acknowledgement.meaningfulChangedNodeIds
         : dispatch.acknowledgement.changedNodeIds;
@@ -7524,6 +7467,16 @@ async function runSingularObservedDesignObjectiveQueue({
         ...(review?.authoredInterferencePairs ?? []).map((pair) => JSON.stringify(pair)),
         ...(review?.authoredContinuityObservations ?? []).map((observation) => JSON.stringify(observation)),
       ].slice(0, 12);
+      observedTurns.push({
+        actionId: decision.action.actionId,
+        intent: decision.action.intent,
+        successSignal: decision.action.successSignal,
+        baseRevisionId,
+        observedRevisionId: currentPackage.revisionId,
+        changedNodeIds,
+        browserStatus: dispatch.acknowledgement.status,
+        remainingFindings: observedIssues,
+      });
       previousOutcome = {
         status: "applied",
         actionId: decision.action.actionId,
@@ -7545,6 +7498,7 @@ async function runSingularObservedDesignObjectiveQueue({
         actionId: decision.action.actionId,
         revisionId: currentPackage.revisionId,
         acknowledgementStatus: dispatch.acknowledgement.status,
+        observedTurnCount: observedTurns.length,
       }, "The singular action rendered; the next model turn receives this exact browser revision.");
     }
 
@@ -7557,7 +7511,8 @@ async function runSingularObservedDesignObjectiveQueue({
       await callbacks.trace?.("design.objective_loop.unresolved", {
         objectiveIndex,
         revisionId: currentPackage.revisionId,
-        observedActionChannels: [...observedActionChannels],
+        observedTurnCount: observedTurns.length,
+        lastObservedTurn: observedTurns.at(-1),
       }, "The next objective will continue from the same browser-verified living artboard.");
     }
   }
@@ -7567,1263 +7522,6 @@ async function runSingularObservedDesignObjectiveQueue({
     usage: runUsage,
   }, "Recorded total provider usage for the universal design-objective loop.");
   return currentPackage;
-}
-
-async function runProductionDesignObjectiveQueue({
-  apiKey,
-  runId,
-  artifactId,
-  thinkingDepth,
-  callbacks,
-  signal,
-  objectives,
-}: {
-  apiKey: string;
-  runId: string;
-  artifactId: string;
-  thinkingDepth: ThinkingDepth;
-  callbacks: CompositionResearchCallbacks;
-  signal: AbortSignal;
-  objectives: readonly string[];
-}): Promise<NorthstarGeneratedCodeArtifactPackage> {
-  let currentPackage = callbacks.getVisibleArtifact();
-  if (!currentPackage) {
-    throw new Error("Northstar cannot start the design reset before the exact research artboard is mounted.");
-  }
-
-  callbacks.trace?.("design.reset.started", {
-    artifactId,
-    baseRevisionId: currentPackage.revisionId,
-    resetVersion: NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION,
-    requestedThinkingMode: thinkingDepth,
-    effectiveDesignMode: "ordered-objective-queue",
-    objectiveCount: objectives.length,
-  }, "Northstar entered the production design objective queue. Every objective uses the same design-engine path.");
-
-  const unresolvedTurns: NorthstarDesignResetTurn[] = [];
-  let previousCumulativeIntentAudit: NorthstarDesignResetTurnArchive["cumulativeIntentAudit"];
-  const canonicalObservationAcknowledgement = (
-    artifact: NorthstarGeneratedCodeArtifactPackage,
-  ): NorthstarArtifactMutationAcknowledgement => ({
-    schema: "northstar.artboard-ack.v1",
-    ackToken: `canonical-observation:${artifact.revisionId}`,
-    artifactId: artifact.artifactId,
-    surfaceId: artifact.surfaceId ?? artifact.artifactId,
-    revisionId: artifact.revisionId,
-    browserRevisionId: artifact.revisionId,
-    status: "ready",
-    review: artifact.runtimeReview,
-    changedNodeIds: [],
-    meaningfulChangedNodeIds: [],
-    changeKinds: [],
-    requiredAssetUrls: [],
-    loadedAssetUrls: [],
-    missingAssetUrls: [],
-    authoredDesignRelations: artifact.authoredDesignRelations ?? [],
-    resolvedDesignRelations: artifact.resolvedDesignRelations ?? [],
-    acknowledgedAt: new Date().toISOString(),
-  });
-  objectiveQueue: for (const [objectiveOffset, turnInstruction] of objectives.entries()) {
-    const turn = objectiveOffset + 1;
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const visibleTurnStartedAt = Date.now();
-    const liveAcknowledgement = callbacks.getLinearDesignAck?.();
-    if (
-      liveAcknowledgement
-      && (
-        liveAcknowledgement.artifactId !== currentPackage.artifactId
-        || liveAcknowledgement.revisionId !== currentPackage.revisionId
-      )
-    ) {
-      throw new Error(`Design reset turn ${turn} cannot continue because browser revision ${liveAcknowledgement.revisionId} does not match canonical revision ${currentPackage.revisionId}.`);
-    }
-    const beforeAcknowledgement = liveAcknowledgement ?? canonicalObservationAcknowledgement(currentPackage);
-    if (!liveAcknowledgement || !beforeAcknowledgement.snapshot) {
-      callbacks.trace?.("design.reset.observation_degraded", {
-        turn,
-        revisionId: currentPackage.revisionId,
-        canonicalSourceAvailable: true,
-        browserAcknowledgementAvailable: Boolean(liveAcknowledgement),
-        browserSnapshotAvailable: Boolean(beforeAcknowledgement.snapshot),
-        browserGeometryAvailable: Boolean(beforeAcknowledgement.snapshot?.semanticNodes?.length),
-      }, "Northstar kept the living artboard active using canonical source because optional browser observation was unavailable. Revision authority remains unchanged.");
-    }
-    const basePackage = materializeNorthstarCanonicalPackage(currentPackage, beforeAcknowledgement);
-    currentPackage = basePackage;
-    const step = {
-      id: `design-reset-turn-${turn}`,
-      label: turnInstruction,
-      tool: "prepare_composition_evidence",
-      icon: "write" as CanvasAIActivityIcon,
-    };
-    await callbacks.extendPlan([step], "Run the next production design objective against the current living artboard.");
-    await callbacks.startStep(step);
-
-    const systemInstruction = buildNorthstarDesignResetSystemInstruction();
-    const modelInput = buildNorthstarDesignResetModelInput({
-      turn,
-      instruction: turnInstruction,
-      artifact: basePackage,
-      acknowledgement: beforeAcknowledgement,
-    });
-    const contents = [{
-      role: "user",
-      parts: [
-        { text: `EXACT CURRENT ARTBOARD\n${JSON.stringify(modelInput)}` },
-        { text: turnInstruction },
-      ],
-    }];
-    let providerAttempt: NorthstarDesignResetProviderAttemptAudit | undefined;
-    const providerAttempts: NorthstarDesignResetProviderAttemptAudit[] = [];
-    let rawParsedResponse: unknown;
-    let parsedResponse: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse> | undefined;
-    let candidate: NorthstarGeneratedCodeArtifactPackage | undefined;
-    let mutationBatch: NonNullable<NorthstarGeneratedCodeArtifactPackage["mutationJournal"]>[number] | undefined;
-    let dispatchResult: Extract<NorthstarDesignResetDispatchResult, { status: "applied" }> | undefined;
-    let liveReviewedArchive: NorthstarDesignResetTurnArchive | undefined;
-    let turnWriteScope: NorthstarTurnWriteScope | undefined;
-    let turnRelationContracts: NorthstarAuthoredDesignRelation[] = [];
-    let repairIssues: string[] = [];
-    let repairContext: Record<string, unknown> | undefined;
-    const repairHistory: Array<Record<string, unknown>> = [];
-    const maximumRepairAttempts = 6;
-    const maximumProviderAttemptsPerObjective = 8;
-    const maximumProviderBackoffMs = 10_000;
-    let providerBackoffUsed = false;
-    let providerInterruption: NorthstarProviderInterruption | undefined;
-    const repeatedRepairFingerprintLimit = 1;
-    const repairFingerprintCounts = new Map<string, number>();
-    const rawRelationsFrom = (value: unknown): unknown[] => {
-      if (!isRecord(value) || !isRecord(value.mutation) || !Array.isArray(value.mutation.relations)) return [];
-      return value.mutation.relations;
-    };
-    const relationPipelineTrace = (
-      raw: unknown,
-      sanitized: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse> | undefined,
-      receipt: NorthstarArtifactMutationAcknowledgement | undefined,
-    ) => ({
-      rawModelRelations: rawRelationsFrom(raw),
-      sanitizedRelations: sanitized?.mutation.relations ?? [],
-      browserAuthoredRelations: receipt?.authoredDesignRelations ?? [],
-      browserResolvedRelations: receipt?.resolvedDesignRelations ?? [],
-      browserRealizationTraces: receipt?.review?.relationRealizationTraces ?? [],
-    });
-    const relationPipelineObservations = (trace: ReturnType<typeof relationPipelineTrace>): string[] => {
-      const relationId = (value: unknown): string | undefined =>
-        isRecord(value) && typeof value.id === "string" && value.id.trim() ? value.id.trim() : undefined;
-      const rawIds = trace.rawModelRelations.map(relationId).filter((value): value is string => Boolean(value));
-      const sanitizedIds = trace.sanitizedRelations.map((relation) => relation.id);
-      const browserIds = trace.browserAuthoredRelations.map((relation) => relation.id);
-      return [
-        ...rawIds.filter((id) => !sanitizedIds.includes(id)).map((id) =>
-          `Relation ${id} was present in the raw model response but was omitted during structural sanitization.`
-        ),
-        ...sanitizedIds.filter((id) => !browserIds.includes(id)).map((id) =>
-          `Relation ${id} survived sanitization but was absent from the browser-authored relation receipt.`
-        ),
-      ];
-    };
-    const repairHasStalled = (
-      stage: string,
-      issues: string[],
-      mutation?: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse>["mutation"],
-      receipt?: NorthstarArtifactMutationAcknowledgement,
-    ): boolean => {
-      const unresolvedRelations = (receipt?.review?.relationRealizationTraces ?? [])
-        .filter((trace) => trace.status !== "resolved")
-        .map((trace) => ({
-          relationId: trace.relationId,
-          kind: trace.kind,
-          realizationPolicy: trace.realizationPolicy,
-          subjectId: trace.subjectId,
-          canonicalReferences: trace.canonicalReferences,
-          primitiveNodeId: trace.primitiveNodeId,
-          primitiveFound: trace.primitiveFound,
-          failureStage: trace.failureStage,
-          status: trace.status,
-          message: trace.message,
-        }));
-      const fingerprint = JSON.stringify(unresolvedRelations.length
-        ? { stage, unresolvedRelations }
-        : {
-            stage,
-            issues: [...issues].sort(),
-            operations: mutation?.operations ?? null,
-            relations: mutation?.relations ?? null,
-          });
-      const count = (repairFingerprintCounts.get(fingerprint) ?? 0) + 1;
-      repairFingerprintCounts.set(fingerprint, count);
-      return count > repeatedRepairFingerprintLimit;
-    };
-
-    for (let repairAttempt = 0; repairAttempt < maximumRepairAttempts; repairAttempt += 1) {
-      if (providerAttempts.length >= maximumProviderAttemptsPerObjective) {
-        repairIssues = [`The objective exhausted its ${maximumProviderAttemptsPerObjective}-call provider budget.`];
-        break;
-      }
-      const repairMessage = repairIssues.length > 0
-        ? {
-            role: "user",
-            parts: [{
-              text: [
-                "REPAIR THE PREVIOUS CANDIDATE AND RETURN THE COMPLETE TURN RESPONSE AGAIN.",
-                "Keep the same user intent and the same exact committed base revision. The visible design remains entirely your authorship.",
-                "The system is returning the complete observed result so you can correct the design. It is not choosing a replacement design.",
-                "Everything currently known to be wrong or unresolved:",
-                ...repairIssues.map((issue) => `- ${issue}`),
-                repairHistory.length
-                  ? `PREVIOUS REPAIR MEMORY\n${JSON.stringify(repairHistory.slice(-4).map((entry) => ({
-                      attempt: entry.attempt,
-                      stage: entry.stage,
-                      attemptedRevisionId: entry.attemptedRevisionId,
-                      issues: entry.issues,
-                      sanitizedMutation: entry.sanitizedMutation,
-                      relationPipelineTrace: entry.relationPipelineTrace,
-                    })))}`
-                  : "",
-                repairContext ? `COMPLETE FAILED-CANDIDATE CONTEXT\n${JSON.stringify(repairContext)}` : "",
-                "Correct all reported causes together, inspect the entire candidate for related problems, preserve all successful prior-turn work, and return one complete replacement mutation. Change the executable cause, not only the explanation or styling. You may remove an optional live relation and keep the visual relationship entirely model-authored when reactive attachment is unnecessary. Do not discuss the repair.",
-              ].join("\n"),
-            }],
-          }
-        : undefined;
-      try {
-        const audited = await callGeminiJsonOnceAudited<unknown>({
-          apiKey,
-          systemInstruction,
-          contents: repairMessage ? [...contents, repairMessage] : contents,
-          schema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
-          signal,
-          maxOutputTokens: 32_000,
-          temperature: 0,
-        });
-        providerAttempt = { ...audited.audit, attempt: providerAttempts.length + 1 };
-        providerAttempts.push(providerAttempt);
-        rawParsedResponse = audited.value;
-        parsedResponse = sanitizeNorthstarDesignResetModelResponse({
-          raw: rawParsedResponse,
-          turn,
-          baseRevisionId: basePackage.revisionId,
-        });
-      } catch (error) {
-        const failedAudit = error instanceof NorthstarAuditedModelCallError ? error.audit : undefined;
-        if (failedAudit) {
-          providerAttempt = { ...failedAudit, attempt: providerAttempts.length + 1 };
-          providerAttempts.push(providerAttempt);
-        }
-        const interruption = northstarProviderInterruption(error);
-        if (interruption) {
-          const backoffMs = interruption.retryAfterSeconds === undefined
-            ? undefined
-            : interruption.retryAfterSeconds * 1_000;
-          const mayRetryOnce = interruption.retryable
-            && !providerBackoffUsed
-            && backoffMs !== undefined
-            && backoffMs <= maximumProviderBackoffMs
-            && providerAttempts.length < maximumProviderAttemptsPerObjective;
-          callbacks.trace?.("design.reset.provider_interrupted", {
-            turn,
-            revisionId: basePackage.revisionId,
-            providerAttemptCount: providerAttempts.length,
-            providerAttemptBudget: maximumProviderAttemptsPerObjective,
-            interruption,
-            retryScheduled: mayRetryOnce,
-          }, mayRetryOnce
-            ? `The provider interrupted this objective. Northstar will honor its ${interruption.retryAfterSeconds}-second retry interval once without treating the interruption as a design defect.`
-            : "The provider interrupted this objective. Northstar preserved the browser-verified revision without sending the provider failure through design repair.");
-          if (mayRetryOnce && backoffMs !== undefined) {
-            providerBackoffUsed = true;
-            await delayWithSignal(backoffMs, signal);
-            continue;
-          }
-          providerInterruption = interruption;
-          repairIssues = [interruption.message];
-          repairHistory.push({
-            attempt: repairAttempt + 1,
-            stage: "provider-interruption",
-            interruption,
-            providerAttemptCount: providerAttempts.length,
-          });
-          break;
-        }
-        repairIssues = [error instanceof Error ? error.message : String(error)];
-        repairContext = {
-          stage: "model-boundary",
-          committedBaseRevisionId: basePackage.revisionId,
-          instruction: turnInstruction,
-          providerAudit: failedAudit,
-          previousRepairAttempts: repairHistory.slice(-3),
-        };
-        repairHistory.push({
-          attempt: repairAttempt + 1,
-          stage: "model-boundary",
-          issues: repairIssues,
-          providerAudit: failedAudit,
-        });
-        if (repairHasStalled("model-boundary", repairIssues)) {
-          callbacks.trace?.("design.reset.repair_stalled", {
-            turn,
-            revisionId: basePackage.revisionId,
-            attempt: repairAttempt + 1,
-            issues: repairIssues,
-          }, "Northstar stopped repeating an identical model-boundary repair request and preserved the last browser-verified revision.");
-          break;
-        }
-        callbacks.trace?.("design.reset.internal_repair_requested", {
-          turn,
-          revisionId: basePackage.revisionId,
-          attempt: repairAttempt + 1,
-          issues: repairIssues,
-        }, "Northstar silently requested another model-authored candidate after a model-boundary failure.");
-        continue;
-      }
-
-      candidate = createNorthstarDesignResetCandidate({ base: basePackage, response: parsedResponse });
-      turnWriteScope = createNorthstarTurnWriteScope({
-        mutation: parsedResponse.mutation,
-        acknowledgement: beforeAcknowledgement,
-      });
-      turnRelationContracts = structuredClone(parsedResponse.mutation.relations ?? []);
-      mutationBatch = candidate.mutationJournal?.at(-1);
-      const attemptedDispatch = await callbacks.applyDesignAction(candidate, turn, parsedResponse.understanding);
-      if (attemptedDispatch.status !== "applied") {
-        const receipt = attemptedDispatch.acknowledgement;
-        const pipelineTrace = relationPipelineTrace(rawParsedResponse, parsedResponse, receipt);
-        const pipelineObservations = relationPipelineObservations(pipelineTrace);
-        const unresolvedRelationTraces = (receipt?.review?.relationRealizationTraces ?? [])
-          .filter((trace) => trace.status !== "resolved");
-        const relationshipFocusedRepair = pipelineObservations.length > 0
-          || unresolvedRelationTraces.length > 0
-          || (receipt?.review?.authoredInterferencePairs?.length ?? 0) > 0;
-        const relationTraceSummary = unresolvedRelationTraces.slice(0, 8).map((trace) =>
-          `${trace.relationId}: stage=${trace.failureStage}, status=${trace.status}, `
-          + `received=${trace.receivedReferences.map((reference) => `${reference.role}:${reference.nodeId}`).join(", ") || "none"}, `
-          + `canonical=${trace.canonicalReferences.map((reference) => `${reference.role}:${reference.nodeId}`).join(", ") || "none"}`
-          + `${trace.primitiveNodeId ? `, primitive=${trace.primitiveNodeId}, found=${String(trace.primitiveFound)}` : ""}`
-          + `${trace.message ? `, message=${trace.message}` : ""}`
-        );
-        const regionIntrusionSummary = (receipt?.review?.semanticRegionIntrusions ?? [])
-          .slice(0, 8)
-          .map((entry) =>
-            `${entry.additionId} refers to ${entry.intendedFlowId} but intrudes into ${entry.intrudedFlowId}; `
-            + `addition bounds left=${entry.additionBounds.left}, top=${entry.additionBounds.top}, width=${entry.additionBounds.width}, height=${entry.additionBounds.height}; `
-            + `overlap left=${entry.overlapBounds.left}, top=${entry.overlapBounds.top}, width=${entry.overlapBounds.width}, height=${entry.overlapBounds.height}`
-          );
-        const continuitySummary = (receipt?.review?.authoredContinuityObservations ?? [])
-          .filter((entry) => entry.visualAttribution === "weakened")
-          .slice(0, 8)
-          .map((entry) =>
-            `${entry.additionId} still targets ${entry.targetNodeIds.join(", ")} but ${entry.reason.toLowerCase()}; `
-            + `addition bounds left=${entry.additionBounds.left}, top=${entry.additionBounds.top}, width=${entry.additionBounds.width}, height=${entry.additionBounds.height}; `
-            + `center distance=${entry.centerDistance}`
-          );
-        const interferenceSummary = (receipt?.review?.authoredInterferencePairs ?? [])
-          .slice(0, 8)
-          .map((entry) => {
-            const bounds = entry.obstacleBounds
-              ? ` obstacle bounds left=${entry.obstacleBounds.left}, top=${entry.obstacleBounds.top}, width=${entry.obstacleBounds.width}, height=${entry.obstacleBounds.height}`
-              : "";
-            const crossing = entry.firstHitPoint && entry.lastHitPoint
-              ? ` crossing from (${entry.firstHitPoint.x}, ${entry.firstHitPoint.y}) to (${entry.lastHitPoint.x}, ${entry.lastHitPoint.y})`
-              : "";
-            return `${entry.primitiveId} crosses ${entry.obstacleId};${bounds}${crossing}`;
-          });
-        repairIssues = [
-          attemptedDispatch.detail,
-          receipt?.reason ? `Browser reason: ${receipt.reason}` : "",
-          ...(receipt?.review?.geometryFacts?.integrityFailures ?? []).map((issue) => `Browser geometry integrity: ${issue}`),
-          ...(!relationshipFocusedRepair ? (receipt?.review?.premiumDesignAudit?.blockingReasons ?? []).map((issue) => `Browser communication review: ${issue}`) : []),
-          ...(!relationshipFocusedRepair ? (receipt?.review?.premiumDesignAudit?.advisories ?? []).map((issue) => `Browser communication advisory: ${issue}`) : []),
-          ...(receipt?.review?.advisoryDeliveryIssues ?? [])
-            .filter((issue) => !relationshipFocusedRepair || /relation|connector|reference|primitive|attachment|interference/i.test(issue))
-            .map((issue) => `Browser delivery observation: ${issue}`),
-          ...pipelineObservations.map((issue) => `Relationship pipeline observation: ${issue}`),
-          relationTraceSummary.length
-            ? `Relationship realization trace: ${relationTraceSummary.join(" | ")}. This is an optional reactive dependency trace, not a required visual form. Preserve the visual intent and either repair the exact dependency fields or remove the optional relation while keeping a clear model-authored relationship.`
-            : "",
-          regionIntrusionSummary.length
-            ? `Semantic-region interference summary: ${regionIntrusionSummary.join(" | ")}. Preserve all evidence and intended meaning, then revise your own composition so each addition remains clearly associated with its intended evidence flow and outside unrelated evidence territory.`
-            : "",
-          continuitySummary.length
-            ? `Cumulative continuity summary: ${continuitySummary.join(" | ")}. Preserve evidence, semantic identity, meaning, target references, and provenance. Recompose the affected prior additions together with the current design change so the whole artboard remains congruent; exact prior coordinates and visual form are not protected.`
-            : "",
-          interferenceSummary.length
-            ? `Visual interference summary: ${interferenceSummary.join(" | ")}. These are the smallest independently meaningful obstacles observed by the browser. Preserve relationship meaning and evidence, then revise your own route or composition so the crossings are removed.`
-            : "",
-          ...(receipt?.review?.geometryFacts?.hiddenEvidenceNodeIds ?? []).map((nodeId) => `Protected evidence is hidden: ${nodeId}`),
-          ...(receipt?.review?.geometryFacts?.partiallyClippedEvidenceNodeIds ?? []).map((nodeId) => `Protected evidence is partially clipped: ${nodeId}`),
-          ...(receipt?.review?.geometryFacts?.croppedEvidenceNodeIds ?? []).map((nodeId) => `Protected evidence is cropped: ${nodeId}`),
-          ...(receipt?.evidenceRegistry?.missingEvidenceIds ?? []).map((evidenceId) => `Expected evidence is missing: ${evidenceId}`),
-          ...(receipt?.evidenceRegistry?.unplacedEvidenceIds ?? []).map((evidenceId) => `Expected evidence is unplaced: ${evidenceId}`),
-          ...(receipt?.resolvedDesignRelations ?? [])
-            .filter((relation) => relation.status !== "resolved")
-            .map((relation) => `Authored relation ${relation.relationId} is ${relation.status}${relation.message ? `: ${relation.message}` : ""}`),
-        ].filter((issue, index, all): issue is string => Boolean(issue) && all.indexOf(issue) === index);
-        repairContext = {
-          stage: attemptedDispatch.status,
-          committedBaseRevisionId: basePackage.revisionId,
-          attemptedRevisionId: candidate.revisionId,
-          instruction: turnInstruction,
-          rawModelResponse: rawParsedResponse,
-          completeModelResponse: parsedResponse,
-          completeMutation: parsedResponse.mutation,
-          candidateSource: candidate.document,
-          candidateMutationJournal: candidate.mutationJournal,
-          browserReceipt: receipt,
-          exactCommittedBaseSource: beforeAcknowledgement.snapshot,
-          exactCommittedBaseSemanticGraph: buildNorthstarArtboardSemanticGraph({ artifact: basePackage, acknowledgement: beforeAcknowledgement }),
-          relationPipelineTrace: pipelineTrace,
-          previousRepairAttempts: repairHistory.slice(-3),
-        };
-        repairHistory.push({
-          attempt: repairAttempt + 1,
-          stage: attemptedDispatch.status,
-          attemptedRevisionId: candidate.revisionId,
-          issues: repairIssues,
-          rawModelResponse: rawParsedResponse,
-          sanitizedMutation: parsedResponse.mutation,
-          candidateSource: candidate.document,
-          browserReceipt: receipt,
-          relationPipelineTrace: pipelineTrace,
-        });
-        if (repairHasStalled(attemptedDispatch.status, repairIssues, parsedResponse.mutation, receipt)) {
-          callbacks.trace?.("design.reset.repair_stalled", {
-            turn,
-            baseRevisionId: basePackage.revisionId,
-            attemptedRevisionId: candidate.revisionId,
-            attempt: repairAttempt + 1,
-            issues: repairIssues,
-          }, "Northstar stopped repeating an identical browser repair request and preserved the last browser-verified revision.");
-          break;
-        }
-        callbacks.trace?.("design.reset.internal_repair_requested", {
-          turn,
-          baseRevisionId: basePackage.revisionId,
-          attemptedRevisionId: candidate.revisionId,
-          attempt: repairAttempt + 1,
-          issues: repairIssues,
-        }, "The browser preserved the last committed revision and Northstar silently requested a corrected model-authored turn.");
-        continue;
-      }
-
-      const appliedRelationTrace = relationPipelineTrace(rawParsedResponse, parsedResponse, attemptedDispatch.acknowledgement);
-      const browserIssues = [
-        ...relationPipelineObservations(appliedRelationTrace),
-        ...northstarAuthoredRelationRealizationIssues(parsedResponse, attemptedDispatch.acknowledgement),
-      ];
-      if (
-        appliedRelationTrace.rawModelRelations.length > 0
-        || appliedRelationTrace.sanitizedRelations.length > 0
-        || appliedRelationTrace.browserRealizationTraces.length > 0
-      ) {
-        callbacks.trace?.("design.reset.authored_relation_observations", {
-          turn,
-          baseRevisionId: basePackage.revisionId,
-          attemptedRevisionId: candidate.revisionId,
-          attempt: repairAttempt + 1,
-          issues: browserIssues,
-          relationPipelineTrace: appliedRelationTrace,
-          acknowledgement: attemptedDispatch.acknowledgement,
-        }, "Northstar recorded the complete non-blocking realization trace for relations the model chose to author.");
-      }
-
-      dispatchResult = attemptedDispatch;
-
-      // Patch 3A: the browser-applied artboard is the review surface. Build
-      // Patch 1 + Patch 2 from that exact acknowledgement immediately after
-      // application. This review does not stage, hide, promote, replay, or
-      // otherwise gate the mutation that is already on the live artboard.
-      const reviewStartedAt = Date.now();
-      liveReviewedArchive = buildNorthstarDesignResetTurnArchive({
-        runId,
-        artifactId,
-        turn,
-        requestedThinkingMode: thinkingDepth,
-        instruction: turnInstruction,
-        status: "committed",
-        beforePackage: basePackage,
-        beforeAcknowledgement,
-        systemInstruction,
-        contents,
-        responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
-        providerAttempt,
-        providerAttempts,
-        rawParsedResponse,
-        acceptedResponse: parsedResponse,
-        candidateBeforeBrowser: candidate,
-        mutationBatch,
-        previousCumulativeIntentAudit,
-        repairHistory,
-        afterPackage: attemptedDispatch.artifact,
-        afterAcknowledgement: attemptedDispatch.acknowledgement,
-      });
-      const reviewDurationMs = Date.now() - reviewStartedAt;
-      const visibleApplyDurationMs = Date.now() - visibleTurnStartedAt;
-      callbacks.trace?.("design.reset.live_artboard_reviewed", {
-        patch: NORTHSTAR_PATCH_3A_DIRECT_LIVE_REVIEW_VERSION,
-        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
-        turn,
-        baseRevisionId: basePackage.revisionId,
-        revisionId: attemptedDispatch.artifact.revisionId,
-        mutationId: mutationBatch?.mutationId,
-        visibleApplyDurationMs,
-        visibleLatencyTargetMs: NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS,
-        withinVisibleLatencyTarget: visibleApplyDurationMs < NORTHSTAR_DESIGN_TURN_VISIBLE_TARGET_MS,
-        reviewDurationMs,
-        cumulativeIntentAuditFailure: liveReviewedArchive.cumulativeIntentAuditFailure,
-        renderedIntegrityAuditFailure: liveReviewedArchive.renderedIntegrityAuditFailure,
-        affectedComposition: liveReviewedArchive.cumulativeIntentAudit?.affectedComposition,
-        highConfidenceFindings: liveReviewedArchive.renderedIntegrityAudit?.highConfidenceFindings ?? [],
-        informationalObservationCount: liveReviewedArchive.renderedIntegrityAudit?.informationalObservations.length ?? 0,
-      }, "The model-authored turn is already on the live artboard; Patch 1 and Patch 2 inspected that exact rendered revision in place.");
-      break;
-    }
-
-    if (!dispatchResult || !parsedResponse || !candidate || !providerAttempt) {
-      const diagnosticDetail = providerInterruption
-        ? `Northstar preserved the last browser-verified revision because the provider reported ${providerInterruption.kind}; this infrastructure interruption was not treated as a design-repair attempt.`
-        : repairIssues.length
-        ? `Unable to produce an accurate design turn after ${maximumRepairAttempts} model-authored attempts: ${repairIssues.join("; ")}`
-        : `Unable to produce an accurate design turn after ${maximumRepairAttempts} model-authored attempts.`;
-      if (providerAttempt) {
-        await callbacks.archiveDesignTurn?.(buildNorthstarDesignResetTurnArchive({
-          runId,
-          artifactId,
-          turn,
-          requestedThinkingMode: thinkingDepth,
-          instruction: turnInstruction,
-          status: "model-failed",
-          beforePackage: basePackage,
-          beforeAcknowledgement,
-          systemInstruction,
-          contents,
-          responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
-          providerAttempt,
-          providerAttempts,
-          rawParsedResponse,
-          acceptedResponse: parsedResponse,
-          candidateBeforeBrowser: candidate,
-          mutationBatch,
-          previousCumulativeIntentAudit,
-          repairHistory,
-          failure: diagnosticDetail,
-        }));
-      }
-      await callbacks.completeStep({
-        id: step.id,
-        tool: step.tool,
-        detail: `Preserved the last valid artboard revision after ${maximumRepairAttempts} silent model correction attempts.`,
-      });
-      callbacks.trace?.("design.reset.repair_exhausted", {
-        turn,
-        revisionId: basePackage.revisionId,
-        attempts: providerAttempts.length,
-        issues: repairIssues,
-        providerInterruption,
-        providerAttemptBudget: maximumProviderAttemptsPerObjective,
-      }, diagnosticDetail);
-      unresolvedTurns.push(turn);
-      currentPackage = basePackage;
-      continue objectiveQueue;
-    }
-
-    // Patch 3B: Patch 1/2 have now observed the exact live artboard. When that
-    // observation identifies a high-confidence defect in this turn's affected
-    // composition, keep the same turn active and let the same design model edit
-    // the current live revision. There is no candidate surface or promotion
-    // protocol: every correction is another ordinary live artboard mutation.
-    // Patch 3B reactive-aware convergence: four ordinary repair passes were an
-    // arbitrary product limit, not a design invariant. Keep the turn alive
-    // while rendered results continue changing; retain only an emergency model
-    // attempt ceiling and a separate circuit breaker for repeated rendered
-    // no-progress results.
-    const emergencyLiveRepairAttemptLimit = 12;
-    const maximumConsecutiveNoProgressRenders = 4;
-    let consecutiveNoProgressRenders = 0;
-    let liveRepairFailure: string | undefined;
-    let previousLiveRepairIssue: string | undefined;
-    const liveRepairMemory: Array<Record<string, unknown>> = [];
-    const ineffectiveRepairFingerprints = new Set<string>();
-    const ineffectiveRepairStrategyFingerprints = new Set<string>();
-    const infeasibleRepairStrategyFingerprints = new Set<string>();
-    let liveRepairFindings = selectNorthstarLiveRepairFindings({
-      cumulativeIntentAudit: liveReviewedArchive?.cumulativeIntentAudit,
-      renderedIntegrityAudit: liveReviewedArchive?.renderedIntegrityAudit,
-    }).filter((finding) => {
-      if (!turnWriteScope) return false;
-      const writable = new Set([...turnWriteScope.writableExistingNodeIds, ...turnWriteScope.introducedNodeIds]);
-      return Boolean(finding.subjectNodeId && writable.has(finding.subjectNodeId))
-        || finding.relatedNodeIds.some((nodeId) => writable.has(nodeId));
-    });
-    if (
-      !liveReviewedArchive?.cumulativeIntentAudit
-      || !liveReviewedArchive.renderedIntegrityAudit
-      || liveReviewedArchive.cumulativeIntentAuditFailure
-      || liveReviewedArchive.renderedIntegrityAuditFailure
-    ) {
-      callbacks.trace?.("design.reset.review_observation_degraded", {
-        turn,
-        revisionId: dispatchResult.artifact.revisionId,
-        cumulativeIntentAuditAvailable: Boolean(liveReviewedArchive?.cumulativeIntentAudit),
-        renderedIntegrityAuditAvailable: Boolean(liveReviewedArchive?.renderedIntegrityAudit),
-        cumulativeIntentAuditFailure: liveReviewedArchive?.cumulativeIntentAuditFailure,
-        renderedIntegrityAuditFailure: liveReviewedArchive?.renderedIntegrityAuditFailure,
-      }, "Optional post-render review was unavailable. Northstar preserved the browser-applied revision and did not convert an observation failure into a design failure.");
-    }
-
-    for (
-      let liveRepairPass = 1;
-      !liveRepairFailure && liveRepairFindings.length > 0 && liveRepairPass <= emergencyLiveRepairAttemptLimit;
-      liveRepairPass += 1
-    ) {
-      if (providerAttempts.length >= maximumProviderAttemptsPerObjective) {
-        liveRepairFailure = `The objective exhausted its ${maximumProviderAttemptsPerObjective}-call provider budget while preserving the current browser-verified revision.`;
-        callbacks.trace?.("design.reset.provider_budget_exhausted", {
-          turn,
-          revisionId: dispatchResult.artifact.revisionId,
-          providerAttemptCount: providerAttempts.length,
-          providerAttemptBudget: maximumProviderAttemptsPerObjective,
-          remainingFindings: liveRepairFindings,
-        }, "Northstar stopped issuing model calls for this objective before it could consume the capacity reserved for later queued objectives.");
-        break;
-      }
-      const repairBasePackage = dispatchResult.artifact;
-      const repairBaseAcknowledgement = dispatchResult.acknowledgement;
-      const triggeringFindings = liveRepairFindings;
-      const carryFindingKeys = triggeringFindings.map((finding) => finding.key);
-      if (!turnWriteScope) {
-        liveRepairFailure = "The turn lost its frozen continuation write scope.";
-        break;
-      }
-      const measuredRepairScope = expandNorthstarMeasuredRepairScope({
-        scope: turnWriteScope,
-        acknowledgement: repairBaseAcknowledgement,
-        findings: triggeringFindings,
-      });
-      turnWriteScope = measuredRepairScope.scope;
-      const spatialFeasibilityContext = buildNorthstarSpatialFeasibilityContext({
-        scope: turnWriteScope,
-        acknowledgement: repairBaseAcknowledgement,
-        findings: triggeringFindings,
-      });
-      callbacks.trace?.("design.reset.live_repair_requested", {
-        patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
-        addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
-        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
-        convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
-        turn,
-        repairPass: liveRepairPass,
-        revisionId: repairBasePackage.revisionId,
-        originalInstruction: turnInstruction,
-        findings: triggeringFindings,
-        turnWriteScope,
-        measuredRepairScope,
-        spatialFeasibilityContext,
-        repairMemory: liveRepairMemory,
-        consecutiveNoProgressRenders,
-      }, "Patch 1/2 found a current-turn communication defect on the live artboard. The same designer will correct that rendered revision before the next turn.");
-
-      const repairModelInput = buildNorthstarDesignResetModelInput({
-        turn,
-        instruction: turnInstruction,
-        artifact: repairBasePackage,
-        acknowledgement: repairBaseAcknowledgement,
-      });
-      const reactiveRepairContext = {
-        purpose: "The browser realizes model-authored spatial dependencies from current rendered geometry. Its realized coordinates are consequences of the authored dependency graph, not independent design decisions.",
-        authoredRelations: repairBaseAcknowledgement.authoredDesignRelations ?? [],
-        resolvedRelations: repairBaseAcknowledgement.resolvedDesignRelations ?? [],
-        realizationTraces: repairBaseAcknowledgement.review?.relationRealizationTraces ?? [],
-      };
-      const ineffectiveStrategyEvidence = liveRepairMemory
-        .filter((entry) => typeof entry.strategyFingerprint === "string" && entry.outcome !== "resolved")
-        .map((entry) => ({
-          strategyFingerprint: entry.strategyFingerprint,
-          outcome: entry.outcome,
-          beforeFindings: entry.beforeFindings,
-          afterFindings: entry.afterFindings,
-        }));
-      const repairContents = [{
-        role: "user",
-        parts: [
-          { text: `EXACT CURRENT LIVE ARTBOARD\n${JSON.stringify(repairModelInput)}` },
-          { text: `ORIGINAL TURN OBJECTIVE\n${turnInstruction}` },
-          {
-            text: [
-              "POST-RENDER REPAIR",
-              "Your previous action is already visible on the live artboard above. Keep the same turn active and preserve its original objective.",
-              "Patch 1/2 measured the rendered result and found these concrete defects in the composition affected by this turn:",
-              JSON.stringify(triggeringFindings),
-              `ENFORCED TURN WRITE SCOPE\n${JSON.stringify(turnWriteScope ? {
-                baseRevisionId: turnWriteScope.baseRevisionId,
-                writableExistingNodeIds: turnWriteScope.writableExistingNodeIds,
-                introducedNodeIds: turnWriteScope.introducedNodeIds,
-                insertionContainerNodeIds: turnWriteScope.insertionContainerNodeIds,
-                relationReferenceNodeIds: turnWriteScope.relationReferenceNodeIds,
-                supportingMovementNodeIds: turnWriteScope.supportingMovementNodeIds,
-                measuredContainerContracts: turnWriteScope.measuredContainerContracts,
-              } : {})}`,
-              `MEASURED REFLOW PREFLIGHT\n${JSON.stringify(measuredRepairScope)}`,
-              `SPATIAL FEASIBILITY CONTEXT\n${JSON.stringify(spatialFeasibilityContext)}`,
-              "Before authoring operations, choose a region or structural alternative that fits the measured bounds and clearance. The browser supplies facts, not a layout decision. Your response must realize the complete solution in one mutation; do not place the subject into a region already occupied by a listed protected obstacle.",
-              "Existing and introduced nodes retain ordinary write authority. Supporting movement nodes are a browser-measured semantic flow suffix or detached group member and have translation-only authority: they may receive only positional set-styles properties. Measured container contracts are geometry-only and bounded by the reported required dimensions; if the required growth is larger than the safe bound, translate the detached member back into its measured container instead of escalating the container. Resolve the member/container correction in one mutation. Do not alter supporting content, appearance, order, or relations. Every other current node is protected prior work.",
-              `AFFECTED COMPOSITION\n${JSON.stringify(liveReviewedArchive?.cumulativeIntentAudit?.affectedComposition ?? {})}`,
-              `REACTIVE DEPENDENCY STATE\n${JSON.stringify(reactiveRepairContext)}`,
-              liveRepairMemory.length > 0 ? `SAME-TURN REPAIR MEMORY\n${JSON.stringify(liveRepairMemory)}` : "",
-              ineffectiveStrategyEvidence.length > 0 ? `PROVEN INEFFECTIVE STRATEGIES\n${JSON.stringify(ineffectiveStrategyEvidence)}` : "",
-              previousLiveRepairIssue ? `PREVIOUS REPAIR ATTEMPT ISSUE\n${previousLiveRepairIssue}` : "",
-              "The repair memory is evidence from attempts already rendered on this same live artboard. Compare the before/after findings and measurements. A change to prose, numeric coordinates, sizes, CSS values, geometryIntent, or relation ids is not a new strategy when it edits the same targets through the same operation and relation shape. Do not repeat a proven ineffective strategy. Change the composition structure: use different target participation, operation types, parentage, or dependency references so the measured obstruction is removed rather than shifted. The memory reports outcomes and does not prescribe your design solution.",
-              "A collateral-geometry finding is a measured continuity obligation to pre-turn rendered content that this objective did not need to change. It remains unresolved until that collateral displacement is repaired, even when your repair directly edits those nodes. Decide the repair composition yourself.",
-              "Treat reactive geometry as the faithful consequence of the authored dependency graph. If a correct existing live relation produces geometry you dislike, repair the authored cause or surrounding composition rather than fighting the realized coordinates. If the dependency itself needs correction, reuse its exact relation id; relation ids are update identities. Do not invent a second relation id that controls the same subject geometry channel.",
-              "Resolve all of these defects together while preserving protected evidence, semantic meaning, provenance, and successful prior work.",
-              "You own the design solution. Reposition, reroute, resize, restyle, or recompose the affected authored area as you judge appropriate; the runtime will not choose a layout or visual treatment for you.",
-              "Author an incremental mutation from the exact current live revision, not from an earlier version of the turn. Do not discuss the repair. Return the complete required JSON response only.",
-            ].join("\n"),
-          },
-        ],
-      }];
-
-      let repairRawResponse: unknown;
-      let repairResponse: ReturnType<typeof sanitizeNorthstarDesignResetModelResponse> | undefined;
-      try {
-        const auditedRepair = await callGeminiJsonOnceAudited<unknown>({
-          apiKey,
-          systemInstruction,
-          contents: repairContents,
-          schema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
-          signal,
-          maxOutputTokens: 32_000,
-          temperature: 0,
-        });
-        providerAttempt = { ...auditedRepair.audit, attempt: providerAttempts.length + 1 };
-        providerAttempts.push(providerAttempt);
-        repairRawResponse = auditedRepair.value;
-        repairResponse = sanitizeNorthstarDesignResetModelResponse({
-          raw: repairRawResponse,
-          turn,
-          baseRevisionId: repairBasePackage.revisionId,
-          continuation: true,
-          existingRelations: turnRelationContracts,
-        });
-      } catch (error) {
-        const failedAudit = error instanceof NorthstarAuditedModelCallError ? error.audit : undefined;
-        if (failedAudit) providerAttempts.push({ ...failedAudit, attempt: providerAttempts.length + 1 });
-        const interruption = northstarProviderInterruption(error);
-        if (interruption) {
-          const backoffMs = interruption.retryAfterSeconds === undefined
-            ? undefined
-            : interruption.retryAfterSeconds * 1_000;
-          const mayRetryOnce = interruption.retryable
-            && !providerBackoffUsed
-            && backoffMs !== undefined
-            && backoffMs <= maximumProviderBackoffMs
-            && providerAttempts.length < maximumProviderAttemptsPerObjective;
-          callbacks.trace?.("design.reset.provider_interrupted", {
-            turn,
-            revisionId: repairBasePackage.revisionId,
-            repairPass: liveRepairPass,
-            providerAttemptCount: providerAttempts.length,
-            providerAttemptBudget: maximumProviderAttemptsPerObjective,
-            interruption,
-            retryScheduled: mayRetryOnce,
-          }, mayRetryOnce
-            ? `The provider interrupted this objective. Northstar will honor its ${interruption.retryAfterSeconds}-second retry interval once without treating the interruption as a design defect.`
-            : "The provider interrupted this objective. Northstar preserved the live browser revision without asking the designer to repair an infrastructure error.");
-          repairHistory.push({
-            stage: "provider-interruption",
-            repairPass: liveRepairPass,
-            baseRevisionId: repairBasePackage.revisionId,
-            interruption,
-            retryScheduled: mayRetryOnce,
-            providerAttemptCount: providerAttempts.length,
-          });
-          if (mayRetryOnce && backoffMs !== undefined) {
-            providerBackoffUsed = true;
-            await delayWithSignal(backoffMs, signal);
-            liveRepairPass -= 1;
-            continue;
-          }
-          liveRepairFailure = `The provider reported ${interruption.kind}: ${interruption.message}`;
-          break;
-        }
-        const detail = error instanceof Error ? error.message : String(error);
-        const repeatedModelFailure = detail === previousLiveRepairIssue;
-        previousLiveRepairIssue = detail;
-        liveRepairMemory.push({
-          repairPass: liveRepairPass,
-          outcome: "model-failure",
-          baseRevisionId: repairBasePackage.revisionId,
-          triggeringFindings,
-          detail,
-          repeatedModelFailure,
-        });
-        repairHistory.push({
-          stage: "live-artboard-model-repair",
-          repairPass: liveRepairPass,
-          baseRevisionId: repairBasePackage.revisionId,
-          triggeringFindings,
-          error: detail,
-        });
-        callbacks.trace?.("design.reset.live_repair_retry", {
-          turn,
-          repairPass: liveRepairPass,
-          revisionId: repairBasePackage.revisionId,
-          detail,
-          repeatedModelFailure,
-        }, "The live artboard remains authoritative while the same-turn repair model call is retried.");
-        if (repeatedModelFailure || liveRepairPass === emergencyLiveRepairAttemptLimit) {
-          liveRepairFailure = repeatedModelFailure ? `The repair model repeated the same model-boundary failure: ${detail}` : detail;
-          break;
-        }
-        continue;
-      }
-
-      const activeTurnWriteScope = turnWriteScope;
-      const normalizedSpatialAuthority = normalizeNorthstarSpatialAuthority({
-        response: repairResponse,
-        continuation: true,
-        existingRelations: turnRelationContracts,
-      });
-      if (normalizedSpatialAuthority.issues.length) {
-        const detail = normalizedSpatialAuthority.issues.join(" ");
-        const repeatedAuthorityFailure = detail === previousLiveRepairIssue;
-        previousLiveRepairIssue = detail;
-        repairHistory.push({
-          stage: "live-artboard-spatial-authority-skipped",
-          repairPass: liveRepairPass,
-          baseRevisionId: repairBasePackage.revisionId,
-          attemptedMutation: repairResponse.mutation,
-          issues: normalizedSpatialAuthority.issues,
-          repeatedAuthorityFailure,
-        });
-        callbacks.trace?.("design.reset.spatial_authority_rejected", {
-          turn,
-          repairPass: liveRepairPass,
-          revisionId: repairBasePackage.revisionId,
-          issues: normalizedSpatialAuthority.issues,
-          repeatedAuthorityFailure,
-        }, "Northstar kept the current revision instead of rendering an incomplete spatial contract.");
-        if (repeatedAuthorityFailure || liveRepairPass === emergencyLiveRepairAttemptLimit) {
-          liveRepairFailure = repeatedAuthorityFailure
-            ? `The repair model repeated the same incomplete spatial contract: ${detail}`
-            : detail;
-          break;
-        }
-        continue;
-      }
-      repairResponse = normalizedSpatialAuthority.response;
-      if (normalizedSpatialAuthority.normalizedFields.length) {
-        callbacks.trace?.("design.reset.spatial_authority_normalized", {
-          turn,
-          repairPass: liveRepairPass,
-          revisionId: repairBasePackage.revisionId,
-          normalizedFields: normalizedSpatialAuthority.normalizedFields,
-        }, "Northstar removed redundant coordinates and cumulative space growth while retaining the model-authored relation.");
-      }
-      const writeScopeValidation = validateNorthstarContinuationWriteScope({
-        scope: activeTurnWriteScope,
-        mutation: repairResponse.mutation,
-      });
-      if (!writeScopeValidation.valid) {
-        const detail = `The continuation attempted to modify protected prior work: ${writeScopeValidation.violations.join(" ")}`;
-        previousLiveRepairIssue = detail;
-        liveRepairMemory.push({
-          repairPass: liveRepairPass,
-          outcome: "protected-write-rejected",
-          baseRevisionId: repairBasePackage.revisionId,
-          attemptedMutation: repairResponse.mutation,
-          violations: writeScopeValidation.violations,
-          detail,
-        });
-        callbacks.trace?.("design.reset.protected_write_rejected", {
-          turn,
-          repairPass: liveRepairPass,
-          revisionId: repairBasePackage.revisionId,
-          turnWriteScope: activeTurnWriteScope,
-          violations: writeScopeValidation.violations,
-        }, "Northstar rejected a continuation that attempted to turn protected prior work into part of the current objective.");
-        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = detail;
-        continue;
-      }
-
-      const reactiveConflicts = findNorthstarNewReactiveRelationConflicts({
-        existingRelations: repairBaseAcknowledgement.authoredDesignRelations ?? [],
-        proposedRelations: repairResponse.mutation.relations ?? [],
-      });
-      if (reactiveConflicts.length > 0) {
-        const detail = `This repair would add competing authored controllers to an existing reactive geometry channel: ${JSON.stringify(reactiveConflicts)}. The browser was not asked to render the known protocol conflict. Inspect the existing dependency state and, when correcting an existing dependency, reuse its exact relation id instead of stacking another controller.`;
-        previousLiveRepairIssue = detail;
-        const memoryEntry = {
-          repairPass: liveRepairPass,
-          outcome: "reactive-relation-conflict-preflight",
-          baseRevisionId: repairBasePackage.revisionId,
-          attemptedMutation: repairResponse.mutation,
-          triggeringFindings,
-          reactiveConflicts,
-          detail,
-        };
-        liveRepairMemory.push(memoryEntry);
-        repairHistory.push({ stage: "live-artboard-reactive-conflict-skipped", ...memoryEntry });
-        callbacks.trace?.("design.reset.live_repair_reactive_conflict_skipped", {
-          patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
-          convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
-          turn,
-          ...memoryEntry,
-          repairMemory: liveRepairMemory,
-        }, "The repair model attempted to stack a competing reactive controller. The current live artboard remained untouched and the same designer will correct its dependency authorship.");
-        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = detail;
-        continue;
-      }
-
-      const repairFingerprint = northstarLiveRepairExecutableFingerprint(repairResponse.mutation);
-      const repairStrategyFingerprint = northstarLiveRepairStrategyFingerprint(repairResponse.mutation);
-      const predictableFeasibility = preflightNorthstarPredictableSpatialFeasibility({
-        mutation: repairResponse.mutation,
-        context: spatialFeasibilityContext,
-      });
-      if (!predictableFeasibility.feasible) {
-        const detail = `The proposed repair is mechanically infeasible against the supplied browser measurements: ${predictableFeasibility.violations.join(" ")}`;
-        const repeatedInfeasibleStrategy = infeasibleRepairStrategyFingerprints.has(repairStrategyFingerprint);
-        infeasibleRepairStrategyFingerprints.add(repairStrategyFingerprint);
-        previousLiveRepairIssue = detail;
-        const memoryEntry = {
-          repairPass: liveRepairPass,
-          outcome: "predictable-spatial-conflict",
-          baseRevisionId: repairBasePackage.revisionId,
-          executableFingerprint: repairFingerprint,
-          strategyFingerprint: repairStrategyFingerprint,
-          attemptedMutation: repairResponse.mutation,
-          triggeringFindings,
-          spatialFeasibilityContext,
-          violations: predictableFeasibility.violations,
-          repeatedInfeasibleStrategy,
-          detail,
-        };
-        liveRepairMemory.push(memoryEntry);
-        repairHistory.push({ stage: "live-artboard-spatial-feasibility-skipped", ...memoryEntry });
-        callbacks.trace?.("design.reset.live_repair_spatially_infeasible", {
-          patch: "northstar.universal-spatial-feasibility-context.v1",
-          turn,
-          ...memoryEntry,
-        }, "Northstar rejected a mechanically predictable collision before browser commit and preserved the current verified revision.");
-        if (repeatedInfeasibleStrategy) {
-          liveRepairFailure = `${detail} The model repeated the same infeasible strategy after receiving the exact constraint packet.`;
-          break;
-        }
-        continue;
-      }
-      if (ineffectiveRepairStrategyFingerprints.has(repairStrategyFingerprint)) {
-        const detail = `Repair strategy ${repairStrategyFingerprint} repeats a strategy already proven ineffective by the browser. The model received the exact before/after measurements and still returned the same operation and relation shape, so another request would be repetition rather than learning. The current browser-verified revision was preserved.`;
-        previousLiveRepairIssue = detail;
-        const memoryEntry = {
-          repairPass: liveRepairPass,
-          outcome: "duplicate-known-ineffective-strategy",
-          baseRevisionId: repairBasePackage.revisionId,
-          executableFingerprint: repairFingerprint,
-          strategyFingerprint: repairStrategyFingerprint,
-          attemptedMutation: repairResponse.mutation,
-          triggeringFindings,
-          detail,
-        };
-        liveRepairMemory.push(memoryEntry);
-        repairHistory.push({ stage: "live-artboard-duplicate-strategy-skipped", ...memoryEntry });
-        callbacks.trace?.("design.reset.live_repair_strategy_skipped", {
-          patch: "northstar.universal-repair-convergence.v1",
-          turn,
-          ...memoryEntry,
-        }, "Northstar rejected a browser-proven ineffective strategy before rendering and ended this objective's repair loop without consuming more provider capacity.");
-        liveRepairFailure = detail;
-        break;
-      }
-      if (ineffectiveRepairFingerprints.has(repairFingerprint)) {
-        const detail = `Executable repair ${repairFingerprint} exactly repeats a same-turn repair that already rendered without clearing the defects. It was not rendered again.`;
-        previousLiveRepairIssue = detail;
-        const memoryEntry = {
-          repairPass: liveRepairPass,
-          outcome: "duplicate-known-ineffective-repair",
-          baseRevisionId: repairBasePackage.revisionId,
-          executableFingerprint: repairFingerprint,
-          strategyFingerprint: repairStrategyFingerprint,
-          attemptedMutation: repairResponse.mutation,
-          triggeringFindings,
-          detail,
-        };
-        liveRepairMemory.push(memoryEntry);
-        repairHistory.push({ stage: "live-artboard-duplicate-repair-skipped", ...memoryEntry });
-        callbacks.trace?.("design.reset.live_repair_duplicate_skipped", {
-          patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
-          addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
-          collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
-          convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
-          turn,
-          ...memoryEntry,
-          repairMemory: liveRepairMemory,
-        }, "The model repeated an executable repair already proven ineffective on this live artboard. Northstar skipped the redundant render and kept the same turn active.");
-        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = detail;
-        continue;
-      }
-
-      const repairCandidate = createNorthstarDesignResetCandidate({ base: repairBasePackage, response: repairResponse });
-      const repairMutationBatch = repairCandidate.mutationJournal?.at(-1);
-      const repairDispatch = await callbacks.applyDesignAction(repairCandidate, turn, repairResponse.understanding);
-      if (repairDispatch.status !== "applied") {
-        previousLiveRepairIssue = repairDispatch.acknowledgement?.reason || repairDispatch.detail;
-        liveRepairMemory.push({
-          repairPass: liveRepairPass,
-          outcome: "browser-apply-failure",
-          baseRevisionId: repairBasePackage.revisionId,
-          executableFingerprint: repairFingerprint,
-          attemptedMutation: repairResponse.mutation,
-          triggeringFindings,
-          detail: repairDispatch.detail,
-        });
-        repairHistory.push({
-          stage: "live-artboard-browser-repair",
-          repairPass: liveRepairPass,
-          baseRevisionId: repairBasePackage.revisionId,
-          attemptedRevisionId: repairCandidate.revisionId,
-          triggeringFindings,
-          detail: repairDispatch.detail,
-          acknowledgement: repairDispatch.acknowledgement,
-        });
-        callbacks.trace?.("design.reset.live_repair_retry", {
-          turn,
-          repairPass: liveRepairPass,
-          revisionId: repairBasePackage.revisionId,
-          attemptedRevisionId: repairCandidate.revisionId,
-          detail: repairDispatch.detail,
-        }, "The browser preserved the current live revision after a repair execution failure; the turn will not advance.");
-        if (liveRepairPass === emergencyLiveRepairAttemptLimit) liveRepairFailure = repairDispatch.detail;
-        continue;
-      }
-
-      previousLiveRepairIssue = undefined;
-      const repairReviewStartedAt = Date.now();
-      const repairReviewedArchive = buildNorthstarDesignResetTurnArchive({
-        runId,
-        artifactId,
-        turn,
-        requestedThinkingMode: thinkingDepth,
-        instruction: turnInstruction,
-        status: "committed",
-        beforePackage: repairBasePackage,
-        beforeAcknowledgement: repairBaseAcknowledgement,
-        systemInstruction,
-        contents: repairContents,
-        responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
-        providerAttempt,
-        providerAttempts,
-        rawParsedResponse: repairRawResponse,
-        acceptedResponse: repairResponse,
-        candidateBeforeBrowser: repairCandidate,
-        mutationBatch: repairMutationBatch,
-        previousCumulativeIntentAudit: liveReviewedArchive?.cumulativeIntentAudit ?? previousCumulativeIntentAudit,
-        repairHistory,
-        afterPackage: repairDispatch.artifact,
-        afterAcknowledgement: repairDispatch.acknowledgement,
-      });
-      const repairReviewDurationMs = Date.now() - repairReviewStartedAt;
-      if (
-        !repairReviewedArchive.cumulativeIntentAudit
-        || !repairReviewedArchive.renderedIntegrityAudit
-        || repairReviewedArchive.cumulativeIntentAuditFailure
-        || repairReviewedArchive.renderedIntegrityAuditFailure
-      ) {
-        callbacks.trace?.("design.reset.review_observation_degraded", {
-          turn,
-          repairPass: liveRepairPass,
-          revisionId: repairDispatch.artifact.revisionId,
-          cumulativeIntentAuditAvailable: Boolean(repairReviewedArchive.cumulativeIntentAudit),
-          renderedIntegrityAuditAvailable: Boolean(repairReviewedArchive.renderedIntegrityAudit),
-          cumulativeIntentAuditFailure: repairReviewedArchive.cumulativeIntentAuditFailure,
-          renderedIntegrityAuditFailure: repairReviewedArchive.renderedIntegrityAuditFailure,
-        }, "Optional repair review was unavailable. Northstar preserved the browser-applied revision and did not convert an observation failure into a design failure.");
-      }
-
-      const remainingFindings = selectNorthstarLiveRepairFindings({
-        cumulativeIntentAudit: repairReviewedArchive.cumulativeIntentAudit,
-        renderedIntegrityAudit: repairReviewedArchive.renderedIntegrityAudit,
-        carryFindingKeys,
-      }).filter((finding) => {
-        const writable = new Set([...activeTurnWriteScope.writableExistingNodeIds, ...activeTurnWriteScope.introducedNodeIds, ...activeTurnWriteScope.supportingMovementNodeIds, ...writeScopeValidation.introducedNodeIds]);
-        return Boolean(finding.subjectNodeId && writable.has(finding.subjectNodeId))
-          || finding.relatedNodeIds.some((nodeId) => writable.has(nodeId));
-      });
-      const repairOutcome = summarizeNorthstarLiveRepairOutcome(triggeringFindings, remainingFindings);
-      consecutiveNoProgressRenders = repairOutcome.status === "no-progress"
-        ? consecutiveNoProgressRenders + 1
-        : 0;
-      const memoryEntry = {
-        repairPass: liveRepairPass,
-        outcome: repairOutcome.status,
-        baseRevisionId: repairBasePackage.revisionId,
-        revisionId: repairDispatch.artifact.revisionId,
-        executableFingerprint: repairFingerprint,
-        strategyFingerprint: repairStrategyFingerprint,
-        attemptedMutation: repairResponse.mutation,
-        beforeFindings: triggeringFindings,
-        afterFindings: remainingFindings,
-        comparison: repairOutcome,
-      };
-      liveRepairMemory.push(memoryEntry);
-      if (remainingFindings.length > 0) {
-        ineffectiveRepairFingerprints.add(repairFingerprint);
-        ineffectiveRepairStrategyFingerprints.add(repairStrategyFingerprint);
-        previousLiveRepairIssue = `Repair pass ${liveRepairPass} rendered but did not clear all current-turn findings. Outcome: ${repairOutcome.status}. Do not repeat executable repair ${repairFingerprint}; use the same-turn repair memory and choose a materially different composition.`;
-      } else {
-        previousLiveRepairIssue = undefined;
-      }
-      repairHistory.push({
-        stage: "live-artboard-post-render-review",
-        repairPass: liveRepairPass,
-        baseRevisionId: repairBasePackage.revisionId,
-        revisionId: repairDispatch.artifact.revisionId,
-        triggeringFindings,
-        remainingFindings,
-        mutation: repairResponse.mutation,
-        executableFingerprint: repairFingerprint,
-        repairOutcome,
-        reviewDurationMs: repairReviewDurationMs,
-      });
-      rawParsedResponse = repairRawResponse;
-      parsedResponse = repairResponse;
-      candidate = repairCandidate;
-      mutationBatch = repairMutationBatch;
-      dispatchResult = repairDispatch;
-      turnWriteScope = extendNorthstarTurnWriteScope(activeTurnWriteScope, writeScopeValidation.introducedNodeIds);
-      liveReviewedArchive = repairReviewedArchive;
-      liveRepairFindings = remainingFindings;
-
-      if (remainingFindings.length > 0 && consecutiveNoProgressRenders >= maximumConsecutiveNoProgressRenders) {
-        liveRepairFailure = `The same designer produced ${consecutiveNoProgressRenders} consecutive browser-rendered repairs with no measured change to the outstanding findings. The current live artboard was preserved and the turn was stopped by the convergence circuit breaker.`;
-        callbacks.trace?.("design.reset.live_repair_stagnated", {
-          patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
-          convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
-          turn,
-          repairPass: liveRepairPass,
-          revisionId: repairDispatch.artifact.revisionId,
-          consecutiveNoProgressRenders,
-          findings: remainingFindings,
-          repairMemory: liveRepairMemory,
-        }, "Northstar stopped only after repeated rendered no-progress results; it did not advance to the next design objective.");
-      }
-
-      callbacks.trace?.("design.reset.live_repair_reviewed", {
-        patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
-        addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
-        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
-        convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
-        turn,
-        repairPass: liveRepairPass,
-        baseRevisionId: repairBasePackage.revisionId,
-        revisionId: repairDispatch.artifact.revisionId,
-        reviewDurationMs: repairReviewDurationMs,
-        triggeringFindings,
-        remainingFindings,
-        executableFingerprint: repairFingerprint,
-        repairOutcome,
-        repairMemory: liveRepairMemory,
-        consecutiveNoProgressRenders,
-      }, remainingFindings.length === 0
-        ? "The same-turn correction resolved the actionable live-artboard findings. The next design objective may begin."
-        : "The repaired live artboard still has actionable findings owned by this turn. The same designer will correct it again before advancing.");
-    }
-
-    if (liveRepairFailure || liveRepairFindings.length > 0) {
-      const detail = liveRepairFailure
-        ? `Patch 1/2 could not close design reset turn ${turn}: ${liveRepairFailure}`
-        : `Design reset turn ${turn} still has ${liveRepairFindings.length} actionable live-artboard finding(s) at the ${emergencyLiveRepairAttemptLimit}-attempt repair circuit breaker.`;
-      unresolvedTurns.push(turn);
-      currentPackage = dispatchResult.artifact;
-      if (liveReviewedArchive) await callbacks.archiveDesignTurn?.({ ...liveReviewedArchive, failure: detail });
-      await callbacks.completeStep({
-        id: step.id,
-        tool: step.tool,
-        detail: `Preserved the current live artboard after objective ${turn} remained unresolved; the next queued objective will use this same browser-verified revision.`,
-      });
-      callbacks.trace?.("design.reset.live_repair_unresolved", {
-        patch: NORTHSTAR_PATCH_3B_LIVE_REPAIR_VERSION,
-        addon: NORTHSTAR_PATCH_3B_REPAIR_MEMORY_ADDON_VERSION,
-        collateralAddon: NORTHSTAR_PATCH_3B_COLLATERAL_CHANGE_ADDON_VERSION,
-        convergenceAddon: NORTHSTAR_PATCH_3B_REACTIVE_CONVERGENCE_ADDON_VERSION,
-        turn,
-        revisionId: currentPackage.revisionId,
-        findings: liveRepairFindings,
-        repairMemory: liveRepairMemory,
-        detail,
-      }, "Northstar recorded the unresolved objective without promoting an invalid candidate; the next queued objective continues from the last browser-verified revision.");
-      previousCumulativeIntentAudit = liveReviewedArchive?.cumulativeIntentAudit ?? previousCumulativeIntentAudit;
-      continue objectiveQueue;
-    }
-
-    if (!dispatchResult.acknowledgement.snapshot) {
-      throw new Error(`Design reset turn ${turn} committed without an exact browser source-after snapshot.`);
-    }
-    if (!providerAttempt) throw new Error("The design reset lost its exact provider audit after dispatch.");
-    // Reuse the review that was built directly from the first live browser
-    // result. Do not re-audit a second surface or reconstruct a candidate.
-    const turnArchive = liveReviewedArchive ?? buildNorthstarDesignResetTurnArchive({
-      runId,
-      artifactId,
-      turn,
-      requestedThinkingMode: thinkingDepth,
-      instruction: turnInstruction,
-      status: "committed",
-      beforePackage: basePackage,
-      beforeAcknowledgement,
-      systemInstruction,
-      contents,
-      responseSchema: NORTHSTAR_DESIGN_RESET_MODEL_RESPONSE_SCHEMA,
-      providerAttempt,
-      providerAttempts,
-      rawParsedResponse,
-      acceptedResponse: parsedResponse,
-      candidateBeforeBrowser: candidate,
-      mutationBatch,
-      previousCumulativeIntentAudit,
-      repairHistory,
-      afterPackage: dispatchResult.artifact,
-      afterAcknowledgement: dispatchResult.acknowledgement,
-    });
-    await callbacks.archiveDesignTurn?.(turnArchive);
-    previousCumulativeIntentAudit = turnArchive.cumulativeIntentAudit ?? previousCumulativeIntentAudit;
-
-    currentPackage = dispatchResult.artifact;
-    await callbacks.completeStep({
-      id: step.id,
-      tool: step.tool,
-      detail: `Committed design reset turn ${turn}: ${turnInstruction}.`,
-    });
-    callbacks.trace?.("design.reset.turn_committed", {
-      turn,
-      baseRevisionId: basePackage.revisionId,
-      revisionId: currentPackage.revisionId,
-      mutationId: mutationBatch?.mutationId,
-      requestedThinkingMode: thinkingDepth,
-      effectiveDesignMode: "ordered-objective-queue",
-    }, `The browser committed ${turnInstruction.toLowerCase()} from the exact model-authored patch.`);
-  }
-
-  const finalAcknowledgement = callbacks.getLinearDesignAck?.();
-  const result = materializeNorthstarCanonicalPackage(currentPackage, finalAcknowledgement);
-  return {
-    ...result,
-    provisional: unresolvedTurns.length > 0,
-    publicationState: unresolvedTurns.length > 0 ? "working" : "verified",
-    diagnostics: [
-      ...result.diagnostics,
-      unresolvedTurns.length > 0
-        ? `${NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION} attempted every queued objective while preserving browser-verified state; unresolved objectives: ${unresolvedTurns.join(", ")}.`
-        : `${NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION} completed every queued production objective.`,
-      "Turn 1 model instruction: Place a Hello World card below the research.",
-      "Turn 2 model instruction: Place a Hello World 2 card to the right of the research and vertically center-align it with the research.",
-      "Turn 3 model instruction: Construct a visual relationship between the first Awin screenshot and the first Whop screenshot.",
-      "Turn 4 model instruction: Create equal space between the first and second Awin screenshots and insert an annotation in that space.",
-      "Turn 5 model instruction: Add an explanation to the Awin screenshot where the user chooses their role.",
-      "Turn 6 model instruction: Make the Awin and Whop onboarding flows easier to distinguish as separate groups.",
-      "Turn 7 model instruction: Create a new analysis area below the current onboarding flows and reuse the Awin screenshot where the user chooses their role there. Preserve the original evidence and make the reused view clearly part of the new analysis area.",
-    ].slice(-60),
-  };
 }
 
 function sanitizeObservation(
@@ -13024,9 +11722,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             designResetLastRevisionId = lastLiveArtifactPackage?.revisionId;
             const codeArtifactPackage = await runSingularObservedDesignObjectiveQueue({
               apiKey,
-              runId,
               artifactId: compositionArtifactId,
-              thinkingDepth,
               callbacks: researchCallbacks,
               signal: request.signal,
               objectives: NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES,

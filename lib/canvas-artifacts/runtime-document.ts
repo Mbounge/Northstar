@@ -5130,7 +5130,6 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const visualSafetyReason = visualSafetyFailure(
           acknowledgement.transaction.beforeVisualSafety || afterVisualSafety,
           afterVisualSafety,
-          linearDesignExecution,
         );
         const pixelStableReason = pixelStableFailure(
           acknowledgement.transaction.pixelStableNodeIds,
@@ -5158,8 +5157,19 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         const constructionCoverageReason = acknowledgement.batch.constructionPlan?.strictCoverage !== false && constructionResult?.completed && !constructionResult?.timedOut && !constructionResult?.recovered && (constructionResult?.uncoveredNodeIds || []).length > 0
           ? "The cinema layer simplified the reveal because it could not stage every changed node: " + constructionResult.uncoveredNodeIds.slice(0, 12).join(", ") + "."
           : "";
+        // Every authored action already runs as a provisional DOM transaction.
+        // These are delta-based browser facts, so they reject only regressions
+        // introduced by this candidate and leave pre-existing artboard issues
+        // available for later singular actions. Linear design skips subjective
+        // quality thresholds, but it must never bypass operational feasibility.
+        const operationalFeasibilityReason = pixelStableReason
+          || visualSafetyReason
+          || (missingAssets.length ? "Required evidence assets did not load: " + missingAssets.join(", ") : "")
+          || hardIssueReason;
         const rejectedReason = additiveExpansionCollateralReason
           ? additiveExpansionCollateralReason
+          : operationalFeasibilityReason
+          ? operationalFeasibilityReason
           : linearDesignExecution
           ? ""
           : pixelStableReason
@@ -5170,8 +5180,6 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
           ? visualSafetyReason
           : essentialPrimitiveAuditReason
           ? essentialPrimitiveAuditReason
-          : missingAssets.length
-          ? "Required evidence assets did not load: " + missingAssets.join(", ")
           : diff.meaningful.length < minimumMeaningful
               ? "The proposed adjustment did not visibly change enough semantic content."
               : textOnly && acknowledgement.batch.allowTextOnly !== true
@@ -5180,9 +5188,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
                   ? "The visual design stage did not produce a palpable compositional delta: " + visualImpactFailures.join(", ")
                 : missingRequiredKinds.length
                   ? "The visible change did not satisfy the required design move: " + missingRequiredKinds.join(", ")
-                  : hardIssueReason
-                    ? hardIssueReason
-                    : "";
+                : "";
         if (rejectedReason) {
           const rejectedRevisionId = acknowledgement.revisionId;
           const rollbackRevisionId = acknowledgement.transaction.revisionId;

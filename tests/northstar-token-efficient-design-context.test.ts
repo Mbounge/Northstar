@@ -37,7 +37,7 @@ test("the compact system instruction keeps the universal singular-turn contract"
 test("the active design loop sends one compact context and records paid usage", () => {
   const route = readFileSync(new URL("../app/api/canvas-ai/route.ts", import.meta.url), "utf8");
   const start = route.indexOf("async function runSingularObservedDesignObjectiveQueue");
-  const end = route.indexOf("async function runProductionDesignObjectiveQueue", start);
+  const end = route.indexOf("function sanitizeObservation", start);
   assert.ok(start >= 0 && end > start);
   const loop = route.slice(start, end);
   assert.match(loop, /buildNorthstarCompactDesignTurnContext/);

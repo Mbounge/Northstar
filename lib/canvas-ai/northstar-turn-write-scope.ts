@@ -77,6 +77,25 @@ export type NorthstarSpatialFeasibilityNode = {
   protected: boolean;
 };
 
+export type NorthstarPlacementSide = "top" | "right" | "bottom" | "left";
+
+export type NorthstarObservedPlacementTerritory = {
+  territoryId: string;
+  kind: "semantic-region" | "artboard";
+  bounds: NorthstarSpatialFeasibilityNode["bounds"];
+};
+
+export type NorthstarObservedPlacementSlot = {
+  slotId: string;
+  territoryId: string;
+  territoryKind: NorthstarObservedPlacementTerritory["kind"];
+  kind: "reference-gap" | "directional-corridor";
+  bounds: NorthstarSpatialFeasibilityNode["bounds"];
+  maximumOuterSize: { width: number; height: number };
+  relativeToNodeIds: string[];
+  compatibleSides: NorthstarPlacementSide[];
+};
+
 export type NorthstarObservedSpatialFacts = {
   source: "browser-measurement";
   minimumClearance: number;
@@ -93,6 +112,30 @@ export type NorthstarObservedSpatialFacts = {
     span: number;
     crossAxisOverlap: number;
   }>;
+  referencePairs: NorthstarObservedReferencePair[];
+  placementFeasibility: {
+    appliesTo: "new-or-transformed-outer-footprints";
+    requiredForCurrentObjective: boolean;
+    clearanceApplied: number;
+    preferredSides: NorthstarPlacementSide[];
+    candidateSlots: NorthstarObservedPlacementSlot[];
+    conclusion: "not-required" | "measured-slots-available" | "no-measured-slot";
+    requiredActionWhenNoFit: "none" | "create-space-or-expand-artboard";
+  };
+};
+
+export type NorthstarObservedReferencePair = {
+  purpose: string;
+  firstNodeId: string;
+  secondNodeId: string;
+  sharedParentId?: string;
+  axis: "x" | "y";
+  firstBounds: NorthstarSpatialFeasibilityNode["bounds"];
+  secondBounds: NorthstarSpatialFeasibilityNode["bounds"];
+  centerDelta: { x: number; y: number };
+  span: number;
+  crossAxisOverlap: number;
+  gapBounds?: NorthstarSpatialFeasibilityNode["bounds"];
 };
 
 type RepairFindingLike = {
@@ -149,6 +192,16 @@ function independentlyPaintedObstacle(
   return attributeNames.has("data-ns-evidence-id") || attributeNames.has("data-ns-authored-annotation");
 }
 
+function addressablePaintBox(node: NorthstarCommittedSemanticNode): boolean {
+  const attributeNames = new Set(Object.keys(node.normalizedAttributes));
+  return !attributeNames.has("data-ns-authored-relationship")
+    && (
+      attributeNames.has("data-ns-node-id")
+      || attributeNames.has("data-ns-evidence-id")
+      || attributeNames.has("data-ns-authored-annotation")
+    );
+}
+
 function axisClearance(input: {
   subject: NorthstarSpatialFeasibilityNode;
   container?: NorthstarSpatialFeasibilityNode;
@@ -194,6 +247,252 @@ function overlaps(first: NorthstarSpatialFeasibilityNode["bounds"], second: Nort
     && Math.min(first.bottom, second.bottom) > Math.max(first.top, second.top);
 }
 
+function positiveBounds(input: {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}): NorthstarSpatialFeasibilityNode["bounds"] | undefined {
+  const width = input.right - input.left;
+  const height = input.bottom - input.top;
+  if (width <= 0 || height <= 0) return undefined;
+  return { ...input, width, height };
+}
+
+function insetBounds(
+  bounds: NorthstarSpatialFeasibilityNode["bounds"],
+  amount: number,
+): NorthstarSpatialFeasibilityNode["bounds"] | undefined {
+  return positiveBounds({
+    left: bounds.left + amount,
+    top: bounds.top + amount,
+    right: bounds.right - amount,
+    bottom: bounds.bottom - amount,
+  });
+}
+
+function outsetBounds(
+  bounds: NorthstarSpatialFeasibilityNode["bounds"],
+  amount: number,
+): NorthstarSpatialFeasibilityNode["bounds"] {
+  const left = bounds.left - amount;
+  const top = bounds.top - amount;
+  const right = bounds.right + amount;
+  const bottom = bounds.bottom + amount;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function directionalCorridor(input: {
+  territory: NorthstarObservedPlacementTerritory;
+  side: NorthstarPlacementSide;
+  focusEnvelope: NorthstarSpatialFeasibilityNode["bounds"];
+  obstacles: NorthstarSpatialFeasibilityNode[];
+  clearance: number;
+}): NorthstarObservedPlacementSlot | undefined {
+  const inner = insetBounds(input.territory.bounds, input.clearance);
+  if (!inner) return undefined;
+  const focus = input.focusEnvelope;
+  const draft = input.side === "right"
+    ? {
+        left: Math.max(inner.left, focus.right + input.clearance),
+        top: Math.max(inner.top, focus.top),
+        right: inner.right,
+        bottom: Math.min(inner.bottom, focus.bottom),
+      }
+    : input.side === "left"
+      ? {
+          left: inner.left,
+          top: Math.max(inner.top, focus.top),
+          right: Math.min(inner.right, focus.left - input.clearance),
+          bottom: Math.min(inner.bottom, focus.bottom),
+        }
+      : input.side === "bottom"
+        ? {
+            left: Math.max(inner.left, focus.left),
+            top: Math.max(inner.top, focus.bottom + input.clearance),
+            right: Math.min(inner.right, focus.right),
+            bottom: inner.bottom,
+          }
+        : {
+            left: Math.max(inner.left, focus.left),
+            top: inner.top,
+            right: Math.min(inner.right, focus.right),
+            bottom: Math.min(inner.bottom, focus.top - input.clearance),
+          };
+  let corridor = positiveBounds(draft);
+  if (!corridor) return undefined;
+
+  for (const obstacle of input.obstacles) {
+    const obstacleWithClearance = outsetBounds(obstacle.bounds, input.clearance);
+    const crossAxisOverlap = input.side === "left" || input.side === "right"
+      ? Math.min(corridor.bottom, obstacleWithClearance.bottom) - Math.max(corridor.top, obstacleWithClearance.top)
+      : Math.min(corridor.right, obstacleWithClearance.right) - Math.max(corridor.left, obstacleWithClearance.left);
+    if (crossAxisOverlap <= 0) continue;
+    if (input.side === "right") {
+      if (obstacleWithClearance.right <= corridor.left || obstacleWithClearance.left >= corridor.right) continue;
+      if (obstacleWithClearance.left <= corridor.left) return undefined;
+      corridor = positiveBounds({ ...corridor, right: obstacleWithClearance.left });
+    } else if (input.side === "left") {
+      if (obstacleWithClearance.left >= corridor.right || obstacleWithClearance.right <= corridor.left) continue;
+      if (obstacleWithClearance.right >= corridor.right) return undefined;
+      corridor = positiveBounds({ ...corridor, left: obstacleWithClearance.right });
+    } else if (input.side === "bottom") {
+      if (obstacleWithClearance.bottom <= corridor.top || obstacleWithClearance.top >= corridor.bottom) continue;
+      if (obstacleWithClearance.top <= corridor.top) return undefined;
+      corridor = positiveBounds({ ...corridor, bottom: obstacleWithClearance.top });
+    } else {
+      if (obstacleWithClearance.top >= corridor.bottom || obstacleWithClearance.bottom <= corridor.top) continue;
+      if (obstacleWithClearance.bottom >= corridor.bottom) return undefined;
+      corridor = positiveBounds({ ...corridor, top: obstacleWithClearance.bottom });
+    }
+    if (!corridor) return undefined;
+  }
+
+  return {
+    slotId: `corridor:${input.territory.territoryId}:${input.side}`,
+    territoryId: input.territory.territoryId,
+    territoryKind: input.territory.kind,
+    kind: "directional-corridor",
+    bounds: corridor,
+    maximumOuterSize: { width: corridor.width, height: corridor.height },
+    relativeToNodeIds: [],
+    compatibleSides: [input.side],
+  };
+}
+
+function placementSlots(input: {
+  focusEnvelope?: NorthstarSpatialFeasibilityNode["bounds"];
+  focusNodeIds: string[];
+  obstacles: NorthstarSpatialFeasibilityNode[];
+  referencePairs: NorthstarObservedReferencePair[];
+  territories: NorthstarObservedPlacementTerritory[];
+  preferredSides: NorthstarPlacementSide[];
+  clearance: number;
+}): NorthstarObservedPlacementSlot[] {
+  const slots: NorthstarObservedPlacementSlot[] = [];
+  for (const pair of input.referencePairs) {
+    if (pair.purpose !== "measured-gap" || !pair.gapBounds) continue;
+    const safeGap = insetBounds(pair.gapBounds, input.clearance);
+    if (!safeGap) continue;
+    if (input.obstacles.some((obstacle) => overlaps(safeGap, outsetBounds(obstacle.bounds, input.clearance)))) continue;
+    const territory = input.territories.find((candidate) =>
+      candidate.bounds.left <= safeGap.left
+      && candidate.bounds.top <= safeGap.top
+      && candidate.bounds.right >= safeGap.right
+      && candidate.bounds.bottom >= safeGap.bottom
+    );
+    slots.push({
+      slotId: `reference-gap:${pair.firstNodeId}:${pair.secondNodeId}`,
+      territoryId: territory?.territoryId ?? "measured-reference-pair",
+      territoryKind: territory?.kind ?? "semantic-region",
+      kind: "reference-gap",
+      bounds: safeGap,
+      maximumOuterSize: { width: safeGap.width, height: safeGap.height },
+      relativeToNodeIds: [pair.firstNodeId, pair.secondNodeId],
+      compatibleSides: [],
+    });
+  }
+  if (input.focusEnvelope) {
+    const sides = input.preferredSides.length
+      ? input.preferredSides
+      : ["right", "bottom", "left", "top"] satisfies NorthstarPlacementSide[];
+    for (const territory of input.territories) {
+      for (const side of sides) {
+        const slot = directionalCorridor({
+          territory,
+          side,
+          focusEnvelope: input.focusEnvelope,
+          obstacles: input.obstacles,
+          clearance: input.clearance,
+        });
+        if (slot) slots.push({ ...slot, relativeToNodeIds: input.focusNodeIds });
+      }
+    }
+  }
+  const uniqueSlots = new Map<string, NorthstarObservedPlacementSlot>();
+  for (const slot of slots) {
+    const key = [slot.kind, slot.bounds.left, slot.bounds.top, slot.bounds.right, slot.bounds.bottom].join(":");
+    if (!uniqueSlots.has(key)) uniqueSlots.set(key, slot);
+  }
+  const preferred = new Set(input.preferredSides);
+  return [...uniqueSlots.values()]
+    .sort((first, second) => {
+      const firstGap = first.kind === "reference-gap" ? 1 : 0;
+      const secondGap = second.kind === "reference-gap" ? 1 : 0;
+      if (firstGap !== secondGap) return secondGap - firstGap;
+      const firstSemantic = first.territoryKind === "semantic-region" ? 1 : 0;
+      const secondSemantic = second.territoryKind === "semantic-region" ? 1 : 0;
+      if (firstSemantic !== secondSemantic) return secondSemantic - firstSemantic;
+      const firstPreferred = first.compatibleSides.some((side) => preferred.has(side)) ? 1 : 0;
+      const secondPreferred = second.compatibleSides.some((side) => preferred.has(side)) ? 1 : 0;
+      if (firstPreferred !== secondPreferred) return secondPreferred - firstPreferred;
+      return (second.bounds.width * second.bounds.height) - (first.bounds.width * first.bounds.height);
+    })
+    .slice(0, 6);
+}
+
+function referencePairGeometry(input: {
+  purpose: string;
+  first: NorthstarSpatialFeasibilityNode;
+  second: NorthstarSpatialFeasibilityNode;
+}): NorthstarObservedReferencePair {
+  const { first, second } = input;
+  const firstCenter = {
+    x: first.bounds.left + (first.bounds.width / 2),
+    y: first.bounds.top + (first.bounds.height / 2),
+  };
+  const secondCenter = {
+    x: second.bounds.left + (second.bounds.width / 2),
+    y: second.bounds.top + (second.bounds.height / 2),
+  };
+  const centerDelta = {
+    x: secondCenter.x - firstCenter.x,
+    y: secondCenter.y - firstCenter.y,
+  };
+  const axis = Math.abs(centerDelta.x) >= Math.abs(centerDelta.y) ? "x" : "y";
+  const firstBeforeSecond = axis === "x"
+    ? firstCenter.x <= secondCenter.x
+    : firstCenter.y <= secondCenter.y;
+  const before = firstBeforeSecond ? first : second;
+  const after = firstBeforeSecond ? second : first;
+  const span = Math.max(0, axis === "x"
+    ? after.bounds.left - before.bounds.right
+    : after.bounds.top - before.bounds.bottom);
+  const crossAxisOverlap = Math.max(0, axis === "x"
+    ? Math.min(first.bounds.bottom, second.bounds.bottom) - Math.max(first.bounds.top, second.bounds.top)
+    : Math.min(first.bounds.right, second.bounds.right) - Math.max(first.bounds.left, second.bounds.left));
+  const gapBounds = span > 0 ? axis === "x"
+    ? {
+        left: before.bounds.right,
+        top: Math.max(first.bounds.top, second.bounds.top),
+        right: after.bounds.left,
+        bottom: Math.min(first.bounds.bottom, second.bounds.bottom),
+        width: span,
+        height: crossAxisOverlap,
+      }
+    : {
+        left: Math.max(first.bounds.left, second.bounds.left),
+        top: before.bounds.bottom,
+        right: Math.min(first.bounds.right, second.bounds.right),
+        bottom: after.bounds.top,
+        width: crossAxisOverlap,
+        height: span,
+      } : undefined;
+  return {
+    purpose: input.purpose,
+    firstNodeId: first.nodeId,
+    secondNodeId: second.nodeId,
+    sharedParentId: first.parentId && first.parentId === second.parentId ? first.parentId : undefined,
+    axis,
+    firstBounds: first.bounds,
+    secondBounds: second.bounds,
+    centerDelta,
+    span,
+    crossAxisOverlap,
+    gapBounds,
+  };
+}
+
 /**
  * Pure browser facts for the next reasoning call. This is deliberately
  * independent of repair findings and write scope: the model sees measured fit
@@ -202,6 +501,14 @@ function overlaps(first: NorthstarSpatialFeasibilityNode["bounds"], second: Nort
 export function buildNorthstarObservedSpatialFacts(input: {
   acknowledgement: NorthstarArtifactMutationAcknowledgement;
   focusNodeIds: string[];
+  referencePairs?: Array<{
+    purpose: string;
+    firstNodeId: string;
+    secondNodeId: string;
+  }>;
+  placementTerritories?: NorthstarObservedPlacementTerritory[];
+  placementRequired?: boolean;
+  preferredSides?: NorthstarPlacementSide[];
   minimumClearance?: number;
 }): NorthstarObservedSpatialFacts {
   const nodes = input.acknowledgement.snapshot?.semanticNodes ?? [];
@@ -214,17 +521,24 @@ export function buildNorthstarObservedSpatialFacts(input: {
   );
   const childCounts = new Map<string, number>();
   for (const node of nodes) if (node.parentId) childCounts.set(node.parentId, (childCounts.get(node.parentId) ?? 0) + 1);
-  const structuralAncestorIds = new Set([...focusIds].flatMap((nodeId) => [...ancestorIds(nodeId, byId)]));
   const focusNodes = [...focusIds]
     .map((nodeId) => byId.get(nodeId))
     .filter(directlyMeasured)
     .map((node) => spatialNode(node, protectedNodeIds))
     .filter(Boolean) as NorthstarSpatialFeasibilityNode[];
   const focusEnvelope = unionBounds(focusNodes);
-  const allObstacles = nodes
-    .filter((node) => !focusIds.has(node.nodeId) && directlyMeasured(node))
+  const focusAncestorIds = new Set([...focusIds].flatMap((nodeId) => [...ancestorIds(nodeId, byId)]));
+  const obstacleCandidates = nodes
+    .filter(directlyMeasured)
+    .filter((node) => !focusIds.has(node.nodeId) && !focusAncestorIds.has(node.nodeId))
     .filter((node) => ![...ancestorIds(node.nodeId, byId)].some((ancestorId) => focusIds.has(ancestorId)))
-    .filter((node) => independentlyPaintedObstacle(node, childCounts, structuralAncestorIds))
+    .filter((node) => !Object.prototype.hasOwnProperty.call(node.normalizedAttributes, "data-ns-authored-relationship"));
+  const addressableObstacleIds = new Set(
+    obstacleCandidates.filter(addressablePaintBox).map((node) => node.nodeId),
+  );
+  const allObstacles = obstacleCandidates
+    .filter((node) => ![...ancestorIds(node.nodeId, byId)].some((ancestorId) => addressableObstacleIds.has(ancestorId)))
+    .filter((node) => addressablePaintBox(node) || (childCounts.get(node.nodeId) ?? 0) === 0)
     .map((node) => spatialNode(node, protectedNodeIds))
     .filter(Boolean) as NorthstarSpatialFeasibilityNode[];
   const worldBounds = input.acknowledgement.size ? {
@@ -281,15 +595,51 @@ export function buildNorthstarObservedSpatialFacts(input: {
       };
     });
   });
+  const referencePairs = (input.referencePairs ?? []).flatMap((pair) => {
+    const firstNode = byId.get(pair.firstNodeId);
+    const secondNode = byId.get(pair.secondNodeId);
+    if (!directlyMeasured(firstNode) || !directlyMeasured(secondNode)) return [];
+    const first = spatialNode(firstNode, protectedNodeIds);
+    const second = spatialNode(secondNode, protectedNodeIds);
+    return first && second ? [referencePairGeometry({ purpose: pair.purpose, first, second })] : [];
+  });
+  const minimumClearance = input.minimumClearance ?? 12;
+  const preferredSides = [...new Set(input.preferredSides ?? [])];
+  const placementRequired = input.placementRequired ?? Boolean(input.placementTerritories?.length);
+  const candidateSlots = placementRequired
+    ? placementSlots({
+        focusEnvelope,
+        focusNodeIds: focusNodes.map((node) => node.nodeId),
+        obstacles: allObstacles,
+        referencePairs,
+        territories: input.placementTerritories ?? [],
+        preferredSides,
+        clearance: minimumClearance,
+      })
+    : [];
   return {
     source: "browser-measurement",
-    minimumClearance: input.minimumClearance ?? 12,
+    minimumClearance,
     worldBounds,
     focusNodes,
     focusEnvelope,
     nearbyObstacles,
     availableClearance,
     measuredGaps,
+    referencePairs,
+    placementFeasibility: {
+      appliesTo: "new-or-transformed-outer-footprints",
+      requiredForCurrentObjective: placementRequired,
+      clearanceApplied: minimumClearance,
+      preferredSides,
+      candidateSlots,
+      conclusion: !placementRequired
+        ? "not-required"
+        : candidateSlots.length
+          ? "measured-slots-available"
+          : "no-measured-slot",
+      requiredActionWhenNoFit: placementRequired ? "create-space-or-expand-artboard" : "none",
+    },
   };
 }
 

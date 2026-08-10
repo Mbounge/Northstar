@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  buildNorthstarCompactDesignTurnSystemInstruction,
   buildNorthstarDesignResetSystemInstruction,
   sanitizeNorthstarObjectiveDecisionResponse,
 } from "../lib/canvas-ai/northstar-two-turn-design-reset";
@@ -13,6 +14,20 @@ test("the universal design instruction requires one observed action at a time", 
   assert.match(instruction, /browser will render and measure it/);
   assert.match(instruction, /Replan from what actually happened/);
   assert.doesNotMatch(instruction, /whole coordinated change in one mutation/);
+});
+
+test("the compact reason step treats browser rejection as measured provisional evidence", () => {
+  const instruction = buildNorthstarCompactDesignTurnSystemInstruction();
+  assert.match(instruction, /provisional browser transaction/);
+  assert.match(instruction, /reject and roll back/);
+  assert.match(instruction, /browserReceipt as an exact measurement/);
+  assert.match(instruction, /Do not repeat an executable action/);
+  assert.match(instruction, /placementFeasibility\.requiredForCurrentObjective/);
+  assert.match(instruction, /candidateSlots/);
+  assert.match(instruction, /create adequate space or grow the artboard/);
+  assert.match(instruction, /connectors and grouping-only changes do not require a placement slot/i);
+  assert.match(instruction, /When requiredForCurrentObjective is false/);
+  assert.doesNotMatch(instruction, /reviewer/i);
 });
 
 test("completion is accepted only against the exact current browser revision", () => {
@@ -29,6 +44,7 @@ test("completion is accepted only against the exact current browser revision", (
       decision: "objective-complete",
       completionRationale: "The browser shows the requested state.",
       completionEvidence: {
+        observedRevisionId: "stale-revision",
         satisfiedSignals: ["The requested state is visible."],
         remainingIssues: [],
       },
@@ -52,6 +68,7 @@ test("completion is rejected while the model still sees unresolved issues", () =
       decision: "objective-complete",
       completionRationale: "Most of the requested state is visible.",
       completionEvidence: {
+        observedRevisionId: "current-revision",
         satisfiedSignals: ["The content exists."],
         remainingIssues: ["The content overlaps evidence."],
       },
@@ -59,6 +76,30 @@ test("completion is rejected while the model still sees unresolved issues", () =
     turn: 1,
     baseRevisionId: "current-revision",
   }), /declared completion with unresolved issues/);
+});
+
+test("completion evidence cannot refer to an earlier observed revision", () => {
+  assert.throws(() => sanitizeNorthstarObjectiveDecisionResponse({
+    raw: {
+      turn: 2,
+      observedBaseRevisionId: "current-revision",
+      understanding: "The latest browser revision is visible.",
+      objectivePlan: {
+        objectiveSummary: "Create the requested state.",
+        plannedActions: [],
+        completedActions: ["Inserted the requested object."],
+      },
+      decision: "objective-complete",
+      completionRationale: "The earlier revision showed the requested state.",
+      completionEvidence: {
+        observedRevisionId: "previous-revision",
+        satisfiedSignals: ["The requested object existed previously."],
+        remainingIssues: [],
+      },
+    },
+    turn: 2,
+    baseRevisionId: "current-revision",
+  }), /Completion evidence observed revision/);
 });
 
 const executableDecision = (operations: Array<Record<string, unknown>>) => ({
@@ -123,7 +164,7 @@ test("a grounding label does not force a spatial relation onto an unrelated oper
 test("the active queue observes each applied action before another model decision", () => {
   const route = readFileSync(new URL("../app/api/canvas-ai/route.ts", import.meta.url), "utf8");
   const start = route.indexOf("async function runSingularObservedDesignObjectiveQueue");
-  const end = route.indexOf("async function runProductionDesignObjectiveQueue", start);
+  const end = route.indexOf("function sanitizeObservation", start);
   assert.ok(start >= 0 && end > start);
   const loop = route.slice(start, end);
   assert.match(loop, /for \(const \[objectiveOffset, instruction\] of objectives\.entries\(\)\)/);
@@ -138,15 +179,18 @@ test("the active queue observes each applied action before another model decisio
   assert.doesNotMatch(loop, /buildNorthstarDesignResetModelInput\(\{/);
   assert.match(loop, /design\.model_usage_summary/);
   assert.match(loop, /meaningfulChangedNodeIds/);
+  assert.match(loop, /observedTurns\.push/);
+  assert.doesNotMatch(loop, /observedActionChannels/);
+  assert.doesNotMatch(loop, /non_convergent_action/);
   assert.match(loop, /if \(northstarProviderInterruption\(error\)\) throw error/);
   assert.doesNotMatch(loop, /NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES/);
   assert.match(route, /await runSingularObservedDesignObjectiveQueue\(\{/);
 });
 
-test("the active queue never spends another model call on an unchanged rejected revision", () => {
+test("a verified provisional rejection is observed once before a materially different action", () => {
   const route = readFileSync(new URL("../app/api/canvas-ai/route.ts", import.meta.url), "utf8");
   const start = route.indexOf("async function runSingularObservedDesignObjectiveQueue");
-  const end = route.indexOf("async function runProductionDesignObjectiveQueue", start);
+  const end = route.indexOf("function sanitizeObservation", start);
   assert.ok(start >= 0 && end > start);
   const loop = route.slice(start, end);
   const contractFailure = loop.slice(
@@ -159,7 +203,35 @@ test("the active queue never spends another model call on an unchanged rejected 
   );
   assert.match(contractFailure, /break;/);
   assert.doesNotMatch(contractFailure, /continue;/);
-  assert.match(executionFailure, /break;/);
-  assert.doesNotMatch(executionFailure, /continue;/);
+  assert.match(executionFailure, /safelyRestored/);
+  assert.match(executionFailure, /compactRejectedBrowserReceipt/);
+  assert.match(executionFailure, /browserReceipt: receipt/);
+  assert.match(executionFailure, /if \(!rejectedAcknowledgement \|\| !safelyRestored\) break;/);
+  assert.match(executionFailure, /continue;/);
+  assert.match(loop, /rejectedActionFingerprints\.has\(actionFingerprint\)/);
+  assert.match(loop, /design\.objective_turn\.duplicate_rejected_action/);
   assert.match(loop, /if \(northstarProviderInterruption\(error\)\) throw error/);
+});
+
+test("linear design uses the existing provisional transaction as an operational feasibility gate", () => {
+  const runtime = readFileSync(new URL("../lib/canvas-artifacts/runtime-document.ts", import.meta.url), "utf8");
+  const start = runtime.indexOf("const afterVisualSafety = visualSafetySnapshot()");
+  const end = runtime.indexOf("if (rejectedReason)", start);
+  assert.ok(start >= 0 && end > start);
+  const gate = runtime.slice(start, end);
+  const visualSafetyCall = gate.slice(0, gate.indexOf("const pixelStableReason"));
+  assert.match(visualSafetyCall, /visualSafetyFailure\([\s\S]*?afterVisualSafety,\s*\)/);
+  assert.doesNotMatch(visualSafetyCall, /linearDesignExecution/);
+  assert.match(gate, /const operationalFeasibilityReason = pixelStableReason/);
+  assert.match(gate, /\|\| visualSafetyReason/);
+  assert.match(gate, /Required evidence assets did not load/);
+  assert.match(gate, /\|\| hardIssueReason/);
+  assert.ok(gate.indexOf(": operationalFeasibilityReason") < gate.indexOf(": linearDesignExecution"));
+});
+
+test("legacy repair-loop architecture is absent from the active route", () => {
+  const route = readFileSync(new URL("../app/api/canvas-ai/route.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(route, /async function runProductionDesignObjectiveQueue/);
+  assert.doesNotMatch(route, /northstar-observed-action-ledger/);
+  assert.doesNotMatch(route, /design\.objective_turn\.non_convergent_action/);
 });

@@ -22,7 +22,11 @@ import {
   buildNorthstarRenderedIntegrityAudit,
   type NorthstarRenderedIntegrityAudit,
 } from "@/lib/canvas-ai/northstar-rendered-integrity-audit";
-import { buildNorthstarObservedSpatialFacts } from "@/lib/canvas-ai/northstar-turn-write-scope";
+import {
+  buildNorthstarObservedSpatialFacts,
+  type NorthstarObservedPlacementTerritory,
+  type NorthstarPlacementSide,
+} from "@/lib/canvas-ai/northstar-turn-write-scope";
 
 export const NORTHSTAR_PRODUCTION_DESIGN_LOOP_VERSION =
   "northstar.production-design-loop.v1" as const;
@@ -232,9 +236,21 @@ export type NorthstarDesignResetCompleteResponse = {
   decision: "objective-complete";
   completionRationale: string;
   completionEvidence: {
+    observedRevisionId: string;
     satisfiedSignals: string[];
     remainingIssues: string[];
   };
+};
+
+export type NorthstarObservedObjectiveTurn = {
+  actionId: string;
+  intent: string;
+  successSignal: string;
+  baseRevisionId: string;
+  observedRevisionId: string;
+  changedNodeIds: string[];
+  browserStatus: NorthstarArtifactMutationAcknowledgement["status"];
+  remainingFindings: string[];
 };
 
 export type NorthstarObjectiveDecisionResponse =
@@ -633,10 +649,11 @@ export const NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
+        observedRevisionId: { type: "string", minLength: 1 },
         satisfiedSignals: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, minItems: 1, maxItems: 12 },
         remainingIssues: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, maxItems: 12 },
       },
-      required: ["satisfiedSignals", "remainingIssues"],
+      required: ["observedRevisionId", "satisfiedSignals", "remainingIssues"],
     },
     grounding: {
       type: "object",
@@ -765,16 +782,29 @@ export function buildNorthstarArtboardSemanticGraph(input: {
   const screenshotsById = new Map(screenshots.map((screenshot) => [screenshot.id, screenshot]));
   const flowsById = new Map((input.artifact.dataBundle?.flows ?? []).map((flow) => [flow.id, flow]));
   const normalizeLookup = (value: string | undefined) => (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  // presentationManifest.index is a legacy global presentation ordinal in
+  // some live artifacts. Instruction ordinals are semantic and flow-local:
+  // "the first Whop screenshot" must resolve to the first Whop member even
+  // when its manifest index follows every Awin member.
+  const localIndexByNodeId = new Map<string, number>();
+  const nextIndexByFlowId = new Map<string, number>();
+  for (const entry of manifest) {
+    if (!isRecord(entry) || typeof entry.nodeId !== "string") continue;
+    const flowId = typeof entry.flowId === "string" ? entry.flowId : "";
+    const localIndex = nextIndexByFlowId.get(flowId) ?? 0;
+    localIndexByNodeId.set(entry.nodeId, localIndex);
+    nextIndexByFlowId.set(flowId, localIndex + 1);
+  }
   const evidenceItems = manifest.flatMap((entry) => {
     if (!isRecord(entry) || typeof entry.nodeId !== "string") return [];
     const bounds = rectFromUnknown(entry);
     const flowId = typeof entry.flowId === "string" ? entry.flowId : "";
-    const index = finiteNumber(entry.index) ?? 0;
+    const manifestIndex = finiteNumber(entry.index) ?? 0;
+    const index = localIndexByNodeId.get(entry.nodeId) ?? manifestIndex;
     const evidenceId = typeof entry.evidenceId === "string" ? entry.evidenceId : undefined;
     const flowScreenshotIds = flowsById.get(flowId)?.screenshotIds ?? [];
     const screenshot = (evidenceId ? screenshotsById.get(evidenceId) : undefined)
       ?? (flowScreenshotIds[index] ? screenshotsById.get(flowScreenshotIds[index]!) : undefined)
-      ?? (index > 0 && flowScreenshotIds[index - 1] ? screenshotsById.get(flowScreenshotIds[index - 1]!) : undefined)
       ?? screenshots.find((candidate) =>
         normalizeLookup(candidate.flowName) === normalizeLookup(flowId)
         && (candidate.index ?? 0) === index
@@ -1010,15 +1040,21 @@ export function buildNorthstarCompactDesignTurnSystemInstruction(): string {
 
 Resolve the supplied objective through singular observed design turns. Return either objective-complete, or exactly one executable mutation operation. After execution the browser will render and measure the result before you choose another action. Never predict a dependent second action in the same response.
 
-Use only the supplied compact context as factual state. Node ids, region membership, bounds, anchors, artboard bounds, relations, preservation rules, and the last browser outcome are authoritative. Ground every referenced subject in those ids. Do not invent missing geometry. If the objective cannot yet be completed safely from the available geometry, use the next action to create the required space or structure.
+Every action is a provisional browser transaction until its measured receipt says applied. A failed transaction must reject and roll back; its receipt becomes the next observation. Do not search nearby blindly; ground one materially different action in that receipt: make space, recompose the smallest affected structure, change the footprint, or use a proven viable location.
 
-The semantic evidence labels identify what each screenshot actually depicts. The observedSpatialFacts are browser measurements taken before this reasoning call. Use both together: first resolve the exact semantic referent, then test the intended outer footprint and clearance against the measured envelope, blockers, and gaps. Never insert an object merely because an instruction names a direction. If fit is not established, the one action for this turn must create adequate space; observe that result before placing the object.
+The observedTurnJournal is exact rendered history. Do not repeat an executable action already applied or rejected. A receipt may justify a different follow-up against the same node; creating measured space and then placing are two observed turns. Replan from the current revision and outcome.
+
+After an applied action, compare the exact current referents, relations, measurements, and findings with the objective. If it is visibly satisfied and no issue remains, return objective-complete immediately; never spend another turn restyling or reasserting it.
+
+Use only the supplied compact context as factual state. Node ids, region membership, bounds, anchors, artboard bounds, relations, preservation rules, and the last browser outcome are authoritative. Ground every referenced subject in those ids. Do not invent missing geometry. Treat a rejected candidate's browserReceipt as an exact measurement of the attempted composition even though the canonical revision was restored. If the objective cannot yet be completed safely from the available geometry, use the next action to create the required space or structure.
+
+The semantic evidence labels identify what each screenshot actually depicts. The observedSpatialFacts are browser measurements taken before this reasoning call. Use both together: first resolve the exact semantic referent, then inspect placementFeasibility.requiredForCurrentObjective. When it is true, test the intended outer border-box against placementFeasibility.candidateSlots. Each slot is a browser-proven currently empty envelope with clearance already applied. A new or repositioned subject must fit wholly inside a semantically appropriate slot. When requiredForCurrentObjective is false, do not create space merely because candidateSlots is empty; connectors and grouping-only changes do not require a placement slot. Never insert an object merely because an instruction names a direction. If placement is required and no slot can contain the planned footprint, the one action for this turn must create adequate space or grow the artboard; observe that result before placing the object on a later turn.
 
 Preserve protected evidence identity, content, order, visibility, appearance, width, and height. Evidence may be explicitly translated only when the objective requires recomposing the smallest coherent affected structure. Keep unrelated regions stable. Never cover readable evidence or authored content. Before placement, compare the subject's intended footprint plus clearance against the measured gap or available artboard space. When it does not fit, create space or request artboard growth instead of searching nearby coordinates.
 
 Use mutation.relations for dependencies that must remain live after later geometry changes. Use relative-placement for explicit directional placement, between-placement for an object centered between two references, and connector-attachment only for an authored connector whose endpoints must follow references. The model chooses the design, dimensions, spacing, styling, route, and operation; the browser only realizes and measures declared intent.
 
-Inserted authored objects require unique data-ns-node-id values. Prefer focused operations against stable node ids. Do not replace or restyle whole evidence flows for a local change. Completion is valid only when the exact current revision visibly satisfies the objective and completionEvidence.remainingIssues is empty. Return JSON only.`;
+Inserted authored objects require unique data-ns-node-id values. Prefer focused operations against stable node ids. Do not replace or restyle whole evidence flows for a local change. Completion is valid only when the exact current revision visibly satisfies the objective, completionEvidence.observedRevisionId equals revision.browserRevisionId, and completionEvidence.remainingIssues is empty. Return JSON only.`;
 }
 
 
@@ -1041,6 +1077,66 @@ function focusScore(instruction: Set<string>, values: string[]): number {
 function ordinalLabel(index: number): string {
   return ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"][index]
     ?? `item ${index + 1}`;
+}
+
+const NORTHSTAR_ORDINAL_WORDS = [
+  "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+] as const;
+
+function normalizedSemanticPhrase(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function instructionOrdinalIndexes(value: string): number[] {
+  const normalized = normalizedSemanticPhrase(value);
+  const indexes = new Set<number>();
+  NORTHSTAR_ORDINAL_WORDS.forEach((word, index) => {
+    if (new RegExp(`\\b${word}\\b`).test(normalized)) indexes.add(index);
+  });
+  for (const match of normalized.matchAll(/\b(\d+)(?:st|nd|rd|th)\b/g)) {
+    const ordinal = Number(match[1]) - 1;
+    if (ordinal >= 0) indexes.add(ordinal);
+  }
+  return [...indexes];
+}
+
+function phraseOccurs(instruction: string, phrase: string): boolean {
+  const normalizedPhrase = normalizedSemanticPhrase(phrase);
+  if (!normalizedPhrase) return false;
+  return ` ${normalizedSemanticPhrase(instruction)} `.includes(` ${normalizedPhrase} `);
+}
+
+function ordinalIndexesNearAliases(instruction: string, aliases: string[]): number[] {
+  const normalized = normalizedSemanticPhrase(instruction);
+  const indexes = new Set<number>();
+  for (const alias of aliases.map(normalizedSemanticPhrase).filter(Boolean)) {
+    let aliasIndex = normalized.indexOf(alias);
+    while (aliasIndex >= 0) {
+      const window = normalized.slice(Math.max(0, aliasIndex - 72), Math.min(normalized.length, aliasIndex + alias.length + 32));
+      instructionOrdinalIndexes(window).forEach((index) => indexes.add(index));
+      aliasIndex = normalized.indexOf(alias, aliasIndex + alias.length);
+    }
+  }
+  return [...indexes];
+}
+
+function evidenceIntentScore(
+  item: NorthstarArtboardSemanticGraph["evidenceItems"][number],
+  instruction: string,
+): number {
+  const request = normalizedSemanticPhrase(instruction);
+  const semanticText = normalizedSemanticPhrase([
+    item.title,
+    item.journeyStage,
+    ...item.visibleCopy,
+  ].filter(Boolean).join(" "));
+  let score = focusScore(instructionTokens(instruction), [semanticText]);
+  const requestsRoleSelection = /\b(role|persona|profession|professional|account type|describes (?:the )?user|chooses? (?:their )?role)\b/.test(request);
+  if (requestsRoleSelection) {
+    if (/\b(role selection|choose (?:your )?role|select (?:your )?role|account type|persona|profession|professional role|what describes you)\b/.test(semanticText)) score += 24;
+    if (/\b(advertiser|publisher|agency|merchant|seller|creator|affiliate type|partner type)\b/.test(semanticText)) score += 10;
+  }
+  return score;
 }
 
 function regionPairGeometry(
@@ -1131,14 +1227,183 @@ function resolveNorthstarInstructionFocus(input: {
   const candidates = [...conceptCandidates, ...regionCandidates, ...evidenceCandidates]
     .sort((a, b) => b.score - a.score)
     .slice(0, 24);
-  const focusedRegions = regionCandidates.filter((candidate) => candidate.score > 0).slice(0, 6);
+  const instruction = input.instruction;
+  const normalizedInstruction = normalizedSemanticPhrase(instruction);
+  const evidenceByFlow = new Map<string, typeof evidenceCandidates>();
+  for (const candidate of evidenceCandidates) {
+    const members = evidenceByFlow.get(candidate.flowId) ?? [];
+    members.push(candidate);
+    evidenceByFlow.set(candidate.flowId, members);
+  }
+  for (const members of evidenceByFlow.values()) members.sort((first, second) => first.index - second.index);
+
+  const rawFlowAliases = new Map<string, string[]>();
+  for (const [flowId, members] of evidenceByFlow) {
+    rawFlowAliases.set(flowId, [...new Set([
+      flowId,
+      flowId.replace(/[-_]+/g, " "),
+      ...members.flatMap((member) => [member.appName ?? "", member.flowName ?? ""]),
+    ].filter(Boolean))]);
+  }
+  const aliasUseCount = new Map<string, number>();
+  for (const aliases of rawFlowAliases.values()) {
+    for (const alias of new Set(aliases.map(normalizedSemanticPhrase))) {
+      aliasUseCount.set(alias, (aliasUseCount.get(alias) ?? 0) + 1);
+    }
+  }
+  const flowAliases = new Map([...rawFlowAliases].map(([flowId, aliases]) => [
+    flowId,
+    aliases.filter((alias) => alias === flowId || aliasUseCount.get(normalizedSemanticPhrase(alias)) === 1),
+  ]));
+  const mentionedFlowIds = [...flowAliases.entries()]
+    .filter(([, aliases]) => aliases.some((alias) => phraseOccurs(instruction, alias)))
+    .map(([flowId]) => flowId);
+  const allOrdinalIndexes = instructionOrdinalIndexes(instruction);
+  const authoritative = new Map<string, { candidate: (typeof candidates)[number]; reason: string }>();
+  const selectCandidate = (candidate: (typeof candidates)[number] | undefined, reason: string) => {
+    if (candidate && !authoritative.has(`${candidate.kind}:${candidate.id}`)) {
+      authoritative.set(`${candidate.kind}:${candidate.id}`, { candidate, reason });
+    }
+  };
+
+  const requestsCollectiveFlows = /\b(flows?|groups?|sections?|separate groups?|onboarding flows?)\b/.test(normalizedInstruction);
+  const requestsAllCurrentFlows = /\b(?:all|both|current|existing) (?:onboarding )?flows?\b/.test(normalizedInstruction)
+    || /\bbelow (?:the )?(?:current |existing )?(?:onboarding )?flows?\b/.test(normalizedInstruction);
+  if (requestsCollectiveFlows) {
+    const targetFlowIds = requestsAllCurrentFlows || mentionedFlowIds.length === 0
+      ? [...evidenceByFlow.keys()]
+      : mentionedFlowIds;
+    for (const flowId of targetFlowIds) {
+      selectCandidate(regionCandidates.find((candidate) => candidate.id === `flow:${flowId}`), "explicit collective flow region");
+    }
+  }
+  if (/\b(research|grounded evidence|evidence trail|research area|research section)\b/.test(normalizedInstruction)) {
+    selectCandidate(regionCandidates.find((candidate) => candidate.id === "research"), "explicit research region");
+  }
+
+  for (const flowId of mentionedFlowIds) {
+    const aliases = flowAliases.get(flowId) ?? [];
+    const localOrdinals = ordinalIndexesNearAliases(instruction, aliases);
+    const ordinalIndexes = localOrdinals.length
+      ? localOrdinals
+      : allOrdinalIndexes.length === 1
+        ? allOrdinalIndexes
+        : [];
+    const members = evidenceByFlow.get(flowId) ?? [];
+    for (const ordinal of ordinalIndexes) {
+      selectCandidate(members.find((candidate) => candidate.index === ordinal), `explicit ${ordinalLabel(ordinal)} item in named flow`);
+    }
+  }
+
+  if (mentionedFlowIds.length === 0 && evidenceByFlow.size === 1) {
+    const [members] = evidenceByFlow.values();
+    for (const ordinal of allOrdinalIndexes) {
+      selectCandidate(members.find((candidate) => candidate.index === ordinal), `explicit ${ordinalLabel(ordinal)} item in unambiguous flow`);
+    }
+  }
+
+  const requestsSpecificScreen = /\b(screen|screenshot|step|view)\b/.test(normalizedInstruction);
+  if (requestsSpecificScreen && mentionedFlowIds.length > 0 && allOrdinalIndexes.length === 0) {
+    for (const flowId of mentionedFlowIds) {
+      const ranked = (evidenceByFlow.get(flowId) ?? [])
+        .map((candidate) => ({ candidate, intentScore: evidenceIntentScore(
+          input.graph.evidenceItems.find((item) => item.nodeId === candidate.id)!,
+          instruction,
+        ) }))
+        .sort((first, second) => second.intentScore - first.intentScore || second.candidate.score - first.candidate.score);
+      if ((ranked[0]?.intentScore ?? 0) > 0) selectCandidate(ranked[0]?.candidate, "best semantic match inside named flow");
+    }
+  }
+
+  if (authoritative.size === 0) {
+    const maximumScore = Math.max(0, ...candidates.map((candidate) => candidate.score));
+    const fallback = candidates.filter((candidate) => candidate.score === maximumScore && candidate.score > 0);
+    (fallback.length ? fallback : candidates.slice(0, 1)).forEach((candidate) => selectCandidate(candidate, "semantic ranking fallback"));
+  }
+  const authoritativeCandidates = [...authoritative.values()].map(({ candidate }) => candidate);
+  const authoritativeReferents = [...authoritative.values()].map(({ candidate, reason }) => ({
+    kind: candidate.kind,
+    id: candidate.id,
+    label: candidate.kind === "evidence"
+      ? candidate.title ?? [candidate.appName, candidate.ordinal].filter(Boolean).join(" ")
+      : candidate.label,
+    reason,
+  }));
+  const authoritativeEvidence = authoritativeCandidates.filter((candidate) => candidate.kind === "evidence");
+  const pairRequest = /\b(between|connect|connector|relationship|equal space|gap)\b/.test(normalizedInstruction);
+  const referencePairs = pairRequest && authoritativeEvidence.length === 2
+    ? [{
+      purpose: /\b(equal space|gap|annotation)\b/.test(normalizedInstruction) ? "measured-gap" : "authored-relationship",
+      firstNodeId: authoritativeEvidence[0]!.id,
+      secondNodeId: authoritativeEvidence[1]!.id,
+    }]
+    : [];
+  const focusedRegions = authoritativeCandidates
+    .filter((candidate) => candidate.kind === "region")
+    .slice(0, 6);
   const regionPairs = focusedRegions.flatMap((first, index) => focusedRegions.slice(index + 1).flatMap((second) => {
     const firstRegion = input.graph.regions.find((region) => region.regionId === first.id);
     const secondRegion = input.graph.regions.find((region) => region.regionId === second.id);
     const geometry = firstRegion && secondRegion ? regionPairGeometry(firstRegion, secondRegion) : undefined;
     return geometry ? [geometry] : [];
   }));
-  return { candidates, regionPairs };
+  return { candidates, authoritativeCandidates, authoritativeReferents, referencePairs, regionPairs };
+}
+
+function requestedPlacementSides(instruction: string): NorthstarPlacementSide[] {
+  const normalized = normalizedSemanticPhrase(instruction);
+  const sides: NorthstarPlacementSide[] = [];
+  if (/\b(?:below|beneath|under)\b/.test(normalized)) sides.push("bottom");
+  if (/\b(?:to the )?right(?: of)?\b/.test(normalized)) sides.push("right");
+  if (/\babove\b/.test(normalized)) sides.push("top");
+  if (/\b(?:to the )?left(?: of)?\b/.test(normalized)) sides.push("left");
+  return [...new Set(sides)];
+}
+
+function instructionAuthorsOuterFootprint(instruction: string): boolean {
+  const normalized = normalizedSemanticPhrase(instruction);
+  return /\b(?:add|place|put|insert|create|reuse|duplicate|copy|reposition|position|move|resize|scale|compose|render)\b/.test(normalized)
+    && /\b(?:card|annotation|explanation|area|panel|label|note|callout|caption|view|object|item|screen|screenshot|image|shape|frame)\b/.test(normalized);
+}
+
+function resolveNorthstarPlacementTerritories(input: {
+  instruction: string;
+  graph: NorthstarArtboardSemanticGraph;
+  focus: ReturnType<typeof resolveNorthstarInstructionFocus>;
+}): NorthstarObservedPlacementTerritory[] {
+  if (!instructionAuthorsOuterFootprint(input.instruction)) return [];
+
+  const artboardTerritory = input.graph.artboard.bounds ? {
+    territoryId: "artboard",
+    kind: "artboard" as const,
+    bounds: input.graph.artboard.bounds,
+  } : undefined;
+  if (requestedPlacementSides(input.instruction).length > 0) {
+    return artboardTerritory ? [artboardTerritory] : [];
+  }
+
+  const territories = new Map<string, NorthstarObservedPlacementTerritory>();
+  const addRegion = (region: NorthstarArtboardSemanticGraph["regions"][number] | undefined) => {
+    if (!region?.bounds || territories.has(region.regionId)) return;
+    territories.set(region.regionId, {
+      territoryId: region.regionId,
+      kind: "semantic-region",
+      bounds: region.bounds,
+    });
+  };
+  for (const candidate of input.focus.authoritativeCandidates) {
+    if (candidate.kind === "region") {
+      addRegion(input.graph.regions.find((region) => region.regionId === candidate.id));
+    } else if (candidate.kind === "evidence") {
+      input.graph.regions
+        .filter((region) => region.rootNodeId === candidate.id || region.memberNodeIds.includes(candidate.id))
+        .forEach(addRegion);
+    } else {
+      input.graph.regions.filter((region) => region.conceptId === candidate.id).forEach(addRegion);
+    }
+  }
+  if (territories.size === 0 && artboardTerritory) territories.set(artboardTerritory.territoryId, artboardTerritory);
+  return [...territories.values()].slice(0, 4);
 }
 
 function buildNorthstarContinuityContext(input: {
@@ -1182,11 +1447,42 @@ function buildNorthstarContinuityContext(input: {
       visualFormAndPlacementRecomposable: true,
     }];
   });
-  const focusedIds = new Set(input.focus.candidates.slice(0, 8).flatMap((candidate) => [candidate.id, ...(candidate.kind === "region" ? candidate.memberNodeIds : candidate.kind === "concept" ? candidate.canonicalNodeIds : [])]));
-  const affectedAdditions = additions.filter((addition) =>
-    addition.targetNodeIds.some((id) => focusedIds.has(id))
-    || addition.targetRegionIds.some((id) => focusedIds.has(id))
-    || (addition.parentId ? focusedIds.has(addition.parentId) : false)
+  const focusedIds = new Set(input.focus.authoritativeCandidates.flatMap((candidate) => {
+    if (candidate.kind === "concept") {
+      const matchingRegions = input.graph.regions.filter((region) => region.conceptId === candidate.id);
+      return [...candidate.canonicalNodeIds, ...matchingRegions.flatMap((region) => [region.rootNodeId, ...region.memberNodeIds])];
+    }
+    if (candidate.kind === "region") return [candidate.rootNodeId, ...candidate.memberNodeIds];
+    return [candidate.id];
+  }));
+  const dependencyIds = new Set(focusedIds);
+  let dependencyChanged = true;
+  while (dependencyChanged) {
+    dependencyChanged = false;
+    for (const relation of authoredRelations) {
+      const relationIds = [relation.subjectId, ...(relation.references ?? []).map((reference) => reference.nodeId)];
+      if (!relationIds.some((id) => dependencyIds.has(id))) continue;
+      for (const id of relationIds) {
+        if (dependencyIds.has(id)) continue;
+        dependencyIds.add(id);
+        dependencyChanged = true;
+      }
+    }
+    for (const addition of additions) {
+      const additionIds = [addition.nodeId, addition.parentId, ...addition.targetNodeIds, ...addition.targetRegionIds]
+        .filter((value): value is string => Boolean(value));
+      if (!additionIds.some((id) => dependencyIds.has(id))) continue;
+      for (const id of additionIds) {
+        if (dependencyIds.has(id)) continue;
+        dependencyIds.add(id);
+        dependencyChanged = true;
+      }
+    }
+  }
+  const affectedAdditions = additions.filter((addition) => dependencyIds.has(addition.nodeId));
+  const relevantAuthoredRelations = authoredRelations.filter((relation) =>
+    dependencyIds.has(relation.subjectId)
+    || (relation.references ?? []).some((reference) => dependencyIds.has(reference.nodeId))
   );
   return {
     policy: "preserve meaning and evidence; recompose affected authored work when needed for cumulative congruence",
@@ -1198,6 +1494,8 @@ function buildNorthstarContinuityContext(input: {
     recomposableEvidenceNodeIds: [...evidenceIds],
     recomposableAuthoredNodeIds: affectedAdditions.map((item) => item.nodeId),
     unrelatedAuthoredNodeIds: additions.filter((item) => !affectedAdditions.includes(item)).map((item) => item.nodeId),
+    affectedCompositionNodeIds: [...dependencyIds],
+    relevantAuthoredRelations,
     browserContinuityObservations: input.acknowledgement.review?.authoredContinuityObservations ?? [],
   };
 }
@@ -1324,14 +1622,21 @@ export function buildNorthstarCompactDesignTurnContext(input: {
       actionId?: string;
       detail: string;
       revisionId?: string;
+      browserReceipt?: Record<string, unknown>;
     };
+    observedTurns?: readonly NorthstarObservedObjectiveTurn[];
   };
 }) {
   const graph = buildNorthstarArtboardSemanticGraph(input);
   const focus = resolveNorthstarInstructionFocus({ instruction: input.instruction, graph });
-  const maximumFocusScore = Math.max(0, ...focus.candidates.map((candidate) => candidate.score));
-  const exactFocusCandidates = focus.candidates.filter((candidate) => candidate.score === maximumFocusScore && candidate.score > 0);
-  const activeFocusCandidates = exactFocusCandidates.length ? exactFocusCandidates : focus.candidates.slice(0, 1);
+  const placementRequired = instructionAuthorsOuterFootprint(input.instruction);
+  const preferredPlacementSides = requestedPlacementSides(input.instruction);
+  const placementTerritories = resolveNorthstarPlacementTerritories({
+    instruction: input.instruction,
+    graph,
+    focus,
+  });
+  const activeFocusCandidates = focus.authoritativeCandidates;
   const expandFocusCandidateNodeIds = (candidate: (typeof focus.candidates)[number]) => {
     if (candidate.kind === "concept") {
       const matchingRegions = graph.regions.filter((region) => region.conceptId === candidate.id);
@@ -1374,8 +1679,46 @@ export function buildNorthstarCompactDesignTurnContext(input: {
   const observedSpatialFacts = buildNorthstarObservedSpatialFacts({
     acknowledgement: input.acknowledgement,
     focusNodeIds: spatialFocusNodeIds,
+    referencePairs: focus.referencePairs,
+    placementTerritories,
+    placementRequired,
+    preferredSides: preferredPlacementSides,
   });
   const continuity = buildNorthstarContinuityContext({ graph, acknowledgement: input.acknowledgement, focus });
+  const relevantObservationIds = new Set([...continuity.affectedCompositionNodeIds, ...changedNodeIds]);
+  for (const region of graph.regions) {
+    if (!relevantObservationIds.has(region.rootNodeId) && !region.memberNodeIds.some((id) => relevantObservationIds.has(id))) continue;
+    relevantObservationIds.add(region.regionId);
+    relevantObservationIds.add(region.regionId.replace(/^flow:/, ""));
+  }
+  const relevantInterference = (input.acknowledgement.review?.authoredInterferencePairs ?? []).filter((finding) =>
+    [finding.relationshipId, finding.primitiveId, finding.obstacleId].some((id) => relevantObservationIds.has(id))
+  ).slice(0, 8);
+  const relevantContinuity = (input.acknowledgement.review?.authoredContinuityObservations ?? []).filter((finding) =>
+    relevantObservationIds.has(finding.additionId)
+    || finding.targetNodeIds.some((id) => relevantObservationIds.has(id))
+  ).slice(0, 8);
+  const relevantRegionIntrusions = (input.acknowledgement.review?.semanticRegionIntrusions ?? []).filter((finding) =>
+    relevantObservationIds.has(finding.additionId)
+    || relevantObservationIds.has(finding.intendedFlowId)
+    || relevantObservationIds.has(finding.intrudedFlowId)
+  ).slice(0, 8);
+  const relevantResolvedRelations = (input.acknowledgement.resolvedDesignRelations ?? []).filter((relation) =>
+    continuity.relevantAuthoredRelations.some((authored) => authored.id === relation.relationId)
+  );
+  const currentRelevantRelations = {
+    authored: continuity.relevantAuthoredRelations.map((relation) => ({
+      kind: relation.kind,
+      subjectId: relation.subjectId,
+      referenceNodeIds: (relation.references ?? []).map((reference) => reference.nodeId),
+    })),
+    resolved: relevantResolvedRelations.map((relation) => ({
+      relationId: relation.relationId,
+      status: relation.status,
+      inputBounds: relation.inputBounds,
+      outputBounds: relation.outputBounds,
+    })),
+  };
   return {
     schema: "northstar.compact-design-turn-context.v1" as const,
     objective: input.instruction,
@@ -1389,7 +1732,9 @@ export function buildNorthstarCompactDesignTurnContext(input: {
     },
     artboard: graph.artboard,
     focus: {
-      candidates: focus.candidates.slice(0, 12),
+      authoritativeReferents: focus.authoritativeReferents,
+      referencePairs: focus.referencePairs,
+      candidates: focus.candidates.slice(0, 6),
       regionPairs: focus.regionPairs,
     },
     relevantRegions: graph.regions.filter((region) =>
@@ -1397,9 +1742,9 @@ export function buildNorthstarCompactDesignTurnContext(input: {
     ),
     relevantNodes: relevantNodes.map((node) => ({
       ...node,
-      text: node.text.slice(0, 320),
+      text: node.text.slice(0, 180),
     })),
-    protectedEvidence: graph.evidenceItems.map(({ nodeId, flowId, index, evidenceId, appName, flowName, title, journeyStage, visibleCopy, bounds, anchors }) => ({
+    evidenceIndex: graph.evidenceItems.map(({ nodeId, flowId, index, evidenceId, appName, flowName, title, journeyStage, bounds, anchors }) => ({
       nodeId,
       flowId,
       index,
@@ -1408,39 +1753,63 @@ export function buildNorthstarCompactDesignTurnContext(input: {
       flowName,
       title,
       journeyStage,
-      visibleCopy,
       bounds,
       anchors,
     })),
+    focusedEvidence: graph.evidenceItems
+      .filter((item) => relevantIds.has(item.nodeId))
+      .map(({ nodeId, visibleCopy }) => ({
+        nodeId,
+        visibleCopy: visibleCopy.slice(0, 8).map((copy) => copy.slice(0, 180)),
+      })),
     semanticSpatialRules: graph.vocabulary,
     observedSpatialFacts,
     priorAuthoredObjects: continuity.priorAuthoredAdditions.map((addition) => ({
       ...addition,
-      text: addition.text.slice(0, 320),
+      text: addition.text.slice(0, relevantIds.has(addition.nodeId) ? 180 : 80),
     })),
     relations: {
       semantic: graph.relationships.filter((relation) =>
         relevantIds.has(relation.subjectId) || relevantIds.has(relation.objectId)
       ),
-      authored: input.acknowledgement.authoredDesignRelations ?? [],
-      resolved: input.acknowledgement.resolvedDesignRelations ?? [],
+      authored: continuity.relevantAuthoredRelations,
+      resolved: relevantResolvedRelations,
     },
     browserFindings: {
       status: input.acknowledgement.status,
       changedNodeIds,
-      interference: (input.acknowledgement.review?.authoredInterferencePairs ?? []).slice(0, 12),
-      continuity: (input.acknowledgement.review?.authoredContinuityObservations ?? []).slice(0, 12),
+      interference: relevantInterference,
+      continuity: relevantContinuity,
+      regionIntrusions: relevantRegionIntrusions,
     },
     progress: {
       objectiveSummary: priorPlan?.objectiveSummary,
-      plannedActions: priorPlan?.plannedActions.slice(0, 8) ?? [],
-      completedActions: priorPlan?.completedActions.slice(0, 8) ?? [],
+      plannedActions: priorPlan?.plannedActions.slice(0, 6) ?? [],
+      completedActions: priorPlan?.completedActions.slice(0, 6) ?? [],
       previousOutcome: previousOutcome ? {
         status: previousOutcome.status,
         actionId: previousOutcome.actionId,
         revisionId: previousOutcome.revisionId,
-        detail: previousOutcome.detail.slice(0, 2_000),
+        detail: previousOutcome.detail.slice(0, 1_200),
+        browserReceipt: previousOutcome.browserReceipt,
       } : undefined,
+      observedTurnJournal: (input.objectiveProgress?.observedTurns ?? []).slice(-6).map((turn) => ({
+        ...turn,
+        intent: turn.intent.slice(0, 300),
+        successSignal: turn.successSignal.slice(0, 300),
+        changedNodeIds: turn.changedNodeIds.slice(0, 24),
+        remainingFindings: turn.remainingFindings.slice(0, 8).map((finding) => finding.slice(0, 500)),
+      })),
+    },
+    objectiveSatisfaction: {
+      previousActionStatus: previousOutcome?.status,
+      observedRevisionId: input.acknowledgement.browserRevisionId,
+      authoritativeReferentIds: focus.authoritativeReferents.map((referent) => referent.id),
+      currentRelevantRelations,
+      changedNodeIds,
+      remainingBrowserIssueCount:
+        relevantInterference.length + relevantContinuity.length + relevantRegionIntrusions.length,
+      instruction: "Return objective-complete as soon as this exact current revision satisfies the objective; do not issue a redundant polish or assertion action.",
     },
     rules: {
       oneOperation: true,
@@ -1537,6 +1906,12 @@ export function sanitizeNorthstarObjectiveDecisionResponse(input: {
     const completionRationale = typeof raw.completionRationale === "string" ? raw.completionRationale.trim() : "";
     if (!completionRationale) throw new Error("The model declared completion without a rendered-state rationale.");
     const evidenceRaw = isRecord(raw.completionEvidence) ? raw.completionEvidence : {};
+    const observedRevisionId = typeof evidenceRaw.observedRevisionId === "string"
+      ? evidenceRaw.observedRevisionId.trim()
+      : "";
+    if (observedRevisionId !== input.baseRevisionId) {
+      throw new Error(`Completion evidence observed revision ${observedRevisionId || "missing"} instead of current revision ${input.baseRevisionId}.`);
+    }
     const satisfiedSignals = cleanActions(evidenceRaw.satisfiedSignals);
     const remainingIssues = cleanActions(evidenceRaw.remainingIssues);
     if (!satisfiedSignals.length) throw new Error("The model declared completion without rendered success evidence.");
@@ -1548,7 +1923,7 @@ export function sanitizeNorthstarObjectiveDecisionResponse(input: {
       objectivePlan,
       decision: "objective-complete",
       completionRationale,
-      completionEvidence: { satisfiedSignals, remainingIssues },
+      completionEvidence: { observedRevisionId, satisfiedSignals, remainingIssues },
     };
   }
   if (raw.decision !== "execute-action") throw new Error("The model must execute one action or declare the objective complete.");
