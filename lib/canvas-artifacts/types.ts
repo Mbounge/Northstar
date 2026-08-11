@@ -587,7 +587,12 @@ export interface CanvasCodeArtifactContentSize {
 
 export interface NorthstarCommittedSemanticNode {
   nodeId: string;
+  /** Durable logical identity, independent of the current DOM node id. */
+  semanticIdentity?: string;
+  /** Current and historical aliases that resolve to this logical entity. */
+  semanticAliases?: string[];
   parentId?: string;
+  parentSemanticIdentity?: string;
   /** Exact browser-measured world-space bounds at snapshot commit time. */
   bounds?: { left: number; top: number; right: number; bottom: number; width: number; height: number };
   normalizedText: string;
@@ -788,6 +793,22 @@ export interface CanvasCodeArtifactRuntimeReview {
   evidenceRegistry?: NorthstarEvidenceRegistryReceipt;
   /** Browser-measured collisions between distinct protected evidence nodes. */
   evidenceCollisionPairs?: Array<[string, string]>;
+  /** Browser-measured overlap between independent semantic content leaves. */
+  spatialCollisionPairs?: Array<{ firstId: string; secondId: string; overlapArea: number }>;
+  /** Browser-measured peer clearances below their semantic owner's minimum. */
+  spatialClearanceViolations?: Array<{
+    firstId: string;
+    secondId: string;
+    axis: "x" | "y";
+    gap: number;
+    requiredClearance: number;
+  }>;
+  /** Browser-measured content escaping its nearest explicit semantic owner. */
+  spatialContainmentViolations?: Array<{
+    nodeId: string;
+    ownerId: string;
+    overflow: { left: number; top: number; right: number; bottom: number };
+  }>;
   /**
    * Browser observations where a model-authored relationship primitive crosses
    * readable authored content. These observations describe the rendered result

@@ -5007,7 +5007,22 @@ interface CanvasAICompositionCheckpoint {
   sessionType?: "onboarding" | "browsing";
   platform?: "mobile" | "web";
   candidateScreens: Array<Record<string, unknown>>;
+  selectedFlows: Array<Record<string, unknown>>;
   ledger: Record<string, unknown>;
+  designPause?: {
+    version: "northstar.design-pause.v1";
+    reason: "provider-overload";
+    instruction: string;
+    objectiveIndex: number;
+    objectiveTurn: number;
+    designTurnIndex: number;
+    artifactId: string;
+    revisionId: string;
+    browserRevisionId: string;
+    primaryModel: string;
+    fallbackModel: string;
+    pausedAt: string;
+  };
   updatedAt: string;
 }
 

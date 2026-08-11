@@ -36,6 +36,7 @@ import {
   buildNorthstarCompactDesignTurnSystemInstruction,
   createNorthstarDesignResetCandidate,
   northstarDesignResetSha256,
+  northstarObjectiveActionStrategyFingerprint,
   readNorthstarModelTokenUsage,
   sanitizeNorthstarObjectiveDecisionResponse,
   validateNorthstarDesignResetCandidate,
@@ -139,6 +140,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 1800;
 
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
+const NORTHSTAR_DESIGN_PRIMARY_MODEL = GEMINI_MODEL;
+const NORTHSTAR_DESIGN_OVERLOAD_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 const MAX_MESSAGE_LENGTH = 8_000;
 const MAX_CONTEXT_CHARACTERS = 3_500_000;
 const MAX_CONVERSATION_SUMMARY_LENGTH = 32_000;
@@ -529,6 +532,21 @@ type CompositionCheckpointFlow = {
   screenIds: string[];
 };
 
+type NorthstarDesignPauseCheckpoint = {
+  version: "northstar.design-pause.v1";
+  reason: "provider-overload";
+  instruction: string;
+  objectiveIndex: number;
+  objectiveTurn: number;
+  designTurnIndex: number;
+  artifactId: string;
+  revisionId: string;
+  browserRevisionId: string;
+  primaryModel: string;
+  fallbackModel: string;
+  pausedAt: string;
+};
+
 type CompositionRunCheckpoint = {
   version: "northstar.composition-checkpoint.v1";
   runId?: string;
@@ -546,6 +564,7 @@ type CompositionRunCheckpoint = {
   candidateScreens: GroundedCompositionScreen[];
   selectedFlows: CompositionCheckpointFlow[];
   ledger: CompositionResearchLedger;
+  designPause?: NorthstarDesignPauseCheckpoint;
   updatedAt: string;
 };
 
@@ -1854,6 +1873,43 @@ function sanitizeWorkspacePlan(value: unknown): ResearchWorkspacePlan | undefine
   };
 }
 
+function sanitizeNorthstarDesignPauseCheckpoint(value: unknown): NorthstarDesignPauseCheckpoint | undefined {
+  if (!isRecord(value) || value.version !== "northstar.design-pause.v1" || value.reason !== "provider-overload") {
+    return undefined;
+  }
+  const instruction = getString(value.instruction)?.trim().slice(0, 1_200);
+  const artifactId = getString(value.artifactId)?.trim().slice(0, 320);
+  const revisionId = getString(value.revisionId)?.trim().slice(0, 320);
+  const browserRevisionId = getString(value.browserRevisionId)?.trim().slice(0, 320);
+  const primaryModel = getString(value.primaryModel)?.trim().slice(0, 160);
+  const fallbackModel = getString(value.fallbackModel)?.trim().slice(0, 160);
+  const positiveInteger = (candidate: unknown) => typeof candidate === "number"
+    && Number.isFinite(candidate)
+    && Number.isInteger(candidate)
+    && candidate > 0
+    ? candidate
+    : undefined;
+  const objectiveIndex = positiveInteger(value.objectiveIndex);
+  const objectiveTurn = positiveInteger(value.objectiveTurn);
+  const designTurnIndex = positiveInteger(value.designTurnIndex);
+  if (!instruction || !artifactId || !revisionId || !browserRevisionId || !primaryModel || !fallbackModel
+    || !objectiveIndex || !objectiveTurn || !designTurnIndex) return undefined;
+  return {
+    version: "northstar.design-pause.v1",
+    reason: "provider-overload",
+    instruction,
+    objectiveIndex,
+    objectiveTurn,
+    designTurnIndex,
+    artifactId,
+    revisionId,
+    browserRevisionId,
+    primaryModel,
+    fallbackModel,
+    pausedAt: getString(value.pausedAt)?.slice(0, 80) || new Date().toISOString(),
+  };
+}
+
 function sanitizeCompositionCheckpoint(value: unknown): CompositionRunCheckpoint | null {
   if (!isRecord(value) || value.version !== "northstar.composition-checkpoint.v1") return null;
   const rawLedger = isRecord(value.ledger) ? value.ledger : null;
@@ -1861,6 +1917,7 @@ function sanitizeCompositionCheckpoint(value: unknown): CompositionRunCheckpoint
   const objective = getString(value.objective)?.trim().slice(0, 1_200);
   const artifactId = getString(value.artifactId)?.trim().slice(0, 320);
   if (!objective || !artifactId) return null;
+  const designPause = sanitizeNorthstarDesignPauseCheckpoint(value.designPause);
   const observations = Array.isArray(rawLedger.observations)
     ? rawLedger.observations.filter(isRecord).slice(0, MAX_COMPOSITION_CHECKPOINT_SCREENS).map((item) => ({
         screenshotId: getString(item.screenshotId)?.slice(0, 320) || "",
@@ -1957,6 +2014,7 @@ function sanitizeCompositionCheckpoint(value: unknown): CompositionRunCheckpoint
     candidateScreens,
     selectedFlows,
     ledger,
+    designPause: designPause?.artifactId === artifactId ? designPause : undefined,
     updatedAt: getString(value.updatedAt)?.slice(0, 80) || new Date().toISOString(),
   };
 }
@@ -2608,6 +2666,8 @@ async function callGeminiJsonOnceAudited<T>({
   signal,
   maxOutputTokens,
   temperature,
+  model = NORTHSTAR_DESIGN_PRIMARY_MODEL,
+  attempt = 1,
 }: {
   apiKey: string;
   systemInstruction: string;
@@ -2615,16 +2675,18 @@ async function callGeminiJsonOnceAudited<T>({
   schema: unknown;
   signal: AbortSignal;
   maxOutputTokens: number;
-  temperature: number;
+  temperature?: number;
+  model?: string;
+  attempt?: number;
 }): Promise<{ value: T; audit: NorthstarDesignResetProviderAttemptAudit }> {
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-  const requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+  const requestUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   // Gemini rejects the full Northstar mutation schema as a provider-side
   // responseJsonSchema with HTTP 400 INVALID_ARGUMENT. Keep the exact schema
   // visible to the model and fully archived, but enforce it in the prompt and
   // validate the returned JSON locally. This is still one model turn: there is
-  // no fallback model call, no placement repair, and no orchestrator-authored
-  // mutation.
+  // Any overload-only model handoff is orchestrated outside this primitive so
+  // this function remains exactly one audited provider request.
   const schemaInstruction = [
     systemInstruction,
     "",
@@ -2635,15 +2697,15 @@ async function callGeminiJsonOnceAudited<T>({
     systemInstruction: { parts: [{ text: schemaInstruction }] },
     contents,
     generationConfig: {
-      temperature,
+      ...(typeof temperature === "number" ? { temperature } : {}),
       maxOutputTokens,
       responseMimeType: "application/json",
     },
   };
   const requestBodyText = JSON.stringify(requestBody);
   const audit: NorthstarDesignResetProviderAttemptAudit = {
-    attempt: 1,
-    model: GEMINI_MODEL,
+    attempt,
+    model,
     requestUrl,
     requestBody,
     requestBodyBytes: Buffer.byteLength(requestBodyText, "utf8"),
@@ -2653,7 +2715,7 @@ async function callGeminiJsonOnceAudited<T>({
 
   try {
     const response = await runNorthstarOperationWithTimeout({
-      label: "Northstar two-turn design reset model call",
+      label: `Northstar design-turn model call (${model}, attempt ${attempt})`,
       timeoutMs: NORTHSTAR_MODEL_CALL_TIMEOUT_MS,
       parentSignal: signal,
       operation: (attemptSignal) => fetch(requestUrl, {
@@ -2715,6 +2777,83 @@ async function callGeminiJsonOnceAudited<T>({
     audit.completedAt ??= new Date().toISOString();
     audit.error = message;
     throw new NorthstarAuditedModelCallError(message, audit, error);
+  }
+}
+
+type NorthstarAuditedModelCallOutcome<T> =
+  | { status: "completed"; value: T; audits: NorthstarDesignResetProviderAttemptAudit[] }
+  | {
+      status: "paused";
+      audits: NorthstarDesignResetProviderAttemptAudit[];
+      interruption: {
+        message: string;
+        primaryModel: string;
+        fallbackModel: string;
+      };
+    };
+
+function northstarGeminiCallCause(error: unknown) {
+  return error instanceof NorthstarAuditedModelCallError ? error.causeValue : error;
+}
+
+function isNorthstarTrueProviderOverload(error: unknown) {
+  const cause = northstarGeminiCallCause(error);
+  if (!(cause instanceof GeminiCallError)) return false;
+  if (
+    cause.status === 429
+    || ["authentication", "permission", "billing", "rate-limit", "quota", "invalid-request", "invalid-response"]
+      .includes(cause.kind)
+  ) return false;
+  const normalized = `${cause.providerCode ?? ""} ${cause.message}`.toLowerCase();
+  return [502, 503, 504].includes(cause.status)
+    || (cause.providerCode ?? "").toUpperCase() === "UNAVAILABLE"
+    || /(high demand|overload|capacity|temporarily unavailable|service unavailable)/i.test(normalized);
+}
+
+async function callNorthstarDesignJsonWithOverloadFallback<T>(input: {
+  apiKey: string;
+  systemInstruction: string;
+  contents: unknown[];
+  schema: unknown;
+  signal: AbortSignal;
+  maxOutputTokens: number;
+}): Promise<NorthstarAuditedModelCallOutcome<T>> {
+  const audits: NorthstarDesignResetProviderAttemptAudit[] = [];
+  try {
+    const primary = await callGeminiJsonOnceAudited<T>({
+      ...input,
+      model: NORTHSTAR_DESIGN_PRIMARY_MODEL,
+      attempt: 1,
+      temperature: 0,
+    });
+    audits.push(primary.audit);
+    return { status: "completed", value: primary.value, audits };
+  } catch (primaryError) {
+    if (primaryError instanceof NorthstarAuditedModelCallError) audits.push(primaryError.audit);
+    if (!isNorthstarTrueProviderOverload(primaryError)) throw primaryError;
+  }
+
+  try {
+    const fallback = await callGeminiJsonOnceAudited<T>({
+      ...input,
+      model: NORTHSTAR_DESIGN_OVERLOAD_FALLBACK_MODEL,
+      attempt: 2,
+    });
+    audits.push(fallback.audit);
+    return { status: "completed", value: fallback.value, audits };
+  } catch (fallbackError) {
+    if (fallbackError instanceof NorthstarAuditedModelCallError) audits.push(fallbackError.audit);
+    if (!isNorthstarTrueProviderOverload(fallbackError)) throw fallbackError;
+    const cause = northstarGeminiCallCause(fallbackError);
+    return {
+      status: "paused",
+      audits,
+      interruption: {
+        message: cause instanceof Error ? cause.message : String(cause),
+        primaryModel: NORTHSTAR_DESIGN_PRIMARY_MODEL,
+        fallbackModel: NORTHSTAR_DESIGN_OVERLOAD_FALLBACK_MODEL,
+      },
+    };
   }
 }
 
@@ -7173,17 +7312,38 @@ async function runSingularObservedDesignObjectiveQueue({
   callbacks,
   signal,
   objectives,
+  resumePause,
 }: {
   apiKey: string;
   artifactId: string;
   callbacks: CompositionResearchCallbacks;
   signal: AbortSignal;
   objectives: readonly string[];
-}): Promise<NorthstarGeneratedCodeArtifactPackage> {
+  resumePause?: NorthstarDesignPauseCheckpoint;
+}): Promise<
+  | { status: "finished"; artifact: NorthstarGeneratedCodeArtifactPackage }
+  | {
+      status: "paused";
+      artifact: NorthstarGeneratedCodeArtifactPackage;
+      pause: NorthstarDesignPauseCheckpoint;
+    }
+> {
   let currentPackage = callbacks.getVisibleArtifact();
   if (!currentPackage) throw new Error("Northstar cannot begin design work before the living artboard is mounted.");
-  let designTurnIndex = 0;
+  if (resumePause) {
+    const pausedInstruction = objectives[resumePause.objectiveIndex - 1];
+    const resumesExactBrowserState =
+      resumePause.artifactId === currentPackage.artifactId
+      && resumePause.revisionId === currentPackage.revisionId
+      && resumePause.browserRevisionId === currentPackage.revisionId
+      && pausedInstruction === resumePause.instruction;
+    if (!resumesExactBrowserState) {
+      throw new Error("Northstar cannot resume a paused design turn against a different objective or browser revision.");
+    }
+  }
+  let designTurnIndex = resumePause ? resumePause.designTurnIndex - 1 : 0;
   const runUsage = emptyNorthstarModelTokenUsage();
+  let pauseCheckpoint: NorthstarDesignPauseCheckpoint | undefined;
   const canonicalAcknowledgement = (
     artifact: NorthstarGeneratedCodeArtifactPackage,
   ): NorthstarArtifactMutationAcknowledgement => ({
@@ -7235,6 +7395,9 @@ async function runSingularObservedDesignObjectiveQueue({
       blockingFacts: {
         missingAssetUrls: acknowledgement.missingAssetUrls.slice(0, 8),
         evidenceCollisionPairs: (review?.evidenceCollisionPairs ?? []).slice(0, 8),
+        spatialCollisionPairs: (review?.spatialCollisionPairs ?? []).slice(0, 8),
+        spatialClearanceViolations: (review?.spatialClearanceViolations ?? []).slice(0, 8),
+        spatialContainmentViolations: (review?.spatialContainmentViolations ?? []).slice(0, 8),
         authoredInterferencePairs: (review?.authoredInterferencePairs ?? []).slice(0, 6).map((entry) => ({
           relationshipId: entry.relationshipId,
           primitiveId: entry.primitiveId,
@@ -7258,6 +7421,21 @@ async function runSingularObservedDesignObjectiveQueue({
       instruction: "The provisional DOM was rolled back to the canonical revision. Do not repeat this action or search nearby coordinates. Choose one materially different singular action grounded in these measured facts.",
     };
   };
+  const classifyRejectedBrowserReceipt = (
+    receipt: ReturnType<typeof compactRejectedBrowserReceipt>,
+  ): string => {
+    if (receipt.blockingFacts.missingAssetUrls.length) return "missing-assets";
+    if (receipt.blockingFacts.evidenceCollisionPairs.length) return "evidence-collision";
+    if (receipt.blockingFacts.spatialCollisionPairs.length) return "spatial-collision";
+    if (receipt.blockingFacts.spatialClearanceViolations.length) return "spatial-clearance";
+    if (receipt.blockingFacts.spatialContainmentViolations.length) return "spatial-containment";
+    if (receipt.blockingFacts.authoredInterferencePairs.length) return "authored-interference";
+    if (receipt.blockingFacts.semanticRegionIntrusions.length) return "semantic-region-intrusion";
+    if (receipt.blockingFacts.weakenedContinuity.length) return "weakened-continuity";
+    if (receipt.candidateEnvelope?.outOfBoundsNodeIds.length) return "out-of-bounds";
+    if (receipt.candidateEnvelope?.clippedSemanticNodeIds.length) return "clipped-semantic-content";
+    return "browser-rejected";
+  };
 
   await callbacks.trace?.("design.objective_loop.started", {
     artifactId,
@@ -7266,8 +7444,9 @@ async function runSingularObservedDesignObjectiveQueue({
     architecture: "plan-one-action-observe-replan",
   }, "Every objective now uses the same singular observed design-turn loop.");
 
-  for (const [objectiveOffset, instruction] of objectives.entries()) {
+  objectiveLoop: for (const [objectiveOffset, instruction] of objectives.entries()) {
     const objectiveIndex = objectiveOffset + 1;
+    if (resumePause && objectiveIndex < resumePause.objectiveIndex) continue;
     const step = {
       id: `design-objective-${objectiveIndex}`,
       label: instruction,
@@ -7286,9 +7465,16 @@ async function runSingularObservedDesignObjectiveQueue({
     } | undefined;
     let completed = false;
     const observedTurns: NorthstarObservedObjectiveTurn[] = [];
-    const rejectedActionFingerprints = new Set<string>();
+    const rejectedActionStrategies = new Map<string, {
+      receipt: ReturnType<typeof compactRejectedBrowserReceipt>;
+      failureClass: string;
+      repeatedReasonSteps: number;
+    }>();
 
-    for (let objectiveTurn = 1; ; objectiveTurn += 1) {
+    const firstObjectiveTurn = resumePause?.objectiveIndex === objectiveIndex
+      ? resumePause.objectiveTurn
+      : 1;
+    for (let objectiveTurn = firstObjectiveTurn; ; objectiveTurn += 1) {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
       const liveAcknowledgement = callbacks.getLinearDesignAck?.();
       const observedBrowserRevisionId = liveAcknowledgement?.status === "rejected"
@@ -7325,31 +7511,57 @@ async function runSingularObservedDesignObjectiveQueue({
       }];
       let decision: ReturnType<typeof sanitizeNorthstarObjectiveDecisionResponse>;
       try {
-        const audited = await callGeminiJsonOnceAudited<unknown>({
+        const outcome = await callNorthstarDesignJsonWithOverloadFallback<unknown>({
           apiKey,
           systemInstruction,
           contents,
           schema: NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA,
           signal,
           maxOutputTokens: 6_000,
-          temperature: 0,
         });
-        addNorthstarModelTokenUsage(runUsage, audited.audit.usage);
-        await callbacks.trace?.("design.model_usage", {
-          objectiveIndex,
-          objectiveTurn,
-          designTurnIndex,
-          revisionId: currentPackage.revisionId,
-          requestBodyBytes: audited.audit.requestBodyBytes,
-          responseBodyBytes: audited.audit.providerPayloadBytes,
-          usage: audited.audit.usage,
-          cumulativeUsage: { ...runUsage },
-        }, "Recorded the exact provider usage for this compact design-turn request.");
+        for (const audit of outcome.audits) {
+          addNorthstarModelTokenUsage(runUsage, audit.usage);
+          await callbacks.trace?.("design.model_usage", {
+            objectiveIndex,
+            objectiveTurn,
+            designTurnIndex,
+            revisionId: currentPackage.revisionId,
+            model: audit.model,
+            attempt: audit.attempt,
+            requestBodyBytes: audit.requestBodyBytes,
+            responseBodyBytes: audit.providerPayloadBytes,
+            usage: audit.usage,
+            cumulativeUsage: { ...runUsage },
+            failed: Boolean(audit.error),
+          }, "Recorded the exact provider usage for this compact design-turn request.");
+        }
+        if (outcome.status === "paused") {
+          pauseCheckpoint = {
+            version: "northstar.design-pause.v1",
+            reason: "provider-overload",
+            instruction,
+            objectiveIndex,
+            objectiveTurn,
+            designTurnIndex,
+            artifactId: currentPackage.artifactId,
+            revisionId: currentPackage.revisionId,
+            browserRevisionId: acknowledgement.browserRevisionId ?? acknowledgement.revisionId,
+            primaryModel: outcome.interruption.primaryModel,
+            fallbackModel: outcome.interruption.fallbackModel,
+            pausedAt: new Date().toISOString(),
+          };
+          await callbacks.trace?.("design.objective_loop.paused", {
+            pauseCheckpoint,
+            ...outcome.interruption,
+          }, "Both authorized models were overloaded. Preserved the exact objective and browser-verified revision without retrying or mutating the artboard.");
+          break;
+        }
         decision = sanitizeNorthstarObjectiveDecisionResponse({
-          raw: audited.value,
+          raw: outcome.value,
           turn: designTurnIndex,
           baseRevisionId: currentPackage.revisionId,
           existingRelations: acknowledgement.authoredDesignRelations,
+          identityAuthority: modelInput.identityAuthority,
         });
       } catch (error) {
         if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
@@ -7402,21 +7614,49 @@ async function runSingularObservedDesignObjectiveQueue({
       }
 
       const baseRevisionId = currentPackage.revisionId;
-      const actionFingerprint = northstarDesignResetSha256(JSON.stringify({
-        geometryIntent: decision.mutation.geometryIntent,
-        operations: decision.mutation.operations,
-        relations: decision.mutation.relations ?? [],
-      }));
-      if (rejectedActionFingerprints.has(actionFingerprint)) {
-        await callbacks.trace?.("design.objective_turn.duplicate_rejected_action", {
+      const actionStrategyFingerprint = northstarObjectiveActionStrategyFingerprint({
+        baseRevisionId,
+        grounding: decision.grounding,
+        mutation: decision.mutation,
+        identityAuthority: modelInput.identityAuthority,
+      });
+      const priorRejectedStrategy = rejectedActionStrategies.get(actionStrategyFingerprint);
+      if (priorRejectedStrategy) {
+        await callbacks.trace?.("design.objective_turn.semantic_strategy_blocked", {
           objectiveIndex,
           objectiveTurn,
           designTurnIndex,
           actionId: decision.action.actionId,
           revisionId: currentPackage.revisionId,
-          actionFingerprint,
-        }, "Stopped before browser dispatch because the model repeated an action that this exact canonical revision already rejected.");
-        break;
+          actionStrategyFingerprint,
+          failureClass: priorRejectedStrategy.failureClass,
+          repeatedReasonSteps: priorRejectedStrategy.repeatedReasonSteps,
+        }, "Skipped browser dispatch because this action is the same rejected semantic strategy with only cosmetic, generated-id, markup, or numeric changes.");
+        if (priorRejectedStrategy.repeatedReasonSteps >= 1) {
+          await callbacks.trace?.("design.objective_turn.semantic_strategy_exhausted", {
+            objectiveIndex,
+            objectiveTurn,
+            designTurnIndex,
+            revisionId: currentPackage.revisionId,
+            actionStrategyFingerprint,
+            failureClass: priorRejectedStrategy.failureClass,
+          }, "Stopped after the model repeated the same rejected semantic strategy despite receiving its measured browser facts.");
+          break;
+        }
+        priorRejectedStrategy.repeatedReasonSteps += 1;
+        previousOutcome = {
+          status: "rejected",
+          actionId: decision.action.actionId,
+          detail: `This is the same ${priorRejectedStrategy.failureClass} strategy already rejected on this browser revision. Cosmetic markup, generated ids, or coordinate nudges are not a new action.`,
+          revisionId: currentPackage.revisionId,
+          browserReceipt: {
+            ...priorRejectedStrategy.receipt,
+            semanticStrategyBlocked: true,
+            failureClass: priorRejectedStrategy.failureClass,
+            requiredChange: "Choose a materially different target, destination region, relationship topology, or first create measured space with a singular action.",
+          },
+        };
+        continue;
       }
       const candidate = createNorthstarDesignResetCandidate({ base: currentPackage, response: decision });
       const dispatch = await callbacks.applyDesignAction(candidate, designTurnIndex, decision.action.intent);
@@ -7437,8 +7677,12 @@ async function runSingularObservedDesignObjectiveQueue({
           ? "The provisional candidate failed browser feasibility and was rolled back. The next reason step receives its compact measured receipt."
           : "The candidate did not return a verified rollback receipt, so progression stopped without changing the canonical artboard.");
         if (!rejectedAcknowledgement || !safelyRestored) break;
-        rejectedActionFingerprints.add(actionFingerprint);
         const receipt = compactRejectedBrowserReceipt(rejectedAcknowledgement, dispatch.detail);
+        rejectedActionStrategies.set(actionStrategyFingerprint, {
+          receipt,
+          failureClass: classifyRejectedBrowserReceipt(receipt),
+          repeatedReasonSteps: 0,
+        });
         observedTurns.push({
           actionId: decision.action.actionId,
           intent: decision.action.intent,
@@ -7502,6 +7746,8 @@ async function runSingularObservedDesignObjectiveQueue({
       }, "The singular action rendered; the next model turn receives this exact browser revision.");
     }
 
+    if (pauseCheckpoint) break objectiveLoop;
+
     if (!completed) {
       await callbacks.completeStep({
         id: step.id,
@@ -7521,7 +7767,9 @@ async function runSingularObservedDesignObjectiveQueue({
     designTurnCount: designTurnIndex,
     usage: runUsage,
   }, "Recorded total provider usage for the universal design-objective loop.");
-  return currentPackage;
+  return pauseCheckpoint
+    ? { status: "paused", artifact: currentPackage, pause: pauseCheckpoint }
+    : { status: "finished", artifact: currentPackage };
 }
 
 function sanitizeObservation(
@@ -11437,6 +11685,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               phase: CompositionRunCheckpoint["phase"],
               ledger: CompositionResearchLedger,
               currentToolResults: ToolResult[],
+              designPause?: NorthstarDesignPauseCheckpoint,
             ) => {
               try {
                 const currentCandidateScreens = compositionScreensFromToolResults(currentToolResults);
@@ -11465,6 +11714,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                   candidateScreens,
                   selectedFlows: selectedFlows.length > 0 ? selectedFlows : activeResumeCheckpoint?.selectedFlows ?? [],
                   ledger,
+                  designPause,
                   updatedAt: new Date().toISOString(),
                 };
                 send("run.checkpoint", { runId, checkpoint });
@@ -11609,6 +11859,123 @@ The semantic intent gate requires grounded tool execution. You must return an ag
               },
             };
 
+            const pauseDesignObjectiveQueue = (
+              result: Extract<Awaited<ReturnType<typeof runSingularObservedDesignObjectiveQueue>>, { status: "paused" }>,
+              ledger: CompositionResearchLedger,
+            ) => {
+              compositionFinalArtifactId = result.artifact.artifactId;
+              designResetLastRevisionId = result.pause.browserRevisionId;
+              designResetPublicationVerified = false;
+              emitCompositionCheckpoint("building", ledger, toolResults, result.pause);
+              const answer = "Northstar paused at the exact browser-verified design turn because both authorized models are temporarily overloaded. The objective and visible revision are preserved for an exact resume.";
+              send("assistant.final", {
+                runId,
+                answer,
+                references: [],
+                suggestedActions: [],
+                showSuggestedActions: false,
+                conversationSummary: scrubInternalIds(conversationSummary, validObjectIds),
+                meta: {
+                  model: GEMINI_MODEL,
+                  contextMode,
+                  interactionFocus: planner.focus,
+                  runMode: planner.mode,
+                  compositionRequested,
+                  resumable: true,
+                  designPause: result.pause,
+                },
+              });
+              sendServerTrace("request", "completed", traceStartedAt, {
+                outcome: "incomplete",
+                reason: "provider-overload",
+                resumable: true,
+                expectedFinalRevisionId: result.pause.browserRevisionId,
+              });
+              send("run.incomplete", {
+                runId,
+                mode: planner.mode,
+                expectedFinalRevisionId: result.pause.browserRevisionId,
+                terminalState: "incomplete",
+                designRuntime: "production-objective-queue",
+                publicationVerified: false,
+                resumable: true,
+                reason: "provider-overload",
+                designPause: result.pause,
+                detail: answer,
+              });
+              close();
+            };
+
+            const completeResumedDesignObjectiveQueue = (
+              artifact: NorthstarGeneratedCodeArtifactPackage,
+              ledger: CompositionResearchLedger,
+            ) => {
+              const assessment = assessNorthstarCanonicalScene(artifact, lastLiveMutationAck);
+              compositionFinalArtifactId = artifact.artifactId;
+              designResetLastRevisionId = artifact.revisionId;
+              designResetPublicationVerified = artifact.publicationState === "verified" && artifact.provisional !== true;
+              compositionFinalStateBrief = buildNorthstarFinalStateBrief({
+                artifact,
+                objective: semanticIntent.objective || message,
+                assessment,
+              });
+              emitCompositionCheckpoint("completed", ledger, toolResults);
+              const answer = designResetPublicationVerified
+                ? "Northstar resumed the preserved design turn and completed the living artboard on the latest browser-verified revision."
+                : "Northstar preserved the latest browser-verified artboard while the resumed objective remains unresolved.";
+              send("assistant.final", {
+                runId,
+                answer,
+                references: [],
+                suggestedActions: [],
+                showSuggestedActions: false,
+                conversationSummary: scrubInternalIds(conversationSummary, validObjectIds),
+                meta: {
+                  model: GEMINI_MODEL,
+                  contextMode,
+                  interactionFocus: planner.focus,
+                  runMode: planner.mode,
+                  compositionRequested,
+                  northstarFinalState: compositionFinalStateBrief,
+                },
+              });
+              sendServerTrace("request", "completed", traceStartedAt, {
+                outcome: designResetPublicationVerified ? "completed" : "incomplete",
+                finalRevisionId: artifact.revisionId,
+                designRuntime: "production-objective-queue",
+              });
+              send(designResetPublicationVerified ? "run.completed" : "run.incomplete", {
+                runId,
+                mode: planner.mode,
+                expectedFinalRevisionId: artifact.revisionId,
+                terminalState: designResetPublicationVerified ? "completed" : "incomplete",
+                designRuntime: "production-objective-queue",
+                publicationVerified: designResetPublicationVerified,
+                detail: answer,
+              });
+              close();
+            };
+
+            const activeDesignPause = activeResumeCheckpoint?.designPause;
+            if (activeDesignPause) {
+              compositionResearchLedger = activeResumeCheckpoint.ledger;
+              compositionUsedDesignReset = true;
+              const resumed = await runSingularObservedDesignObjectiveQueue({
+                apiKey,
+                artifactId: compositionArtifactId,
+                callbacks: researchCallbacks,
+                signal: request.signal,
+                objectives: NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES,
+                resumePause: activeDesignPause,
+              });
+              if (resumed.status === "paused") {
+                pauseDesignObjectiveQueue(resumed, compositionResearchLedger);
+                return;
+              }
+              completeResumedDesignObjectiveQueue(resumed.artifact, compositionResearchLedger);
+              return;
+            }
+
             const selectedArtifactDataBundle = selectedCodeArtifact?.dataBundle;
             const revisionRequestsFreshEvidence = Boolean(
               semanticIntent.data &&
@@ -11720,14 +12087,18 @@ The semantic intent gate requires grounded tool execution. You must return an ag
                 });
             compositionUsedDesignReset = true;
             designResetLastRevisionId = lastLiveArtifactPackage?.revisionId;
-            const codeArtifactPackage = await runSingularObservedDesignObjectiveQueue({
+            const designQueueResult = await runSingularObservedDesignObjectiveQueue({
               apiKey,
               artifactId: compositionArtifactId,
               callbacks: researchCallbacks,
               signal: request.signal,
               objectives: NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES,
             });
-            const finalCodeArtifactPackage: NorthstarGeneratedCodeArtifactPackage = codeArtifactPackage;
+            if (designQueueResult.status === "paused") {
+              pauseDesignObjectiveQueue(designQueueResult, compositionResearchLedger);
+              return;
+            }
+            const finalCodeArtifactPackage = designQueueResult.artifact;
             designResetPublicationVerified = finalCodeArtifactPackage.publicationState === "verified"
               && finalCodeArtifactPackage.provisional !== true;
             const finalAcknowledgement = lastLiveMutationAck;
@@ -11767,7 +12138,7 @@ The semantic intent gate requires grounded tool execution. You must return an ag
             send("plan.extended", {
               runId,
               title: planner.title,
-              visualStrategy: codeArtifactPackage.visualStrategy,
+              visualStrategy: finalCodeArtifactPackage.visualStrategy,
               steps: compositionSteps.map((step) => ({
                 id: step.id,
                 label: step.label,

@@ -29,12 +29,18 @@ const rect = (left: number, top: number, width: number, height: number) => ({
 function semanticNode(input: {
   nodeId: string;
   parentId?: string;
+  semanticIdentity?: string;
+  semanticAliases?: string[];
+  parentSemanticIdentity?: string;
   bounds?: ReturnType<typeof rect>;
   attributes?: Record<string, string>;
 }): NorthstarCommittedSemanticNode {
   return {
     nodeId: input.nodeId,
     parentId: input.parentId,
+    semanticIdentity: input.semanticIdentity,
+    semanticAliases: input.semanticAliases,
+    parentSemanticIdentity: input.parentSemanticIdentity,
     bounds: input.bounds,
     normalizedText: "",
     normalizedAttributes: input.attributes ?? {},
@@ -317,6 +323,60 @@ test("editing one evidence item does not fan out through all region siblings", (
   assert.ok(result.affectedComposition.unrelatedCommitmentIds.includes("commitment:connector"));
   assert.ok(result.affectedComposition.unrelatedCommitmentIds.includes("commitment:visual-pair"));
   assert.ok(!result.affectedComposition.geometryChangedNodeIds.includes("awin-1"));
+});
+
+test("re-authored logical nodes retain their commitments and reactive dependencies", () => {
+  const beforeNodes = snapshotNodes().map((node) => node.nodeId === "role-note"
+    ? {
+        ...node,
+        nodeId: "role-note-v1",
+        semanticIdentity: "annotation:role-selection",
+        semanticAliases: ["role-note-v1", "annotation:role-selection"],
+      }
+    : node);
+  const afterNodes = snapshotNodes({ movedAwin2: true }).map((node) => node.nodeId === "role-note"
+    ? {
+        ...node,
+        nodeId: "role-note-v2",
+        semanticIdentity: "annotation:role-selection",
+        semanticAliases: ["role-note-v2", "role-note-v1", "annotation:role-selection"],
+      }
+    : node);
+  const renameGraphNode = (
+    value: NorthstarCumulativeIntentGraphView,
+    from: string,
+    to: string,
+  ): NorthstarCumulativeIntentGraphView => ({
+    ...value,
+    nodes: value.nodes.map((node) => node.nodeId === from ? { ...node, nodeId: to } : node),
+  });
+  const authoredRelations = relations().map((relation) => relation.id === "rel-role"
+    ? { ...relation, subjectId: "role-note-v1" }
+    : relation);
+  const previous = previousAudit(priorCommitments.map((commitment) => commitment.commitmentId === "commitment:role-note"
+    ? { ...commitment, nodeId: "role-note-v1" }
+    : commitment));
+
+  const result = buildNorthstarCumulativeIntentAudit(auditInput({
+    currentMutation: batch({ operations: [{ op: "set-styles", targetId: "awin-2", styles: { transform: "translateX(30px)" } }] }),
+    beforeGraph: renameGraphNode(graph(), "role-note", "role-note-v1"),
+    afterGraph: renameGraphNode(graph({ nodeBounds: { "awin-2": rect(150, 10, 80, 100) } }), "role-note", "role-note-v2"),
+    beforeNodes,
+    afterNodes,
+    previous,
+    authoredRelations,
+  }));
+
+  const roleCommitments = result.activeCommitmentLedger.filter((commitment) => commitment.commitmentId === "commitment:role-note");
+  assert.equal(roleCommitments.length, 1);
+  assert.equal(roleCommitments[0]?.nodeId, "role-note-v2");
+  assert.ok(!result.retiredCommitmentIds.includes("commitment:role-note"));
+  assert.ok(result.affectedComposition.continuityDependentCommitmentIds.includes("commitment:role-note"));
+  assert.ok(result.affectedComposition.dependencyPaths.some((path) => (
+    path.fromNodeId === "awin-2"
+      && path.toNodeId === "role-note-v2"
+      && path.reason === "authored-target"
+  )));
 });
 
 test("a local turn reports material geometry drift of pre-existing content outside its explained scope", () => {

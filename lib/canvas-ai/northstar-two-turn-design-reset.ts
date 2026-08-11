@@ -238,8 +238,19 @@ export type NorthstarDesignResetCompleteResponse = {
   completionEvidence: {
     observedRevisionId: string;
     satisfiedSignals: string[];
+    verifiedNodeIds: string[];
+    measuredFacts: string[];
     remainingIssues: string[];
   };
+};
+
+export type NorthstarDesignTurnIdentityAuthority = {
+  browserRevisionId: string;
+  knownNodeIds: string[];
+  knownRegionIds: string[];
+  knownConceptIds: string[];
+  knownAuthoredRelationIds: string[];
+  protectedEvidenceNodeIds: string[];
 };
 
 export type NorthstarObservedObjectiveTurn = {
@@ -388,6 +399,96 @@ export function northstarLiveRepairStrategyFingerprint(mutation: NorthstarArtboa
         .map((reference) => ({ role: reference.role, nodeId: reference.nodeId }))
         .sort((a, b) => `${a.role}:${a.nodeId}`.localeCompare(`${b.role}:${b.nodeId}`)),
     })),
+  };
+  return createHash("sha256").update(JSON.stringify(strategy)).digest("hex");
+}
+
+/**
+ * Semantic identity for an objective action on one browser-verified revision.
+ * Generated ids, markup, prose, and numeric nudges are deliberately excluded:
+ * changing those does not make a rejected placement strategy new. A changed
+ * target, relationship, operation topology, or canonical revision does.
+ */
+export function northstarObjectiveActionStrategyFingerprint(input: {
+  baseRevisionId: string;
+  grounding: NorthstarDesignResetGrounding;
+  mutation: NorthstarArtboardMutationDraft;
+  identityAuthority: NorthstarDesignTurnIdentityAuthority;
+}): string {
+  const knownIds = new Set([
+    ...input.identityAuthority.knownNodeIds,
+    ...input.identityAuthority.knownRegionIds,
+    ...input.identityAuthority.knownAuthoredRelationIds,
+  ]);
+  const canonicalId = (value: string | undefined) => {
+    if (!value) return undefined;
+    return knownIds.has(value) ? value : "$new";
+  };
+  const operationStrategy = input.mutation.operations.map((operation) => {
+    if (operation.op === "set-styles") return {
+      op: operation.op,
+      targetId: canonicalId(operation.targetId),
+      properties: Object.keys(operation.styles).map((property) => property.toLowerCase()).sort(),
+    };
+    if (operation.op === "set-attributes") return {
+      op: operation.op,
+      targetId: canonicalId(operation.targetId),
+      properties: Object.keys(operation.attributes).map((property) => property.toLowerCase()).sort(),
+    };
+    if (operation.op === "set-classes") return {
+      op: operation.op,
+      targetId: canonicalId(operation.targetId),
+      changes: [operation.add?.length ? "add" : "", operation.remove?.length ? "remove" : ""].filter(Boolean),
+    };
+    if (operation.op === "move") return {
+      op: operation.op,
+      targetId: canonicalId(operation.targetId),
+      parentId: canonicalId(operation.parentId),
+      beforeId: canonicalId(operation.beforeId),
+    };
+    if (operation.op === "insert-html") return {
+      op: operation.op,
+      targetId: canonicalId(operation.targetId),
+      position: operation.position,
+    };
+    if (operation.op === "recompose-region") return {
+      op: operation.op,
+      targetId: canonicalId(operation.targetId),
+      placements: operation.placements.map((placement) => ({
+        targetId: canonicalId(placement.targetId),
+        parentId: canonicalId(placement.parentId),
+        beforeId: canonicalId(placement.beforeId),
+        preserveGeometry: Boolean(placement.preserveGeometry),
+      })),
+      retireNodeIds: (operation.retireNodeIds ?? []).map(canonicalId).sort(),
+    };
+    if (operation.op === "set-css-layer") return { op: operation.op, layerId: canonicalId(operation.layerId) };
+    if (operation.op === "set-runtime-module") return { op: operation.op, moduleId: canonicalId(operation.moduleId) };
+    if (operation.op === "request-space") return {
+      op: operation.op,
+      sides: (["left", "top", "right", "bottom"] as const).filter((side) => operation[side] !== undefined),
+    };
+    return { op: operation.op, targetId: canonicalId(operation.targetId) };
+  });
+  const strategy = {
+    baseRevisionId: input.baseRevisionId,
+    grounding: {
+      conceptId: input.grounding.conceptId,
+      resolvedNodeId: canonicalId(input.grounding.resolvedNodeId),
+      requestedRelation: input.grounding.requestedRelation,
+      placementSpace: input.grounding.placementSpace,
+      expansionDirection: input.grounding.expansionDirection,
+      evidenceNodeIds: input.grounding.evidenceNodeIds.map(canonicalId).sort(),
+      expectedPreservedNodeIds: input.grounding.expectedPreservedNodeIds.map(canonicalId).sort(),
+    },
+    operations: operationStrategy,
+    relations: (input.mutation.relations ?? []).map((relation) => ({
+      subjectId: canonicalId(relation.subjectId),
+      kind: relation.kind,
+      references: relation.references
+        .map((reference) => ({ role: reference.role, nodeId: canonicalId(reference.nodeId) }))
+        .sort((a, b) => `${a.role}:${a.nodeId}`.localeCompare(`${b.role}:${b.nodeId}`)),
+    })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
   };
   return createHash("sha256").update(JSON.stringify(strategy)).digest("hex");
 }
@@ -651,9 +752,11 @@ export const NORTHSTAR_OBJECTIVE_DECISION_RESPONSE_SCHEMA = {
       properties: {
         observedRevisionId: { type: "string", minLength: 1 },
         satisfiedSignals: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, minItems: 1, maxItems: 12 },
+        verifiedNodeIds: { type: "array", items: { type: "string", minLength: 1, maxLength: 120 }, minItems: 1, maxItems: 24 },
+        measuredFacts: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, minItems: 1, maxItems: 12 },
         remainingIssues: { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, maxItems: 12 },
       },
-      required: ["observedRevisionId", "satisfiedSignals", "remainingIssues"],
+      required: ["observedRevisionId", "satisfiedSignals", "verifiedNodeIds", "measuredFacts", "remainingIssues"],
     },
     grounding: {
       type: "object",
@@ -990,7 +1093,9 @@ export function buildNorthstarDesignResetSystemInstruction(): string {
 
 Every artboard turn is singular. First form a provisional ordered plan for the current objective. Then either declare the objective complete from the exact current browser revision, or execute exactly one coherent visual action. Never combine dependent actions when the second action needs to observe the rendered result of the first. After an executed action, the browser will render and measure it and you will receive that exact new revision before choosing the next action. Replan from what actually happened, not from what you predicted. Continue one action at a time until the objective is visibly satisfied. Declare completion only when you can name the rendered success signals and completionEvidence.remainingIssues is empty.
 
-One singular action contains exactly one mutation operation. A relation may accompany that operation only when it is the positioning dependency for the same subject changed by that operation. It must not perform the next planned action. Creating space and placing content into that newly rendered space are separate actions. Creating a container and then populating it are separate actions. Positioning and then correcting that position are separate actions. This rule applies universally to every objective and is not benchmark-specific.
+Singularity is defined by semantic visual intent, not by primitive DOM operation count. One action may author a complete self-contained composition in one browser transaction—for example a new container together with its text, image, chart, table, local styling, and internal relations—when every primitive belongs to that one newly authored composition and none depends on observing another primitive's rendered result. Do not split a container from its contents merely to satisfy an operation-count rule. Never bundle unrelated edits to existing nodes into that composition.
+
+Actions remain separate whenever the next choice depends on fresh browser observation. Creating or requesting space and then placing content into the newly rendered space are separate actions. Moving existing content and then inserting into the resulting gap are separate actions. Positioning and then correcting that position are separate actions. This rule applies universally to every objective and is not benchmark-specific.
 
 The user will give you one short design instruction, the complete current artboard source, and an authoritative semantic-spatial graph derived from that exact committed revision. The graph defines stable concepts, regions, membership, exclusions, and current measured bounds.
 
@@ -1038,23 +1143,23 @@ Make only the requested design change. Do not perform unrelated redesign work. R
 export function buildNorthstarCompactDesignTurnSystemInstruction(): string {
   return `You are editing one living Northstar artboard from its latest browser-measured revision.
 
-Resolve the supplied objective through singular observed design turns. Return either objective-complete, or exactly one executable mutation operation. After execution the browser will render and measure the result before you choose another action. Never predict a dependent second action in the same response.
+Resolve the objective through singular observed turns. Return objective-complete or exactly one executable mutation operation. The browser will render and measure the result before you choose another action. Never predict a dependent second action.
 
-Every action is a provisional browser transaction until its measured receipt says applied. A failed transaction must reject and roll back; its receipt becomes the next observation. Do not search nearby blindly; ground one materially different action in that receipt: make space, recompose the smallest affected structure, change the footprint, or use a proven viable location.
+Each action is a provisional browser transaction until its measured receipt says applied. The browser must reject and roll back a failed transaction; its receipt becomes the next observation. Do not search nearby blindly; use that receipt to make space, recompose the smallest affected structure, change the footprint, or choose a proven viable location.
 
-The observedTurnJournal is exact rendered history. Do not repeat an executable action already applied or rejected. A receipt may justify a different follow-up against the same node; creating measured space and then placing are two observed turns. Replan from the current revision and outcome.
+The observedTurnJournal is exact rendered history. Do not repeat an executable action that was applied or rejected. A receipt may justify a different action on the same node. Creating measured space and placing are separate observed turns. Replan from the current revision.
 
-After an applied action, compare the exact current referents, relations, measurements, and findings with the objective. If it is visibly satisfied and no issue remains, return objective-complete immediately; never spend another turn restyling or reasserting it.
+After an applied action, compare current referents, relations, measurements, and findings with the objective. If visibly satisfied with no remaining issue, return objective-complete immediately.
 
-Use only the supplied compact context as factual state. Node ids, region membership, bounds, anchors, artboard bounds, relations, preservation rules, and the last browser outcome are authoritative. Ground every referenced subject in those ids. Do not invent missing geometry. Treat a rejected candidate's browserReceipt as an exact measurement of the attempted composition even though the canonical revision was restored. If the objective cannot yet be completed safely from the available geometry, use the next action to create the required space or structure.
+Use only the compact context as fact. Its node ids, region membership, bounds, anchors, artboard bounds, relations, preservation rules, and last browser outcome are authoritative. Ground every subject in those ids; never invent identity or geometry. Treat a rejected candidate's browserReceipt as an exact measurement of its attempted composition even though the canonical revision was restored. If safe completion is not yet possible, create the required space or structure.
 
-The semantic evidence labels identify what each screenshot actually depicts. The observedSpatialFacts are browser measurements taken before this reasoning call. Use both together: first resolve the exact semantic referent, then inspect placementFeasibility.requiredForCurrentObjective. When it is true, test the intended outer border-box against placementFeasibility.candidateSlots. Each slot is a browser-proven currently empty envelope with clearance already applied. A new or repositioned subject must fit wholly inside a semantically appropriate slot. When requiredForCurrentObjective is false, do not create space merely because candidateSlots is empty; connectors and grouping-only changes do not require a placement slot. Never insert an object merely because an instruction names a direction. If placement is required and no slot can contain the planned footprint, the one action for this turn must create adequate space or grow the artboard; observe that result before placing the object on a later turn.
+Semantic evidence labels identify screenshot meaning; observedSpatialFacts are current browser measurements. Resolve the exact semantic referent, then inspect placementFeasibility.requiredForCurrentObjective and candidateSlots. When requiredForCurrentObjective is false, connectors and grouping-only changes do not require a placement slot. When true, the planned outer border-box must fit wholly in a semantically appropriate candidateSlot; each slot is browser-proven empty with clearance applied. If no slot fits, create adequate space or grow the artboard now, observe it, and place later.
 
-Preserve protected evidence identity, content, order, visibility, appearance, width, and height. Evidence may be explicitly translated only when the objective requires recomposing the smallest coherent affected structure. Keep unrelated regions stable. Never cover readable evidence or authored content. Before placement, compare the subject's intended footprint plus clearance against the measured gap or available artboard space. When it does not fit, create space or request artboard growth instead of searching nearby coordinates.
+Preserve protected evidence identity, content, order, visibility, appearance, width, and height. Translate it only when the objective requires recomposing the smallest coherent affected structure. Keep unrelated regions stable and never cover readable content. Compare footprint plus clearance with measured space before placement; if it cannot fit, create space or grow the artboard.
 
-Use mutation.relations for dependencies that must remain live after later geometry changes. Use relative-placement for explicit directional placement, between-placement for an object centered between two references, and connector-attachment only for an authored connector whose endpoints must follow references. The model chooses the design, dimensions, spacing, styling, route, and operation; the browser only realizes and measures declared intent.
+Use mutation.relations for live geometric dependencies: relative-placement for directional placement, between-placement between two references, and connector-attachment only for a connector whose endpoints follow references. You choose design, dimensions, spacing, style, route, and operation; the browser realizes and measures declared intent.
 
-Inserted authored objects require unique data-ns-node-id values. Prefer focused operations against stable node ids. Do not replace or restyle whole evidence flows for a local change. Completion is valid only when the exact current revision visibly satisfies the objective, completionEvidence.observedRevisionId equals revision.browserRevisionId, and completionEvidence.remainingIssues is empty. Return JSON only.`;
+Inserted objects require unique data-ns-node-id values. Prefer focused operations on stable ids; never replace whole evidence flows for a local change. Completion is valid only when the current revision visibly satisfies the objective, observedRevisionId equals revision.browserRevisionId, verifiedNodeIds names known nodes or relations proving it, measuredFacts cites current browser measurements, and remainingIssues is empty. Return JSON only.`;
 }
 
 
@@ -1719,6 +1824,24 @@ export function buildNorthstarCompactDesignTurnContext(input: {
       outputBounds: relation.outputBounds,
     })),
   };
+  const identityAuthority: NorthstarDesignTurnIdentityAuthority = {
+    browserRevisionId: input.acknowledgement.browserRevisionId ?? input.artifact.revisionId,
+    knownNodeIds: [...new Set([
+      ...graph.nodes.map((node) => node.nodeId),
+      ...graph.evidenceItems.map((item) => item.nodeId),
+      ...graph.regions.flatMap((region) => [region.rootNodeId, ...region.memberNodeIds]),
+    ])].sort(),
+    knownRegionIds: [...new Set(graph.regions.map((region) => region.regionId))].sort(),
+    knownConceptIds: [...new Set([
+      ...graph.concepts.map((concept) => concept.conceptId),
+      ...graph.regions.map((region) => region.conceptId),
+    ])].sort(),
+    knownAuthoredRelationIds: [...new Set([
+      ...(input.acknowledgement.authoredDesignRelations ?? []).map((relation) => relation.id),
+      ...(input.acknowledgement.resolvedDesignRelations ?? []).map((relation) => relation.relationId),
+    ])].sort(),
+    protectedEvidenceNodeIds: [...new Set(graph.evidenceItems.map((item) => item.nodeId))].sort(),
+  };
   return {
     schema: "northstar.compact-design-turn-context.v1" as const,
     objective: input.instruction,
@@ -1731,6 +1854,7 @@ export function buildNorthstarCompactDesignTurnContext(input: {
       sourceSha256: graph.sourceSha256,
     },
     artboard: graph.artboard,
+    identityAuthority,
     focus: {
       authoritativeReferents: focus.authoritativeReferents,
       referencePairs: focus.referencePairs,
@@ -1827,11 +1951,10 @@ export function sanitizeNorthstarDesignResetModelResponse(input: {
   baseRevisionId: string;
   continuation?: boolean;
   existingRelations?: NorthstarAuthoredDesignRelation[];
+  identityAuthority?: NorthstarDesignTurnIdentityAuthority;
 }): NorthstarDesignResetModelResponse {
-  // The reset intentionally performs no semantic, placement, preservation, or
-  // implementation-style validation before execution. The model response is
-  // normalized only enough to construct an executable mutation. The rendered
-  // result and complete diagnostics are the experiment.
+  // The browser remains the spatial authority. Before execution, this boundary
+  // only rejects invented semantic identities and stale browser revisions.
   const raw = isRecord(input.raw) ? input.raw : {};
   const groundingRaw = isRecord(raw.grounding) ? raw.grounding : {};
   const mutation = sanitizeNorthstarArtboardMutationDraft(
@@ -1872,6 +1995,28 @@ export function sanitizeNorthstarDesignResetModelResponse(input: {
     },
     mutation,
   };
+  if (input.identityAuthority) {
+    const authority = input.identityAuthority;
+    if (authority.browserRevisionId !== input.baseRevisionId) {
+      throw new Error(`Identity authority observed revision ${authority.browserRevisionId} instead of current revision ${input.baseRevisionId}.`);
+    }
+    const knownNodeIds = new Set(authority.knownNodeIds);
+    const knownReferentIds = new Set([
+      ...authority.knownNodeIds,
+      ...authority.knownRegionIds,
+      ...authority.knownConceptIds,
+      "artboard",
+    ]);
+    if (!knownReferentIds.has(response.grounding.resolvedNodeId)) {
+      throw new Error(`The model grounded the action in unknown referent ${response.grounding.resolvedNodeId || "missing"}.`);
+    }
+    for (const nodeId of response.grounding.evidenceNodeIds) {
+      if (!knownNodeIds.has(nodeId)) throw new Error(`The model grounded the action in unknown evidence node ${nodeId}.`);
+    }
+    for (const nodeId of response.grounding.expectedPreservedNodeIds) {
+      if (!knownNodeIds.has(nodeId)) throw new Error(`The model attempted to preserve unknown node ${nodeId}.`);
+    }
+  }
   const normalized = normalizeNorthstarSpatialAuthority({
     response,
     continuation: input.continuation,
@@ -1886,6 +2031,7 @@ export function sanitizeNorthstarObjectiveDecisionResponse(input: {
   turn: NorthstarDesignResetTurn;
   baseRevisionId: string;
   existingRelations?: NorthstarAuthoredDesignRelation[];
+  identityAuthority?: NorthstarDesignTurnIdentityAuthority;
 }): NorthstarObjectiveDecisionResponse {
   const raw = isRecord(input.raw) ? input.raw : {};
   if (raw.observedBaseRevisionId !== input.baseRevisionId) {
@@ -1913,9 +2059,26 @@ export function sanitizeNorthstarObjectiveDecisionResponse(input: {
       throw new Error(`Completion evidence observed revision ${observedRevisionId || "missing"} instead of current revision ${input.baseRevisionId}.`);
     }
     const satisfiedSignals = cleanActions(evidenceRaw.satisfiedSignals);
+    const verifiedNodeIds = cleanActions(evidenceRaw.verifiedNodeIds);
+    const measuredFacts = cleanActions(evidenceRaw.measuredFacts);
     const remainingIssues = cleanActions(evidenceRaw.remainingIssues);
     if (!satisfiedSignals.length) throw new Error("The model declared completion without rendered success evidence.");
+    if (!verifiedNodeIds.length) throw new Error("The model declared completion without exact verified node identities.");
+    if (!measuredFacts.length) throw new Error("The model declared completion without current browser measurements.");
     if (remainingIssues.length) throw new Error(`The model declared completion with unresolved issues: ${remainingIssues.join(" ")}`);
+    if (input.identityAuthority) {
+      if (input.identityAuthority.browserRevisionId !== input.baseRevisionId) {
+        throw new Error(`Identity authority observed revision ${input.identityAuthority.browserRevisionId} instead of current revision ${input.baseRevisionId}.`);
+      }
+      const completionIds = new Set([
+        ...input.identityAuthority.knownNodeIds,
+        ...input.identityAuthority.knownRegionIds,
+        ...input.identityAuthority.knownAuthoredRelationIds,
+      ]);
+      for (const nodeId of verifiedNodeIds) {
+        if (!completionIds.has(nodeId)) throw new Error(`Completion cited unknown browser identity ${nodeId}.`);
+      }
+    }
     return {
       turn: input.turn,
       observedBaseRevisionId: input.baseRevisionId,
@@ -1923,7 +2086,7 @@ export function sanitizeNorthstarObjectiveDecisionResponse(input: {
       objectivePlan,
       decision: "objective-complete",
       completionRationale,
-      completionEvidence: { observedRevisionId, satisfiedSignals, remainingIssues },
+      completionEvidence: { observedRevisionId, satisfiedSignals, verifiedNodeIds, measuredFacts, remainingIssues },
     };
   }
   if (raw.decision !== "execute-action") throw new Error("The model must execute one action or declare the objective complete.");
@@ -1939,16 +2102,55 @@ export function sanitizeNorthstarObjectiveDecisionResponse(input: {
     turn: input.turn,
     baseRevisionId: input.baseRevisionId,
     existingRelations: input.existingRelations,
+    identityAuthority: input.identityAuthority,
   });
-  if (executable.mutation.operations.length !== 1) {
-    throw new Error(`A singular observed design turn must contain exactly one mutation operation; received ${executable.mutation.operations.length}. Split the objective and submit only the next operation.`);
-  }
-  const spatialRelations = (executable.mutation.relations ?? [])
-    .filter((relation) => relation.kind === "relative-placement" || relation.kind === "between-placement");
-  if (spatialRelations.length > 1) {
-    throw new Error("A singular observed design turn may establish at most one spatial positioning dependency for its one operation.");
-  }
+  assertNorthstarCoherentObservedAction(executable.mutation);
   return { ...executable, objectivePlan, decision: "execute-action", action };
+}
+
+function collectNorthstarAuthoredIds(html: string): Set<string> {
+  const ids = new Set<string>();
+  const pattern = /\bdata-ns-node-id\s*=\s*(["'])([^"'<>]+)\1/gi;
+  for (const match of html.matchAll(pattern)) {
+    const id = match[2]?.trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+function assertNorthstarCoherentObservedAction(mutation: NorthstarArtboardMutationBatch): void {
+  const operations = mutation.operations;
+  if (operations.length === 1) return;
+
+  const insertions = operations.filter((operation) => operation.op === "insert-html");
+  if (insertions.length !== 1) {
+    throw new Error("A singular observed design turn must contain one coherent visual action. Multiple edits to existing or unrelated nodes require separate browser-observed actions.");
+  }
+
+  const rootInsertion = insertions[0];
+  const authoredIds = collectNorthstarAuthoredIds(rootInsertion.html);
+  if (authoredIds.size === 0) {
+    throw new Error("An atomic composition must declare stable data-ns-node-id identities for every node refined in the same action.");
+  }
+
+  for (const operation of operations) {
+    if (operation === rootInsertion) continue;
+    if (operation.op === "request-space" || operation.op === "insert-html" || operation.op === "set-html" || operation.op === "recompose-region" || operation.op === "remove" || operation.op === "set-css-layer" || operation.op === "set-runtime-module") {
+      throw new Error("This action contains a geometry-dependent or structurally separate step that requires a fresh browser observation before the next action.");
+    }
+    const targetId = "targetId" in operation && typeof operation.targetId === "string"
+      ? operation.targetId.trim()
+      : "";
+    if (!targetId || !authoredIds.has(targetId)) {
+      throw new Error("An atomic composition may only refine nodes authored inside its one new composition root; existing or unrelated nodes require separate browser-observed actions.");
+    }
+  }
+
+  for (const relation of mutation.relations ?? []) {
+    if (!authoredIds.has(relation.subjectId)) {
+      throw new Error("An atomic composition may only establish relations whose subject is authored inside that same new composition.");
+    }
+  }
 }
 
 const POSITION_STYLE_CHANNELS = {

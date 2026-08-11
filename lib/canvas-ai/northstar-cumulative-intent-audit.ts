@@ -259,7 +259,31 @@ function normalizeRect(value: unknown): NorthstarAuditRect | undefined {
 }
 
 function snapshotNodeMap(acknowledgement: NorthstarArtifactMutationAcknowledgement): Map<string, NorthstarCommittedSemanticNode> {
-  return new Map((acknowledgement.snapshot?.semanticNodes ?? []).map((node) => [node.nodeId, node]));
+  const nodes = acknowledgement.snapshot?.semanticNodes ?? [];
+  const index = new Map<string, NorthstarCommittedSemanticNode>();
+  const ambiguous = new Set<string>();
+  for (const node of nodes) {
+    for (const identity of [node.nodeId, node.semanticIdentity, ...(node.semanticAliases ?? [])]) {
+      if (!identity || ambiguous.has(identity)) continue;
+      const prior = index.get(identity);
+      if (prior && prior !== node) {
+        index.delete(identity);
+        ambiguous.add(identity);
+      } else index.set(identity, node);
+    }
+  }
+  return index;
+}
+
+function snapshotPrimaryNodeIds(acknowledgement: NorthstarArtifactMutationAcknowledgement): string[] {
+  return stableUnique((acknowledgement.snapshot?.semanticNodes ?? []).map((node) => node.nodeId));
+}
+
+function resolvedSnapshotNodeId(
+  nodeId: string,
+  snapshotNodes: Map<string, NorthstarCommittedSemanticNode>,
+): string {
+  return snapshotNodes.get(nodeId)?.nodeId ?? nodeId;
 }
 
 function nodeIdsFromMarkup(markup: string): string[] {
@@ -366,23 +390,29 @@ function regionMembership(graph: NorthstarCumulativeIntentGraphView) {
   return { byNode, membersByRoot };
 }
 
-function nodeBoundsMap(graph: NorthstarCumulativeIntentGraphView, acknowledgement: NorthstarArtifactMutationAcknowledgement) {
+function nodeBoundsMap(
+  graph: NorthstarCumulativeIntentGraphView,
+  acknowledgement: NorthstarArtifactMutationAcknowledgement,
+  resolveNodeId: (nodeId: string) => string = (nodeId) => nodeId,
+) {
   const map = new Map<string, NorthstarAuditRect>();
   for (const node of acknowledgement.snapshot?.semanticNodes ?? []) {
     const bounds = normalizeRect(node.bounds);
-    if (bounds) map.set(node.nodeId, bounds);
+    if (bounds) map.set(resolveNodeId(node.nodeId), bounds);
   }
   for (const node of graph.nodes) {
     const bounds = normalizeRect(node.bounds);
-    if (bounds && !map.has(node.nodeId)) map.set(node.nodeId, bounds);
+    const nodeId = resolveNodeId(node.nodeId);
+    if (bounds && !map.has(nodeId)) map.set(nodeId, bounds);
   }
   for (const item of graph.evidenceItems) {
     const bounds = normalizeRect(item.bounds);
-    if (bounds && !map.has(item.nodeId)) map.set(item.nodeId, bounds);
+    const nodeId = resolveNodeId(item.nodeId);
+    if (bounds && !map.has(nodeId)) map.set(nodeId, bounds);
   }
   for (const region of graph.regions) {
     const bounds = normalizeRect(region.bounds);
-    if (bounds) map.set(region.rootNodeId, bounds);
+    if (bounds) map.set(resolveNodeId(region.rootNodeId), bounds);
   }
   return map;
 }
@@ -440,8 +470,9 @@ function relationshipRegistry(input: BuildNorthstarCumulativeIntentAuditInput): 
 function semanticTargetEvidence(node: NorthstarCommittedSemanticNode | undefined, relations: NorthstarAuthoredDesignRelation[]) {
   const relationTargets = new Set<string>();
   const attributeTargets = new Set<string>();
+  const nodeIdentities = new Set([node?.nodeId, node?.semanticIdentity, ...(node?.semanticAliases ?? [])].filter(Boolean));
   for (const relation of relations) {
-    if (relation.subjectId !== node?.nodeId) continue;
+    if (!nodeIdentities.has(relation.subjectId)) continue;
     for (const reference of relation.references) relationTargets.add(reference.nodeId);
   }
   for (const name of TARGET_ATTRIBUTE_NAMES) {
@@ -611,7 +642,7 @@ function addSnapshotAssets(
   acknowledgement: NorthstarArtifactMutationAcknowledgement,
 ): NorthstarHtmlAssetIndex {
   const nodeMap = snapshotNodeMap(acknowledgement);
-  for (const node of nodeMap.values()) {
+  for (const node of new Set(nodeMap.values())) {
     const src = node.normalizedAttributes?.src;
     if (!src) continue;
     const owners = [node.nodeId, ...ancestorSet(node.nodeId, nodeMap)];
@@ -852,22 +883,35 @@ function isAuthoredNode(node: NorthstarCommittedSemanticNode | undefined): boole
 function buildCommitmentLedger(input: BuildNorthstarCumulativeIntentAuditInput, scope: ReturnType<typeof operationScope>) {
   const beforeNodes = snapshotNodeMap(input.beforeAcknowledgement);
   const afterNodes = snapshotNodeMap(input.afterAcknowledgement);
-  const relations = relationshipRegistry(input);
+  const canonicalNodeId = (nodeId: string) => resolvedSnapshotNodeId(nodeId, afterNodes);
+  const relations = relationshipRegistry(input).map((relation) => ({
+    ...relation,
+    subjectId: canonicalNodeId(relation.subjectId),
+    references: relation.references.map((reference) => ({
+      ...reference,
+      nodeId: canonicalNodeId(reference.nodeId),
+    })),
+  }));
   const relationSubjects = new Set(relations.map((relation) => relation.subjectId));
-  const currentRelationSubjects = new Set(scope.relationSubjectNodeIds);
+  const currentRelationSubjects = new Set(scope.relationSubjectNodeIds.map(canonicalNodeId));
   const targetMetadataTouched = new Set<string>();
   const provenanceMetadataTouched = new Set<string>();
   for (const operation of input.currentMutation.operations) {
     if (operation.op !== "set-attributes") continue;
     const names = Object.keys(operation.attributes);
-    if (names.some((name) => (TARGET_ATTRIBUTE_NAMES as readonly string[]).includes(name))) targetMetadataTouched.add(operation.targetId);
-    if (names.some((name) => (PROVENANCE_ATTRIBUTE_NAMES as readonly string[]).includes(name))) provenanceMetadataTouched.add(operation.targetId);
+    if (names.some((name) => (TARGET_ATTRIBUTE_NAMES as readonly string[]).includes(name))) targetMetadataTouched.add(canonicalNodeId(operation.targetId));
+    if (names.some((name) => (PROVENANCE_ATTRIBUTE_NAMES as readonly string[]).includes(name))) provenanceMetadataTouched.add(canonicalNodeId(operation.targetId));
   }
 
-  const introduced = new Set(scope.introducedNodeIds);
-  const removed = new Set(scope.removedNodeIds);
-  const direct = new Set(scope.directNodeIds);
-  const prior = new Map((input.previousAudit?.activeCommitmentLedger ?? []).map((commitment) => [commitment.nodeId, commitment]));
+  const introduced = new Set(scope.introducedNodeIds.map(canonicalNodeId));
+  const removed = new Set(scope.removedNodeIds.map(canonicalNodeId));
+  const direct = new Set(scope.directNodeIds.map(canonicalNodeId));
+  const prior = new Map<string, NorthstarCumulativeIntentCommitment>();
+  for (const commitment of input.previousAudit?.activeCommitmentLedger ?? []) {
+    const currentNodeId = canonicalNodeId(commitment.nodeId);
+    const existing = prior.get(currentNodeId);
+    if (!existing || commitment.nodeId === currentNodeId) prior.set(currentNodeId, commitment);
+  }
   const { byNode: regionsByNode } = regionMembership(input.afterGraph);
   const evidenceByNode = new Map(input.afterGraph.evidenceItems.map((item) => [item.nodeId, item]));
   const regionRoots = new Set(input.afterGraph.regions.map((region) => region.rootNodeId));
@@ -875,14 +919,14 @@ function buildCommitmentLedger(input: BuildNorthstarCumulativeIntentAuditInput, 
     ...input.afterGraph.nodes.map((node) => node.nodeId),
     ...input.afterGraph.evidenceItems.map((item) => item.nodeId),
     ...input.afterGraph.regions.map((region) => region.rootNodeId),
-  ]);
+  ].map(canonicalNodeId));
   const allAfterNodeIds = new Set([...afterNodes.keys(), ...graphNodeIds]);
   const currentNodeIds = new Set([
     ...prior.keys(),
     ...introduced,
-    ...scope.directNodeIds,
+    ...direct,
     ...relationSubjects,
-    ...afterNodes.keys(),
+    ...snapshotPrimaryNodeIds(input.afterAcknowledgement),
     ...graphNodeIds,
   ]);
 
@@ -1119,7 +1163,18 @@ function hasAncestorRelationship(a: string, b: string, nodeMap: Map<string, Nort
 }
 
 export function buildNorthstarCumulativeIntentAudit(input: BuildNorthstarCumulativeIntentAuditInput): NorthstarCumulativeIntentAudit {
-  const scope = operationScope(input.currentMutation);
+  const afterNodeIndex = snapshotNodeMap(input.afterAcknowledgement);
+  const canonicalNodeId = (nodeId: string) => resolvedSnapshotNodeId(nodeId, afterNodeIndex);
+  const rawScope = operationScope(input.currentMutation);
+  const scope = {
+    ...rawScope,
+    directNodeIds: stableUnique(rawScope.directNodeIds.map(canonicalNodeId)),
+    introducedNodeIds: stableUnique(rawScope.introducedNodeIds.map(canonicalNodeId)),
+    removedNodeIds: stableUnique(rawScope.removedNodeIds.map(canonicalNodeId)),
+    containerContextNodeIds: stableUnique(rawScope.containerContextNodeIds.map(canonicalNodeId)),
+    relationSubjectNodeIds: stableUnique(rawScope.relationSubjectNodeIds.map(canonicalNodeId)),
+    relationReferenceNodeIds: stableUnique(rawScope.relationReferenceNodeIds.map(canonicalNodeId)),
+  };
   const ledger = buildCommitmentLedger(input, scope);
   const directNodes = new Set(scope.directNodeIds);
   const afterMembership = regionMembership(input.afterGraph);
@@ -1128,8 +1183,8 @@ export function buildNorthstarCumulativeIntentAudit(input: BuildNorthstarCumulat
     for (const memberId of afterMembership.membersByRoot.get(directNodeId) ?? []) structuralMembers.add(memberId);
   }
 
-  const beforeBounds = nodeBoundsMap(input.beforeGraph, input.beforeAcknowledgement);
-  const afterBounds = nodeBoundsMap(input.afterGraph, input.afterAcknowledgement);
+  const beforeBounds = nodeBoundsMap(input.beforeGraph, input.beforeAcknowledgement, canonicalNodeId);
+  const afterBounds = nodeBoundsMap(input.afterGraph, input.afterAcknowledgement, canonicalNodeId);
   const geometryChangedNodeIds = stableUnique(new Set([...beforeBounds.keys(), ...afterBounds.keys()]).values())
     .filter((nodeId) => geometryChanged(beforeBounds.get(nodeId), afterBounds.get(nodeId)));
   const changedGeometry = new Set(geometryChangedNodeIds);
@@ -1153,7 +1208,10 @@ export function buildNorthstarCumulativeIntentAudit(input: BuildNorthstarCumulat
 
   const relationTargetsBySubject = new Map<string, Set<string>>();
   for (const relation of relationshipRegistry(input)) {
-    relationTargetsBySubject.set(relation.subjectId, new Set(relation.references.map((reference) => reference.nodeId)));
+    relationTargetsBySubject.set(
+      canonicalNodeId(relation.subjectId),
+      new Set(relation.references.map((reference) => canonicalNodeId(reference.nodeId))),
+    );
   }
 
   for (const commitment of ledger.active) {

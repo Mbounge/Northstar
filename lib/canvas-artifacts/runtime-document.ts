@@ -299,14 +299,93 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     "current-act": ".working-act",
     "current-act-text": ".working-act strong",
   });
+  const SEMANTIC_IDENTITY_ATTRIBUTES = Object.freeze([
+    "data-ns-semantic-id", "data-ns-evidence-id", "data-ns-annotation-id",
+    "data-ns-relationship-id", "data-ns-flow-id", "data-ns-screen-id",
+    "data-ns-region-id", "data-ns-card-id", "data-ns-analysis-id",
+  ]);
+  const historicalSemanticIdentityByNodeId = new Map();
+  const currentNodeBySemanticAlias = new Map();
+  const ambiguousSemanticAliases = new Set();
+  let refreshingSemanticIdentityRegistry = false;
+  const semanticIdentityFor = (element) => {
+    if (!element) return "";
+    for (const attribute of SEMANTIC_IDENTITY_ATTRIBUTES) {
+      const value = String(element.getAttribute?.(attribute) || "").trim();
+      if (value) return attribute + ":" + value;
+    }
+    const nodeId = String(element.getAttribute?.("data-ns-node-id") || "").trim();
+    return nodeId ? "data-ns-node-id:" + nodeId : "";
+  };
+  const currentSemanticAliasesFor = (element) => {
+    const aliases = new Set();
+    const nodeId = String(element?.getAttribute?.("data-ns-node-id") || "").trim();
+    if (nodeId) { aliases.add(nodeId); aliases.add("data-ns-node-id:" + nodeId); }
+    for (const attribute of SEMANTIC_IDENTITY_ATTRIBUTES) {
+      const value = String(element?.getAttribute?.(attribute) || "").trim();
+      if (value) { aliases.add(attribute + ":" + value); aliases.add(value); }
+    }
+    return Array.from(aliases);
+  };
+  const refreshSemanticIdentityRegistry = () => {
+    if (refreshingSemanticIdentityRegistry) return;
+    refreshingSemanticIdentityRegistry = true;
+    try {
+      currentNodeBySemanticAlias.clear();
+      ambiguousSemanticAliases.clear();
+      const register = (alias, element) => {
+        if (!alias || ambiguousSemanticAliases.has(alias)) return;
+        const prior = currentNodeBySemanticAlias.get(alias);
+        if (prior && prior !== element) {
+          currentNodeBySemanticAlias.delete(alias);
+          ambiguousSemanticAliases.add(alias);
+          return;
+        }
+        currentNodeBySemanticAlias.set(alias, element);
+      };
+      root.querySelectorAll("[data-ns-node-id]").forEach((element) => {
+        const nodeId = String(element.getAttribute("data-ns-node-id") || "").trim();
+        const identity = semanticIdentityFor(element);
+        if (nodeId && identity) historicalSemanticIdentityByNodeId.set(nodeId, identity);
+        currentSemanticAliasesFor(element).forEach((alias) => register(alias, element));
+        register(identity, element);
+      });
+    } finally {
+      refreshingSemanticIdentityRegistry = false;
+    }
+  };
+  const semanticAliasesFor = (element) => {
+    const identity = semanticIdentityFor(element);
+    const aliases = new Set(currentSemanticAliasesFor(element));
+    if (identity) aliases.add(identity);
+    historicalSemanticIdentityByNodeId.forEach((mappedIdentity, historicalNodeId) => {
+      if (mappedIdentity !== identity) return;
+      aliases.add(historicalNodeId);
+      aliases.add("data-ns-node-id:" + historicalNodeId);
+    });
+    return Array.from(aliases).sort();
+  };
   const nodeById = (id) => {
     if (id === "__root__") return root;
     const direct = root.querySelector('[data-ns-node-id="' + cssEscape(id) + '"]');
     if (direct) return direct;
+    refreshSemanticIdentityRegistry();
+    const requested = String(id || "");
+    const historicalIdentity = historicalSemanticIdentityByNodeId.get(requested);
+    const semantic = (historicalIdentity && currentNodeBySemanticAlias.get(historicalIdentity))
+      || currentNodeBySemanticAlias.get(requested);
+    if (semantic) return semantic;
     const selector = LEGACY_NODE_SELECTORS[id];
     const legacy = selector ? root.querySelector(selector) : null;
     if (legacy && !legacy.hasAttribute("data-ns-node-id")) legacy.setAttribute("data-ns-node-id", id);
     return legacy;
+  };
+  const canonicalNodeIdentity = (id) => {
+    const requested = String(id || "");
+    const resolved = nodeById(requested);
+    return semanticIdentityFor(resolved)
+      || historicalSemanticIdentityByNodeId.get(requested)
+      || (requested ? "data-ns-node-id:" + requested : "");
   };
   const assetAllowed = (value) => !value || value.startsWith("data:") || value.startsWith("blob:") || ALLOWED_ASSETS.has(value);
   const sanitizeFragment = (html) => {
@@ -1894,7 +1973,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     return (hash >>> 0).toString(16).padStart(8, "0");
   };
-  const captureCommittedSemanticNodes = () => Array.from(root.querySelectorAll("[data-ns-node-id]"))
+  const captureCommittedSemanticNodes = () => {
+    refreshSemanticIdentityRegistry();
+    return Array.from(root.querySelectorAll("[data-ns-node-id]"))
     .filter((element) => !element.closest('[data-ns-runtime-owned="true"],[data-ns-spatial-system]'))
     .map((element) => {
       const nodeId = element.getAttribute("data-ns-node-id") || "";
@@ -1918,7 +1999,10 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         .filter(Boolean);
       return {
         nodeId,
+        semanticIdentity: semanticIdentityFor(element) || undefined,
+        semanticAliases: semanticAliasesFor(element),
         parentId: parent?.getAttribute("data-ns-node-id") || undefined,
+        parentSemanticIdentity: semanticIdentityFor(parent) || undefined,
         bounds,
         normalizedText,
         normalizedAttributes,
@@ -1935,6 +2019,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       };
     })
     .filter((node) => node.nodeId);
+  };
   const semanticSnapshot = () => {
     const snapshot = new Map();
     root.querySelectorAll("[data-ns-node-id]").forEach((element) => {
@@ -2208,6 +2293,89 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
         geometryRole: classifySemanticGeometryRole(element),
       }))
       .filter((item) => item.geometryRole !== "root" && item.rect.width > 1 && item.rect.height > 1);
+    const isSpatialPrimitive = (element) =>
+      element.matches("svg,path,line,polyline,polygon")
+      || element.hasAttribute("data-ns-relationship")
+      || element.hasAttribute("data-ns-relation-id")
+      || element.hasAttribute("data-ns-overlay")
+      || element.hasAttribute("data-ns-allow-overlap");
+    const spatialOwnerFor = (element) => element.closest("[data-ns-flow-id], [data-ns-structural-layer]");
+    const spatialOwnerId = (element) => element?.getAttribute("data-ns-flow-id")
+      || element?.getAttribute("data-ns-node-id")
+      || element?.getAttribute("data-ns-structural-layer")
+      || "";
+    const protectedEvidenceOwner = (element) => element.closest("[data-ns-protected-evidence], [data-ns-evidence-id]");
+    const isCompactTextFragment = (element) => {
+      if (!(element.textContent || "").trim()) return false;
+      return !element.querySelector(
+        "img, video, canvas, svg, [data-ns-evidence-id], [data-ns-protected-evidence], [data-ns-relationship], [data-ns-relation-id]",
+      );
+    };
+    const localSemanticClearanceGroupFor = (element, spatialOwner) => {
+      if (!spatialOwner || !isCompactTextFragment(element)) return null;
+      const immediateWrapper = element.parentElement;
+      if (!immediateWrapper || immediateWrapper === spatialOwner || !spatialOwner.contains(immediateWrapper)) return null;
+      return immediateWrapper;
+    };
+    const spatialItems = semantic.filter((item) => {
+      if (item.geometryRole !== "content" || isSpatialPrimitive(item.element)) return false;
+      return !semantic.some((candidate) =>
+        candidate !== item
+        && candidate.geometryRole === "content"
+        && item.element.contains(candidate.element)
+        && !isSpatialPrimitive(candidate.element)
+      );
+    });
+    const spatialCollisionPairs = [];
+    const spatialClearanceViolations = [];
+    for (let index = 0; index < spatialItems.length; index += 1) {
+      for (let otherIndex = index + 1; otherIndex < spatialItems.length; otherIndex += 1) {
+        const first = spatialItems[index];
+        const second = spatialItems[otherIndex];
+        if (first.element.contains(second.element) || second.element.contains(first.element)) continue;
+        const firstEvidenceOwner = protectedEvidenceOwner(first.element);
+        if (firstEvidenceOwner && firstEvidenceOwner === protectedEvidenceOwner(second.element)) continue;
+        const overlapWidth = Math.min(first.rect.right, second.rect.right) - Math.max(first.rect.left, second.rect.left);
+        const overlapHeight = Math.min(first.rect.bottom, second.rect.bottom) - Math.max(first.rect.top, second.rect.top);
+        const overlapArea = Math.max(0, overlapWidth) * Math.max(0, overlapHeight);
+        if (overlapWidth > 2 && overlapHeight > 2 && overlapArea > 16) {
+          spatialCollisionPairs.push({
+            firstId: first.id,
+            secondId: second.id,
+            overlapArea: Math.round(overlapArea),
+          });
+          continue;
+        }
+        const firstOwner = spatialOwnerFor(first.element);
+        const secondOwner = spatialOwnerFor(second.element);
+        if (!firstOwner || firstOwner !== secondOwner) continue;
+        const firstLocalClearanceGroup = localSemanticClearanceGroupFor(first.element, firstOwner);
+        const secondLocalClearanceGroup = localSemanticClearanceGroupFor(second.element, secondOwner);
+        if (firstLocalClearanceGroup && firstLocalClearanceGroup === secondLocalClearanceGroup) continue;
+        const requiredClearance = Math.max(0, Number(firstOwner.getAttribute("data-ns-min-clearance") || 8));
+        if (!requiredClearance) continue;
+        const horizontalGap = Math.max(first.rect.left, second.rect.left) - Math.min(first.rect.right, second.rect.right);
+        const verticalGap = Math.max(first.rect.top, second.rect.top) - Math.min(first.rect.bottom, second.rect.bottom);
+        if (overlapHeight > 2 && horizontalGap >= 0 && horizontalGap < requiredClearance) {
+          spatialClearanceViolations.push({ firstId: first.id, secondId: second.id, axis: "x", gap: Math.round(horizontalGap * 10) / 10, requiredClearance });
+        } else if (overlapWidth > 2 && verticalGap >= 0 && verticalGap < requiredClearance) {
+          spatialClearanceViolations.push({ firstId: first.id, secondId: second.id, axis: "y", gap: Math.round(verticalGap * 10) / 10, requiredClearance });
+        }
+      }
+    }
+    const spatialContainmentViolations = spatialItems.flatMap((item) => {
+      const owner = spatialOwnerFor(item.element);
+      if (!owner || owner === item.element || owner.hasAttribute("data-ns-allow-overflow") || item.element.hasAttribute("data-ns-allow-overflow")) return [];
+      const ownerRect = owner.getBoundingClientRect();
+      const overflow = {
+        left: Math.max(0, ownerRect.left - item.rect.left),
+        top: Math.max(0, ownerRect.top - item.rect.top),
+        right: Math.max(0, item.rect.right - ownerRect.right),
+        bottom: Math.max(0, item.rect.bottom - ownerRect.bottom),
+      };
+      if (Math.max(overflow.left, overflow.top, overflow.right, overflow.bottom) <= 2) return [];
+      return [{ nodeId: item.id, ownerId: spatialOwnerId(owner), overflow }];
+    });
     const evidenceElements = Array.from(root.querySelectorAll("[data-ns-evidence-id], [data-ns-protected-evidence], figure:has(img)"))
       .filter((element) => element.hasAttribute("data-ns-protected-evidence") || Boolean(element.querySelector("img,video,canvas,svg")));
     const evidenceItems = evidenceElements
@@ -2699,6 +2867,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       declaredStructureFailures,
       duplicateSingletonRoles,
       evidenceCollisionPairs,
+      spatialCollisionPairs,
+      spatialClearanceViolations,
+      spatialContainmentViolations,
       authoredInterferencePairs,
       semanticRegionIntrusions,
       authoredContinuityObservations,
@@ -2783,6 +2954,46 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     if (newEvidenceCollisionPairs.length) {
       return "New protected-evidence collisions appeared in the visible composition: "
         + newEvidenceCollisionPairs.map((pair) => pair.join(" ↔ ")).join(", ");
+    }
+    const collisionKey = (entry) => [entry.firstId, entry.secondId].sort().join("|");
+    const beforeSpatialCollisions = new Map(
+      (before.spatialCollisionPairs || []).map((entry) => [collisionKey(entry), Number(entry.overlapArea || 0)]),
+    );
+    const newSpatialCollisions = (after.spatialCollisionPairs || []).filter((entry) => {
+      const priorArea = beforeSpatialCollisions.get(collisionKey(entry));
+      return priorArea === undefined || Number(entry.overlapArea || 0) > Math.max(priorArea + 16, priorArea * 1.1);
+    });
+    if (newSpatialCollisions.length) {
+      return "The provisional composition creates browser-measured content collisions: "
+        + newSpatialCollisions.slice(0, 8).map((entry) => entry.firstId + " ↔ " + entry.secondId + " (" + entry.overlapArea + "px²)").join(", ")
+        + ". Create sufficient space or choose a different composition before committing.";
+    }
+    const clearanceKey = (entry) => [entry.firstId, entry.secondId].sort().join("|") + "|" + entry.axis;
+    const beforeClearance = new Map(
+      (before.spatialClearanceViolations || []).map((entry) => [clearanceKey(entry), Number(entry.gap || 0)]),
+    );
+    const newClearanceViolations = (after.spatialClearanceViolations || []).filter((entry) => {
+      const priorGap = beforeClearance.get(clearanceKey(entry));
+      return priorGap === undefined || Number(entry.gap || 0) < priorGap - 1;
+    });
+    if (newClearanceViolations.length) {
+      return "The provisional composition violates browser-measured minimum clearance: "
+        + newClearanceViolations.slice(0, 8).map((entry) => entry.firstId + " ↔ " + entry.secondId + " has " + entry.gap + "px; requires " + entry.requiredClearance + "px").join(", ")
+        + ". Reflow the affected region before committing.";
+    }
+    const containmentKey = (entry) => entry.nodeId + "|" + entry.ownerId;
+    const containmentAmount = (entry) => Math.max(...Object.values(entry.overflow || {}).map(Number));
+    const beforeContainment = new Map(
+      (before.spatialContainmentViolations || []).map((entry) => [containmentKey(entry), containmentAmount(entry)]),
+    );
+    const newContainmentViolations = (after.spatialContainmentViolations || []).filter((entry) => {
+      const priorAmount = beforeContainment.get(containmentKey(entry));
+      return priorAmount === undefined || containmentAmount(entry) > priorAmount + 2;
+    });
+    if (newContainmentViolations.length) {
+      return "The provisional composition places content outside its semantic owner: "
+        + newContainmentViolations.slice(0, 8).map((entry) => entry.nodeId + " escapes " + entry.ownerId).join(", ")
+        + ". Resize or reflow the owner and its dependents before committing.";
     }
     const regionIntrusionKey = (entry) => [entry.additionId, entry.intendedFlowId, entry.intrudedFlowId].join("|");
     const beforeRegionIntrusions = new Map(
@@ -3585,16 +3796,17 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       const relationById = new Map(targetRelations.map((relation) => [relation.id, relation]));
       const relationIdsBySubject = new Map();
       for (const relation of targetRelations) {
-        const values = relationIdsBySubject.get(relation.subjectId) || [];
+        const subjectIdentity = canonicalNodeIdentity(relation.subjectId);
+        const values = relationIdsBySubject.get(subjectIdentity) || [];
         values.push(relation.id);
-        relationIdsBySubject.set(relation.subjectId, values);
+        relationIdsBySubject.set(subjectIdentity, values);
       }
 
       const conflictIds = new Set();
       const ownerByChannel = new Map();
       for (const relation of targetRelations) {
         for (const channel of relationChannels(relation)) {
-          const key = relation.subjectId + "::" + channel;
+          const key = canonicalNodeIdentity(relation.subjectId) + "::" + channel;
           const prior = ownerByChannel.get(key);
           if (prior && prior !== relation.id) { conflictIds.add(prior); conflictIds.add(relation.id); }
           else ownerByChannel.set(key, relation.id);
@@ -3605,7 +3817,7 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       for (const relation of targetRelations) {
         const dependencies = new Set();
         for (const reference of relation.references || []) {
-          for (const dependencyId of relationIdsBySubject.get(reference.nodeId) || []) {
+          for (const dependencyId of relationIdsBySubject.get(canonicalNodeIdentity(reference.nodeId)) || []) {
             if (dependencyId !== relation.id) dependencies.add(dependencyId);
           }
           if (referenceGeometryMode(reference, relation.parameters || {}) === "semantic-descendant-union") {
@@ -3916,6 +4128,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     }
     const expectedParent = Array.from(appliedMutationIds).at(-1);
     if (batch.parentMutationId && expectedParent && batch.parentMutationId !== expectedParent) throw new Error("Mutation lineage is discontinuous.");
+    // Capture old transient ids before authored markup can replace their nodes.
+    // Relations then rebind to the new node carrying the same durable identity.
+    refreshSemanticIdentityRegistry();
     canonicalGeometryMutationId = batch.mutationId;
     registerAssets(batch.requiredAssetUrls || []);
     solveSpatialSystem();
@@ -4987,11 +5202,14 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     const evidenceRegistry = captureEvidenceRegistryReceipt();
     const visualSafety = visualSafetySnapshot();
     const evidenceCollisionPairs = visualSafety.evidenceCollisionPairs || [];
+    const spatialCollisionPairs = visualSafety.spatialCollisionPairs || [];
+    const spatialClearanceViolations = visualSafety.spatialClearanceViolations || [];
+    const spatialContainmentViolations = visualSafety.spatialContainmentViolations || [];
     const authoredInterferencePairs = visualSafety.authoredInterferencePairs || [];
     const semanticRegionIntrusions = visualSafety.semanticRegionIntrusions || [];
     const authoredContinuityObservations = visualSafety.authoredContinuityObservations || [];
     const relationRealizationTraces = relationRealizationTraceRecords();
-    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0) + Number(spatialAudit.hardFailureCount || 0) + Number(spatialAudit.softIssueCount || 0) + requiredPrimitiveAudit.failureCount + geometryFacts.integrityFailures.length + evidenceRegistry.missingEvidenceIds.length + evidenceCollisionPairs.length + authoredInterferencePairs.length + semanticRegionIntrusions.length + authoredContinuityObservations.filter((entry) => entry.visualAttribution === "weakened").length;
+    const issueCount = overflowElementCount + clippedTextCount + smallTextCount + tinyInteractiveCount + missingImageCount + (documentScrollRisk ? 1 : 0) + Number(spatialAudit.hardFailureCount || 0) + Number(spatialAudit.softIssueCount || 0) + requiredPrimitiveAudit.failureCount + geometryFacts.integrityFailures.length + evidenceRegistry.missingEvidenceIds.length + evidenceCollisionPairs.length + spatialCollisionPairs.length + spatialClearanceViolations.length + spatialContainmentViolations.length + authoredInterferencePairs.length + semanticRegionIntrusions.length + authoredContinuityObservations.filter((entry) => entry.visualAttribution === "weakened").length;
     const review = {
       revisionId: currentRevisionId, mutationId: currentMutationId, stageIndex: activeStageIndex, evaluatedAt: new Date().toISOString(),
       rootWidth: bounds.width, rootHeight: bounds.height, elementCount: elements.length,
@@ -5004,6 +5222,9 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
       premiumDesignAudit,
       evidenceRegistry,
       evidenceCollisionPairs,
+      spatialCollisionPairs,
+      spatialClearanceViolations,
+      spatialContainmentViolations,
       authoredInterferencePairs,
       semanticRegionIntrusions,
       authoredContinuityObservations,
