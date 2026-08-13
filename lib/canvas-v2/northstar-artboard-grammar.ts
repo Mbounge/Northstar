@@ -1,0 +1,21 @@
+export const NORTHSTAR_V2_ARTBOARD_GRAMMAR = `North Star artboard grammar:
+- North Star's visual identity is editorial intelligence: clear argument, strong typography, purposeful spatial relationships, restrained color, unusually good evidence handling, and confident negative space. It should feel authored, not assembled from UI components.
+- Optimize simultaneously for clarity, legibility, distinctiveness, and premium restraint. Novelty must make the idea easier to understand, not merely decorate it.
+- Treat the artifact as a geometrically expanding editorial working surface, never a fixed slide or dashboard.
+- The canonical artboard background is clean warm white (#fff or #fdfcff). Do not place a grey page or a centered inner canvas on it.
+- Let the root widen with the communication: use width:max-content with a generous minimum around 1680px, and grow vertically as research and analysis accumulate.
+- Compose directly on the surface with whitespace, alignment, typography, fine rules, evidence, and restrained violet/blue accents before introducing containers. Purposeful asymmetry and varied scale are welcome when hierarchy remains effortless to read.
+- Cards, panels, pills, filled boxes, and rounded rectangles require a specific communicative reason. They are not the default primitive for comparisons, thoughts, evidence, or sections.
+- Choose a visual structure from the user's actual communication problem. Avoid returning the same header-plus-cards composition for unrelated prompts. Within one artifact, keep a consistent visual thesis, spacing rhythm, type system, and accent logic.
+- Write artifact-scoped CSS with custom properties for its palette, type scale, spacing rhythm, rules, and shadows. Use grid and flex intentionally, coherent readable font sizes and line heights, controlled line lengths, stable alignment, and max-content geometry where sequences must remain complete.
+- Establish a small number of strong alignment rails and one unmistakable primary anchor. Related elements should share edges, baselines, centers, or a declared visual axis; near-misses look accidental.
+- Use a repeatable spacing rhythm with deliberate exceptions. Dense evidence may be compact, but narrative transitions need enough air to make the reading order obvious.
+- Let content determine height. Grow width only for genuinely horizontal material such as complete sequences, timelines, or side-by-side evidence; do not create vast unused artboard regions with arbitrary fixed dimensions.
+- Preserve each image's natural aspect ratio. Choose one semantic scale for peers, vary scale only to establish meaning, and keep annotations close enough to their target that the relationship remains unambiguous.
+- Treat connectors, arrows, and overlays as spatial relationships rather than decoration. Anchor them to identified elements and declare deliberate overlap in the spatial strategy; otherwise keep regions cleanly separated.
+- Remember that the model sees a downscaled complete-artboard screenshot. Author typography and evidence at readable source dimensions, then use measured node bounds to diagnose wrapping and density instead of compensating for screenshot scale.
+- Prefer one dominant idea, a clear reading order, and a small number of supporting visual moves. Avoid card soup, ornamental gradients, excessive rounding, tiny text, gratuitous badges, centered-everything layouts, and large empty zones without editorial purpose.
+- Canonical product flows use a quiet 170px app-identity lane followed by one unwrapped max-content row. Preserve complete screenshot order and natural aspect ratio. Prefer roughly 235px screenshot height, 18px gaps, no screenshot cards, and only subtle image shadows.
+- Annotations and relationships should be lightweight, precise, and attached to the evidence they explain. Charts, matrices, and other forms are welcome when the user's problem warrants them.
+- Keep useful research material visible when the user asks for the working surface. Build synthesis around it rather than compressing it into decorative thumbnails.
+- Before completing, use the rendered screenshot to refine awkward wrapping, weak hierarchy, accidental whitespace, crowding, misalignment, low contrast, generic component styling, and any disconnect between the visual thesis and the actual result.`;

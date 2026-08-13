@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { NorthStarCanvasWorkspace } from "@/components/canvas/north-star-canvas-workspace";
+import { CanvasV2Workspace } from "@/components/canvas-v2/canvas-v2-workspace";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +17,5 @@ export default async function CanvasPage() {
     redirect("/");
   }
 
-  return (
-    <NorthStarCanvasWorkspace
-      userEmail={user.email ?? "default@gmail.com"}
-    />
-  );
+  return <CanvasV2Workspace />;
 }

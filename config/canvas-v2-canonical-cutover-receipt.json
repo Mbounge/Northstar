@@ -1,0 +1,40 @@
+{
+  "schema": "northstar.canvas-v2-canonical-cutover.v1",
+  "phase": "7e3-canonical-cutover",
+  "observedAt": "2026-08-12",
+  "canonicalRoute": {
+    "requestedPath": "/canvas",
+    "settledPath": "/canvas",
+    "authenticatedWorkspaceRendered": true,
+    "v2WorkspaceRendered": true,
+    "existingCommittedArtboardRestored": true,
+    "existingChatHistoryRestored": true
+  },
+  "previewAlias": {
+    "requestedPath": "/canvas-v2",
+    "settledPath": "/canvas",
+    "redirected": true,
+    "duplicateWorkspaceOwner": false
+  },
+  "canonicalSmoke": {
+    "interaction": "read-only artboard inspection",
+    "route": "inspect",
+    "v2RouterRequestCount": 1,
+    "legacyEndpointRequestCount": 0,
+    "artboardRevisionChanged": false,
+    "inspectionAnswerRendered": true,
+    "reloadPreservedArtboard": true,
+    "reloadPreservedChat": true
+  },
+  "boundaries": {
+    "canvasEngineConsumers": 0,
+    "canonicalV1Imports": 0,
+    "canonicalLegacyEndpointReferences": 0,
+    "remoteCanvasWritesAdded": false,
+    "v1FilesDeleted": false
+  },
+  "exclusions": [
+    "No user, tenant, token, key, cookie, asset URL, app identifier, flow identifier, evidence identifier, or canvas source is recorded",
+    "V1 source remains dormant until Phase 7E.4"
+  ]
+}

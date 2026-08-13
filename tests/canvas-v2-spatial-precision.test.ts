@@ -1,0 +1,49 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+test("the renderer returns a bounded factual spatial map for every visible stable node", () => {
+  const source = readFileSync("lib/canvas-v2/spatial-observation.ts", "utf8");
+  const preview = readFileSync("components/canvas-v2/artboard-preview.tsx", "utf8");
+
+  assert.match(source, /CANVAS_V2_MAX_SPATIAL_NODES = 240/);
+  assert.match(source, /getBoundingClientRect\(\)/);
+  assert.match(source, /getComputedStyle/);
+  assert.match(source, /parentNodeId/);
+  assert.match(source, /contentOverflowNodeIds/);
+  assert.match(source, /notableIntersections/);
+  assert.match(preview, /spatial: observeCanvasV2SpatialLayout\(frameDocument\)/);
+  assert.doesNotMatch(source, /aesthetic|beauty|premiumScore|passThreshold/);
+});
+
+test("the model owns spatial strategy and the runtime does not author a layout", () => {
+  const types = readFileSync("lib/canvas-v2/types.ts", "utf8");
+  const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
+  const loop = readFileSync("lib/canvas-v2/design-loop.ts", "utf8");
+
+  assert.match(types, /interface CanvasV2SpatialStrategy/);
+  assert.match(types, /growthDirection: "stable" \| "horizontal" \| "vertical" \| "both"/);
+  assert.match(route, /factual map of rendered node bounds and computed layout/);
+  assert.match(route, /reported intersections are facts, not automatic errors/i);
+  assert.match(loop, /spatialStrategy: input\.spatialStrategy/);
+  assert.doesNotMatch(`${types}\n${loop}`, /layoutTemplate|repairController|aestheticScore/);
+});
+
+test("North Star spatial grammar protects precision without prescribing one composition", () => {
+  const grammar = readFileSync("lib/canvas-v2/northstar-artboard-grammar.ts", "utf8");
+  assert.match(grammar, /strong alignment rails/);
+  assert.match(grammar, /repeatable spacing rhythm/);
+  assert.match(grammar, /Let content determine height/);
+  assert.match(grammar, /natural aspect ratio/);
+  assert.match(grammar, /connectors, arrows, and overlays/i);
+  assert.match(grammar, /downscaled complete-artboard screenshot/);
+});
+
+test("the browser proof includes a distinct relationship composition with declared overlap", () => {
+  const fixture = readFileSync("app/canvas-v2-e2e/design/route.ts", "utf8");
+  assert.match(fixture, /spatial relationship map/);
+  assert.match(fixture, /moveKind: "relationship"/);
+  assert.match(fixture, /intentionalOverlaps: \[/);
+  assert.match(fixture, /class=\"map-rail\"/);
+  assert.match(fixture, /data-canvas-v2-node-id=\"evidence-lens\"/);
+});

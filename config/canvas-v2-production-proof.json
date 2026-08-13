@@ -1,0 +1,73 @@
+{
+  "schema": "northstar.canvas-v2-production-proof.v1",
+  "phase": "7e2-authenticated-production-proof",
+  "observedAt": "2026-08-12",
+  "environment": {
+    "surface": "authenticated local application",
+    "boundaries": [
+      "production Supabase authentication and tenant resolution",
+      "production Gemini router and design model",
+      "production tenant research adapter and storage assets",
+      "production Canvas V2 source-render-observe loop"
+    ],
+    "persistence": "browser-local Canvas V2 recovery only"
+  },
+  "provider": {
+    "model": "gemini-3.1-flash-lite",
+    "routerResponded": true,
+    "designerResponded": true,
+    "structuredResponsesParsed": true
+  },
+  "catalog": {
+    "accountAppCount": 11,
+    "requiredAppCount": 2,
+    "requiredAppsResolved": 2,
+    "completeFlowCounts": {
+      "firstRequiredApp": 44,
+      "secondRequiredApp": 50
+    },
+    "targetScopedAppCount": 2,
+    "boundedIndexedFlowCount": 36,
+    "boundedContextBytes": 28787,
+    "assetRangeProbeCount": 6,
+    "assetRangeProbeSuccessCount": 6,
+    "assetMimeType": "image/png"
+  },
+  "standardPrompt": {
+    "route": "research-design",
+    "researchMode": "synthesis",
+    "targetCount": 2,
+    "committedStepSequence": [
+      "research",
+      "research",
+      "design",
+      "complete"
+    ],
+    "selectedFlowScreenCounts": [
+      3,
+      17
+    ],
+    "canonicalFlowCount": 2,
+    "canonicalScreenshotCount": 20,
+    "designBeforeRequiredEvidence": false,
+    "completedBeforePostEvidenceSynthesis": false,
+    "complete": true
+  },
+  "assertions": {
+    "unauthenticatedRouteRedirected": true,
+    "authenticatedWorkspaceRendered": true,
+    "tenantResolved": true,
+    "requiredEvidencePrecededClaims": true,
+    "completeFlowsRemainedVisible": true,
+    "postEvidenceSynthesisRendered": true,
+    "invalidModelDecisionRetriedWithoutCommit": true,
+    "latestCommittedRevisionSurvivedRetries": true,
+    "noRemoteCanvasWrite": true
+  },
+  "exclusions": [
+    "No canonical route switch",
+    "No V1 deletion",
+    "No remote canvas persistence",
+    "No user, tenant, token, key, asset URL, app identifier, flow identifier, or evidence identifier is recorded"
+  ]
+}

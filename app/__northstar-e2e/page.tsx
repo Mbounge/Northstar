@@ -4,6 +4,6 @@ import { NorthstarArtboardE2EHarness } from "@/components/canvas/testing/northst
 export const dynamic = "force-dynamic";
 
 export default function NorthstarE2EPage() {
-  if (process.env.NORTHSTAR_E2E !== "1") notFound();
+  if (process.env.NODE_ENV === "production" || process.env.NORTHSTAR_E2E !== "1") notFound();
   return <NorthstarArtboardE2EHarness />;
 }

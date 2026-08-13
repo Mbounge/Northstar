@@ -4,12 +4,14 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function proxy(request: NextRequest) {
-  // The browser transaction harness is compiled only for the explicit release
-  // gate. It must exercise the real iframe/runtime/ack route without depending
-  // on a developer's Supabase account or authentication cookies.
+  // Browser release-gate harnesses must exercise their real iframe boundaries
+  // without depending on a developer's Supabase cookies. They remain unavailable
+  // in production even if the explicit E2E environment is set accidentally.
   if (
+    process.env.NODE_ENV !== "production" &&
     process.env.NORTHSTAR_E2E === "1" &&
     (request.nextUrl.pathname.startsWith("/__northstar-e2e") ||
+      request.nextUrl.pathname.startsWith("/canvas-v2-e2e") ||
       request.nextUrl.pathname === "/api/canvas-ai/artifact-ack")
   ) {
     return NextResponse.next({ request })
@@ -28,7 +30,7 @@ export async function proxy(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
           supabaseResponse = NextResponse.next({
             request,
           })
