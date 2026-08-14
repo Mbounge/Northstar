@@ -6,9 +6,12 @@ route. The independently proven V2 engine is no longer hidden behind
 present but dormant until the separately reviewed Phase 7E.4 retirement patch.
 
 Phase 7E.3.1 subsequently paused that retirement after the authenticated visual
-result exposed inadequate journey selection. The route cutover remains
-reversible and V1 remains present; deletion cannot proceed until the
-taxonomy-aware resolver receives fresh authenticated visual proof.
+result exposed inadequate journey selection. Phase 7E.3.2 retained the hold
+after the next real-use run exposed representative-flow, long-evidence geometry,
+and source-correction failures. Phase 7E.3.3 also corrects the page lifetime:
+refresh starts a clean in-memory canvas instead of restoring local work. The
+route cutover remains reversible and V1 remains present; deletion cannot proceed
+until the latest repairs receive fresh authenticated visual proof.
 
 The machine-readable authorities are:
 
@@ -39,6 +42,10 @@ navigation entry has exactly one valid destination: `/canvas`.
 
 ## Authenticated canonical smoke
 
+This is the historical 7E.3 smoke receipt. Phase 7E.3.3 supersedes only its
+reload-continuity observations; the route-ownership and no-V1-request evidence
+remain valid.
+
 The cutover was exercised in the signed-in application using the real server
 route and the browser-local state produced during 7E.2:
 
@@ -63,11 +70,12 @@ authentication, asset, evidence, or canvas-source material.
 This is intentionally a route-ownership change rather than a deletion patch.
 Reverting the single 7E.3 commit restores the prior dual-run page while all V1
 files still exist. No user data is migrated or deleted, no Supabase canvas table
-is introduced, and Canvas V2 continues using browser-local revision/chat
-recovery.
+is introduced, and Canvas V2 uses in-memory page-session state. Refresh
+deliberately resets the artboard, chat, and history; no Canvas V2 canvas state is
+written to browser storage or Supabase.
 
 Phase 7E.4 may delete the manifest-declared V1 runtime roots, legacy APIs,
-V1-only test page, and legacy tests only after the 7E.3.1 live-proof hold is
+V1-only test page, and legacy tests only after the 7E.3.3 live-proof hold is
 explicitly cleared. It must not delete shared app data, screenshots, icons,
 authentication infrastructure, or the V2 research adapter.
 

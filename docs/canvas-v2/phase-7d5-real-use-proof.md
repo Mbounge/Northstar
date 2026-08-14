@@ -1,5 +1,9 @@
 # Phase 7D.5 — Real-use proof
 
+> Historical note: Phase 7E.3.3 replaces this phase's reload-continuity
+> expectations with a hard refresh reset. Current browser coverage proves that
+> artboard, chat, active work, and undo/redo history are cleared on reload.
+
 Phase 7D.5 replaces the stale single-objective preview check with cumulative
 browser journeys over the Canvas V2 architecture that will ship. It proves
 mechanical and lifecycle truth; it does not add an aesthetic evaluator, score

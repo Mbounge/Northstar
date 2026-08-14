@@ -4,13 +4,14 @@ import test from "node:test";
 
 test("history contains committed revisions rather than inverse DOM commands", () => {
   const hook = readFileSync("components/canvas-v2/use-canvas-v2-design-loop.ts", "utf8");
-  const recovery = readFileSync("lib/canvas-v2/local-recovery.ts", "utf8");
+  const chat = readFileSync("components/canvas-v2/use-canvas-v2-chat.ts", "utf8");
+  const lifecycle = readFileSync("lib/canvas-v2/session-lifecycle.ts", "utf8");
   assert.match(hook, /history.*CanvasV2ArtifactRevision\[\]/);
   assert.match(hook, /acceptCommittedRevision/);
   assert.match(hook, /travelHistory/);
-  assert.match(hook, /persistCanvasV2ArtifactRecovery/);
-  assert.match(recovery, /canvas-v2\.local-recovery\.v1/);
-  assert.doesNotMatch(recovery, /supabase|fetch\(|XMLHttpRequest/);
+  assert.doesNotMatch(`${hook}\n${chat}`, /localStorage|sessionStorage|persistCanvasV2/);
+  assert.match(lifecycle, /discardObsoleteCanvasV2LocalState/);
+  assert.doesNotMatch(lifecycle, /setItem|getItem|supabase|fetch\(|XMLHttpRequest/);
   assert.doesNotMatch(hook, /execCommand|MutationObserver/);
 });
 

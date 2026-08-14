@@ -13,12 +13,29 @@ function fixtureApp(name: string, color: string, screenNames: string[]): AppData
     appName: name,
     platform: "mobile",
     sessionType: "onboarding",
+    scope: "journey",
+    taxonomyPath: ["Mobile onboarding"],
+    descendantFlowCount: 1,
     screens: screenNames.map((screenName, index) => ({ id: `${name.toLowerCase()}-screen-${index + 1}`, name: screenName, imageUrl: image(screenName, index % 2 ? color : `${color}dd`), appName: name, flowName: "Mobile onboarding", platform: "mobile", sessionType: "onboarding", index })),
   };
   return { id: appId, name, iconUrl: image(name.slice(0, 1), color), totalScreens: flow.screens.length, flows: [flow] };
 }
 
+const awin = fixtureApp("Awin", "#6b4dff", [
+  "Landing", "Sign in", "Choose persona",
+  ...Array.from({ length: 44 }, (_, index) => ["Creator promise", "Partner profile", "Company details", "Goals", "Verification", "Payment", "Preferences", "Activation"][index % 8] + ` · ${index + 1}`),
+]);
+const awinFlow = awin.flows[0]!;
+awinFlow.name = "Landing & Persona Selection → Creator & Influencer Onboarding";
+awinFlow.screens.forEach((screen) => { screen.flowName = awinFlow.name; });
+awinFlow.scope = "path";
+awinFlow.taxonomyPath = ["Landing & Persona Selection", "Creator & Influencer Onboarding"];
+awinFlow.journeySegments = [
+  { id: "awin-shared-entry", name: "Landing & Persona Selection", kind: "shared-entry", startIndex: 0, screenCount: 3 },
+  { id: "awin-creator-branch", name: "Creator & Influencer Onboarding", kind: "branch", startIndex: 3, screenCount: 44 },
+];
+
 export const CANVAS_V2_E2E_APPS = [
-  fixtureApp("Awin", "#6b4dff", ["Welcome", "Create account", "Role selection", "Company profile", "Partner goals", "Verification", "Payment setup", "Preferences", "Invite team", "Activation", "Success", "Next steps"]),
-  fixtureApp("Whop", "#ff4f18", ["Welcome", "Verify email", "Username", "Account", "Profile", "Interests", "Community", "Notifications", "Ready"]),
+  awin,
+  fixtureApp("Whop", "#ff4f18", Array.from({ length: 17 }, (_, index) => ["Welcome", "Email", "Username", "Account", "Profile", "Interests", "Community", "Ready"][index % 8] + ` · ${index + 1}`)),
 ];

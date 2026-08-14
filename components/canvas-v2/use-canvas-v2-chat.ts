@@ -2,26 +2,41 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { canvasV2ChatStatusForLoop } from "@/lib/canvas-v2/chat-lifecycle";
+import { canvasV2ChatStatusForLoop, type CanvasV2ChatStatus } from "@/lib/canvas-v2/chat-lifecycle";
 import type { CanvasV2LoopContinuation, CanvasV2LoopState } from "@/lib/canvas-v2/design-loop";
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import {
   canvasV2RouteMutatesArtboard,
   type CanvasV2InteractionDecision,
+  type CanvasV2InteractionRoute,
   type CanvasV2ResearchMode,
 } from "@/lib/canvas-v2/interaction-router";
 import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/canvas-v2/types";
 import {
   CANVAS_V2_ROUTING_REQUEST_POLICY,
   requestCanvasV2Json,
+  type CanvasV2RetryState,
+  type CanvasV2ProviderAttemptAudit,
 } from "@/lib/canvas-v2/request-reliability";
-import {
-  loadCanvasV2LocalRecovery,
-  persistCanvasV2ChatRecovery,
-  type CanvasV2StoredChatTurn,
-} from "@/lib/canvas-v2/local-recovery";
 
-export type CanvasV2ChatTurn = CanvasV2StoredChatTurn;
+export interface CanvasV2ChatTurn {
+  id: string;
+  message: string;
+  createdAt: string;
+  status: CanvasV2ChatStatus;
+  route?: CanvasV2InteractionRoute;
+  routeSummary?: string;
+  answer?: string;
+  canvasInstruction?: string;
+  runId?: string;
+  loop?: CanvasV2LoopState;
+  priorLoops?: CanvasV2LoopState[];
+  error?: string;
+  retry?: CanvasV2RetryState;
+  researchTargets?: string[];
+  researchMode?: CanvasV2ResearchMode;
+  providerAttempts?: CanvasV2ProviderAttemptAudit[];
+}
 
 interface DesignEngine {
   committed: CanvasV2ArtifactRevision;
@@ -44,9 +59,6 @@ export function useCanvasV2Chat(input: {
 }) {
   const [draft, setDraft] = useState("");
   const [turns, setTurns] = useState<CanvasV2ChatTurn[]>([]);
-  const [persistenceReady, setPersistenceReady] = useState(false);
-  const [persistenceNotice, setPersistenceNotice] = useState<string>();
-  const persistenceWriteBlocked = useRef(false);
   const activeRoutingTurnId = useRef<string | undefined>(undefined);
   const activeDesignTurnId = useRef<string | undefined>(undefined);
   const routingSequence = useRef(0);
@@ -54,20 +66,6 @@ export function useCanvasV2Chat(input: {
   const routing = turns.some((turn) => turn.status === "routing");
   const designing = turns.some((turn) => turn.status === "running");
   const busy = routing || designing || input.engine.running || input.engine.applyingManualEdit;
-
-  useEffect(() => {
-    const recovery = loadCanvasV2LocalRecovery(window.localStorage);
-    persistenceWriteBlocked.current = recovery.writeBlocked;
-    setPersistenceNotice(recovery.notice);
-    if (recovery.envelope) setTurns(recovery.envelope.chat.turns);
-    setPersistenceReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!persistenceReady || persistenceWriteBlocked.current) return;
-    const result = persistCanvasV2ChatRecovery(window.localStorage, turns);
-    if (!result.ok) setPersistenceNotice(result.error);
-  }, [persistenceReady, turns]);
 
   useEffect(() => {
     const loop = input.engine.loop;
@@ -97,7 +95,7 @@ export function useCanvasV2Chat(input: {
     const abort = new AbortController();
     controller.current = { sequence, turnId, abortController: abort };
     try {
-      const payload = await requestCanvasV2Json<{ decision?: CanvasV2InteractionDecision; error?: string }>({
+      const payload = await requestCanvasV2Json<{ decision?: CanvasV2InteractionDecision; providerAttempts?: CanvasV2ProviderAttemptAudit[]; error?: string }>({
         endpoint: input.endpoint,
         signal: abort.signal,
         requestId: turnId,
@@ -126,6 +124,7 @@ export function useCanvasV2Chat(input: {
           routeSummary: decision.summary,
           answer: decision.answer,
           retry: undefined,
+          providerAttempts: payload.providerAttempts,
         } : item));
         return;
       }
@@ -144,6 +143,7 @@ export function useCanvasV2Chat(input: {
         retry: undefined,
         researchTargets: decision.researchTargets,
         researchMode: decision.researchMode,
+        providerAttempts: payload.providerAttempts,
       } : item));
     } catch (error) {
       if (routingSequence.current !== sequence || activeRoutingTurnId.current !== turnId) return;
@@ -199,5 +199,5 @@ export function useCanvasV2Chat(input: {
     } : candidate));
   };
 
-  return { draft, setDraft, turns, busy, routing, persistenceNotice, submit, stop, continueTurn };
+  return { draft, setDraft, turns, busy, routing, submit, stop, continueTurn };
 }

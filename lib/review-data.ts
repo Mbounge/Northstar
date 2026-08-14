@@ -1,5 +1,11 @@
 // lib/review-data.ts
 import { createClient } from '@supabase/supabase-js';
+import {
+  isAbsoluteReviewMediaUrl,
+  resolveReviewScreenshotStoragePrefix,
+  reviewScreenshotBaseUrl,
+  reviewScreenshotFileName,
+} from '@/lib/app-data/review-media';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -351,11 +357,11 @@ function normalizeStepShell(rawStep: any, index: number, screenshotBaseUrl?: str
       ? screenshotSource.split("/").pop()
       : "";
 
-  const imagePath =
-    rawStep?.imagePath ||
-    (screenshotBaseUrl && cleanFileName
-      ? `${screenshotBaseUrl}/${cleanFileName}`
-      : screenshotSource);
+  const imagePath = isAbsoluteReviewMediaUrl(screenshotSource)
+    ? screenshotSource
+    : screenshotBaseUrl && cleanFileName
+      ? `${screenshotBaseUrl}/${encodeURIComponent(cleanFileName)}`
+      : screenshotSource;
 
   return {
     ...rawStep,
@@ -386,12 +392,11 @@ function normalizeCatalogEntry(rawEntry: any, index: number, screenshotBaseUrl?:
       ? screenshotSource.split("/").pop()
       : "";
 
-  const screenshotFile =
-    rawEntry?.screenshot_file ||
-    rawEntry?.imagePath ||
-    (screenshotBaseUrl && cleanFileName
-      ? `${screenshotBaseUrl}/${cleanFileName}`
-      : screenshotSource);
+  const screenshotFile = isAbsoluteReviewMediaUrl(screenshotSource)
+    ? screenshotSource
+    : screenshotBaseUrl && cleanFileName
+      ? `${screenshotBaseUrl}/${encodeURIComponent(cleanFileName)}`
+      : screenshotSource;
 
   return {
     ...rawEntry,
@@ -472,14 +477,38 @@ function hydrateFlowsCatalogWithCatalog(flowsData: any, catalog: any[]) {
   return nextFlowsData;
 }
 
-async function getMobilePlatformPrefix(appName: string, tenantId: string) {
-  const { data: subFolders } = await supabase.storage
-    .from("reviews")
-    .list(`${tenantId}/${appName}`, { limit: 20 });
+async function getPlatformPrefix(
+  appName: string,
+  tenantId: string,
+  platform: "mobile" | "web",
+  sessionType: "onboarding" | "browsing",
+  reference?: string,
+) {
+  return resolveReviewScreenshotStoragePrefix({
+    storage: supabase.storage,
+    tenantId,
+    appName,
+    platform,
+    sessionType,
+    reference,
+  });
+}
 
-  const folders = (subFolders || []).map((f) => f.name.toLowerCase());
-
-  return folders.includes("mobile") ? "mobile" : "";
+function screenshotBase(
+  appName: string,
+  tenantId: string,
+  platform: "mobile" | "web",
+  sessionType: "onboarding" | "browsing",
+  storagePrefix: string,
+) {
+  return reviewScreenshotBaseUrl({
+    supabaseUrl,
+    tenantId,
+    appName,
+    platform,
+    sessionType,
+    storagePrefix,
+  });
 }
 
 export async function getAppDetails(
@@ -595,8 +624,11 @@ export async function getAppViewerData(
   }
 
   if (sess && Array.isArray(sess.steps_data) && sess.steps_data.length > 0) {
+    const reference = sess.steps_data.map((step: any) => reviewScreenshotFileName(step?.imagePath || step?.screenshot || step?.screenshot_file || step?.path)).find(Boolean);
+    const platformPrefix = await getPlatformPrefix(appName, tenantId, platform, sessionType, reference);
+    const screenshotBaseUrl = screenshotBase(appName, tenantId, platform, sessionType, platformPrefix);
     const steps = sess.steps_data.map((step: any, index: number) =>
-      normalizeStepShell(step, index)
+      normalizeStepShell(step, index, screenshotBaseUrl)
     );
 
     return {
@@ -609,8 +641,7 @@ export async function getAppViewerData(
     };
   }
 
-  const platformPrefix =
-    platform === "web" ? "web" : await getMobilePlatformPrefix(appName, tenantId);
+  const platformPrefix = await getPlatformPrefix(appName, tenantId, platform, sessionType);
 
   return await fetchStorageViewerData(appName, sessionType, tenantId, platformPrefix);
 }
@@ -644,6 +675,10 @@ export async function getAppFlowsData(
 
   if (sess?.flows_data) {
     if (Array.isArray(sess.flows_data.screen_catalog)) {
+      const reference = sess.flows_data.screen_catalog.map((entry: any) => reviewScreenshotFileName(entry?.screenshot_file || entry?.imagePath || entry?.screenshot || entry?.path)).find(Boolean);
+      const platformPrefix = await getPlatformPrefix(appName, tenantId, platform, sessionType, reference);
+      const screenshotBaseUrl = screenshotBase(appName, tenantId, platform, sessionType, platformPrefix);
+      const catalog = sess.flows_data.screen_catalog.map((entry: any, index: number) => normalizeCatalogEntry(entry, index, screenshotBaseUrl));
       return {
         summary: {
           total_screenshots: sess.total_screens || sess.flows_data.screen_catalog.length,
@@ -652,7 +687,7 @@ export async function getAppFlowsData(
         sessionIntel: sess.session_intel || null,
         flowsData: hydrateFlowsCatalogWithCatalog(
           sess.flows_data,
-          sess.flows_data.screen_catalog
+          catalog
         ),
       };
     }
@@ -670,19 +705,22 @@ export async function getAppFlowsData(
       stepsOnly && Array.isArray(stepsOnly.steps_data)
         ? catalogFromSteps(stepsOnly.steps_data)
         : [];
+    const reference = catalog.map((entry: any) => reviewScreenshotFileName(entry?.screenshot_file)).find(Boolean);
+    const platformPrefix = await getPlatformPrefix(appName, tenantId, platform, sessionType, reference);
+    const screenshotBaseUrl = screenshotBase(appName, tenantId, platform, sessionType, platformPrefix);
+    const hydratedCatalog = catalog.map((entry: any, index: number) => normalizeCatalogEntry(entry, index, screenshotBaseUrl));
 
     return {
       summary: {
-        total_screenshots: sess.total_screens || catalog.length,
+        total_screenshots: sess.total_screens || hydratedCatalog.length,
         ux_grade: sess.ux_grade || "N/A",
       },
       sessionIntel: sess.session_intel || null,
-      flowsData: hydrateFlowsCatalogWithCatalog(sess.flows_data, catalog),
+      flowsData: hydrateFlowsCatalogWithCatalog(sess.flows_data, hydratedCatalog),
     };
   }
 
-  const platformPrefix =
-    platform === "web" ? "web" : await getMobilePlatformPrefix(appName, tenantId);
+  const platformPrefix = await getPlatformPrefix(appName, tenantId, platform, sessionType);
 
   return await fetchStorageFlowsData(appName, sessionType, tenantId, platformPrefix);
 }

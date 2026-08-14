@@ -12,6 +12,12 @@ resolver is exercised through the authenticated standard prompt and the visible
 result satisfies the proof conditions in
 `config/canvas-v2-cutover-manifest.json`.
 
+The subsequent authenticated run exposed a second-order real-use failure:
+representative evidence over-selected an umbrella journey, long flows used
+unbounded single-row geometry, and synthesis retries could not correct missing
+image identities. Phase 7E.3.2 supersedes this document's live-proof hold while
+preserving its taxonomy and adequacy guarantees.
+
 ## One neutral tenant evidence model
 
 The Canvas V2 adapter still reads the existing tenant-scoped `target_apps` and

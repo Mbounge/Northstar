@@ -1,4 +1,6 @@
 import type {
+  CanvasV2AuthoredAnnotationObservation,
+  CanvasV2AuthoredRelationshipObservation,
   CanvasV2ElementBounds,
   CanvasV2EvidenceRenderObservation,
   CanvasV2SpatialIntersection,
@@ -12,6 +14,24 @@ export const CANVAS_V2_MAX_SPATIAL_INTERSECTIONS = 60;
 
 function precision(value: number): number {
   return Number.isFinite(value) ? Math.round(value * 10) / 10 : 0;
+}
+
+function ratioPrecision(value: number): number {
+  return Number.isFinite(value) ? Math.round(value * 1_000) / 1_000 : 0;
+}
+
+function referencedNodeIds(value: string | null): string[] {
+  return Array.from(new Set((value ?? "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)));
+}
+
+function identifiedNodeId(element: Element | null): string | undefined {
+  return element?.getAttribute("data-canvas-v2-node-id") || undefined;
+}
+
+function visibleElement(element: Element, view: Window): boolean {
+  const style = view.getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0 && rect.width > 0 && rect.height > 0;
 }
 
 function elementBounds(element: Element): CanvasV2ElementBounds {
@@ -49,6 +69,128 @@ function visibleIdentifiedElements(document: Document): HTMLElement[] {
       const rect = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0 && rect.width > 0 && rect.height > 0;
     });
+}
+
+interface RelationshipPoint {
+  x: number;
+  y: number;
+}
+
+function distanceBetweenPoints(first: RelationshipPoint, second: RelationshipPoint): number {
+  return Math.hypot(first.x - second.x, first.y - second.y);
+}
+
+function distanceFromPointToBounds(point: RelationshipPoint, bounds: CanvasV2ElementBounds): number {
+  const dx = Math.max(bounds.x - point.x, 0, point.x - (bounds.x + bounds.width));
+  const dy = Math.max(bounds.y - point.y, 0, point.y - (bounds.y + bounds.height));
+  return Math.hypot(dx, dy);
+}
+
+function anchorTolerance(bounds: CanvasV2ElementBounds): number {
+  return precision(Math.max(8, Math.min(32, Math.max(bounds.width, bounds.height) * 0.18)));
+}
+
+function relationshipGeometryEndpoints(element: Element): { start: RelationshipPoint; end: RelationshipPoint } | undefined {
+  const geometry = element as SVGGeometryElement;
+  if (typeof geometry.getTotalLength !== "function" || typeof geometry.getPointAtLength !== "function" || typeof geometry.getScreenCTM !== "function") return undefined;
+  try {
+    const length = geometry.getTotalLength();
+    const transform = geometry.getScreenCTM();
+    if (!Number.isFinite(length) || !transform) return undefined;
+    const start = geometry.getPointAtLength(0).matrixTransform(transform);
+    const end = geometry.getPointAtLength(length).matrixTransform(transform);
+    return {
+      start: { x: precision(start.x), y: precision(start.y) },
+      end: { x: precision(end.x), y: precision(end.y) },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function closestRelationshipAnchor(
+  point: RelationshipPoint,
+  nodeIds: readonly string[],
+  byNodeId: ReadonlyMap<string, Element>,
+): { nodeId: string; distance: number; tolerance: number } | undefined {
+  return nodeIds.flatMap((nodeId) => {
+    const target = byNodeId.get(nodeId);
+    if (!target) return [];
+    const bounds = elementBounds(target);
+    return [{ nodeId, distance: precision(distanceFromPointToBounds(point, bounds)), tolerance: anchorTolerance(bounds) }];
+  }).sort((first, second) => first.distance - second.distance)[0];
+}
+
+function observeAuthoredRelationships(document: Document, view: Window): CanvasV2AuthoredRelationshipObservation[] {
+  const byNodeId = new Map(Array.from(document.querySelectorAll<Element>("[data-canvas-v2-node-id]")).flatMap((element) => {
+    const nodeId = identifiedNodeId(element);
+    return nodeId ? [[nodeId, element] as const] : [];
+  }));
+  return Array.from(document.querySelectorAll<Element>("[data-canvas-v2-relationship-source],[data-canvas-v2-relationship-target]"))
+    .filter((element) => Boolean(identifiedNodeId(element)) && visibleElement(element, view))
+    .map((element) => {
+      const nodeId = element.getAttribute("data-canvas-v2-node-id")!;
+      const sourceNodeIds = referencedNodeIds(element.getAttribute("data-canvas-v2-relationship-source"));
+      const targetNodeIds = referencedNodeIds(element.getAttribute("data-canvas-v2-relationship-target"));
+      const missingSourceNodeIds = sourceNodeIds.filter((targetId) => !byNodeId.has(targetId));
+      const missingTargetNodeIds = targetNodeIds.filter((targetId) => !byNodeId.has(targetId));
+      const endpoints = relationshipGeometryEndpoints(element);
+      let geometry: Partial<CanvasV2AuthoredRelationshipObservation> = {};
+      if (endpoints) {
+        const forwardSource = closestRelationshipAnchor(endpoints.start, sourceNodeIds, byNodeId);
+        const forwardTarget = closestRelationshipAnchor(endpoints.end, targetNodeIds, byNodeId);
+        const reverseSource = closestRelationshipAnchor(endpoints.end, sourceNodeIds, byNodeId);
+        const reverseTarget = closestRelationshipAnchor(endpoints.start, targetNodeIds, byNodeId);
+        const forwardDistance = (forwardSource?.distance ?? Number.POSITIVE_INFINITY) + (forwardTarget?.distance ?? Number.POSITIVE_INFINITY);
+        const reverseDistance = (reverseSource?.distance ?? Number.POSITIVE_INFINITY) + (reverseTarget?.distance ?? Number.POSITIVE_INFINITY);
+        const reversed = reverseDistance < forwardDistance;
+        const sourceAnchor = reversed ? reverseSource : forwardSource;
+        const targetAnchor = reversed ? reverseTarget : forwardTarget;
+        geometry = {
+          geometryStartPoint: endpoints.start,
+          geometryEndPoint: endpoints.end,
+          geometryOrientation: reversed ? "reversed" : "forward",
+          geometrySpan: precision(distanceBetweenPoints(endpoints.start, endpoints.end)),
+          ...(sourceAnchor ? {
+            sourceAnchorNodeId: sourceAnchor.nodeId,
+            sourceAnchorDistance: sourceAnchor.distance,
+            sourceAnchorTolerance: sourceAnchor.tolerance,
+          } : {}),
+          ...(targetAnchor ? {
+            targetAnchorNodeId: targetAnchor.nodeId,
+            targetAnchorDistance: targetAnchor.distance,
+            targetAnchorTolerance: targetAnchor.tolerance,
+          } : {}),
+        };
+      }
+      return {
+        nodeId,
+        tagName: element.tagName.toLowerCase(),
+        sourceNodeIds,
+        targetNodeIds,
+        bounds: elementBounds(element),
+        ...(element.getAttribute("data-canvas-v2-visual-role") ? { visualRole: element.getAttribute("data-canvas-v2-visual-role")! } : {}),
+        ...(missingSourceNodeIds.length ? { missingSourceNodeIds } : {}),
+        ...(missingTargetNodeIds.length ? { missingTargetNodeIds } : {}),
+        ...geometry,
+      };
+    })
+    .slice(0, 80);
+}
+
+function observeAuthoredAnnotations(document: Document, view: Window): CanvasV2AuthoredAnnotationObservation[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-annotation-for]"))
+    .filter((element) => Boolean(element.dataset.canvasV2NodeId) && visibleElement(element, view))
+    .map((element) => {
+      const text = element.textContent?.replace(/\s+/g, " ").trim();
+      return {
+        nodeId: element.dataset.canvasV2NodeId!,
+        targetNodeIds: referencedNodeIds(element.getAttribute("data-canvas-v2-annotation-for")),
+        bounds: elementBounds(element),
+        ...(text ? { textPreview: text.slice(0, 180) } : {}),
+      };
+    })
+    .slice(0, 80);
 }
 
 function observeNode(element: HTMLElement, view: Window): CanvasV2SpatialNodeObservation {
@@ -175,6 +317,13 @@ function transformDistortsAspectRatio(style: CSSStyleDeclaration): boolean {
 }
 
 function observeEvidence(document: Document, view: Window): CanvasV2EvidenceRenderObservation[] {
+  const artboard = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
+    .find((element) => element.dataset.canvasV2NodeId === "artboard") ?? document.body;
+  const artboardRect = artboard.getBoundingClientRect();
+  const identified = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"));
+  const byNodeId = new Map(identified.flatMap((element) => element.dataset.canvasV2NodeId ? [[element.dataset.canvasV2NodeId, element] as const] : []));
+  const relationships = observeAuthoredRelationships(document, view);
+  const annotations = observeAuthoredAnnotations(document, view);
   return Array.from(document.querySelectorAll<HTMLImageElement>("img[data-canvas-v2-evidence-id]")).map((image) => {
     const style = view.getComputedStyle(image);
     const rect = image.getBoundingClientRect();
@@ -186,11 +335,27 @@ function observeEvidence(document: Document, view: Window): CanvasV2EvidenceRend
     const renderedRatio = rect.height > 0 ? rect.width / rect.height : 0;
     const naturalRatio = image.naturalHeight > 0 ? image.naturalWidth / image.naturalHeight : 0;
     const ratioDelta = naturalRatio > 0 ? Math.abs(renderedRatio - naturalRatio) / naturalRatio : 0;
+    const sourceNodeId = image.dataset.canvasV2SourceNodeId;
+    const source = sourceNodeId ? byNodeId.get(sourceNodeId) : undefined;
+    const sourceRect = source?.getBoundingClientRect();
+    const sourceIsCanonicalScreen = Boolean(source?.hasAttribute("data-canvas-v2-flow-index"));
+    const designRegion = image.closest<HTMLElement>("[data-canvas-v2-design-region]") ?? artboard;
+    const designRegionRect = designRegion.getBoundingClientRect();
+    const visualRoleElement = image.closest<HTMLElement>("[data-canvas-v2-visual-role]");
+    const treatmentElement = image.closest<HTMLElement>("[data-canvas-v2-evidence-treatment]");
+    const nodeId = image.dataset.canvasV2NodeId || "unknown";
+    const annotationNodeIds = annotations.filter((annotation) => annotation.targetNodeIds.includes(nodeId)).map((annotation) => annotation.nodeId);
+    const relationshipNodeIds = relationships
+      .filter((relationship) => relationship.sourceNodeIds.includes(nodeId) || relationship.targetNodeIds.includes(nodeId))
+      .map((relationship) => relationship.nodeId);
+    const area = rect.width * rect.height;
+    const artboardArea = Math.max(1, artboardRect.width * artboardRect.height);
+    const designRegionArea = Math.max(1, designRegionRect.width * designRegionRect.height);
     return {
       evidenceId: image.dataset.canvasV2EvidenceId || "unknown",
-      nodeId: image.dataset.canvasV2NodeId || "unknown",
+      nodeId,
       role,
-      ...(image.dataset.canvasV2SourceNodeId ? { sourceNodeId: image.dataset.canvasV2SourceNodeId } : {}),
+      ...(sourceNodeId ? { sourceNodeId } : {}),
       bounds: elementBounds(image),
       naturalWidth: image.naturalWidth,
       naturalHeight: image.naturalHeight,
@@ -199,6 +364,24 @@ function observeEvidence(document: Document, view: Window): CanvasV2EvidenceRend
       clippingAncestorNodeIds: clippingAncestors(image, rect, view),
       croppingRisk: style.objectFit === "cover" || hasClipPath(image, view),
       aspectRatioDistorted: (style.objectFit === "fill" && ratioDelta > 0.025) || transformDistortsAspectRatio(style),
+      ...(role === "analysis-copy" ? {
+        sourceIsCanonicalScreen,
+        ...(sourceRect?.height ? {
+          canonicalPeerHeight: precision(sourceRect.height),
+          scaleVsCanonicalHeight: ratioPrecision(rect.height / sourceRect.height),
+        } : {}),
+        artboardWidthShare: ratioPrecision(rect.width / Math.max(1, artboardRect.width)),
+        artboardHeightShare: ratioPrecision(rect.height / Math.max(1, artboardRect.height)),
+        artboardAreaShare: ratioPrecision(area / artboardArea),
+        designRegionNodeId: identifiedNodeId(designRegion),
+        designRegionWidthShare: ratioPrecision(rect.width / Math.max(1, designRegionRect.width)),
+        designRegionHeightShare: ratioPrecision(rect.height / Math.max(1, designRegionRect.height)),
+        designRegionAreaShare: ratioPrecision(area / designRegionArea),
+        ...(visualRoleElement?.getAttribute("data-canvas-v2-visual-role") ? { visualRole: visualRoleElement.getAttribute("data-canvas-v2-visual-role")! } : {}),
+        ...(treatmentElement?.getAttribute("data-canvas-v2-evidence-treatment") ? { treatment: treatmentElement.getAttribute("data-canvas-v2-evidence-treatment")! } : {}),
+        annotationNodeIds,
+        relationshipNodeIds,
+      } : {}),
     };
   });
 }
@@ -217,5 +400,7 @@ export function observeCanvasV2SpatialLayout(document: Document): CanvasV2Spatia
       .filter((node) => node.contentBox.scrollWidth > node.contentBox.clientWidth + 2 || node.contentBox.scrollHeight > node.contentBox.clientHeight + 2)
       .map((node) => node.nodeId),
     evidence: view ? observeEvidence(document, view) : [],
+    authoredRelationships: view ? observeAuthoredRelationships(document, view) : [],
+    authoredAnnotations: view ? observeAuthoredAnnotations(document, view) : [],
   };
 }

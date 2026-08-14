@@ -43,8 +43,8 @@ function countPattern(directory, pattern) {
 
 if (manifest.schema !== "northstar.canvas-v2-cutover-readiness.v1") fail("Unknown Canvas V2 cutover manifest schema.");
 if (manifest.phase !== "7e3-canonical-cutover") fail("The readiness verifier only accepts the explicit Phase 7E.3 canonical-cutover state.");
-if (manifest.retirementReadiness?.status !== "paused-pending-7e3.1-live-proof") fail("V1 retirement must remain paused until the 7E.3.1 tenant-evidence result is proven live.");
-if (!Array.isArray(manifest.retirementReadiness?.requiredProof) || manifest.retirementReadiness.requiredProof.length < 3) fail("The 7E.3.1 retirement hold is missing its explicit proof conditions.");
+if (manifest.retirementReadiness?.status !== "paused-pending-7e3.5-live-proof") fail("V1 retirement must remain paused until the 7E.3.5 journey-compilation, horizontal-rail, deterministic-research, provider-continuity, and refresh-reset repairs are proven live.");
+if (!Array.isArray(manifest.retirementReadiness?.requiredProof) || manifest.retirementReadiness.requiredProof.length < 11) fail("The 7E.3.5 retirement hold is missing its explicit proof conditions.");
 
 [
   manifest.cutoverReceipt,
@@ -54,6 +54,7 @@ if (!Array.isArray(manifest.retirementReadiness?.requiredProof) || manifest.reti
   ...manifest.productionV2.sourceRoots,
   manifest.productionV2.workspace,
   manifest.productionV2.sharedDataAdapter,
+  manifest.productionV2.sharedMediaAdapter,
   ...manifest.testOnly.routeRoots,
   manifest.testOnly.fixture,
   ...manifest.legacyV1.runtimeRoots,
@@ -188,5 +189,5 @@ if (failures.length) {
   console.error("Canvas V2 cutover readiness failed:\n" + failures.map((failure) => `- ${failure}`).join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Canvas V2 canonical cutover verified: /canvas is V2-only, /canvas-v2 redirects canonically, ${productionV2Files.length} V2 source files remain isolated, and ${legacyFiles.length} V1 runtime files remain dormant while the 7E.3.1 live-proof hold pauses retirement.`);
+  console.log(`Canvas V2 canonical cutover verified: /canvas is V2-only, /canvas-v2 redirects canonically, ${productionV2Files.length} V2 source files remain isolated, and ${legacyFiles.length} V1 runtime files remain dormant while the 7E.3.5 live-proof hold pauses retirement.`);
 }

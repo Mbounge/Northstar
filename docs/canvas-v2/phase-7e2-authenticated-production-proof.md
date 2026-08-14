@@ -1,5 +1,10 @@
 # Phase 7E.2 — Authenticated production proof
 
+> Historical note: the authenticated observation recorded here correctly
+> described browser-local recovery at that time. Phase 7E.3.3 subsequently
+> removed that behavior; Canvas V2 now starts a clean in-memory session on every
+> refresh and still performs no remote canvas writes.
+
 Phase 7E.2 proves Canvas V2 through the real authenticated application boundary
 before North Star changes its canonical route. The proof used an approved account,
 the configured Gemini provider, production tenant resolution, the production app

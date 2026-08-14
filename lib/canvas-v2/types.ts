@@ -98,6 +98,49 @@ export interface CanvasV2EvidenceRenderObservation {
   clippingAncestorNodeIds: string[];
   croppingRisk: boolean;
   aspectRatioDistorted: boolean;
+  /** Factual composition geometry for analysis copies. These are not aesthetic scores. */
+  sourceIsCanonicalScreen?: boolean;
+  canonicalPeerHeight?: number;
+  scaleVsCanonicalHeight?: number;
+  artboardWidthShare?: number;
+  artboardHeightShare?: number;
+  artboardAreaShare?: number;
+  designRegionNodeId?: string;
+  designRegionWidthShare?: number;
+  designRegionHeightShare?: number;
+  designRegionAreaShare?: number;
+  visualRole?: string;
+  treatment?: string;
+  annotationNodeIds?: string[];
+  relationshipNodeIds?: string[];
+}
+
+export interface CanvasV2AuthoredRelationshipObservation {
+  nodeId: string;
+  tagName: string;
+  sourceNodeIds: string[];
+  targetNodeIds: string[];
+  bounds: CanvasV2ElementBounds;
+  visualRole?: string;
+  geometryStartPoint?: { x: number; y: number };
+  geometryEndPoint?: { x: number; y: number };
+  geometryOrientation?: "forward" | "reversed";
+  sourceAnchorNodeId?: string;
+  targetAnchorNodeId?: string;
+  sourceAnchorDistance?: number;
+  targetAnchorDistance?: number;
+  sourceAnchorTolerance?: number;
+  targetAnchorTolerance?: number;
+  geometrySpan?: number;
+  missingSourceNodeIds?: string[];
+  missingTargetNodeIds?: string[];
+}
+
+export interface CanvasV2AuthoredAnnotationObservation {
+  nodeId: string;
+  targetNodeIds: string[];
+  bounds: CanvasV2ElementBounds;
+  textPreview?: string;
 }
 
 export interface CanvasV2SpatialObservation {
@@ -107,6 +150,8 @@ export interface CanvasV2SpatialObservation {
   notableIntersections: CanvasV2SpatialIntersection[];
   contentOverflowNodeIds: string[];
   evidence: CanvasV2EvidenceRenderObservation[];
+  authoredRelationships?: CanvasV2AuthoredRelationshipObservation[];
+  authoredAnnotations?: CanvasV2AuthoredAnnotationObservation[];
 }
 
 export interface CanvasV2RenderObservation {
@@ -122,6 +167,20 @@ export interface CanvasV2RenderObservation {
   runtimeErrors: CanvasV2RuntimeError[];
   missingEvidenceIds: string[];
   overflow?: CanvasV2ElementBounds[];
+  railDetails?: Array<{
+    laneNodeId: string;
+    label: string;
+    startIndex: number;
+    endIndex: number;
+    screenshotDataUrl: string;
+  }>;
+  designDetails?: Array<{
+    nodeId: string;
+    label: string;
+    width: number;
+    height: number;
+    screenshotDataUrl: string;
+  }>;
   spatial: CanvasV2SpatialObservation;
   capturedAt: string;
 }
@@ -146,6 +205,7 @@ export interface CanvasV2CreativeDirection {
   visualLanguage: string;
   evidenceStrategy: string;
   currentFocus: string;
+  unresolvedOpportunities: string[];
   nextMoves: string[];
 }
 
@@ -153,6 +213,12 @@ export interface CanvasV2CreativeDirection {
 export interface CanvasV2RenderedReflection {
   observedResult: string;
   remainingOpportunity: string;
+  conceptRead: string;
+  hierarchyRead: string;
+  evidenceRead: string;
+  relationshipRead: string;
+  legibilityRead: string;
+  distinctivenessRead: string;
   nextMoveReason: string;
 }
 
@@ -178,7 +244,6 @@ export interface CanvasV2DesignTurnInput {
   };
   run?: {
     turn: number;
-    maxEdits: number;
     creativeDirection?: CanvasV2CreativeDirection;
     spatialStrategy?: CanvasV2SpatialStrategy;
     priorSteps: Array<{

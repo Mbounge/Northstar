@@ -10,20 +10,46 @@ export interface CanvasV2FlowInsertion {
 }
 
 const FLOW_CSS = `
-.canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:1568px; padding:0; background:transparent; color:#151620; font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
+/* canvas-v2-flow-layout-v4: complete canonical journeys stay on one intrinsic horizontal rail */
+.northstar-artboard.canvas-v2-artboard--evidence-wide { box-sizing:border-box; width:max-content; min-width:1680px; max-width:none; overflow:visible; }
+.canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:100%; max-width:none; padding:0; background:transparent; color:#151620; font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
 .canvas-v2-grounded-evidence--standalone { min-width:1680px; padding:52px 56px 64px; background:#fff; }
 .canvas-v2-grounded-title { margin:0 0 28px; color:#23232b; font-size:9px; font-weight:850; letter-spacing:.18em; text-transform:uppercase; }
-.canvas-v2-flow-lane { display:grid; grid-template-columns:170px max-content; align-items:center; gap:24px; min-height:270px; padding:16px 0; }
-.canvas-v2-flow-identity { display:flex; align-items:center; gap:12px; align-self:center; }
+.canvas-v2-flow-lane { display:grid; grid-template-columns:170px max-content; align-items:start; gap:24px; width:max-content; min-width:100%; max-width:none; min-height:270px; padding:16px 0; }
+.canvas-v2-flow-identity { display:flex; align-items:center; gap:12px; align-self:start; padding-top:94px; }
 .canvas-v2-flow-icon { width:46px; height:46px; flex:none; border-radius:13px; object-fit:contain; box-shadow:0 10px 24px rgba(39,30,93,.10); }
 .canvas-v2-flow-app { margin:0; color:#17171e; font-size:18px; font-weight:850; letter-spacing:-.02em; }
 .canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:#737686; font-size:11px; line-height:1.35; }
-.canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; gap:18px; padding-right:56px; overflow:visible; }
+.canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; min-width:0; max-width:none; column-gap:18px; padding-right:0; overflow:visible; }
 .canvas-v2-flow-screen { display:block; width:auto; height:235px; max-width:none; flex:none; object-fit:contain; filter:drop-shadow(0 12px 20px rgba(32,24,80,.09)); }
+.canvas-v2-flow-segment { box-sizing:border-box; display:flex; width:132px; height:235px; flex:none; align-items:flex-start; padding:12px 18px 0 14px; border-left:1px solid rgba(70,61,116,.22); color:#817d8d; font-size:9px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
+.canvas-v2-flow-segment-label { display:-webkit-box; max-width:102px; overflow:hidden; overflow-wrap:normal; word-break:normal; -webkit-box-orient:vertical; -webkit-line-clamp:4; }
+.canvas-v2-flow-segment--branch { border-left-color:rgba(107,77,255,.55); color:#6b4dff; }
 `;
 
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "flow";
+function stableTokenHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).padStart(7, "0");
+}
+
+/**
+ * Tenant taxonomy ids can share a long generated prefix. A plain truncation
+ * therefore collapses distinct entry/branch segments into one DOM identity.
+ * Keep a readable stem while suffixing a hash of the complete source value.
+ */
+export function canvasV2StableNodeToken(value: string): string {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "flow";
+  return `${normalized.slice(0, 48)}-${stableTokenHash(value)}`;
+}
+
+export function canvasV2CompactJourneySegmentLabel(value: string): string {
+  const parts = value.split(/\s+(?:→|>)\s+|\s+\/\s+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length <= 2) return value;
+  return `${parts[0]} → ${parts.at(-1)}`;
 }
 
 function mergeEvidence(current: readonly CanvasV2EvidenceAsset[], next: readonly CanvasV2EvidenceAsset[]): CanvasV2EvidenceAsset[] {
@@ -43,6 +69,7 @@ export function insertCanvasV2CanonicalFlow(input: {
 
   const parsed = new DOMParser().parseFromString(`<body>${input.document.html}</body>`, "text/html");
   const host = parsed.querySelector<HTMLElement>('[data-canvas-v2-node-id="artboard"]') ?? parsed.querySelector<HTMLElement>("main") ?? parsed.body;
+  if (host !== parsed.body) host.classList.add("canvas-v2-artboard--evidence-wide");
   let region = parsed.querySelector<HTMLElement>("[data-canvas-v2-evidence-region=canonical]");
   const regionNodeId = region?.dataset.canvasV2NodeId ?? "grounded-evidence";
   if (!region) {
@@ -57,8 +84,9 @@ export function insertCanvasV2CanonicalFlow(input: {
     region.append(title);
     host.append(region);
   }
+  region.dataset.canvasV2LayoutVersion = "4";
 
-  const laneNodeId = `flow-${slug(input.app.name)}-${slug(input.flow.id)}`;
+  const laneNodeId = `flow-${canvasV2StableNodeToken(input.app.name)}-${canvasV2StableNodeToken(input.flow.id)}`;
   const existing = Array.from(parsed.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]")).find((element) => element.dataset.canvasV2NodeId === laneNodeId);
   if (existing) throw new Error(`${input.flow.name} is already on the artboard.`);
   const lane = parsed.createElement("article");
@@ -97,7 +125,24 @@ export function insertCanvasV2CanonicalFlow(input: {
   const sequence = parsed.createElement("div");
   sequence.className = "canvas-v2-flow-sequence";
   sequence.dataset.canvasV2NodeId = `${laneNodeId}-sequence`;
+  const segmentByStartIndex = new Map((input.flow.journeySegments ?? []).map((segment) => [segment.startIndex, segment]));
   screenEvidence.forEach((asset, index) => {
+    const segment = segmentByStartIndex.get(index);
+    if (segment) {
+      const marker = parsed.createElement("div");
+      marker.className = `canvas-v2-flow-segment canvas-v2-flow-segment--${segment.kind}`;
+      marker.dataset.canvasV2NodeId = `${laneNodeId}-segment-${canvasV2StableNodeToken(segment.id)}`;
+      marker.dataset.canvasV2JourneySegment = segment.id;
+      marker.dataset.canvasV2SegmentKind = segment.kind;
+      marker.title = segment.name;
+      marker.setAttribute("aria-label", segment.name);
+      const markerLabel = parsed.createElement("span");
+      markerLabel.className = "canvas-v2-flow-segment-label";
+      markerLabel.dataset.canvasV2NodeId = `${marker.dataset.canvasV2NodeId}-label`;
+      markerLabel.textContent = canvasV2CompactJourneySegmentLabel(segment.name);
+      marker.append(markerLabel);
+      sequence.append(marker);
+    }
     const image = parsed.createElement("img");
     image.className = "canvas-v2-flow-screen";
     image.dataset.canvasV2NodeId = `${laneNodeId}-screen-${index + 1}`;
@@ -112,7 +157,7 @@ export function insertCanvasV2CanonicalFlow(input: {
   region.append(lane);
 
   const evidence = mergeEvidence(input.currentEvidence, input.evidence.filter((asset) => asset.id === `icon:${input.app.id}` || screenEvidence.some((screen) => screen.id === asset.id)));
-  const document = assertCanvasV2ArtifactDocument({ ...input.document, html: parsed.body.innerHTML, css: input.document.css.includes(".canvas-v2-grounded-evidence") ? input.document.css : `${input.document.css}\n${FLOW_CSS}` });
+  const document = assertCanvasV2ArtifactDocument({ ...input.document, html: parsed.body.innerHTML, css: input.document.css.includes("canvas-v2-flow-layout-v4") ? input.document.css : `${input.document.css}\n${FLOW_CSS}` });
   const failures = validateCanvasV2EvidenceBindings(document, evidence);
   if (failures.length) throw new Error(failures.join(" "));
   return { document, evidence, regionNodeId, laneNodeId };

@@ -53,14 +53,19 @@ for (const forbidden of [
 const router = source("app/api/canvas-v2/route/route.ts");
 const design = source("app/api/canvas-v2/design/route.ts");
 const director = source("lib/canvas-v2/research-director.ts");
-const recovery = source("lib/canvas-v2/local-recovery.ts");
+const lifecycle = source("lib/canvas-v2/session-lifecycle.ts");
+const workspace = source("components/canvas-v2/canvas-v2-workspace.tsx");
+const designHook = source("components/canvas-v2/use-canvas-v2-design-loop.ts");
+const chatHook = source("components/canvas-v2/use-canvas-v2-chat.ts");
 const proxy = source("proxy.ts");
 
 if (!router.includes('researchMode: { type: "string", enum: ["none", "evidence", "synthesis"] }')) fail("The production router does not declare evidence versus synthesis intent.");
 if (!design.includes("canvasV2ResearchDecisionPolicy") || !design.includes("decisionPolicy.permittedDecisions.includes")) fail("The production design route does not enforce evidence-first decision authority.");
 if (!design.includes("Ground every product-specific analytical claim in a visible screen")) fail("The production designer does not require claim-level evidence grounding.");
+if (!(design.includes("fetchCanvasV2ProviderJsonWithModelChain") || design.includes("fetchCanvasV2ProviderJsonWithFallback")) || !router.includes("fetchCanvasV2ProviderJsonWithFallback")) fail("The production model boundaries do not share audited provider continuity.");
 if (!director.includes("MAX_INDEX_FLOWS_PER_APP") || !director.includes("MAX_INDEX_SCREEN_NAMES") || !director.includes("requiredAppIds")) fail("The production research context is not target-scoped and bounded.");
-if (!recovery.includes("researchMode")) fail("Research intent is not retained across browser-local recovery.");
+if (!lifecycle.includes("discardObsoleteCanvasV2LocalState") || !workspace.includes("discardObsoleteCanvasV2LocalState")) fail("Canvas V2 does not discard obsolete recovery state when a fresh page session starts.");
+if (/localStorage|sessionStorage|persistCanvasV2/.test(designHook + chatHook)) fail("Canvas V2 hooks still persist or restore canvas state across refresh.");
 if (/CANVAS_V2_PROOF_SECRET|canvas-v2-proof-auth/.test(proxy + design + router)) fail("Temporary authenticated-proof authority escaped into production source.");
 
 if (failures.length) {

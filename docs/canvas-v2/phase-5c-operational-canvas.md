@@ -1,5 +1,8 @@
 # Canvas V2 Phase 5C: operational canvas
 
+> Historical note: Phase 7E.3.3 supersedes this phase's local-persistence
+> behavior. Canvas V2 now resets completely on refresh.
+
 Phase 5C completes the first operational editing surface.
 
 ## Capabilities

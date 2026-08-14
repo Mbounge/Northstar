@@ -1,6 +1,6 @@
 "use client";
 
-import { toPng } from "html-to-image";
+import { toJpeg } from "html-to-image";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { buildCanvasV2RuntimeDocument } from "@/lib/canvas-v2/runtime-document";
@@ -48,6 +48,92 @@ function bounds(element: Element): CanvasV2ElementBounds {
     width: rect.width,
     height: rect.height,
   };
+}
+
+const CANVAS_V2_RAIL_DETAIL_CHUNK_SIZE = 24;
+const CANVAS_V2_MAX_RAIL_DETAIL_CHUNKS = 4;
+const CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS = 4;
+
+async function captureCanonicalRailDetails(frameDocument: Document): Promise<NonNullable<CanvasV2RenderObservation["railDetails"]>> {
+  const details: NonNullable<CanvasV2RenderObservation["railDetails"]> = [];
+  const lanes = Array.from(frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-canonical-flow]"));
+  for (const lane of lanes) {
+    const laneNodeId = lane.dataset.canvasV2NodeId;
+    if (!laneNodeId) continue;
+    const screens = Array.from(lane.querySelectorAll<HTMLImageElement>("[data-canvas-v2-flow-index]"));
+    const appName = lane.querySelector<HTMLElement>(".canvas-v2-flow-app")?.textContent?.trim() || "Canonical flow";
+    for (let startIndex = 0; startIndex < screens.length && details.length < CANVAS_V2_MAX_RAIL_DETAIL_CHUNKS; startIndex += CANVAS_V2_RAIL_DETAIL_CHUNK_SIZE) {
+      const chunk = screens.slice(startIndex, startIndex + CANVAS_V2_RAIL_DETAIL_CHUNK_SIZE);
+      const strip = frameDocument.createElement("section");
+      strip.setAttribute("aria-hidden", "true");
+      strip.style.cssText = "position:fixed;left:-100000px;top:0;display:grid;grid-template-columns:repeat(12,128px);align-items:end;gap:18px 12px;width:max-content;padding:24px;background:#fff;";
+      chunk.forEach((screen, chunkIndex) => {
+        const item = frameDocument.createElement("figure");
+        item.style.cssText = "display:grid;grid-template-rows:18px 188px;gap:5px;margin:0;align-items:end;";
+        const label = frameDocument.createElement("figcaption");
+        label.textContent = String(startIndex + chunkIndex + 1).padStart(2, "0");
+        label.style.cssText = "font:700 12px/1 system-ui,sans-serif;color:#6756dd;letter-spacing:.08em;";
+        const image = screen.cloneNode(false) as HTMLImageElement;
+        image.removeAttribute("data-canvas-v2-node-id");
+        image.removeAttribute("data-canvas-v2-evidence-id");
+        image.removeAttribute("data-canvas-v2-evidence-role");
+        image.style.cssText = "display:block;width:128px;height:188px;max-width:none;object-fit:contain;object-position:left bottom;";
+        item.append(label, image);
+        strip.append(item);
+      });
+      frameDocument.body.append(strip);
+      try {
+        const screenshotDataUrl = await toJpeg(strip, {
+          backgroundColor: "#ffffff",
+          cacheBust: false,
+          pixelRatio: 1,
+          quality: 0.76,
+          skipFonts: true,
+          style: { position: "static", left: "auto", top: "auto" },
+        });
+        details.push({
+          laneNodeId,
+          label: `${appName} screens ${startIndex + 1}–${startIndex + chunk.length}`,
+          startIndex,
+          endIndex: startIndex + chunk.length - 1,
+          screenshotDataUrl,
+        });
+      } finally {
+        strip.remove();
+      }
+    }
+    if (details.length >= CANVAS_V2_MAX_RAIL_DETAIL_CHUNKS) break;
+  }
+  return details;
+}
+
+async function captureAuthoredDesignDetails(frameDocument: Document): Promise<NonNullable<CanvasV2RenderObservation["designDetails"]>> {
+  const regions = Array.from(frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-design-region]"))
+    .filter((region) => !region.parentElement?.closest("[data-canvas-v2-design-region]"))
+    .slice(0, CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS);
+  const details: NonNullable<CanvasV2RenderObservation["designDetails"]> = [];
+  for (const region of regions) {
+    const nodeId = region.dataset.canvasV2NodeId;
+    const rect = region.getBoundingClientRect();
+    if (!nodeId || rect.width < 2 || rect.height < 2) continue;
+    const scale = Math.min(1, 1_800 / rect.width, 1_800 / rect.height, Math.sqrt(2_500_000 / (rect.width * rect.height)));
+    const heading = region.querySelector<HTMLElement>("h1,h2,h3")?.textContent?.trim();
+    const screenshotDataUrl = await toJpeg(region, {
+      backgroundColor: "#ffffff",
+      cacheBust: false,
+      pixelRatio: Math.max(0.1, scale),
+      quality: 0.82,
+      skipFonts: true,
+    });
+    details.push({
+      nodeId,
+      label: region.getAttribute("aria-label")?.trim() || heading || "Authored design region",
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      screenshotDataUrl,
+    });
+  }
+  return details;
 }
 
 export function CanvasV2ArtboardPreview({
@@ -144,15 +230,21 @@ export function CanvasV2ArtboardPreview({
       onGeometry?.(geometry);
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
       const captureGeometry = canvasV2CaptureGeometry(geometry);
-      const screenshotDataUrl = await toPng(frameDocument.documentElement, {
-        cacheBust: true,
+      const screenshotDataUrl = await toJpeg(frameDocument.documentElement, {
+        cacheBust: false,
         pixelRatio: 1,
         width: geometry.width,
         height: geometry.height,
         canvasWidth: captureGeometry.width,
         canvasHeight: captureGeometry.height,
         backgroundColor: "#ffffff",
+        quality: 0.8,
+        skipFonts: true,
       });
+      const [railDetails, designDetails] = await Promise.all([
+        captureCanonicalRailDetails(frameDocument),
+        captureAuthoredDesignDetails(frameDocument),
+      ]);
       const evidenceIds = new Set(revision.evidence.map((asset) => asset.id));
       frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-evidence-id]").forEach((element) => {
         const id = element.dataset.canvasV2EvidenceId;
@@ -179,6 +271,8 @@ export function CanvasV2ArtboardPreview({
         runtimeErrors: [],
         missingEvidenceIds: Array.from(evidenceIds),
         ...(overflow.length ? { overflow } : {}),
+        ...(railDetails.length ? { railDetails } : {}),
+        ...(designDetails.length ? { designDetails } : {}),
         spatial: observeCanvasV2SpatialLayout(frameDocument),
         capturedAt: new Date().toISOString(),
       });

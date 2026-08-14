@@ -15,11 +15,22 @@ export interface CanvasV2FailurePayload {
   code: CanvasV2FailureCode;
   retryable: boolean;
   retryAfterMs?: number;
+  providerAttempts?: CanvasV2ProviderAttemptAudit[];
+}
+
+export interface CanvasV2ProviderAttemptAudit {
+  model: string;
+  attempt?: number;
+  outcome: "completed" | "provider-unavailable" | "rate-limited" | "timeout" | "invalid-response" | "rejected" | "cancelled" | "transport";
+  durationMs: number;
+  code?: CanvasV2FailureCode;
+  httpStatus?: number;
+  detail?: string;
 }
 
 export interface CanvasV2RequestPolicy {
   maxAttempts: number;
-  timeoutMs: number;
+  timeoutMs?: number;
   baseDelayMs: number;
   maxDelayMs: number;
 }
@@ -56,15 +67,13 @@ export function canvasV2RetryReason(code: CanvasV2FailureCode): string {
 }
 
 export const CANVAS_V2_ROUTING_REQUEST_POLICY: CanvasV2RequestPolicy = {
-  maxAttempts: 3,
-  timeoutMs: 30_000,
+  maxAttempts: 2,
   baseDelayMs: 350,
   maxDelayMs: 1_400,
 };
 
 export const CANVAS_V2_DESIGN_REQUEST_POLICY: CanvasV2RequestPolicy = {
-  maxAttempts: 3,
-  timeoutMs: 100_000,
+  maxAttempts: 2,
   baseDelayMs: 500,
   maxDelayMs: 2_000,
 };
@@ -74,6 +83,7 @@ export class CanvasV2RequestError extends Error {
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
   readonly attempts: number;
+  readonly providerAttempts?: CanvasV2ProviderAttemptAudit[];
 
   constructor(input: CanvasV2FailurePayload & { attempts: number }) {
     super(input.error);
@@ -82,6 +92,7 @@ export class CanvasV2RequestError extends Error {
     this.retryable = input.retryable;
     this.retryAfterMs = input.retryAfterMs;
     this.attempts = input.attempts;
+    this.providerAttempts = input.providerAttempts;
   }
 }
 
@@ -120,6 +131,7 @@ function failureFromResponse(response: Response, payload: unknown, attempt: numb
     code,
     retryable,
     retryAfterMs,
+    providerAttempts: Array.isArray(record.providerAttempts) ? record.providerAttempts : undefined,
     attempts: attempt,
   });
 }
@@ -155,6 +167,7 @@ export async function requestCanvasV2Json<T>(input: {
   const wait = input.wait ?? waitForRetry;
   const serializedBody = JSON.stringify(input.body);
   let lastFailure: CanvasV2RequestError | undefined;
+  let correction: string | undefined;
 
   for (let attempt = 1; attempt <= input.policy.maxAttempts; attempt += 1) {
     if (input.signal.aborted) throw abortError();
@@ -162,7 +175,7 @@ export async function requestCanvasV2Json<T>(input: {
     let timedOut = false;
     const cancelAttempt = () => attemptController.abort();
     input.signal.addEventListener("abort", cancelAttempt, { once: true });
-    const timeout = setTimeout(() => {
+    const timeout = input.policy.timeoutMs === undefined ? undefined : setTimeout(() => {
       timedOut = true;
       attemptController.abort();
     }, input.policy.timeoutMs);
@@ -174,6 +187,7 @@ export async function requestCanvasV2Json<T>(input: {
           "Content-Type": "application/json",
           "X-Canvas-V2-Request-ID": input.requestId,
           "X-Canvas-V2-Attempt": String(attempt),
+          ...(correction ? { "X-Canvas-V2-Previous-Failure": encodeURIComponent(correction.slice(0, 1_200)) } : {}),
         },
         signal: attemptController.signal,
         body: serializedBody,
@@ -200,7 +214,10 @@ export async function requestCanvasV2Json<T>(input: {
       return payload as T;
     } catch (cause) {
       if (input.signal.aborted) throw abortError();
-      if (cause instanceof CanvasV2RequestError) lastFailure = cause;
+      if (cause instanceof CanvasV2RequestError) {
+        lastFailure = cause;
+        correction = cause.code === "invalid-response" ? cause.message : undefined;
+      }
       else if (timedOut) lastFailure = new CanvasV2RequestError({
         error: "North Star’s model request timed out.",
         code: "timeout",
@@ -214,7 +231,7 @@ export async function requestCanvasV2Json<T>(input: {
         attempts: attempt,
       });
     } finally {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
       input.signal.removeEventListener("abort", cancelAttempt);
     }
 
@@ -240,6 +257,7 @@ export async function requestCanvasV2Json<T>(input: {
     code: lastFailure.code,
     retryable: lastFailure.retryable,
     retryAfterMs: lastFailure.retryAfterMs,
+    providerAttempts: lastFailure.providerAttempts,
     attempts: lastFailure.attempts,
   });
 }

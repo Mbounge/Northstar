@@ -173,10 +173,96 @@ export function validateCanvasV2RenderedEvidenceIntegrity(
       const current = rendered.get(screens[index].nodeId);
       if (!previous || !current) continue;
       const previousRight = previous.bounds.x + previous.bounds.width;
-      if (current.bounds.x < previousRight - 1) {
-        failures.push(`Canonical flow must render left-to-right without screenshot overlap: ${flow.flowId}.`);
+      if (Math.abs(current.bounds.y - previous.bounds.y) > 1 || current.bounds.x < previousRight - 1) {
+        failures.push(`Canonical flow must remain one uninterrupted horizontal rail without wrapping or screenshot overlap: ${flow.flowId}.`);
         break;
       }
+    }
+  }
+  return Array.from(new Set(failures));
+}
+
+/**
+ * A large analysis copy is valid when it is visibly doing analytical work.
+ * This protects the whole-board composition without prescribing a fixed image
+ * width or preventing a model-authored focal inspection.
+ */
+export function validateCanvasV2RenderedAnalysisEvidenceScale(
+  observation: CanvasV2RenderObservation,
+): string[] {
+  const failures: string[] = [];
+  for (const item of observation.spatial.evidence) {
+    if (item.role !== "analysis-copy" || !item.sourceIsCanonicalScreen) continue;
+    const scale = item.scaleVsCanonicalHeight ?? 0;
+    const regionHeightShare = item.designRegionHeightShare ?? 0;
+    const regionAreaShare = item.designRegionAreaShare ?? 0;
+    const artboardHeightShare = item.artboardHeightShare ?? 0;
+    const dominant = scale >= 2.75 && (regionHeightShare >= 0.55 || regionAreaShare >= 0.2 || artboardHeightShare >= 0.46);
+    if (!dominant) continue;
+    const linkedExplanationCount = (item.annotationNodeIds?.length ?? 0) + (item.relationshipNodeIds?.length ?? 0);
+    const declaredAnalyticalRole = Boolean(item.visualRole?.trim() || item.treatment?.trim());
+    if (declaredAnalyticalRole && linkedExplanationCount > 0) continue;
+    failures.push(
+      `Analysis screenshot ${item.nodeId} is ${scale.toFixed(2)}× its canonical peer height and occupies ${Math.round(regionHeightShare * 100)}% of its authored region height without a visibly linked annotation or relationship. Reduce it to a coherent peer scale or make the enlargement earn its space through an authored analytical role plus visible evidence-linked explanation.`,
+    );
+  }
+  return Array.from(new Set(failures));
+}
+
+/**
+ * A screenshot-led comparison must keep real representative evidence in its
+ * analytical composition. The model remains free to communicate through
+ * sequence, scale, juxtaposition, annotation, relationship geometry, or a
+ * different prompt-specific form; this validator does not prescribe one.
+ */
+export function validateCanvasV2RenderedComparisonCommunication(
+  observation: CanvasV2RenderObservation,
+  instruction: string,
+): string[] {
+  const asksForComparison = /\b(?:compare|comparison|comparative|versus|vs\.?|contrast)\b/i.test(instruction);
+  const asksForScreens = /\b(?:representative|screenshot|screenshots|screen evidence|visual evidence)\b/i.test(instruction);
+  if (!asksForComparison || !asksForScreens) return [];
+
+  const analysisScreens = observation.spatial.evidence.filter((item) => (
+    item.role === "analysis-copy"
+    && item.sourceIsCanonicalScreen
+    && item.visible
+    && item.bounds.width > 0
+    && item.bounds.height > 0
+  ));
+  const failures: string[] = [];
+  if (analysisScreens.length < 2) {
+    failures.push("The screenshot-led comparison needs at least two visible canonical screen copies in its analytical composition so the contrast can be inspected rather than described only in prose.");
+  }
+
+  return Array.from(new Set(failures));
+}
+
+/**
+ * Relationship geometry is optional visual vocabulary. Once the model chooses
+ * it, however, every declared endpoint must still exist and the rendered line
+ * must remain attached after later composition changes.
+ */
+export function validateCanvasV2RenderedRelationshipGeometry(
+  observation: CanvasV2RenderObservation,
+): string[] {
+  const failures: string[] = [];
+  for (const relationship of observation.spatial.authoredRelationships ?? []) {
+    if (!relationship.sourceNodeIds.length || !relationship.targetNodeIds.length) {
+      failures.push(`Authored relationship ${relationship.nodeId} must declare both source and target node identities.`);
+      continue;
+    }
+    if (relationship.missingSourceNodeIds?.length) {
+      failures.push(`Authored relationship ${relationship.nodeId} references missing source nodes: ${relationship.missingSourceNodeIds.join(", ")}.`);
+    }
+    if (relationship.missingTargetNodeIds?.length) {
+      failures.push(`Authored relationship ${relationship.nodeId} references missing target nodes: ${relationship.missingTargetNodeIds.join(", ")}.`);
+    }
+    if (relationship.sourceAnchorDistance !== undefined && relationship.sourceAnchorTolerance !== undefined && relationship.sourceAnchorDistance > relationship.sourceAnchorTolerance) {
+      failures.push(`Authored relationship ${relationship.nodeId} is detached from source ${relationship.sourceAnchorNodeId ?? relationship.sourceNodeIds[0]} by ${relationship.sourceAnchorDistance.toFixed(1)}px (tolerance ${relationship.sourceAnchorTolerance.toFixed(1)}px). Rebuild its geometry against the current composition.`);
+    }
+    if (relationship.targetAnchorDistance !== undefined && relationship.targetAnchorTolerance !== undefined && relationship.targetAnchorDistance > relationship.targetAnchorTolerance) {
+      failures.push(`Authored relationship ${relationship.nodeId} is detached from target ${relationship.targetAnchorNodeId ?? relationship.targetNodeIds[0]} by ${relationship.targetAnchorDistance.toFixed(1)}px (tolerance ${relationship.targetAnchorTolerance.toFixed(1)}px). Rebuild its geometry against the current composition.`);
     }
   }
   return Array.from(new Set(failures));

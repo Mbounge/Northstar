@@ -45,6 +45,7 @@ import {
   listCanvasV2SourceNodes,
   type CanvasV2ManualMutation,
 } from "@/lib/canvas-v2/manual-mutations";
+import { discardObsoleteCanvasV2LocalState } from "@/lib/canvas-v2/session-lifecycle";
 
 type Panel = "chat" | "shapes" | "apps";
 type CanvasTool = "select" | "pan";
@@ -79,7 +80,7 @@ const TOOL_ITEMS = [
 ];
 
 function clampScale(value: number): number {
-  return Math.min(1.5, Math.max(0.25, value));
+  return Math.min(1.5, Math.max(0.08, value));
 }
 
 export function CanvasV2Workspace({
@@ -91,6 +92,14 @@ export function CanvasV2Workspace({
   researchEndpoint?: string;
   routerEndpoint?: string;
 } = {}) {
+  useEffect(() => {
+    try {
+      discardObsoleteCanvasV2LocalState(window.localStorage);
+    } catch {
+      // The clean in-memory session must not depend on browser storage access.
+    }
+  }, []);
+
   const engine = useCanvasV2DesignLoop(designEndpoint);
   const [panel, setPanel] = useState<Panel>("chat");
   const [tool, setTool] = useState<CanvasTool>("select");
@@ -391,7 +400,7 @@ export function CanvasV2Workspace({
         <button onClick={() => setTool("select")} title="Select" className={`grid h-11 w-11 place-items-center rounded-xl ${tool === "select" ? "bg-[#e9e5ff] text-[#6c57ec]" : "text-[#646474]"}`}><MousePointer2 className="h-5 w-5" /></button>
         <button onClick={() => setTool("pan")} title="Pan" className={`grid h-11 w-11 place-items-center rounded-xl ${tool === "pan" ? "bg-[#e9e5ff] text-[#6c57ec]" : "text-[#646474]"}`}><Hand className="h-5 w-5" /></button>
         <div className="mx-1 h-7 w-px bg-[#e2e2eb]" />
-        {TOOL_ITEMS.map(({ label, icon: Icon, primitive }) => <button key={label} title={`Create ${label}`} onClick={() => createPrimitive(primitive)} disabled={engine.running || engine.applyingManualEdit} className="grid h-11 w-11 place-items-center rounded-xl text-[#686879] hover:bg-[#f0edff] hover:text-[#6d59ed] disabled:opacity-35"><Icon className="h-5 w-5" /></button>)}
+        {TOOL_ITEMS.map(({ label, icon: Icon, primitive }) => <button key={label} title={`Create ${label}`} onClick={() => createPrimitive(primitive)} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-11 w-11 place-items-center rounded-xl text-[#686879] hover:bg-[#f0edff] hover:text-[#6d59ed] disabled:opacity-35"><Icon className="h-5 w-5" /></button>)}
         <div className="mx-1 h-7 w-px bg-[#e2e2eb]" />
         <button title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`flex h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold ${layersOpen ? "bg-[#e9e5ff] text-[#6c57ec]" : "text-[#5e5e6e]"}`}><Layers3 className="h-4 w-4" />Layer</button>
       </div>

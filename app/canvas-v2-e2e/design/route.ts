@@ -19,16 +19,27 @@ function direction(currentFocus: string, nextMoves: string[]): CanvasV2CreativeD
   return {
     designIntent: "Make the different onboarding philosophies immediately legible while keeping the complete research surface inspectable.",
     visualThesis: "Two paths, two operating beliefs: Awin establishes confidence through guided depth while Whop converts momentum through compression.",
-    compositionStrategy: "Use an editorial opening, a horizontal evidence field, and a concluding analytical sequence connected by one continuous reading axis.",
+    compositionStrategy: "Use an editorial opening, complete uninterrupted evidence rails, and a concluding analytical sequence connected by one continuous reading axis.",
     visualLanguage: "Warm white field, near-black editorial type, fine graphite rules, Awin violet and Whop vermilion used sparingly as semantic signals.",
     evidenceStrategy: "Keep both canonical flows complete and full-size, then build conclusions beside and below them without replacing evidence with decorative thumbnails.",
     currentFocus,
+    unresolvedOpportunities: nextMoves,
     nextMoves,
   };
 }
 
 function reflection(observedResult: string, remainingOpportunity: string, nextMoveReason: string): CanvasV2RenderedReflection {
-  return { observedResult, remainingOpportunity, nextMoveReason };
+  return {
+    observedResult,
+    remainingOpportunity,
+    conceptRead: observedResult,
+    hierarchyRead: observedResult,
+    evidenceRead: observedResult,
+    relationshipRead: remainingOpportunity,
+    legibilityRead: observedResult,
+    distinctivenessRead: remainingOpportunity,
+    nextMoveReason,
+  };
 }
 
 function spatial(currentAdjustment: string, growthDirection: CanvasV2SpatialStrategy["growthDirection"] = "vertical"): CanvasV2SpatialStrategy {
@@ -52,6 +63,7 @@ function mapDirection(): CanvasV2CreativeDirection {
     visualLanguage: "Warm white, large near-black editorial type, hairline graphite structure, and one translucent violet focal gesture.",
     evidenceStrategy: "This conceptual prompt needs no app research; the relationship itself is the primary evidence structure.",
     currentFocus: "Resolve the causal chain with exact alignment and one intentional focal overlap.",
+    unresolvedOpportunities: [],
     nextMoves: [],
   };
 }
@@ -77,6 +89,7 @@ function marketDirection(): CanvasV2CreativeDirection {
     visualLanguage: "Warm white, near-black type, fine graphite rules, signal blue, assumption amber, and one decisive North Star violet axis.",
     evidenceStrategy: "Keep observable signals and unverified assumptions visibly distinct; this conceptual prompt must not impersonate account research.",
     currentFocus: "Resolve the market-entry decision into a legible spatial argument with explicit uncertainty.",
+    unresolvedOpportunities: [],
     nextMoves: [],
   };
 }
@@ -102,6 +115,7 @@ function largeDirection(): CanvasV2CreativeDirection {
     visualLanguage: "Warm white, oversized black editorial anchors, fine violet coordinates, and sparse blue and orange semantic signals.",
     evidenceStrategy: "This is a geometric behavior proof with clearly labeled conceptual material, not fabricated product evidence.",
     currentFocus: "Keep distant regions purposeful and connected while making the full two-dimensional extent measurable.",
+    unresolvedOpportunities: [],
     nextMoves: [],
   };
 }
@@ -120,7 +134,7 @@ function largeSpatial(): CanvasV2SpatialStrategy {
 }
 
 const BASE_CSS = `
-.northstar-artboard{--ns-ink:#171721;--ns-muted:#666678;--ns-rule:rgba(42,39,66,.13);--ns-violet:#684dff;--ns-orange:#f04b23;box-sizing:border-box;width:max-content;min-width:1680px;min-height:945px;padding:58px 64px 76px;background:#fefdfb;color:var(--ns-ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.northstar-artboard{--ns-ink:#171721;--ns-muted:#666678;--ns-rule:rgba(42,39,66,.13);--ns-violet:#684dff;--ns-orange:#f04b23;box-sizing:border-box;width:2060px;min-width:2060px;min-height:945px;padding:58px 64px 76px;background:#fefdfb;color:var(--ns-ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 .e2e-editorial-header{display:grid;grid-template-columns:minmax(520px,760px) 320px 320px;gap:72px;align-items:start;width:1560px;padding-bottom:34px;border-bottom:1px solid var(--ns-rule)}
 .e2e-eyebrow,.e2e-note-label,.e2e-section-label{margin:0;color:var(--ns-violet);font-size:10px;font-weight:850;letter-spacing:.17em;text-transform:uppercase}
 .e2e-editorial-header h1{max-width:720px;margin:13px 0 15px;font-size:58px;line-height:.94;letter-spacing:-.058em}
@@ -157,6 +171,9 @@ export async function POST(request: NextRequest) {
   if (!revision) return NextResponse.json({ error: "Missing revision" }, { status: 400 });
   if (!body.observation?.spatial || body.observation.spatial.reportedNodeCount !== body.observation.spatial.nodes.length) {
     return NextResponse.json({ error: "Missing exact spatial observation" }, { status: 400 });
+  }
+  if (revision.document.html.includes("data-canvas-v2-canonical-flow") && !(body.observation.railDetails?.length)) {
+    return NextResponse.json({ error: "Missing legible canonical rail detail observations" }, { status: 400 });
   }
   const attempt = Number(request.headers.get("x-canvas-v2-attempt")) || 1;
 

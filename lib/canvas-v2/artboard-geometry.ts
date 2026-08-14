@@ -5,8 +5,8 @@ export interface CanvasV2ArtboardGeometry {
 
 export const CANVAS_V2_MIN_ARTBOARD: CanvasV2ArtboardGeometry = { width: 1680, height: 945 };
 export const CANVAS_V2_MAX_ARTBOARD: CanvasV2ArtboardGeometry = { width: 12_000, height: 12_000 };
-export const CANVAS_V2_MAX_CAPTURE_EDGE = 4_096;
-export const CANVAS_V2_MAX_CAPTURE_PIXELS = 12_000_000;
+export const CANVAS_V2_MAX_CAPTURE_EDGE = 2_400;
+export const CANVAS_V2_MAX_CAPTURE_PIXELS = 4_500_000;
 
 function finite(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;

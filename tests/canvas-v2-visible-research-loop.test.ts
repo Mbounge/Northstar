@@ -10,6 +10,7 @@ import {
   canvasV2ResearchStatusForDecision,
   canvasV2UnacknowledgedUnavailableApps,
   canvasV2UnavailableRequiredApps,
+  nextCanvasV2RequiredResearch,
   resolveCanvasV2ResearchCompletion,
   resolveCanvasV2ResearchDecision,
   settleCanvasV2ResearchRequirement,
@@ -25,11 +26,18 @@ const creativeDirection = {
   visualLanguage: "Quiet editorial surface.",
   evidenceStrategy: "Preserve every screen in order.",
   currentFocus: "Retrieve one complete flow.",
+  unresolvedOpportunities: ["Ground the contrasting product."],
   nextMoves: ["Retrieve the contrasting flow"],
 };
 const reflection = {
   observedResult: "The flow is not yet visible.",
   remainingOpportunity: "Ground the requested product.",
+  conceptRead: "The concept awaits grounded evidence.",
+  hierarchyRead: "The evidence sequence is the current anchor.",
+  evidenceRead: "One requested source remains absent.",
+  relationshipRead: "Comparison is premature until both sources are present.",
+  legibilityRead: "The existing rail is readable.",
+  distinctivenessRead: "This is research, not the final authored form.",
   nextMoveReason: "The comparison requires visible evidence.",
 };
 const spatialStrategy = {
@@ -69,16 +77,32 @@ test("the model sees both explicitly named apps and chooses exact complete flows
 test("production research is evidence-first and synthesis cannot complete on the final retrieval turn", () => {
   const unresolved = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", revision(), ["Awin", "Whop"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(unresolved, "synthesis", []).permittedDecisions, ["research"]);
+  assert.deepEqual(nextCanvasV2RequiredResearch(unresolved), {
+    appId: "app:awin",
+    appName: "Awin",
+    flowId: "flow:awin:onboarding",
+    flowName: "Mobile onboarding",
+    screenCount: 2,
+  });
+
+  const awinVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"></article></main>');
+  const oneRemaining = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", awinVisible, ["Awin", "Whop"]);
+  assert.equal(nextCanvasV2RequiredResearch(oneRemaining)?.appName, "Whop");
 
   const bothVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"></article><article data-canvas-v2-canonical-flow="flow:whop:onboarding"></article></main>');
   const grounded = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", bothVisible, ["Awin", "Whop"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "research" }]).permittedDecisions, ["edit"]);
-  assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }]).permittedDecisions, ["research", "edit", "complete"]);
+  const refinement = canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }], { nextMoves: ["Develop the relationship"] });
+  assert.equal(refinement.phase, "resolve-grounded-synthesis");
+  assert.deepEqual(refinement.permittedDecisions, ["edit"]);
+  assert.match(refinement.reason, /replan the remaining queue from the new visible result/);
+  assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }, { kind: "design" }], { nextMoves: [], unresolvedOpportunities: [] }).permittedDecisions, ["research", "edit", "complete"]);
+  assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }, { kind: "design" }], { nextMoves: [], unresolvedOpportunities: ["Make the relationship visible"] }).permittedDecisions, ["edit"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "evidence", [{ kind: "research" }]).permittedDecisions, ["research", "edit", "complete"]);
 });
 
 test("the production catalog is target-scoped, relevance-ranked, and bounded without truncating a selected flow", () => {
-  const flow = (index: number, screens: number, name = `Onboarding path ${index}`, scope: "journey" | "flow" | "session" = "flow") => ({
+  const flow = (index: number, screens: number, name = `Onboarding path ${index}`, scope: "journey" | "path" | "flow" | "collection" | "session" = "flow") => ({
     id: `flow:awin:${index}`,
     name,
     appName: "Awin",
@@ -105,12 +129,12 @@ test("the production catalog is target-scoped, relevance-ranked, and bounded wit
   assert.equal(index.apps[0]?.flows[0]?.screenNames.length, 12);
   assert.equal(index.apps[0]?.flows[0]?.scope, "journey");
   assert.equal(index.apps[0]?.flows[0]?.selection, "preferred");
-  assert.equal(index.apps[0]?.flows.find((candidate) => candidate.scope === "session")?.selection, "supporting");
+  assert.equal(index.apps[0]?.flows.some((candidate) => candidate.scope === "session"), false);
   assert.equal(index.apps[0]?.omittedUsableFlowCount, 9);
   assert.ok(JSON.stringify(index).length < 50_000);
 });
 
-test("a shallow visible leaf cannot satisfy a broad journey request when coherent coverage exists", () => {
+test("a shallow stage and aggregate collection cannot satisfy a representative branch-path request", () => {
   const makeScreens = (flowName: string, count: number) => Array.from({ length: count }, (_, index) => ({
     id: `${flowName}-${index}`,
     name: `Step ${index + 1}`,
@@ -124,16 +148,17 @@ test("a shallow visible leaf cannot satisfy a broad journey request when coheren
   const coverageCatalog: AppDataCatalog = { tenantId: "tenant", apps: [{
     id: "app:awin",
     name: "Awin",
-    totalScreens: 14,
+    totalScreens: 58,
     flows: [
-      { id: "flow:awin:journey", name: "Partner onboarding", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "journey", taxonomyPath: ["Partner onboarding"], descendantFlowCount: 4, screens: makeScreens("journey", 11) },
+      { id: "flow:awin:journey", name: "Partner onboarding all alternatives", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "collection", taxonomyPath: ["Partner onboarding"], descendantFlowCount: 4, screens: makeScreens("journey", 44) },
       { id: "flow:awin:leaf", name: "Landing and persona selection", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "flow", taxonomyPath: ["Partner onboarding", "Landing and persona selection"], descendantFlowCount: 1, screens: makeScreens("leaf", 3) },
+      { id: "flow:awin:representative", name: "Guided creator registration", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "path", taxonomyPath: ["Partner onboarding", "Guided creator registration"], descendantFlowCount: 1, screens: makeScreens("representative", 11) },
     ],
   }] };
   const shallowVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:leaf"></article></main>');
   const index = buildCanvasV2ResearchCatalogIndex(coverageCatalog, "Build a representative executive comparison of Awin onboarding", shallowVisible, ["Awin"]);
   assert.equal(index.requirements[0]?.state, "unresolved");
-  assert.deepEqual(index.requirements[0]?.adequateFlowIds, ["flow:awin:journey"]);
+  assert.deepEqual(index.requirements[0]?.adequateFlowIds, ["flow:awin:representative"]);
   assert.deepEqual(index.requirements[0]?.visibleFlowIds, ["flow:awin:leaf"]);
   assert.deepEqual(index.requirements[0]?.visibleAdequateFlowIds, []);
   assert.match(index.requirements[0]?.reason ?? "", /does not adequately cover/);
@@ -157,9 +182,9 @@ test("a shallow visible leaf cannot satisfy a broad journey request when coheren
     spatialStrategy,
     reflection,
     appId: "app:awin",
-    flowId: "flow:awin:journey",
-    summary: "Use the journey.",
-    expectedVisualResult: "The complete journey is visible.",
+    flowId: "flow:awin:representative",
+    summary: "Use the complete path.",
+    expectedVisualResult: "The complete valid branch path is visible.",
   }, [], index);
   assert.equal(result.screens.length, 11);
 
@@ -172,6 +197,41 @@ test("a shallow visible leaf cannot satisfy a broad journey request when coheren
   assert.equal(focused.apps[0]?.flows[0]?.id, "flow:awin:leaf");
   assert.equal(focused.apps[0]?.flows[0]?.selection, "preferred");
   assert.deepEqual(focused.requirements[0]?.adequateFlowIds, ["flow:awin:leaf"]);
+
+  const representative = buildCanvasV2ResearchCatalogIndex(
+    coverageCatalog,
+    "Build an executive comparison of Awin onboarding. Choose representative flows and screenshots.",
+    revision(),
+    ["Awin"],
+  );
+  assert.equal(representative.apps[0]?.flows[0]?.id, "flow:awin:representative");
+  assert.equal(representative.apps[0]?.flows[0]?.screenCount, 11);
+  assert.deepEqual(representative.requirements[0]?.adequateFlowIds, ["flow:awin:representative"]);
+  assert.equal(representative.apps[0]?.flows.find((flow) => flow.scope === "collection")?.selection, "supporting");
+});
+
+test("broad onboarding prefers a complete shared-entry journey over its branch-only candidate", () => {
+  const makeScreens = (flowName: string, count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `${flowName}-${index}`,
+    name: `Step ${index + 1}`,
+    imageUrl: `https://evidence.test/awin/${flowName}/${index}.png`,
+    appName: "Awin",
+    flowName,
+    platform: "mobile",
+    sessionType: "onboarding",
+    index,
+  }));
+  const completeCatalog: AppDataCatalog = { tenantId: "tenant", apps: [{
+    id: "app:awin", name: "Awin", totalScreens: 47, flows: [
+      { id: "flow:branch", name: "Creator & Influencer Onboarding", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "journey", screens: makeScreens("branch", 44) },
+      { id: "flow:complete", name: "Landing & Persona Selection → Creator & Influencer Onboarding", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "path", completeJourney: true, journeySegments: [{ id: "entry", name: "Landing", kind: "shared-entry", startIndex: 0, screenCount: 3 }, { id: "creator", name: "Creator", kind: "branch", startIndex: 3, screenCount: 44 }], screens: makeScreens("complete", 47) },
+    ],
+  }] };
+  const broad = buildCanvasV2ResearchCatalogIndex(completeCatalog, "Build an executive comparison of Awin onboarding. Choose representative flows and screenshots.", revision(), ["Awin"]);
+  assert.equal(broad.apps[0]?.flows[0]?.id, "flow:complete");
+  assert.equal(nextCanvasV2RequiredResearch(broad)?.screenCount, 47);
+  const exactBranch = buildCanvasV2ResearchCatalogIndex(completeCatalog, "Inspect Awin Creator & Influencer Onboarding", revision(), ["Awin"]);
+  assert.equal(exactBranch.apps[0]?.flows[0]?.id, "flow:branch");
 });
 
 test("required named apps remain unresolved until their evidence is visibly committed", () => {
@@ -265,6 +325,10 @@ test("the production loop materializes research before another model turn and re
   const loop = readFileSync("lib/canvas-v2/design-loop.ts", "utf8");
   assert.match(route, /decision: \{ type: "string", enum: \["research", "edit", "complete"\] \}/);
   assert.match(route, /resolveCanvasV2ResearchDecision/);
+  assert.match(route, /nextCanvasV2RequiredResearch/);
+  assert.ok(route.indexOf("const requiredResearch =") < route.indexOf("const provider = await"));
+  assert.match(route, /northstar-deterministic-research-director/);
+  assert.match(route, /railDetailParts/);
   assert.match(route, /resolveCanvasV2ResearchCompletion/);
   assert.match(route, /researchTargets/);
   assert.doesNotMatch(route, /loadCanvasV2EvidenceVisuals|buildCanvasV2AgentResearch/);
@@ -274,6 +338,7 @@ test("the production loop materializes research before another model turn and re
   assert.match(hook, /kind: pendingActionKind/);
   assert.match(hook, /artboard is still preparing its first visual observation/);
   assert.match(workspace, /left-\[max\(50%,770px\)\]/);
-  assert.match(loop, /CANVAS_V2_MAX_AUTOMATIC_EDITS = 8/);
+  assert.match(loop, /CANVAS_V2_MAX_CONTEXT_STEPS = 24/);
+  assert.doesNotMatch(loop, /edit-limit-reached/);
   assert.doesNotMatch(`${route}\n${hook}`, /@\/lib\/canvas-ai\//);
 });

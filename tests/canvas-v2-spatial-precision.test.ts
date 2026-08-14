@@ -36,7 +36,8 @@ test("North Star spatial grammar protects precision without prescribing one comp
   assert.match(grammar, /Let content determine height/);
   assert.match(grammar, /natural aspect ratio/);
   assert.match(grammar, /connectors, arrows, and overlays/i);
-  assert.match(grammar, /downscaled complete-artboard screenshot/);
+  assert.match(grammar, /downscaled complete-artboard overview/);
+  assert.match(grammar, /segmented views of long canonical rails/);
 });
 
 test("the browser proof includes a distinct relationship composition with declared overlap", () => {

@@ -6,7 +6,7 @@ import { parseCanvasV2InteractionDecision } from "@/lib/canvas-v2/interaction-ro
 import {
   CanvasV2ProviderError,
   canvasV2ProviderErrorResponse,
-  fetchCanvasV2ProviderJson,
+  fetchCanvasV2ProviderJsonWithFallback,
   invalidCanvasV2ProviderResponse,
 } from "@/lib/canvas-v2/provider-reliability";
 import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/canvas-v2/types";
@@ -14,8 +14,8 @@ import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MODEL = process.env.CANVAS_V2_ROUTER_MODEL || process.env.CANVAS_V2_MODEL || "gemini-3.1-flash-lite";
-const PROVIDER_TIMEOUT_MS = 25_000;
+const PRIMARY_MODEL = process.env.CANVAS_V2_ROUTER_MODEL || process.env.CANVAS_V2_MODEL || "gemini-3.1-flash-lite";
+const FALLBACK_MODEL = process.env.CANVAS_V2_ROUTER_FALLBACK_MODEL || process.env.CANVAS_V2_FALLBACK_MODEL || "gemini-3.5-flash-lite";
 const SYSTEM = `You are the interaction router and conversational voice for North Star Canvas V2.
 Choose exactly one route based on what the user is asking to happen now:
 - conversation: answer normally; the user is not asking to read or change the artboard.
@@ -53,7 +53,8 @@ export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "You must be signed in to use North Star.", code: "invalid-request", retryable: false }, { status: 401 });
-  if (!process.env.GEMINI_API_KEY) return NextResponse.json({ error: "GEMINI_API_KEY is not configured.", code: "configuration", retryable: false }, { status: 500 });
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return NextResponse.json({ error: "GEMINI_API_KEY is not configured.", code: "configuration", retryable: false }, { status: 500 });
   try {
     const body = await request.json() as {
       message?: unknown;
@@ -94,25 +95,34 @@ export async function POST(request: NextRequest) {
     const screenshot = imagePart(body.observation);
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: JSON.stringify(context) }];
     if (screenshot) parts.push({ text: "Current rendered artboard:" }, screenshot);
-    const payload = await fetchCanvasV2ProviderJson<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>({
-      url: `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+    const provider = await fetchCanvasV2ProviderJsonWithFallback<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>({
+      primaryModel: PRIMARY_MODEL,
+      fallbackModel: FALLBACK_MODEL,
       requestSignal: request.signal,
-      timeoutMs: PROVIDER_TIMEOUT_MS,
-      init: {
+      validatePayload: (candidatePayload) => {
+        const text = candidatePayload.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+        if (!text) throw new Error("North Star router returned no decision.");
+        parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection);
+      },
+      requestForModel: (model) => ({
+        url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        init: {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         cache: "no-store",
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM }] },
           contents: [{ role: "user", parts }],
           generationConfig: { temperature: 0.15, maxOutputTokens: 4_096, responseMimeType: "application/json", responseJsonSchema: RESPONSE_SCHEMA },
         }),
-      },
+        },
+      }),
     });
+    const payload = provider.payload;
     try {
       const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
       if (!text) throw new Error("North Star router returned no decision.");
-      return NextResponse.json({ decision: parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection), model: MODEL });
+      return NextResponse.json({ decision: parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection), model: provider.model, fallbackUsed: provider.fallbackUsed, providerAttempts: provider.attempts });
     } catch (error) {
       throw invalidCanvasV2ProviderResponse(error instanceof Error ? error.message : "North Star router returned an invalid decision.");
     }

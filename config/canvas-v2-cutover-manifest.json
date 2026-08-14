@@ -5,8 +5,8 @@
   "canonicalRoute": {
     "path": "/canvas",
     "file": "app/canvas/page.tsx",
-    "currentOwner": "Canvas V2 without fallback",
-    "targetOwner": "Canvas V2 without fallback",
+    "currentOwner": "Canvas V2 with primary/fallback provider continuity",
+    "targetOwner": "Canvas V2 with primary/fallback provider continuity",
     "cutoverPhase": "7E.3 complete"
   },
   "previewAlias": {
@@ -17,12 +17,20 @@
     "cutoverPhase": "7E.3 complete"
   },
   "retirementReadiness": {
-    "status": "paused-pending-7e3.1-live-proof",
-    "reason": "The authenticated 7E.2 run proved the production mechanics but selected one shallow journey and produced an underdeveloped composition. V1 remains dormant and recoverable until the taxonomy-aware resolver is exercised against the standard prompt.",
+    "status": "paused-pending-7e3.5-live-proof",
+    "reason": "The authenticated post-7E.3.4 run proved media resolution and intrinsic bounds but exposed a curated sibling-taxonomy gap, wrapped evidence semantics, and avoidable provider calls during required research. 7E.3.5 compiles shared-entry-to-branch journeys, preserves uninterrupted horizontal rails, and grounds required evidence deterministically. V1 remains dormant until this behavior is exercised against authenticated tenant data.",
     "requiredProof": [
-      "both named apps resolve to preferred or adequate tenant journeys",
-      "canonical evidence reflects coherent taxonomy coverage rather than an arbitrary leaf",
-      "the completed artboard contains evidence-grounded analytical development at an inspectable scale"
+      "both named apps resolve to preferred or adequate tenant journeys or complete branch paths",
+      "canonical evidence reflects coherent taxonomy coverage rather than an arbitrary stage or flattened branch collection",
+      "the main Flow explorer and Canvas V2 resolve the same working absolute screenshot URLs",
+      "every canonical screenshot is whole and visible with no hidden right-edge boundary",
+      "a primary provider overload hands the same logical turn to fallback or pauses resumably if both providers are unavailable",
+      "the completed artboard contains evidence-grounded analytical development at an inspectable scale without identity-validation failure",
+      "curated sibling taxonomies resolve a shared entry followed by one complete branch rather than a branch alone or every alternative",
+      "each canonical journey remains one uninterrupted horizontal rail while the artboard grows to its intrinsic width",
+      "required named-app retrieval commits visibly without consuming a creative provider call",
+      "wide canonical rails provide bounded overview and legible segmented model observations",
+      "refresh clears the artboard, chat, active work, and undo history back to the canonical starter"
     ]
   },
   "productionV2": {
@@ -38,8 +46,9 @@
     ],
     "workspace": "components/canvas-v2/canvas-v2-workspace.tsx",
     "sharedDataAdapter": "lib/app-data/canvas-v2-catalog.ts",
-    "localRecoveryKey": "northstar.canvas-v2.local-recovery.v1",
-    "expectedSourceFileCount": 31
+    "sharedMediaAdapter": "lib/app-data/review-media.ts",
+    "pageLifecycle": "in-memory only; refresh starts a clean canvas and discards obsolete V2 recovery keys",
+    "expectedSourceFileCount": 35
   },
   "testOnly": {
     "routeRoots": [
@@ -76,10 +85,11 @@
     "browserTestPattern": "e2e/northstar-*.spec.ts",
     "browserTestCount": 3,
     "expectedRuntimeFileCount": 54,
-    "retirementPhase": "7E.4 only after the 7E.3.1 live-proof hold is cleared"
+    "retirementPhase": "7E.4 only after the 7E.3.5 live-proof hold is cleared"
   },
   "sharedKeep": [
     "lib/app-data/canvas-v2-catalog.ts",
+    "lib/app-data/review-media.ts",
     "lib/supabase/client.ts",
     "lib/supabase/server.ts",
     "proxy.ts",
@@ -89,7 +99,10 @@
   "gates": [
     "7E.2 authenticated production proof is recorded in config/canvas-v2-production-proof.json",
     "7E.3 makes /canvas V2-only, removes CANVAS_ENGINE, and redirects /canvas-v2 to /canvas",
-    "7E.3.1 keeps V1 retirement paused until taxonomy-aware tenant retrieval and composition quality are re-proven live",
+    "7E.3.2 keeps V1 retirement paused until representative tenant retrieval, bounded evidence geometry, and corrective synthesis are re-proven live",
+    "7E.3.3 makes refresh a hard page-session reset with no local canvas persistence",
+    "7E.3.4 makes tenant paths branch-aware, resolves one canonical media URL, exposes complete intrinsic artboard bounds, and adds audited provider fallback",
+    "7E.3.5 compiles curated common-entry branches, preserves single-row journey rails, retrieves required evidence without model calls, and shares one provider deadline",
     "7E.4 deletes every declared V1 runtime root and legacy-only test surface only after that hold is cleared",
     "7E.5 passes typecheck, V2 unit tests, V2 browser tests, production build, and live smoke tests"
   ]

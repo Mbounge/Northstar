@@ -1,5 +1,10 @@
 # Phase 7D.4 — Browser-local recovery and manual-edit truth
 
+> Historical note: Phase 7E.3.3 supersedes the refresh behavior in this phase.
+> Canvas V2 no longer restores or persists artboard, chat, or history state.
+> Refresh now opens a completely clean in-memory canvas. The manual candidate
+> safety contracts described below still apply within one page session.
+
 Phase 7D.4 makes refresh and reopening safe before North Star has any remote
 persistence. It does not create database tables, write to Supabase, synchronize
 across browsers, or import the V1 persistence/runtime-document machinery.

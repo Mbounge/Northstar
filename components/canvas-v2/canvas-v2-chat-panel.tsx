@@ -24,7 +24,7 @@ import type { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import type { CanvasV2InteractionRoute } from "@/lib/canvas-v2/interaction-router";
 import type { CanvasV2ResearchRequirement } from "@/lib/canvas-v2/research-director";
-import { canvasV2RetryReason, type CanvasV2RetryState } from "@/lib/canvas-v2/request-reliability";
+import { canvasV2RetryReason, type CanvasV2ProviderAttemptAudit, type CanvasV2RetryState } from "@/lib/canvas-v2/request-reliability";
 import type { CanvasV2CreativeMoveKind } from "@/lib/canvas-v2/types";
 
 const ROUTE_PRESENTATION: Record<CanvasV2InteractionRoute, { label: string; icon: typeof MessageCircle }> = {
@@ -54,12 +54,25 @@ function RetryProgress({ retry }: { retry: CanvasV2RetryState }) {
   return <span>{canvasV2RetryReason(retry.code)} — retrying request {retry.attempt} of {retry.maxAttempts}…</span>;
 }
 
+function ModelAttempts({ attempts }: { attempts: CanvasV2ProviderAttemptAudit[] }) {
+  const visibleAttempts = attempts.filter((attempt) => attempt.outcome !== "invalid-response");
+  if (!visibleAttempts.length) return null;
+  return <div className="mb-3 grid gap-1 border-b border-[#efedf8] pb-3 text-[10px] text-[#777287]">
+    <div className="font-black uppercase tracking-[.14em] text-[#9a91d9]">Model activity</div>
+    {visibleAttempts.map((attempt, index) => <div key={`${attempt.model}-${index}`} title={attempt.detail} className="flex justify-between gap-3">
+      <span className="truncate font-semibold text-[#555064]">{attempt.model}</span>
+      <span className="shrink-0">{attempt.outcome.replaceAll("-", " ")}{attempt.attempt && attempt.attempt > 1 ? ` · attempt ${attempt.attempt}` : ""}{attempt.httpStatus ? ` · HTTP ${attempt.httpStatus}` : ""} · {(attempt.durationMs / 1_000).toFixed(1)}s</span>
+    </div>)}
+  </div>;
+}
+
 function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
   const loops = [...(turn.priorLoops ?? []), ...(turn.loop ? [turn.loop] : [])];
   const loop = turn.loop ?? loops.at(-1);
   const steps = loops.flatMap((entry) => entry.steps);
   const researchStatus = loop?.researchStatus ?? (loop?.researchTargets ?? turn.researchTargets ?? []).map<CanvasV2ResearchRequirement>((requestedName) => ({ requestedName, state: "unresolved", usableFlowIds: [], adequateFlowIds: [], visibleFlowIds: [], visibleAdequateFlowIds: [] }));
   return <div className="mt-3 border-l border-[#ded9ff] pl-4">
+    {loop?.providerAttempts?.length ? <ModelAttempts attempts={loop.providerAttempts} /> : null}
     {loop?.creativeDirection && <div className="mb-4 border-b border-[#efedf8] pb-3">
       <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#9a91d9]">Creative direction</div>
       <p className="mt-1 text-[12px] font-semibold leading-[1.5] text-[#4c485d]">{loop.creativeDirection.visualThesis}</p>
@@ -93,12 +106,13 @@ function ChatTurn({ turn, busy, onContinue }: { turn: CanvasV2ChatTurn; busy: bo
       <div className="min-w-0 flex-1 pt-0.5">
         {turn.status === "routing" && <div className="flex items-center gap-2 text-[13px] text-[#727282]"><Loader2 className="h-3.5 w-3.5 animate-spin text-[#735fff]" />{turn.retry ? <RetryProgress retry={turn.retry} /> : "Understanding your request…"}</div>}
         {turn.route && <RouteLabel route={turn.route} />}
+        {turn.providerAttempts?.length ? <ModelAttempts attempts={turn.providerAttempts} /> : null}
         {turn.answer && <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-[#3f3f4d]">{turn.answer}</p>}
         {turn.routeSummary && !turn.answer && <p className="text-[13px] leading-[1.6] text-[#454554]">{turn.routeSummary}</p>}
         {turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}
         {turn.loop?.finalSummary && <div className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d]">{turn.loop.finalSummary}</div>}
         {turn.status === "incomplete" && <div className="mt-3 rounded-xl border border-[#e3ddff] bg-[#f8f6ff] px-3.5 py-3 text-xs leading-5 text-[#5d5870]">
-          <p><span className="font-bold text-[#413a67]">Continuation required.</span> North Star reached the safe revision boundary before declaring the composition complete. The latest verified artboard is preserved.</p>
+          <p><span className="font-bold text-[#413a67]">{turn.loop?.status === "paused" ? "Provider pause." : "Continuation required."}</span> {turn.loop?.status === "paused" ? (turn.loop.pauseReason ?? "Both model providers are temporarily unavailable.") : "North Star reached the safe revision boundary before declaring the composition complete."} The latest verified artboard is preserved.</p>
           <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Continue from this artboard</button>
         </div>}
         {turn.status === "stopped" && <div className="mt-3 text-xs font-semibold text-[#777789]">Stopped. The latest committed artboard remains visible.</div>}
@@ -145,7 +159,6 @@ export function CanvasV2ChatPanel({
         </div>
       </div>}
       <div className="space-y-7">{chat.turns.map((turn) => <ChatTurn key={turn.id} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} />)}</div>
-      {(engine.persistenceNotice || chat.persistenceNotice) && <div data-testid="canvas-v2-recovery-notice" className="mt-5 rounded-xl border border-[#eadfca] bg-[#fffaf0] px-3 py-2.5 text-xs leading-5 text-[#80683f]">{engine.persistenceNotice ?? chat.persistenceNotice}</div>}
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Rendering the manual revision…</div>}
       {engine.manualNotice && <div className="mt-5 text-xs font-semibold leading-5 text-[#6e6b7b]">{engine.manualNotice}</div>}
       {engine.manualError && <div className="mt-5 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44]">{engine.manualError}</div>}

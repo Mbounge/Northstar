@@ -2,25 +2,18 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { canvasV2ChatStatusForLoop, restoreCanvasV2ChatStatus } from "../lib/canvas-v2/chat-lifecycle";
+import { canvasV2ChatStatusForLoop } from "../lib/canvas-v2/chat-lifecycle";
 import type { CanvasV2LoopState } from "../lib/canvas-v2/design-loop";
 
 function loop(status: CanvasV2LoopState["status"]): CanvasV2LoopState {
   return { id: "run", instruction: "Design", status, steps: [] };
 }
 
-test("the safety edit limit is incomplete rather than completed", () => {
+test("paused work is incomplete rather than falsely completed", () => {
   assert.equal(canvasV2ChatStatusForLoop(loop("completed")), "completed");
-  assert.equal(canvasV2ChatStatusForLoop(loop("edit-limit-reached")), "incomplete");
+  assert.equal(canvasV2ChatStatusForLoop(loop("paused")), "incomplete");
   assert.equal(canvasV2ChatStatusForLoop(loop("stopped")), "stopped");
   assert.equal(canvasV2ChatStatusForLoop(loop("failed")), "failed");
-});
-
-test("only interrupted active work is normalized to stopped after reload", () => {
-  assert.equal(restoreCanvasV2ChatStatus("routing"), "stopped");
-  assert.equal(restoreCanvasV2ChatStatus("running"), "stopped");
-  assert.equal(restoreCanvasV2ChatStatus("incomplete"), "incomplete");
-  assert.equal(restoreCanvasV2ChatStatus("completed"), "completed");
 });
 
 test("routing and design ownership cannot overwrite a stopped or newer turn", () => {

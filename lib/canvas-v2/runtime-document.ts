@@ -15,9 +15,9 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root { --northstar-ink:#151620; --northstar-muted:#737686; --northstar-violet:#6b4dff; --northstar-line:rgba(78,67,135,.10); --northstar-artboard:#ffffff; }
-    html, body { margin: 0; min-width: 1680px; min-height: 945px; background: var(--northstar-artboard); }
-    html, body { overflow: hidden; }
-    body { width: max-content; color:var(--northstar-ink); font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
+    html, body { margin:0; min-width:1680px; min-height:945px; background:var(--northstar-artboard); overflow:visible; }
+    html { width:fit-content; }
+    body { width:fit-content; color:var(--northstar-ink); font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
     ${escapeStyleEnd(document.css)}
   </style>
 </head>

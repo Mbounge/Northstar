@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import {
-  CANVAS_V2_MAX_AUTOMATIC_EDITS,
+  CANVAS_V2_MAX_CONTEXT_STEPS,
   canvasV2LoopIsActive,
   completeCanvasV2Loop,
   createCanvasV2Loop,
   failCanvasV2Loop,
+  pauseCanvasV2Loop,
   recordCanvasV2CommittedEdit,
   stopCanvasV2Loop,
   type CanvasV2LoopContinuation,
@@ -18,10 +19,6 @@ import {
   createCanvasV2CandidateRevision,
   createCanvasV2CommittedRevision,
 } from "@/lib/canvas-v2/revisions";
-import {
-  loadCanvasV2LocalRecovery,
-  persistCanvasV2ArtifactRecovery,
-} from "@/lib/canvas-v2/local-recovery";
 import type {
   CanvasV2ArtifactDocument,
   CanvasV2ArtifactRevision,
@@ -39,7 +36,7 @@ import {
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
 import { validateCanvasV2RenderedEvidenceIntegrity } from "@/lib/canvas-v2/evidence-authorship";
-import { CANVAS_V2_DESIGN_REQUEST_POLICY, requestCanvasV2Json } from "@/lib/canvas-v2/request-reliability";
+import { CANVAS_V2_DESIGN_REQUEST_POLICY, CanvasV2RequestError, requestCanvasV2Json, type CanvasV2ProviderAttemptAudit } from "@/lib/canvas-v2/request-reliability";
 import {
   settleCanvasV2ResearchRequirement,
   type CanvasV2ResearchRequirement,
@@ -61,7 +58,7 @@ type PendingCanvasV2Edit = Omit<CanvasV2EditDecision, "moveKind"> & {
 
 const STARTER_DOCUMENT = {
   html: `<main class="northstar-artboard" data-canvas-v2-node-id="artboard" aria-label="Empty North Star artboard"></main>`,
-  css: `.northstar-artboard { position:relative; width:1680px; min-width:1680px; min-height:945px; overflow:visible; padding:56px; background:#fff; color:#151620; }`,
+  css: `.northstar-artboard { position:relative; box-sizing:border-box; width:1680px; min-width:1680px; min-height:945px; overflow:visible; padding:56px; background:#fff; color:#151620; }`,
 };
 function id(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -77,9 +74,6 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const [committed, setCommitted] = useState<CanvasV2ArtifactRevision>(initial);
   const [history, setHistory] = useState<CanvasV2ArtifactRevision[]>([initial]);
   const [historyIndex, setHistoryIndex] = useState(0);
-  const [persistenceReady, setPersistenceReady] = useState(false);
-  const [persistenceNotice, setPersistenceNotice] = useState<string>();
-  const persistenceWriteBlocked = useRef(false);
   const [candidate, setCandidate] = useState<CanvasV2ArtifactRevision>();
   const [pendingEdit, setPendingEdit] = useState<PendingCanvasV2Edit>();
   const [pendingActionKind, setPendingActionKind] = useState<"research" | "design">("design");
@@ -102,25 +96,6 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     loopRef.current = next;
     setLoop(next);
   };
-
-  useEffect(() => {
-    const recovery = loadCanvasV2LocalRecovery(window.localStorage);
-    persistenceWriteBlocked.current = recovery.writeBlocked;
-    setPersistenceNotice(recovery.notice);
-    const artifact = recovery.envelope?.artifact;
-    if (artifact) {
-      setCommitted(artifact.history[artifact.historyIndex]);
-      setHistory(artifact.history);
-      setHistoryIndex(artifact.historyIndex);
-    }
-    setPersistenceReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!persistenceReady || persistenceWriteBlocked.current) return;
-    const result = persistCanvasV2ArtifactRecovery(window.localStorage, history, historyIndex);
-    if (!result.ok) setPersistenceNotice(result.error);
-  }, [history, historyIndex, persistenceReady]);
 
   const acceptCommittedRevision = (revision: CanvasV2ArtifactRevision) => {
     setCommitted(revision);
@@ -146,6 +121,9 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         evidence?: CanvasV2EvidenceAsset[];
         research?: CanvasV2ResearchResult;
         researchStatus?: CanvasV2ResearchRequirement[];
+        model?: string;
+        fallbackUsed?: boolean;
+        providerAttempts?: CanvasV2ProviderAttemptAudit[];
         error?: string;
       }>({
         endpoint: designEndpoint,
@@ -158,8 +136,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
           observation,
           run: {
             turn: activeLoop.steps.length + 1,
-            maxEdits: CANVAS_V2_MAX_AUTOMATIC_EDITS,
-            priorSteps: [...(activeLoop.priorSteps ?? []), ...activeLoop.steps].slice(-CANVAS_V2_MAX_AUTOMATIC_EDITS),
+            priorSteps: [...(activeLoop.priorSteps ?? []), ...activeLoop.steps].slice(-CANVAS_V2_MAX_CONTEXT_STEPS),
             creativeDirection: activeLoop.creativeDirection,
             spatialStrategy: activeLoop.spatialStrategy,
             researchTargets: activeLoop.researchTargets,
@@ -177,6 +154,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         publishLoop({
           ...completeCanvasV2Loop(activeLoop, payload.decision.summary, payload.decision.creativeDirection, payload.decision.spatialStrategy, payload.decision.reflection),
           researchStatus: payload.researchStatus,
+          providerAttempts: payload.providerAttempts,
         });
         activeRunId.current = undefined;
         return;
@@ -200,7 +178,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         setPendingActionKind("research");
         setPendingResearch({ appId: payload.decision.appId, flowId: payload.decision.flowId });
         setCandidate(createCanvasV2CandidateRevision({ id: id("research-revision"), parent: revision, document: insertion.document, evidence: insertion.evidence, createdAt: new Date().toISOString() }));
-        publishLoop({ ...activeLoop, status: "rendering", retry: undefined, researchStatus: payload.researchStatus });
+        publishLoop({ ...activeLoop, status: "rendering", retry: undefined, researchStatus: payload.researchStatus, providerAttempts: payload.providerAttempts });
         return;
       }
       setPendingEdit(payload.decision);
@@ -213,10 +191,13 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         evidence: payload.evidence,
         createdAt: new Date().toISOString(),
       }));
-      publishLoop({ ...activeLoop, status: "rendering", retry: undefined, researchStatus: payload.researchStatus });
+      publishLoop({ ...activeLoop, status: "rendering", retry: undefined, researchStatus: payload.researchStatus, providerAttempts: payload.providerAttempts });
     } catch (requestError) {
       if (controller.signal.aborted || activeRunId.current !== activeLoop.id) return;
-      publishLoop(failCanvasV2Loop(activeLoop, requestError instanceof Error ? requestError.message : "Canvas V2 request failed."));
+      const message = requestError instanceof Error ? requestError.message : "Canvas V2 request failed.";
+      publishLoop(requestError instanceof CanvasV2RequestError && !requestError.retryable && requestError.providerAttempts?.length
+        ? { ...pauseCanvasV2Loop(activeLoop, message), providerAttempts: requestError.providerAttempts }
+        : failCanvasV2Loop(activeLoop, message));
       activeRunId.current = undefined;
     } finally {
       if (requestController.current === controller) requestController.current = undefined;
@@ -400,7 +381,6 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     loop,
     running,
     applyingManualEdit,
-    persistenceNotice,
     manualSummary: pendingManualEdit?.summary,
     manualError,
     manualNotice,

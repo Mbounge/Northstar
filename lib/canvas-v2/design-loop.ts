@@ -4,11 +4,16 @@ import type {
   CanvasV2RenderedReflection,
   CanvasV2SpatialStrategy,
 } from "@/lib/canvas-v2/types";
-import type { CanvasV2RetryState } from "@/lib/canvas-v2/request-reliability";
+import type { CanvasV2ProviderAttemptAudit, CanvasV2RetryState } from "@/lib/canvas-v2/request-reliability";
 import type { CanvasV2ResearchRequirement } from "@/lib/canvas-v2/research-director";
 import type { CanvasV2ResearchMode } from "@/lib/canvas-v2/interaction-router";
 
-export const CANVAS_V2_MAX_AUTOMATIC_EDITS = 8;
+/**
+ * Context is compacted independently from execution. This is not a turn cap:
+ * the model remains responsible for declaring creative completion, while the
+ * user, cancellation, or a provider failure can stop a run at any time.
+ */
+export const CANVAS_V2_MAX_CONTEXT_STEPS = 24;
 
 export type CanvasV2LoopStatus =
   | "idle"
@@ -16,8 +21,8 @@ export type CanvasV2LoopStatus =
   | "rendering"
   | "completed"
   | "stopped"
-  | "failed"
-  | "edit-limit-reached";
+  | "paused"
+  | "failed";
 
 export interface CanvasV2LoopStep {
   turn: number;
@@ -43,10 +48,12 @@ export interface CanvasV2LoopState {
   finalReflection?: CanvasV2RenderedReflection;
   finalSummary?: string;
   error?: string;
+  pauseReason?: string;
   retry?: CanvasV2RetryState;
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
   researchStatus?: CanvasV2ResearchRequirement[];
+  providerAttempts?: CanvasV2ProviderAttemptAudit[];
 }
 
 export interface CanvasV2LoopContinuation {
@@ -77,7 +84,7 @@ export function createCanvasV2Loop(input: {
     researchMode: input.continuation?.researchMode ?? input.researchMode,
     ...(input.continuation ? {
       continuationOf: input.continuation.previousRunId,
-      priorSteps: (input.continuation.priorSteps ?? []).slice(-CANVAS_V2_MAX_AUTOMATIC_EDITS),
+      priorSteps: (input.continuation.priorSteps ?? []).slice(-CANVAS_V2_MAX_CONTEXT_STEPS),
       creativeDirection: input.continuation.creativeDirection,
       spatialStrategy: input.continuation.spatialStrategy,
       researchStatus: input.continuation.researchStatus,
@@ -107,7 +114,6 @@ export function recordCanvasV2CommittedEdit(input: {
   spatialStrategy: CanvasV2SpatialStrategy;
   reflection: CanvasV2RenderedReflection;
   researchStatus?: CanvasV2ResearchRequirement[];
-  maxEdits?: number;
 }): CanvasV2LoopState {
   if (input.loop.status !== "rendering") throw new Error("Canvas V2 can record an edit only after candidate rendering.");
   const steps = [...input.loop.steps, {
@@ -121,10 +127,9 @@ export function recordCanvasV2CommittedEdit(input: {
     spatialStrategy: input.spatialStrategy,
     reflection: input.reflection,
   }];
-  const maxEdits = input.maxEdits ?? CANVAS_V2_MAX_AUTOMATIC_EDITS;
   return {
     ...withoutRetry(input.loop),
-    status: steps.length >= maxEdits ? "edit-limit-reached" : "thinking",
+    status: "thinking",
     steps,
     creativeDirection: input.creativeDirection,
     spatialStrategy: input.spatialStrategy,
@@ -145,6 +150,10 @@ export function completeCanvasV2Loop(
 
 export function stopCanvasV2Loop(loop: CanvasV2LoopState): CanvasV2LoopState {
   return { ...withoutRetry(loop), status: "stopped", error: undefined };
+}
+
+export function pauseCanvasV2Loop(loop: CanvasV2LoopState, reason: string): CanvasV2LoopState {
+  return { ...withoutRetry(loop), status: "paused", error: undefined, pauseReason: reason };
 }
 
 export function failCanvasV2Loop(loop: CanvasV2LoopState, error: string): CanvasV2LoopState {

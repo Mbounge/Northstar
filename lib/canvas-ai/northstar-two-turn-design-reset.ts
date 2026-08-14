@@ -2118,7 +2118,7 @@ function collectNorthstarAuthoredIds(html: string): Set<string> {
   return ids;
 }
 
-function assertNorthstarCoherentObservedAction(mutation: NorthstarArtboardMutationBatch): void {
+function assertNorthstarCoherentObservedAction(mutation: NorthstarArtboardMutationDraft): void {
   const operations = mutation.operations;
   if (operations.length === 1) return;
 

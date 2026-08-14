@@ -25,11 +25,12 @@ export interface CanvasV2ResearchCatalogIndex {
       description?: string;
       platform?: string;
       sessionType?: string;
-      scope: "journey" | "flow" | "session";
+      scope: "journey" | "path" | "flow" | "collection" | "session";
       taxonomyPath: string[];
       descendantFlowCount: number;
       screenCount: number;
       duplicateScreenCount: number;
+      completeJourney: boolean;
       screenNames: string[];
       selectionRank: number;
       selection: "preferred" | "adequate" | "supporting";
@@ -61,9 +62,11 @@ export interface CanvasV2ResearchRequirement {
 export type CanvasV2ResearchDecisionKind = "research" | "edit" | "complete";
 
 export interface CanvasV2ResearchDecisionPolicy {
-  phase: "ground-required-evidence" | "synthesize-grounded-evidence" | "open-design";
+  phase: "ground-required-evidence" | "resolve-grounded-synthesis" | "open-design";
   permittedDecisions: CanvasV2ResearchDecisionKind[];
   reason: string;
+  requiresPlannedContinuation?: boolean;
+  requiredNextMoves?: string[];
 }
 
 function normalize(value: string): string {
@@ -129,7 +132,11 @@ function explicitlyNamesFlow(instruction: string, flow: AppDataFlow): boolean {
   if (!terms.length) return false;
   const prompt = normalize(instruction);
   const title = normalize(flow.name);
-  return prompt.includes(title) || terms.every((term) => prompt.includes(` ${term} `));
+  const namedTaxonomySegment = (flow.taxonomyPath ?? []).some((segment) => {
+    const segmentTerms = normalize(segment).trim().split(" ").filter((term) => term.length > 2 && !GENERIC_FLOW_TERMS.has(term));
+    return segmentTerms.length > 0 && segmentTerms.every((term) => prompt.includes(` ${term} `));
+  });
+  return prompt.includes(title) || terms.every((term) => prompt.includes(` ${term} `)) || namedTaxonomySegment;
 }
 
 function flowScopeMatch(flow: AppDataFlow, sessions: readonly string[], platforms: readonly string[]): "exact" | "compatible" | "mismatch" {
@@ -141,7 +148,18 @@ function flowScopeMatch(flow: AppDataFlow, sessions: readonly string[], platform
   return "mismatch";
 }
 
-function flowRelevance(flow: AppDataFlow, terms: readonly string[], scopeMatch: FlowAssessment["scopeMatch"], preferJourney: boolean, exactFlowName: boolean): number {
+function requestsRepresentativeEvidence(instruction: string): boolean {
+  return /\b(?:choose|select|use|show|present)\s+(?:[a-z]+\s+){0,3}representative\s+(?:flows?|paths?|screens?|screenshots?|evidence)\b/i.test(instruction);
+}
+
+function flowRelevance(
+  flow: AppDataFlow,
+  terms: readonly string[],
+  scopeMatch: FlowAssessment["scopeMatch"],
+  preferJourney: boolean,
+  preferRepresentativePath: boolean,
+  exactFlowName: boolean,
+): number {
   const title = normalize(flow.name);
   const description = normalize(flow.description ?? "");
   const session = normalize([flow.platform, flow.sessionType].filter(Boolean).join(" "));
@@ -154,12 +172,14 @@ function flowRelevance(flow: AppDataFlow, terms: readonly string[], scopeMatch: 
     + (description.includes(` ${term} `) ? 10 : 0)
     + (screens.includes(` ${term} `) ? 4 : 0), 0);
   score += scopeMatch === "exact" ? 90 : scopeMatch === "mismatch" ? -120 : 0;
-  score += flow.scope === "journey" ? 110 : flow.scope === "session" ? 30 : 20;
+  score += flow.scope === "path" ? 125 : flow.scope === "journey" ? 115 : flow.scope === "flow" ? 25 : flow.scope === "collection" ? -45 : -70;
   score += Math.min(24, flow.screens.length) * 3;
   score += Math.min(8, flow.descendantFlowCount ?? 0) * 4;
   if (flow.scope === "session" && flow.screens.length > 40) score -= Math.min(60, flow.screens.length - 40);
   if (exactFlowName) score += 220;
+  if (flow.completeJourney && (preferJourney || preferRepresentativePath)) score += 260;
   if (preferJourney) score += flow.scope === "journey" ? 100 : flow.scope === "flow" ? -40 : -15;
+  if (preferRepresentativePath) score += flow.scope === "path" ? 190 : flow.scope === "journey" ? 130 : -90;
   return score;
 }
 
@@ -169,24 +189,36 @@ function assessedFlows(app: AppDataApp, instruction: string, catalog: AppDataCat
   const platforms = requestedPlatforms(instruction);
   const usable = app.flows.filter((flow) => flow.screens.length > 0 && flow.screens.every((screen) => Boolean(screen.imageUrl)));
   const exactNames = new Set(usable.filter((flow) => explicitlyNamesFlow(instruction, flow)).map((flow) => flow.id));
-  const scopedJourneys = usable.filter((flow) => flow.scope === "journey" && flowScopeMatch(flow, sessions, platforms) !== "mismatch");
-  const preferJourney = Boolean(sessions.length && !exactNames.size && scopedJourneys.length);
+  const scopedJourneys = usable.filter((flow) => (flow.scope === "journey" || flow.scope === "path") && flowScopeMatch(flow, sessions, platforms) !== "mismatch");
+  const completeJourneys = scopedJourneys.filter((flow) => flow.completeJourney);
+  const scopedPaths = scopedJourneys.filter((flow) => flow.scope === "path");
+  // A broad journey request must start at the product's shared entry whenever
+  // the curated taxonomy provides a complete entry-to-branch candidate. Exact
+  // branch requests remain free to select their named branch directly.
+  const authoritativeJourneys = completeJourneys.length
+    ? completeJourneys
+    : scopedPaths.length ? scopedPaths : scopedJourneys.filter((flow) => flow.scope === "journey");
+  const representativeCandidates = authoritativeJourneys;
+  const preferRepresentativePath = Boolean(!exactNames.size && requestsRepresentativeEvidence(instruction) && representativeCandidates.length);
+  const preferJourney = Boolean(sessions.length && !exactNames.size && authoritativeJourneys.length && !preferRepresentativePath);
   const scored = usable.map((flow, sourceIndex) => {
     const scopeMatch = flowScopeMatch(flow, sessions, platforms);
     return {
       flow,
       sourceIndex,
       scopeMatch,
-      score: flowRelevance(flow, terms, scopeMatch, preferJourney, exactNames.has(flow.id)),
+      score: flowRelevance(flow, terms, scopeMatch, preferJourney, preferRepresentativePath, exactNames.has(flow.id)),
     };
   });
-  const preferredPool = scored.filter((assessment) => {
+  const selectable = scored.filter((assessment) => assessment.flow.scope !== "collection" || exactNames.has(assessment.flow.id));
+  const preferredPool = selectable.filter((assessment) => {
     if (exactNames.size) return exactNames.has(assessment.flow.id);
-    if (preferJourney) return assessment.flow.scope === "journey" && assessment.scopeMatch !== "mismatch";
+    if (preferRepresentativePath) return representativeCandidates.some((flow) => flow.id === assessment.flow.id);
+    if (preferJourney) return authoritativeJourneys.some((flow) => flow.id === assessment.flow.id);
     const hasExactScope = scored.some((candidate) => candidate.scopeMatch === "exact");
     return hasExactScope ? assessment.scopeMatch === "exact" : assessment.scopeMatch !== "mismatch";
   });
-  const fallbackPool = preferredPool.length ? preferredPool : scored;
+  const fallbackPool = preferredPool.length ? preferredPool : selectable.length ? selectable : scored;
   const bestScore = Math.max(...fallbackPool.map((assessment) => assessment.score), Number.NEGATIVE_INFINITY);
   return scored
     .map((assessment): FlowAssessment => {
@@ -195,11 +227,15 @@ function assessedFlows(app: AppDataApp, instruction: string, catalog: AppDataCat
       const selection = inPool && distance <= 0 ? "preferred" : inPool && distance <= 18 ? "adequate" : "supporting";
       const scope = assessment.flow.scope ?? "flow";
       const selectionReason = selection === "preferred"
-        ? `Best ${assessment.scopeMatch === "exact" ? "scope-matched " : ""}${scope} coverage for this request.`
+        ? assessment.flow.completeJourney
+          ? "Authoritative shared-entry-to-branch journey for this broad request."
+          : `Best ${assessment.scopeMatch === "exact" ? "scope-matched " : ""}${scope} coverage for this request.`
         : selection === "adequate"
           ? `Comparable ${scope} coverage within the preferred evidence set.`
-          : preferJourney && scope !== "journey"
-            ? "A narrower path or session-wide capture is supporting evidence; a coherent taxonomy journey is available."
+          : preferRepresentativePath && scope !== "path" && scope !== "journey"
+            ? "A taxonomy collection, stage, or session dump is supporting material; the user requested a complete representative journey path."
+          : preferJourney && scope !== "journey" && scope !== "path"
+            ? "A stage, aggregate collection, or session-wide capture is supporting evidence; a coherent taxonomy path is available."
             : assessment.scopeMatch === "mismatch"
               ? "The captured session or platform does not match the requested scope."
               : "Useful supporting evidence, but not the strongest coverage for the requested scope.";
@@ -298,7 +334,7 @@ export function buildCanvasV2ResearchCatalogIndex(
       includedAppCount: scopedApps.length,
       omittedAppCount: Math.max(0, catalog.apps.length - scopedApps.length),
       maxFlowsPerApp: MAX_INDEX_FLOWS_PER_APP,
-      selectionGuidance: "Choose a preferred or adequate candidate, never a supporting candidate while its app remains unresolved. Scope comes before brevity: use a coherent taxonomy journey for broad onboarding or browsing requests, an exact child path when the user names that path, and a session-wide capture only when it is the strongest truthful coverage. Representative and executive describe the final communication, not permission to discard journey evidence. A selected flow is inserted in full and is never truncated.",
+      selectionGuidance: "Choose a preferred or adequate candidate, never a supporting candidate while its app remains unresolved. Scope comes before brevity: use a coherent linear journey for a sequential capture, one complete branch-aware path for an alternative journey, an exact taxonomy flow when the user names it, and a session-wide capture only as a truthful fallback. Collections contain multiple alternatives and must not impersonate a single user journey. When the user requests representative evidence, choose one complete path rather than flattening sibling alternatives or selecting an arbitrary stage. Executive describes the final communication, not permission to truncate the selected evidence. A selected flow is inserted in full.",
     },
     apps: scopedApps.map((app) => {
       const usable = usableFlowIds(app);
@@ -322,6 +358,7 @@ export function buildCanvasV2ResearchCatalogIndex(
           descendantFlowCount: assessment.flow.descendantFlowCount ?? 0,
           screenCount: assessment.flow.screens.length,
           duplicateScreenCount: assessment.flow.duplicateScreenCount ?? 0,
+          completeJourney: Boolean(assessment.flow.completeJourney),
           screenNames: assessment.flow.screens.slice(0, MAX_INDEX_SCREEN_NAMES).map((screen) => screen.name),
           selectionRank: selectionRank + 1,
           selection: assessment.selection,
@@ -341,6 +378,35 @@ function exactFlow(catalog: AppDataCatalog, appId: string, flowId: string): { ap
   const app = catalog.apps.find((candidate) => candidate.id === appId);
   const flow = app?.flows.find((candidate) => candidate.id === flowId);
   return app && flow ? { app, flow } : undefined;
+}
+
+export interface CanvasV2RequiredResearchSelection {
+  appId: string;
+  appName: string;
+  flowId: string;
+  flowName: string;
+  screenCount: number;
+}
+
+/**
+ * Required account evidence is a data decision, not a creative model turn.
+ * Choose the first unresolved target in prompt order and its highest-ranked
+ * scope-adequate canonical journey.
+ */
+export function nextCanvasV2RequiredResearch(index: CanvasV2ResearchCatalogIndex): CanvasV2RequiredResearchSelection | undefined {
+  const requirement = index.requirements.find((candidate) => candidate.state === "unresolved" && candidate.appId && candidate.appName);
+  if (!requirement?.appId || !requirement.appName) return undefined;
+  const app = index.apps.find((candidate) => candidate.id === requirement.appId);
+  const flow = app?.flows
+    .filter((candidate) => requirement.adequateFlowIds.includes(candidate.id) && candidate.selection !== "supporting")
+    .sort((left, right) => left.selectionRank - right.selectionRank)[0];
+  return flow ? {
+    appId: requirement.appId,
+    appName: requirement.appName,
+    flowId: flow.id,
+    flowName: flow.name,
+    screenCount: flow.screenCount,
+  } : undefined;
 }
 
 export function resolveCanvasV2ResearchDecision(catalog: AppDataCatalog, decision: CanvasV2ResearchDecision, visibleFlowIds: readonly string[], index?: CanvasV2ResearchCatalogIndex): CanvasV2ResearchResult {
@@ -364,6 +430,7 @@ export function canvasV2ResearchDecisionPolicy(
   index: CanvasV2ResearchCatalogIndex,
   researchMode: CanvasV2ResearchMode | undefined,
   priorSteps: ReadonlyArray<{ kind: "research" | "design" }>,
+  currentCreativeDirection?: { nextMoves?: readonly string[]; unresolvedOpportunities?: readonly string[] },
 ): CanvasV2ResearchDecisionPolicy {
   const unresolved = canvasV2MissingRequiredApps(index);
   if (unresolved.length) return {
@@ -372,11 +439,22 @@ export function canvasV2ResearchDecisionPolicy(
     reason: `Ground one complete, scope-adequate journey for an unresolved required app before authoring claims: ${unresolved.join(", ")}.`,
   };
   const lastResearchStep = priorSteps.findLastIndex((step) => step.kind === "research");
-  const lastDesignStep = priorSteps.findLastIndex((step) => step.kind === "design");
-  if (researchMode === "synthesis" && lastResearchStep >= 0 && lastDesignStep < lastResearchStep) return {
-    phase: "synthesize-grounded-evidence",
+  const postResearchDesignSteps = lastResearchStep < 0
+    ? []
+    : priorSteps.slice(lastResearchStep + 1).filter((step) => step.kind === "design");
+  const modelHasNoPlannedCreativeMoves = postResearchDesignSteps.length > 0
+    && Array.isArray(currentCreativeDirection?.nextMoves)
+    && currentCreativeDirection.nextMoves.length === 0
+    && (!Array.isArray(currentCreativeDirection?.unresolvedOpportunities) || currentCreativeDirection.unresolvedOpportunities.length === 0);
+  const requiredNextMoves = currentCreativeDirection?.nextMoves?.map((move) => move.trim()).filter(Boolean);
+  if (researchMode === "synthesis" && lastResearchStep >= 0 && !modelHasNoPlannedCreativeMoves) return {
+    phase: "resolve-grounded-synthesis",
     permittedDecisions: ["edit"],
-    reason: "The final required flow is now visible. Author a meaningful evidence-grounded synthesis edit before completion.",
+    ...(postResearchDesignSteps.length === 0 ? { requiresPlannedContinuation: true } : {}),
+    ...(postResearchDesignSteps.length > 0 && requiredNextMoves?.length ? { requiredNextMoves } : {}),
+    reason: postResearchDesignSteps.length === 0
+      ? "The final required flow is visible. Establish a specific evidence-grounded visual argument and declare at least three distinct meaningful creative moves of your own choosing for subsequent observed turns. This is an initial authorship commitment, not a maximum or a prescribed move taxonomy."
+      : `Continue the model-authored creative arc from the exact rendered result. Execute the first previously committed move now: ${requiredNextMoves?.[0] || "the next meaningful unresolved visual move"}. After executing it, replan the remaining queue from the new visible result: preserve still-material work, revise or replace work invalidated by the render, and add newly discovered opportunities. Do not use an empty queue as a shortcut while the latest reflection still exposes material work.`,
   };
   return {
     phase: "open-design",

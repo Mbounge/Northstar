@@ -92,17 +92,17 @@ canonical committed flows are the only source of visibility truth, completion
 cannot silently omit available research, and interruption recovery cannot
 duplicate a flow. See `docs/canvas-v2/phase-7d3-research-completeness.md`.
 
-Phase 7D.4 replaces the two loose browser keys with one versioned, bounded,
-local-only recovery envelope for committed history, undo/redo position, and
-chat context. Restore validates and salvages committed source, active work
-reopens as stopped, incompatible future data is never overwritten, and manual
-candidates remain validated and discardable. It adds no Supabase persistence.
-See `docs/canvas-v2/phase-7d4-local-recovery.md`.
+Phase 7E.3.3 supersedes the earlier 7D.4 browser-recovery decision. Canvas V2
+is an in-memory page session: refresh starts the clean canonical artboard with
+empty chat and history, cancels active work, and discards obsolete V2 recovery
+keys. Manual candidates remain validated and discardable within the current
+page lifetime. No Supabase or browser-local canvas persistence exists. See
+`docs/canvas-v2/phase-7e3.3-refresh-reset.md`.
 
 Phase 7D.5 replaces stale preview coverage with cumulative real-use proof. The
 standard complete-flow comparison, unrelated startup-discovery compositions,
 conversation, grounded inspection, selection edits, interruption, failure,
-reload, manual history, and a 3600×2400 artboard now exercise the same V2
+refresh reset, manual history, and a 3600×2400 artboard now exercise the same V2
 authority path. The deterministic provider remains test-only and production
 contains no benchmark-specific behavior. See
 `docs/canvas-v2/phase-7d5-real-use-proof.md`.
