@@ -68,12 +68,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Product flow counts are source facts. A model may select subsets, but it may not relabel a complete grounded journey with an invented count. */
-export function validateCanvasV2ClaimedCanonicalFlowCounts(
+function canvasV2CanonicalScreenCountsByApp(
   document: CanvasV2ArtifactDocument,
   evidence: readonly CanvasV2EvidenceAsset[],
-): string[] {
-  const text = document.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+): Map<string, Set<number>> {
   const countsByApp = new Map<string, Set<number>>();
   const evidenceById = new Map(evidence.map((asset) => [asset.id, asset]));
   for (const flow of readCanvasV2CanonicalFlowManifests(document)) {
@@ -86,11 +84,77 @@ export function validateCanvasV2ClaimedCanonicalFlowCounts(
       countsByApp.set(app, counts);
     }
   }
+  return countsByApp;
+}
+
+/**
+ * Exact canonical screen totals are compiler facts, not visual authorship.
+ * Correct a uniquely-known app count inside authored text before validation so
+ * an otherwise valid composition is not discarded because the model swapped
+ * two supplied totals. The scan maps plain-text matches back to their original
+ * text-node offsets and never rewrites markup, CSS, evidence, or other numbers.
+ */
+export function normalizeCanvasV2ClaimedCanonicalFlowCounts(
+  document: CanvasV2ArtifactDocument,
+  evidence: readonly CanvasV2EvidenceAsset[],
+): CanvasV2ArtifactDocument {
+  const countsByApp = canvasV2CanonicalScreenCountsByApp(document, evidence);
+  if (!countsByApp.size) return document;
+  const segments: Array<{ plainStart: number; rawStart: number; text: string }> = [];
+  let plainText = "";
+  for (const match of document.html.matchAll(/(^|>)([^<]+)(?=<|$)/g)) {
+    const text = match[2];
+    const separator = plainText ? " " : "";
+    plainText += separator;
+    const plainStart = plainText.length;
+    const rawStart = (match.index ?? 0) + match[1].length;
+    segments.push({ plainStart, rawStart, text });
+    plainText += text;
+  }
+  const appMentions = Array.from(countsByApp.keys()).flatMap((app) =>
+    Array.from(plainText.matchAll(new RegExp(`(?:^|[^A-Za-z0-9])${escapeRegExp(app)}(?:$|[^A-Za-z0-9])`, "gi")), (match) => ({ app, index: match.index ?? 0 })),
+  );
+  const replacements: Array<{ start: number; end: number; value: string }> = [];
+  for (const match of plainText.matchAll(/(\d+)(?:[\s-]+[A-Za-z][\w-]*){0,3}[\s-]+screens?/gi)) {
+    const matchIndex = match.index ?? 0;
+    const digitOffset = match[0].indexOf(match[1]);
+    const digitIndex = matchIndex + digitOffset;
+    const nearest = appMentions
+      .map((mention) => ({ ...mention, distance: Math.abs(mention.index - matchIndex) }))
+      .filter((mention) => mention.distance <= 600)
+      .sort((left, right) => left.distance - right.distance)[0];
+    if (!nearest) continue;
+    const counts = countsByApp.get(nearest.app)!;
+    if (counts.size !== 1 || counts.has(Number(match[1]))) continue;
+    const segment = segments.find((item) => digitIndex >= item.plainStart && digitIndex + match[1].length <= item.plainStart + item.text.length);
+    if (!segment) continue;
+    const start = segment.rawStart + digitIndex - segment.plainStart;
+    replacements.push({ start, end: start + match[1].length, value: String(Array.from(counts)[0]) });
+  }
+  if (!replacements.length) return document;
+  let html = document.html;
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    html = `${html.slice(0, replacement.start)}${replacement.value}${html.slice(replacement.end)}`;
+  }
+  return { ...document, html };
+}
+
+/**
+ * Captured-screen totals are source facts. Analytical steps, phases, and
+ * moments are authored groupings and deliberately need not equal the number
+ * of screenshots in a canonical journey.
+ */
+export function validateCanvasV2ClaimedCanonicalFlowCounts(
+  document: CanvasV2ArtifactDocument,
+  evidence: readonly CanvasV2EvidenceAsset[],
+): string[] {
+  const text = document.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  const countsByApp = canvasV2CanonicalScreenCountsByApp(document, evidence);
   const failures: string[] = [];
   const appMentions = Array.from(countsByApp.keys()).flatMap((app) =>
     Array.from(text.matchAll(new RegExp(`(?:^|[^A-Za-z0-9])${escapeRegExp(app)}(?:$|[^A-Za-z0-9])`, "gi")), (match) => ({ app, index: match.index ?? 0 })),
   );
-  const countedScreens = /(\d+)(?:[\s-]+[A-Za-z][\w-]*){0,3}[\s-]+(screens?|steps?)/gi;
+  const countedScreens = /(\d+)(?:[\s-]+[A-Za-z][\w-]*){0,3}[\s-]+(screens?)/gi;
   for (const match of text.matchAll(countedScreens)) {
     const index = match.index ?? 0;
     const nearest = appMentions
@@ -100,10 +164,6 @@ export function validateCanvasV2ClaimedCanonicalFlowCounts(
     if (!nearest) continue;
     const claimed = Number(match[1]);
     const counts = countsByApp.get(nearest.app)!;
-    if (/^steps?/i.test(match[2])) {
-      failures.push(`${nearest.app}'s grounded record contains ${Array.from(counts).join(" or ")} captured screens; do not relabel that screenshot count as journey steps.`);
-      continue;
-    }
     if (!counts.has(claimed)) failures.push(`${nearest.app}'s complete grounded journey has ${Array.from(counts).join(" or ")} screens, not ${claimed}.`);
   }
   return Array.from(new Set(failures));
@@ -251,6 +311,11 @@ export function validateCanvasV2QuantitativeClaimLabels(
   for (const match of text.matchAll(/\b\d+\s*\/\s*\d+\b/g)) {
     const normalized = match[0].replace(/\s+/g, "");
     if (groundedFractions.has(normalized)) continue;
+    const [numerator, denominator] = normalized.split("/");
+    // Editorial counters such as 01/04 are navigation furniture, not
+    // quantitative product claims. Leading zeroes deliberately distinguish
+    // them from unsupported ratios such as 35/47.
+    if (numerator?.startsWith("0") || denominator?.startsWith("0")) continue;
     const index = match.index ?? 0;
     const context = text.slice(Math.max(0, index - 110), index + match[0].length + 110);
     if (!/\b(?:hypothesis|hypothetical|illustrative|estimate|estimated|assumption|assumed)\b/i.test(context)) {

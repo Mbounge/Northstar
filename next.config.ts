@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
+  // Browser proof runs beside a developer's live Canvas session. Give the
+  // isolated E2E server its own compiler state so it never contends for the
+  // active `.next/dev/lock` or requires stopping the app under inspection.
+  distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
   images: {
     qualities: [75, 80, 100],
     remotePatterns:[

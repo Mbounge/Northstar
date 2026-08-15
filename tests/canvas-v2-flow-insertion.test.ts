@@ -29,6 +29,9 @@ test("long branching taxonomy remains available without becoming a wall inside t
   const source = readFileSync("lib/canvas-v2/flow-insertion.ts", "utf8");
   assert.match(source, /marker\.title = segment\.name/);
   assert.match(source, /-webkit-line-clamp:4/);
+  const compiler = readFileSync("lib/canvas-v2/source-patch.ts", "utf8");
+  assert.match(compiler, /\.canvas-v2-flow-segment\{[^}]*width:132px!important[^}]*overflow:hidden!important/);
+  assert.match(compiler, /\.canvas-v2-flow-segment-label\{[^}]*max-width:100%!important[^}]*overflow-wrap:anywhere!important/);
 });
 
 test("Apps and References share the neutral research surface", () => {

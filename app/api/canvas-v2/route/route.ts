@@ -6,16 +6,23 @@ import { parseCanvasV2InteractionDecision } from "@/lib/canvas-v2/interaction-ro
 import {
   CanvasV2ProviderError,
   canvasV2ProviderErrorResponse,
-  fetchCanvasV2ProviderJsonWithFallback,
+  fetchCanvasV2ProviderJsonWithModelChain,
   invalidCanvasV2ProviderResponse,
 } from "@/lib/canvas-v2/provider-reliability";
 import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/canvas-v2/types";
+import {
+  canvasV2DesignModelChain,
+  canvasV2ProviderForModel,
+  parseCanvasV2ModelSelection,
+} from "@/lib/canvas-v2/model-catalog";
+import {
+  buildCanvasV2StructuredProviderRequest,
+  extractCanvasV2StructuredText,
+} from "@/lib/canvas-v2/structured-provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PRIMARY_MODEL = process.env.CANVAS_V2_ROUTER_MODEL || process.env.CANVAS_V2_MODEL || "gemini-3.1-flash-lite";
-const FALLBACK_MODEL = process.env.CANVAS_V2_ROUTER_FALLBACK_MODEL || process.env.CANVAS_V2_FALLBACK_MODEL || "gemini-3.5-flash-lite";
 const SYSTEM = `You are the interaction router and conversational voice for North Star Canvas V2.
 Choose exactly one route based on what the user is asking to happen now:
 - conversation: answer normally; the user is not asking to read or change the artboard.
@@ -53,8 +60,6 @@ export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "You must be signed in to use North Star.", code: "invalid-request", retryable: false }, { status: 401 });
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "GEMINI_API_KEY is not configured.", code: "configuration", retryable: false }, { status: 500 });
   try {
     const body = await request.json() as {
       message?: unknown;
@@ -62,11 +67,21 @@ export async function POST(request: NextRequest) {
       observation?: CanvasV2RenderObservation;
       selection?: CanvasV2InspectableElement;
       history?: unknown;
+      modelSelection?: unknown;
     };
     const message = typeof body.message === "string" ? body.message.trim() : "";
     if (!message || message.length > 8_000) throw new Error("A valid message is required.");
     if (!body.revision) throw new Error("The committed artboard revision is required.");
     if (body.observation && body.observation.revisionId !== body.revision.id) throw new Error("The observation does not belong to the committed revision.");
+    const modelSelection = parseCanvasV2ModelSelection(body.modelSelection);
+    const modelChain = canvasV2DesignModelChain(modelSelection);
+    const modelProvider = canvasV2ProviderForModel(modelSelection);
+    if (modelProvider === "openai" && !process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: "OPENAI_API_KEY is not configured for GPT-5.6 Luna.", code: "configuration", retryable: false }, { status: 500 });
+    }
+    if (modelProvider === "google" && !process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ error: "GEMINI_API_KEY is not configured for the selected Gemini model.", code: "configuration", retryable: false }, { status: 500 });
+    }
     const history = Array.isArray(body.history) ? body.history.slice(-12).map((entry) => {
       const item = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
       return {
@@ -95,32 +110,33 @@ export async function POST(request: NextRequest) {
     const screenshot = imagePart(body.observation);
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: JSON.stringify(context) }];
     if (screenshot) parts.push({ text: "Current rendered artboard:" }, screenshot);
-    const provider = await fetchCanvasV2ProviderJsonWithFallback<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>({
-      primaryModel: PRIMARY_MODEL,
-      fallbackModel: FALLBACK_MODEL,
+    const provider = await fetchCanvasV2ProviderJsonWithModelChain<unknown>({
+      models: modelChain,
       requestSignal: request.signal,
-      validatePayload: (candidatePayload) => {
-        const text = candidatePayload.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+      maxInvalidResponsesPerModel: 4,
+      attemptRole: "router",
+      validatePayload: (candidatePayload, model) => {
+        const text = extractCanvasV2StructuredText(candidatePayload, model);
         if (!text) throw new Error("North Star router returned no decision.");
         parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection);
       },
-      requestForModel: (model) => ({
-        url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        cache: "no-store",
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM }] },
-          contents: [{ role: "user", parts }],
-          generationConfig: { temperature: 0.15, maxOutputTokens: 4_096, responseMimeType: "application/json", responseJsonSchema: RESPONSE_SCHEMA },
-        }),
-        },
-      }),
+      requestForModel: (model, correction) => {
+        const providerRequest = buildCanvasV2StructuredProviderRequest({
+          model,
+          system: SYSTEM,
+          parts,
+          schemaName: "canvas_v2_interaction_route",
+          schema: RESPONSE_SCHEMA,
+          maxOutputTokens: 4_096,
+          temperature: 0.15,
+          correction,
+        });
+        return { url: providerRequest.url, init: providerRequest.init };
+      },
     });
     const payload = provider.payload;
     try {
-      const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+      const text = extractCanvasV2StructuredText(payload, provider.model);
       if (!text) throw new Error("North Star router returned no decision.");
       return NextResponse.json({ decision: parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection), model: provider.model, fallbackUsed: provider.fallbackUsed, providerAttempts: provider.attempts });
     } catch (error) {

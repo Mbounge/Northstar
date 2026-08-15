@@ -1,12 +1,19 @@
 import type {
+  CanvasV2CompositionState,
   CanvasV2CreativeDirection,
   CanvasV2CreativeMoveKind,
+  CanvasV2ElementBounds,
+  CanvasV2IslandExecutionContract,
   CanvasV2RenderedReflection,
   CanvasV2SpatialStrategy,
 } from "@/lib/canvas-v2/types";
 import type { CanvasV2ProviderAttemptAudit, CanvasV2RetryState } from "@/lib/canvas-v2/request-reliability";
 import type { CanvasV2ResearchRequirement } from "@/lib/canvas-v2/research-director";
 import type { CanvasV2ResearchMode } from "@/lib/canvas-v2/interaction-router";
+import {
+  CANVAS_V2_DEFAULT_MODEL,
+  type CanvasV2ModelSelection,
+} from "@/lib/canvas-v2/model-catalog";
 
 /**
  * Context is compacted independently from execution. This is not a turn cap:
@@ -33,7 +40,14 @@ export interface CanvasV2LoopStep {
   expectedVisualResult: string;
   creativeDirection: CanvasV2CreativeDirection;
   spatialStrategy: CanvasV2SpatialStrategy;
+  compositionState?: CanvasV2CompositionState;
+  /** Exact programmatic island transaction that produced this committed render. */
+  islandExecution?: CanvasV2IslandExecutionContract;
   reflection: CanvasV2RenderedReflection;
+  providerAttempts?: CanvasV2ProviderAttemptAudit[];
+  renderRepairCount?: number;
+  /** Exact deterministic failures retained for production diagnostics. */
+  renderRepairFailures?: string[];
 }
 
 export interface CanvasV2LoopState {
@@ -45,6 +59,7 @@ export interface CanvasV2LoopState {
   continuationOf?: string;
   creativeDirection?: CanvasV2CreativeDirection;
   spatialStrategy?: CanvasV2SpatialStrategy;
+  compositionState?: CanvasV2CompositionState;
   finalReflection?: CanvasV2RenderedReflection;
   finalSummary?: string;
   error?: string;
@@ -54,6 +69,27 @@ export interface CanvasV2LoopState {
   researchMode?: CanvasV2ResearchMode;
   researchStatus?: CanvasV2ResearchRequirement[];
   providerAttempts?: CanvasV2ProviderAttemptAudit[];
+  modelSelection?: CanvasV2ModelSelection;
+  activeModel?: string;
+  renderRepair?: {
+    attempt: number;
+    maxAttempts: number;
+    failures: string[];
+    failedMove?: string;
+    /** The failed candidate's exact island transaction survives every repair pass. */
+    islandExecution?: CanvasV2IslandExecutionContract;
+    rejectedCandidate?: {
+      artboardGeometry: {
+        contentBounds: CanvasV2ElementBounds;
+        canonicalLaneBounds?: CanvasV2ElementBounds;
+      };
+      evidenceGeometry: Array<Record<string, unknown>>;
+      designRegions: Array<Record<string, unknown>>;
+      relationshipGeometry: Array<Record<string, unknown>>;
+      nodeHtmlExcerpts: Array<{ nodeId: string; html: string }>;
+      cssTail: string;
+    };
+  };
 }
 
 export interface CanvasV2LoopContinuation {
@@ -61,9 +97,11 @@ export interface CanvasV2LoopContinuation {
   priorSteps?: CanvasV2LoopStep[];
   creativeDirection?: CanvasV2CreativeDirection;
   spatialStrategy?: CanvasV2SpatialStrategy;
+  compositionState?: CanvasV2CompositionState;
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
   researchStatus?: CanvasV2ResearchRequirement[];
+  modelSelection?: CanvasV2ModelSelection;
 }
 
 export function createCanvasV2Loop(input: {
@@ -72,6 +110,7 @@ export function createCanvasV2Loop(input: {
   continuation?: CanvasV2LoopContinuation;
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
+  modelSelection?: CanvasV2ModelSelection;
 }): CanvasV2LoopState {
   const instruction = input.instruction.trim();
   if (!instruction) throw new Error("Canvas V2 requires a design instruction.");
@@ -82,11 +121,13 @@ export function createCanvasV2Loop(input: {
     steps: [],
     researchTargets: Array.from(new Set((input.continuation?.researchTargets ?? input.researchTargets ?? []).map((target) => target.trim()).filter(Boolean))).slice(0, 12),
     researchMode: input.continuation?.researchMode ?? input.researchMode,
+    modelSelection: input.continuation?.modelSelection ?? input.modelSelection ?? CANVAS_V2_DEFAULT_MODEL,
     ...(input.continuation ? {
       continuationOf: input.continuation.previousRunId,
       priorSteps: (input.continuation.priorSteps ?? []).slice(-CANVAS_V2_MAX_CONTEXT_STEPS),
       creativeDirection: input.continuation.creativeDirection,
       spatialStrategy: input.continuation.spatialStrategy,
+      compositionState: input.continuation.compositionState,
       researchStatus: input.continuation.researchStatus,
     } : {}),
   };
@@ -112,6 +153,8 @@ export function recordCanvasV2CommittedEdit(input: {
   expectedVisualResult: string;
   creativeDirection: CanvasV2CreativeDirection;
   spatialStrategy: CanvasV2SpatialStrategy;
+  compositionState?: CanvasV2CompositionState;
+  islandExecution?: CanvasV2IslandExecutionContract;
   reflection: CanvasV2RenderedReflection;
   researchStatus?: CanvasV2ResearchRequirement[];
 }): CanvasV2LoopState {
@@ -125,16 +168,24 @@ export function recordCanvasV2CommittedEdit(input: {
     expectedVisualResult: input.expectedVisualResult,
     creativeDirection: input.creativeDirection,
     spatialStrategy: input.spatialStrategy,
+    compositionState: input.compositionState,
+    ...(input.islandExecution ? { islandExecution: input.islandExecution } : {}),
     reflection: input.reflection,
+    ...(input.loop.providerAttempts?.length ? { providerAttempts: input.loop.providerAttempts } : {}),
+    ...(input.loop.renderRepair?.attempt ? { renderRepairCount: input.loop.renderRepair.attempt } : {}),
+    ...(input.loop.renderRepair?.failures?.length ? { renderRepairFailures: input.loop.renderRepair.failures.slice(-12) } : {}),
   }];
-  return {
+  const next: CanvasV2LoopState = {
     ...withoutRetry(input.loop),
     status: "thinking",
     steps,
     creativeDirection: input.creativeDirection,
     spatialStrategy: input.spatialStrategy,
+    compositionState: input.compositionState,
     ...(input.researchStatus ? { researchStatus: input.researchStatus } : {}),
   };
+  delete next.renderRepair;
+  return next;
 }
 
 export function completeCanvasV2Loop(
@@ -142,10 +193,11 @@ export function completeCanvasV2Loop(
   summary: string,
   creativeDirection: CanvasV2CreativeDirection,
   spatialStrategy: CanvasV2SpatialStrategy,
+  compositionState: CanvasV2CompositionState | undefined,
   reflection: CanvasV2RenderedReflection,
 ): CanvasV2LoopState {
   if (loop.status !== "thinking") throw new Error("Canvas V2 can complete only after observing a committed revision.");
-  return { ...withoutRetry(loop), status: "completed", creativeDirection, spatialStrategy, finalReflection: reflection, finalSummary: summary, error: undefined };
+  return { ...withoutRetry(loop), status: "completed", creativeDirection, spatialStrategy, compositionState, finalReflection: reflection, finalSummary: summary, error: undefined };
 }
 
 export function stopCanvasV2Loop(loop: CanvasV2LoopState): CanvasV2LoopState {

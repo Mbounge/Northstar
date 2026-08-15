@@ -56,6 +56,40 @@ test("parses a bounded source-patch edit", () => {
   if (decision.decision === "edit") assert.match(decision.document.html, /data-canvas-v2-node-id="safe"/);
 });
 
+test("preserves long branch-aware evidence identities without truncating island memory", () => {
+  const longEvidenceId = `screen:${"branch-aware-provenance:".repeat(36)}final-screen`;
+  assert.ok(longEvidenceId.length > 300);
+  const decision = parseCanvasV2DesignDecision({
+    decision: "edit",
+    moveKind: "analysis",
+    creativeDirection,
+    spatialStrategy,
+    reflection,
+    summary: "Extended the evidence reading.",
+    expectedVisualResult: "The evidence chapter remains grounded.",
+    patch: { operations: [{ op: "append-html", targetNodeId: "artboard", html: '<section data-canvas-v2-node-id="analysis">Analysis</section>' }] },
+    compositionState: {
+      dominantAnchor: "artboard",
+      readingOrder: ["artboard"],
+      regions: [{
+        nodeId: "artboard",
+        purpose: "Ground the comparison.",
+        maturity: "developing",
+        openRequirements: ["Finish the comparison"],
+        requiredEvidenceIds: [longEvidenceId],
+      }],
+      preservedNodeIds: [],
+      retiredNodes: [],
+      preservedStrengths: ["Grounded evidence remains visible"],
+      nextTerritory: { relation: "within", anchorNodeId: "artboard", intendedFootprint: "Continue inside the analysis.", rationale: "Finish the island." },
+      regressionRisks: ["Do not lose provenance"],
+    },
+  }, [], emptyDocument);
+  assert.equal(decision.decision, "edit");
+  if (decision.decision !== "edit") return;
+  assert.equal(decision.compositionState?.regions[0]?.requiredEvidenceIds?.[0], longEvidenceId);
+});
+
 test("rejects executable generated source", () => {
   assert.throws(() => parseCanvasV2DesignDecision({
     decision: "edit",

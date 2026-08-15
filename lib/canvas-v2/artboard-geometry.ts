@@ -19,6 +19,22 @@ export function normalizeCanvasV2ArtboardGeometry(input: CanvasV2ArtboardGeometr
   };
 }
 
+/**
+ * Growing an iframe can itself reflow responsive authored CSS. Geometry is a
+ * monotonic render transaction: later measurements may expand the artboard,
+ * but may never shrink a previously observed intrinsic extent and create an
+ * oscillating or stale capture boundary.
+ */
+export function growCanvasV2ArtboardGeometry(
+  current: CanvasV2ArtboardGeometry,
+  measured: CanvasV2ArtboardGeometry,
+): CanvasV2ArtboardGeometry {
+  return normalizeCanvasV2ArtboardGeometry({
+    width: Math.max(current.width, measured.width),
+    height: Math.max(current.height, measured.height),
+  });
+}
+
 export function measureCanvasV2ArtboardGeometry(document: Document): CanvasV2ArtboardGeometry {
   const html = document.documentElement;
   const body = document.body;

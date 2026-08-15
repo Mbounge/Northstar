@@ -35,13 +35,21 @@ import {
 } from "@/lib/canvas-v2/artifact-safety";
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
-import { validateCanvasV2RenderedEvidenceIntegrity } from "@/lib/canvas-v2/evidence-authorship";
+import {
+  validateCanvasV2RenderedAnalysisEvidenceScale,
+  validateCanvasV2RenderedDesignRegionContentIntegrity,
+  validateCanvasV2RenderedDesignRegionTerritoryIntegrity,
+  validateCanvasV2RenderedEvidenceIntegrity,
+  validateCanvasV2RenderedIslandNarrativeIntegrity,
+  validateCanvasV2RenderedRelationshipGeometry,
+} from "@/lib/canvas-v2/evidence-authorship";
 import { CANVAS_V2_DESIGN_REQUEST_POLICY, CanvasV2RequestError, requestCanvasV2Json, type CanvasV2ProviderAttemptAudit } from "@/lib/canvas-v2/request-reliability";
 import {
   settleCanvasV2ResearchRequirement,
   type CanvasV2ResearchRequirement,
 } from "@/lib/canvas-v2/research-director";
 import type { CanvasV2ResearchMode } from "@/lib/canvas-v2/interaction-router";
+import type { CanvasV2ModelSelection } from "@/lib/canvas-v2/model-catalog";
 
 interface PendingManualEdit {
   summary: string;
@@ -60,6 +68,95 @@ const STARTER_DOCUMENT = {
   html: `<main class="northstar-artboard" data-canvas-v2-node-id="artboard" aria-label="Empty North Star artboard"></main>`,
   css: `.northstar-artboard { position:relative; box-sizing:border-box; width:1680px; min-width:1680px; min-height:945px; overflow:visible; padding:56px; background:#fff; color:#151620; }`,
 };
+const MAX_RENDER_REPAIRS = 3;
+
+function summarizeRenderedIntegrityFailures(failures: readonly string[]): string {
+  const outside = failures.filter((failure) => failure.includes("inside the rendered artboard"));
+  const clipped = failures.filter((failure) => failure.includes("clipped by its layout"));
+  const hidden = failures.filter((failure) => failure.includes("not visibly rendered"));
+  const distorted = failures.filter((failure) => failure.includes("aspect ratio") || failure.includes("cropping presentation"));
+  const rails = failures.filter((failure) => failure.includes("uninterrupted horizontal rail"));
+  const runawayAnalysis = failures.filter((failure) => failure.includes("may not dominate the composition"));
+  const clippedAnalysis = failures.filter((failure) => failure.includes("Authored design region") && failure.includes("clips"));
+  const detachedRelationships = failures.filter((failure) => failure.includes("relationship") && failure.includes("anchor"));
+  const diagnoses = [
+    outside.length ? `${outside.length} canonical evidence assets extended beyond the rendered artboard because the candidate constrained the intrinsic evidence width` : "",
+    clipped.length ? `${clipped.length} canonical evidence assets were clipped by authored layout` : "",
+    hidden.length ? `${hidden.length} grounded assets were no longer visibly rendered` : "",
+    distorted.length ? `${distorted.length} grounded assets lost their natural presentation` : "",
+    rails.length ? `${rails.length} canonical journeys no longer formed one uninterrupted horizontal rail` : "",
+    runawayAnalysis.length ? `${runawayAnalysis.length} analytical screenshots became page-dominating slabs instead of bounded evidence callouts` : "",
+    clippedAnalysis.length ? `${clippedAnalysis.length} authored analytical regions hid part of their own content` : "",
+    detachedRelationships.length ? `${detachedRelationships.length} authored relationships detached from their evidence endpoints` : "",
+  ].filter(Boolean);
+  return diagnoses.length
+    ? `${diagnoses.join("; ")}. Preserve the complete max-content evidence rails and grow or recompose the analytical surface around them.`
+    : Array.from(new Set(failures)).slice(0, 3).join(" ");
+}
+
+function rejectedCandidateContext(
+  document: CanvasV2ArtifactDocument,
+  observation: CanvasV2RenderObservation,
+): NonNullable<NonNullable<CanvasV2LoopState["renderRepair"]>["rejectedCandidate"]> {
+  const content = observation.contentBounds;
+  const evidenceGeometry = observation.spatial.evidence
+    .filter((item) => {
+      const right = item.bounds.x + item.bounds.width;
+      const bottom = item.bounds.y + item.bounds.height;
+      const outside = item.bounds.x < content.x
+        || item.bounds.y < content.y
+        || right > content.x + content.width
+        || bottom > content.y + content.height;
+      return outside || item.clippingAncestorNodeIds.length > 0 || item.role === "analysis-copy";
+    })
+    .sort((left, right) => Number(right.role === "canonical") - Number(left.role === "canonical"))
+    .slice(0, 20)
+    .map((item) => ({
+      nodeId: item.nodeId,
+      evidenceId: item.evidenceId,
+      role: item.role,
+      sourceNodeId: item.sourceNodeId,
+      bounds: item.bounds,
+      clippingAncestorNodeIds: item.clippingAncestorNodeIds,
+      canonicalPeerHeight: item.canonicalPeerHeight,
+      scaleVsCanonicalHeight: item.scaleVsCanonicalHeight,
+      designRegionNodeId: item.designRegionNodeId,
+      designRegionHeightShare: item.designRegionHeightShare,
+      designRegionAreaShare: item.designRegionAreaShare,
+      visualRole: item.visualRole,
+      treatment: item.treatment,
+    }));
+  const designRegions = (observation.spatial.designRegions ?? []).slice(0, 24).map((region) => ({ ...region }));
+  const relationshipGeometry = (observation.spatial.authoredRelationships ?? []).slice(0, 24).map((relationship) => ({ ...relationship }));
+  const nodeIds = Array.from(new Set([
+    ...evidenceGeometry.map((item) => item.nodeId),
+    ...designRegions.map((item) => String(item.nodeId)),
+    ...relationshipGeometry.map((item) => String(item.nodeId)),
+  ])).slice(0, 32);
+  const nodeHtmlExcerpts = nodeIds.flatMap((nodeId) => {
+    const doubleQuoted = document.html.indexOf(`data-canvas-v2-node-id="${nodeId}"`);
+    const singleQuoted = document.html.indexOf(`data-canvas-v2-node-id='${nodeId}'`);
+    const index = doubleQuoted >= 0 ? doubleQuoted : singleQuoted;
+    if (index < 0) return [];
+    return [{
+      nodeId,
+      html: document.html.slice(Math.max(0, index - 500), Math.min(document.html.length, index + 2_500)),
+    }];
+  });
+  return {
+    artboardGeometry: {
+      contentBounds: observation.contentBounds,
+      ...(observation.spatial.authoredSurface?.canonicalLaneBounds
+        ? { canonicalLaneBounds: observation.spatial.authoredSurface.canonicalLaneBounds }
+        : {}),
+    },
+    evidenceGeometry,
+    designRegions,
+    relationshipGeometry,
+    nodeHtmlExcerpts,
+    cssTail: document.css.slice(-18_000),
+  };
+}
 function id(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -88,7 +185,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const loopRef = useRef<CanvasV2LoopState | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
   const requestController = useRef<AbortController | undefined>(undefined);
-  const displayed = candidate ?? committed;
+  // The public artboard is committed truth only. Automatic and manual
+  // candidates render in the workspace's off-screen inspection frame and are
+  // promoted here only after every rendered-integrity check passes. This
+  // prevents rejected geometry from flashing and disappearing in front of the
+  // user while preserving the exact render-before-commit architecture.
+  const displayed = committed;
   const running = canvasV2LoopIsActive(loop);
   const applyingManualEdit = Boolean(pendingManualEdit && candidate);
 
@@ -110,6 +212,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     activeLoop: CanvasV2LoopState,
     revision: CanvasV2ArtifactRevision,
     observation: CanvasV2RenderObservation,
+    commitParent: CanvasV2ArtifactRevision = revision,
   ) => {
     if (activeRunId.current !== activeLoop.id) return;
     const controller = new AbortController();
@@ -139,8 +242,11 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
             priorSteps: [...(activeLoop.priorSteps ?? []), ...activeLoop.steps].slice(-CANVAS_V2_MAX_CONTEXT_STEPS),
             creativeDirection: activeLoop.creativeDirection,
             spatialStrategy: activeLoop.spatialStrategy,
+            compositionState: activeLoop.compositionState,
             researchTargets: activeLoop.researchTargets,
             researchMode: activeLoop.researchMode,
+            modelSelection: activeLoop.modelSelection,
+            renderRepair: activeLoop.renderRepair,
           },
         },
         onRetry: (retry) => {
@@ -150,9 +256,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       });
       if (activeRunId.current !== activeLoop.id) return;
       if (!payload.decision) throw new Error(payload.error || "Canvas V2 did not return a decision.");
+      const loopWithProvider: CanvasV2LoopState = {
+        ...activeLoop,
+        activeModel: payload.model,
+        providerAttempts: payload.providerAttempts,
+      };
       if (payload.decision.decision === "complete") {
         publishLoop({
-          ...completeCanvasV2Loop(activeLoop, payload.decision.summary, payload.decision.creativeDirection, payload.decision.spatialStrategy, payload.decision.reflection),
+          ...completeCanvasV2Loop(loopWithProvider, payload.decision.summary, payload.decision.creativeDirection, payload.decision.spatialStrategy, payload.decision.compositionState, payload.decision.reflection),
           researchStatus: payload.researchStatus,
           providerAttempts: payload.providerAttempts,
         });
@@ -170,6 +281,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
           moveKind: payload.decision.moveKind,
           creativeDirection: payload.decision.creativeDirection,
           spatialStrategy: payload.decision.spatialStrategy,
+          compositionState: payload.decision.compositionState,
           reflection: payload.decision.reflection,
           document: insertion.document,
           summary: payload.decision.summary,
@@ -177,8 +289,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         });
         setPendingActionKind("research");
         setPendingResearch({ appId: payload.decision.appId, flowId: payload.decision.flowId });
-        setCandidate(createCanvasV2CandidateRevision({ id: id("research-revision"), parent: revision, document: insertion.document, evidence: insertion.evidence, createdAt: new Date().toISOString() }));
-        publishLoop({ ...activeLoop, status: "rendering", retry: undefined, researchStatus: payload.researchStatus, providerAttempts: payload.providerAttempts });
+        setCandidate(createCanvasV2CandidateRevision({ id: id("research-revision"), parent: commitParent, document: insertion.document, evidence: insertion.evidence, createdAt: new Date().toISOString() }));
+        publishLoop({ ...loopWithProvider, status: "rendering", retry: undefined, researchStatus: payload.researchStatus });
         return;
       }
       setPendingEdit(payload.decision);
@@ -186,12 +298,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       setPendingResearch(undefined);
       setCandidate(createCanvasV2CandidateRevision({
         id: id("revision"),
-        parent: revision,
+        parent: commitParent,
         document: payload.decision.document,
         evidence: payload.evidence,
         createdAt: new Date().toISOString(),
       }));
-      publishLoop({ ...activeLoop, status: "rendering", retry: undefined, researchStatus: payload.researchStatus, providerAttempts: payload.providerAttempts });
+      publishLoop({ ...loopWithProvider, status: "rendering", retry: undefined, researchStatus: payload.researchStatus });
     } catch (requestError) {
       if (controller.signal.aborted || activeRunId.current !== activeLoop.id) return;
       const message = requestError instanceof Error ? requestError.message : "Canvas V2 request failed.";
@@ -210,6 +322,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     continuation?: CanvasV2LoopContinuation,
     researchTargets?: string[],
     researchMode?: CanvasV2ResearchMode,
+    modelSelection?: CanvasV2ModelSelection,
   ): string | undefined => {
     const objective = currentInstruction.trim();
     if (!objective || activeRunId.current || canvasV2LoopIsActive(loopRef.current)) return undefined;
@@ -223,7 +336,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       setPendingActionKind("design");
       setPendingResearch(undefined);
     }
-    const nextLoop = createCanvasV2Loop({ id: id("run"), instruction: objective, continuation, researchTargets, researchMode });
+    const nextLoop = createCanvasV2Loop({ id: id("run"), instruction: objective, continuation, researchTargets, researchMode, modelSelection });
     activeRunId.current = nextLoop.id;
     publishLoop(nextLoop);
     const observation = currentObservation ?? observationsRef.current[committed.id];
@@ -289,10 +402,18 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     setObservations((current) => ({ ...current, [observation.revisionId]: observation }));
     if (candidate && !pendingManualEdit && activeRunId.current !== loop?.id) return;
     if (candidate && observation.revisionId === candidate.id) {
-      const integrityFailures = validateCanvasV2RenderedEvidenceIntegrity(candidate.document, observation);
+      const integrityFailures = [
+        ...validateCanvasV2RenderedEvidenceIntegrity(candidate.document, observation),
+        ...validateCanvasV2RenderedAnalysisEvidenceScale(observation),
+        ...validateCanvasV2RenderedDesignRegionContentIntegrity(observation),
+        ...validateCanvasV2RenderedDesignRegionTerritoryIntegrity(observation),
+        ...validateCanvasV2RenderedIslandNarrativeIntegrity(observation),
+        ...validateCanvasV2RenderedRelationshipGeometry(observation),
+      ];
       if (integrityFailures.length) {
-        const message = integrityFailures.join(" ");
+        const message = summarizeRenderedIntegrityFailures(integrityFailures);
         setCandidate(undefined);
+        const failedMove = [pendingEdit?.summary, pendingEdit?.expectedVisualResult].filter(Boolean).join(" — ").slice(0, 1_600);
         setPendingEdit(undefined);
         setPendingActionKind("design");
         setPendingResearch(undefined);
@@ -300,8 +421,29 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
           setPendingManualEdit(undefined);
           setManualError(message);
         } else if (loop?.status === "rendering") {
-          publishLoop(failCanvasV2Loop(loop, message));
-          activeRunId.current = undefined;
+          const repairAttempt = (loop.renderRepair?.attempt ?? 0) + 1;
+          if (repairAttempt <= MAX_RENDER_REPAIRS) {
+            const repairLoop: CanvasV2LoopState = {
+              ...loop,
+              status: "thinking",
+              renderRepair: {
+                attempt: repairAttempt,
+                maxAttempts: MAX_RENDER_REPAIRS,
+                failures: [...(loop.renderRepair?.failures ?? []), ...integrityFailures].slice(-12),
+                ...(failedMove ? { failedMove } : {}),
+                ...(pendingEdit?.islandExecution ? { islandExecution: pendingEdit.islandExecution } : {}),
+                rejectedCandidate: rejectedCandidateContext(candidate.document, observation),
+              },
+            };
+            publishLoop(repairLoop);
+            // Continue the same hidden transaction from the exact rejected
+            // render. The repaired result still commits against public
+            // committed truth, so invalid geometry never flashes on canvas.
+            void askModel(repairLoop, candidate, observation, committed);
+          } else {
+            publishLoop(failCanvasV2Loop(loop, `North Star could not produce a render-safe revision after ${MAX_RENDER_REPAIRS} corrective attempts. ${message}`));
+            activeRunId.current = undefined;
+          }
         }
         return;
       }
@@ -328,6 +470,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       moveKind: pendingEdit.moveKind,
       creativeDirection: pendingEdit.creativeDirection,
       spatialStrategy: pendingEdit.spatialStrategy,
+      compositionState: pendingEdit.compositionState,
+      islandExecution: pendingEdit.islandExecution,
       reflection: pendingEdit.reflection,
       researchStatus: pendingResearch
         ? settleCanvasV2ResearchRequirement(loop.researchStatus, pendingResearch.appId, pendingResearch.flowId)
@@ -376,6 +520,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   return {
     committed,
     displayed,
+    inspectionCandidate: candidate,
     instruction,
     setInstruction,
     loop,

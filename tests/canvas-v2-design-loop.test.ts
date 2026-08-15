@@ -41,6 +41,28 @@ const spatialStrategy = {
   currentAdjustment: "Open the layout.",
   intentionalOverlaps: [],
 };
+const islandExecution = {
+  target: {
+    action: "create" as const,
+    islandId: "island-revision-2-1",
+    storyRole: "title" as const,
+    resultingMaturity: "resolved" as const,
+    resolutionRationale: "The title and description are complete.",
+    openRequirements: [],
+  },
+  territory: {
+    relation: "above" as const,
+    anchorNodeId: "flow-awin",
+    intendedFootprint: "Compact upper-left narrative origin.",
+    rationale: "Every board needs one explicit beginning.",
+    placementMode: "evidence-relative-island" as const,
+    targetZoneId: "top-left" as const,
+  },
+  requiredEvidenceIds: [],
+  requiredEvidenceHandles: [],
+  requiredVisualRoles: ["narrative-title"],
+  directorCheckpointJson: JSON.stringify({ materialMove: "Establish the narrative opening." }),
+};
 
 test("each rendered edit advances one observed turn", () => {
   const started = createCanvasV2Loop({ id: "run-1", instruction: "Recompose the board" });
@@ -53,12 +75,15 @@ test("each rendered edit advances one observed turn", () => {
     expectedVisualResult: "A clearer hierarchy.",
     creativeDirection,
     spatialStrategy,
+    islandExecution,
     reflection,
   });
   assert.equal(continued.status, "thinking");
   assert.deepEqual(continued.steps.map((step) => [step.turn, step.revisionId]), [[1, "revision-2"]]);
   assert.equal(continued.creativeDirection?.visualThesis, creativeDirection.visualThesis);
   assert.equal(continued.spatialStrategy?.layoutSystem, spatialStrategy.layoutSystem);
+  assert.equal(continued.steps[0]?.islandExecution?.target.islandId, "island-revision-2-1");
+  assert.equal(continued.steps[0]?.islandExecution?.directorCheckpointJson, islandExecution.directorCheckpointJson);
 });
 
 test("the model can continue beyond the former automatic edit ceiling", () => {
@@ -116,7 +141,7 @@ test("continuation starts a fresh bounded run while preserving design direction"
 
 test("completion, stop, and failure are terminal without synthetic repair", () => {
   const started = createCanvasV2Loop({ id: "run-1", instruction: "Recompose" });
-  const completed = completeCanvasV2Loop(started, "Done", creativeDirection, spatialStrategy, reflection);
+  const completed = completeCanvasV2Loop(started, "Done", creativeDirection, spatialStrategy, undefined, reflection);
   assert.equal(completed.status, "completed");
   assert.equal(completed.finalReflection?.observedResult, reflection.observedResult);
   assert.equal(stopCanvasV2Loop(started).status, "stopped");

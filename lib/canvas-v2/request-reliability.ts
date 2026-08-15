@@ -20,6 +20,8 @@ export interface CanvasV2FailurePayload {
 
 export interface CanvasV2ProviderAttemptAudit {
   model: string;
+  provider?: "openai" | "google";
+  role?: "router" | "visual-director" | "source-author";
   attempt?: number;
   outcome: "completed" | "provider-unavailable" | "rate-limited" | "timeout" | "invalid-response" | "rejected" | "cancelled" | "transport";
   durationMs: number;

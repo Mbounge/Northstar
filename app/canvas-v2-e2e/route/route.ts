@@ -34,7 +34,12 @@ function needsAccountResearch(message: string, targets: readonly string[]): bool
 
 export async function POST(request: NextRequest) {
   if (process.env.NODE_ENV === "production" || process.env.NORTHSTAR_E2E !== "1") return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const body = await request.json() as { message?: string; selection?: { nodeId?: string }; revision?: CanvasV2ArtifactRevision };
+  let body: { message?: string; selection?: { nodeId?: string }; revision?: CanvasV2ArtifactRevision };
+  try {
+    body = await request.json() as typeof body;
+  } catch {
+    return new NextResponse(null, { status: 499 });
+  }
   const message = body.message?.trim() || "";
   const attempt = Number(request.headers.get("x-canvas-v2-attempt")) || 1;
   if (message === "Keep retrying until I stop" || (message === "Retry routing once" && attempt === 1)) {

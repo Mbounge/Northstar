@@ -30,15 +30,11 @@ test("stopping a design run preserves the committed revision and rejects a late 
   await expect(page.getByText("Stopped. The latest committed artboard remains visible.")).toBeVisible();
 });
 
-test("the edit ceiling is incomplete until continuation reaches model-declared completion", async ({ page }) => {
+test("the model may complete beyond the former edit ceiling in the same run", async ({ page }) => {
   await page.getByLabel("Message North Star").fill("Exercise lifecycle edit limit");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText("Continuation required.")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("edit limit reached");
+  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 30_000 });
   await expect(page.locator('[data-testid="canvas-v2-preview"]').contentFrame().locator("[data-e2e-lifecycle-step]" )).toHaveCount(8);
-
-  await page.getByRole("button", { name: "Continue from this artboard" }).click();
-  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed");
   await expect(page.getByText("The continued run reviewed the preserved artboard and declared the lifecycle proof complete.")).toBeVisible();
   await expect(page.getByText("Continuation required.")).toHaveCount(0);
 });

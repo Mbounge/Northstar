@@ -1,11 +1,14 @@
 import type {
   CanvasV2AuthoredAnnotationObservation,
   CanvasV2AuthoredRelationshipObservation,
+  CanvasV2AuthoredSurfaceObservation,
+  CanvasV2DesignRegionObservation,
   CanvasV2ElementBounds,
   CanvasV2EvidenceRenderObservation,
   CanvasV2SpatialIntersection,
   CanvasV2SpatialNodeObservation,
   CanvasV2SpatialObservation,
+  CanvasV2SurfaceZoneId,
 } from "@/lib/canvas-v2/types";
 import { resolveCanvasV2EvidenceRole } from "@/lib/canvas-v2/evidence-authorship";
 
@@ -191,6 +194,165 @@ function observeAuthoredAnnotations(document: Document, view: Window): CanvasV2A
       };
     })
     .slice(0, 80);
+}
+
+function observeDesignRegions(document: Document, view: Window): CanvasV2DesignRegionObservation[] {
+  const artboard = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
+    .find((element) => element.dataset.canvasV2NodeId === "artboard") ?? document.body;
+  const artboardRect = artboard.getBoundingClientRect();
+  const artboardArea = Math.max(1, artboardRect.width * artboardRect.height);
+  const canonicalLanes = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-canonical-flow][data-canvas-v2-node-id]"))
+    .filter((element) => visibleElement(element, view))
+    .map((element) => ({ nodeId: element.dataset.canvasV2NodeId!, bounds: elementBounds(element) }));
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-design-region][data-canvas-v2-node-id]"))
+    // Legacy or unnormalized source may still contain a nested marker. Only
+    // the outermost region is an independently positioned island; descendants
+    // remain normal internal composition chapters.
+    .filter((element) => !element.parentElement?.closest("[data-canvas-v2-design-region]") && visibleElement(element, view))
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = view.getComputedStyle(element);
+      const heading = element.querySelector<HTMLElement>("h1,h2,h3")?.textContent?.replace(/\s+/g, " ").trim();
+      const text = element.textContent?.replace(/\s+/g, " ").trim();
+      const bounds = elementBounds(element);
+      const regionArea = Math.max(1, bounds.width * bounds.height);
+      const sourcedStages = Array.from(element.querySelectorAll<HTMLElement>("[data-canvas-v2-stage-evidence='sourced'][data-canvas-v2-node-id]"))
+        .filter((stage) => visibleElement(stage, view));
+      const emptySourcedStageNodeIds = sourcedStages
+        .filter((stage) => !stage.querySelector("img[data-canvas-v2-evidence-role='analysis-copy']"))
+        .map((stage) => stage.dataset.canvasV2NodeId!);
+      const canonicalLaneOverlaps = canonicalLanes.flatMap((lane) => {
+        const area = intersectionArea(bounds, lane.bounds);
+        if (area <= 4) return [];
+        const overlap = intersection(bounds, lane.bounds);
+        if (!overlap) return [];
+        return [{
+          laneNodeId: lane.nodeId,
+          intersection: overlap,
+          regionCoverage: ratioPrecision(area / regionArea),
+          laneCoverage: ratioPrecision(area / Math.max(1, lane.bounds.width * lane.bounds.height)),
+        }];
+      });
+      return {
+        nodeId: element.dataset.canvasV2NodeId!,
+        islandId: element.getAttribute("data-canvas-v2-island-id") || element.dataset.canvasV2NodeId!,
+        ...(["title", "orientation", "evidence-reading", "comparison", "analysis", "relationship", "implication", "synthesis", "whole-board"].includes(element.getAttribute("data-canvas-v2-story-role") ?? "")
+          ? { storyRole: element.getAttribute("data-canvas-v2-story-role") as CanvasV2DesignRegionObservation["storyRole"] }
+          : {}),
+        ...(element.getAttribute("aria-label") || heading ? { label: element.getAttribute("aria-label") || heading } : {}),
+        ...(element.getAttribute("data-canvas-v2-visual-role") ? { visualRole: element.getAttribute("data-canvas-v2-visual-role")! } : {}),
+        ...(["attached", "evidence-relative-island", "interleaved", "recompose"].includes(element.getAttribute("data-canvas-v2-placement-mode") ?? "")
+          ? { placementMode: element.getAttribute("data-canvas-v2-placement-mode") as CanvasV2DesignRegionObservation["placementMode"] }
+          : {}),
+        ...(["within", "above", "below", "left", "right", "span", "interleave", "offset", "recompose", "none"].includes(element.getAttribute("data-canvas-v2-territory-relation") ?? "")
+          ? { territoryRelation: element.getAttribute("data-canvas-v2-territory-relation") as CanvasV2DesignRegionObservation["territoryRelation"] }
+          : {}),
+        ...(["top-left", "top-center", "top-right", "middle-left", "middle-center", "middle-right", "bottom-left", "bottom-center", "bottom-right"].includes(element.getAttribute("data-canvas-v2-target-zone") ?? "")
+          ? { targetZoneId: element.getAttribute("data-canvas-v2-target-zone") as CanvasV2DesignRegionObservation["targetZoneId"] }
+          : {}),
+        ...(text ? { textPreview: text.slice(0, 220) } : {}),
+        bounds,
+        artboardWidthShare: ratioPrecision(rect.width / Math.max(1, artboardRect.width)),
+        artboardHeightShare: ratioPrecision(rect.height / Math.max(1, artboardRect.height)),
+        artboardAreaShare: ratioPrecision((rect.width * rect.height) / artboardArea),
+        centerXShare: ratioPrecision((rect.left + rect.width / 2 - artboardRect.left) / Math.max(1, artboardRect.width)),
+        centerYShare: ratioPrecision((rect.top + rect.height / 2 - artboardRect.top) / Math.max(1, artboardRect.height)),
+        edgeSpace: {
+          left: precision(rect.left - artboardRect.left),
+          top: precision(rect.top - artboardRect.top),
+          right: precision(artboardRect.right - rect.right),
+          bottom: precision(artboardRect.bottom - rect.bottom),
+        },
+        contentOverflowX: precision(Math.max(0, element.scrollWidth - element.clientWidth)),
+        contentOverflowY: precision(Math.max(0, element.scrollHeight - element.clientHeight)),
+        clipsOverflow: [style.overflow, style.overflowX, style.overflowY].some((value) => value === "hidden" || value === "clip"),
+        ...(sourcedStages.length ? { sourcedStageCount: sourcedStages.length } : {}),
+        ...(emptySourcedStageNodeIds.length ? { emptySourcedStageNodeIds } : {}),
+        ...(element.getAttribute("data-canvas-v2-evidence-interleave") ? { evidenceInterleave: element.getAttribute("data-canvas-v2-evidence-interleave")! } : {}),
+        ...(canonicalLaneOverlaps.length ? { canonicalLaneOverlaps } : {}),
+      };
+    })
+    .slice(0, 48);
+}
+
+function unionElementBounds(bounds: readonly CanvasV2ElementBounds[]): CanvasV2ElementBounds | undefined {
+  if (!bounds.length) return undefined;
+  const left = Math.min(...bounds.map((item) => item.x));
+  const top = Math.min(...bounds.map((item) => item.y));
+  const right = Math.max(...bounds.map((item) => item.x + item.width));
+  const bottom = Math.max(...bounds.map((item) => item.y + item.height));
+  return { x: precision(left), y: precision(top), width: precision(right - left), height: precision(bottom - top) };
+}
+
+function intersectionArea(first: CanvasV2ElementBounds, second: CanvasV2ElementBounds): number {
+  const width = Math.max(0, Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x));
+  const height = Math.max(0, Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y));
+  return width * height;
+}
+
+const SURFACE_ZONE_ROWS = ["top", "middle", "bottom"] as const;
+const SURFACE_ZONE_COLUMNS = ["left", "center", "right"] as const;
+
+function observeAuthoredSurface(
+  document: Document,
+  designRegions: readonly CanvasV2DesignRegionObservation[],
+  evidence: readonly CanvasV2EvidenceRenderObservation[],
+): CanvasV2AuthoredSurfaceObservation {
+  const artboard = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
+    .find((element) => element.dataset.canvasV2NodeId === "artboard") ?? document.body;
+  const artboardBounds = elementBounds(artboard);
+  const artboardArea = Math.max(1, artboardBounds.width * artboardBounds.height);
+  const canonicalLanes = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-canonical-flow][data-canvas-v2-node-id]"))
+    .map((element) => ({ nodeId: element.dataset.canvasV2NodeId!, bounds: elementBounds(element) }));
+  const authoredBounds = unionElementBounds(designRegions.map((region) => region.bounds));
+  const canonicalLaneBounds = unionElementBounds(canonicalLanes.map((lane) => lane.bounds));
+  const analysisEvidenceBounds = unionElementBounds(evidence.filter((item) => item.role === "analysis-copy" && item.visible).map((item) => item.bounds));
+  const readingOrder = [...designRegions]
+    .sort((left, right) => {
+      const verticalDelta = left.bounds.y - right.bounds.y;
+      const rowTolerance = Math.max(24, Math.min(left.bounds.height, right.bounds.height) * 0.18);
+      return Math.abs(verticalDelta) <= rowTolerance ? left.bounds.x - right.bounds.x : verticalDelta;
+    })
+    .map((region) => region.nodeId);
+  const byArea = [...designRegions].sort((left, right) => right.bounds.width * right.bounds.height - left.bounds.width * left.bounds.height);
+  const byX = [...designRegions].sort((left, right) => left.bounds.x - right.bounds.x);
+  const byY = [...designRegions].sort((left, right) => left.bounds.y - right.bounds.y);
+  const zones = SURFACE_ZONE_ROWS.flatMap((row, rowIndex) => SURFACE_ZONE_COLUMNS.map((column, columnIndex) => {
+    const zoneBounds: CanvasV2ElementBounds = {
+      x: precision(artboardBounds.x + artboardBounds.width * columnIndex / 3),
+      y: precision(artboardBounds.y + artboardBounds.height * rowIndex / 3),
+      width: precision(artboardBounds.width / 3),
+      height: precision(artboardBounds.height / 3),
+    };
+    const zoneArea = Math.max(1, zoneBounds.width * zoneBounds.height);
+    const designRegionNodeIds = designRegions.filter((region) => intersectionArea(region.bounds, zoneBounds) > 4).map((region) => region.nodeId);
+    const canonicalLaneNodeIds = canonicalLanes.filter((lane) => intersectionArea(lane.bounds, zoneBounds) > 4).map((lane) => lane.nodeId);
+    const occupiedArea = Math.min(zoneArea, [
+      ...designRegions.map((region) => region.bounds),
+      ...canonicalLanes.map((lane) => lane.bounds),
+    ].reduce((sum, item) => sum + intersectionArea(item, zoneBounds), 0));
+    const occupiedAreaShare = ratioPrecision(occupiedArea / zoneArea);
+    return {
+      id: `${row}-${column}` as CanvasV2SurfaceZoneId,
+      bounds: zoneBounds,
+      designRegionNodeIds,
+      canonicalLaneNodeIds,
+      occupiedAreaShare,
+      availableAreaShare: ratioPrecision(1 - occupiedAreaShare),
+    };
+  }));
+  return {
+    artboardBounds,
+    ...(authoredBounds ? { authoredBounds } : {}),
+    authoredAreaShare: ratioPrecision(designRegions.reduce((sum, region) => sum + region.bounds.width * region.bounds.height, 0) / artboardArea),
+    readingOrder,
+    ...(byArea[0] ? { primaryRegionNodeId: byArea[0].nodeId } : {}),
+    ...(byX[0] ? { leftmostRegionNodeId: byX[0].nodeId, rightmostRegionNodeId: byX.at(-1)!.nodeId } : {}),
+    ...(byY[0] ? { topmostRegionNodeId: byY[0].nodeId, bottommostRegionNodeId: byY.at(-1)!.nodeId } : {}),
+    ...(canonicalLaneBounds ? { canonicalLaneBounds } : {}),
+    ...(analysisEvidenceBounds ? { analysisEvidenceBounds } : {}),
+    zones,
+  };
 }
 
 function observeNode(element: HTMLElement, view: Window): CanvasV2SpatialNodeObservation {
@@ -391,6 +553,8 @@ export function observeCanvasV2SpatialLayout(document: Document): CanvasV2Spatia
   const allElements = visibleIdentifiedElements(document);
   const elements = allElements.slice(0, CANVAS_V2_MAX_SPATIAL_NODES);
   const nodes = view ? elements.map((element) => observeNode(element, view)) : [];
+  const evidence = view ? observeEvidence(document, view) : [];
+  const designRegions = view ? observeDesignRegions(document, view) : [];
   return {
     measuredNodeCount: allElements.length,
     reportedNodeCount: nodes.length,
@@ -399,8 +563,10 @@ export function observeCanvasV2SpatialLayout(document: Document): CanvasV2Spatia
     contentOverflowNodeIds: nodes
       .filter((node) => node.contentBox.scrollWidth > node.contentBox.clientWidth + 2 || node.contentBox.scrollHeight > node.contentBox.clientHeight + 2)
       .map((node) => node.nodeId),
-    evidence: view ? observeEvidence(document, view) : [],
+    evidence,
     authoredRelationships: view ? observeAuthoredRelationships(document, view) : [],
     authoredAnnotations: view ? observeAuthoredAnnotations(document, view) : [],
+    designRegions,
+    authoredSurface: observeAuthoredSurface(document, designRegions, evidence),
   };
 }

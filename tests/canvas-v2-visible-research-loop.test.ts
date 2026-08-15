@@ -75,6 +75,9 @@ test("the model sees both explicitly named apps and chooses exact complete flows
 });
 
 test("production research is evidence-first and synthesis cannot complete on the final retrieval turn", () => {
+  const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
+  assert.match(route, /if \(groundingRequired\)/);
+  assert.match(route, /The design model was not called/);
   const unresolved = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", revision(), ["Awin", "Whop"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(unresolved, "synthesis", []).permittedDecisions, ["research"]);
   assert.deepEqual(nextCanvasV2RequiredResearch(unresolved), {
@@ -234,6 +237,38 @@ test("broad onboarding prefers a complete shared-entry journey over its branch-o
   assert.equal(exactBranch.apps[0]?.flows[0]?.id, "flow:branch");
 });
 
+test("required research is selected from full catalog truth even when the bounded model index omits it", () => {
+  const screens = (flowName: string, count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `${flowName}-${index}`,
+    name: `Step ${index + 1}`,
+    imageUrl: `https://evidence.test/whop/${flowName}/${index}.png`,
+    appName: "Whop",
+    flowName,
+    platform: "mobile",
+    sessionType: "onboarding",
+    index,
+  }));
+  const largeCatalog: AppDataCatalog = { tenantId: "tenant", apps: [{
+    id: "app:whop",
+    name: "Whop",
+    totalScreens: 250,
+    flows: [
+      { id: "flow:whop:canonical", name: "User Onboarding", appName: "Whop", platform: "mobile", sessionType: "onboarding", scope: "journey", completeJourney: true, screens: screens("canonical", 17) },
+      ...Array.from({ length: 24 }, (_, index) => ({ id: `flow:whop:supporting:${index}`, name: `Supporting capture ${index}`, appName: "Whop", platform: "mobile", sessionType: "onboarding", scope: "session" as const, screens: screens(`supporting-${index}`, 9) })),
+    ],
+  }] };
+  const index = buildCanvasV2ResearchCatalogIndex(largeCatalog, "Compare Whop onboarding", revision(), ["Whop"]);
+  index.apps[0]!.flows = index.apps[0]!.flows.filter((flow) => flow.id !== "flow:whop:canonical");
+  assert.equal(index.apps[0]?.flows.some((flow) => flow.id === "flow:whop:canonical"), false);
+  assert.deepEqual(nextCanvasV2RequiredResearch(index), {
+    appId: "app:whop",
+    appName: "Whop",
+    flowId: "flow:whop:canonical",
+    flowName: "User Onboarding",
+    screenCount: 17,
+  });
+});
+
 test("required named apps remain unresolved until their evidence is visibly committed", () => {
   const awinVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"><img data-canvas-v2-evidence-id="screen:Awin-0" src="https://evidence.test/Awin/0.png"></article></main>', [{ id: "screen:Awin-0", url: "https://evidence.test/Awin/0.png", label: "Awin", app: "Awin" }]);
   const index = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", awinVisible);
@@ -323,7 +358,8 @@ test("the production loop materializes research before another model turn and re
   const hook = readFileSync("components/canvas-v2/use-canvas-v2-design-loop.ts", "utf8");
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
   const loop = readFileSync("lib/canvas-v2/design-loop.ts", "utf8");
-  assert.match(route, /decision: \{ type: "string", enum: \["research", "edit", "complete"\] \}/);
+  assert.match(route, /decision: \{ type: "string", enum: \["edit"\] \}/);
+  assert.match(route, /deterministicResearchDecision/);
   assert.match(route, /resolveCanvasV2ResearchDecision/);
   assert.match(route, /nextCanvasV2RequiredResearch/);
   assert.ok(route.indexOf("const requiredResearch =") < route.indexOf("const provider = await"));

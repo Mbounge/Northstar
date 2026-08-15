@@ -56,6 +56,16 @@ export interface CanvasV2ResearchRequirement {
   adequateFlowIds: string[];
   visibleFlowIds: string[];
   visibleAdequateFlowIds: string[];
+  /**
+   * The authoritative highest-ranked adequate journey from the complete tenant
+   * catalog. Required research must never depend on the bounded model-facing
+   * flow index, which may omit this candidate for large or branching apps.
+   */
+  preferredFlow?: {
+    id: string;
+    name: string;
+    screenCount: number;
+  };
   pendingFlowId?: string;
 }
 
@@ -285,7 +295,9 @@ function requirementForTarget(catalog: AppDataCatalog, requestedName: string, vi
   };
   const usable = usableFlowIds(app);
   const visible = usable.filter((flowId) => visibleFlowIds.includes(flowId));
-  const adequate = assessedFlows(app, instruction, catalog).filter((assessment) => assessment.selection !== "supporting").map((assessment) => assessment.flow.id);
+  const adequateAssessments = assessedFlows(app, instruction, catalog).filter((assessment) => assessment.selection !== "supporting");
+  const adequate = adequateAssessments.map((assessment) => assessment.flow.id);
+  const preferredAssessment = adequateAssessments[0];
   const visibleAdequate = adequate.filter((flowId) => visibleFlowIds.includes(flowId));
   if (!usable.length) return {
     requestedName,
@@ -310,6 +322,11 @@ function requirementForTarget(catalog: AppDataCatalog, requestedName: string, vi
     adequateFlowIds: adequate,
     visibleFlowIds: visible,
     visibleAdequateFlowIds: visibleAdequate,
+    preferredFlow: preferredAssessment ? {
+      id: preferredAssessment.flow.id,
+      name: preferredAssessment.flow.name,
+      screenCount: preferredAssessment.flow.screens.length,
+    } : undefined,
   };
 }
 
@@ -396,10 +413,7 @@ export interface CanvasV2RequiredResearchSelection {
 export function nextCanvasV2RequiredResearch(index: CanvasV2ResearchCatalogIndex): CanvasV2RequiredResearchSelection | undefined {
   const requirement = index.requirements.find((candidate) => candidate.state === "unresolved" && candidate.appId && candidate.appName);
   if (!requirement?.appId || !requirement.appName) return undefined;
-  const app = index.apps.find((candidate) => candidate.id === requirement.appId);
-  const flow = app?.flows
-    .filter((candidate) => requirement.adequateFlowIds.includes(candidate.id) && candidate.selection !== "supporting")
-    .sort((left, right) => left.selectionRank - right.selectionRank)[0];
+  const flow = requirement.preferredFlow;
   return flow ? {
     appId: requirement.appId,
     appName: requirement.appName,

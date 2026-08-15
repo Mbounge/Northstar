@@ -166,7 +166,12 @@ const BASE_CSS = `
 
 export async function POST(request: NextRequest) {
   if (process.env.NODE_ENV === "production" || process.env.NORTHSTAR_E2E !== "1") return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const body = await request.json() as { revision?: CanvasV2ArtifactRevision; observation?: CanvasV2RenderObservation; instruction?: string; run?: { researchTargets?: string[] } };
+  let body: { revision?: CanvasV2ArtifactRevision; observation?: CanvasV2RenderObservation; instruction?: string; run?: { researchTargets?: string[] } };
+  try {
+    body = await request.json() as typeof body;
+  } catch {
+    return new NextResponse(null, { status: 499 });
+  }
   const revision = body.revision;
   if (!revision) return NextResponse.json({ error: "Missing revision" }, { status: 400 });
   if (!body.observation?.spatial || body.observation.spatial.reportedNodeCount !== body.observation.spatial.nodes.length) {

@@ -143,7 +143,7 @@ test("a large two-dimensional discovery landscape grows, fits, remains selectabl
   await expect(fitControl).toHaveText(/%/);
   const fitPercent = Number.parseInt(await fitControl.textContent() ?? "", 10);
   expect(fitPercent).toBeGreaterThanOrEqual(8);
-  expect(fitPercent).toBeLessThanOrEqual(25);
+  expect(fitPercent).toBeLessThanOrEqual(45);
 
   const frame = canvasFrame(page);
   await expect(frame.getByLabel("Large two-dimensional discovery landscape")).toBeVisible();

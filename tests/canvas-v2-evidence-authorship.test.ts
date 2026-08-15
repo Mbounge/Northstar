@@ -5,6 +5,7 @@ import {
   validateCanvasV2AnalysisEvidenceContinuity,
   validateCanvasV2ArtifactDocument,
   validateCanvasV2ClaimedCanonicalFlowCounts,
+  normalizeCanvasV2ClaimedCanonicalFlowCounts,
   validateCanvasV2EvidenceContinuity,
   validateCanvasV2GroundedAppIdentityUsage,
   validateCanvasV2QuantitativeClaimLabels,
@@ -15,8 +16,11 @@ import {
   readCanvasV2CanonicalFlowManifests,
   resolveCanvasV2EvidenceRole,
   validateCanvasV2RenderedAnalysisEvidenceScale,
+  validateCanvasV2RenderedDesignRegionContentIntegrity,
+  validateCanvasV2RenderedDesignRegionTerritoryIntegrity,
   validateCanvasV2RenderedComparisonCommunication,
   validateCanvasV2RenderedEvidenceIntegrity,
+  validateCanvasV2RenderedIslandNarrativeIntegrity,
   validateCanvasV2RenderedRelationshipGeometry,
 } from "../lib/canvas-v2/evidence-authorship";
 import { buildCanvasV2BoundedModelContext } from "../lib/canvas-v2/model-context";
@@ -77,6 +81,25 @@ test("model context separates grounded identity assets from exact sequential scr
   assert.match(context.source.htmlOutline, /IMMUTABLE CANONICAL LANE · 2 screens/);
   assert.match(context.source.htmlOutline, /GROUNDED IDENTITY ASSETS flow-awin-icon:lane-0-identity-0/);
   assert.doesNotMatch(context.source.htmlOutline, /IMMUTABLE CANONICAL LANE · 3 screens/);
+});
+
+test("compiler-owned canonical label furniture never becomes a model design opportunity", () => {
+  const rendered = observation();
+  rendered.overflow = [
+    { nodeId: "flow-awin-segment-entry-label", x: 1, y: 1, width: 20, height: 20 },
+    { nodeId: "authored-analysis", x: 2, y: 2, width: 40, height: 40 },
+  ];
+  rendered.spatial.contentOverflowNodeIds = ["flow-awin-segment-entry-label", "authored-analysis"];
+  const context = buildCanvasV2BoundedModelContext({
+    schema: "canvas-v2.artifact.v1",
+    id: "revision",
+    state: "committed",
+    document: canonical,
+    evidence,
+    createdAt: "2026-08-13T12:00:00.000Z",
+  }, rendered);
+  assert.deepEqual(context.render.overflow?.map((item) => item.nodeId), ["authored-analysis"]);
+  assert.deepEqual(context.render.spatial.contentOverflowNodeIds, ["authored-analysis"]);
 });
 
 test("role-less evidence in a legacy canonical lane upgrades without losing analytical provenance", () => {
@@ -205,7 +228,7 @@ test("rendered canonical screens stay on one horizontal rail and cannot visually
   assert.match(validateCanvasV2RenderedEvidenceIntegrity(canonical, wrapped).join(" "), /one uninterrupted horizontal rail/);
 });
 
-test("dominant analysis screenshots must visibly earn their scale without imposing a fixed width", () => {
+test("analysis screenshots may enlarge purposefully but can never become runaway full-screen slabs", () => {
   const dominant = observation();
   dominant.spatial.evidence.push({
     evidenceId: "screen:awin-1",
@@ -233,7 +256,7 @@ test("dominant analysis screenshots must visibly earn their scale without imposi
     annotationNodeIds: [],
     relationshipNodeIds: [],
   });
-  assert.match(validateCanvasV2RenderedAnalysisEvidenceScale(dominant).join(" "), /without a visibly linked annotation or relationship/);
+  assert.match(validateCanvasV2RenderedAnalysisEvidenceScale(dominant).join(" "), /may not dominate the composition/);
 
   dominant.spatial.evidence[dominant.spatial.evidence.length - 1] = {
     ...dominant.spatial.evidence[dominant.spatial.evidence.length - 1],
@@ -241,7 +264,33 @@ test("dominant analysis screenshots must visibly earn their scale without imposi
     treatment: "magnified-evidence",
     annotationNodeIds: ["awin-friction-note"],
   };
-  assert.deepEqual(validateCanvasV2RenderedAnalysisEvidenceScale(dominant), []);
+  assert.match(
+    validateCanvasV2RenderedAnalysisEvidenceScale(dominant).join(" "),
+    /even when it has a declared analytical role or annotation/,
+  );
+
+  const boundedFocalInspection = observation();
+  boundedFocalInspection.spatial.evidence.push({
+    ...dominant.spatial.evidence[dominant.spatial.evidence.length - 1],
+    nodeId: "analysis-awin-bounded-focal",
+    bounds: { x: 100, y: 100, width: 288, height: 576 },
+    scaleVsCanonicalHeight: 2.4,
+    designRegionHeightShare: 0.54,
+    designRegionAreaShare: 0.2,
+    artboardHeightShare: 0.34,
+  });
+  assert.deepEqual(validateCanvasV2RenderedAnalysisEvidenceScale(boundedFocalInspection), []);
+
+  boundedFocalInspection.spatial.evidence[boundedFocalInspection.spatial.evidence.length - 1] = {
+    ...boundedFocalInspection.spatial.evidence[boundedFocalInspection.spatial.evidence.length - 1],
+    visualRole: undefined,
+    treatment: undefined,
+    annotationNodeIds: [],
+  };
+  assert.match(
+    validateCanvasV2RenderedAnalysisEvidenceScale(boundedFocalInspection).join(" "),
+    /without a visibly linked annotation or relationship/,
+  );
 
   const deliberatePeerScale = observation();
   deliberatePeerScale.spatial.evidence.push({
@@ -257,6 +306,120 @@ test("dominant analysis screenshots must visibly earn their scale without imposi
     annotationNodeIds: [],
   });
   assert.deepEqual(validateCanvasV2RenderedAnalysisEvidenceScale(deliberatePeerScale), []);
+});
+
+test("authored design regions may grow but cannot clip information they introduce", () => {
+  const rendered = observation();
+  rendered.spatial.designRegions = [{
+    nodeId: "analysis",
+    bounds: { x: 20, y: 20, width: 900, height: 500 },
+    artboardWidthShare: 0.54,
+    artboardHeightShare: 0.53,
+    artboardAreaShare: 0.29,
+    centerXShare: 0.28,
+    centerYShare: 0.29,
+    edgeSpace: { left: 20, top: 20, right: 760, bottom: 425 },
+    contentOverflowX: 240,
+    contentOverflowY: 80,
+    clipsOverflow: true,
+  }];
+  assert.match(validateCanvasV2RenderedDesignRegionContentIntegrity(rendered).join(" "), /Preserve every authored label/);
+  rendered.spatial.designRegions[0] = { ...rendered.spatial.designRegions[0], clipsOverflow: false };
+  assert.deepEqual(validateCanvasV2RenderedDesignRegionContentIntegrity(rendered), []);
+});
+
+test("a stage that claims direct sourcing cannot render as an empty evidence block", () => {
+  const rendered = observation();
+  rendered.spatial.designRegions = [{
+    nodeId: "handoff-sequence",
+    bounds: { x: 20, y: 20, width: 900, height: 500 },
+    artboardWidthShare: 0.54,
+    artboardHeightShare: 0.53,
+    artboardAreaShare: 0.29,
+    centerXShare: 0.28,
+    centerYShare: 0.29,
+    edgeSpace: { left: 20, top: 20, right: 760, bottom: 425 },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+    sourcedStageCount: 4,
+    emptySourcedStageNodeIds: ["awin-profile-stage", "whop-identity-stage"],
+  }];
+  assert.match(validateCanvasV2RenderedDesignRegionContentIntegrity(rendered).join(" "), /no exact screenshot inside them/);
+  rendered.spatial.designRegions[0] = { ...rendered.spatial.designRegions[0], emptySourcedStageNodeIds: [] };
+  assert.deepEqual(validateCanvasV2RenderedDesignRegionContentIntegrity(rendered), []);
+});
+
+test("authored regions cannot drift into canonical lanes without an explicit evidence interleave", () => {
+  const rendered = observation();
+  rendered.spatial.designRegions = [{
+    nodeId: "handoff-field",
+    bounds: { x: 400, y: 80, width: 900, height: 500 },
+    artboardWidthShare: 0.54,
+    artboardHeightShare: 0.53,
+    artboardAreaShare: 0.29,
+    centerXShare: 0.5,
+    centerYShare: 0.35,
+    edgeSpace: { left: 400, top: 80, right: 380, bottom: 365 },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+    canonicalLaneOverlaps: [{
+      laneNodeId: "flow-awin",
+      intersection: { x: 500, y: 500, width: 700, height: 80 },
+      regionCoverage: 0.124,
+      laneCoverage: 0.03,
+    }],
+  }];
+  assert.match(validateCanvasV2RenderedDesignRegionTerritoryIntegrity(rendered).join(" "), /without declaring an intentional evidence interleave/);
+  rendered.spatial.designRegions[0] = { ...rendered.spatial.designRegions[0], evidenceInterleave: "annotated stage handoff" };
+  assert.match(validateCanvasV2RenderedDesignRegionTerritoryIntegrity(rendered).join(" "), /physically covers canonical screenshot evidence/);
+  rendered.spatial.designRegions[0] = {
+    ...rendered.spatial.designRegions[0],
+    bounds: { x: 500, y: 80, width: 900, height: 500 },
+    evidenceInterleave: "annotated stage handoff in a deliberate gap after the captured screenshots",
+  };
+  assert.deepEqual(validateCanvasV2RenderedDesignRegionTerritoryIntegrity(rendered), []);
+});
+
+test("a planning zone never overrides evidence-relative rendered truth", () => {
+  const rendered = observation();
+  rendered.spatial.designRegions = [{
+    nodeId: "friction-island",
+    placementMode: "evidence-relative-island",
+    targetZoneId: "top-right",
+    bounds: { x: 600, y: 40, width: 420, height: 260 },
+    artboardWidthShare: 0.25,
+    artboardHeightShare: 0.28,
+    artboardAreaShare: 0.07,
+    centerXShare: 0.48,
+    centerYShare: 0.18,
+    edgeSpace: { left: 600, top: 40, right: 660, bottom: 645 },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+  }];
+  rendered.spatial.authoredSurface = {
+    artboardBounds: rendered.contentBounds,
+    authoredAreaShare: 0.07,
+    readingOrder: ["friction-island"],
+    zones: [{
+      id: "top-right",
+      bounds: { x: 1120, y: 0, width: 560, height: 315 },
+      designRegionNodeIds: [],
+      canonicalLaneNodeIds: [],
+      occupiedAreaShare: 0.2,
+      availableAreaShare: 0.8,
+    }],
+  };
+  assert.deepEqual(validateCanvasV2RenderedDesignRegionTerritoryIntegrity(rendered), []);
+  rendered.spatial.designRegions[0] = {
+    ...rendered.spatial.designRegions[0],
+    bounds: { x: 1210, y: 40, width: 360, height: 260 },
+    centerXShare: 0.83,
+    edgeSpace: { left: 1210, top: 40, right: 110, bottom: 645 },
+  };
+  assert.deepEqual(validateCanvasV2RenderedDesignRegionTerritoryIntegrity(rendered), []);
 });
 
 test("a screenshot-led comparison keeps multiple inspectable screens without forcing relationship geometry", () => {
@@ -326,6 +489,53 @@ test("chosen relationship geometry must remain attached after later recompositio
   assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(" "), /references missing target nodes/);
 });
 
+test("islands preserve one upper-left story origin and distinct readable territories", () => {
+  const rendered = observation();
+  const region = (nodeId: string, storyRole: "title" | "comparison", x: number, y: number, width: number, height: number) => ({
+    nodeId,
+    islandId: nodeId,
+    storyRole,
+    placementMode: "evidence-relative-island" as const,
+    targetZoneId: storyRole === "title" ? "top-left" as const : "middle-right" as const,
+    bounds: { x, y, width, height },
+    artboardWidthShare: width / 1680,
+    artboardHeightShare: height / 945,
+    artboardAreaShare: width * height / (1680 * 945),
+    centerXShare: (x + width / 2) / 1680,
+    centerYShare: (y + height / 2) / 945,
+    edgeSpace: { left: x, top: y, right: 1680 - x - width, bottom: 945 - y - height },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+  });
+  rendered.spatial.designRegions = [
+    region("title-island", "title", 56, 56, 1_568, 180),
+    region("comparison-island", "comparison", 920, 360, 560, 360),
+  ];
+  rendered.spatial.authoredSurface = {
+    artboardBounds: rendered.contentBounds,
+    authoredAreaShare: 0.18,
+    readingOrder: ["title-island", "comparison-island"],
+    zones: [],
+  };
+  assert.deepEqual(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered), []);
+
+  rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 1_090, 360, 560, 360);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /56px artboard safe area/);
+
+  rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 360, 110, 560, 360);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /materially overlap/);
+
+  rendered.spatial.designRegions = [
+    region("title-island", "title", 56, 56, 480, 180),
+    region("comparison-island", "comparison", 920, 360, 560, 360),
+  ];
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /full-width horizontal strip/);
+
+  rendered.spatial.designRegions = [region("comparison-island", "comparison", 920, 360, 560, 360)];
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /exactly one title-and-description island/);
+});
+
 test("bounded model context exposes factual analysis-copy geometry and authored relationships", () => {
   const rendered = observation();
   rendered.spatial.evidence.push({
@@ -354,6 +564,13 @@ test("bounded model context exposes factual analysis-copy geometry and authored 
     createdAt: "2026-08-13T12:00:00.000Z",
   }, rendered);
   assert.equal(context.render.spatial.analysisEvidenceGeometry[0]?.scaleVsCanonicalHeight, 3.25);
+  assert.deepEqual(context.render.spatial.authoredSurface, {
+    artboardBounds: rendered.contentBounds,
+    authoredAreaShare: 0,
+    readingOrder: [],
+    zones: [],
+    designRegions: [],
+  });
   assert.equal(context.render.spatial.analysisEvidenceGeometry[0]?.annotationNodeIds?.[0], "analysis-note");
   assert.equal(context.render.spatial.authoredRelationships[0]?.visualRole, "friction-bridge");
   assert.equal(context.render.spatial.authoredRelationships[0]?.sourceAnchorDistance, 2);
@@ -380,10 +597,25 @@ test("authored complete-flow counts cannot drift from grounded evidence", () => 
     ...canonical,
     html: canonical.html.replace("</main>", '<section data-canvas-v2-node-id="count"><h2>Awin</h2><p>Designed for professional creators and publishers requiring deep brand affiliation, multi-platform authorization, banking verification, and rigorous compliance review.</p><strong>Length: 3 partner-focused screens</strong></section></main>'),
   }, grounded).join(" "), /2 screens, not 3/);
-  assert.match(validateCanvasV2ClaimedCanonicalFlowCounts({
+  assert.deepEqual(validateCanvasV2ClaimedCanonicalFlowCounts({
     ...canonical,
     html: canonical.html.replace("</main>", '<p data-canvas-v2-node-id="count">Awin has a 2-step journey</p></main>'),
-  }, grounded).join(" "), /do not relabel that screenshot count as journey steps/);
+  }, grounded), []);
+});
+
+test("the compiler corrects swapped canonical screen totals without rewriting other authored numbers", () => {
+  const grounded = [
+    { id: "screen:awin-1", url: "https://evidence.test/awin/1.png", label: "Awin screen 1", app: "Awin" },
+    { id: "screen:awin-2", url: "https://evidence.test/awin/2.png", label: "Awin screen 2", app: "Awin" },
+  ];
+  const drifted = {
+    ...canonical,
+    html: canonical.html.replace("</main>", '<section data-canvas-v2-node-id="count"><h2>Awin</h2><p>Length: <strong>47 screens</strong>; interpretation: 3 strategic phases.</p></section></main>'),
+  };
+  const normalized = normalizeCanvasV2ClaimedCanonicalFlowCounts(drifted, grounded);
+  assert.match(normalized.html, /<strong>2 screens<\/strong>/);
+  assert.match(normalized.html, /3 strategic phases/);
+  assert.deepEqual(validateCanvasV2ClaimedCanonicalFlowCounts(normalized, grounded), []);
 });
 
 test("authored app identity uses the exact grounded icon instead of a proxy mark", () => {
@@ -445,4 +677,6 @@ test("invented quantitative precision must remain visibly hypothetical", () => {
   assert.match(validateCanvasV2QuantitativeClaimLabels(unsupportedFraction, evidence, "Compare onboarding").join(" "), /Unsupported quantitative precision 35\/47/);
   const labeledFraction = { ...canonical, html: canonical.html.replace("</main>", '<p data-canvas-v2-node-id="axis">Illustrative estimate · Awin friction allocation: 35 / 47</p></main>') };
   assert.deepEqual(validateCanvasV2QuantitativeClaimLabels(labeledFraction, evidence, "Compare onboarding"), []);
+  const editorialCounter = { ...canonical, html: canonical.html.replace("</main>", '<p data-canvas-v2-node-id="counter">01/04 · observed stage</p></main>') };
+  assert.deepEqual(validateCanvasV2QuantitativeClaimLabels(editorialCounter, evidence, "Compare onboarding"), []);
 });

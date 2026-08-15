@@ -3,6 +3,7 @@ import type {
   CanvasV2FailurePayload,
   CanvasV2ProviderAttemptAudit,
 } from "@/lib/canvas-v2/request-reliability";
+import { canvasV2ProviderForModelIfKnown } from "@/lib/canvas-v2/model-catalog";
 
 export class CanvasV2ProviderError extends Error {
   readonly code: CanvasV2FailureCode;
@@ -11,8 +12,10 @@ export class CanvasV2ProviderError extends Error {
   readonly retryAfterMs?: number;
   readonly providerAttempts?: CanvasV2ProviderAttemptAudit[];
   readonly providerHttpStatus?: number;
+  /** Private corrective context for the next provider call; never returned to the client. */
+  readonly repairContext?: string;
 
-  constructor(input: CanvasV2FailurePayload & { status: number; providerHttpStatus?: number }) {
+  constructor(input: CanvasV2FailurePayload & { status: number; providerHttpStatus?: number; repairContext?: string }) {
     super(input.error);
     this.name = "CanvasV2ProviderError";
     this.code = input.code;
@@ -21,6 +24,7 @@ export class CanvasV2ProviderError extends Error {
     this.retryAfterMs = input.retryAfterMs;
     this.providerAttempts = input.providerAttempts;
     this.providerHttpStatus = input.providerHttpStatus;
+    this.repairContext = input.repairContext;
   }
 }
 
@@ -58,13 +62,14 @@ function providerFailure(status: number, retryAfterMs?: number): CanvasV2Provide
   });
 }
 
-export function invalidCanvasV2ProviderResponse(message: string, providerAttempts?: CanvasV2ProviderAttemptAudit[]): CanvasV2ProviderError {
+export function invalidCanvasV2ProviderResponse(message: string, providerAttempts?: CanvasV2ProviderAttemptAudit[], repairContext?: string): CanvasV2ProviderError {
   return new CanvasV2ProviderError({
     error: message,
     code: "invalid-response",
     status: 502,
     retryable: true,
     providerAttempts,
+    repairContext,
   });
 }
 
@@ -142,7 +147,15 @@ export interface CanvasV2ProviderModelChainInput<T> {
   timeoutMs?: number;
   primaryTimeoutMs?: number;
   requestForModel: (model: string, correction?: string) => { url: string; init: RequestInit };
+  attemptRole?: CanvasV2ProviderAttemptAudit["role"];
   validatePayload?: (payload: T, model: string) => void;
+  /** Caller-owned authoritative context revealed progressively across repairs. */
+  repairContextForAttempt?: (input: {
+    model: string;
+    repairAttempt: number;
+    totalRepairAttempts: number;
+    failureHistory: readonly string[];
+  }) => string | undefined;
   fetcher?: typeof fetch;
 }
 
@@ -191,13 +204,26 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
       try {
         input.validatePayload?.(payload, model);
       } catch (error) {
-        throw invalidCanvasV2ProviderResponse(error instanceof Error ? error.message : "North Star’s model returned invalid output.");
+        const message = error instanceof Error ? error.message : "North Star’s model returned invalid output.";
+        throw invalidCanvasV2ProviderResponse(message, undefined, [
+          `Your preceding structured draft failed deterministic validation: ${message}`,
+          "The committed revision did not change. Return a corrected response for the exact same brief and source. Do not explain the failure.",
+        ].join("\n\n"));
       }
-      attempts.push({ model, attempt: modelAttempt, outcome: "completed", durationMs: Date.now() - attemptStartedAt });
+      attempts.push({
+        model,
+        ...(canvasV2ProviderForModelIfKnown(model) ? { provider: canvasV2ProviderForModelIfKnown(model) } : {}),
+        ...(input.attemptRole ? { role: input.attemptRole } : {}),
+        attempt: modelAttempt,
+        outcome: "completed",
+        durationMs: Date.now() - attemptStartedAt,
+      });
       return payload;
       } catch (error) {
         if (error instanceof CanvasV2ProviderError) attempts.push({
         model,
+        ...(canvasV2ProviderForModelIfKnown(model) ? { provider: canvasV2ProviderForModelIfKnown(model) } : {}),
+        ...(input.attemptRole ? { role: input.attemptRole } : {}),
         attempt: modelAttempt,
         outcome: providerAttemptOutcome(error),
         code: error.code,
@@ -216,11 +242,13 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
       }
   };
   const maxInvalidResponses = Math.max(1, input.maxInvalidResponsesPerModel ?? 1);
+  const totalRepairAttempts = Math.max(0, maxInvalidResponses - 1);
   let lastFailure: CanvasV2ProviderError | undefined;
   let retryAfterMs: number | undefined;
   for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
     const model = models[modelIndex];
     let correction: string | undefined;
+    const correctionFailures: string[] = [];
     for (let invalidAttempt = 1; invalidAttempt <= maxInvalidResponses; invalidAttempt += 1) {
       try {
         return {
@@ -234,7 +262,26 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
         lastFailure = failure;
         retryAfterMs = failure.retryAfterMs ?? retryAfterMs;
         if (failure.code === "invalid-response" && invalidAttempt < maxInvalidResponses) {
-          correction = failure.message;
+          correctionFailures.push(failure.message);
+          const repairAttempt = invalidAttempt;
+          const repairPosture = repairAttempt === 1
+            ? "Repair the exact rejected field or patch operation and preserve every valid part of the intended move."
+            : repairAttempt === 2
+              ? "Re-read the response schema and authoritative source handles. Rebuild the complete minimal response; do not preserve malformed optional structure from the rejected draft."
+              : "Final structural repair: discard the malformed response shape and reconstruct only the required fields from the unchanged brief and committed source. Prefer the smallest valid patch that realizes the same move.";
+          const callerContext = input.repairContextForAttempt?.({
+            model,
+            repairAttempt,
+            totalRepairAttempts,
+            failureHistory: correctionFailures,
+          });
+          correction = [
+            `REPAIR PASS ${repairAttempt} OF ${totalRepairAttempts}.`,
+            repairPosture,
+            `Validator failure history: ${correctionFailures.map((message, index) => `${index + 1}. ${message.slice(0, 800)}`).join(" | ")}`,
+            failure.repairContext ?? failure.message,
+            ...(callerContext ? [callerContext] : []),
+          ].join("\n\n");
           continue;
         }
         if (!canvasV2ProviderSupportsFallback(failure)) throw providerErrorWithAttempts(failure, attempts);
@@ -246,11 +293,13 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
   const onlyInvalidResponses = attempts.every((attempt) => attempt.outcome === "invalid-response");
   throw new CanvasV2ProviderError({
     error: onlyInvalidResponses
-      ? `North Star’s model chain could not repair its structured design output. ${lastFailure.message}`
+      ? "North Star could not safely complete this composition after three automatic corrections. The verified artboard is preserved so the same turn can continue without exposing internal source identities."
       : `North Star’s model chain could not complete this design turn (${attempts.map((attempt) => `${attempt.model}: ${attempt.outcome}`).join("; ")}). The verified artboard is preserved and this run can continue from it.`,
     code: lastFailure.code,
     status: lastFailure.code === "provider-rejected" || lastFailure.code === "invalid-response" ? 502 : 503,
-    retryable: onlyInvalidResponses,
+    // Every invalid draft has already received the caller-owned corrective
+    // attempts. Do not make the client repeat the entire logical turn.
+    retryable: false,
     retryAfterMs,
     providerAttempts: attempts,
     providerHttpStatus: lastFailure.providerHttpStatus,

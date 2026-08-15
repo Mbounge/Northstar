@@ -12,6 +12,13 @@ test("the renderer returns a bounded factual spatial map for every visible stabl
   assert.match(source, /parentNodeId/);
   assert.match(source, /contentOverflowNodeIds/);
   assert.match(source, /notableIntersections/);
+  assert.match(source, /observeDesignRegions/);
+  assert.match(source, /centerXShare/);
+  assert.match(source, /edgeSpace/);
+  assert.match(source, /observeAuthoredSurface/);
+  assert.match(source, /SURFACE_ZONE_ROWS/);
+  assert.match(source, /authoredAreaShare/);
+  assert.match(source, /readingOrder/);
   assert.match(preview, /spatial: observeCanvasV2SpatialLayout\(frameDocument\)/);
   assert.doesNotMatch(source, /aesthetic|beauty|premiumScore|passThreshold/);
 });
@@ -23,8 +30,11 @@ test("the model owns spatial strategy and the runtime does not author a layout",
 
   assert.match(types, /interface CanvasV2SpatialStrategy/);
   assert.match(types, /growthDirection: "stable" \| "horizontal" \| "vertical" \| "both"/);
-  assert.match(route, /factual map of rendered node bounds and computed layout/);
-  assert.match(route, /reported intersections are facts, not automatic errors/i);
+  assert.match(route, /whole-board placement/);
+  assert.match(route, /compileCanvasV2CompositionState/);
+  assert.match(route, /diverseDesignDetails/);
+  assert.match(route, /targetTerritory/);
+  assert.match(route, /factual whole-board placement/);
   assert.match(loop, /spatialStrategy: input\.spatialStrategy/);
   assert.doesNotMatch(`${types}\n${loop}`, /layoutTemplate|repairController|aestheticScore/);
 });
@@ -38,6 +48,10 @@ test("North Star spatial grammar protects precision without prescribing one comp
   assert.match(grammar, /connectors, arrows, and overlays/i);
   assert.match(grammar, /downscaled complete-artboard overview/);
   assert.match(grammar, /segmented views of long canonical rails/);
+  assert.match(grammar, /two-dimensional editorial territory/);
+  assert.match(grammar, /measured authored-surface region centers and edge space/);
+  assert.match(grammar, /data-canvas-v2-stage-evidence="sourced"/);
+  assert.match(grammar, /empty sourced blocks cannot/);
 });
 
 test("the browser proof includes a distinct relationship composition with declared overlap", () => {

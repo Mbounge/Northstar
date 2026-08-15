@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-import { canvasV2CaptureGeometry, normalizeCanvasV2ArtboardGeometry } from "../lib/canvas-v2/artboard-geometry";
+import { canvasV2CaptureGeometry, growCanvasV2ArtboardGeometry, normalizeCanvasV2ArtboardGeometry } from "../lib/canvas-v2/artboard-geometry";
 
 test("the North Star artboard has a generous minimum and grows in either axis", () => {
   assert.deepEqual(normalizeCanvasV2ArtboardGeometry({ width: 400, height: 300 }), { width: 1680, height: 945 });
@@ -13,6 +13,17 @@ test("large artboards remain complete in a bounded model observation", () => {
   const capture = canvasV2CaptureGeometry({ width: 8000, height: 2000 });
   assert.equal(capture.width, 2400);
   assert.equal(capture.height, 600);
+});
+
+test("responsive remeasurement grows monotonically before observation", () => {
+  assert.deepEqual(
+    growCanvasV2ArtboardGeometry({ width: 4200, height: 1600 }, { width: 6100, height: 1400 }),
+    { width: 6100, height: 1600 },
+  );
+  assert.deepEqual(
+    growCanvasV2ArtboardGeometry({ width: 6100, height: 1600 }, { width: 5800, height: 1500 }),
+    { width: 6100, height: 1600 },
+  );
 });
 
 test("the iframe exposes complete intrinsic bounds while the outer canvas owns navigation", () => {

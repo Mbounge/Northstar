@@ -143,6 +143,148 @@ export interface CanvasV2AuthoredAnnotationObservation {
   textPreview?: string;
 }
 
+/** Factual placement of one top-level model-authored analytical region. */
+export interface CanvasV2DesignRegionObservation {
+  nodeId: string;
+  /** Compiler-owned stable identity for this independently editable island. */
+  islandId?: string;
+  /** Stable narrative function of this island in the whole-board story. */
+  storyRole?: CanvasV2IslandStoryRole;
+  label?: string;
+  visualRole?: string;
+  /** Model-declared whole-board placement, observed again after render. */
+  placementMode?: "attached" | "evidence-relative-island" | "interleaved" | "recompose";
+  /** Model-declared relationship to its narrative anchor, observed after render. */
+  territoryRelation?: CanvasV2TerritoryRelation;
+  targetZoneId?: CanvasV2SurfaceZoneId;
+  textPreview?: string;
+  bounds: CanvasV2ElementBounds;
+  artboardWidthShare: number;
+  artboardHeightShare: number;
+  artboardAreaShare: number;
+  centerXShare: number;
+  centerYShare: number;
+  edgeSpace: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+  contentOverflowX: number;
+  contentOverflowY: number;
+  clipsOverflow: boolean;
+  /** Model-declared sequence stages that claim direct screenshot grounding. */
+  sourcedStageCount?: number;
+  /** Sourced stage nodes that rendered without their exact analytical evidence copy. */
+  emptySourcedStageNodeIds?: string[];
+  /** Explicit model-authored intent for a region that deliberately enters canonical evidence territory. */
+  evidenceInterleave?: string;
+  /** Factual intersections with immutable canonical lane containers. */
+  canonicalLaneOverlaps?: Array<{
+    laneNodeId: string;
+    intersection: CanvasV2ElementBounds;
+    regionCoverage: number;
+    laneCoverage: number;
+  }>;
+}
+
+export type CanvasV2SurfaceZoneId =
+  | "top-left" | "top-center" | "top-right"
+  | "middle-left" | "middle-center" | "middle-right"
+  | "bottom-left" | "bottom-center" | "bottom-right";
+
+export type CanvasV2IslandAction = "create" | "develop" | "enrich" | "repair" | "recompose" | "complete";
+export type CanvasV2IslandStoryRole = "title" | "orientation" | "evidence-reading" | "comparison" | "analysis" | "relationship" | "implication" | "synthesis" | "whole-board";
+
+/**
+ * Server-compiled transaction for one island turn. This is execution truth,
+ * not a second creative brief: it lets a rejected candidate be rebuilt against
+ * the same stable island, evidence assignment, and promised territory instead
+ * of asking the next repair pass to rediscover an uncommitted identity.
+ */
+export interface CanvasV2IslandExecutionContract {
+  target: {
+    action: CanvasV2IslandAction;
+    islandId: string;
+    storyRole: CanvasV2IslandStoryRole;
+    resultingMaturity: "developing" | "resolved" | "unchanged";
+    resolutionRationale: string;
+    openRequirements: string[];
+  };
+  territory: {
+    relation: CanvasV2TerritoryRelation;
+    anchorNodeId: string;
+    intendedFootprint: string;
+    rationale: string;
+    placementMode: NonNullable<CanvasV2DesignRegionObservation["placementMode"]>;
+    targetZoneId: CanvasV2SurfaceZoneId;
+  };
+  requiredEvidenceIds: string[];
+  requiredEvidenceHandles: string[];
+  requiredVisualRoles: string[];
+  /**
+   * Exact server-validated visual-director checkpoint for this transaction.
+   * Hidden render repair reuses it instead of asking the visual director to
+   * reinterpret an already-authored, still-uncommitted island.
+   */
+  directorCheckpointJson?: string;
+}
+
+/** Compact factual/model-memory record for one independently targetable island. */
+export interface CanvasV2IslandRegistryEntry {
+  islandId: string;
+  nodeId: string;
+  storyRole: CanvasV2IslandStoryRole;
+  label?: string;
+  purpose: string;
+  maturity: "foundation" | "developing" | "resolved";
+  /** Model-owned explanation of why this island is open or demonstrably complete. */
+  resolutionRationale?: string;
+  /** Prompt-critical information the visual director still expects this island to communicate. */
+  openRequirements: string[];
+  /** Evidence selected while developing this island and therefore required to remain inside it. */
+  requiredEvidenceIds: string[];
+  /** Required evidence that is no longer materially present inside the rendered island. */
+  missingRequiredEvidenceIds: string[];
+  placementMode?: CanvasV2DesignRegionObservation["placementMode"];
+  targetZoneId?: CanvasV2SurfaceZoneId;
+  visualRole?: string;
+  bounds: CanvasV2ElementBounds;
+  centerXShare: number;
+  centerYShare: number;
+  artboardAreaShare: number;
+  evidenceIds: string[];
+  annotationNodeIds: string[];
+  relationshipNodeIds: string[];
+  textPreview?: string;
+}
+
+/** A factual coarse cell in the complete artboard. It describes occupancy, never quality. */
+export interface CanvasV2SurfaceZoneObservation {
+  id: CanvasV2SurfaceZoneId;
+  bounds: CanvasV2ElementBounds;
+  designRegionNodeIds: string[];
+  canonicalLaneNodeIds: string[];
+  occupiedAreaShare: number;
+  availableAreaShare: number;
+}
+
+/** Whole-board geometry supplied to the model so it can compose beyond one local crop. */
+export interface CanvasV2AuthoredSurfaceObservation {
+  artboardBounds: CanvasV2ElementBounds;
+  authoredBounds?: CanvasV2ElementBounds;
+  authoredAreaShare: number;
+  readingOrder: string[];
+  primaryRegionNodeId?: string;
+  leftmostRegionNodeId?: string;
+  rightmostRegionNodeId?: string;
+  topmostRegionNodeId?: string;
+  bottommostRegionNodeId?: string;
+  canonicalLaneBounds?: CanvasV2ElementBounds;
+  analysisEvidenceBounds?: CanvasV2ElementBounds;
+  zones: CanvasV2SurfaceZoneObservation[];
+}
+
 export interface CanvasV2SpatialObservation {
   measuredNodeCount: number;
   reportedNodeCount: number;
@@ -152,6 +294,8 @@ export interface CanvasV2SpatialObservation {
   evidence: CanvasV2EvidenceRenderObservation[];
   authoredRelationships?: CanvasV2AuthoredRelationshipObservation[];
   authoredAnnotations?: CanvasV2AuthoredAnnotationObservation[];
+  designRegions?: CanvasV2DesignRegionObservation[];
+  authoredSurface?: CanvasV2AuthoredSurfaceObservation;
 }
 
 export interface CanvasV2RenderObservation {
@@ -179,6 +323,11 @@ export interface CanvasV2RenderObservation {
     label: string;
     width: number;
     height: number;
+    centerXShare: number;
+    centerYShare: number;
+    artboardAreaShare: number;
+    readingIndex: number;
+    visualRole?: string;
     screenshotDataUrl: string;
   }>;
   spatial: CanvasV2SpatialObservation;
@@ -234,6 +383,54 @@ export interface CanvasV2SpatialStrategy {
   intentionalOverlaps: string[];
 }
 
+export type CanvasV2TerritoryRelation =
+  | "within"
+  | "above"
+  | "below"
+  | "left"
+  | "right"
+  | "span"
+  | "interleave"
+  | "offset"
+  | "recompose"
+  | "none";
+
+/**
+ * Compact model-owned continuity memory. It records the composition the model
+ * intends to preserve and develop; it is not a runtime-authored layout plan or
+ * an aesthetic score.
+ */
+export interface CanvasV2CompositionState {
+  dominantAnchor: string;
+  readingOrder: string[];
+  regions: Array<{
+    nodeId: string;
+    islandId?: string;
+    storyRole?: CanvasV2IslandStoryRole;
+    purpose: string;
+    maturity: "foundation" | "developing" | "resolved";
+    resolutionRationale?: string;
+    openRequirements?: string[];
+    requiredEvidenceIds?: string[];
+    placementMode?: CanvasV2DesignRegionObservation["placementMode"];
+    targetZoneId?: CanvasV2SurfaceZoneId;
+  }>;
+  preservedNodeIds: string[];
+  retiredNodes: Array<{
+    nodeId: string;
+    reason: string;
+    replacementNodeId?: string;
+  }>;
+  preservedStrengths: string[];
+  nextTerritory: {
+    relation: CanvasV2TerritoryRelation;
+    anchorNodeId: string;
+    intendedFootprint: string;
+    rationale: string;
+  };
+  regressionRisks: string[];
+}
+
 export interface CanvasV2DesignTurnInput {
   instruction: string;
   revision: CanvasV2ArtifactRevision;
@@ -246,6 +443,7 @@ export interface CanvasV2DesignTurnInput {
     turn: number;
     creativeDirection?: CanvasV2CreativeDirection;
     spatialStrategy?: CanvasV2SpatialStrategy;
+    compositionState?: CanvasV2CompositionState;
     priorSteps: Array<{
       revisionId: string;
       kind?: "research" | "design";
@@ -263,10 +461,13 @@ export interface CanvasV2EditDecision {
   moveKind: Exclude<CanvasV2CreativeMoveKind, "research">;
   creativeDirection: CanvasV2CreativeDirection;
   spatialStrategy: CanvasV2SpatialStrategy;
+  compositionState?: CanvasV2CompositionState;
   reflection: CanvasV2RenderedReflection;
   document: CanvasV2ArtifactDocument;
   summary: string;
   expectedVisualResult: string;
+  /** Compiler-owned repair lineage for the exact island mutation. */
+  islandExecution?: CanvasV2IslandExecutionContract;
 }
 
 export interface CanvasV2CompleteDecision {
@@ -274,6 +475,7 @@ export interface CanvasV2CompleteDecision {
   decision: "complete";
   creativeDirection: CanvasV2CreativeDirection;
   spatialStrategy: CanvasV2SpatialStrategy;
+  compositionState?: CanvasV2CompositionState;
   reflection: CanvasV2RenderedReflection;
   summary: string;
 }
@@ -284,6 +486,7 @@ export interface CanvasV2ResearchDecision {
   moveKind: "research";
   creativeDirection: CanvasV2CreativeDirection;
   spatialStrategy: CanvasV2SpatialStrategy;
+  compositionState?: CanvasV2CompositionState;
   reflection: CanvasV2RenderedReflection;
   appId: string;
   flowId: string;

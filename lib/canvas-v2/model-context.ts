@@ -7,6 +7,10 @@ const MAX_SOURCE_OUTLINE = 42_000;
 const MAX_CSS_CONTEXT = 32_000;
 const MAX_SPATIAL_NODES = 90;
 
+function compilerOwnedRailFurniture(nodeId: string | undefined): boolean {
+  return Boolean(nodeId && /-segment-[a-z0-9-]+-label$/i.test(nodeId));
+}
+
 function sourceAttribute(attributes: string, name: string): string | undefined {
   return new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "i").exec(attributes)?.[1];
 }
@@ -27,6 +31,31 @@ function compactAnalysisEvidenceCopies(html: string, copyHandleByEvidenceId: Rea
     const copyHandle = copyHandleByEvidenceId.get(evidenceId);
     return `<img data-canvas-v2-node-id="${nodeId}" ${copyHandle ? `data-canvas-v2-copy-evidence-handle="${copyHandle}"` : `data-canvas-v2-copy-evidence-id="${evidenceId}"`}${className ? ` class="${className}"` : ""}${alt ? ` alt="${alt}"` : ""}>`;
   });
+}
+
+/**
+ * Keep a focused island lossless while replacing compiler-owned image URLs
+ * and long tenant evidence identities with the short handles accepted by the
+ * source patch compiler. Later turns should spend context on composition, not
+ * on repeating provenance that the server already owns.
+ */
+export function compactCanvasV2IslandSourceForModel(
+  revision: CanvasV2ArtifactRevision,
+  nodeId: string | undefined,
+): string | undefined {
+  if (!nodeId) return undefined;
+  const range = findCanvasV2SourceNodeRange(revision.document.html, nodeId);
+  if (!range) return undefined;
+  const copyHandleByEvidenceId = new Map(
+    buildCanvasV2EvidenceCopyHandles(revision.document).map((item) => [item.evidenceId, item.handle]),
+  );
+  const source = compactAnalysisEvidenceCopies(
+    revision.document.html.slice(range.start, range.end),
+    copyHandleByEvidenceId,
+  );
+  return source.length <= 18_000
+    ? source
+    : `${source.slice(0, 12_000)}\n<!-- focused island source middle omitted -->\n${source.slice(-6_000)}`;
 }
 
 function compactSource(revision: CanvasV2ArtifactRevision): string {
@@ -89,12 +118,15 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
       contentBounds: observation.contentBounds,
       runtimeErrors: observation.runtimeErrors,
       missingEvidenceIds: observation.missingEvidenceIds,
-      overflow: observation.overflow?.slice(0, 30),
+      // Canonical segment labels are clamped by the source compiler. They are
+      // not creative work and must not consume model turns as false-positive
+      // whole-board opportunities.
+      overflow: observation.overflow?.filter((item) => !compilerOwnedRailFurniture(item.nodeId)).slice(0, 30),
       spatial: {
         measuredNodeCount: observation.spatial.measuredNodeCount,
         nodes: observation.spatial.nodes.filter((node) => !canonicalNodeIds.has(node.nodeId)).slice(0, MAX_SPATIAL_NODES),
         notableIntersections: observation.spatial.notableIntersections.slice(0, 30),
-        contentOverflowNodeIds: observation.spatial.contentOverflowNodeIds.slice(0, 50),
+        contentOverflowNodeIds: observation.spatial.contentOverflowNodeIds.filter((nodeId) => !compilerOwnedRailFurniture(nodeId)).slice(0, 50),
         analysisEvidenceGeometry: observation.spatial.evidence
           .filter((item) => item.role === "analysis-copy")
           .map((item) => ({
@@ -119,6 +151,15 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
           })),
         authoredRelationships: (observation.spatial.authoredRelationships ?? []).slice(0, 40),
         authoredAnnotations: (observation.spatial.authoredAnnotations ?? []).slice(0, 40),
+        authoredSurface: {
+          ...(observation.spatial.authoredSurface ?? {
+            artboardBounds: observation.contentBounds,
+            authoredAreaShare: 0,
+            readingOrder: [],
+            zones: [],
+          }),
+          designRegions: (observation.spatial.designRegions ?? []).slice(0, 32),
+        },
         canonicalEvidenceIntegrity: manifests.map((flow) => {
           const screens = flow.items.filter((item) => item.flowIndex !== undefined);
           return {

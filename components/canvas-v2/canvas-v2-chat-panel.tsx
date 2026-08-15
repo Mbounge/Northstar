@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  ArrowUp,
   Check,
   ChevronDown,
   CircleDot,
@@ -9,15 +10,15 @@ import {
   Loader2,
   MessageCircle,
   MousePointer2,
-  Paperclip,
+  LockKeyhole,
+  Plus,
   RotateCw,
   Search,
-  Send,
   Sparkles,
-  StopCircle,
+  Square,
   WandSparkles,
 } from "lucide-react";
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useCanvasV2Chat, type CanvasV2ChatTurn } from "@/components/canvas-v2/use-canvas-v2-chat";
 import type { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
@@ -26,6 +27,11 @@ import type { CanvasV2InteractionRoute } from "@/lib/canvas-v2/interaction-route
 import type { CanvasV2ResearchRequirement } from "@/lib/canvas-v2/research-director";
 import { canvasV2RetryReason, type CanvasV2ProviderAttemptAudit, type CanvasV2RetryState } from "@/lib/canvas-v2/request-reliability";
 import type { CanvasV2CreativeMoveKind } from "@/lib/canvas-v2/types";
+import {
+  CANVAS_V2_MODEL_CATALOG,
+  canvasV2ModelLabel,
+  parseCanvasV2ModelSelection,
+} from "@/lib/canvas-v2/model-catalog";
 
 const ROUTE_PRESENTATION: Record<CanvasV2InteractionRoute, { label: string; icon: typeof MessageCircle }> = {
   conversation: { label: "Conversation", icon: MessageCircle },
@@ -60,7 +66,7 @@ function ModelAttempts({ attempts }: { attempts: CanvasV2ProviderAttemptAudit[] 
   return <div className="mb-3 grid gap-1 border-b border-[#efedf8] pb-3 text-[10px] text-[#777287]">
     <div className="font-black uppercase tracking-[.14em] text-[#9a91d9]">Model activity</div>
     {visibleAttempts.map((attempt, index) => <div key={`${attempt.model}-${index}`} title={attempt.detail} className="flex justify-between gap-3">
-      <span className="truncate font-semibold text-[#555064]">{attempt.model}</span>
+      <span className="truncate font-semibold text-[#555064]">{attempt.provider ? `${attempt.provider === "openai" ? "OpenAI" : "Google"} · ` : ""}{canvasV2ModelLabel(attempt.model)}{attempt.role ? ` · ${attempt.role.replaceAll("-", " ")}` : ""}</span>
       <span className="shrink-0">{attempt.outcome.replaceAll("-", " ")}{attempt.attempt && attempt.attempt > 1 ? ` · attempt ${attempt.attempt}` : ""}{attempt.httpStatus ? ` · HTTP ${attempt.httpStatus}` : ""} · {(attempt.durationMs / 1_000).toFixed(1)}s</span>
     </div>)}
   </div>;
@@ -71,7 +77,11 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
   const loop = turn.loop ?? loops.at(-1);
   const steps = loops.flatMap((entry) => entry.steps);
   const researchStatus = loop?.researchStatus ?? (loop?.researchTargets ?? turn.researchTargets ?? []).map<CanvasV2ResearchRequirement>((requestedName) => ({ requestedName, state: "unresolved", usableFlowIds: [], adequateFlowIds: [], visibleFlowIds: [], visibleAdequateFlowIds: [] }));
-  return <div className="mt-3 border-l border-[#ded9ff] pl-4">
+  return <div
+    className="mt-3 border-l border-[#ded9ff] pl-4"
+    data-canvas-v2-loop-provider-attempt-audit={loop?.providerAttempts?.length ? JSON.stringify(loop.providerAttempts) : undefined}
+  >
+    {loop?.activeModel && <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-[#f0eef8] px-2.5 py-1 text-[9px] font-black uppercase tracking-[.12em] text-[#6659c5]"><Sparkles className="h-3 w-3" />Authored with {canvasV2ModelLabel(loop.activeModel)}</div>}
     {loop?.providerAttempts?.length ? <ModelAttempts attempts={loop.providerAttempts} /> : null}
     {loop?.creativeDirection && <div className="mb-4 border-b border-[#efedf8] pb-3">
       <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#9a91d9]">Creative direction</div>
@@ -85,10 +95,16 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
         <span><strong className="font-bold text-[#4c485b]">{requirement.appName ?? requirement.requestedName}</strong> · {requirement.state}{requirement.reason ? ` — ${requirement.reason}` : ""}</span>
       </div>)}
     </div> : null}
-    {steps.map((step, index) => <div key={step.revisionId} className="relative pb-4 last:pb-1">
+    {steps.map((step, index) => <div
+      key={step.revisionId}
+      className="relative pb-4 last:pb-1"
+      data-canvas-v2-provider-attempt-audit={step.providerAttempts?.length ? JSON.stringify(step.providerAttempts) : undefined}
+      data-canvas-v2-render-repair-audit={step.renderRepairFailures?.length ? JSON.stringify(step.renderRepairFailures) : undefined}
+    >
       <span className="absolute -left-[21px] top-0.5 grid h-3 w-3 place-items-center rounded-full bg-white ring-1 ring-[#8778ef]"><Check className="h-2 w-2 text-[#6552df]" /></span>
       <div className="text-[10px] font-black uppercase tracking-[.12em] text-[#7564e9]">{MOVE_LABEL[step.moveKind]} · {index + 1}</div>
       <p className="mt-1 text-[13px] leading-5 text-[#555566]">{step.summary}</p>
+      {step.providerAttempts?.length ? <div className="mt-1 text-[9px] font-semibold uppercase tracking-[.08em] text-[#a19bab]">{step.providerAttempts.filter((attempt) => attempt.outcome === "completed").map((attempt) => `${attempt.role === "visual-director" ? "art direction" : attempt.role === "source-author" ? "authorship" : "model"} ${(attempt.durationMs / 1_000).toFixed(1)}s`).join(" · ")}{step.renderRepairCount ? ` · ${step.renderRepairCount} render repair${step.renderRepairCount === 1 ? "" : "s"}` : ""}</div> : null}
     </div>)}
     {(turn.status === "running" || turn.status === "routing") && <div className="relative flex items-center gap-2 pb-1 text-[13px] text-[#747486]">
       <span className="absolute -left-[21px] grid h-3 w-3 place-items-center rounded-full bg-white ring-1 ring-[#c8c2f8]"><CircleDot className="h-2 w-2 animate-pulse text-[#745fff]" /></span>
@@ -133,6 +149,7 @@ export function CanvasV2ChatPanel({
 }) {
   const chat = useCanvasV2Chat({ endpoint: routerEndpoint, engine, selection });
   const endRef = useRef<HTMLDivElement>(null);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -165,7 +182,7 @@ export function CanvasV2ChatPanel({
       <div ref={endRef} />
     </div>
 
-    <div className="m-5 mt-1 rounded-[24px] border border-[#dedee9] bg-white p-3.5 shadow-[0_15px_45px_rgba(50,48,80,.11)] transition focus-within:border-[#bcb2fb] focus-within:shadow-[0_18px_50px_rgba(91,75,190,.15)]">
+    <div className="relative m-5 mt-1 rounded-[28px] border border-[#dad9e5] bg-[#fbfbfc] p-3 shadow-[0_18px_55px_rgba(42,39,70,.13)] transition focus-within:border-[#b8aff5] focus-within:bg-white focus-within:shadow-[0_22px_62px_rgba(83,67,177,.17)]">
       {selection && <div className="mb-2.5 flex items-center gap-2 rounded-xl bg-[#f4f2ff] px-3 py-2 text-[10px] font-bold text-[#6553dd]"><MousePointer2 className="h-3.5 w-3.5" /><span className="truncate">Selected · {selection.nodeId}</span></div>}
       <label htmlFor="canvas-v2-message" className="sr-only">Message North Star</label>
       <textarea
@@ -175,15 +192,58 @@ export function CanvasV2ChatPanel({
         onKeyDown={keyDown}
         disabled={chat.busy}
         placeholder="Ask North Star anything…"
-        className="h-[76px] w-full resize-none bg-transparent px-1 text-[13px] leading-5 outline-none placeholder:text-[#a4a4b1] disabled:opacity-60"
+        className="h-[104px] w-full resize-none bg-transparent px-2 pt-1 text-[14px] leading-6 text-[#292834] outline-none placeholder:text-[#9d9ca8] disabled:opacity-60"
       />
-      <div className="flex items-center justify-between border-t border-[#ededf2] pt-3">
-        <div className="flex items-center gap-1">
-          <button type="button" disabled aria-label="Attach context" title="Attachment support is not enabled in Canvas V2 yet" className="grid h-8 w-8 place-items-center rounded-lg text-[#b0b0bc]"><Paperclip className="h-4 w-4" /></button>
-          <button type="button" className="flex h-8 items-center gap-1 rounded-lg px-2 text-[11px] font-bold text-[#777789] hover:bg-[#f6f5fa]">Balanced <ChevronDown className="h-3 w-3" /></button>
+      <div className="flex items-center justify-between pt-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <button type="button" disabled aria-label="Add context" title="Attachments will arrive with the collaborative workspace patch" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#9997a5] transition hover:bg-[#f0eef8] disabled:opacity-55"><Plus className="h-[18px] w-[18px]" /></button>
+          <span className="hidden truncate text-[11px] font-medium text-[#92909e] 2xl:inline">Context from the living artboard</span>
         </div>
-        {chat.busy ? <button onClick={chat.stop} aria-label="Stop current response" className="grid h-10 w-10 place-items-center rounded-full bg-[#fff0f0] text-[#d84b59] transition hover:bg-[#ffe3e3]"><StopCircle className="h-4.5 w-4.5" /></button> : <button onClick={() => void chat.submit()} disabled={!chat.draft.trim() || !engine.ready || engine.applyingManualEdit} aria-label="Send message" className="grid h-10 w-10 place-items-center rounded-full bg-[#735fff] text-white shadow-[0_7px_18px_rgba(100,80,225,.32)] transition hover:-translate-y-0.5 hover:bg-[#6550ee] disabled:translate-y-0 disabled:opacity-35 disabled:shadow-none"><Send className="h-4.5 w-4.5" /></button>}
+        <div className="flex items-center gap-2">
+          {chat.busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-[#7160e8]" aria-label="North Star is working" />}
+          <button
+            type="button"
+            onClick={() => setModelMenuOpen((open) => !open)}
+            disabled={chat.busy}
+            aria-expanded={modelMenuOpen}
+            aria-haspopup="menu"
+            className="flex h-9 max-w-[176px] items-center gap-1.5 rounded-xl bg-[#eeedf2] px-3 text-[11px] font-bold text-[#4c4959] transition hover:bg-[#e7e5ed] disabled:opacity-60"
+          >
+            <span className="truncate">{canvasV2ModelLabel(chat.modelSelection)}</span>
+            <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition ${modelMenuOpen ? "rotate-180" : ""}`} />
+          </button>
+          {chat.busy
+            ? <button onClick={chat.stop} aria-label="Stop current response" className="grid h-10 w-10 place-items-center rounded-full bg-[#ecebf0] text-[#4d4a59] transition hover:bg-[#e2e0e8]"><Square className="h-3.5 w-3.5 fill-current" /></button>
+            : <button onClick={() => void chat.submit()} disabled={!chat.draft.trim() || !engine.ready || engine.applyingManualEdit} aria-label="Send message" className="grid h-10 w-10 place-items-center rounded-full bg-[#171721] text-white shadow-[0_8px_20px_rgba(23,23,33,.22)] transition hover:-translate-y-0.5 hover:bg-[#292837] disabled:translate-y-0 disabled:bg-[#d7d5df] disabled:shadow-none"><ArrowUp className="h-5 w-5" /></button>}
+        </div>
       </div>
+
+      {modelMenuOpen && <div role="menu" aria-label="North Star model" className="absolute bottom-[62px] right-[54px] z-30 w-[272px] overflow-hidden rounded-[20px] border border-[#dedce7] bg-[#25242a] p-2 text-white shadow-[0_22px_70px_rgba(22,20,35,.28)]">
+        <div className="px-3 pb-2 pt-1 text-[9px] font-black uppercase tracking-[.16em] text-[#9995a5]">Model</div>
+        {CANVAS_V2_MODEL_CATALOG.map((entry) => {
+          const selected = entry.id === chat.modelSelection;
+          return <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={selected}
+            disabled={!entry.selectable || chat.busy}
+            key={entry.id}
+            onClick={() => {
+              if (!entry.selectable) return;
+              chat.setModelSelection(parseCanvasV2ModelSelection(entry.id));
+              setModelMenuOpen(false);
+            }}
+            className="flex w-full items-start gap-3 rounded-[14px] px-3 py-2.5 text-left transition enabled:hover:bg-white/[.07] disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <span className={`mt-1 grid h-4 w-4 shrink-0 place-items-center rounded-full border ${selected ? "border-[#a99cff] bg-[#7762ef]" : "border-[#686570]"}`}>{selected ? <Check className="h-2.5 w-2.5" /> : !entry.enabled ? <LockKeyhole className="h-2.5 w-2.5" /> : null}</span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center justify-between gap-2 text-[12px] font-bold"><span>{entry.label}</span>{selected && <span className="text-[9px] uppercase tracking-[.12em] text-[#b8adff]">Active</span>}</span>
+              <span className="mt-0.5 block text-[10px] leading-4 text-[#aaa6b2]">{entry.disabledReason ?? entry.description}</span>
+            </span>
+          </button>;
+        })}
+        <div className="mx-3 mt-1 border-t border-white/10 px-0 py-2 text-[9px] leading-4 text-[#8e8a97]">Each run remains pinned to the model you choose. Terra and Sol are blocked in every execution path.</div>
+      </div>}
     </div>
   </>;
 }

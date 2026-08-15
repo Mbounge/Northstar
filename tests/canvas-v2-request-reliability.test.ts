@@ -249,8 +249,9 @@ test("two invalid design outputs remain corrective instead of masquerading as pr
   }), (error) => {
     assert.ok(error instanceof CanvasV2ProviderError);
     assert.equal(error.code, "invalid-response");
-    assert.equal(error.retryable, true);
-    assert.match(error.message, /resolve the visible relationship/);
+    assert.equal(error.retryable, false);
+    assert.match(error.message, /three automatic corrections/);
+    assert.doesNotMatch(error.message, /resolve the visible relationship/);
     return true;
   });
 });
@@ -274,11 +275,67 @@ test("invalid structured output is repaired by the same model with exact validat
   });
   assert.equal(result.model, "primary-model");
   assert.equal(result.fallbackUsed, false);
-  assert.deepEqual(corrections, [undefined, "Every image needs a unique stable node identity."]);
+  assert.equal(corrections[0], undefined);
+  assert.match(corrections[1] ?? "", /Every image needs a unique stable node identity/);
+  assert.match(corrections[1] ?? "", /REPAIR PASS 1 OF 2/);
+  assert.doesNotMatch(corrections[1] ?? "", /\{\"ok\":false\}/);
   assert.deepEqual(result.attempts.map((attempt) => [attempt.model, attempt.attempt, attempt.outcome]), [
     ["primary-model", 1, "invalid-response"],
     ["primary-model", 2, "completed"],
   ]);
+});
+
+test("a corrective retry receives the exact validator failure without resending a bloated invalid draft", async () => {
+  const corrections: Array<string | undefined> = [];
+  const controller = new AbortController();
+  const outcome = await fetchCanvasV2ProviderJsonWithModelChain<{ draft: string }>({
+    models: ["primary-model"],
+    requestSignal: controller.signal,
+    maxInvalidResponsesPerModel: 2,
+    requestForModel: (_model, correction) => {
+      corrections.push(correction);
+      return { url: "https://provider.test/repair", init: {} };
+    },
+    fetcher: async () => new Response(JSON.stringify({ draft: corrections.length === 1 ? "Whop has 47 screens" : "Whop has 17 screens" }), { status: 200 }),
+    validatePayload: (payload) => {
+      if (payload.draft.includes("47")) throw new Error("Whop has 17 screens, not 47.");
+    },
+  });
+
+  assert.equal(outcome.payload.draft, "Whop has 17 screens");
+  assert.equal(corrections[0], undefined);
+  assert.match(corrections[1] ?? "", /Whop has 17 screens, not 47/);
+  assert.doesNotMatch(corrections[1] ?? "", /Preceding invalid provider response/);
+});
+
+test("one model receives exactly three progressively labeled repairs after its original draft", async () => {
+  const corrections: Array<string | undefined> = [];
+  let calls = 0;
+  const result = await fetchCanvasV2ProviderJsonWithModelChain<{ valid: boolean }>({
+    models: ["primary-model"],
+    requestSignal: new AbortController().signal,
+    maxInvalidResponsesPerModel: 4,
+    requestForModel: (_model, correction) => {
+      corrections.push(correction);
+      return { url: "https://provider.test/progressive-repair", init: {} };
+    },
+    fetcher: async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ valid: calls === 4 }), { status: 200 });
+    },
+    validatePayload: (payload) => {
+      if (!payload.valid) throw new Error(`Draft ${calls} still violates the current revision.`);
+    },
+  });
+
+  assert.equal(result.payload.valid, true);
+  assert.equal(calls, 4);
+  assert.equal(corrections[0], undefined);
+  assert.match(corrections[1] ?? "", /REPAIR PASS 1 OF 3/);
+  assert.match(corrections[2] ?? "", /REPAIR PASS 2 OF 3/);
+  assert.match(corrections[2] ?? "", /Draft 1[\s\S]*Draft 2/);
+  assert.match(corrections[3] ?? "", /REPAIR PASS 3 OF 3/);
+  assert.match(corrections[3] ?? "", /Draft 1[\s\S]*Draft 2[\s\S]*Draft 3/);
 });
 
 test("the model chain reaches a third fallback after corrective attempts are exhausted", async () => {

@@ -18,6 +18,10 @@ import {
   type CanvasV2RetryState,
   type CanvasV2ProviderAttemptAudit,
 } from "@/lib/canvas-v2/request-reliability";
+import {
+  CANVAS_V2_DEFAULT_MODEL,
+  type CanvasV2ModelSelection,
+} from "@/lib/canvas-v2/model-catalog";
 
 export interface CanvasV2ChatTurn {
   id: string;
@@ -44,7 +48,7 @@ interface DesignEngine {
   loop?: CanvasV2LoopState;
   running: boolean;
   applyingManualEdit: boolean;
-  start: (instruction: string, observation?: CanvasV2RenderObservation, continuation?: CanvasV2LoopContinuation, researchTargets?: string[], researchMode?: CanvasV2ResearchMode) => string | undefined;
+  start: (instruction: string, observation?: CanvasV2RenderObservation, continuation?: CanvasV2LoopContinuation, researchTargets?: string[], researchMode?: CanvasV2ResearchMode, modelSelection?: CanvasV2ModelSelection) => string | undefined;
   stop: () => void;
 }
 
@@ -59,6 +63,7 @@ export function useCanvasV2Chat(input: {
 }) {
   const [draft, setDraft] = useState("");
   const [turns, setTurns] = useState<CanvasV2ChatTurn[]>([]);
+  const [modelSelection, setModelSelection] = useState<CanvasV2ModelSelection>(CANVAS_V2_DEFAULT_MODEL);
   const activeRoutingTurnId = useRef<string | undefined>(undefined);
   const activeDesignTurnId = useRef<string | undefined>(undefined);
   const routingSequence = useRef(0);
@@ -106,6 +111,7 @@ export function useCanvasV2Chat(input: {
           observation: input.engine.displayedObservation,
           selection: input.selection,
           history,
+          modelSelection,
         },
         onRetry: (retry) => {
           if (routingSequence.current !== sequence || activeRoutingTurnId.current !== turnId) return;
@@ -129,7 +135,7 @@ export function useCanvasV2Chat(input: {
         return;
       }
       if (!decision.canvasInstruction) throw new Error("North Star returned no canvas instruction.");
-      const runId = input.engine.start(decision.canvasInstruction, input.engine.displayedObservation, undefined, decision.researchTargets, decision.researchMode);
+      const runId = input.engine.start(decision.canvasInstruction, input.engine.displayedObservation, undefined, decision.researchTargets, decision.researchMode, modelSelection);
       if (!runId) throw new Error("The artboard is not ready to begin another design run.");
       activeRoutingTurnId.current = undefined;
       activeDesignTurnId.current = turnId;
@@ -178,11 +184,13 @@ export function useCanvasV2Chat(input: {
       priorSteps: [...(turn.loop.priorSteps ?? []), ...turn.loop.steps],
       creativeDirection: turn.loop.creativeDirection,
       spatialStrategy: turn.loop.spatialStrategy,
+      compositionState: turn.loop.compositionState,
       researchTargets: turn.loop.researchTargets ?? turn.researchTargets,
       researchMode: turn.loop.researchMode ?? turn.researchMode,
       researchStatus: turn.loop.researchStatus,
+      modelSelection: turn.loop.modelSelection,
     };
-    const runId = input.engine.start(turn.canvasInstruction, input.engine.displayedObservation, continuation);
+    const runId = input.engine.start(turn.canvasInstruction, input.engine.displayedObservation, continuation, undefined, undefined, continuation.modelSelection ?? modelSelection);
     if (!runId) {
       setTurns((current) => current.map((candidate) => candidate.id === turnId ? { ...candidate, error: "The latest committed artboard is still preparing for continuation." } : candidate));
       return;
@@ -199,5 +207,5 @@ export function useCanvasV2Chat(input: {
     } : candidate));
   };
 
-  return { draft, setDraft, turns, busy, routing, submit, stop, continueTurn };
+  return { draft, setDraft, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection };
 }

@@ -373,6 +373,23 @@ export function CanvasV2Workspace({
         </div>
       </section>
 
+      {engine.inspectionCandidate && (
+        <div
+          aria-hidden="true"
+          data-testid="canvas-v2-candidate-inspection-surface"
+          className="pointer-events-none fixed overflow-hidden opacity-0"
+          style={{ left: -100_000, top: -100_000, width: 1, height: 1 }}
+        >
+          <CanvasV2ArtboardPreview
+            revision={engine.inspectionCandidate}
+            onObservation={engine.receiveObservation}
+            onCaptureError={engine.captureFailed}
+            bare
+            framePointerEvents="none"
+          />
+        </div>
+      )}
+
       {selectedElement && <aside aria-label="Element inspector" className="absolute right-6 top-[94px] z-40 w-[280px] rounded-[22px] border border-[#dedfec] bg-white/95 p-5 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl">
         <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-black"><LocateFixed className="h-4 w-4 text-[#6d59ed]" />Selection</div><button onClick={() => selectElement(undefined)} aria-label="Clear element selection" className="text-xs font-bold text-[#777789]">Clear</button></div>
         <div className="mt-4 rounded-xl bg-[#f5f4fb] p-3"><div className="text-[10px] font-black uppercase tracking-[.13em] text-[#9292a1]">Node identity</div><div className="mt-1 break-all font-mono text-xs text-[#3f3f4e]">{selectedElement.nodeId}</div></div>

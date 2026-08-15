@@ -5,8 +5,8 @@
   "canonicalRoute": {
     "path": "/canvas",
     "file": "app/canvas/page.tsx",
-    "currentOwner": "Canvas V2 with primary/fallback provider continuity",
-    "targetOwner": "Canvas V2 with primary/fallback provider continuity",
+    "currentOwner": "Canvas V2 with provider-neutral structured continuity and a server-enforced Luna cost guard",
+    "targetOwner": "Canvas V2 with provider-neutral structured continuity and a server-enforced Luna cost guard",
     "cutoverPhase": "7E.3 complete"
   },
   "previewAlias": {
@@ -48,7 +48,7 @@
     "sharedDataAdapter": "lib/app-data/canvas-v2-catalog.ts",
     "sharedMediaAdapter": "lib/app-data/review-media.ts",
     "pageLifecycle": "in-memory only; refresh starts a clean canvas and discards obsolete V2 recovery keys",
-    "expectedSourceFileCount": 35
+    "expectedSourceFileCount": 39
   },
   "testOnly": {
     "routeRoots": [

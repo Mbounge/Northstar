@@ -7,6 +7,7 @@ import { buildCanvasV2RuntimeDocument } from "@/lib/canvas-v2/runtime-document";
 import {
   CANVAS_V2_MIN_ARTBOARD,
   canvasV2CaptureGeometry,
+  growCanvasV2ArtboardGeometry,
   measureCanvasV2ArtboardGeometry,
   type CanvasV2ArtboardGeometry,
 } from "@/lib/canvas-v2/artboard-geometry";
@@ -52,7 +53,7 @@ function bounds(element: Element): CanvasV2ElementBounds {
 
 const CANVAS_V2_RAIL_DETAIL_CHUNK_SIZE = 24;
 const CANVAS_V2_MAX_RAIL_DETAIL_CHUNKS = 4;
-const CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS = 4;
+const CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS = 6;
 
 async function captureCanonicalRailDetails(frameDocument: Document): Promise<NonNullable<CanvasV2RenderObservation["railDetails"]>> {
   const details: NonNullable<CanvasV2RenderObservation["railDetails"]> = [];
@@ -108,11 +109,22 @@ async function captureCanonicalRailDetails(frameDocument: Document): Promise<Non
 }
 
 async function captureAuthoredDesignDetails(frameDocument: Document): Promise<NonNullable<CanvasV2RenderObservation["designDetails"]>> {
+  const artboard = Array.from(frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
+    .find((element) => element.dataset.canvasV2NodeId === "artboard") ?? frameDocument.body;
+  const artboardRect = artboard.getBoundingClientRect();
+  const artboardArea = Math.max(1, artboardRect.width * artboardRect.height);
   const regions = Array.from(frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-design-region]"))
     .filter((region) => !region.parentElement?.closest("[data-canvas-v2-design-region]"))
+    .sort((left, right) => {
+      const leftRect = left.getBoundingClientRect();
+      const rightRect = right.getBoundingClientRect();
+      const verticalDelta = leftRect.top - rightRect.top;
+      const rowTolerance = Math.max(24, Math.min(leftRect.height, rightRect.height) * 0.18);
+      return Math.abs(verticalDelta) <= rowTolerance ? leftRect.left - rightRect.left : verticalDelta;
+    })
     .slice(0, CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS);
   const details: NonNullable<CanvasV2RenderObservation["designDetails"]> = [];
-  for (const region of regions) {
+  for (const [readingIndex, region] of regions.entries()) {
     const nodeId = region.dataset.canvasV2NodeId;
     const rect = region.getBoundingClientRect();
     if (!nodeId || rect.width < 2 || rect.height < 2) continue;
@@ -130,6 +142,11 @@ async function captureAuthoredDesignDetails(frameDocument: Document): Promise<No
       label: region.getAttribute("aria-label")?.trim() || heading || "Authored design region",
       width: Math.round(rect.width),
       height: Math.round(rect.height),
+      centerXShare: Number(((rect.left + rect.width / 2 - artboardRect.left) / Math.max(1, artboardRect.width)).toFixed(3)),
+      centerYShare: Number(((rect.top + rect.height / 2 - artboardRect.top) / Math.max(1, artboardRect.height)).toFixed(3)),
+      artboardAreaShare: Number(((rect.width * rect.height) / artboardArea).toFixed(3)),
+      readingIndex,
+      ...(region.getAttribute("data-canvas-v2-visual-role") ? { visualRole: region.getAttribute("data-canvas-v2-visual-role")! } : {}),
       screenshotDataUrl,
     });
   }
@@ -224,7 +241,19 @@ export function CanvasV2ArtboardPreview({
         new Promise<void>((resolve) => window.setTimeout(resolve, 8_000)),
       ]);
 
-      const geometry = measureCanvasV2ArtboardGeometry(frameDocument);
+      let geometry = measureCanvasV2ArtboardGeometry(frameDocument);
+      // Resolve responsive reflow before observation. A model-authored grid can
+      // change its intrinsic extent after the iframe grows from the minimum
+      // viewport; capturing the first measurement made intact canonical rails
+      // look clipped and triggered unnecessary source-author repair.
+      for (let pass = 0; pass < 4; pass += 1) {
+        frame.style.width = `${geometry.width}px`;
+        frame.style.height = `${geometry.height}px`;
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+        const grown = growCanvasV2ArtboardGeometry(geometry, measureCanvasV2ArtboardGeometry(frameDocument));
+        if (grown.width === geometry.width && grown.height === geometry.height) break;
+        geometry = grown;
+      }
       frame.style.width = `${geometry.width}px`;
       frame.style.height = `${geometry.height}px`;
       onGeometry?.(geometry);

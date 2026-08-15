@@ -19,6 +19,7 @@ export default defineConfig({
     timeout: 120_000,
     env: {
       NORTHSTAR_E2E: "1",
+      NEXT_DIST_DIR: ".next/e2e",
       WATCHPACK_POLLING: "true",
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
       NEXT_PUBLIC_SUPABASE_ANON_KEY: "northstar-e2e-anon-key",
