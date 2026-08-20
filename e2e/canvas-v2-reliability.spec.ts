@@ -5,7 +5,7 @@ function canvasApp(page: Page) {
 }
 
 function canvasFrame(page: Page) {
-  return canvasApp(page).getByRole("region", { name: "Canvas workspace" }).locator('[data-testid="canvas-v2-preview"]').contentFrame();
+  return canvasApp(page).getByRole("region", { name: "Canvas workspace" }).getByTestId("canvas-v2-native-scene");
 }
 
 test.beforeEach(async ({ page }) => {
@@ -15,7 +15,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByLabel("Message North Star")).toBeEnabled();
 });
 
-test("routing retries one transient provider failure without touching the artboard", async ({ page }) => {
+test("routing retries one transient provider failure without touching the canvas", async ({ page }) => {
   const before = await canvasApp(page).getByTestId("canvas-v2-committed-revision").textContent();
   await page.getByLabel("Message North Star").fill("Retry routing once");
   await page.getByRole("button", { name: "Send message" }).click();
@@ -47,7 +47,7 @@ test("Stop during backoff cancels all later routing attempts", async ({ page }) 
   await page.getByLabel("Message North Star").fill("Keep retrying until I stop");
   await page.getByRole("button", { name: "Send message" }).click();
   await page.getByRole("button", { name: "Stop current response" }).click();
-  await expect(page.getByText("Stopped. The latest committed artboard remains visible.")).toBeVisible();
+  await expect(page.getByText("Stopped. The latest committed canvas remains visible.")).toBeVisible();
   await page.waitForTimeout(1_000);
   await expect(page.getByLabel("Message North Star")).toBeEnabled();
   await expect(page.getByText(/retrying request/)).toHaveCount(0);

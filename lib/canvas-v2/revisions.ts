@@ -38,6 +38,7 @@ export function createCanvasV2CandidateRevision(input: {
   document: CanvasV2ArtifactDocument;
   evidence?: readonly CanvasV2EvidenceAsset[];
   createdAt: string;
+  sceneTransaction?: CanvasV2ArtifactRevision["sceneTransaction"];
 }): CanvasV2ArtifactRevision {
   if (input.parent.state !== "committed") {
     throw new Error("A Canvas V2 candidate must be based on a committed revision.");
@@ -54,6 +55,7 @@ export function createCanvasV2CandidateRevision(input: {
     document: cloneDocument(input.document),
     evidence: cloneEvidence(input.evidence ?? input.parent.evidence),
     createdAt: input.createdAt,
+    ...(input.sceneTransaction ? { sceneTransaction: input.sceneTransaction } : {}),
   };
 }
 

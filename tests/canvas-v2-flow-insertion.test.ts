@@ -8,13 +8,13 @@ test("canonical evidence stays on one intrinsic horizontal rail", () => {
   const source = readFileSync("lib/canvas-v2/flow-insertion.ts", "utf8");
   assert.match(source, /dataset\.canvasV2EvidenceRegion = "canonical"/);
   assert.match(source, /canvas-v2-flow-sequence/);
-  assert.match(source, /data-canvas-v2-node-id="artboard"/);
+  assert.match(source, /data-canvas-v2-node-id="canvas"/);
   assert.match(source, /height:235px/);
   assert.match(source, /flex-flow:row nowrap/);
   assert.match(source, /grid-template-columns:170px max-content/);
   assert.match(source, /width:max-content; min-width:0; max-width:none/);
   assert.match(source, /canvas-v2-flow-layout-v4/);
-  assert.match(source, /canvas-v2-artboard--evidence-wide/);
+  assert.match(source, /canvas-v2-canvas--evidence-wide/);
   assert.match(source, /dataset\.canvasV2JourneySegment/);
   assert.doesNotMatch(source, /max-width:2380px|max-width:2600px|max-width:2680px/);
   assert.match(source, /object-fit:contain/);
@@ -39,7 +39,9 @@ test("Apps and References share the neutral research surface", () => {
   const panel = readFileSync("components/canvas-v2/canvas-v2-research-panel.tsx", "utf8");
   assert.match(workspace, /researchEndpoint/);
   assert.match(workspace, /insertCanvasV2CanonicalFlow/);
-  assert.match(workspace, /label === "References" && setPanel\("apps"\)/);
+  assert.match(workspace, /\["chat", "shapes", "apps"\]/);
+  assert.match(workspace, /setPanel\(item\)/);
+  assert.match(workspace, /canvas-v2-floating-panel/);
   assert.match(panel, /operation: "flow-screens"/);
   assert.match(panel, /Insert flow/);
   assert.doesNotMatch(`${workspace}\n${panel}`, /@\/lib\/canvas-ai\//);

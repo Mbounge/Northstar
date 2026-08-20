@@ -7,8 +7,8 @@ import { compactCanvasV2IslandSourceForModel } from "../lib/canvas-v2/model-cont
 
 const evidence = [{ id: "screen-1", url: "https://evidence.test/screen-1.png", label: "Screen 1" }];
 const previous = {
-  html: '<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-node-id="lane" data-canvas-v2-canonical-flow="flow:1"><div data-canvas-v2-node-id="nested"><img data-canvas-v2-node-id="canonical-1" data-canvas-v2-evidence-id="screen-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/screen-1.png"></div></article></main>',
-  css: ".northstar-artboard { display:block; }",
+  html: '<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-node-id="lane" data-canvas-v2-canonical-flow="flow:1"><div data-canvas-v2-node-id="nested"><img data-canvas-v2-node-id="canonical-1" data-canvas-v2-evidence-id="screen-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/screen-1.png"></div></article></main>',
+  css: ".northstar-canvas { display:block; }",
 };
 
 test("source node ranges survive nested elements with the same tag", () => {
@@ -24,7 +24,7 @@ test("bounded patches preserve canonical rails and bind evidence copies server-s
     evidence,
     operations: [
       { op: "insert-after", targetNodeId: "lane", html: '<section data-canvas-v2-node-id="analysis"><img data-canvas-v2-node-id="copy-1" data-canvas-v2-copy-evidence-handle="lane-0-screen-0" alt="Evidence detail"></section>' },
-      { op: "upsert-css", layerId: "analysis", css: ".northstar-artboard { display:grid; }" },
+      { op: "upsert-css", layerId: "analysis", css: ".northstar-canvas { display:grid; }" },
     ],
   });
   assert.match(next.html, /data-canvas-v2-source-node-id="canonical-1"/);
@@ -35,9 +35,9 @@ test("bounded patches preserve canonical rails and bind evidence copies server-s
   assert.match(next.css, /canvas-v2-canonical-evidence-geometry-guard/);
   assert.ok(next.css.indexOf("canvas-v2-canonical-evidence-geometry-guard") > next.css.indexOf("canvas-v2-model-layer:analysis"));
   assert.match(next.css, /width:max-content!important/);
-  assert.match(next.css, /canvas-v2-artboard--evidence-wide\{[^}]*padding:56px!important/);
-  assert.match(next.css, /canvas-v2-artboard--evidence-wide>\[data-canvas-v2-design-region\]\{[^}]*position:relative!important[^}]*inset:auto!important[^}]*max-width:100%!important/);
-  assert.match(next.css, /data-canvas-v2-story-role="title"[^}]*grid-column:1\/-1!important[^}]*margin-bottom:72px!important/);
+  assert.match(next.css, /canvas-v2-canvas--evidence-wide\{[^}]*padding:1200px!important/);
+  assert.match(next.css, /canvas-v2-canvas--evidence-wide>\[data-canvas-v2-design-region\]\{[^}]*position:relative!important[^}]*inset:auto!important[^}]*max-width:100%!important/);
+  assert.match(next.css, /data-canvas-v2-story-role="title"[^}]*grid-column:1\/-1!important[^}]*margin-bottom:112px!important/);
   assert.match(next.css, /\.canvas-v2-flow-lane\{[^}]*transform:none!important[^}]*grid-template-columns:170px max-content!important/);
   assert.match(next.css, /\.canvas-v2-flow-screen\{[^}]*transform:none!important[^}]*height:235px!important/);
   assert.match(next.css, /data-canvas-v2-scale-intent="peer"[^}]*max-height:376px!important/);
@@ -86,7 +86,7 @@ test("the compiler, not model CSS, owns grounded analysis-copy scale ceilings", 
         targetNodeId: "lane",
         html: '<img data-canvas-v2-node-id="copy-oversized" data-canvas-v2-copy-evidence-handle="lane-0-screen-0" width="2400" height="4800" style="width:2400px!important;height:4800px!important;min-height:4800px!important;object-fit:cover!important" alt="Evidence detail">',
       },
-      { op: "upsert-css", layerId: "oversized", css: '.northstar-artboard img[data-canvas-v2-evidence-role="analysis-copy"]{width:2400px!important;height:4800px!important;min-height:4800px!important}' },
+      { op: "upsert-css", layerId: "oversized", css: '.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]{width:2400px!important;height:4800px!important;min-height:4800px!important}' },
     ],
   });
   assert.match(next.html, /data-canvas-v2-scale-intent="bounded-emphasis"/);
@@ -100,6 +100,27 @@ test("the compiler, not model CSS, owns grounded analysis-copy scale ceilings", 
 test("model patches cannot mutate canonical lane internals", () => {
   assert.throws(() => applyCanvasV2SourcePatch({ previous, evidence, operations: [{ op: "append-html", targetNodeId: "lane", html: '<p data-canvas-v2-node-id="bad">Bad</p>' }] }), /immutable/);
   assert.throws(() => applyCanvasV2SourcePatch({ previous, evidence, operations: [{ op: "remove-node", targetNodeId: "lane" }] }), /immutable/);
+});
+
+test("model patches cannot erase human-edited nodes or their containing subtree", () => {
+  const humanEdited = {
+    ...previous,
+    html: previous.html.replace(
+      '<div data-canvas-v2-node-id="nested">',
+      '<div data-canvas-v2-node-id="nested" data-canvas-v2-user-edited="move text" data-canvas-v2-last-author="user" data-canvas-v2-edit-version="2">',
+    ),
+  };
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: humanEdited,
+    evidence,
+    operations: [{ op: "replace-node", targetNodeId: "canvas", html: '<main data-canvas-v2-node-id="canvas">Reset</main>' }],
+  }), /Human-authored node nested is protected/);
+  const appended = applyCanvasV2SourcePatch({
+    previous: humanEdited,
+    evidence,
+    operations: [{ op: "insert-after", targetNodeId: "lane", html: '<p data-canvas-v2-node-id="new-analysis">Analysis</p>' }],
+  });
+  assert.match(appended.html, /data-canvas-v2-user-edited="move text"/);
 });
 
 test("the compiler owns stable programmatic island identity", () => {

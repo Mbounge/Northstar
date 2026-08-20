@@ -35,7 +35,7 @@ import {
 
 const ROUTE_PRESENTATION: Record<CanvasV2InteractionRoute, { label: string; icon: typeof MessageCircle }> = {
   conversation: { label: "Conversation", icon: MessageCircle },
-  inspect: { label: "Artboard inspection", icon: Eye },
+  inspect: { label: "Canvas inspection", icon: Eye },
   transform: { label: "Canvas design", icon: WandSparkles },
   "research-design": { label: "Research + design", icon: Search },
   "selection-transform": { label: "Selection edit", icon: MousePointer2 },
@@ -47,13 +47,13 @@ const MOVE_LABEL: Record<CanvasV2CreativeMoveKind, string> = {
   composition: "Developed the composition",
   relationship: "Clarified relationships",
   analysis: "Built the analysis",
-  refinement: "Refined the artboard",
+  refinement: "Refined the canvas",
 };
 
 function RouteLabel({ route }: { route: CanvasV2InteractionRoute }) {
   const presentation = ROUTE_PRESENTATION[route];
   const Icon = presentation.icon;
-  return <div className="mb-2 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[.13em] text-[#7060e8]"><Icon className="h-3.5 w-3.5" />{presentation.label}</div>;
+  return <div className="mb-2 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[.13em] text-[#7060e8] dark:text-[#aa9cff]"><Icon className="h-3.5 w-3.5" />{presentation.label}</div>;
 }
 
 function RetryProgress({ retry }: { retry: CanvasV2RetryState }) {
@@ -63,10 +63,10 @@ function RetryProgress({ retry }: { retry: CanvasV2RetryState }) {
 function ModelAttempts({ attempts }: { attempts: CanvasV2ProviderAttemptAudit[] }) {
   const visibleAttempts = attempts.filter((attempt) => attempt.outcome !== "invalid-response");
   if (!visibleAttempts.length) return null;
-  return <div className="mb-3 grid gap-1 border-b border-[#efedf8] pb-3 text-[10px] text-[#777287]">
+  return <div className="mb-3 grid gap-1 border-b border-[#efedf8] pb-3 text-[10px] text-[#777287] dark:border-white/[.08] dark:text-[#9d98a7]">
     <div className="font-black uppercase tracking-[.14em] text-[#9a91d9]">Model activity</div>
     {visibleAttempts.map((attempt, index) => <div key={`${attempt.model}-${index}`} title={attempt.detail} className="flex justify-between gap-3">
-      <span className="truncate font-semibold text-[#555064]">{attempt.provider ? `${attempt.provider === "openai" ? "OpenAI" : "Google"} · ` : ""}{canvasV2ModelLabel(attempt.model)}{attempt.role ? ` · ${attempt.role.replaceAll("-", " ")}` : ""}</span>
+      <span className="truncate font-semibold text-[#555064] dark:text-[#d0ccd7]">{attempt.provider ? `${attempt.provider === "openai" ? "OpenAI" : "Google"} · ` : ""}{canvasV2ModelLabel(attempt.model)}{attempt.role ? ` · ${attempt.role.replaceAll("-", " ")}` : ""}</span>
       <span className="shrink-0">{attempt.outcome.replaceAll("-", " ")}{attempt.attempt && attempt.attempt > 1 ? ` · attempt ${attempt.attempt}` : ""}{attempt.httpStatus ? ` · HTTP ${attempt.httpStatus}` : ""} · {(attempt.durationMs / 1_000).toFixed(1)}s</span>
     </div>)}
   </div>;
@@ -78,17 +78,17 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
   const steps = loops.flatMap((entry) => entry.steps);
   const researchStatus = loop?.researchStatus ?? (loop?.researchTargets ?? turn.researchTargets ?? []).map<CanvasV2ResearchRequirement>((requestedName) => ({ requestedName, state: "unresolved", usableFlowIds: [], adequateFlowIds: [], visibleFlowIds: [], visibleAdequateFlowIds: [] }));
   return <div
-    className="mt-3 border-l border-[#ded9ff] pl-4"
+    className="mt-3 border-l border-[#ded9ff] pl-4 dark:border-[#514780]"
     data-canvas-v2-loop-provider-attempt-audit={loop?.providerAttempts?.length ? JSON.stringify(loop.providerAttempts) : undefined}
   >
-    {loop?.activeModel && <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-[#f0eef8] px-2.5 py-1 text-[9px] font-black uppercase tracking-[.12em] text-[#6659c5]"><Sparkles className="h-3 w-3" />Authored with {canvasV2ModelLabel(loop.activeModel)}</div>}
+    {loop?.activeModel && <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-[#f0eef8] px-2.5 py-1 text-[9px] font-black uppercase tracking-[.12em] text-[#6659c5] dark:bg-white/[.07] dark:text-[#b7adff]"><Sparkles className="h-3 w-3" />Authored with {canvasV2ModelLabel(loop.activeModel)}</div>}
     {loop?.providerAttempts?.length ? <ModelAttempts attempts={loop.providerAttempts} /> : null}
-    {loop?.creativeDirection && <div className="mb-4 border-b border-[#efedf8] pb-3">
+    {loop?.creativeDirection && <div className="mb-4 border-b border-[#efedf8] pb-3 dark:border-white/[.08]">
       <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#9a91d9]">Creative direction</div>
-      <p className="mt-1 text-[12px] font-semibold leading-[1.5] text-[#4c485d]">{loop.creativeDirection.visualThesis}</p>
-      {loop.spatialStrategy && <p className="mt-1.5 text-[11px] leading-[1.45] text-[#777287]"><span className="font-bold text-[#5d586c]">Spatial approach · </span>{loop.spatialStrategy.layoutSystem}</p>}
+      <p className="mt-1 text-[12px] font-semibold leading-[1.5] text-[#4c485d] dark:text-[#d8d4df]">{loop.creativeDirection.visualThesis}</p>
+      {loop.spatialStrategy && <p className="mt-1.5 text-[11px] leading-[1.45] text-[#777287] dark:text-[#9894a2]"><span className="font-bold text-[#5d586c] dark:text-[#c9c5d0]">Spatial approach · </span>{loop.spatialStrategy.layoutSystem}</p>}
     </div>}
-    {researchStatus.length ? <div className="mb-4 grid gap-1.5 border-b border-[#efedf8] pb-3">
+    {researchStatus.length ? <div className="mb-4 grid gap-1.5 border-b border-[#efedf8] pb-3 dark:border-white/[.08]">
       <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#9a91d9]">Research coverage</div>
       {researchStatus.map((requirement) => <div key={requirement.requestedName} className="flex items-start gap-2 text-[11px] leading-4 text-[#686475]">
         {requirement.state === "visible" ? <Check className="mt-0.5 h-3 w-3 shrink-0 text-[#3f9a70]" /> : requirement.state === "pending" ? <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-[#705be7]" /> : requirement.state === "unavailable" ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-[#c47b29]" /> : <CircleDot className="mt-0.5 h-3 w-3 shrink-0 text-[#9b96ac]" />}
@@ -103,36 +103,36 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
     >
       <span className="absolute -left-[21px] top-0.5 grid h-3 w-3 place-items-center rounded-full bg-white ring-1 ring-[#8778ef]"><Check className="h-2 w-2 text-[#6552df]" /></span>
       <div className="text-[10px] font-black uppercase tracking-[.12em] text-[#7564e9]">{MOVE_LABEL[step.moveKind]} · {index + 1}</div>
-      <p className="mt-1 text-[13px] leading-5 text-[#555566]">{step.summary}</p>
+      <p className="mt-1 text-[13px] leading-5 text-[#555566] dark:text-[#c5c1cd]">{step.summary}</p>
       {step.providerAttempts?.length ? <div className="mt-1 text-[9px] font-semibold uppercase tracking-[.08em] text-[#a19bab]">{step.providerAttempts.filter((attempt) => attempt.outcome === "completed").map((attempt) => `${attempt.role === "visual-director" ? "art direction" : attempt.role === "source-author" ? "authorship" : "model"} ${(attempt.durationMs / 1_000).toFixed(1)}s`).join(" · ")}{step.renderRepairCount ? ` · ${step.renderRepairCount} render repair${step.renderRepairCount === 1 ? "" : "s"}` : ""}</div> : null}
     </div>)}
     {(turn.status === "running" || turn.status === "routing") && <div className="relative flex items-center gap-2 pb-1 text-[13px] text-[#747486]">
       <span className="absolute -left-[21px] grid h-3 w-3 place-items-center rounded-full bg-white ring-1 ring-[#c8c2f8]"><CircleDot className="h-2 w-2 animate-pulse text-[#745fff]" /></span>
       <Loader2 className="h-3.5 w-3.5 animate-spin text-[#745fff]" />
-      {loop?.retry ? <RetryProgress retry={loop.retry} /> : loop?.status === "rendering" ? "Rendering and observing the revision…" : "Reviewing the visible artboard…"}
+      {loop?.retry ? <RetryProgress retry={loop.retry} /> : loop?.status === "rendering" ? "Rendering and observing the revision…" : "Reviewing the visible canvas…"}
     </div>}
   </div>;
 }
 
 function ChatTurn({ turn, busy, onContinue }: { turn: CanvasV2ChatTurn; busy: boolean; onContinue: (turnId: string) => void }) {
   return <article className="space-y-3" data-chat-turn={turn.id}>
-    <div className="ml-10 rounded-[20px] rounded-br-md bg-[#ece8ff] px-4 py-3 text-[13px] leading-[1.55] text-[#37314f]">{turn.message}</div>
+    <div className="ml-10 rounded-[20px] rounded-br-md bg-[#ece8ff] px-4 py-3 text-[13px] leading-[1.55] text-[#37314f] dark:bg-[#302b4a] dark:text-[#e2ddfb]">{turn.message}</div>
     <div className="flex items-start gap-3">
-      <div className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-lg bg-[#171721] text-[10px] font-black text-white">N</div>
+      <div className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-lg bg-[#171721] text-[10px] font-black text-white dark:bg-[#6d59ed]">N</div>
       <div className="min-w-0 flex-1 pt-0.5">
         {turn.status === "routing" && <div className="flex items-center gap-2 text-[13px] text-[#727282]"><Loader2 className="h-3.5 w-3.5 animate-spin text-[#735fff]" />{turn.retry ? <RetryProgress retry={turn.retry} /> : "Understanding your request…"}</div>}
         {turn.route && <RouteLabel route={turn.route} />}
         {turn.providerAttempts?.length ? <ModelAttempts attempts={turn.providerAttempts} /> : null}
-        {turn.answer && <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-[#3f3f4d]">{turn.answer}</p>}
-        {turn.routeSummary && !turn.answer && <p className="text-[13px] leading-[1.6] text-[#454554]">{turn.routeSummary}</p>}
+        {turn.answer && <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]">{turn.answer}</p>}
+        {turn.routeSummary && !turn.answer && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
         {turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}
-        {turn.loop?.finalSummary && <div className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d]">{turn.loop.finalSummary}</div>}
-        {turn.status === "incomplete" && <div className="mt-3 rounded-xl border border-[#e3ddff] bg-[#f8f6ff] px-3.5 py-3 text-xs leading-5 text-[#5d5870]">
-          <p><span className="font-bold text-[#413a67]">{turn.loop?.status === "paused" ? "Provider pause." : "Continuation required."}</span> {turn.loop?.status === "paused" ? (turn.loop.pauseReason ?? "Both model providers are temporarily unavailable.") : "North Star reached the safe revision boundary before declaring the composition complete."} The latest verified artboard is preserved.</p>
-          <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Continue from this artboard</button>
+        {turn.loop?.finalSummary && <div className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d] dark:border-white/[.08] dark:text-[#d4d1da]">{turn.loop.finalSummary}</div>}
+        {turn.status === "incomplete" && <div className="mt-3 rounded-xl border border-[#e3ddff] bg-[#f8f6ff] px-3.5 py-3 text-xs leading-5 text-[#5d5870] dark:border-[#504477] dark:bg-[#272331] dark:text-[#c9c3d3]">
+          <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">{turn.loop?.status === "paused" ? "Provider pause." : "Continuation required."}</span> {turn.loop?.status === "paused" ? (turn.loop.pauseReason ?? "Both model providers are temporarily unavailable.") : "North Star reached the safe revision boundary before declaring the composition complete."} The latest verified canvas is preserved.</p>
+          <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Continue from this canvas</button>
         </div>}
-        {turn.status === "stopped" && <div className="mt-3 text-xs font-semibold text-[#777789]">Stopped. The latest committed artboard remains visible.</div>}
-        {turn.error && <div className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44]">{turn.error}{turn.status === "failed" && <span className="mt-1 block font-semibold">The latest committed artboard remains visible.</span>}</div>}
+        {turn.status === "stopped" && <div className="mt-3 text-xs font-semibold text-[#777789]">Stopped. The latest committed canvas remains visible.</div>}
+        {turn.error && <div className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
       </div>
     </div>
   </article>;
@@ -142,18 +142,30 @@ export function CanvasV2ChatPanel({
   routerEndpoint,
   engine,
   selection,
+  selections,
 }: {
   routerEndpoint: string;
   engine: ReturnType<typeof useCanvasV2DesignLoop>;
   selection?: CanvasV2InspectableElement;
+  selections?: readonly CanvasV2InspectableElement[];
 }) {
-  const chat = useCanvasV2Chat({ endpoint: routerEndpoint, engine, selection });
+  const chat = useCanvasV2Chat({ endpoint: routerEndpoint, engine, selection, selections });
   const endRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [chat.turns]);
+
+  useEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    composer.style.height = "0px";
+    const maximumHeight = Math.max(160, Math.floor(window.innerHeight * 0.42));
+    composer.style.height = `${Math.min(Math.max(52, composer.scrollHeight), maximumHeight)}px`;
+    composer.style.overflowY = "hidden";
+  }, [chat.draft]);
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -163,16 +175,17 @@ export function CanvasV2ChatPanel({
   };
 
   return <>
-    <div className="flex-1 overflow-y-auto px-6 pb-4 pt-5 [scrollbar-width:thin] [scrollbar-color:#d8d4ec_transparent]" aria-live="polite">
-      <div className="mb-6 flex items-center justify-between text-[10px] font-black uppercase tracking-[.14em] text-[#9a9aa8]"><span>Canvas · 1</span><span className="flex items-center gap-1.5 text-[#6553e8]"><span className="h-1.5 w-1.5 rounded-full bg-[#765fff]" />Living artboard</span></div>
-      {!chat.turns.length && <div className="py-5">
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#eeeaff] text-[#6955e8]"><Sparkles className="h-4.5 w-4.5" /></div>
-        <h2 className="mt-4 text-[19px] font-black tracking-[-.025em] text-[#252532]">Ask, inspect, or create.</h2>
-        <p className="mt-2 max-w-[300px] text-[13px] leading-6 text-[#737382]">North Star understands whether to answer here, inspect what is visible, or begin an observed design run.</p>
-        <div className="mt-5 grid gap-2 text-left text-xs text-[#626272]">
-          <div className="border-l border-[#d8d2ff] pl-3">Ask a question without changing the board</div>
-          <div className="border-l border-[#d8d2ff] pl-3">Understand the current composition</div>
-          <div className="border-l border-[#d8d2ff] pl-3">Research, design, and transform visibly</div>
+    <div className="flex-1 overflow-y-auto px-4 pb-3 pt-4 text-[#292834] [scrollbar-width:thin] [scrollbar-color:#d8d4ec_transparent] dark:text-[#f2f1f7] dark:[scrollbar-color:#4b485a_transparent]" aria-live="polite">
+      <div className="mb-4 flex items-center justify-between px-1 text-[9px] font-black uppercase tracking-[.16em] text-[#9a9aa8] dark:text-[#777482]"><span>North Star</span><span className="flex items-center gap-1.5 text-[#6553e8] dark:text-[#a99cff]"><span className="h-1.5 w-1.5 rounded-full bg-[#765fff]" />Board aware</span></div>
+      {!chat.turns.length && <div className="rounded-[20px] border border-[#ecebf2] bg-[linear-gradient(145deg,#ffffff_0%,#faf9ff_100%)] p-4 dark:border-white/[.08] dark:bg-[linear-gradient(145deg,#22212a_0%,#1b1a22_100%)]">
+        <div className="flex items-center gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[12px] bg-[#eeeaff] text-[#6955e8]"><Sparkles className="h-4 w-4" /></div>
+          <div><h2 className="text-[15px] font-black tracking-[-.02em] text-[#252532] dark:text-[#f7f6fb]">Ask, inspect, or create.</h2><p className="mt-0.5 text-[11px] leading-4 text-[#7a7888] dark:text-[#9996a5]">One conversation, grounded in the board.</p></div>
+        </div>
+        <div className="mt-4 grid gap-2">
+          <button type="button" onClick={() => chat.setDraft("What stands out on this board?")} className="group flex items-center gap-3 rounded-[14px] border border-[#eceaf3] bg-white px-3 py-2.5 text-left transition hover:-translate-y-px hover:border-[#d8d1ff] hover:shadow-[0_6px_18px_rgba(61,52,110,.07)] dark:border-white/[.08] dark:bg-white/[.035] dark:hover:border-[#7163b8]"><Eye className="h-3.5 w-3.5 shrink-0 text-[#7661ee] dark:text-[#a99cff]" /><span className="min-w-0"><span className="block text-[11px] font-bold text-[#454351] dark:text-[#e8e6ef]">Inspect the board</span><span className="block truncate text-[10px] text-[#8a8796] dark:text-[#8f8b99]">Understand what is visible</span></span></button>
+          <button type="button" onClick={() => chat.setDraft("Research this problem and develop the board.")} className="group flex items-center gap-3 rounded-[14px] border border-[#eceaf3] bg-white px-3 py-2.5 text-left transition hover:-translate-y-px hover:border-[#d8d1ff] hover:shadow-[0_6px_18px_rgba(61,52,110,.07)] dark:border-white/[.08] dark:bg-white/[.035] dark:hover:border-[#7163b8]"><Search className="h-3.5 w-3.5 shrink-0 text-[#7661ee] dark:text-[#a99cff]" /><span className="min-w-0"><span className="block text-[11px] font-bold text-[#454351] dark:text-[#e8e6ef]">Research and develop</span><span className="block truncate text-[10px] text-[#8a8796] dark:text-[#8f8b99]">Bring grounded evidence into view</span></span></button>
+          <button type="button" onClick={() => chat.setDraft("Transform the selected part of the board.")} className="group flex items-center gap-3 rounded-[14px] border border-[#eceaf3] bg-white px-3 py-2.5 text-left transition hover:-translate-y-px hover:border-[#d8d1ff] hover:shadow-[0_6px_18px_rgba(61,52,110,.07)] dark:border-white/[.08] dark:bg-white/[.035] dark:hover:border-[#7163b8]"><WandSparkles className="h-3.5 w-3.5 shrink-0 text-[#7661ee] dark:text-[#a99cff]" /><span className="min-w-0"><span className="block text-[11px] font-bold text-[#454351] dark:text-[#e8e6ef]">Design visibly</span><span className="block truncate text-[10px] text-[#8a8796] dark:text-[#8f8b99]">Create or transform the workspace</span></span></button>
         </div>
       </div>}
       <div className="space-y-7">{chat.turns.map((turn) => <ChatTurn key={turn.id} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} />)}</div>
@@ -182,22 +195,24 @@ export function CanvasV2ChatPanel({
       <div ref={endRef} />
     </div>
 
-    <div className="relative m-5 mt-1 rounded-[28px] border border-[#dad9e5] bg-[#fbfbfc] p-3 shadow-[0_18px_55px_rgba(42,39,70,.13)] transition focus-within:border-[#b8aff5] focus-within:bg-white focus-within:shadow-[0_22px_62px_rgba(83,67,177,.17)]">
-      {selection && <div className="mb-2.5 flex items-center gap-2 rounded-xl bg-[#f4f2ff] px-3 py-2 text-[10px] font-bold text-[#6553dd]"><MousePointer2 className="h-3.5 w-3.5" /><span className="truncate">Selected · {selection.nodeId}</span></div>}
+    <div className="relative m-3 mt-1 rounded-[20px] border border-[#dedde7] bg-white p-2.5 shadow-[0_12px_34px_rgba(42,39,70,.10)] transition focus-within:border-[#b8aff5] focus-within:shadow-[0_16px_42px_rgba(83,67,177,.15)] dark:border-white/[.1] dark:bg-[#211f28] dark:shadow-[0_16px_42px_rgba(0,0,0,.28)] dark:focus-within:border-[#7668bd]">
+      {selection && <div className="mb-2.5 flex items-center gap-2 rounded-xl bg-[#f4f2ff] px-3 py-2 text-[10px] font-bold text-[#6553dd] dark:bg-[#302b4a] dark:text-[#c0b6ff]"><MousePointer2 className="h-3.5 w-3.5" /><span className="truncate">{(selections?.length ?? 0) > 1 ? `${selections!.length} objects selected` : `Selected · ${selection.nodeId}`}</span></div>}
       <label htmlFor="canvas-v2-message" className="sr-only">Message North Star</label>
       <textarea
+        ref={composerRef}
         id="canvas-v2-message"
         value={chat.draft}
         onChange={(event) => chat.setDraft(event.target.value)}
         onKeyDown={keyDown}
         disabled={chat.busy}
         placeholder="Ask North Star anything…"
-        className="h-[104px] w-full resize-none bg-transparent px-2 pt-1 text-[14px] leading-6 text-[#292834] outline-none placeholder:text-[#9d9ca8] disabled:opacity-60"
+        rows={1}
+        className="min-h-[52px] w-full resize-none overflow-hidden bg-transparent px-2 pt-1 text-[13px] leading-5 text-[#292834] outline-none placeholder:text-[#9d9ca8] disabled:opacity-60 dark:text-[#f3f1f7] dark:placeholder:text-[#777482]"
       />
       <div className="flex items-center justify-between pt-2">
         <div className="flex min-w-0 items-center gap-1.5">
-          <button type="button" disabled aria-label="Add context" title="Attachments will arrive with the collaborative workspace patch" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#9997a5] transition hover:bg-[#f0eef8] disabled:opacity-55"><Plus className="h-[18px] w-[18px]" /></button>
-          <span className="hidden truncate text-[11px] font-medium text-[#92909e] 2xl:inline">Context from the living artboard</span>
+          <button type="button" disabled aria-label="Add context" title="Attachments will arrive with the collaborative workspace patch" className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] border border-[#eceaf2] text-[#8e8b9a] transition hover:bg-[#f0eef8] disabled:opacity-55 dark:border-white/[.09] dark:text-[#898594] dark:hover:bg-white/[.06]"><Plus className="h-4 w-4" /></button>
+          <span className="hidden truncate text-[11px] font-medium text-[#92909e] 2xl:inline">Context from the living canvas</span>
         </div>
         <div className="flex items-center gap-2">
           {chat.busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-[#7160e8]" aria-label="North Star is working" />}
@@ -207,14 +222,14 @@ export function CanvasV2ChatPanel({
             disabled={chat.busy}
             aria-expanded={modelMenuOpen}
             aria-haspopup="menu"
-            className="flex h-9 max-w-[176px] items-center gap-1.5 rounded-xl bg-[#eeedf2] px-3 text-[11px] font-bold text-[#4c4959] transition hover:bg-[#e7e5ed] disabled:opacity-60"
+            className="flex h-8 max-w-[164px] items-center gap-1.5 rounded-[10px] bg-[#f0eff4] px-3 text-[10px] font-bold text-[#4c4959] transition hover:bg-[#e7e5ed] disabled:opacity-60 dark:bg-white/[.07] dark:text-[#dedbe6] dark:hover:bg-white/[.11]"
           >
             <span className="truncate">{canvasV2ModelLabel(chat.modelSelection)}</span>
             <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition ${modelMenuOpen ? "rotate-180" : ""}`} />
           </button>
           {chat.busy
-            ? <button onClick={chat.stop} aria-label="Stop current response" className="grid h-10 w-10 place-items-center rounded-full bg-[#ecebf0] text-[#4d4a59] transition hover:bg-[#e2e0e8]"><Square className="h-3.5 w-3.5 fill-current" /></button>
-            : <button onClick={() => void chat.submit()} disabled={!chat.draft.trim() || !engine.ready || engine.applyingManualEdit} aria-label="Send message" className="grid h-10 w-10 place-items-center rounded-full bg-[#171721] text-white shadow-[0_8px_20px_rgba(23,23,33,.22)] transition hover:-translate-y-0.5 hover:bg-[#292837] disabled:translate-y-0 disabled:bg-[#d7d5df] disabled:shadow-none"><ArrowUp className="h-5 w-5" /></button>}
+            ? <button onClick={chat.stop} aria-label="Stop current response" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#ecebf0] text-[#4d4a59] transition hover:bg-[#e2e0e8]"><Square className="h-3.5 w-3.5 fill-current" /></button>
+            : <button onClick={() => void chat.submit()} disabled={!chat.draft.trim() || !engine.ready || engine.applyingManualEdit} aria-label="Send message" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#6d59ed] text-white shadow-[0_7px_18px_rgba(86,68,195,.24)] transition hover:-translate-y-0.5 hover:bg-[#5d49dc] disabled:translate-y-0 disabled:bg-[#d7d5df] disabled:shadow-none"><ArrowUp className="h-4.5 w-4.5" /></button>}
         </div>
       </div>
 

@@ -4,7 +4,7 @@ import test from "node:test";
 
 test("the renderer returns a bounded factual spatial map for every visible stable node", () => {
   const source = readFileSync("lib/canvas-v2/spatial-observation.ts", "utf8");
-  const preview = readFileSync("components/canvas-v2/artboard-preview.tsx", "utf8");
+  const preview = readFileSync("components/canvas-v2/canvas-scene.tsx", "utf8");
 
   assert.match(source, /CANVAS_V2_MAX_SPATIAL_NODES = 240/);
   assert.match(source, /getBoundingClientRect\(\)/);
@@ -40,13 +40,13 @@ test("the model owns spatial strategy and the runtime does not author a layout",
 });
 
 test("North Star spatial grammar protects precision without prescribing one composition", () => {
-  const grammar = readFileSync("lib/canvas-v2/northstar-artboard-grammar.ts", "utf8");
+  const grammar = readFileSync("lib/canvas-v2/northstar-canvas-grammar.ts", "utf8");
   assert.match(grammar, /strong alignment rails/);
   assert.match(grammar, /repeatable spacing rhythm/);
   assert.match(grammar, /Let content determine height/);
   assert.match(grammar, /natural aspect ratio/);
   assert.match(grammar, /connectors, arrows, and overlays/i);
-  assert.match(grammar, /downscaled complete-artboard overview/);
+  assert.match(grammar, /downscaled complete-canvas overview/);
   assert.match(grammar, /segmented views of long canonical rails/);
   assert.match(grammar, /two-dimensional editorial territory/);
   assert.match(grammar, /measured authored-surface region centers and edge space/);

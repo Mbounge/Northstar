@@ -28,6 +28,8 @@ export interface CanvasV2ArtifactRevision {
   document: CanvasV2ArtifactDocument;
   evidence: CanvasV2EvidenceAsset[];
   createdAt: string;
+  /** The atomic object delta that produced this revision, when applicable. */
+  sceneTransaction?: import("@/lib/canvas-v2/scene-transaction").CanvasV2SceneTransaction;
 }
 
 export interface CanvasV2RuntimeError {
@@ -102,9 +104,9 @@ export interface CanvasV2EvidenceRenderObservation {
   sourceIsCanonicalScreen?: boolean;
   canonicalPeerHeight?: number;
   scaleVsCanonicalHeight?: number;
-  artboardWidthShare?: number;
-  artboardHeightShare?: number;
-  artboardAreaShare?: number;
+  canvasWidthShare?: number;
+  canvasHeightShare?: number;
+  canvasAreaShare?: number;
   designRegionNodeId?: string;
   designRegionWidthShare?: number;
   designRegionHeightShare?: number;
@@ -159,9 +161,9 @@ export interface CanvasV2DesignRegionObservation {
   targetZoneId?: CanvasV2SurfaceZoneId;
   textPreview?: string;
   bounds: CanvasV2ElementBounds;
-  artboardWidthShare: number;
-  artboardHeightShare: number;
-  artboardAreaShare: number;
+  canvasWidthShare: number;
+  canvasHeightShare: number;
+  canvasAreaShare: number;
   centerXShare: number;
   centerYShare: number;
   edgeSpace: {
@@ -252,14 +254,14 @@ export interface CanvasV2IslandRegistryEntry {
   bounds: CanvasV2ElementBounds;
   centerXShare: number;
   centerYShare: number;
-  artboardAreaShare: number;
+  canvasAreaShare: number;
   evidenceIds: string[];
   annotationNodeIds: string[];
   relationshipNodeIds: string[];
   textPreview?: string;
 }
 
-/** A factual coarse cell in the complete artboard. It describes occupancy, never quality. */
+/** A factual coarse cell in the complete canvas. It describes occupancy, never quality. */
 export interface CanvasV2SurfaceZoneObservation {
   id: CanvasV2SurfaceZoneId;
   bounds: CanvasV2ElementBounds;
@@ -271,7 +273,7 @@ export interface CanvasV2SurfaceZoneObservation {
 
 /** Whole-board geometry supplied to the model so it can compose beyond one local crop. */
 export interface CanvasV2AuthoredSurfaceObservation {
-  artboardBounds: CanvasV2ElementBounds;
+  canvasBounds: CanvasV2ElementBounds;
   authoredBounds?: CanvasV2ElementBounds;
   authoredAreaShare: number;
   readingOrder: string[];
@@ -325,7 +327,7 @@ export interface CanvasV2RenderObservation {
     height: number;
     centerXShare: number;
     centerYShare: number;
-    artboardAreaShare: number;
+    canvasAreaShare: number;
     readingIndex: number;
     visualRole?: string;
     screenshotDataUrl: string;
@@ -468,6 +470,8 @@ export interface CanvasV2EditDecision {
   expectedVisualResult: string;
   /** Compiler-owned repair lineage for the exact island mutation. */
   islandExecution?: CanvasV2IslandExecutionContract;
+  /** Compiler-authored object transaction consumed by the shared canvas authority. */
+  sceneTransaction?: import("@/lib/canvas-v2/scene-transaction").CanvasV2SceneTransaction;
 }
 
 export interface CanvasV2CompleteDecision {

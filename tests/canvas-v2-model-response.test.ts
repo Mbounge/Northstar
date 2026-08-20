@@ -36,7 +36,7 @@ const spatialStrategy = {
   intentionalOverlaps: [],
 };
 
-const emptyDocument = { html: '<main data-canvas-v2-node-id="artboard"></main>', css: "" };
+const emptyDocument = { html: '<main data-canvas-v2-node-id="canvas"></main>', css: "" };
 
 test("parses a bounded source-patch edit", () => {
   const decision = parseCanvasV2DesignDecision({
@@ -45,11 +45,11 @@ test("parses a bounded source-patch edit", () => {
     creativeDirection,
     spatialStrategy,
     reflection,
-    summary: "Recomposed the artboard.",
+    summary: "Recomposed the canvas.",
     expectedVisualResult: "A clear two-column composition.",
     patch: { operations: [
-      { op: "append-html", targetNodeId: "artboard", html: '<section data-canvas-v2-node-id="safe">Safe</section>' },
-      { op: "upsert-css", layerId: "composition", css: ".northstar-artboard { display:grid; }" },
+      { op: "append-html", targetNodeId: "canvas", html: '<section data-canvas-v2-node-id="safe">Safe</section>' },
+      { op: "upsert-css", layerId: "composition", css: ".northstar-canvas { display:grid; }" },
     ] },
   }, [], emptyDocument);
   assert.equal(decision.decision, "edit");
@@ -67,12 +67,12 @@ test("preserves long branch-aware evidence identities without truncating island 
     reflection,
     summary: "Extended the evidence reading.",
     expectedVisualResult: "The evidence chapter remains grounded.",
-    patch: { operations: [{ op: "append-html", targetNodeId: "artboard", html: '<section data-canvas-v2-node-id="analysis">Analysis</section>' }] },
+    patch: { operations: [{ op: "append-html", targetNodeId: "canvas", html: '<section data-canvas-v2-node-id="analysis">Analysis</section>' }] },
     compositionState: {
-      dominantAnchor: "artboard",
-      readingOrder: ["artboard"],
+      dominantAnchor: "canvas",
+      readingOrder: ["canvas"],
       regions: [{
-        nodeId: "artboard",
+        nodeId: "canvas",
         purpose: "Ground the comparison.",
         maturity: "developing",
         openRequirements: ["Finish the comparison"],
@@ -81,7 +81,7 @@ test("preserves long branch-aware evidence identities without truncating island 
       preservedNodeIds: [],
       retiredNodes: [],
       preservedStrengths: ["Grounded evidence remains visible"],
-      nextTerritory: { relation: "within", anchorNodeId: "artboard", intendedFootprint: "Continue inside the analysis.", rationale: "Finish the island." },
+      nextTerritory: { relation: "within", anchorNodeId: "canvas", intendedFootprint: "Continue inside the analysis.", rationale: "Finish the island." },
       regressionRisks: ["Do not lose provenance"],
     },
   }, [], emptyDocument);
@@ -99,7 +99,7 @@ test("rejects executable generated source", () => {
     reflection,
     summary: "Unsafe",
     expectedVisualResult: "Unsafe",
-    patch: { operations: [{ op: "append-html", targetNodeId: "artboard", html: "<script>alert(1)</script>" }] },
+    patch: { operations: [{ op: "append-html", targetNodeId: "canvas", html: "<script>alert(1)</script>" }] },
   }, [], emptyDocument), /prohibited executable/);
 });
 
@@ -112,9 +112,9 @@ test("accepts only exact approved evidence bindings", () => {
     reflection,
     summary: "Used grounded evidence.",
     expectedVisualResult: "The approved screenshot is visible.",
-    patch: { operations: [{ op: "append-html", targetNodeId: "artboard", html: '<img data-canvas-v2-node-id="screen-1-node" data-canvas-v2-copy-evidence-id="screen-1" alt="Screen">' }] },
+    patch: { operations: [{ op: "append-html", targetNodeId: "canvas", html: '<img data-canvas-v2-node-id="screen-1-node" data-canvas-v2-copy-evidence-id="screen-1" alt="Screen">' }] },
   };
-  const previous = { html: '<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-node-id="flow-1" data-canvas-v2-canonical-flow="flow:1"><img data-canvas-v2-node-id="flow-1-screen-1" data-canvas-v2-evidence-id="screen-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/screen.png"></article></main>', css: "" };
+  const previous = { html: '<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-node-id="flow-1" data-canvas-v2-canonical-flow="flow:1"><img data-canvas-v2-node-id="flow-1-screen-1" data-canvas-v2-evidence-id="screen-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/screen.png"></article></main>', css: "" };
   assert.equal(parseCanvasV2DesignDecision(value, [{ id: "screen-1", url: "https://evidence.test/screen.png", label: "Screen" }], previous).decision, "edit");
   assert.throws(() => parseCanvasV2DesignDecision(value, [], previous), /not grounded/);
 });
@@ -122,7 +122,7 @@ test("accepts only exact approved evidence bindings", () => {
 test("repairs omitted analytical image identities without changing model-authored layout", () => {
   const approved = [{ id: "screen-1", url: "https://evidence.test/screen.png", label: "Screen" }];
   const previous = {
-    html: '<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-node-id="flow-1" data-canvas-v2-canonical-flow="flow:1"><img data-canvas-v2-node-id="flow-1-screen-1" data-canvas-v2-evidence-id="screen-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/screen.png"></article></main>',
+    html: '<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-node-id="flow-1" data-canvas-v2-canonical-flow="flow:1"><img data-canvas-v2-node-id="flow-1-screen-1" data-canvas-v2-evidence-id="screen-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/screen.png"></article></main>',
     css: ".analysis { display:grid; }",
   };
   const decision = parseCanvasV2DesignDecision({

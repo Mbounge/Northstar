@@ -10,7 +10,7 @@ export interface CanvasV2DisposableLocalState {
 
 /**
  * Canvas V2 is intentionally an in-memory page session. A browser refresh
- * starts a new chat, artboard, and history. These keys are removed only to
+ * starts a new chat, canvas, and history. These keys are removed only to
  * prevent obsolete recovery builds from resurrecting work in the future.
  */
 export function discardObsoleteCanvasV2LocalState(storage: CanvasV2DisposableLocalState): void {

@@ -36,13 +36,13 @@ function state(overrides: Partial<CanvasV2CompositionState> = {}): CanvasV2Compo
 }
 
 const completeDocument = {
-  html: '<main data-canvas-v2-node-id="artboard"><section data-canvas-v2-node-id="thesis" data-canvas-v2-design-region></section><section data-canvas-v2-node-id="analysis" data-canvas-v2-design-region></section><section data-canvas-v2-node-id="implication" data-canvas-v2-design-region></section></main>',
+  html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="thesis" data-canvas-v2-design-region></section><section data-canvas-v2-node-id="analysis" data-canvas-v2-design-region></section><section data-canvas-v2-node-id="implication" data-canvas-v2-design-region></section></main>',
   css: "",
 };
 
 test("resolved whole-board regions cannot silently disappear between visible turns", () => {
   const document = {
-    html: '<main data-canvas-v2-node-id="artboard"><section data-canvas-v2-node-id="analysis" data-canvas-v2-design-region></section><section data-canvas-v2-node-id="implication" data-canvas-v2-design-region></section></main>',
+    html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="analysis" data-canvas-v2-design-region></section><section data-canvas-v2-node-id="implication" data-canvas-v2-design-region></section></main>',
     css: "",
   };
   const failures = validateCanvasV2CompositionContinuity({ previous, next: state({ preservedNodeIds: ["analysis"] }), document, decision: "edit" });
@@ -99,7 +99,7 @@ test("clerical model-ledger hallucinations cannot discard a valid authored turn"
 
 test("island lifecycle survives turns while canonical evidence is already resolved", () => {
   const document = {
-    html: '<main data-canvas-v2-node-id="artboard"><section data-canvas-v2-node-id="canonical-awin" data-canvas-v2-canonical-flow="awin"></section><section data-canvas-v2-node-id="analysis" data-canvas-v2-island-id="analysis" data-canvas-v2-design-region><img data-canvas-v2-node-id="copy-one" data-canvas-v2-copy-evidence-id="screen-1"></section></main>',
+    html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="canonical-awin" data-canvas-v2-canonical-flow="awin"></section><section data-canvas-v2-node-id="analysis" data-canvas-v2-island-id="analysis" data-canvas-v2-design-region><img data-canvas-v2-node-id="copy-one" data-canvas-v2-copy-evidence-id="screen-1"></section></main>',
     css: "",
   };
   const developing = compileCanvasV2CompositionState({

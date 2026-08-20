@@ -115,7 +115,7 @@ export function buildCanvasV2IslandRegistry(input: {
       bounds: region.bounds,
       centerXShare: region.centerXShare,
       centerYShare: region.centerYShare,
-      artboardAreaShare: region.artboardAreaShare,
+      canvasAreaShare: region.canvasAreaShare,
       evidenceIds,
       annotationNodeIds: annotations
         .filter((annotation) => annotation.targetNodeIds.some((nodeId) => nodeId === region.nodeId || islandEvidenceNodeIds.has(nodeId)))
@@ -161,7 +161,7 @@ function validateTargetIslandSource(input: {
     failures.push(`Target island ${input.target.islandId} must materialize its stable story role as data-canvas-v2-story-role="${input.target.storyRole}".`);
   }
   if (input.target.storyRole === "title" && (!/<h[12]\b/i.test(source) || !/<p\b/i.test(source))) {
-    failures.push(`The title island ${input.target.islandId} must contain a real h1/h2 title and a descriptive paragraph so the artboard story has an explicit beginning.`);
+    failures.push(`The title island ${input.target.islandId} must contain a real h1/h2 title and a descriptive paragraph so the canvas story has an explicit beginning.`);
   }
   if (input.territoryRelation
     && !source.includes(`data-canvas-v2-territory-relation="${input.territoryRelation}"`)

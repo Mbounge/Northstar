@@ -197,10 +197,9 @@ function observeAuthoredAnnotations(document: Document, view: Window): CanvasV2A
 }
 
 function observeDesignRegions(document: Document, view: Window): CanvasV2DesignRegionObservation[] {
-  const artboard = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
-    .find((element) => element.dataset.canvasV2NodeId === "artboard") ?? document.body;
-  const artboardRect = artboard.getBoundingClientRect();
-  const artboardArea = Math.max(1, artboardRect.width * artboardRect.height);
+  const canvas = document.body;
+  const canvasRect = canvas.getBoundingClientRect();
+  const canvasArea = Math.max(1, canvasRect.width * canvasRect.height);
   const canonicalLanes = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-canonical-flow][data-canvas-v2-node-id]"))
     .filter((element) => visibleElement(element, view))
     .map((element) => ({ nodeId: element.dataset.canvasV2NodeId!, bounds: elementBounds(element) }));
@@ -252,16 +251,16 @@ function observeDesignRegions(document: Document, view: Window): CanvasV2DesignR
           : {}),
         ...(text ? { textPreview: text.slice(0, 220) } : {}),
         bounds,
-        artboardWidthShare: ratioPrecision(rect.width / Math.max(1, artboardRect.width)),
-        artboardHeightShare: ratioPrecision(rect.height / Math.max(1, artboardRect.height)),
-        artboardAreaShare: ratioPrecision((rect.width * rect.height) / artboardArea),
-        centerXShare: ratioPrecision((rect.left + rect.width / 2 - artboardRect.left) / Math.max(1, artboardRect.width)),
-        centerYShare: ratioPrecision((rect.top + rect.height / 2 - artboardRect.top) / Math.max(1, artboardRect.height)),
+        canvasWidthShare: ratioPrecision(rect.width / Math.max(1, canvasRect.width)),
+        canvasHeightShare: ratioPrecision(rect.height / Math.max(1, canvasRect.height)),
+        canvasAreaShare: ratioPrecision((rect.width * rect.height) / canvasArea),
+        centerXShare: ratioPrecision((rect.left + rect.width / 2 - canvasRect.left) / Math.max(1, canvasRect.width)),
+        centerYShare: ratioPrecision((rect.top + rect.height / 2 - canvasRect.top) / Math.max(1, canvasRect.height)),
         edgeSpace: {
-          left: precision(rect.left - artboardRect.left),
-          top: precision(rect.top - artboardRect.top),
-          right: precision(artboardRect.right - rect.right),
-          bottom: precision(artboardRect.bottom - rect.bottom),
+          left: precision(rect.left - canvasRect.left),
+          top: precision(rect.top - canvasRect.top),
+          right: precision(canvasRect.right - rect.right),
+          bottom: precision(canvasRect.bottom - rect.bottom),
         },
         contentOverflowX: precision(Math.max(0, element.scrollWidth - element.clientWidth)),
         contentOverflowY: precision(Math.max(0, element.scrollHeight - element.clientHeight)),
@@ -298,10 +297,9 @@ function observeAuthoredSurface(
   designRegions: readonly CanvasV2DesignRegionObservation[],
   evidence: readonly CanvasV2EvidenceRenderObservation[],
 ): CanvasV2AuthoredSurfaceObservation {
-  const artboard = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
-    .find((element) => element.dataset.canvasV2NodeId === "artboard") ?? document.body;
-  const artboardBounds = elementBounds(artboard);
-  const artboardArea = Math.max(1, artboardBounds.width * artboardBounds.height);
+  const canvas = document.body;
+  const canvasBounds = elementBounds(canvas);
+  const canvasArea = Math.max(1, canvasBounds.width * canvasBounds.height);
   const canonicalLanes = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-canonical-flow][data-canvas-v2-node-id]"))
     .map((element) => ({ nodeId: element.dataset.canvasV2NodeId!, bounds: elementBounds(element) }));
   const authoredBounds = unionElementBounds(designRegions.map((region) => region.bounds));
@@ -319,10 +317,10 @@ function observeAuthoredSurface(
   const byY = [...designRegions].sort((left, right) => left.bounds.y - right.bounds.y);
   const zones = SURFACE_ZONE_ROWS.flatMap((row, rowIndex) => SURFACE_ZONE_COLUMNS.map((column, columnIndex) => {
     const zoneBounds: CanvasV2ElementBounds = {
-      x: precision(artboardBounds.x + artboardBounds.width * columnIndex / 3),
-      y: precision(artboardBounds.y + artboardBounds.height * rowIndex / 3),
-      width: precision(artboardBounds.width / 3),
-      height: precision(artboardBounds.height / 3),
+      x: precision(canvasBounds.x + canvasBounds.width * columnIndex / 3),
+      y: precision(canvasBounds.y + canvasBounds.height * rowIndex / 3),
+      width: precision(canvasBounds.width / 3),
+      height: precision(canvasBounds.height / 3),
     };
     const zoneArea = Math.max(1, zoneBounds.width * zoneBounds.height);
     const designRegionNodeIds = designRegions.filter((region) => intersectionArea(region.bounds, zoneBounds) > 4).map((region) => region.nodeId);
@@ -342,9 +340,9 @@ function observeAuthoredSurface(
     };
   }));
   return {
-    artboardBounds,
+    canvasBounds,
     ...(authoredBounds ? { authoredBounds } : {}),
-    authoredAreaShare: ratioPrecision(designRegions.reduce((sum, region) => sum + region.bounds.width * region.bounds.height, 0) / artboardArea),
+    authoredAreaShare: ratioPrecision(designRegions.reduce((sum, region) => sum + region.bounds.width * region.bounds.height, 0) / canvasArea),
     readingOrder,
     ...(byArea[0] ? { primaryRegionNodeId: byArea[0].nodeId } : {}),
     ...(byX[0] ? { leftmostRegionNodeId: byX[0].nodeId, rightmostRegionNodeId: byX.at(-1)!.nodeId } : {}),
@@ -479,9 +477,8 @@ function transformDistortsAspectRatio(style: CSSStyleDeclaration): boolean {
 }
 
 function observeEvidence(document: Document, view: Window): CanvasV2EvidenceRenderObservation[] {
-  const artboard = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
-    .find((element) => element.dataset.canvasV2NodeId === "artboard") ?? document.body;
-  const artboardRect = artboard.getBoundingClientRect();
+  const canvas = document.body;
+  const canvasRect = canvas.getBoundingClientRect();
   const identified = Array.from(document.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"));
   const byNodeId = new Map(identified.flatMap((element) => element.dataset.canvasV2NodeId ? [[element.dataset.canvasV2NodeId, element] as const] : []));
   const relationships = observeAuthoredRelationships(document, view);
@@ -501,7 +498,7 @@ function observeEvidence(document: Document, view: Window): CanvasV2EvidenceRend
     const source = sourceNodeId ? byNodeId.get(sourceNodeId) : undefined;
     const sourceRect = source?.getBoundingClientRect();
     const sourceIsCanonicalScreen = Boolean(source?.hasAttribute("data-canvas-v2-flow-index"));
-    const designRegion = image.closest<HTMLElement>("[data-canvas-v2-design-region]") ?? artboard;
+    const designRegion = image.closest<HTMLElement>("[data-canvas-v2-design-region]") ?? canvas;
     const designRegionRect = designRegion.getBoundingClientRect();
     const visualRoleElement = image.closest<HTMLElement>("[data-canvas-v2-visual-role]");
     const treatmentElement = image.closest<HTMLElement>("[data-canvas-v2-evidence-treatment]");
@@ -511,7 +508,7 @@ function observeEvidence(document: Document, view: Window): CanvasV2EvidenceRend
       .filter((relationship) => relationship.sourceNodeIds.includes(nodeId) || relationship.targetNodeIds.includes(nodeId))
       .map((relationship) => relationship.nodeId);
     const area = rect.width * rect.height;
-    const artboardArea = Math.max(1, artboardRect.width * artboardRect.height);
+    const canvasArea = Math.max(1, canvasRect.width * canvasRect.height);
     const designRegionArea = Math.max(1, designRegionRect.width * designRegionRect.height);
     return {
       evidenceId: image.dataset.canvasV2EvidenceId || "unknown",
@@ -532,9 +529,9 @@ function observeEvidence(document: Document, view: Window): CanvasV2EvidenceRend
           canonicalPeerHeight: precision(sourceRect.height),
           scaleVsCanonicalHeight: ratioPrecision(rect.height / sourceRect.height),
         } : {}),
-        artboardWidthShare: ratioPrecision(rect.width / Math.max(1, artboardRect.width)),
-        artboardHeightShare: ratioPrecision(rect.height / Math.max(1, artboardRect.height)),
-        artboardAreaShare: ratioPrecision(area / artboardArea),
+        canvasWidthShare: ratioPrecision(rect.width / Math.max(1, canvasRect.width)),
+        canvasHeightShare: ratioPrecision(rect.height / Math.max(1, canvasRect.height)),
+        canvasAreaShare: ratioPrecision(area / canvasArea),
         designRegionNodeId: identifiedNodeId(designRegion),
         designRegionWidthShare: ratioPrecision(rect.width / Math.max(1, designRegionRect.width)),
         designRegionHeightShare: ratioPrecision(rect.height / Math.max(1, designRegionRect.height)),

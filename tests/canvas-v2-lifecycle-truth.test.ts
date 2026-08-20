@@ -28,12 +28,12 @@ test("routing and design ownership cannot overwrite a stopped or newer turn", ()
   assert.match(engine, /requestController\.current === controller/);
 });
 
-test("the chat exposes an explicit continuation from the preserved artboard", () => {
+test("the chat exposes an explicit continuation from the preserved canvas", () => {
   const chat = readFileSync("components/canvas-v2/use-canvas-v2-chat.ts", "utf8");
   const panel = readFileSync("components/canvas-v2/canvas-v2-chat-panel.tsx", "utf8");
   assert.match(chat, /continueTurn/);
   assert.match(chat, /previousRunId: turn\.loop\.id/);
   assert.match(chat, /priorLoops/);
   assert.match(panel, /Continuation required/);
-  assert.match(panel, /Continue from this artboard/);
+  assert.match(panel, /Continue from this canvas/);
 });

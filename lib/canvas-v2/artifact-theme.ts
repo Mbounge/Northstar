@@ -1,0 +1,149 @@
+export type CanvasV2ArtifactTheme = "light" | "dark";
+
+interface StoredStyle {
+  value: string;
+  priority: string;
+}
+
+export interface CanvasV2ArtifactThemeState {
+  originals: Map<Element, Map<string, StoredStyle>>;
+}
+
+const THEMED_PROPERTIES = [
+  "color",
+  "background-color",
+  "border-top-color",
+  "border-right-color",
+  "border-bottom-color",
+  "border-left-color",
+  "outline-color",
+  "fill",
+  "stroke",
+] as const;
+
+const MEDIA_TAGS = new Set(["IMG", "VIDEO", "CANVAS", "PICTURE", "SOURCE"]);
+
+export function createCanvasV2ArtifactThemeState(): CanvasV2ArtifactThemeState {
+  return { originals: new Map() };
+}
+
+function restoreTheme(state: CanvasV2ArtifactThemeState): void {
+  state.originals.forEach((properties, element) => {
+    const style = (element as HTMLElement | SVGElement).style;
+    properties.forEach((stored, property) => {
+      if (stored.value) style.setProperty(property, stored.value, stored.priority);
+      else style.removeProperty(property);
+    });
+  });
+  state.originals.clear();
+}
+
+function parseColor(value: string): { red: number; green: number; blue: number; alpha: number } | undefined {
+  const match = value.match(/^rgba?\(\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i);
+  if (!match) return undefined;
+  return {
+    red: Number(match[1]),
+    green: Number(match[2]),
+    blue: Number(match[3]),
+    alpha: match[4] === undefined ? 1 : Number(match[4]),
+  };
+}
+
+function colorFacts(value: string) {
+  const parsed = parseColor(value);
+  if (!parsed || parsed.alpha === 0) return undefined;
+  const channels = [parsed.red, parsed.green, parsed.blue];
+  return {
+    ...parsed,
+    brightness: parsed.red * 0.2126 + parsed.green * 0.7152 + parsed.blue * 0.0722,
+    neutral: Math.max(...channels) - Math.min(...channels) <= 28,
+  };
+}
+
+function darkText(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || !color.neutral || color.brightness >= 205) return undefined;
+  if (color.brightness < 70) return "#f4f3f8";
+  if (color.brightness < 150) return "#d5d1dc";
+  return "#aaa6b4";
+}
+
+function darkSurface(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || color.brightness < 175) return undefined;
+  if (color.neutral) {
+    if (color.brightness >= 246) return "#1b1a22";
+    if (color.brightness >= 226) return "#211f28";
+    return "#292731";
+  }
+  const base = { red: 24, green: 23, blue: 31 };
+  const tint = 0.13;
+  return `rgb(${Math.round(base.red * (1 - tint) + color.red * tint)} ${Math.round(base.green * (1 - tint) + color.green * tint)} ${Math.round(base.blue * (1 - tint) + color.blue * tint)})`;
+}
+
+function darkRule(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || color.brightness < 135) return undefined;
+  return color.neutral ? "rgba(255,255,255,.12)" : darkSurface(value);
+}
+
+function darkVector(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || !color.neutral || color.brightness >= 205) return undefined;
+  return color.brightness < 120 ? "#f0eef5" : "#aaa6b4";
+}
+
+function themedValue(element: Element, property: string, computed: CSSStyleDeclaration): string | undefined {
+  const value = computed.getPropertyValue(property).trim();
+  if (!value || value === "none" || value === "currentcolor") return undefined;
+  if (property === "color") return darkText(value);
+  if (property === "background-color") {
+    const color = colorFacts(value);
+    const directSurfaceRegion = element.hasAttribute("data-canvas-v2-design-region")
+      || element.getAttribute("data-canvas-v2-evidence-region") === "canonical"
+      || element.getAttribute("data-canvas-v2-node-id") === "canvas";
+    if (directSurfaceRegion && color?.neutral && color.brightness >= 226) return "transparent";
+    return darkSurface(value);
+  }
+  if (property === "fill" || property === "stroke") return darkVector(value);
+  return darkRule(value);
+}
+
+/**
+ * Applies the host theme to an authored artifact without rewriting its source.
+ * Saturated product and accent colors remain intact; only neutral ink, surfaces,
+ * rules, and vector marks receive an accessible dark counterpart. The original
+ * inline cascade is restored exactly when light mode returns.
+ */
+export function applyCanvasV2ArtifactTheme(
+  frameDocument: Document,
+  theme: CanvasV2ArtifactTheme,
+  state: CanvasV2ArtifactThemeState,
+): void {
+  restoreTheme(state);
+  frameDocument.documentElement.dataset.canvasV2Theme = theme;
+  // The iframe is a transparent layer of the host workspace, not a nested
+  // document/page. Keep its browser compositing surface light/transparent and
+  // theme only authored elements and North Star tokens below. Switching the
+  // iframe itself to a dark color-scheme gives transparent pixels an opaque
+  // black backing in WebKit and Chromium.
+  frameDocument.documentElement.style.colorScheme = "light";
+  if (theme === "light") return;
+
+  const view = frameDocument.defaultView;
+  if (!view) return;
+  const elements = [frameDocument.documentElement, frameDocument.body, ...Array.from(frameDocument.body.querySelectorAll<Element>("*"))];
+  elements.forEach((element) => {
+    if (MEDIA_TAGS.has(element.tagName) || element.getAttribute("data-canvas-v2-theme-preserve") === "true") return;
+    const computed = view.getComputedStyle(element);
+    const original = new Map<string, StoredStyle>();
+    const style = (element as HTMLElement | SVGElement).style;
+    THEMED_PROPERTIES.forEach((property) => {
+      const next = themedValue(element, property, computed);
+      if (!next) return;
+      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property) });
+      style.setProperty(property, next, "important");
+    });
+    if (original.size) state.originals.set(element, original);
+  });
+}

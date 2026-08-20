@@ -1,6 +1,7 @@
 import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import { assertCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from "@/lib/canvas-v2/artifact-safety";
 import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
+import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 
 export interface CanvasV2FlowInsertion {
   document: CanvasV2ArtifactDocument;
@@ -11,20 +12,20 @@ export interface CanvasV2FlowInsertion {
 
 const FLOW_CSS = `
 /* canvas-v2-flow-layout-v4: complete canonical journeys stay on one intrinsic horizontal rail */
-.northstar-artboard.canvas-v2-artboard--evidence-wide { box-sizing:border-box; width:max-content; min-width:1680px; max-width:none; overflow:visible; }
-.canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:100%; max-width:none; padding:0; background:transparent; color:#151620; font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
-.canvas-v2-grounded-evidence--standalone { min-width:1680px; padding:52px 56px 64px; background:#fff; }
-.canvas-v2-grounded-title { margin:0 0 28px; color:#23232b; font-size:9px; font-weight:850; letter-spacing:.18em; text-transform:uppercase; }
+.northstar-canvas.canvas-v2-canvas--evidence-wide { box-sizing:border-box; width:100%; min-width:100%; min-height:100%; max-width:none; padding:${CANVAS_V2_WORKSPACE.aiAuthoringInset}px; overflow:visible; }
+.canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:100%; max-width:none; padding:0; background:transparent; color:var(--northstar-ink); font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
+.canvas-v2-grounded-evidence--standalone { min-width:1680px; padding:52px 96px 96px; background:transparent; }
+.canvas-v2-grounded-title { margin:0 0 28px; color:var(--northstar-ink); font-size:9px; font-weight:850; letter-spacing:.18em; text-transform:uppercase; }
 .canvas-v2-flow-lane { display:grid; grid-template-columns:170px max-content; align-items:start; gap:24px; width:max-content; min-width:100%; max-width:none; min-height:270px; padding:16px 0; }
 .canvas-v2-flow-identity { display:flex; align-items:center; gap:12px; align-self:start; padding-top:94px; }
 .canvas-v2-flow-icon { width:46px; height:46px; flex:none; border-radius:13px; object-fit:contain; box-shadow:0 10px 24px rgba(39,30,93,.10); }
-.canvas-v2-flow-app { margin:0; color:#17171e; font-size:18px; font-weight:850; letter-spacing:-.02em; }
-.canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:#737686; font-size:11px; line-height:1.35; }
+.canvas-v2-flow-app { margin:0; color:var(--northstar-ink); font-size:18px; font-weight:850; letter-spacing:-.02em; }
+.canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:var(--northstar-muted); font-size:11px; line-height:1.35; }
 .canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; min-width:0; max-width:none; column-gap:18px; padding-right:0; overflow:visible; }
 .canvas-v2-flow-screen { display:block; width:auto; height:235px; max-width:none; flex:none; object-fit:contain; filter:drop-shadow(0 12px 20px rgba(32,24,80,.09)); }
-.canvas-v2-flow-segment { box-sizing:border-box; display:flex; width:132px; height:235px; flex:none; align-items:flex-start; padding:12px 18px 0 14px; border-left:1px solid rgba(70,61,116,.22); color:#817d8d; font-size:9px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
+.canvas-v2-flow-segment { box-sizing:border-box; display:flex; width:132px; height:235px; flex:none; align-items:flex-start; padding:12px 18px 0 14px; border-left:1px solid var(--northstar-line); color:var(--northstar-muted); font-size:9px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
 .canvas-v2-flow-segment-label { display:-webkit-box; max-width:102px; overflow:hidden; overflow-wrap:normal; word-break:normal; -webkit-box-orient:vertical; -webkit-line-clamp:4; }
-.canvas-v2-flow-segment--branch { border-left-color:rgba(107,77,255,.55); color:#6b4dff; }
+.canvas-v2-flow-segment--branch { border-left-color:var(--northstar-violet); color:var(--northstar-violet); }
 `;
 
 function stableTokenHash(value: string): string {
@@ -68,8 +69,8 @@ export function insertCanvasV2CanonicalFlow(input: {
   if (!screenEvidence.length) throw new Error("This flow has no renderable screenshots.");
 
   const parsed = new DOMParser().parseFromString(`<body>${input.document.html}</body>`, "text/html");
-  const host = parsed.querySelector<HTMLElement>('[data-canvas-v2-node-id="artboard"]') ?? parsed.querySelector<HTMLElement>("main") ?? parsed.body;
-  if (host !== parsed.body) host.classList.add("canvas-v2-artboard--evidence-wide");
+  const host = parsed.querySelector<HTMLElement>('[data-canvas-v2-node-id="canvas"]') ?? parsed.querySelector<HTMLElement>("main") ?? parsed.body;
+  if (host !== parsed.body) host.classList.add("canvas-v2-canvas--evidence-wide");
   let region = parsed.querySelector<HTMLElement>("[data-canvas-v2-evidence-region=canonical]");
   const regionNodeId = region?.dataset.canvasV2NodeId ?? "grounded-evidence";
   if (!region) {
@@ -88,7 +89,7 @@ export function insertCanvasV2CanonicalFlow(input: {
 
   const laneNodeId = `flow-${canvasV2StableNodeToken(input.app.name)}-${canvasV2StableNodeToken(input.flow.id)}`;
   const existing = Array.from(parsed.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]")).find((element) => element.dataset.canvasV2NodeId === laneNodeId);
-  if (existing) throw new Error(`${input.flow.name} is already on the artboard.`);
+  if (existing) throw new Error(`${input.flow.name} is already on the canvas.`);
   const lane = parsed.createElement("article");
   lane.className = "canvas-v2-flow-lane";
   lane.dataset.canvasV2NodeId = laneNodeId;

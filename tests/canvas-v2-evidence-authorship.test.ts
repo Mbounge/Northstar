@@ -34,7 +34,7 @@ const evidence = [
 
 function document(inner: string): CanvasV2ArtifactDocument {
   return {
-    html: `<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-node-id="flow-awin" data-canvas-v2-canonical-flow="flow:awin">${inner}</article></main>`,
+    html: `<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-node-id="flow-awin" data-canvas-v2-canonical-flow="flow:awin">${inner}</article></main>`,
     css: "",
   };
 }
@@ -117,10 +117,10 @@ test("role-less evidence in a legacy canonical lane upgrades without losing anal
 
 test("a free-standing image cannot nominate itself as a canonical provenance source", () => {
   const forged = {
-    html: '<main data-canvas-v2-node-id="artboard"><img data-canvas-v2-node-id="forged-source" data-canvas-v2-evidence-id="screen:awin-1" data-canvas-v2-evidence-role="canonical" src="https://evidence.test/awin/1.png"></main>',
+    html: '<main data-canvas-v2-node-id="canvas"><img data-canvas-v2-node-id="forged-source" data-canvas-v2-evidence-id="screen:awin-1" data-canvas-v2-evidence-role="canonical" src="https://evidence.test/awin/1.png"></main>',
     css: "",
   };
-  const empty = { html: '<main data-canvas-v2-node-id="artboard"></main>', css: "" };
+  const empty = { html: '<main data-canvas-v2-node-id="canvas"></main>', css: "" };
   assert.match(validateCanvasV2EvidenceContinuity(empty, forged, [evidence[1]]).join(" "), /valid only for an original image inside its canonical flow/);
 });
 
@@ -153,7 +153,7 @@ test("an analytical copy cannot substitute for a missing or reordered canonical 
 
 test("every canonical flow requires complete contiguous screen indices", () => {
   const invalid = { ...canonical, html: canonical.html.replace('data-canvas-v2-flow-index="1"', 'data-canvas-v2-flow-index="4"') };
-  const empty = { html: '<main data-canvas-v2-node-id="artboard"></main>', css: "" };
+  const empty = { html: '<main data-canvas-v2-node-id="canvas"></main>', css: "" };
   assert.match(validateCanvasV2EvidenceContinuity(empty, invalid, evidence).join(" "), /indices must be complete and contiguous/);
 });
 
@@ -166,7 +166,7 @@ test("analytical copies are freely composable but remain traceable to a canonica
 
 test("the artifact rejects duplicate identities and unidentified images", () => {
   assert.match(validateCanvasV2ArtifactDocument({ html: '<main data-canvas-v2-node-id="same"><img data-canvas-v2-node-id="same" src="x"></main>', css: "" }).join(" "), /must be unique/);
-  assert.match(validateCanvasV2ArtifactDocument({ html: '<main data-canvas-v2-node-id="artboard"><img src="x"></main>', css: "" }).join(" "), /Every image must have a unique stable node identity/);
+  assert.match(validateCanvasV2ArtifactDocument({ html: '<main data-canvas-v2-node-id="canvas"><img src="x"></main>', css: "" }).join(" "), /Every image must have a unique stable node identity/);
 });
 
 function observation(overrides: Partial<CanvasV2RenderObservation["spatial"]["evidence"][number]> = {}): CanvasV2RenderObservation {
@@ -246,9 +246,9 @@ test("analysis screenshots may enlarge purposefully but can never become runaway
     sourceIsCanonicalScreen: true,
     canonicalPeerHeight: 240,
     scaleVsCanonicalHeight: 7,
-    artboardWidthShare: 0.5,
-    artboardHeightShare: 0.7,
-    artboardAreaShare: 0.35,
+    canvasWidthShare: 0.5,
+    canvasHeightShare: 0.7,
+    canvasAreaShare: 0.35,
     designRegionNodeId: "analysis",
     designRegionWidthShare: 0.48,
     designRegionHeightShare: 0.82,
@@ -277,7 +277,7 @@ test("analysis screenshots may enlarge purposefully but can never become runaway
     scaleVsCanonicalHeight: 2.4,
     designRegionHeightShare: 0.54,
     designRegionAreaShare: 0.2,
-    artboardHeightShare: 0.34,
+    canvasHeightShare: 0.34,
   });
   assert.deepEqual(validateCanvasV2RenderedAnalysisEvidenceScale(boundedFocalInspection), []);
 
@@ -300,7 +300,7 @@ test("analysis screenshots may enlarge purposefully but can never become runaway
     scaleVsCanonicalHeight: 1.5,
     designRegionHeightShare: 0.24,
     designRegionAreaShare: 0.08,
-    artboardHeightShare: 0.18,
+    canvasHeightShare: 0.18,
     visualRole: undefined,
     treatment: undefined,
     annotationNodeIds: [],
@@ -313,9 +313,9 @@ test("authored design regions may grow but cannot clip information they introduc
   rendered.spatial.designRegions = [{
     nodeId: "analysis",
     bounds: { x: 20, y: 20, width: 900, height: 500 },
-    artboardWidthShare: 0.54,
-    artboardHeightShare: 0.53,
-    artboardAreaShare: 0.29,
+    canvasWidthShare: 0.54,
+    canvasHeightShare: 0.53,
+    canvasAreaShare: 0.29,
     centerXShare: 0.28,
     centerYShare: 0.29,
     edgeSpace: { left: 20, top: 20, right: 760, bottom: 425 },
@@ -333,9 +333,9 @@ test("a stage that claims direct sourcing cannot render as an empty evidence blo
   rendered.spatial.designRegions = [{
     nodeId: "handoff-sequence",
     bounds: { x: 20, y: 20, width: 900, height: 500 },
-    artboardWidthShare: 0.54,
-    artboardHeightShare: 0.53,
-    artboardAreaShare: 0.29,
+    canvasWidthShare: 0.54,
+    canvasHeightShare: 0.53,
+    canvasAreaShare: 0.29,
     centerXShare: 0.28,
     centerYShare: 0.29,
     edgeSpace: { left: 20, top: 20, right: 760, bottom: 425 },
@@ -355,9 +355,9 @@ test("authored regions cannot drift into canonical lanes without an explicit evi
   rendered.spatial.designRegions = [{
     nodeId: "handoff-field",
     bounds: { x: 400, y: 80, width: 900, height: 500 },
-    artboardWidthShare: 0.54,
-    artboardHeightShare: 0.53,
-    artboardAreaShare: 0.29,
+    canvasWidthShare: 0.54,
+    canvasHeightShare: 0.53,
+    canvasAreaShare: 0.29,
     centerXShare: 0.5,
     centerYShare: 0.35,
     edgeSpace: { left: 400, top: 80, right: 380, bottom: 365 },
@@ -389,9 +389,9 @@ test("a planning zone never overrides evidence-relative rendered truth", () => {
     placementMode: "evidence-relative-island",
     targetZoneId: "top-right",
     bounds: { x: 600, y: 40, width: 420, height: 260 },
-    artboardWidthShare: 0.25,
-    artboardHeightShare: 0.28,
-    artboardAreaShare: 0.07,
+    canvasWidthShare: 0.25,
+    canvasHeightShare: 0.28,
+    canvasAreaShare: 0.07,
     centerXShare: 0.48,
     centerYShare: 0.18,
     edgeSpace: { left: 600, top: 40, right: 660, bottom: 645 },
@@ -400,7 +400,7 @@ test("a planning zone never overrides evidence-relative rendered truth", () => {
     clipsOverflow: false,
   }];
   rendered.spatial.authoredSurface = {
-    artboardBounds: rendered.contentBounds,
+    canvasBounds: rendered.contentBounds,
     authoredAreaShare: 0.07,
     readingOrder: ["friction-island"],
     zones: [{
@@ -498,9 +498,9 @@ test("islands preserve one upper-left story origin and distinct readable territo
     placementMode: "evidence-relative-island" as const,
     targetZoneId: storyRole === "title" ? "top-left" as const : "middle-right" as const,
     bounds: { x, y, width, height },
-    artboardWidthShare: width / 1680,
-    artboardHeightShare: height / 945,
-    artboardAreaShare: width * height / (1680 * 945),
+    canvasWidthShare: width / 1680,
+    canvasHeightShare: height / 945,
+    canvasAreaShare: width * height / (1680 * 945),
     centerXShare: (x + width / 2) / 1680,
     centerYShare: (y + height / 2) / 945,
     edgeSpace: { left: x, top: y, right: 1680 - x - width, bottom: 945 - y - height },
@@ -509,26 +509,26 @@ test("islands preserve one upper-left story origin and distinct readable territo
     clipsOverflow: false,
   });
   rendered.spatial.designRegions = [
-    region("title-island", "title", 56, 56, 1_568, 180),
-    region("comparison-island", "comparison", 920, 360, 560, 360),
+    region("title-island", "title", 192, 192, 1_296, 180),
+    region("comparison-island", "comparison", 920, 420, 560, 320),
   ];
   rendered.spatial.authoredSurface = {
-    artboardBounds: rendered.contentBounds,
+    canvasBounds: rendered.contentBounds,
     authoredAreaShare: 0.18,
     readingOrder: ["title-island", "comparison-island"],
     zones: [],
   };
   assert.deepEqual(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered), []);
 
-  rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 1_090, 360, 560, 360);
-  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /56px artboard safe area/);
+  rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 1_090, 420, 560, 320);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /192px canvas safe area/);
 
   rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 360, 110, 560, 360);
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /materially overlap/);
 
   rendered.spatial.designRegions = [
-    region("title-island", "title", 56, 56, 480, 180),
-    region("comparison-island", "comparison", 920, 360, 560, 360),
+    region("title-island", "title", 192, 192, 480, 180),
+    region("comparison-island", "comparison", 920, 420, 560, 320),
   ];
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /full-width horizontal strip/);
 
@@ -549,7 +549,7 @@ test("bounded model context exposes factual analysis-copy geometry and authored 
     designRegionNodeId: "analysis",
     designRegionHeightShare: 0.6,
     designRegionAreaShare: 0.22,
-    artboardHeightShare: 0.4,
+    canvasHeightShare: 0.4,
     annotationNodeIds: ["analysis-note"],
     relationshipNodeIds: ["analysis-curve"],
   });
@@ -565,7 +565,7 @@ test("bounded model context exposes factual analysis-copy geometry and authored 
   }, rendered);
   assert.equal(context.render.spatial.analysisEvidenceGeometry[0]?.scaleVsCanonicalHeight, 3.25);
   assert.deepEqual(context.render.spatial.authoredSurface, {
-    artboardBounds: rendered.contentBounds,
+    canvasBounds: rendered.contentBounds,
     authoredAreaShare: 0,
     readingOrder: [],
     zones: [],

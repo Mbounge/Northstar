@@ -79,7 +79,7 @@ export interface CanvasV2LoopState {
     /** The failed candidate's exact island transaction survives every repair pass. */
     islandExecution?: CanvasV2IslandExecutionContract;
     rejectedCandidate?: {
-      artboardGeometry: {
+      canvasGeometry: {
         contentBounds: CanvasV2ElementBounds;
         canonicalLaneBounds?: CanvasV2ElementBounds;
       };

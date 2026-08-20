@@ -3,6 +3,8 @@ import { readCanvasV2CanonicalFlowManifests } from "@/lib/canvas-v2/evidence-aut
 import { normalizeCanvasV2ModelSource } from "@/lib/canvas-v2/model-source-normalization";
 import { buildCanvasV2EvidenceCopyHandles } from "@/lib/canvas-v2/evidence-handles";
 import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
+import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
+import { normalizeCanvasV2SceneObjectIdentities } from "@/lib/canvas-v2/scene-transaction";
 
 export type CanvasV2SourcePatchOperation =
   | { op: "insert-before" | "insert-after" | "append-html" | "replace-node"; targetNodeId: string; html: string }
@@ -24,22 +26,22 @@ const ANALYSIS_COPY_MAX_HEIGHT: Record<CanvasV2EvidenceScaleIntent, number> = {
   "bounded-emphasis": Math.round(CANONICAL_SCREEN_HEIGHT * 2.75),
 };
 const EVIDENCE_GEOMETRY_GUARD = `${EVIDENCE_GEOMETRY_GUARD_START}
-/* Canonical rails determine the artboard's minimum intrinsic width. Authored
+/* Canonical rails determine the canvas's minimum intrinsic width. Authored
    regions remain free to grow or recompose around this immutable source record.
    The root padding is a compiler-owned canvas safe area: model CSS may shape
-   the interior story, but no chapter may render flush against an artboard edge. */
-.northstar-artboard.canvas-v2-artboard--evidence-wide{box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;float:none!important;contain:none!important;clip-path:none!important;width:max-content!important;inline-size:max-content!important;min-width:1680px!important;max-width:none!important;max-inline-size:none!important;overflow:visible!important;padding:56px!important}
-/* Top-level islands participate in the artboard's real layout. Neutralizing
+   the interior story, but no chapter may render flush against an canvas edge. */
+.northstar-canvas.canvas-v2-canvas--evidence-wide{box-sizing:border-box!important;position:relative!important;inset:0!important;transform:none!important;float:none!important;contain:none!important;clip-path:none!important;width:100%!important;inline-size:100%!important;min-width:100%!important;max-width:none!important;max-inline-size:none!important;min-height:100%!important;overflow:visible!important;padding:${CANVAS_V2_WORKSPACE.aiAuthoringInset}px!important}
+/* Top-level islands participate in the canvas's real layout. Neutralizing
    absolute offsets here removes an entire class of overlap, off-canvas, and
    edge-clinging candidates before the browser ever observes them. The model
    can still author genuinely two-dimensional compositions with parent grid
    areas, columns, normal-flow order, alignment, and deliberate margins. */
-.northstar-artboard.canvas-v2-artboard--evidence-wide>[data-canvas-v2-design-region]{box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;float:none!important;max-width:100%!important}
+.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region]{box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;float:none!important;max-width:100%!important}
 /* The title owns a full narrative strip in normal flow. The model retains
    complete control of its internal composition and visual language, while the
    compiler guarantees a stable story origin and deliberate air before the
    evidence atlas. */
-.northstar-artboard.canvas-v2-artboard--evidence-wide>[data-canvas-v2-design-region][data-canvas-v2-story-role="title"]{grid-column:1/-1!important;align-self:start!important;justify-self:stretch!important;width:auto!important;min-width:0!important;max-width:none!important;margin-bottom:72px!important}
+.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region][data-canvas-v2-story-role="title"]{grid-column:1/-1!important;align-self:start!important;justify-self:stretch!important;width:auto!important;min-width:0!important;max-width:none!important;margin-bottom:112px!important}
 /* Canonical evidence is immutable source geometry. Analytical authorship may
    place the atlas as one whole story chapter, but may never transform,
    position, shrink, wrap, or restyle its internal lanes and screens. */
@@ -55,15 +57,15 @@ const EVIDENCE_GEOMETRY_GUARD = `${EVIDENCE_GEOMETRY_GUARD_START}
 /* Grounded analysis copies are composition material, not unconstrained
    canvases. The visual director chooses the scale class; the compiler owns
    its hard geometry envelope before the candidate can ever render. */
-.northstar-artboard img[data-canvas-v2-evidence-role="analysis-copy"]{display:block;min-width:0!important;min-height:0!important;max-width:100%!important;max-inline-size:100%!important;object-fit:contain!important}
-.northstar-artboard img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="identity-mark"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important}
-.northstar-artboard img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="peer"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important}
-.northstar-artboard img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="bounded-emphasis"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]{display:block;min-width:0!important;min-height:0!important;max-width:100%!important;max-inline-size:100%!important;object-fit:contain!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="identity-mark"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="peer"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="bounded-emphasis"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important}
 /* The compiler's evidence inbox is a durable island subregion. Model CSS can
    give it a more expressive layout, while this intrinsic fallback prevents a
    newly bound screen from becoming a detached or page-sized orphan. */
-.northstar-artboard .canvas-v2-evidence-inbox{box-sizing:border-box;display:flex;flex-flow:row wrap;align-items:flex-end;gap:16px;max-width:100%}
-.northstar-artboard .canvas-v2-evidence-inbox>img[data-canvas-v2-evidence-role="analysis-copy"]{flex:0 1 auto;width:auto;max-width:min(100%,420px)!important}
+.northstar-canvas .canvas-v2-evidence-inbox{box-sizing:border-box;display:flex;flex-flow:row wrap;align-items:flex-end;gap:16px;max-width:100%}
+.northstar-canvas .canvas-v2-evidence-inbox>img[data-canvas-v2-evidence-role="analysis-copy"]{flex:0 1 auto;width:auto;max-width:min(100%,420px)!important}
 ${EVIDENCE_GEOMETRY_GUARD_END}`;
 
 function escapedRegExp(value: string): string {
@@ -72,6 +74,13 @@ function escapedRegExp(value: string): string {
 
 function attribute(attributes: string, name: string): string | undefined {
   return new RegExp(`\\b${escapedRegExp(name)}\\s*=\\s*["']([^"']+)["']`, "i").exec(attributes)?.[1];
+}
+
+function userEditedNodeIds(html: string): Set<string> {
+  return new Set(Array.from(
+    html.matchAll(/<([a-z][\w:-]*)\b([^>]*\bdata-canvas-v2-user-edited\s*=\s*["'][^"']+["'][^>]*)>/gi),
+    (match) => attribute(match[2], "data-canvas-v2-node-id"),
+  ).filter((nodeId): nodeId is string => Boolean(nodeId)));
 }
 
 export interface CanvasV2SourceNodeRange {
@@ -267,6 +276,7 @@ export function applyCanvasV2SourcePatch(input: {
   scaleIntentByEvidenceId?: ReadonlyMap<string, CanvasV2EvidenceScaleIntent>;
 }): CanvasV2ArtifactDocument {
   const protectedLaneIds = new Set(readCanvasV2CanonicalFlowManifests(input.previous).map((flow) => flow.laneNodeId));
+  const protectedUserNodeIds = userEditedNodeIds(input.previous.html);
   let html = input.previous.html;
   let css = input.previous.css;
   for (const operation of input.operations) {
@@ -279,6 +289,13 @@ export function applyCanvasV2SourcePatch(input: {
     if (protectedLaneIds.has(operation.targetNodeId) && (operation.op === "replace-node" || operation.op === "remove-node" || operation.op === "append-html")) {
       throw new Error(`Canonical evidence lane is immutable; insert analysis before or after it instead: ${operation.targetNodeId}.`);
     }
+    if (operation.op === "replace-node" || operation.op === "remove-node") {
+      const protectedDescendant = Array.from(protectedUserNodeIds).find((nodeId) => {
+        const protectedRange = findCanvasV2SourceNodeRange(html, nodeId);
+        return protectedRange && protectedRange.start >= range.start && protectedRange.end <= range.end;
+      });
+      if (protectedDescendant) throw new Error(`Human-authored node ${protectedDescendant} is protected. Compose around it or target an unedited sibling.`);
+    }
     const fragment = "html" in operation
       ? expandEvidenceCopies(operation.html, input.previous, html, input.evidence, input.scaleIntentByEvidenceId ?? new Map())
       : "";
@@ -290,7 +307,10 @@ export function applyCanvasV2SourcePatch(input: {
   }
   if (protectedLaneIds.size) css = enforceCanonicalEvidenceGeometry(css);
   const normalized = normalizeCanvasV2ModelSource({ document: { html, css }, previous: input.previous, evidence: input.evidence });
-  const document = assertCanvasV2ArtifactDocument({ ...normalized, html: enforceDesignIslandTopology(normalized.html) });
+  const document = assertCanvasV2ArtifactDocument(normalizeCanvasV2SceneObjectIdentities({
+    ...normalized,
+    html: enforceDesignIslandTopology(normalized.html),
+  }));
   const evidenceFailures = validateCanvasV2EvidenceBindings(document, input.evidence);
   if (evidenceFailures.length) throw new Error(evidenceFailures.join(" "));
   return document;

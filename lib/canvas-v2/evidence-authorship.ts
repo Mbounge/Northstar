@@ -4,6 +4,7 @@ import type {
   CanvasV2EvidenceRole,
   CanvasV2RenderObservation,
 } from "@/lib/canvas-v2/types";
+import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 
 export interface CanvasV2CanonicalEvidenceItem {
   evidenceId: string;
@@ -163,7 +164,7 @@ export function validateCanvasV2RenderedEvidenceIntegrity(
     const right = result.bounds.x + result.bounds.width;
     const bottom = result.bounds.y + result.bounds.height;
     if (result.bounds.x < 0 || result.bounds.y < 0 || right > observation.contentBounds.width || bottom > observation.contentBounds.height) {
-      failures.push(`Canonical evidence must remain inside the rendered artboard: ${item.nodeId}.`);
+      failures.push(`Canonical evidence must remain inside the rendered canvas: ${item.nodeId}.`);
     }
   }
   for (const flow of flows) {
@@ -186,7 +187,7 @@ export function validateCanvasV2RenderedEvidenceIntegrity(
  * Analysis copies may grow enough to support close reading, but a full-screen
  * source capture may not become the composition itself. The thresholds stay
  * relative to the canonical peer and authored region so this remains useful
- * across geometrically growing artboards without prescribing a pixel width.
+ * across geometrically growing canvass without prescribing a pixel width.
  */
 export function validateCanvasV2RenderedAnalysisEvidenceScale(
   observation: CanvasV2RenderObservation,
@@ -197,7 +198,7 @@ export function validateCanvasV2RenderedAnalysisEvidenceScale(
     const scale = item.scaleVsCanonicalHeight ?? 0;
     const regionHeightShare = item.designRegionHeightShare ?? 0;
     const regionAreaShare = item.designRegionAreaShare ?? 0;
-    const artboardHeightShare = item.artboardHeightShare ?? 0;
+    const canvasHeightShare = item.canvasHeightShare ?? 0;
     const runaway = scale >= 3.25
       || (scale >= 2.25 && regionHeightShare >= 0.72)
       || (scale >= 2.25 && regionAreaShare >= 0.34);
@@ -207,7 +208,7 @@ export function validateCanvasV2RenderedAnalysisEvidenceScale(
       );
       continue;
     }
-    const dominant = scale >= 2.1 && (regionHeightShare >= 0.48 || regionAreaShare >= 0.18 || artboardHeightShare >= 0.4);
+    const dominant = scale >= 2.1 && (regionHeightShare >= 0.48 || regionAreaShare >= 0.18 || canvasHeightShare >= 0.4);
     if (!dominant) continue;
     const linkedExplanationCount = (item.annotationNodeIds?.length ?? 0) + (item.relationshipNodeIds?.length ?? 0);
     const declaredAnalyticalRole = Boolean(item.visualRole?.trim() || item.treatment?.trim());
@@ -226,7 +227,7 @@ export function validateCanvasV2RenderedDesignRegionContentIntegrity(
   return Array.from(new Set((observation.spatial.designRegions ?? []).flatMap((region) => {
     const failures: string[] = [];
     if (region.clipsOverflow && (region.contentOverflowX > 2 || region.contentOverflowY > 2)) {
-      failures.push(`Authored design region ${region.nodeId} clips ${Math.round(region.contentOverflowX)} artboard units horizontally and ${Math.round(region.contentOverflowY)} vertically. Preserve every authored label, explanation, uncertainty note, and evidence reference by growing or recomposing the section before continuing.`);
+      failures.push(`Authored design region ${region.nodeId} clips ${Math.round(region.contentOverflowX)} canvas units horizontally and ${Math.round(region.contentOverflowY)} vertically. Preserve every authored label, explanation, uncertainty note, and evidence reference by growing or recomposing the section before continuing.`);
     }
     if (region.emptySourcedStageNodeIds?.length) {
       failures.push(`Authored design region ${region.nodeId} labels these sequence stages as directly sourced but renders no exact screenshot inside them: ${region.emptySourcedStageNodeIds.join(", ")}. Add one grounded analysis copy to every sourced stage, or relabel the stage as interpretation and remove any empty evidence footprint.`);
@@ -252,7 +253,7 @@ export function validateCanvasV2RenderedDesignRegionTerritoryIntegrity(
         && overlap.intersection.height >= 24
         && (overlap.regionCoverage >= 0.02 || overlap.laneCoverage >= 0.01);
       if (material && region.storyRole === "title") {
-        return [`Title island ${region.nodeId} overlaps canonical evidence lane ${overlap.laneNodeId}. The narrative title and description must remain above the source sequence at the upper-left beginning of the artboard; evidence interleave cannot waive this boundary.`];
+        return [`Title island ${region.nodeId} overlaps canonical evidence lane ${overlap.laneNodeId}. The narrative title and description must remain above the source sequence at the upper-left beginning of the canvas; evidence interleave cannot waive this boundary.`];
       }
       if (!material || region.evidenceInterleave?.trim()) return [];
       return [`Authored design region ${region.nodeId} enters canonical evidence lane ${overlap.laneNodeId} across ${Math.round(overlap.regionCoverage * 100)}% of its own area without declaring an intentional evidence interleave. Keep the analytical region outside the immutable rail, or declare data-canvas-v2-evidence-interleave with a short purpose and recompose it so the source sequence remains unobscured.`];
@@ -269,7 +270,7 @@ export function validateCanvasV2RenderedDesignRegionTerritoryIntegrity(
     }
     // targetZoneId is a planning hint captured from the director's whole-board
     // reading, not a rendered-integrity boundary. An intrinsically growing
-    // artboard changes the mathematical thirds every time a chapter is added;
+    // canvas changes the mathematical thirds every time a chapter is added;
     // treating those moving thirds as commit law rejected otherwise correct
     // islands and sent the same candidate through futile repair loops. Actual
     // commit authority lives in the stable invariants below: evidence-relative
@@ -323,40 +324,41 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
     failures.push(`An authored North Star board requires exactly one title-and-description island as its narrative origin; rendered ${titles.length}.`);
   }
   const title = titles[0];
-  const artboard = observation.spatial.authoredSurface?.artboardBounds ?? observation.contentBounds;
-  // The source compiler owns a 56px artboard safe area. Allow a few rendered
+  const canvas = observation.spatial.authoredSurface?.canvasBounds ?? observation.contentBounds;
+  // The source compiler owns the same safe area as direct manipulation. Allow a few rendered
   // units of fractional-layout tolerance, but reject every island that escapes
   // that shared canvas margin. This is a whole-board invariant rather than a
   // prompt convention, so a visually attractive turn can never normalize an
-  // edge-clinging or partially off-artboard chapter.
-  const minimumRenderedSafeMargin = 52;
+  // edge-clinging or partially off-canvas chapter.
+  const minimumRenderedSafeMargin = CANVAS_V2_WORKSPACE.documentMargin - 4;
   for (const region of regions) {
     const unsafeEdges = Object.entries(region.edgeSpace)
       .filter(([, space]) => space < minimumRenderedSafeMargin)
       .map(([edge, space]) => `${edge}=${Math.round(space)}px`);
     if (unsafeEdges.length) {
-      failures.push(`Narrative island ${region.nodeId} violates the compiler-owned 56px artboard safe area (${unsafeEdges.join(", ")}). Keep every island visibly inset from all four outer edges; grow the artboard or recompose its normal-flow grid instead of pushing content against or beyond the canvas boundary.`);
+      failures.push(`Narrative island ${region.nodeId} violates the compiler-owned ${CANVAS_V2_WORKSPACE.documentMargin}px canvas safe area (${unsafeEdges.join(", ")}). Keep every island visibly inset from all four outer edges; grow the canvas or recompose its normal-flow grid instead of pushing content against or beyond the canvas boundary.`);
     }
   }
   if (title) {
     const titleCenterY = title.bounds.y + title.bounds.height / 2;
-    const titleWidthShare = title.bounds.width / Math.max(1, artboard.width);
-    const titleLeftInsetShare = Math.abs(title.bounds.x - artboard.x) / Math.max(1, artboard.width);
+    const safeInnerWidth = Math.max(1, canvas.width - CANVAS_V2_WORKSPACE.documentMargin * 2);
+    const titleWidthShare = title.bounds.width / safeInnerWidth;
+    const titleLeftInset = Math.abs(title.bounds.x - canvas.x - CANVAS_V2_WORKSPACE.documentMargin);
     if (title.targetZoneId !== "top-left"
-      || titleLeftInsetShare > 0.08
-      || titleCenterY > artboard.y + artboard.height * 0.38) {
+      || titleLeftInset > 8
+      || titleCenterY > canvas.y + canvas.height * 0.38) {
       failures.push(`Title island ${title.nodeId} must begin at the upper-left narrative origin, above the evidence and outside later analytical territories.`);
     }
     if (titleWidthShare < 0.82) {
-      failures.push(`Title island ${title.nodeId} occupies only ${Math.round(titleWidthShare * 100)}% of the artboard width. The narrative beginning must own a deliberate full-width horizontal strip; keep its readable content composed within that strip and reserve the remaining width and lower margin as intentional story space.`);
+      failures.push(`Title island ${title.nodeId} occupies only ${Math.round(titleWidthShare * 100)}% of the safe inner canvas width. The narrative beginning must own a deliberate full-width horizontal strip inside the compiler-owned perimeter; keep its readable content composed within that strip and reserve the lower margin as intentional story space.`);
     }
     const laneBounds = observation.spatial.authoredSurface?.canonicalLaneBounds;
     if (laneBounds && title.bounds.y + title.bounds.height > laneBounds.y + 4) {
       failures.push(`Title island ${title.nodeId} must finish before grounded evidence begins. Reflow the canonical rails below the title-and-description chapter instead of placing the narrative origin over or beside source screenshots.`);
     } else if (laneBounds) {
       const narrativeGap = laneBounds.y - (title.bounds.y + title.bounds.height);
-      if (narrativeGap < 56) {
-        failures.push(`Title island ${title.nodeId} leaves only ${Math.round(narrativeGap)}px before grounded evidence. Reserve at least 56px of deliberate separation so the title strip and canonical evidence read as distinct story islands.`);
+      if (narrativeGap < CANVAS_V2_WORKSPACE.documentMargin) {
+        failures.push(`Title island ${title.nodeId} leaves only ${Math.round(narrativeGap)}px before grounded evidence. Reserve at least ${CANVAS_V2_WORKSPACE.documentMargin}px of deliberate separation so the title strip and canonical evidence read as distinct story islands.`);
       }
     }
   }

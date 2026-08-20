@@ -293,8 +293,8 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
   const onlyInvalidResponses = attempts.every((attempt) => attempt.outcome === "invalid-response");
   throw new CanvasV2ProviderError({
     error: onlyInvalidResponses
-      ? "North Star could not safely complete this composition after three automatic corrections. The verified artboard is preserved so the same turn can continue without exposing internal source identities."
-      : `North Star’s model chain could not complete this design turn (${attempts.map((attempt) => `${attempt.model}: ${attempt.outcome}`).join("; ")}). The verified artboard is preserved and this run can continue from it.`,
+      ? "North Star could not safely complete this composition after three automatic corrections. The verified canvas is preserved so the same turn can continue without exposing internal source identities."
+      : `North Star’s model chain could not complete this design turn (${attempts.map((attempt) => `${attempt.model}: ${attempt.outcome}`).join("; ")}). The verified canvas is preserved and this run can continue from it.`,
     code: lastFailure.code,
     status: lastFailure.code === "provider-rejected" || lastFailure.code === "invalid-response" ? 502 : 503,
     // Every invalid draft has already received the caller-owned corrective

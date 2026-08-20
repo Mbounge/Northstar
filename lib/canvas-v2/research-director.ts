@@ -87,7 +87,7 @@ const MAX_INDEX_APPS = 24;
 const MAX_INDEX_FLOWS_PER_APP = 18;
 const MAX_INDEX_SCREEN_NAMES = 12;
 const NON_RESEARCH_TERMS = new Set([
-  "analysis", "analyze", "and", "are", "artboard", "balanced", "board", "build", "can", "canvas", "choose", "compare", "comparison", "complete",
+  "analysis", "analyze", "and", "are", "canvas", "balanced", "board", "build", "can", "canvas", "choose", "compare", "comparison", "complete",
   "design", "executive", "for", "from", "how", "insight", "insights", "inspect", "into", "keep", "leave", "main", "make",
   "prompt", "representative", "research", "screens", "screenshots", "simple", "that", "the", "their", "this",
   "visible", "what", "when", "where", "which", "with", "working", "you",
@@ -426,7 +426,7 @@ export function nextCanvasV2RequiredResearch(index: CanvasV2ResearchCatalogIndex
 export function resolveCanvasV2ResearchDecision(catalog: AppDataCatalog, decision: CanvasV2ResearchDecision, visibleFlowIds: readonly string[], index?: CanvasV2ResearchCatalogIndex): CanvasV2ResearchResult {
   const match = exactFlow(catalog, decision.appId, decision.flowId);
   if (!match) throw new Error("The requested research flow is not available in this account catalog.");
-  if (visibleFlowIds.includes(match.flow.id)) throw new Error(`${match.app.name} · ${match.flow.name} is already visible on the artboard.`);
+  if (visibleFlowIds.includes(match.flow.id)) throw new Error(`${match.app.name} · ${match.flow.name} is already visible on the canvas.`);
   const unresolvedRequirement = index?.requirements.find((requirement) => requirement.appId === decision.appId && requirement.state === "unresolved");
   if (unresolvedRequirement && !unresolvedRequirement.adequateFlowIds.includes(decision.flowId)) {
     throw new Error(`${match.app.name} · ${match.flow.name} is supporting evidence, but it does not adequately cover the requested journey. Choose a preferred or adequate catalog candidate.`);

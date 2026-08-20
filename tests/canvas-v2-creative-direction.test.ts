@@ -22,7 +22,7 @@ test("the model owns an evolving creative direction rather than a runtime aesthe
 
 test("creative moves are purposeful and remain open to divergent visual forms", () => {
   const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
-  const grammar = readFileSync("lib/canvas-v2/northstar-artboard-grammar.ts", "utf8");
+  const grammar = readFileSync("lib/canvas-v2/northstar-canvas-grammar.ts", "utf8");
 
   for (const move of ["framing", "composition", "relationship", "analysis", "refinement"]) {
     assert.match(route, new RegExp(`\\"${move}\\"`));
@@ -32,7 +32,7 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(grammar, /editorial intelligence/);
   assert.match(grammar, /artifact-scoped CSS with custom properties/);
   assert.match(grammar, /Avoid returning the same header-plus-cards composition/);
-  assert.match(grammar, /complete-artboard overview as a first-class reading distance/);
+  assert.match(grammar, /complete-canvas overview as a first-class reading distance/);
   assert.match(route, /Progressive judgment without a creative-turn ceiling/);
   assert.match(route, /North Star visual-language references/);
   assert.match(route, /strategic-storyline-atlas\.png/);

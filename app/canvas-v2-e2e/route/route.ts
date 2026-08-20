@@ -9,18 +9,18 @@ function inspectAnswer(revision?: CanvasV2ArtifactRevision): string {
   if (flows.length) {
     const apps = ["Awin", "Whop", "Ghost"].filter((name) => html.toLowerCase().includes(`>${name.toLowerCase()}<`));
     const stages = ["framing", "composition", "analysis", "refinement"].filter((stage) => html.includes(`data-e2e-stage="${stage}"`));
-    return `The committed artboard contains ${flows.length} complete canonical onboarding flow${flows.length === 1 ? "" : "s"}${apps.length ? ` for ${apps.join(" and ")}` : ""}. ${stages.length ? `It also contains the ${stages.join(", ")} design stages, with the source evidence still visible.` : "The source evidence remains visible for inspection."}`;
+    return `The committed canvas contains ${flows.length} complete canonical onboarding flow${flows.length === 1 ? "" : "s"}${apps.length ? ` for ${apps.join(" and ")}` : ""}. ${stages.length ? `It also contains the ${stages.join(", ")} design stages, with the source evidence still visible.` : "The source evidence remains visible for inspection."}`;
   }
   if (html.includes("data-e2e-market-landscape")) {
-    return "The committed artboard is a market-entry decision landscape. It separates observable market signals, strategic assumptions, and the three decision horizons without using app research.";
+    return "The committed canvas is a market-entry decision landscape. It separates observable market signals, strategic assumptions, and the three decision horizons without using app research.";
   }
   if (html.includes("data-e2e-spatial-map")) {
-    return "The committed artboard is a four-stage causal map from signal through evidence and interpretation to decision.";
+    return "The committed canvas is a four-stage causal map from signal through evidence and interpretation to decision.";
   }
-  if (html.includes("data-e2e-large-artboard")) {
-    return "The committed artboard is an expanded two-dimensional discovery landscape with distant but connected evidence, opportunity, and decision regions.";
+  if (html.includes("data-e2e-large-canvas")) {
+    return "The committed canvas is an expanded two-dimensional discovery landscape with distant but connected evidence, opportunity, and decision regions.";
   }
-  return "The artboard is currently a clean, empty working surface ready for research or design.";
+  return "The canvas is currently a clean, empty working surface ready for research or design.";
 }
 
 function requestedResearchTargets(message: string): string[] {
@@ -48,18 +48,18 @@ export async function POST(request: NextRequest) {
   if (message === "Keep routing until I stop") await new Promise((resolve) => setTimeout(resolve, 700));
   let decision: CanvasV2InteractionDecision;
   if (message === "Retry routing once") {
-    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "conversation", summary: "Recovered the routing request without changing the artboard.", answer: "The routing request recovered safely on its second attempt." };
-  } else if (message === "What is currently visible on this artboard?") {
-    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "inspect", summary: "Inspected the committed artboard without changing it.", answer: inspectAnswer(body.revision) };
+    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "conversation", summary: "Recovered the routing request without changing the canvas.", answer: "The routing request recovered safely on its second attempt." };
+  } else if (message === "What is currently visible on this canvas?") {
+    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "inspect", summary: "Inspected the committed canvas without changing it.", answer: inspectAnswer(body.revision) };
   } else if (message === "What can you help me with?") {
-    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "conversation", summary: "Answered in chat without using the artboard.", answer: "I can answer questions, inspect the visible artboard, research account evidence, or design and transform the canvas with each revision shown as it happens." };
+    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "conversation", summary: "Answered in chat without using the canvas.", answer: "I can answer questions, inspect the visible canvas, research account evidence, or design and transform the canvas with each revision shown as it happens." };
   } else if (body.selection?.nodeId) {
     decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "selection-transform", summary: `I’ll transform the selected ${body.selection.nodeId} element.`, canvasInstruction: `${message}\n\nSelected node: ${body.selection.nodeId}.` };
   } else {
     const researchTargets = requestedResearchTargets(message);
     decision = needsAccountResearch(message, researchTargets)
       ? { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "research-design", summary: "I’ll retrieve the relevant evidence visibly, compose the answer, and inspect each revision.", canvasInstruction: message, researchTargets, researchMode: "synthesis" }
-      : { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "transform", summary: "I’ll develop the requested visual answer directly on the living artboard and inspect the rendered result.", canvasInstruction: message };
+      : { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "transform", summary: "I’ll develop the requested visual answer directly on the living canvas and inspect the rendered result.", canvasInstruction: message };
   }
   return NextResponse.json({ decision });
 }

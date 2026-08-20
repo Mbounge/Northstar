@@ -58,7 +58,7 @@ const catalog: AppDataCatalog = { tenantId: "tenant", apps: ["Awin", "Whop"].map
   flows: [{ id: `flow:${name.toLowerCase()}:onboarding`, name: "Mobile onboarding", appName: name, platform: "mobile", sessionType: "onboarding", screens: [0, 1].map((index) => ({ id: `${name}-${index}`, name: `Screen ${index + 1}`, imageUrl: `https://evidence.test/${name}/${index}.png`, appName: name, flowName: "Mobile onboarding", index })) }],
 })) };
 
-function revision(html = '<main data-canvas-v2-node-id="artboard"></main>', evidence: Array<{ id: string; url: string; label: string; app?: string }> = []) {
+function revision(html = '<main data-canvas-v2-node-id="canvas"></main>', evidence: Array<{ id: string; url: string; label: string; app?: string }> = []) {
   return createCanvasV2CommittedRevision({ id: "revision", document: { html, css: "" }, evidence, createdAt: "2026-08-12T12:00:00.000Z" });
 }
 
@@ -88,11 +88,11 @@ test("production research is evidence-first and synthesis cannot complete on the
     screenCount: 2,
   });
 
-  const awinVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"></article></main>');
+  const awinVisible = revision('<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"></article></main>');
   const oneRemaining = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", awinVisible, ["Awin", "Whop"]);
   assert.equal(nextCanvasV2RequiredResearch(oneRemaining)?.appName, "Whop");
 
-  const bothVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"></article><article data-canvas-v2-canonical-flow="flow:whop:onboarding"></article></main>');
+  const bothVisible = revision('<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"></article><article data-canvas-v2-canonical-flow="flow:whop:onboarding"></article></main>');
   const grounded = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", bothVisible, ["Awin", "Whop"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "research" }]).permittedDecisions, ["edit"]);
   const refinement = canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }], { nextMoves: ["Develop the relationship"] });
@@ -158,7 +158,7 @@ test("a shallow stage and aggregate collection cannot satisfy a representative b
       { id: "flow:awin:representative", name: "Guided creator registration", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "path", taxonomyPath: ["Partner onboarding", "Guided creator registration"], descendantFlowCount: 1, screens: makeScreens("representative", 11) },
     ],
   }] };
-  const shallowVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:leaf"></article></main>');
+  const shallowVisible = revision('<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-canonical-flow="flow:awin:leaf"></article></main>');
   const index = buildCanvasV2ResearchCatalogIndex(coverageCatalog, "Build a representative executive comparison of Awin onboarding", shallowVisible, ["Awin"]);
   assert.equal(index.requirements[0]?.state, "unresolved");
   assert.deepEqual(index.requirements[0]?.adequateFlowIds, ["flow:awin:representative"]);
@@ -270,7 +270,7 @@ test("required research is selected from full catalog truth even when the bounde
 });
 
 test("required named apps remain unresolved until their evidence is visibly committed", () => {
-  const awinVisible = revision('<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"><img data-canvas-v2-evidence-id="screen:Awin-0" src="https://evidence.test/Awin/0.png"></article></main>', [{ id: "screen:Awin-0", url: "https://evidence.test/Awin/0.png", label: "Awin", app: "Awin" }]);
+  const awinVisible = revision('<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"><img data-canvas-v2-evidence-id="screen:Awin-0" src="https://evidence.test/Awin/0.png"></article></main>', [{ id: "screen:Awin-0", url: "https://evidence.test/Awin/0.png", label: "Awin", app: "Awin" }]);
   const index = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", awinVisible);
   assert.deepEqual(canvasV2MissingRequiredApps(index), ["Whop"]);
   assert.throws(() => resolveCanvasV2ResearchDecision(catalog, { schema: "canvas-v2.decision.v1", decision: "research", moveKind: "research", creativeDirection, spatialStrategy, reflection, appId: "app:awin", flowId: "flow:awin:onboarding", summary: "Again", expectedVisualResult: "Again" }, index.visibleFlowIds), /already visible/);
@@ -345,7 +345,7 @@ test("evidence metadata alone cannot impersonate a visibly committed flow", () =
 });
 
 test("later authored revisions cannot erase visible canonical research", () => {
-  const previous = { html: '<main data-canvas-v2-node-id="artboard"><article data-canvas-v2-node-id="flow-awin" data-canvas-v2-canonical-flow="flow:awin"><img data-canvas-v2-node-id="flow-awin-screen-1" data-canvas-v2-evidence-id="awin-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/awin.png"></article></main>', css: "" };
+  const previous = { html: '<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-node-id="flow-awin" data-canvas-v2-canonical-flow="flow:awin"><img data-canvas-v2-node-id="flow-awin-screen-1" data-canvas-v2-evidence-id="awin-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/awin.png"></article></main>', css: "" };
   const evidence = [{ id: "awin-1", url: "https://evidence.test/awin.png", label: "Awin screen" }];
   assert.deepEqual(validateCanvasV2EvidenceContinuity(previous, previous, evidence), []);
   const failures = validateCanvasV2EvidenceContinuity(previous, { html: "<main></main>", css: "" }, evidence).join(" ");
@@ -372,8 +372,10 @@ test("the production loop materializes research before another model turn and re
   assert.match(hook, /settleCanvasV2ResearchRequirement/);
   assert.match(hook, /id\("research-revision"\)/);
   assert.match(hook, /kind: pendingActionKind/);
-  assert.match(hook, /artboard is still preparing its first visual observation/);
-  assert.match(workspace, /left-\[max\(50%,770px\)\]/);
+  assert.match(hook, /canvas is still preparing its first visual observation/);
+  assert.match(workspace, /bottom-5 left-1\/2/);
+  assert.match(workspace, /bottom-24[^\n]*2xl:bottom-5/);
+  assert.match(workspace, /Collapse North Star panel/);
   assert.match(loop, /CANVAS_V2_MAX_CONTEXT_STEPS = 24/);
   assert.doesNotMatch(loop, /edit-limit-reached/);
   assert.doesNotMatch(`${route}\n${hook}`, /@\/lib\/canvas-ai\//);

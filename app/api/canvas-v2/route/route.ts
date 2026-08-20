@@ -25,9 +25,9 @@ export const dynamic = "force-dynamic";
 
 const SYSTEM = `You are the interaction router and conversational voice for North Star Canvas V2.
 Choose exactly one route based on what the user is asking to happen now:
-- conversation: answer normally; the user is not asking to read or change the artboard.
-- inspect: answer from the visible artboard without changing it.
-- transform: the user wants the artboard created, edited, arranged, annotated, explained visually, or otherwise transformed without account research.
+- conversation: answer normally; the user is not asking to read or change the canvas.
+- inspect: answer from the visible canvas without changing it.
+- transform: the user wants the canvas created, edited, arranged, annotated, explained visually, or otherwise transformed without account research.
 - research-design: the requested visual artifact needs product/app evidence, flows, screenshots, icons, or account research before or during design.
 - selection-transform: the user explicitly wants the currently selected element changed.
 Route by semantic intent, not by word matching. Mentioning an app or the canvas does not by itself request a visual mutation. Questions that can be answered in chat stay in chat. Never claim to have changed or researched anything in this routing response.
@@ -66,12 +66,13 @@ export async function POST(request: NextRequest) {
       revision?: CanvasV2ArtifactRevision;
       observation?: CanvasV2RenderObservation;
       selection?: CanvasV2InspectableElement;
+      selections?: CanvasV2InspectableElement[];
       history?: unknown;
       modelSelection?: unknown;
     };
     const message = typeof body.message === "string" ? body.message.trim() : "";
     if (!message || message.length > 8_000) throw new Error("A valid message is required.");
-    if (!body.revision) throw new Error("The committed artboard revision is required.");
+    if (!body.revision) throw new Error("The committed canvas revision is required.");
     if (body.observation && body.observation.revisionId !== body.revision.id) throw new Error("The observation does not belong to the committed revision.");
     const modelSelection = parseCanvasV2ModelSelection(body.modelSelection);
     const modelChain = canvasV2DesignModelChain(modelSelection);
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest) {
     const context = {
       message,
       history,
-      artboard: {
+      canvas: {
         revisionId: body.revision.id,
         isEmpty: !body.revision.document.html.replace(/<[^>]+>/g, "").trim(),
         source: body.revision.document,
@@ -105,11 +106,12 @@ export async function POST(request: NextRequest) {
           spatial: body.observation.spatial,
         } : undefined,
         selection: body.selection,
+        selections: body.selections?.slice(0, 40),
       },
     };
     const screenshot = imagePart(body.observation);
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: JSON.stringify(context) }];
-    if (screenshot) parts.push({ text: "Current rendered artboard:" }, screenshot);
+    if (screenshot) parts.push({ text: "Current rendered canvas:" }, screenshot);
     const provider = await fetchCanvasV2ProviderJsonWithModelChain<unknown>({
       models: modelChain,
       requestSignal: request.signal,
@@ -118,7 +120,7 @@ export async function POST(request: NextRequest) {
       validatePayload: (candidatePayload, model) => {
         const text = extractCanvasV2StructuredText(candidatePayload, model);
         if (!text) throw new Error("North Star router returned no decision.");
-        parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection);
+        parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection, body.selections);
       },
       requestForModel: (model, correction) => {
         const providerRequest = buildCanvasV2StructuredProviderRequest({
@@ -138,7 +140,7 @@ export async function POST(request: NextRequest) {
     try {
       const text = extractCanvasV2StructuredText(payload, provider.model);
       if (!text) throw new Error("North Star router returned no decision.");
-      return NextResponse.json({ decision: parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection), model: provider.model, fallbackUsed: provider.fallbackUsed, providerAttempts: provider.attempts });
+      return NextResponse.json({ decision: parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection, body.selections), model: provider.model, fallbackUsed: provider.fallbackUsed, providerAttempts: provider.attempts });
     } catch (error) {
       throw invalidCanvasV2ProviderResponse(error instanceof Error ? error.message : "North Star router returned an invalid decision.");
     }

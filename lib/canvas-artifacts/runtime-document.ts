@@ -5603,7 +5603,13 @@ function buildWebCanvasArtifactRuntimeDocument(artifact: CanvasCodeArtifactPaylo
     queueAuthoredRelationResolution();
     queueContentSize();
   });
-  observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+  // A srcdoc revision can replace its document between the root lookup and
+  // observer installation. Never let a stale cross-document value surface as
+  // a runtime exception in the canvas; the next loaded revision installs its
+  // own observer against the live element.
+  if (root?.nodeType === Node.ELEMENT_NODE && root.ownerDocument === document) {
+    observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+  }
   relationResizeObserver = new ResizeObserver(() => {
     queueAuthoredRelationResolution();
     queueContentSize();
@@ -6534,7 +6540,7 @@ function buildLegacyCanvasArtifactRuntimeDocument(
   });
 
   const legacyRoot = document.getElementById("northstar-artifact-root");
-  if (legacyRoot) {
+  if (legacyRoot?.nodeType === Node.ELEMENT_NODE && legacyRoot.ownerDocument === document) {
     new ResizeObserver(queueContentSize).observe(legacyRoot);
     new MutationObserver(queueContentSize).observe(legacyRoot, { childList: true, subtree: true, attributes: true, characterData: true });
   }

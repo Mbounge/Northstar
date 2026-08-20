@@ -50,12 +50,13 @@ export function parseCanvasV2InteractionDecision(
   value: unknown,
   userMessage: string,
   selection?: CanvasV2InspectableElement,
+  selections?: readonly CanvasV2InspectableElement[],
 ): CanvasV2InteractionDecision {
   if (!value || typeof value !== "object") throw new Error("Canvas V2 router returned an invalid decision.");
   const input = value as Record<string, unknown>;
   if (typeof input.route !== "string" || !ROUTES.has(input.route as CanvasV2InteractionRoute)) throw new Error("Canvas V2 router returned an unknown route.");
   const route = input.route as CanvasV2InteractionRoute;
-  if (route === "selection-transform" && !selection) throw new Error("Select an artboard element before requesting a selection-specific change.");
+  if (route === "selection-transform" && !selection) throw new Error("Select an canvas element before requesting a selection-specific change.");
   const summary = requiredString(input.summary, "a concise route summary", 600);
   if (route === "conversation" || route === "inspect") {
     return {
@@ -70,7 +71,8 @@ export function parseCanvasV2InteractionDecision(
     : userMessage.trim().slice(0, 8_000);
   if (!canvasInstruction) throw new Error("Canvas V2 router requires a canvas instruction.");
   if (route === "selection-transform" && selection) {
-    canvasInstruction += `\n\nTransform only the selected stable canvas node unless the requested result requires a small coherent parent adjustment. Selected node: ${JSON.stringify(selection)}.`;
+    const activeSelection = selections?.length ? selections : [selection];
+    canvasInstruction += `\n\nTransform only the selected stable canvas node${activeSelection.length === 1 ? "" : "s"} as one coherent user selection unless the requested result requires a small coherent parent adjustment. Preserve their human-authored geometry unless the request explicitly changes it. Selected objects: ${JSON.stringify(activeSelection)}.`;
   }
   return {
     schema: CANVAS_V2_INTERACTION_SCHEMA,
@@ -84,6 +86,6 @@ export function parseCanvasV2InteractionDecision(
   };
 }
 
-export function canvasV2RouteMutatesArtboard(route: CanvasV2InteractionRoute): boolean {
+export function canvasV2RouteMutatesCanvas(route: CanvasV2InteractionRoute): boolean {
   return route === "transform" || route === "research-design" || route === "selection-transform";
 }

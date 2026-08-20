@@ -2,10 +2,13 @@ import { readCanvasV2CanonicalFlowManifests } from "@/lib/canvas-v2/evidence-aut
 import { findCanvasV2SourceNodeRange } from "@/lib/canvas-v2/source-patch";
 import { buildCanvasV2EvidenceCopyHandles } from "@/lib/canvas-v2/evidence-handles";
 import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/canvas-v2/types";
+import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
+import { buildCanvasV2SceneObjectInventory } from "@/lib/canvas-v2/scene-transaction";
 
 const MAX_SOURCE_OUTLINE = 42_000;
 const MAX_CSS_CONTEXT = 32_000;
 const MAX_SPATIAL_NODES = 90;
+const MAX_USER_EDITS = 40;
 
 function compilerOwnedRailFurniture(nodeId: string | undefined): boolean {
   return Boolean(nodeId && /-segment-[a-z0-9-]+-label$/i.test(nodeId));
@@ -13,6 +16,24 @@ function compilerOwnedRailFurniture(nodeId: string | undefined): boolean {
 
 function sourceAttribute(attributes: string, name: string): string | undefined {
   return new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "i").exec(attributes)?.[1];
+}
+
+function canvasV2UserEditLedger(html: string) {
+  const edits: Array<{ nodeId: string; kinds: string[]; version: number; rotation: number; group: boolean }> = [];
+  for (const match of html.matchAll(/<([a-z][\w:-]*)\b([^>]*\bdata-canvas-v2-user-edited\s*=\s*["'][^"']+["'][^>]*)>/gi)) {
+    const nodeId = sourceAttribute(match[2], "data-canvas-v2-node-id");
+    const kinds = sourceAttribute(match[2], "data-canvas-v2-user-edited")?.split(/\s+/).filter(Boolean) ?? [];
+    if (!nodeId || !kinds.length) continue;
+    edits.push({
+      nodeId,
+      kinds,
+      version: Number(sourceAttribute(match[2], "data-canvas-v2-edit-version")) || 1,
+      rotation: Number(sourceAttribute(match[2], "data-canvas-v2-rotation")) || 0,
+      group: sourceAttribute(match[2], "data-canvas-v2-group") === "true",
+    });
+    if (edits.length >= MAX_USER_EDITS) break;
+  }
+  return edits;
 }
 
 /**
@@ -90,6 +111,21 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
   const evidenceById = new Map(revision.evidence.map((asset) => [asset.id, asset]));
   const copyHandleByEvidenceId = new Map(buildCanvasV2EvidenceCopyHandles(revision.document).map((item) => [item.evidenceId, item.handle]));
   return {
+    workspace: {
+      schema: CANVAS_V2_WORKSPACE.schema,
+      bounds: { x: 0, y: 0, width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height },
+      safeMargin: CANVAS_V2_WORKSPACE.documentMargin,
+      contract: "The board is one finite coordinate space. Compose inside it; do not create an inner canvas. Preserve user-authored geometry and content unless the user explicitly asks you to change it.",
+      userEdits: canvasV2UserEditLedger(revision.document.html),
+      objectGraph: buildCanvasV2SceneObjectInventory(revision.document).slice(0, 220),
+      lastSceneTransaction: revision.sceneTransaction ? {
+        origin: revision.sceneTransaction.origin,
+        targetIslandId: revision.sceneTransaction.targetIslandId,
+        stylesheetChanged: revision.sceneTransaction.stylesheetChanged,
+        mutations: revision.sceneTransaction.mutations.slice(0, 120),
+      } : undefined,
+      authorshipContract: "Every listed object has stable identity and remains directly selectable after commit. Preserve userEdited objects exactly. Develop an existing island through its identified descendants; create new objects only inside the declared island transaction.",
+    },
     source: {
       htmlOutline: compactSource(revision),
       cssContext: compactCss(revision.document.css),
@@ -137,9 +173,9 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
             bounds: item.bounds,
             canonicalPeerHeight: item.canonicalPeerHeight,
             scaleVsCanonicalHeight: item.scaleVsCanonicalHeight,
-            artboardWidthShare: item.artboardWidthShare,
-            artboardHeightShare: item.artboardHeightShare,
-            artboardAreaShare: item.artboardAreaShare,
+            canvasWidthShare: item.canvasWidthShare,
+            canvasHeightShare: item.canvasHeightShare,
+            canvasAreaShare: item.canvasAreaShare,
             designRegionNodeId: item.designRegionNodeId,
             designRegionWidthShare: item.designRegionWidthShare,
             designRegionHeightShare: item.designRegionHeightShare,
@@ -153,7 +189,7 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
         authoredAnnotations: (observation.spatial.authoredAnnotations ?? []).slice(0, 40),
         authoredSurface: {
           ...(observation.spatial.authoredSurface ?? {
-            artboardBounds: observation.contentBounds,
+            canvasBounds: observation.contentBounds,
             authoredAreaShare: 0,
             readingOrder: [],
             zones: [],

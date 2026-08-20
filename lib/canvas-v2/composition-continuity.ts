@@ -80,7 +80,7 @@ export function compileCanvasV2CompositionState(input: {
   const previousById = new Map(input.previous?.regions.map((region) => [region.nodeId, region]) ?? []);
   const dominantAnchor = ids.includes(input.previous?.dominantAnchor ?? "")
     ? input.previous!.dominantAnchor
-    : ids.find((id) => !/^(?:flow-|canonical-)/i.test(id)) ?? ids[0] ?? "artboard";
+    : ids.find((id) => !/^(?:flow-|canonical-)/i.test(id)) ?? ids[0] ?? "canvas";
   const regions = ids.map((nodeId) => {
     const previous = previousById.get(nodeId);
     const attributes = attributesById.get(nodeId);
@@ -155,7 +155,7 @@ export function reconcileCanvasV2CompositionState(
   });
   const fallbackAnchor = regions[0]?.nodeId
     ?? unique(state.readingOrder)[0]
-    ?? (identified.has("artboard") ? "artboard" : Array.from(identified)[0]);
+    ?? (identified.has("canvas") ? "canvas" : Array.from(identified)[0]);
   if (!fallbackAnchor) return state;
   const nextTerritory = {
     ...state.nextTerritory,

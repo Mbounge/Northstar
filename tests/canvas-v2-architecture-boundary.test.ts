@@ -14,7 +14,7 @@ const prohibitedImports = [
   "@/lib/canvas-v2/testing/",
 ];
 const benchmarkLanguage = [
-  "NORTHSTAR_ARTBOARD_BENCHMARK_OBJECTIVES",
+  "NORTHSTAR_CANVAS_BENCHMARK_OBJECTIVES",
   "Hello World 2",
   "first Awin screenshot",
   "first Whop screenshot",

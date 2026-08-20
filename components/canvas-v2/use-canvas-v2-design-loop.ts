@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import {
   CANVAS_V2_MAX_CONTEXT_STEPS,
@@ -29,6 +29,10 @@ import type {
   CanvasV2RenderObservation,
 } from "@/lib/canvas-v2/types";
 import {
+  assertCanvasV2SceneTransaction,
+  compileCanvasV2SceneTransaction,
+} from "@/lib/canvas-v2/scene-transaction";
+import {
   assertCanvasV2ArtifactDocument,
   validateCanvasV2EvidenceBindings,
   validateCanvasV2EvidenceContinuity,
@@ -50,6 +54,7 @@ import {
 } from "@/lib/canvas-v2/research-director";
 import type { CanvasV2ResearchMode } from "@/lib/canvas-v2/interaction-router";
 import type { CanvasV2ModelSelection } from "@/lib/canvas-v2/model-catalog";
+import type { CanvasV2NativeSceneDocument } from "@/lib/canvas-v2/native-scene";
 
 interface PendingManualEdit {
   summary: string;
@@ -65,13 +70,16 @@ type PendingCanvasV2Edit = Omit<CanvasV2EditDecision, "moveKind"> & {
 };
 
 const STARTER_DOCUMENT = {
-  html: `<main class="northstar-artboard" data-canvas-v2-node-id="artboard" aria-label="Empty North Star artboard"></main>`,
-  css: `.northstar-artboard { position:relative; box-sizing:border-box; width:1680px; min-width:1680px; min-height:945px; overflow:visible; padding:56px; background:#fff; color:#151620; }`,
+  // The workspace is rendered and navigated by the host. The initial artifact
+  // therefore contains metadata only—never a second visible rectangle. Model
+  // and human authored objects are body-level canvas objects from the start.
+  html: `<template data-canvas-v2-node-id="canvas-root" data-canvas-v2-workspace-root="true" aria-label="North Star canvas metadata"></template>`,
+  css: ``,
 };
 const MAX_RENDER_REPAIRS = 3;
 
 function summarizeRenderedIntegrityFailures(failures: readonly string[]): string {
-  const outside = failures.filter((failure) => failure.includes("inside the rendered artboard"));
+  const outside = failures.filter((failure) => failure.includes("inside the rendered canvas"));
   const clipped = failures.filter((failure) => failure.includes("clipped by its layout"));
   const hidden = failures.filter((failure) => failure.includes("not visibly rendered"));
   const distorted = failures.filter((failure) => failure.includes("aspect ratio") || failure.includes("cropping presentation"));
@@ -80,7 +88,7 @@ function summarizeRenderedIntegrityFailures(failures: readonly string[]): string
   const clippedAnalysis = failures.filter((failure) => failure.includes("Authored design region") && failure.includes("clips"));
   const detachedRelationships = failures.filter((failure) => failure.includes("relationship") && failure.includes("anchor"));
   const diagnoses = [
-    outside.length ? `${outside.length} canonical evidence assets extended beyond the rendered artboard because the candidate constrained the intrinsic evidence width` : "",
+    outside.length ? `${outside.length} canonical evidence assets extended beyond the rendered canvas because the candidate constrained the intrinsic evidence width` : "",
     clipped.length ? `${clipped.length} canonical evidence assets were clipped by authored layout` : "",
     hidden.length ? `${hidden.length} grounded assets were no longer visibly rendered` : "",
     distorted.length ? `${distorted.length} grounded assets lost their natural presentation` : "",
@@ -144,7 +152,7 @@ function rejectedCandidateContext(
     }];
   });
   return {
-    artboardGeometry: {
+    canvasGeometry: {
       contentBounds: observation.contentBounds,
       ...(observation.spatial.authoredSurface?.canonicalLaneBounds
         ? { canonicalLaneBounds: observation.spatial.authoredSurface.canonicalLaneBounds }
@@ -179,13 +187,19 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const [manualError, setManualError] = useState<string>();
   const [manualNotice, setManualNotice] = useState<string>();
   const [observations, setObservations] = useState<Record<string, CanvasV2RenderObservation>>({});
+  const [nativeScene, setNativeScene] = useState<CanvasV2NativeSceneDocument>();
   const observationsRef = useRef<Record<string, CanvasV2RenderObservation>>({});
   const [instruction, setInstruction] = useState("");
   const [loop, setLoop] = useState<CanvasV2LoopState>();
   const loopRef = useRef<CanvasV2LoopState | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
   const requestController = useRef<AbortController | undefined>(undefined);
-  // The public artboard is committed truth only. Automatic and manual
+  // Resize observers and iframe load/settle events may publish the same
+  // candidate observation more than once before React commits the next state.
+  // Settlement is a revision transaction: exactly one observation may accept,
+  // reject, or repair a candidate revision.
+  const settledCandidateRevisionIds = useRef(new Set<string>());
+  // The public canvas is committed truth only. Automatic and manual
   // candidates render in the workspace's off-screen inspection frame and are
   // promoted here only after every rendered-integrity check passes. This
   // prevents rejected geometry from flashing and disappearing in front of the
@@ -193,6 +207,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const displayed = committed;
   const running = canvasV2LoopIsActive(loop);
   const applyingManualEdit = Boolean(pendingManualEdit && candidate);
+  const receiveNativeScene = useCallback((next: CanvasV2NativeSceneDocument) => {
+    if (next.revisionId !== committed.id) return;
+    // The compiler establishes native truth for a newly committed AI source.
+    // A direct manual mutation then updates that scene synchronously. Any
+    // later compiler callback for the *same* revision is verification only;
+    // it may never replace the already-authoritative native coordinates.
+    setNativeScene((current) => current?.revisionId === next.revisionId ? current : next);
+  }, [committed.id]);
 
   const publishLoop = (next: CanvasV2LoopState | undefined) => {
     loopRef.current = next;
@@ -275,6 +297,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         const flow = payload.research?.flows[0];
         if (!app || !flow || !payload.research) throw new Error("Canvas V2 returned an incomplete research action.");
         const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: payload.research.evidence });
+        const sceneTransaction = compileCanvasV2SceneTransaction({
+          origin: "research",
+          baseRevisionId: revision.id,
+          previous: revision.document,
+          next: insertion.document,
+        });
         setPendingEdit({
           schema: payload.decision.schema,
           decision: "edit",
@@ -286,14 +314,37 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
           document: insertion.document,
           summary: payload.decision.summary,
           expectedVisualResult: payload.decision.expectedVisualResult,
+          sceneTransaction,
         });
         setPendingActionKind("research");
         setPendingResearch({ appId: payload.decision.appId, flowId: payload.decision.flowId });
-        setCandidate(createCanvasV2CandidateRevision({ id: id("research-revision"), parent: commitParent, document: insertion.document, evidence: insertion.evidence, createdAt: new Date().toISOString() }));
+        setCandidate(createCanvasV2CandidateRevision({ id: id("research-revision"), parent: commitParent, document: insertion.document, evidence: insertion.evidence, createdAt: new Date().toISOString(), sceneTransaction }));
         publishLoop({ ...loopWithProvider, status: "rendering", retry: undefined, researchStatus: payload.researchStatus });
         return;
       }
-      setPendingEdit(payload.decision);
+      const responseSceneTransaction = payload.decision.sceneTransaction ?? compileCanvasV2SceneTransaction({
+        origin: "northstar",
+        baseRevisionId: revision.id,
+        previous: revision.document,
+        next: payload.decision.document,
+        execution: payload.decision.islandExecution,
+      });
+      assertCanvasV2SceneTransaction({
+        transaction: responseSceneTransaction,
+        baseRevisionId: revision.id,
+        previous: revision.document,
+        next: payload.decision.document,
+      });
+      const committedSceneTransaction = revision.id === commitParent.id
+        ? responseSceneTransaction
+        : compileCanvasV2SceneTransaction({
+            origin: "northstar",
+            baseRevisionId: commitParent.id,
+            previous: commitParent.document,
+            next: payload.decision.document,
+            execution: payload.decision.islandExecution,
+          });
+      setPendingEdit({ ...payload.decision, sceneTransaction: committedSceneTransaction });
       setPendingActionKind("design");
       setPendingResearch(undefined);
       setCandidate(createCanvasV2CandidateRevision({
@@ -302,6 +353,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         document: payload.decision.document,
         evidence: payload.evidence,
         createdAt: new Date().toISOString(),
+        sceneTransaction: committedSceneTransaction,
       }));
       publishLoop({ ...loopWithProvider, status: "rendering", retry: undefined, researchStatus: payload.researchStatus });
     } catch (requestError) {
@@ -341,7 +393,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     publishLoop(nextLoop);
     const observation = currentObservation ?? observationsRef.current[committed.id];
     if (!observation) {
-      publishLoop(failCanvasV2Loop(nextLoop, "The artboard is still preparing its first visual observation. Try again in a moment."));
+      publishLoop(failCanvasV2Loop(nextLoop, "The canvas is still preparing its first visual observation. Try again in a moment."));
       activeRunId.current = undefined;
       return nextLoop.id;
     }
@@ -355,7 +407,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       setCandidate(undefined);
       setPendingManualEdit(undefined);
       setManualError(undefined);
-      setManualNotice("Stopped the uncommitted manual revision. The latest committed artboard remains visible.");
+      setManualNotice("Stopped the uncommitted manual revision. The latest committed canvas remains visible.");
       return;
     }
     if (!activeLoop || !canvasV2LoopIsActive(activeLoop)) return;
@@ -369,8 +421,19 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     publishLoop(stopCanvasV2Loop(activeLoop));
   };
 
-  const applyManualDocument = (document: CanvasV2ArtifactDocument, summary: string, evidence?: readonly CanvasV2EvidenceAsset[]): boolean => {
-    if (running || candidate || !observationsRef.current[committed.id]) return false;
+  const applyManualDocument = (
+    document: CanvasV2ArtifactDocument,
+    summary: string,
+    evidence?: readonly CanvasV2EvidenceAsset[],
+    nativeSceneRevision?: CanvasV2NativeSceneDocument,
+  ): boolean => {
+    // Native object edits already carry measured, finite-canvas geometry. They
+    // do not need to wait for the compatibility HTML compiler to rediscover
+    // geometry the native scene owns. Keeping them in the candidate pipeline
+    // made the canvas look ready while a hidden transaction still rejected a
+    // quick follow-up resize/group action. Validate source safety, then commit
+    // native truth synchronously; the off-screen compiler remains a verifier.
+    if (running || candidate || (!nativeSceneRevision && !observationsRef.current[committed.id])) return false;
     try {
       const safeDocument = assertCanvasV2ArtifactDocument(document);
       const nextEvidence = evidence ?? committed.evidence;
@@ -385,9 +448,22 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         document: safeDocument,
         evidence: nextEvidence,
         createdAt: new Date().toISOString(),
+        sceneTransaction: compileCanvasV2SceneTransaction({
+          origin: "user",
+          baseRevisionId: committed.id,
+          previous: committed.document,
+          next: safeDocument,
+        }),
       });
       setManualError(undefined);
       setManualNotice(undefined);
+      if (nativeSceneRevision) {
+        const nextCommitted = commitCanvasV2Candidate({ candidate: nextCandidate, expectedParentId: committed.id });
+        setNativeScene({ ...nativeSceneRevision, revisionId: nextCommitted.id });
+        acceptCommittedRevision(nextCommitted);
+        setManualNotice(summary);
+        return true;
+      }
       setPendingManualEdit({ summary });
       setCandidate(nextCandidate);
       return true;
@@ -400,8 +476,31 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const receiveObservation = (observation: CanvasV2RenderObservation) => {
     observationsRef.current = { ...observationsRef.current, [observation.revisionId]: observation };
     setObservations((current) => ({ ...current, [observation.revisionId]: observation }));
+    if (candidate && observation.revisionId === candidate.id) {
+      if (settledCandidateRevisionIds.current.has(candidate.id)) return;
+      settledCandidateRevisionIds.current.add(candidate.id);
+    }
     if (candidate && !pendingManualEdit && activeRunId.current !== loop?.id) return;
     if (candidate && observation.revisionId === candidate.id) {
+      if (pendingManualEdit) {
+        // Human-authored geometry is canvas truth once the candidate renders.
+        // The source-level checks in applyManualDocument already protect
+        // evidence identity, provenance, and continuity. Re-running the AI's
+        // composition-quality rules here used to reject legitimate direct
+        // manipulation—most visibly moving or resizing a canonical evidence
+        // screen because it no longer formed the AI-authored rail. Grounded
+        // evidence remains protected from deletion, but its placement, size,
+        // fit, rotation, and presentation belong to the user.
+        try {
+          acceptCommittedRevision(commitCanvasV2Candidate({ candidate, expectedParentId: committed.id }));
+          setManualNotice(pendingManualEdit.summary);
+        } catch (error) {
+          setManualError(error instanceof Error ? error.message : "The manual revision could not be committed.");
+        }
+        setCandidate(undefined);
+        setPendingManualEdit(undefined);
+        return;
+      }
       const integrityFailures = [
         ...validateCanvasV2RenderedEvidenceIntegrity(candidate.document, observation),
         ...validateCanvasV2RenderedAnalysisEvidenceScale(observation),
@@ -417,10 +516,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         setPendingEdit(undefined);
         setPendingActionKind("design");
         setPendingResearch(undefined);
-        if (pendingManualEdit) {
-          setPendingManualEdit(undefined);
-          setManualError(message);
-        } else if (loop?.status === "rendering") {
+        if (loop?.status === "rendering") {
           const repairAttempt = (loop.renderRepair?.attempt ?? 0) + 1;
           if (repairAttempt <= MAX_RENDER_REPAIRS) {
             const repairLoop: CanvasV2LoopState = {
@@ -447,17 +543,6 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         }
         return;
       }
-    }
-    if (candidate && pendingManualEdit && observation.revisionId === candidate.id) {
-      try {
-        acceptCommittedRevision(commitCanvasV2Candidate({ candidate, expectedParentId: committed.id }));
-        setManualNotice(pendingManualEdit.summary);
-      } catch (error) {
-        setManualError(error instanceof Error ? error.message : "The manual revision could not be committed.");
-      }
-      setCandidate(undefined);
-      setPendingManualEdit(undefined);
-      return;
     }
     if (!candidate || !pendingEdit || !loop || loop.status !== "rendering" || observation.revisionId !== candidate.id) return;
     const nextCommitted = commitCanvasV2Candidate({ candidate, expectedParentId: committed.id });
@@ -538,6 +623,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     start,
     stop,
     applyManualDocument,
+    nativeScene: nativeScene?.revisionId === committed.id ? nativeScene : undefined,
+    receiveNativeScene,
     undo: () => travelHistory(-1),
     redo: () => travelHistory(1),
     receiveObservation,

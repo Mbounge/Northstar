@@ -1,22 +1,27 @@
 "use client";
 
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   AppWindow,
-  BookOpen,
-  Check,
+  Bold,
+  ChevronDown,
   Copy,
   EyeOff,
   FileText,
-  Grid2X2,
   Hand,
-  Home,
-  Images,
+  Group,
+  Image as ImageIcon,
+  Italic,
   Layers3,
   Lock,
-  LocateFixed,
+  Maximize2,
   MessageSquare,
   Minus,
+  Moon,
   MousePointer2,
+  Palette,
   Plus,
   Shapes,
   Square,
@@ -25,52 +30,226 @@ import {
   Type,
   Undo2,
   Redo2,
+  RotateCw,
+  Settings2,
+  Ungroup,
   Unlock,
+  Sun,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent } from "react";
 
-import { CanvasV2ArtboardPreview } from "@/components/canvas-v2/artboard-preview";
+import { CanvasV2CanvasScene, type CanvasV2TransientGeometry } from "@/components/canvas-v2/canvas-scene";
 import { CanvasV2ChatPanel } from "@/components/canvas-v2/canvas-v2-chat-panel";
 import { CanvasV2ResearchPanel } from "@/components/canvas-v2/canvas-v2-research-panel";
 import { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
+import { useTheme } from "@/components/theme-provider";
 import { insertCanvasV2EvidenceAsset } from "@/lib/canvas-v2/evidence-insertion";
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
 import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
-import { CANVAS_V2_MIN_ARTBOARD, type CanvasV2ArtboardGeometry } from "@/lib/canvas-v2/artboard-geometry";
-import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
+import { CANVAS_V2_MIN_CANVAS, type CanvasV2CanvasGeometry } from "@/lib/canvas-v2/canvas-geometry";
+import type { CanvasV2InspectableElement, CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
+import { readCanvasV2BoardObjectGraph } from "@/lib/canvas-v2/board-object-graph";
 import {
   applyCanvasV2ManualMutation,
   describeCanvasV2ManualMutation,
-  listCanvasV2SourceNodes,
   type CanvasV2ManualMutation,
+  type CanvasV2EditableStyleProperty,
 } from "@/lib/canvas-v2/manual-mutations";
+import {
+  applyCanvasV2NativeSceneMutation,
+  canvasV2NativeSceneSelectionContainsTarget,
+  serializeCanvasV2NativeScene,
+  type CanvasV2NativeSceneDocument,
+} from "@/lib/canvas-v2/native-scene";
+import {
+  canvasV2BoundsIntersect,
+  canvasV2RotationFromPointer,
+  scaleCanvasV2FontSize,
+  scaleCanvasV2ObjectBounds,
+  snapCanvasV2ObjectDelta,
+  translateCanvasV2ObjectBounds,
+  unionCanvasV2ObjectBounds,
+  type CanvasV2SnapGuide,
+} from "@/lib/canvas-v2/object-interaction";
 import { discardObsoleteCanvasV2LocalState } from "@/lib/canvas-v2/session-lifecycle";
+import {
+  CANVAS_V2_WORKSPACE,
+  CANVAS_V2_EMPTY_INSETS,
+  canvasV2FrameableSceneBounds,
+  centeredCanvasV2WorkspaceOrigin,
+  constrainCanvasV2WorkspaceViewport,
+  fitCanvasV2WorkspaceBounds,
+  resizeCanvasV2WorkspaceBounds,
+  translateCanvasV2WorkspaceBounds,
+  zoomCanvasV2WorkspaceAtPoint,
+  type CanvasV2ResizeHandle,
+  type CanvasV2WorkspaceInsets,
+  type CanvasV2WorkspaceViewport,
+} from "@/lib/canvas-v2/workspace-coordinate-space";
 
 type Panel = "chat" | "shapes" | "apps";
 type CanvasTool = "select" | "pan";
 
-interface Viewport {
-  x: number;
-  y: number;
-  scale: number;
-}
-
 interface DirectGesture {
-  kind: "move" | "resize";
+  kind: "move" | "resize" | "rotate";
+  handle?: CanvasV2ResizeHandle;
   pointerId: number;
   startX: number;
   startY: number;
   original: CanvasV2InspectableElement["bounds"];
+  originals: CanvasV2InspectableElement[];
+  startRotation?: number;
+  draftBounds: CanvasV2InspectableElement["bounds"];
+  draftElementBounds: Record<string, CanvasV2InspectableElement["bounds"]>;
+  draftRotations: Record<string, number>;
+  clickSelection?: CanvasV2InspectableElement[];
 }
 
-const NAVIGATION = [
-  { label: "Home", icon: Home },
-  { label: "Chat", icon: MessageSquare },
-  { label: "Canvas", icon: Grid2X2, active: true },
-  { label: "References", icon: Images },
-  { label: "Library", icon: BookOpen },
+interface MarqueeGesture {
+  pointerId: number;
+  start: { x: number; y: number };
+  current: { x: number; y: number };
+  screenStart: { x: number; y: number };
+  screenCurrent: { x: number; y: number };
+  additive: boolean;
+}
+
+function sameInspectableElements(
+  current: readonly CanvasV2InspectableElement[],
+  next: readonly CanvasV2InspectableElement[],
+): boolean {
+  if (current.length !== next.length) return false;
+  return current.every((item, index) => {
+    const candidate = next[index];
+    return candidate?.nodeId === item.nodeId
+      && candidate.parentNodeId === item.parentNodeId
+      && candidate.hidden === item.hidden
+      && candidate.locked === item.locked
+      && candidate.rotation === item.rotation
+      && candidate.textPreview === item.textPreview
+      && candidate.altText === item.altText
+      && candidate.visualStyle?.color === item.visualStyle?.color
+      && candidate.visualStyle?.backgroundColor === item.visualStyle?.backgroundColor
+      && candidate.visualStyle?.borderColor === item.visualStyle?.borderColor
+      && candidate.visualStyle?.fontFamily === item.visualStyle?.fontFamily
+      && candidate.visualStyle?.fontSize === item.visualStyle?.fontSize
+      && candidate.visualStyle?.fontWeight === item.visualStyle?.fontWeight
+      && candidate.visualStyle?.fontStyle === item.visualStyle?.fontStyle
+      && candidate.visualStyle?.textAlign === item.visualStyle?.textAlign
+      && candidate.visualStyle?.objectFit === item.visualStyle?.objectFit
+      && candidate.bounds.x === item.bounds.x
+      && candidate.bounds.y === item.bounds.y
+      && candidate.bounds.width === item.bounds.width
+      && candidate.bounds.height === item.bounds.height;
+  });
+}
+
+function topLevelCanvasSelection(elements: readonly CanvasV2InspectableElement[]): CanvasV2InspectableElement[] {
+  const candidates = elements.filter((element) => {
+    const { x, y, width, height } = element.bounds;
+    return element.nodeId !== "canvas"
+      && element.kind !== "root"
+      && !element.hidden
+      && Number.isFinite(x)
+      && Number.isFinite(y)
+      && Number.isFinite(width)
+      && Number.isFinite(height)
+      && width > 0
+      && height > 0
+      && canvasV2BoundsIntersect(element.bounds, {
+        x: 0,
+        y: 0,
+        width: CANVAS_V2_WORKSPACE.width,
+        height: CANVAS_V2_WORKSPACE.height,
+      });
+  });
+  const candidateIds = new Set(candidates.map((element) => element.nodeId));
+  return candidates.filter((element) => !element.parentNodeId || !candidateIds.has(element.parentNodeId));
+}
+
+function synchronizeSelectionWithNativeScene(
+  current: readonly CanvasV2InspectableElement[],
+  scene: CanvasV2NativeSceneDocument,
+): CanvasV2InspectableElement[] {
+  const byId = new Map(scene.nodes.map((node) => [node.id, node]));
+  const bySourceId = new Map(scene.nodes.flatMap((node) => node.sourceNodeId ? [[node.sourceNodeId, node] as const] : []));
+  const absoluteBounds = (nodeId: string) => {
+    const node = byId.get(nodeId);
+    if (!node) return undefined;
+    let x = node.geometry.x;
+    let y = node.geometry.y;
+    let parentId = node.parentId;
+    const seen = new Set<string>();
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = byId.get(parentId);
+      if (!parent) break;
+      x += parent.geometry.x;
+      y += parent.geometry.y;
+      parentId = parent.parentId;
+    }
+    return { x, y, width: node.geometry.width, height: node.geometry.height };
+  };
+  return current.flatMap((item) => {
+    const node = bySourceId.get(item.nodeId);
+    const bounds = node ? absoluteBounds(node.id) : undefined;
+    if (!node || !bounds) return [];
+    const parent = node.parentId ? byId.get(node.parentId) : undefined;
+    const visualStyle = item.visualStyle ? {
+      ...item.visualStyle,
+      color: node.inlineStyle.color ?? item.visualStyle.color,
+      backgroundColor: node.inlineStyle["background-color"] ?? node.inlineStyle.background ?? item.visualStyle.backgroundColor,
+      borderColor: node.inlineStyle["border-color"] ?? item.visualStyle.borderColor,
+      borderRadius: node.inlineStyle["border-radius"] ?? item.visualStyle.borderRadius,
+      fontFamily: node.inlineStyle["font-family"] ?? item.visualStyle.fontFamily,
+      fontSize: node.inlineStyle["font-size"] ?? item.visualStyle.fontSize,
+      fontWeight: node.inlineStyle["font-weight"] ?? item.visualStyle.fontWeight,
+      fontStyle: node.inlineStyle["font-style"] ?? item.visualStyle.fontStyle,
+      textAlign: node.inlineStyle["text-align"] ?? item.visualStyle.textAlign,
+      textDecoration: node.inlineStyle["text-decoration"] ?? item.visualStyle.textDecoration,
+      opacity: node.inlineStyle.opacity ?? item.visualStyle.opacity,
+      objectFit: node.inlineStyle["object-fit"] ?? item.visualStyle.objectFit,
+    } : undefined;
+    return [{
+      ...item,
+      parentNodeId: parent?.sourceNodeId,
+      bounds,
+      rotation: node.geometry.rotation,
+      hidden: node.hidden,
+      locked: node.locked,
+      userEdited: node.userEdited,
+      editVersion: node.editVersion,
+      canonicalEvidence: node.canonicalEvidence,
+      textPreview: node.directText?.replace(/\s+/g, " ").trim().slice(0, 120) || item.textPreview,
+      altText: node.kind === "image" ? node.attributes.alt ?? "" : item.altText,
+      ...(visualStyle ? { visualStyle } : {}),
+    }];
+  });
+}
+
+const RESIZE_HANDLES: ReadonlyArray<{
+  handle: CanvasV2ResizeHandle;
+  className: string;
+  cursor: string;
+}> = [
+  { handle: "north-west", className: "-left-2 -top-2", cursor: "cursor-nwse-resize" },
+  { handle: "north", className: "left-1/2 -top-2 -translate-x-1/2", cursor: "cursor-ns-resize" },
+  { handle: "north-east", className: "-right-2 -top-2", cursor: "cursor-nesw-resize" },
+  { handle: "east", className: "-right-2 top-1/2 -translate-y-1/2", cursor: "cursor-ew-resize" },
+  { handle: "south-east", className: "-bottom-2 -right-2", cursor: "cursor-nwse-resize" },
+  { handle: "south", className: "-bottom-2 left-1/2 -translate-x-1/2", cursor: "cursor-ns-resize" },
+  { handle: "south-west", className: "-bottom-2 -left-2", cursor: "cursor-nesw-resize" },
+  { handle: "west", className: "-left-2 top-1/2 -translate-y-1/2", cursor: "cursor-ew-resize" },
 ];
+
+const ROTATE_CORNERS = [
+  { corner: "north-west", className: "-left-9 -top-9", iconClassName: "left-0 top-0" },
+  { corner: "north-east", className: "-right-9 -top-9", iconClassName: "right-0 top-0" },
+  { corner: "south-east", className: "-bottom-9 -right-9", iconClassName: "bottom-0 right-0" },
+  { corner: "south-west", className: "-bottom-9 -left-9", iconClassName: "bottom-0 left-0" },
+] as const;
 
 const TOOL_ITEMS = [
   { label: "Frame", icon: Square, primitive: "frame" as const },
@@ -79,9 +258,28 @@ const TOOL_ITEMS = [
   { label: "Table", icon: Table2, primitive: "table" as const },
 ];
 
-function clampScale(value: number): number {
-  return Math.min(1.5, Math.max(0.08, value));
-}
+const CANVAS_COLOR_SWATCHES = [
+  { label: "North Star ink", value: "var(--northstar-ink)", preview: "#181824" },
+  { label: "North Star surface", value: "var(--northstar-surface)", preview: "#ffffff" },
+  { label: "North Star violet", value: "var(--northstar-violet)", preview: "#6d59ed" },
+  { label: "Slate", value: "#6b7280", preview: "#6b7280" },
+  { label: "Red", value: "#ef4444", preview: "#ef4444" },
+  { label: "Orange", value: "#f97316", preview: "#f97316" },
+  { label: "Amber", value: "#f59e0b", preview: "#f59e0b" },
+  { label: "Green", value: "#22c55e", preview: "#22c55e" },
+  { label: "Teal", value: "#14b8a6", preview: "#14b8a6" },
+  { label: "Blue", value: "#3b82f6", preview: "#3b82f6" },
+  { label: "Violet", value: "#7c3aed", preview: "#7c3aed" },
+  { label: "Pink", value: "#ec4899", preview: "#ec4899" },
+] as const;
+
+const TEXT_STYLE_OPTIONS = [
+  { label: "Simple", value: "Inter,ui-sans-serif,system-ui,sans-serif" },
+  { label: "Bookish", value: "Georgia,serif" },
+  { label: "Technical", value: "ui-monospace,SFMono-Regular,monospace" },
+] as const;
+
+const TEXT_SIZE_OPTIONS = [12, 16, 20, 24, 28, 32, 40, 48, 64, 80] as const;
 
 export function CanvasV2Workspace({
   designEndpoint = "/api/canvas-v2/design",
@@ -101,143 +299,680 @@ export function CanvasV2Workspace({
   }, []);
 
   const engine = useCanvasV2DesignLoop(designEndpoint);
+  const { theme, toggleTheme } = useTheme();
   const [panel, setPanel] = useState<Panel>("chat");
+  const [chatOpen, setChatOpen] = useState(true);
   const [tool, setTool] = useState<CanvasTool>("select");
-  const [selected, setSelected] = useState(true);
   const [hoveredElement, setHoveredElement] = useState<CanvasV2InspectableElement>();
-  const [selectedElement, setSelectedElement] = useState<CanvasV2InspectableElement>();
+  const [selectedElements, setSelectedElements] = useState<CanvasV2InspectableElement[]>([]);
+  const selectedElement = selectedElements[selectedElements.length - 1];
   const [selectionTarget, setSelectionTarget] = useState<string>();
   const [draftBounds, setDraftBounds] = useState<CanvasV2InspectableElement["bounds"]>();
-  const [textDraft, setTextDraft] = useState("");
+  const [draftElementBounds, setDraftElementBounds] = useState<Record<string, CanvasV2InspectableElement["bounds"]>>({});
+  const [draftRotations, setDraftRotations] = useState<Record<string, number>>({});
+  const [snapGuides, setSnapGuides] = useState<CanvasV2SnapGuide[]>([]);
+  const [sceneElements, setSceneElements] = useState<CanvasV2InspectableElement[]>([]);
+  const [marquee, setMarquee] = useState<MarqueeGesture>();
   const [mutationError, setMutationError] = useState<string>();
   const [layersOpen, setLayersOpen] = useState(false);
-  const [viewport, setViewport] = useState<Viewport>({ x: 450, y: 72, scale: 0.66 });
-  const [artboardGeometry, setArtboardGeometry] = useState<CanvasV2ArtboardGeometry>(CANVAS_V2_MIN_ARTBOARD);
+  const [toolbarMenu, setToolbarMenu] = useState<"color" | "font" | "size" | "image" | "more">();
+  const [colorProperty, setColorProperty] = useState<CanvasV2EditableStyleProperty>("background-color");
+  const [customColorDraft, setCustomColorDraft] = useState("#6d59ed");
+  const [altTextDraft, setAltTextDraft] = useState("");
+  const [toolbarWidth, setToolbarWidth] = useState(420);
+  // The finite canvas begins at the viewport origin. The previous bootstrap
+  // used a legacy artboard-style offset ({ x: 450, y: 72 }) which was outside
+  // the legal camera range at 24%. Until the first zoom normalized that
+  // invalid state, canvas coordinate (0, 0) appeared as a phantom inner edge
+  // and objects could not be dragged into the visibly available top/left
+  // space. Start with a valid camera so insertion, dragging, and zoom all
+  // share one coordinate system from the first painted frame.
+  const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>({ x: 0, y: 0, scale: 0.24 });
+  const viewportRef = useRef(viewport);
+  const [spacePan, setSpacePan] = useState(false);
+  const [canvasGeometry, setCanvasGeometry] = useState<CanvasV2CanvasGeometry>(CANVAS_V2_MIN_CANVAS);
   const workspaceRef = useRef<HTMLElement>(null);
-  const geometryRef = useRef(artboardGeometry);
-  const receivedGeometryRef = useRef(false);
-  const initialFitRef = useRef(false);
+  const canvasMenuRef = useRef<HTMLDivElement>(null);
+  const statusPillRef = useRef<HTMLDivElement>(null);
+  const chatPanelRef = useRef<HTMLElement>(null);
+  const contextualToolbarRef = useRef<HTMLElement>(null);
+  const geometryRef = useRef(canvasGeometry);
   const panRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | undefined>(undefined);
   const directGestureRef = useRef<DirectGesture | undefined>(undefined);
-  const selectElement = useCallback((element?: CanvasV2InspectableElement) => {
-    setSelectedElement(element);
+  const marqueeRef = useRef<MarqueeGesture | undefined>(undefined);
+  const sceneElementsRef = useRef<CanvasV2InspectableElement[]>([]);
+  const internalClipboardRef = useRef<string[]>([]);
+  const commitViewport = useCallback((update: CanvasV2WorkspaceViewport | ((current: CanvasV2WorkspaceViewport) => CanvasV2WorkspaceViewport)) => {
+    setViewport((current) => {
+      const next = typeof update === "function" ? update(current) : update;
+      // Pointer messages can arrive between React's state update and its next
+      // effect. Keep the imperative camera authority in lockstep so the first
+      // gesture after pan/zoom never uses stale geometry.
+      viewportRef.current = next;
+      return next;
+    });
+  }, []);
+  useEffect(() => { viewportRef.current = viewport; }, [viewport]);
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+
+    // `overflow:hidden` still creates a programmatically scrollable element.
+    // Chromium will silently scroll that element when an iframe descendant is
+    // focused, splitting the browser's scroll offset from North Star's camera
+    // transform. The visible result is a phantom rectangle, clipped objects,
+    // and selections whose nodes appear to have disappeared. The canvas owns
+    // every translation, so native host scrolling is never valid.
+    const restoreCanvasAuthority = () => {
+      if (workspace.scrollLeft !== 0) workspace.scrollLeft = 0;
+      if (workspace.scrollTop !== 0) workspace.scrollTop = 0;
+    };
+    restoreCanvasAuthority();
+    workspace.addEventListener("scroll", restoreCanvasAuthority, { passive: true });
+    return () => workspace.removeEventListener("scroll", restoreCanvasAuthority);
+  }, []);
+  const selectElement = useCallback((element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => {
+    // The source document keeps a permanent compatibility root for revision
+    // and observation bookkeeping, but that identity is not a canvas object.
+    // A stale layer click or hot-refresh must never turn it into a selectable,
+    // translucent rectangle.
+    if (element?.nodeId === "canvas" || element?.kind === "root") element = undefined;
+    setSelectedElements((current) => {
+      if (!element) return [];
+      if (!intent?.additive) return [element];
+      return current.some((item) => item.nodeId === element.nodeId)
+        ? current.filter((item) => item.nodeId !== element.nodeId)
+        : [...current, element];
+    });
     setSelectionTarget(element?.nodeId);
     setDraftBounds(undefined);
-    setTextDraft(element?.textEditable ? element.textPreview ?? "" : "");
+    setDraftElementBounds({});
+    setSnapGuides([]);
+    setToolbarMenu(undefined);
+    setAltTextDraft(element?.altText ?? "");
     setMutationError(undefined);
-    if (element) setSelected(true);
+  }, []);
+  const selectCanvasElement = useCallback((element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => {
+    setLayersOpen(false);
+    selectElement(element, intent);
+  }, [selectElement]);
+  const refreshSelection = useCallback((elements: CanvasV2InspectableElement[]) => {
+    elements = topLevelCanvasSelection(elements);
+    setSelectedElements((current) => sameInspectableElements(current, elements) ? current : elements);
+    const primary = elements[elements.length - 1];
+    if (primary?.kind === "image") setAltTextDraft(primary.altText ?? "");
   }, []);
   const hoverElement = useCallback((element?: CanvasV2InspectableElement) => setHoveredElement(element), []);
 
-  const fitArtboard = useCallback((geometry = geometryRef.current) => {
+  // Fast refresh can preserve selection state created by an older build. The
+  // compatibility source root is never an object in Patch 8, so enforce that
+  // truth at the state boundary as well as at every pointer/layer entry point.
+  useEffect(() => {
+    if (selectedElements.some((element) => element.nodeId === "canvas" || element.kind === "root")) {
+      setSelectedElements((current) => current.filter((element) => element.nodeId !== "canvas" && element.kind !== "root"));
+    }
+    if (selectionTarget === "canvas") setSelectionTarget(undefined);
+  }, [selectedElements, selectionTarget]);
+  const cameraSize = useCallback(() => {
     const workspace = workspaceRef.current;
-    if (!workspace) return;
-    const leftRail = 430;
-    const margin = 48;
-    const availableWidth = Math.max(320, workspace.clientWidth - leftRail - margin * 2);
-    const availableHeight = Math.max(320, workspace.clientHeight - margin * 2);
-    const scale = clampScale(Math.min(availableWidth / geometry.width, availableHeight / geometry.height));
-    const x = leftRail + Math.max(margin, (availableWidth - geometry.width * scale) / 2);
-    const y = Math.max(margin, (workspace.clientHeight - geometry.height * scale) / 2);
-    setViewport({ x, y, scale });
+    return { width: workspace?.clientWidth ?? 1, height: workspace?.clientHeight ?? 1 };
   }, []);
 
-  const receiveGeometry = useCallback((geometry: CanvasV2ArtboardGeometry) => {
-    const previous = geometryRef.current;
-    geometryRef.current = geometry;
-    setArtboardGeometry(geometry);
-    const firstMeasurement = !receivedGeometryRef.current;
-    receivedGeometryRef.current = true;
-    const grew = geometry.width > previous.width + 64 || geometry.height > previous.height + 64;
-    if (firstMeasurement || grew) window.requestAnimationFrame(() => fitArtboard(geometry));
-  }, [fitArtboard]);
+  const workspacePoint = useCallback((clientX: number, clientY: number) => {
+    const rect = workspaceRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const current = viewportRef.current;
+    return { x: (clientX - rect.left - current.x) / current.scale, y: (clientY - rect.top - current.y) / current.scale };
+  }, []);
 
-  useEffect(() => {
-    if (!engine.ready || initialFitRef.current) return;
-    initialFitRef.current = true;
-    fitArtboard(geometryRef.current);
-  }, [engine.ready, fitArtboard]);
+  const contentInsets = useCallback((): CanvasV2WorkspaceInsets => {
+    const workspace = workspaceRef.current?.getBoundingClientRect();
+    if (!workspace) return { left: chatOpen ? 430 : 32, top: 116, right: 32, bottom: 92 };
+    const chat = chatOpen ? chatPanelRef.current?.getBoundingClientRect() : undefined;
+    const menu = canvasMenuRef.current?.getBoundingClientRect();
+    const status = statusPillRef.current?.getBoundingClientRect();
+    const breathingRoom = 24;
+    return {
+      // The top menu and status pill share one shallow exclusion band; treating
+      // them as full-height left and right columns made wide evidence rails fit
+      // into a fictitious sliver and collapse to 4%. Only the open chat panel
+      // owns a vertical column.
+      left: chat ? Math.max(32, chat.right - workspace.left + breathingRoom) : 32,
+      top: Math.max(
+        32,
+        (menu?.bottom ?? workspace.top) - workspace.top + breathingRoom,
+        (status?.bottom ?? workspace.top) - workspace.top + breathingRoom,
+      ),
+      right: 32,
+      bottom: 92,
+    };
+  }, [chatOpen]);
+
+  const receiveScene = useCallback((elements: CanvasV2InspectableElement[]) => {
+    sceneElementsRef.current = elements;
+    setSceneElements((current) => sameInspectableElements(current, elements) ? current : elements);
+    // Scene observation owns semantic geometry only. It must never mutate the
+    // camera: doing so after an AI commit caused the correctly inset document
+    // to snap back against the viewport edge as soon as the delayed snapshot
+    // settled. The finite canvas, authored coordinates, and user camera are
+    // independent authorities. Only explicit pan, zoom, or Fit commands move
+    // the camera.
+  }, []);
+
+  const constrainViewport = useCallback((candidate: CanvasV2WorkspaceViewport) => (
+    constrainCanvasV2WorkspaceViewport(candidate, cameraSize(), CANVAS_V2_EMPTY_INSETS)
+  ), [cameraSize]);
+
+  const fitContent = useCallback((geometry = geometryRef.current) => {
+    const authoredBounds = canvasV2FrameableSceneBounds(sceneElementsRef.current);
+    commitViewport(fitCanvasV2WorkspaceBounds(
+      authoredBounds ?? { x: 0, y: 0, width: geometry.width, height: geometry.height },
+      cameraSize(),
+      contentInsets(),
+      authoredBounds ? 96 : 48,
+    ));
+  }, [cameraSize, commitViewport, contentInsets]);
+
+  const fitWorkspace = useCallback(() => {
+    commitViewport(fitCanvasV2WorkspaceBounds(
+      { x: 0, y: 0, width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height },
+      cameraSize(),
+      contentInsets(),
+      36,
+    ));
+  }, [cameraSize, commitViewport, contentInsets]);
+
+  const receiveGeometry = useCallback((geometry: CanvasV2CanvasGeometry) => {
+    geometryRef.current = geometry;
+    setCanvasGeometry(geometry);
+    // Geometry is observation metadata, not a second camera authority. Earlier
+    // builds fitted this legacy document rectangle after the scene snapshot,
+    // overwriting the AI-safe frame and causing visible zoom jumps, edge-clung
+    // work, and occasional partially painted Chromium layers.
+  }, []);
 
   const zoomAtCenter = (delta: number) => {
-    setViewport((current) => ({ ...current, scale: clampScale(current.scale + delta) }));
+    const camera = cameraSize();
+    const insets = contentInsets();
+    const anchor = {
+      x: insets.left + (camera.width - insets.left - insets.right) / 2,
+      y: insets.top + (camera.height - insets.top - insets.bottom) / 2,
+    };
+    commitViewport((current) => zoomCanvasV2WorkspaceAtPoint(current, current.scale + delta, anchor, camera, CANVAS_V2_EMPTY_INSETS));
   };
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
-    if (tool === "select" && target.closest("[data-canvas-v2-artboard]")) {
-      setSelected(true);
+    const panning = tool === "pan" || spacePan || event.button === 1;
+    if (!panning) {
+      if (tool === "select" && target.closest("[data-canvas-v2-workspace-content]")) return;
+      if (tool === "select") {
+        const point = workspacePoint(event.clientX, event.clientY);
+        const screen = { x: event.clientX, y: event.clientY };
+        const gesture = { pointerId: event.pointerId, start: point, current: point, screenStart: screen, screenCurrent: screen, additive: event.shiftKey || event.metaKey };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        marqueeRef.current = gesture;
+        setMarquee(gesture);
+        if (!gesture.additive) selectElement(undefined);
+      }
       return;
     }
-    if (tool === "select" && !target.closest("[data-canvas-v2-artboard]")) {
-      setSelected(false);
-      setSelectedElement(undefined);
-    }
-    if (tool !== "pan" && event.button !== 1) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     panRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, originX: viewport.x, originY: viewport.y };
   };
 
-  const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const directGesture = directGestureRef.current;
-    if (directGesture?.pointerId === event.pointerId) {
-      const deltaX = (event.clientX - directGesture.startX) / viewport.scale;
-      const deltaY = (event.clientY - directGesture.startY) / viewport.scale;
-      setDraftBounds(directGesture.kind === "move"
-        ? { ...directGesture.original, x: directGesture.original.x + deltaX, y: directGesture.original.y + deltaY }
-        : { ...directGesture.original, width: Math.max(24, directGesture.original.width + deltaX), height: Math.max(24, directGesture.original.height + deltaY) });
+  const forwardedWorkspacePointer = useCallback((event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => {
+    // Pointer move events report `button === -1` in Chromium even while the
+    // primary button remains held. Once a select gesture owns the pointer,
+    // route the complete sequence through marquee handling by pointer id.
+    const activeMarquee = marqueeRef.current?.pointerId === event.pointerId;
+    if (tool === "select" && (event.button === 0 || activeMarquee)) {
+      const point = workspacePoint(event.clientX, event.clientY);
+      if (event.phase === "down") {
+        const screen = { x: event.clientX, y: event.clientY };
+        const gesture = { pointerId: event.pointerId, start: point, current: point, screenStart: screen, screenCurrent: screen, additive: Boolean(event.shiftKey || event.metaKey) };
+        marqueeRef.current = gesture;
+        setMarquee(gesture);
+        if (!gesture.additive) selectElement(undefined);
+      } else if (marqueeRef.current?.pointerId === event.pointerId && event.phase === "move") {
+        const next = { ...marqueeRef.current, current: point, screenCurrent: { x: event.clientX, y: event.clientY } };
+        marqueeRef.current = next;
+        setMarquee(next);
+      } else if (marqueeRef.current?.pointerId === event.pointerId && event.phase === "up") {
+        finishMarquee(marqueeRef.current);
+      }
+      return;
+    }
+    if (event.phase === "down") {
+      const current = viewportRef.current;
+      panRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, originX: current.x, originY: current.y };
       return;
     }
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    setViewport((current) => ({ ...current, x: pan.originX + event.clientX - pan.x, y: pan.originY + event.clientY - pan.y }));
+    if (event.phase === "up") {
+      panRef.current = undefined;
+      return;
+    }
+    commitViewport((current) => constrainViewport({ ...current, x: pan.originX + event.clientX - pan.x, y: pan.originY + event.clientY - pan.y }));
+  }, [commitViewport, constrainViewport, selectElement, tool, workspacePoint]);
+
+  const finishMarquee = (gesture: MarqueeGesture) => {
+    const bounds = {
+      x: Math.min(gesture.start.x, gesture.current.x),
+      y: Math.min(gesture.start.y, gesture.current.y),
+      width: Math.abs(gesture.current.x - gesture.start.x),
+      height: Math.abs(gesture.current.y - gesture.start.y),
+    };
+    const hits = bounds.width < 3 && bounds.height < 3
+      ? []
+      : sceneElementsRef.current.filter((item) => item.nodeId !== "canvas" && canvasV2BoundsIntersect(bounds, item.bounds));
+    const topLevelHits = topLevelCanvasSelection(hits);
+    setSelectedElements((current) => gesture.additive
+      ? [...current.filter((item) => !topLevelHits.some((hit) => hit.nodeId === item.nodeId)), ...topLevelHits]
+      : topLevelHits);
+    setSelectionTarget(topLevelHits.at(-1)?.nodeId);
+    marqueeRef.current = undefined;
+    setMarquee(undefined);
+  };
+
+  const updateDirectGesture = (pointerId: number, clientX: number, clientY: number) => {
+    const directGesture = directGestureRef.current;
+    if (directGesture?.pointerId === pointerId) {
+      const currentViewport = viewportRef.current;
+      const deltaX = (clientX - directGesture.startX) / currentViewport.scale;
+      const deltaY = (clientY - directGesture.startY) / currentViewport.scale;
+      if (directGesture.kind === "rotate") {
+        const pointer = workspacePoint(clientX, clientY);
+        const center = { x: directGesture.original.x + directGesture.original.width / 2, y: directGesture.original.y + directGesture.original.height / 2 };
+        const nextRotation = canvasV2RotationFromPointer(center, pointer);
+        // Keep the gesture continuous when the pointer crosses the -180/180
+        // seam instead of making the selection spin almost a full turn.
+        const rotationDelta = ((nextRotation - (directGesture.startRotation ?? nextRotation) + 540) % 360) - 180;
+        const radians = rotationDelta * Math.PI / 180;
+        const rotations = Object.fromEntries(directGesture.originals.map((item) => [item.nodeId, (item.rotation ?? 0) + rotationDelta]));
+        const nextElements = Object.fromEntries(directGesture.originals.map((item) => {
+          const itemCenter = { x: item.bounds.x + item.bounds.width / 2, y: item.bounds.y + item.bounds.height / 2 };
+          const offsetX = itemCenter.x - center.x;
+          const offsetY = itemCenter.y - center.y;
+          const rotatedCenter = {
+            x: center.x + offsetX * Math.cos(radians) - offsetY * Math.sin(radians),
+            y: center.y + offsetX * Math.sin(radians) + offsetY * Math.cos(radians),
+          };
+          return [item.nodeId, {
+            ...item.bounds,
+            x: rotatedCenter.x - item.bounds.width / 2,
+            y: rotatedCenter.y - item.bounds.height / 2,
+          }];
+        }));
+        directGesture.draftRotations = rotations;
+        directGesture.draftElementBounds = nextElements;
+        setDraftRotations(rotations);
+        setDraftElementBounds(nextElements);
+        setDraftBounds(unionCanvasV2ObjectBounds(Object.values(nextElements)) ?? directGesture.original);
+        return true;
+      }
+      if (directGesture.kind === "move") {
+        const selectedIds = new Set(directGesture.originals.map((item) => item.nodeId));
+        const snapped = snapCanvasV2ObjectDelta({ moving: directGesture.original, deltaX, deltaY, others: sceneElementsRef.current.filter((item) => item.nodeId !== "canvas" && !selectedIds.has(item.nodeId)).map((item) => item.bounds), threshold: 8 / currentViewport.scale });
+        // A gesture translates the selection as one rigid set and the finite
+        // canvas owns the final coordinates. The previous unbounded helper
+        // allowed negative x/y values, so objects progressively clipped at an
+        // old-looking edge, disappeared, and remained selected off-canvas.
+        const next = translateCanvasV2WorkspaceBounds(directGesture.original, {
+          x: snapped.deltaX,
+          y: snapped.deltaY,
+        });
+        const boundedDeltaX = next.x - directGesture.original.x;
+        const boundedDeltaY = next.y - directGesture.original.y;
+        const nextElements = Object.fromEntries(directGesture.originals.map((item) => [
+          item.nodeId,
+          translateCanvasV2ObjectBounds(item.bounds, boundedDeltaX, boundedDeltaY),
+        ]));
+        directGesture.draftBounds = next;
+        directGesture.draftElementBounds = nextElements;
+        setDraftBounds(next);
+        setDraftElementBounds(nextElements);
+        setSnapGuides(snapped.guides);
+        return true;
+      }
+      const next = resizeCanvasV2WorkspaceBounds(directGesture.original, directGesture.handle ?? "south-east", { x: deltaX, y: deltaY });
+      const nextElements = Object.fromEntries(directGesture.originals.map((item) => [item.nodeId, scaleCanvasV2ObjectBounds(item.bounds, directGesture.original, next)]));
+      directGesture.draftBounds = next;
+      directGesture.draftElementBounds = nextElements;
+      setDraftBounds(next);
+      setDraftElementBounds(nextElements);
+      return true;
+    }
+    return false;
+  };
+
+  const finishDirectGesture = (pointerId: number) => {
+    const directGesture = directGestureRef.current;
+    if (directGesture?.pointerId !== pointerId) return false;
+    directGestureRef.current = undefined;
+    if (directGesture.kind === "rotate") {
+      const mutations = directGesture.originals.flatMap((item) => {
+        const rotation = directGesture.draftRotations[item.nodeId];
+        const next = directGesture.draftElementBounds[item.nodeId];
+        if (rotation === undefined || !next) return [];
+        const deltaX = next.x - item.bounds.x;
+        const deltaY = next.y - item.bounds.y;
+        return [
+          ...(Math.abs(deltaX) >= 0.01 || Math.abs(deltaY) >= 0.01
+            ? [{ kind: "move" as const, nodeId: item.nodeId, deltaX, deltaY }]
+            : []),
+          ...(Math.abs(rotation - (item.rotation ?? 0)) >= 0.01
+            ? [{ kind: "rotate" as const, nodeId: item.nodeId, rotation }]
+            : []),
+        ];
+      });
+      if (mutations.length) {
+        if (!submitMutation({ kind: "batch", label: `Rotated ${directGesture.originals.length} selected object${directGesture.originals.length === 1 ? "" : "s"}.`, mutations })) {
+          setDraftRotations({});
+          setDraftBounds(undefined);
+          setDraftElementBounds({});
+        } else {
+          // Native truth and the source revision commit in this same pointer-up
+          // event. Leaving the transient transform mounted for one more render
+          // would apply it twice and cause the release-frame jump users saw.
+          setDraftRotations({});
+          setDraftBounds(undefined);
+          setDraftElementBounds({});
+        }
+      } else {
+        setDraftRotations({});
+        setDraftBounds(undefined);
+        setDraftElementBounds({});
+      }
+      return true;
+    }
+    const finalBounds = directGesture.draftBounds;
+    const moved = Math.abs(finalBounds.x - directGesture.original.x) >= 0.01
+      || Math.abs(finalBounds.y - directGesture.original.y) >= 0.01;
+    const resized = Math.abs(finalBounds.width - directGesture.original.width) >= 0.01
+      || Math.abs(finalBounds.height - directGesture.original.height) >= 0.01;
+    setSnapGuides([]);
+    // A pointer down/up with no geometric change is selection, not authorship.
+    if (!moved && !resized) {
+      if (directGesture.clickSelection) {
+        setSelectedElements(directGesture.clickSelection);
+        setSelectionTarget(directGesture.clickSelection.at(-1)?.nodeId);
+      }
+      setDraftBounds(undefined);
+      setDraftElementBounds({});
+      return true;
+    }
+    const mutations = directGesture.originals.map((item) => {
+      const next = directGesture.draftElementBounds[item.nodeId] ?? item.bounds;
+      return directGesture.kind === "move"
+        ? { kind: "move" as const, nodeId: item.nodeId, deltaX: next.x - item.bounds.x, deltaY: next.y - item.bounds.y }
+        : {
+            kind: "transform" as const,
+            nodeId: item.nodeId,
+            deltaX: next.x - item.bounds.x,
+            deltaY: next.y - item.bounds.y,
+            width: next.width,
+            height: next.height,
+            ...(item.textEditable && item.visualStyle?.fontSize
+              ? { fontSize: scaleCanvasV2FontSize(Number.parseFloat(item.visualStyle.fontSize), directGesture.original, directGesture.draftBounds) }
+              : {}),
+          };
+    });
+    if (!submitMutation({ kind: "batch", label: `${directGesture.kind === "move" ? "Moved" : "Resized"} ${mutations.length} selected object${mutations.length === 1 ? "" : "s"}.`, mutations })) {
+      setDraftBounds(undefined);
+      setDraftElementBounds({});
+    } else {
+      // Commit replaces the live transient values atomically. Clearing both in
+      // the same event prevents a doubled transform or one-frame old scene.
+      setDraftBounds(undefined);
+      setDraftElementBounds({});
+    }
+    return true;
+  };
+
+  const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (updateDirectGesture(event.pointerId, event.clientX, event.clientY)) return;
+    const marqueeGesture = marqueeRef.current;
+    if (marqueeGesture?.pointerId === event.pointerId) {
+      const next = { ...marqueeGesture, current: workspacePoint(event.clientX, event.clientY), screenCurrent: { x: event.clientX, y: event.clientY } };
+      marqueeRef.current = next;
+      setMarquee(next);
+      return;
+    }
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    commitViewport(constrainViewport({ ...viewport, x: pan.originX + event.clientX - pan.x, y: pan.originY + event.clientY - pan.y }));
   };
 
   const pointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const directGesture = directGestureRef.current;
-    if (directGesture?.pointerId === event.pointerId && selectedElement && draftBounds) {
-      const mutation: CanvasV2ManualMutation = directGesture.kind === "move"
-        ? { kind: "move", nodeId: selectedElement.nodeId, deltaX: draftBounds.x - directGesture.original.x, deltaY: draftBounds.y - directGesture.original.y }
-        : { kind: "resize", nodeId: selectedElement.nodeId, width: draftBounds.width, height: draftBounds.height };
-      submitMutation(mutation);
-      directGestureRef.current = undefined;
-      setDraftBounds(undefined);
+    if (finishDirectGesture(event.pointerId)) return;
+    if (marqueeRef.current?.pointerId === event.pointerId) {
+      finishMarquee(marqueeRef.current);
       return;
     }
     if (panRef.current?.pointerId === event.pointerId) panRef.current = undefined;
   };
 
-  const beginDirectGesture = (kind: DirectGesture["kind"], event: ReactPointerEvent<HTMLElement>) => {
-    if (!selectedElement || selectedElement.locked || engine.running || engine.applyingManualEdit) return;
+  useEffect(() => {
+    // Authored objects live inside a same-origin iframe while North Star's
+    // floating chrome lives in the parent document. A drag that crosses under
+    // the menu, chat panel, status pill, or bottom toolbar therefore leaves the
+    // iframe. Keep the gesture owned by the workspace until its terminal
+    // pointer event so those overlays never become invisible canvas edges.
+    const move = (event: PointerEvent) => {
+      if (!directGestureRef.current || directGestureRef.current.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      updateDirectGesture(event.pointerId, event.clientX, event.clientY);
+    };
+    const finish = (event: PointerEvent) => {
+      if (!directGestureRef.current || directGestureRef.current.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      finishDirectGesture(event.pointerId);
+      workspaceRef.current?.focus({ preventScroll: true });
+    };
+    window.addEventListener("pointermove", move, { capture: true, passive: false });
+    window.addEventListener("pointerup", finish, { capture: true, passive: false });
+    window.addEventListener("pointercancel", finish, { capture: true, passive: false });
+    return () => {
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", finish, true);
+      window.removeEventListener("pointercancel", finish, true);
+    };
+  });
+
+  const startDirectGesture = (kind: DirectGesture["kind"], pointerId: number, clientX: number, clientY: number, elements: CanvasV2InspectableElement[], handle?: CanvasV2ResizeHandle, clickSelection?: CanvasV2InspectableElement[]) => {
+    const mutable = elements.filter((item) => item.nodeId !== "canvas" && !item.locked);
+    const selectionBounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
+    if (!mutable.length || !selectionBounds || engine.running || engine.applyingManualEdit) return false;
+    const elementBounds = Object.fromEntries(mutable.map((item) => [item.nodeId, item.bounds]));
+    const pointer = workspacePoint(clientX, clientY);
+    const center = { x: selectionBounds.x + selectionBounds.width / 2, y: selectionBounds.y + selectionBounds.height / 2 };
+    directGestureRef.current = { kind, handle, pointerId, startX: clientX, startY: clientY, original: selectionBounds, originals: mutable, startRotation: kind === "rotate" ? canvasV2RotationFromPointer(center, pointer) : undefined, draftBounds: selectionBounds, draftElementBounds: elementBounds, draftRotations: {}, clickSelection };
+    setDraftBounds(selectionBounds);
+    setDraftElementBounds(elementBounds);
+    return true;
+  };
+
+  const beginDirectGesture = (kind: DirectGesture["kind"], event: ReactPointerEvent<HTMLElement>, handle?: CanvasV2ResizeHandle) => {
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    directGestureRef.current = { kind, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, original: selectedElement.bounds };
-    setDraftBounds(selectedElement.bounds);
+    startDirectGesture(kind, event.pointerId, event.clientX, event.clientY, selectedElements, handle);
+  };
+
+  const forwardedElementPointer = (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => {
+    if (event.phase === "move") {
+      updateDirectGesture(event.pointerId, event.clientX, event.clientY);
+      return;
+    }
+    if (event.phase === "up") {
+      finishDirectGesture(event.pointerId);
+      // The iframe receives the browser's terminal click/focus after the
+      // pointer-down handler. Reclaim keyboard ownership at the end of the
+      // gesture as well so an immediately-following arrow/duplicate/delete
+      // command always belongs to the selected canvas objects.
+      workspaceRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (tool !== "select" || event.button !== 0) return;
+    setLayersOpen(false);
+    const additive = Boolean(event.shiftKey || event.metaKey);
+    const selectedNodeIds = selectedElements.map((item) => item.nodeId);
+    const selectionOwnsTarget = !additive && (
+      Boolean(event.element.parentNodeId && selectedNodeIds.includes(event.element.parentNodeId))
+      || canvasV2NativeSceneSelectionContainsTarget(engine.nativeScene, selectedNodeIds, event.element.nodeId)
+    );
+    const alreadySelected = selectedElements.some((item) => item.nodeId === event.element.nodeId);
+    const nextSelection = selectionOwnsTarget
+      ? selectedElements
+      : additive
+      ? alreadySelected ? selectedElements : [...selectedElements, event.element]
+      : alreadySelected && selectedElements.length > 1 ? selectedElements : [event.element];
+    const clickSelection = selectionOwnsTarget
+      ? selectedElements
+      : additive
+      ? alreadySelected ? selectedElements.filter((item) => item.nodeId !== event.element.nodeId) : nextSelection
+      : [event.element];
+    const interactionElement = selectionOwnsTarget ? selectedElements.at(-1) : event.element;
+    setSelectedElements(nextSelection);
+    setSelectionTarget(interactionElement?.nodeId);
+    setDraftBounds(undefined);
+    setDraftElementBounds({});
+    setSnapGuides([]);
+    setToolbarMenu(undefined);
+    setAltTextDraft(interactionElement?.altText ?? "");
+    setMutationError(undefined);
+    startDirectGesture("move", event.pointerId, event.clientX, event.clientY, nextSelection, undefined, clickSelection);
+    // Keyboard manipulation belongs to the canvas, not to the iframe that
+    // happened to receive the pointer. Restore focus without scrolling the
+    // finite workspace so arrows, duplicate and delete work immediately after
+    // direct selection. A later double-click explicitly returns focus to the
+    // authored text node for inline editing.
+    workspaceRef.current?.focus({ preventScroll: true });
   };
 
   const submitMutation = (mutation: CanvasV2ManualMutation) => {
     try {
-      const document = applyCanvasV2ManualMutation(engine.committed.document, mutation);
-      if (!engine.applyManualDocument(document, describeCanvasV2ManualMutation(mutation))) throw new Error("Wait for the current revision to finish rendering.");
+      const sourceScene = engine.nativeScene;
+      const nextNativeScene = sourceScene ? applyCanvasV2NativeSceneMutation(sourceScene, mutation) : undefined;
+      const document = nextNativeScene
+        ? serializeCanvasV2NativeScene(nextNativeScene)
+        : applyCanvasV2ManualMutation(engine.committed.document, mutation);
+      if (!engine.applyManualDocument(document, describeCanvasV2ManualMutation(mutation), undefined, nextNativeScene)) {
+        // Busy-state rejections are control flow, not product errors. Controls
+        // are disabled while AI work is active; a racing keyboard/pointer
+        // event should simply leave committed truth untouched and never leak
+        // an internal transaction message onto the canvas.
+        setMutationError(undefined);
+        return false;
+      }
+      // The selection overlay is part of the same visual transaction as the
+      // object. Updating it from the already-mutated native scene in this
+      // event prevents one release frame with new object geometry inside old
+      // handles—the resize glitch visible in manual testing.
+      if (nextNativeScene) {
+        setSelectedElements((current) => synchronizeSelectionWithNativeScene(current, nextNativeScene));
+      }
       setMutationError(undefined);
       if (mutation.kind === "delete") selectElement(undefined);
       if (mutation.kind === "visibility" && mutation.hidden) selectElement(undefined);
       if (mutation.kind === "create") {
-        setSelectedElement(undefined);
+        setSelectedElements([]);
         setSelectionTarget(mutation.nodeId);
       }
       if (mutation.kind === "duplicate") {
-        setSelectedElement(undefined);
+        setSelectedElements([]);
         setSelectionTarget(mutation.newNodeId);
       }
+      if (mutation.kind === "group") {
+        setSelectedElements([]);
+        setSelectionTarget(mutation.groupNodeId);
+      }
+      if (mutation.kind === "ungroup" || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete"))) selectElement(undefined);
+      return true;
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : "The manual edit could not be prepared.");
+      return false;
     }
   };
 
+  const batchForSelection = (label: string, create: (element: CanvasV2InspectableElement, index: number) => Exclude<CanvasV2ManualMutation, { kind: "batch" }> | undefined) => {
+    const mutations = selectedElements.flatMap((element, index) => {
+      const mutation = create(element, index);
+      return mutation ? [mutation] : [];
+    });
+    if (mutations.length) submitMutation({ kind: "batch", label, mutations });
+  };
+
+  const styleSelection = (property: CanvasV2EditableStyleProperty, value: string) => {
+    batchForSelection(
+      `Updated ${property} for ${selectedElements.length} selected object${selectedElements.length === 1 ? "" : "s"}.`,
+      (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "style", nodeId: item.nodeId, property, value },
+    );
+    setToolbarMenu(undefined);
+  };
+
+  const commitCustomColor = () => {
+    const normalized = customColorDraft.startsWith("#") ? customColorDraft : `#${customColorDraft}`;
+    if (!/^#[0-9a-f]{6}$/i.test(normalized)) {
+      setMutationError("Enter a six-digit hex color such as #6D59ED.");
+      return;
+    }
+    setCustomColorDraft(normalized.toUpperCase());
+    styleSelection(colorProperty, normalized);
+  };
+
+  const alignObjectSelection = (mode: "left" | "center" | "right") => {
+    const mutable = selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked);
+    const bounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
+    if (!bounds || mutable.length < 2) return;
+    const mutations = mutable.map((item) => {
+      const x = mode === "left"
+        ? bounds.x
+        : mode === "right"
+          ? bounds.x + bounds.width - item.bounds.width
+          : bounds.x + (bounds.width - item.bounds.width) / 2;
+      return { kind: "move" as const, nodeId: item.nodeId, deltaX: x - item.bounds.x, deltaY: 0 };
+    });
+    submitMutation({ kind: "batch", label: `Aligned ${mutable.length} objects ${mode}.`, mutations });
+  };
+
+  const groupSelection = () => {
+    const items = selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked);
+    const bounds = unionCanvasV2ObjectBounds(items.map((item) => item.bounds));
+    if (items.length < 2 || !bounds) return;
+    submitMutation({
+      kind: "group",
+      groupNodeId: `manual-group-${Date.now().toString(36)}`,
+      label: "Object group",
+      bounds,
+      items: items.map((item) => ({ nodeId: item.nodeId, bounds: item.bounds })),
+    });
+  };
+
+  const duplicateSelection = () => batchForSelection(
+    `Duplicated ${selectedElements.length} selected object${selectedElements.length === 1 ? "" : "s"}.`,
+    (item, index) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "duplicate", nodeId: item.nodeId, newNodeId: `${item.nodeId}-copy-${Date.now().toString(36)}-${index}` },
+  );
+
   const createPrimitive = (primitive: "text" | "frame" | "shape" | "table") => {
     const nodeId = `manual-${primitive}-${Date.now().toString(36)}`;
-    submitMutation({ kind: "create", primitive, nodeId });
+    const size = primitive === "frame" ? { width: 360, height: 240 }
+      : primitive === "shape" ? { width: 160, height: 160 }
+        : primitive === "table" ? { width: 480, height: 120 }
+          : { width: 220, height: 48 };
+    const centered = centeredCanvasV2WorkspaceOrigin(size, viewport, cameraSize(), contentInsets());
+    const occupied = sceneElementsRef.current
+      .filter((item) => item.nodeId !== "canvas")
+      .map((item) => item.bounds);
+    let origin = centered;
+    // Consecutive insertions must be separately targetable on their first
+    // gesture instead of landing in an accidental topmost z-stack.
+    for (let index = 0; index < 12; index += 1) {
+      if (!occupied.some((bounds) => canvasV2BoundsIntersect({ ...origin, ...size }, bounds))) break;
+      origin = { x: centered.x + (index + 1) * 36, y: centered.y + (index + 1) * 36 };
+    }
+    submitMutation({ kind: "create", primitive, nodeId, x: origin.x, y: origin.y });
   };
 
   const insertResearchFlow = (app: AppDataApp, flow: AppDataFlow, result: CanvasV2ResearchResult) => {
@@ -246,7 +981,6 @@ export function CanvasV2Workspace({
       if (!engine.applyManualDocument(insertion.document, `Inserted the complete ordered ${app.name} ${flow.name} evidence flow.`, insertion.evidence)) throw new Error("Wait for the current revision to finish rendering.");
       setPanel("chat");
       setSelectionTarget(insertion.laneNodeId);
-      setViewport({ x: 112, y: 42, scale: 0.66 });
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : "The flow could not be inserted.");
     }
@@ -278,100 +1012,319 @@ export function CanvasV2Workspace({
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, [contenteditable=true]")) return;
+      if (target?.closest('input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
       const command = event.metaKey || event.ctrlKey;
-      if (command && event.key.toLowerCase() === "z") {
+      if (event.code === "Space") {
+        event.preventDefault();
+        setSpacePan(true);
+      } else if (event.key === "Escape") {
+        selectElement(undefined);
+      } else if (event.key.toLowerCase() === "f" && !command) {
+        event.preventDefault();
+        fitContent();
+      } else if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redoCanvas(); else undoCanvas();
-      } else if ((event.key === "Delete" || event.key === "Backspace") && selectedElement && !selectedElement.locked) {
+      } else if (command && event.key.toLowerCase() === "a") {
         event.preventDefault();
-        submitMutation({ kind: "delete", nodeId: selectedElement.nodeId });
+        window.getSelection()?.removeAllRanges();
+        const selectable = topLevelCanvasSelection(sceneElementsRef.current);
+        setSelectedElements(selectable);
+        setSelectionTarget(selectable.at(-1)?.nodeId);
+        setToolbarMenu(undefined);
+      } else if (command && event.key.toLowerCase() === "g" && event.shiftKey && selectedElement?.kind === "group") {
+        event.preventDefault();
+        submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId });
+      } else if (command && event.key.toLowerCase() === "g" && selectedElements.length > 1) {
+        event.preventDefault();
+        groupSelection();
+      } else if (command && event.key.toLowerCase() === "c" && selectedElements.length) {
+        event.preventDefault();
+        internalClipboardRef.current = selectedElements.filter((item) => item.nodeId !== "canvas").map((item) => item.nodeId);
+      } else if (command && event.key.toLowerCase() === "x" && selectedElements.length) {
+        event.preventDefault();
+        internalClipboardRef.current = selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked).map((item) => item.nodeId);
+        batchForSelection(`Cut ${internalClipboardRef.current.length} objects.`, (item) => internalClipboardRef.current.includes(item.nodeId) ? { kind: "delete", nodeId: item.nodeId } : undefined);
+      } else if (command && event.key.toLowerCase() === "v" && internalClipboardRef.current.length) {
+        event.preventDefault();
+        submitMutation({ kind: "batch", label: `Pasted ${internalClipboardRef.current.length} objects.`, mutations: internalClipboardRef.current.map((nodeId, index) => ({ kind: "duplicate", nodeId, newNodeId: `${nodeId}-paste-${Date.now().toString(36)}-${index}` })) });
+      } else if (command && event.key.toLowerCase() === "d" && selectedElements.length) {
+        event.preventDefault();
+        duplicateSelection();
+      } else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) && selectedElements.length) {
+        event.preventDefault();
+        const amount = event.shiftKey ? 10 : 1;
+        batchForSelection(`Nudged ${selectedElements.length} selected object${selectedElements.length === 1 ? "" : "s"}.`, (item) => item.nodeId === "canvas" || item.locked ? undefined : ({
+          kind: "move", nodeId: item.nodeId,
+          deltaX: event.key === "ArrowLeft" ? -amount : event.key === "ArrowRight" ? amount : 0,
+          deltaY: event.key === "ArrowUp" ? -amount : event.key === "ArrowDown" ? amount : 0,
+        }));
+      } else if ((event.key === "Delete" || event.key === "Backspace") && selectedElements.length) {
+        event.preventDefault();
+        batchForSelection(`Deleted selected objects.`, (item) => item.nodeId === "canvas" || item.locked || item.canonicalEvidence ? undefined : { kind: "delete", nodeId: item.nodeId });
       }
     };
+    const keyup = (event: KeyboardEvent) => {
+      if (event.code === "Space") setSpacePan(false);
+    };
     window.addEventListener("keydown", keydown);
-    return () => window.removeEventListener("keydown", keydown);
+    window.addEventListener("keyup", keyup);
+    return () => {
+      window.removeEventListener("keydown", keydown);
+      window.removeEventListener("keyup", keyup);
+    };
   });
 
-  const wheel = (event: WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
+  const navigateWorkspaceWheel = useCallback((event: { clientX: number; clientY: number; deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean }) => {
     if (event.ctrlKey || event.metaKey) {
-      const rect = event.currentTarget.getBoundingClientRect();
+      const rect = workspaceRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
-      setViewport((current) => {
-        const nextScale = clampScale(current.scale * Math.exp(-event.deltaY * 0.002));
-        const ratio = nextScale / current.scale;
-        return { scale: nextScale, x: localX - (localX - current.x) * ratio, y: localY - (localY - current.y) * ratio };
+      commitViewport((current) => {
+        return zoomCanvasV2WorkspaceAtPoint(
+          current,
+          current.scale * Math.exp(-event.deltaY * 0.002),
+          { x: localX, y: localY },
+          cameraSize(),
+          CANVAS_V2_EMPTY_INSETS,
+        );
       });
       return;
     }
-    setViewport((current) => ({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
+    commitViewport((current) => constrainViewport({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
+  }, [cameraSize, commitViewport, constrainViewport]);
+
+  const wheel = (event: WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    navigateWorkspaceWheel(event);
   };
 
-  const activeSelectionBounds = draftBounds ?? selectedElement?.bounds;
-  const sourceNodes = useMemo(() => listCanvasV2SourceNodes(engine.committed.document), [engine.committed]);
+  const selectionNodeIds = useMemo(() => selectedElements.map((item) => item.nodeId), [selectedElements]);
+  const transientGeometry = useMemo<Readonly<Record<string, CanvasV2TransientGeometry>>>(() => {
+    const gesture = directGestureRef.current;
+    if (!gesture) return {};
+    return Object.fromEntries(selectedElements.flatMap((item) => {
+      const next = draftElementBounds[item.nodeId];
+      const rotation = draftRotations[item.nodeId];
+      if (!next && rotation === undefined) return [];
+      return [[item.nodeId, {
+        kind: gesture?.kind ?? (rotation !== undefined ? "rotate" : "move"),
+        deltaX: next ? next.x - item.bounds.x : 0,
+        deltaY: next ? next.y - item.bounds.y : 0,
+        ...(gesture?.kind === "resize" && next ? { width: next.width, height: next.height } : {}),
+        ...(gesture?.kind === "resize" && next && item.textEditable && item.visualStyle?.fontSize
+          ? { fontSize: scaleCanvasV2FontSize(Number.parseFloat(item.visualStyle.fontSize), gesture.original, gesture.draftBounds) }
+          : {}),
+        ...(rotation !== undefined ? { rotation } : {}),
+      } satisfies CanvasV2TransientGeometry]];
+    }));
+  }, [draftElementBounds, draftRotations, selectedElements]);
+  const activeSelectionBounds = draftBounds ?? unionCanvasV2ObjectBounds(selectedElements.map((item) => item.bounds));
+  const selectionPermanent = selectedElements.some((item) => item.nodeId === "canvas");
+  const selectionIsText = Boolean(selectedElements.length === 1 && selectedElement?.textEditable && (
+    selectedElement.textPreview !== undefined
+    || ["p", "span", "small", "strong", "em", "label", "button", "h1", "h2", "h3", "h4", "h5", "h6"].includes(selectedElement.tagName)
+  ));
+  const selectionIsImage = selectedElements.length === 1 && selectedElement?.kind === "image";
+  const selectionCanFill = selectedElements.length === 1 && !selectionIsText && !selectionIsImage && !selectionPermanent;
+  const selectedVisualStyle = selectedElement?.visualStyle;
+  const sourceNodes = useMemo(
+    () => readCanvasV2BoardObjectGraph(engine.committed.document).filter((node) => node.kind !== "root"),
+    [engine.committed],
+  );
+  const contextualToolbarPosition = useMemo(() => {
+    if (!activeSelectionBounds) return undefined;
+    const availableWidth = workspaceRef.current?.clientWidth ?? 1_440;
+    const availableHeight = workspaceRef.current?.clientHeight ?? 900;
+    const rawCenter = viewport.x + (activeSelectionBounds.x + activeSelectionBounds.width / 2) * viewport.scale;
+    const halfToolbar = Math.min(toolbarWidth, availableWidth - 32) / 2;
+    const minimumCenter = (chatOpen ? 430 : 16) + halfToolbar + 12;
+    const maximumCenter = Math.max(minimumCenter, availableWidth - halfToolbar - 16);
+    const left = Math.max(minimumCenter, Math.min(maximumCenter, rawCenter));
+    const selectionTop = viewport.y + activeSelectionBounds.y * viewport.scale;
+    const selectionBottom = viewport.y + (activeSelectionBounds.y + activeSelectionBounds.height) * viewport.scale;
+    // Reserve screen-space for the fixed-size rotate targets. The contextual
+    // toolbar previously sat directly on top of the north rotate handles at
+    // normal zoom, so the toolbar swallowed the drag before the object could
+    // receive it. Keep chrome and manipulation controls in separate bands.
+    const above = selectionTop - 116;
+    const below = selectionBottom + 60;
+    const placement = above >= 18 || below + 58 > availableHeight - 18 ? "above" as const : "below" as const;
+    return { placement, style: { left, top: placement === "above" ? Math.max(18, above) : Math.min(availableHeight - 70, below) } };
+  }, [activeSelectionBounds, chatOpen, toolbarWidth, viewport]);
+
+  useEffect(() => {
+    const toolbar = contextualToolbarRef.current;
+    if (!toolbar || !selectedElement) return;
+    const update = () => setToolbarWidth(toolbar.offsetWidth);
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+    observer?.observe(toolbar);
+    return () => observer?.disconnect();
+  }, [selectedElement, selectedElements.length, toolbarMenu]);
 
   return (
-    <main className="relative h-screen min-h-[680px] overflow-hidden bg-[#eef0fa] text-[#181824]">
-      <header className="absolute inset-x-0 top-0 z-40 flex h-[78px] items-center border-b border-[#dedfec] bg-white/90 px-6 backdrop-blur-xl">
-        <div className="flex w-[340px] items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#171721] text-sm font-black text-white">N</div><span className="text-2xl font-black tracking-[-.04em]">North Star</span></div>
-        <button className="rounded-2xl border border-[#d9d9e7] bg-white px-6 py-3 text-base font-semibold shadow-sm">Untitled canvas</button>
-        <div className="ml-auto flex items-center gap-3 text-xs text-[#767686]"><span data-testid="canvas-v2-committed-revision">{engine.committed.id.slice(0, 18)}…</span><span data-testid="canvas-v2-loop-status" className="rounded-full bg-[#eeeaff] px-3 py-1.5 font-bold capitalize text-[#6250df]">{engine.loop?.status.replaceAll("-", " ") ?? "ready"}</span></div>
-      </header>
+    <main className="relative h-screen min-h-[680px] overflow-hidden bg-[#fefeff] text-[#181824] transition-colors duration-300 dark:bg-[#111117] dark:text-[#f4f3f8]">
+      <div ref={canvasMenuRef} className="absolute left-5 top-5 z-50 flex h-14 items-center overflow-hidden rounded-2xl border border-[#dedfea] bg-white shadow-[0_10px_32px_rgba(51,45,95,.13)] dark:border-white/[.1] dark:bg-[#1d1c24] dark:shadow-[0_14px_40px_rgba(0,0,0,.32)]">
+        <button aria-label="Open North Star panel" onClick={() => { setChatOpen(true); setPanel("chat"); }} className="grid h-14 w-14 place-items-center border-r border-[#e8e8ef] bg-[#181824] text-sm font-black text-white dark:border-white/[.08] dark:bg-[#6d59ed]">N</button>
+        <button className="flex h-14 items-center gap-3 px-4 text-left" aria-label="Canvas menu">
+          <span><span className="block text-[10px] font-black uppercase tracking-[.16em] text-[#8c8c9a] dark:text-[#8e8b99]">North Star</span><span className="block text-sm font-bold tracking-[-.01em]">Untitled canvas</span></span>
+          <ChevronDown className="h-4 w-4 text-[#7c7c8a] dark:text-[#9995a5]" />
+        </button>
+        {!chatOpen && <button aria-label="Open North Star panel" onClick={() => setChatOpen(true)} className="grid h-14 w-12 place-items-center border-l border-[#e8e8ef] text-[#6653e8] hover:bg-[#f2efff] dark:border-white/[.08] dark:text-[#b4a9ff] dark:hover:bg-white/[.06]"><MessageSquare className="h-4 w-4" /></button>}
+      </div>
 
-      <nav className="absolute bottom-0 left-0 top-[78px] z-30 flex w-[82px] flex-col items-center gap-3 border-r border-[#dedfec] bg-white/80 py-5 backdrop-blur-xl">
-        {NAVIGATION.map(({ label, icon: Icon, active }) => <button key={label} title={label} onClick={() => label === "References" && setPanel("apps")} className={`flex h-[66px] w-[66px] flex-col items-center justify-center gap-1 rounded-2xl text-[10px] font-semibold ${active ? "bg-[#e9e5ff] text-[#6857ea]" : "text-[#777789] hover:bg-white"}`}><Icon className="h-5 w-5" />{label}</button>)}
-      </nav>
+      <div ref={statusPillRef} className="absolute right-5 top-5 z-50 flex h-14 items-center gap-3 rounded-2xl border border-[#dedfea] bg-white px-2.5 shadow-[0_10px_32px_rgba(51,45,95,.13)] dark:border-white/[.1] dark:bg-[#1d1c24] dark:shadow-[0_14px_40px_rgba(0,0,0,.32)]">
+        <span className={`h-2 w-2 rounded-full ${engine.running ? "animate-pulse bg-[#735dff]" : "bg-emerald-400"}`} />
+        <span data-testid="canvas-v2-loop-status" className="text-xs font-black capitalize text-[#343442] dark:text-[#f1eff6]">{engine.loop?.status.replaceAll("-", " ") ?? "ready"}</span>
+        <span className="h-6 w-px bg-[#e5e5ed] dark:bg-white/[.09]" />
+        <span data-testid="canvas-v2-committed-revision" className="max-w-[150px] truncate font-mono text-[10px] text-[#8b8b99]">{engine.committed.id}</span>
+        <button type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title="Toggle theme" className="grid h-9 w-9 place-items-center rounded-[11px] text-[#676573] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#aaa6b4] dark:hover:bg-white/[.07] dark:hover:text-[#c1b8ff]">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
+      </div>
 
-      <aside className="absolute bottom-5 left-[98px] top-[94px] z-30 flex w-[390px] flex-col overflow-hidden rounded-[30px] border border-[#ddddea] bg-white/95 shadow-[0_22px_70px_rgba(65,60,120,.14)] backdrop-blur-xl">
-        <div className="grid grid-cols-3 border-b border-[#e8e8f0] px-5 pt-5">
-          {(["chat", "shapes", "apps"] as Panel[]).map((item) => {
-            const Icon = item === "chat" ? MessageSquare : item === "shapes" ? Shapes : AppWindow;
-            return <button key={item} onClick={() => setPanel(item)} className={`flex items-center justify-center gap-2 border-b-2 px-2 pb-4 text-sm font-bold capitalize ${panel === item ? "border-[#745fff] text-[#272735]" : "border-transparent text-[#868695]"}`}><Icon className="h-4 w-4" />{item}</button>;
-          })}
+      {chatOpen && <aside ref={chatPanelRef} data-testid="canvas-v2-floating-panel" className="absolute bottom-24 left-5 top-[90px] z-40 flex w-[390px] flex-col overflow-hidden rounded-[24px] border border-[#dedee8] bg-white shadow-[0_24px_80px_rgba(46,42,88,.14)] dark:border-white/[.1] dark:bg-[#191820] dark:shadow-[0_28px_85px_rgba(0,0,0,.38)] 2xl:bottom-5">
+        <div className="flex h-[58px] items-center border-b border-[#ececf2] px-3 dark:border-white/[.08]">
+          <div className="grid flex-1 grid-cols-3 gap-1 rounded-[14px] bg-[#f6f6f9] p-1 dark:bg-white/[.045]">
+            {(["chat", "shapes", "apps"] as Panel[]).map((item) => {
+              const Icon = item === "chat" ? MessageSquare : item === "shapes" ? Shapes : AppWindow;
+              return <button key={item} onClick={() => setPanel(item)} className={`flex h-9 items-center justify-center gap-1.5 rounded-[10px] px-2 text-xs font-bold capitalize transition ${panel === item ? "bg-white text-[#272735] shadow-[0_2px_8px_rgba(43,40,72,.08)] dark:bg-white/[.1] dark:text-[#f3f1f7]" : "text-[#898895] hover:text-[#555461] dark:text-[#8f8b99] dark:hover:text-[#d7d4dd]"}`}><Icon className="h-3.5 w-3.5" />{item}</button>;
+            })}
+          </div>
+          <button aria-label="Collapse North Star panel" onClick={() => setChatOpen(false)} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
         </div>
 
-        {panel === "chat" ? <CanvasV2ChatPanel routerEndpoint={routerEndpoint} engine={engine} selection={selectedElement} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.running || engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex flex-1 flex-col items-center justify-center p-8 text-center"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#f0edff] text-[#6d59ed]"><Shapes /></div><h2 className="mt-4 font-bold capitalize">{panel}</h2><p className="mt-2 max-w-[250px] text-sm leading-6 text-[#777789]">Create text, frames, shapes, and tables from the toolbar, then edit them directly on the artboard.</p></div>}
-      </aside>
+        {panel === "chat" ? <CanvasV2ChatPanel routerEndpoint={routerEndpoint} engine={engine} selection={selectedElement} selections={selectedElements} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.running || engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex flex-1 flex-col items-center justify-center p-8 text-center"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#f0edff] text-[#6d59ed] dark:bg-[#292439] dark:text-[#ad9fff]"><Shapes /></div><h2 className="mt-4 font-bold capitalize">{panel}</h2><p className="mt-2 max-w-[250px] text-sm leading-6 text-[#777789] dark:text-[#9995a5]">Create text, frames, shapes, and tables from the toolbar, then edit them directly on the workspace.</p></div>}
+      </aside>}
 
       <section
         ref={workspaceRef}
+        tabIndex={-1}
         aria-label="Canvas workspace"
-        className={`absolute bottom-0 left-[82px] right-0 top-[78px] overflow-hidden ${tool === "pan" ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
-        style={{ backgroundColor: "#f4f5ff", backgroundImage: "radial-gradient(circle, rgba(91,87,255,.18) 1px, transparent 1px)", backgroundSize: `${24 * viewport.scale}px ${24 * viewport.scale}px`, backgroundPosition: `${viewport.x}px ${viewport.y}px` }}
+        className={`absolute inset-0 overflow-clip overscroll-none ${tool === "pan" || spacePan ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+        style={{
+          backgroundColor: theme === "dark" ? "#111117" : "#fefeff",
+          backgroundImage: `radial-gradient(circle, ${theme === "dark" ? "rgba(174,159,255,.17)" : "rgba(109,89,237,.12)"} 1px, transparent 1px)`,
+          backgroundSize: `${CANVAS_V2_WORKSPACE.grid * viewport.scale}px ${CANVAS_V2_WORKSPACE.grid * viewport.scale}px`,
+          backgroundPosition: `${viewport.x}px ${viewport.y}px`,
+        }}
         onPointerDown={pointerDown}
         onPointerMove={pointerMove}
         onPointerUp={pointerUp}
         onPointerCancel={pointerUp}
+        onScroll={(event) => {
+          // A synchronous JSX boundary complements the lifecycle listener and
+          // makes the invariant explicit in tests and during React remounts.
+          event.currentTarget.scrollLeft = 0;
+          event.currentTarget.scrollTop = 0;
+        }}
         onWheel={wheel}
       >
-        <div className="absolute origin-top-left" style={{ left: viewport.x, top: viewport.y, transform: `scale(${viewport.scale})` }}>
-          <div data-canvas-v2-artboard className={`relative overflow-visible bg-white shadow-[0_28px_90px_rgba(43,38,93,.14)] ${selected ? "ring-[2px] ring-[#6d5df5]" : "ring-1 ring-[rgba(78,67,135,.10)]"}`} style={{ width: artboardGeometry.width, height: artboardGeometry.height }} onPointerDownCapture={() => tool === "select" && setSelected(true)}>
-            <CanvasV2ArtboardPreview
+        <div
+          data-testid="canvas-v2-workspace-surface"
+          data-canvas-v2-workspace-surface
+          className="absolute origin-top-left overflow-visible bg-transparent"
+          style={{
+            left: viewport.x,
+            top: viewport.y,
+            width: CANVAS_V2_WORKSPACE.width,
+            height: CANVAS_V2_WORKSPACE.height,
+            transform: `scale(${viewport.scale})`,
+            transformOrigin: "0 0",
+            backgroundImage: `radial-gradient(circle, ${theme === "dark" ? "rgba(174,159,255,.17)" : "rgba(109,89,237,.12)"} 1px, transparent 1px)`,
+            backgroundSize: `${CANVAS_V2_WORKSPACE.grid}px ${CANVAS_V2_WORKSPACE.grid}px`,
+            // Do not promote the full 12,000 x 8,000 surface to one GPU paint
+            // layer. Chromium can drop that layer (and nearby floating chrome)
+            // under zoom/revision pressure. Normal tiled painting is stable.
+            contain: "layout style",
+          }}
+        >
+          <div
+            data-canvas-v2-workspace-content
+            className="relative overflow-visible"
+            style={{ width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height }}
+          >
+            <CanvasV2CanvasScene
               revision={engine.displayed}
+              theme={theme}
               onObservation={engine.receiveObservation}
               onCaptureError={engine.captureFailed}
               bare
-              framePointerEvents={tool === "pan" ? "none" : "auto"}
-              inspectionEnabled={tool === "select"}
+              framePointerEvents={tool === "pan" || spacePan ? "none" : "auto"}
+              inspectionEnabled={tool === "select" && !spacePan}
               selectedNodeId={selectionTarget}
+              selectedNodeIds={selectionNodeIds}
               onElementHover={hoverElement}
-              onElementSelect={selectElement}
-              width={artboardGeometry.width}
-              height={artboardGeometry.height}
-              onGeometry={receiveGeometry}
+              onElementSelect={selectCanvasElement}
+              onSelectionRefresh={refreshSelection}
+              onSceneSnapshot={receiveScene}
+              onNativeScene={engine.receiveNativeScene}
+              nativeSceneOverride={engine.nativeScene}
+              onElementTextCommit={(element, text) => submitMutation({ kind: "text", nodeId: element.nodeId, text })}
+              width={CANVAS_V2_WORKSPACE.width}
+              height={CANVAS_V2_WORKSPACE.height}
+              captureEnabled={false}
+              onWorkspaceWheel={navigateWorkspaceWheel}
+              onWorkspacePointer={forwardedWorkspacePointer}
+              onElementPointer={forwardedElementPointer}
+              transientGeometry={transientGeometry}
             />
-            {tool === "select" && hoveredElement && hoveredElement.nodeId !== selectedElement?.nodeId && <div aria-hidden className="pointer-events-none absolute border-2 border-dashed border-[#8d7cff] bg-[#7661f3]/5" style={{ left: hoveredElement.bounds.x, top: hoveredElement.bounds.y, width: hoveredElement.bounds.width, height: hoveredElement.bounds.height }} />}
-            {selectedElement && activeSelectionBounds && <div data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-2 border-[#6d5df5] bg-[#6d5df5]/5" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height }}>
-              <span className="absolute -top-8 left-0 rounded-md bg-[#6250df] px-2 py-1 text-[11px] font-bold text-white">{selectedElement.tagName} · {selectedElement.nodeId}</span>
-              <button aria-label={`Move ${selectedElement.nodeId}`} onPointerDown={(event) => beginDirectGesture("move", event)} className="pointer-events-auto absolute inset-0 cursor-move" />
-              {[["-left-1.5", "-top-1.5"], ["-right-1.5", "-top-1.5"], ["-left-1.5", "-bottom-1.5"]].map(([horizontal, vertical]) => <span key={`${horizontal}-${vertical}`} className={`absolute h-3 w-3 rounded-sm border-2 border-[#6d5df5] bg-white ${horizontal} ${vertical}`} />)}
-              <button aria-label={`Resize ${selectedElement.nodeId}`} onPointerDown={(event) => beginDirectGesture("resize", event)} className="pointer-events-auto absolute -bottom-2 -right-2 z-10 h-4 w-4 cursor-nwse-resize rounded-sm border-2 border-[#6d5df5] bg-white" />
+            {tool === "select" && selectedElements.length === 0 && hoveredElement && hoveredElement.nodeId !== "canvas" && hoveredElement.kind !== "root" && !selectionNodeIds.includes(hoveredElement.nodeId) && <div aria-hidden className="pointer-events-none absolute border border-[#8d7cff]/70 bg-[#7661f3]/[.025]" style={{ left: hoveredElement.bounds.x, top: hoveredElement.bounds.y, width: hoveredElement.bounds.width, height: hoveredElement.bounds.height }} />}
+            {selectedElements.length > 1 && selectedElements.map((element) => {
+              const bounds = draftElementBounds[element.nodeId] ?? element.bounds;
+              return <div key={element.nodeId} aria-hidden className="pointer-events-none absolute border border-[#8d7cff]/70" style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, rotate: `${draftRotations[element.nodeId] ?? element.rotation ?? 0}deg` }} />;
+            })}
+            {selectedElement && activeSelectionBounds && <div data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: 1 / viewport.scale }}>
+              {selectedElements.length > 1 && !selectionPermanent && <button
+                type="button"
+                aria-label={`Move ${selectedElements.length} selected objects`}
+                title="Drag the selection"
+                data-testid="canvas-v2-aggregate-drag-surface"
+                onPointerDown={(event) => beginDirectGesture("move", event)}
+                className="pointer-events-auto absolute inset-0 z-[5] cursor-move bg-transparent"
+              />}
+              {!selectionPermanent && RESIZE_HANDLES.map(({ handle, className, cursor }) => <button key={handle} aria-label={`Resize ${selectedElement.nodeId} from ${handle}`} onPointerDown={(event) => beginDirectGesture("resize", event, handle)} style={{ scale: `${0.625 / viewport.scale}` }} className={`pointer-events-auto absolute z-10 h-4 w-4 rounded-sm border-2 border-[#6d5df5] bg-white dark:bg-[#1f1d27] ${className} ${cursor}`} />)}
+              {!selectionPermanent && ROTATE_CORNERS.map(({ corner, className, iconClassName }) => {
+                const offset = -(22 / viewport.scale + 14);
+                return <button key={corner} aria-label={`Rotate selected objects from ${corner}`} title="Drag to rotate" onPointerDown={(event) => beginDirectGesture("rotate", event)} style={{ scale: `${1 / viewport.scale}`, ...(corner.includes("west") ? { left: offset } : { right: offset }), ...(corner.includes("north") ? { top: offset } : { bottom: offset }) }} className={`group pointer-events-auto absolute z-20 h-7 w-7 cursor-grab rounded-full bg-transparent active:cursor-grabbing ${className}`}><span className={`pointer-events-none absolute grid h-6 w-6 scale-75 place-items-center rounded-full border border-[#dad6ff] bg-white text-[#6d59ed] opacity-0 shadow-lg transition group-hover:scale-100 group-hover:opacity-100 group-focus-visible:scale-100 group-focus-visible:opacity-100 dark:border-[#554a89] dark:bg-[#211e2b] dark:text-[#b9adff] ${iconClassName}`}><RotateCw className="h-3.5 w-3.5" /></span></button>;
+              })}
             </div>}
-            {engine.running && <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-[#ddd9ff] bg-white/90 px-4 py-2 text-xs font-bold text-[#6652e9] shadow-lg backdrop-blur">{engine.loop?.status === "thinking" ? "North Star is reviewing" : "Rendering revision"}</div>}
+            {snapGuides.map((guide, index) => <div key={`${guide.axis}-${guide.position}-${index}`} aria-hidden className="pointer-events-none absolute z-30 bg-[#ef4fb8]" style={guide.axis === "x" ? { left: guide.position, top: guide.from, width: 1, height: guide.to - guide.from } : { left: guide.from, top: guide.position, width: guide.to - guide.from, height: 1 }} />)}
+            {engine.running && <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-[#ddd9ff] bg-white/90 px-4 py-2 text-xs font-bold text-[#6652e9] shadow-lg backdrop-blur dark:border-[#5b4f91] dark:bg-[#24212e]/92 dark:text-[#b8adff]">{engine.loop?.status === "thinking" ? "North Star is reviewing" : "Rendering revision"}</div>}
           </div>
         </div>
+        {marquee && (Math.abs(marquee.screenCurrent.x - marquee.screenStart.x) >= 3 || Math.abs(marquee.screenCurrent.y - marquee.screenStart.y) >= 3) && (
+          <div
+            data-testid="canvas-v2-marquee-selection"
+            aria-hidden
+            className="pointer-events-none fixed z-[70] border border-[#6d5df5] bg-[#6d5df5]/[.035] shadow-[0_0_0_1px_rgba(255,255,255,.22)_inset]"
+            style={{
+              left: Math.min(marquee.screenStart.x, marquee.screenCurrent.x),
+              top: Math.min(marquee.screenStart.y, marquee.screenCurrent.y),
+              width: Math.abs(marquee.screenCurrent.x - marquee.screenStart.x),
+              height: Math.abs(marquee.screenCurrent.y - marquee.screenStart.y),
+            }}
+          />
+        )}
       </section>
+
+      {!engine.displayedObservation && (
+        <div
+          aria-hidden="true"
+          data-testid="canvas-v2-committed-observation-surface"
+          className="pointer-events-none fixed overflow-hidden opacity-0"
+          style={{ left: -100_000, top: -100_000, width: 1, height: 1 }}
+        >
+          <CanvasV2CanvasScene
+            revision={engine.displayed}
+            theme={theme}
+            onObservation={engine.receiveObservation}
+            onCaptureError={engine.captureFailed}
+            onGeometry={receiveGeometry}
+            bare
+            framePointerEvents="none"
+          />
+        </div>
+      )}
 
       {engine.inspectionCandidate && (
         <div
@@ -380,8 +1333,9 @@ export function CanvasV2Workspace({
           className="pointer-events-none fixed overflow-hidden opacity-0"
           style={{ left: -100_000, top: -100_000, width: 1, height: 1 }}
         >
-          <CanvasV2ArtboardPreview
+          <CanvasV2CanvasScene
             revision={engine.inspectionCandidate}
+            theme={theme}
             onObservation={engine.receiveObservation}
             onCaptureError={engine.captureFailed}
             bare
@@ -390,39 +1344,104 @@ export function CanvasV2Workspace({
         </div>
       )}
 
-      {selectedElement && <aside aria-label="Element inspector" className="absolute right-6 top-[94px] z-40 w-[280px] rounded-[22px] border border-[#dedfec] bg-white/95 p-5 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl">
-        <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-black"><LocateFixed className="h-4 w-4 text-[#6d59ed]" />Selection</div><button onClick={() => selectElement(undefined)} aria-label="Clear element selection" className="text-xs font-bold text-[#777789]">Clear</button></div>
-        <div className="mt-4 rounded-xl bg-[#f5f4fb] p-3"><div className="text-[10px] font-black uppercase tracking-[.13em] text-[#9292a1]">Node identity</div><div className="mt-1 break-all font-mono text-xs text-[#3f3f4e]">{selectedElement.nodeId}</div></div>
-        <dl className="mt-4 grid grid-cols-2 gap-3 text-xs"><div><dt className="text-[#9292a1]">Element</dt><dd className="mt-1 font-bold">{selectedElement.tagName}</dd></div><div><dt className="text-[#9292a1]">Size</dt><dd className="mt-1 font-bold">{Math.round(selectedElement.bounds.width)} × {Math.round(selectedElement.bounds.height)}</dd></div></dl>
-        {selectedElement.label && <div className="mt-4 text-xs"><div className="text-[#9292a1]">Label</div><div className="mt-1 font-semibold">{selectedElement.label}</div></div>}
-        {selectedElement.textPreview && <div className="mt-4 border-t border-[#e8e8f0] pt-4 text-xs leading-5 text-[#5d5d6d]">{selectedElement.textPreview}</div>}
-        {selectedElement.textEditable ? <div className="mt-4 border-t border-[#e8e8f0] pt-4"><label htmlFor="canvas-v2-text-edit" className="text-[10px] font-black uppercase tracking-[.13em] text-[#9292a1]">Text</label><textarea id="canvas-v2-text-edit" value={textDraft} onChange={(event) => setTextDraft(event.target.value)} disabled={selectedElement.locked} className="mt-2 h-20 w-full resize-none rounded-xl border border-[#ddddea] p-3 text-xs outline-none focus:border-[#7661f3] disabled:opacity-50" /><button onClick={() => submitMutation({ kind: "text", nodeId: selectedElement.nodeId, text: textDraft })} disabled={selectedElement.locked || engine.running || engine.applyingManualEdit} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-[#6d59ed] px-3 py-2 text-xs font-bold text-white disabled:opacity-40"><Check className="h-3.5 w-3.5" />Apply text</button></div> : <div className="mt-4 rounded-xl bg-amber-50 p-3 text-[11px] leading-4 text-amber-800">Select a leaf node with its own stable identity to edit text.</div>}
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button onClick={() => submitMutation({ kind: "duplicate", nodeId: selectedElement.nodeId, newNodeId: `${selectedElement.nodeId}-copy-${Date.now().toString(36)}` })} disabled={selectedElement.locked || engine.running || engine.applyingManualEdit} className="flex items-center justify-center gap-1.5 rounded-xl border border-[#ddddea] px-2 py-2 text-[11px] font-bold disabled:opacity-40"><Copy className="h-3.5 w-3.5" />Duplicate</button>
-          <button onClick={() => submitMutation({ kind: "lock", nodeId: selectedElement.nodeId, locked: !selectedElement.locked })} disabled={engine.running || engine.applyingManualEdit} className="flex items-center justify-center gap-1.5 rounded-xl border border-[#ddddea] px-2 py-2 text-[11px] font-bold disabled:opacity-40">{selectedElement.locked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}{selectedElement.locked ? "Unlock" : "Lock"}</button>
-          <button onClick={() => submitMutation({ kind: "visibility", nodeId: selectedElement.nodeId, hidden: true })} disabled={selectedElement.locked || engine.running || engine.applyingManualEdit} className="flex items-center justify-center gap-1.5 rounded-xl border border-[#ddddea] px-2 py-2 text-[11px] font-bold disabled:opacity-40"><EyeOff className="h-3.5 w-3.5" />Hide</button>
-          <button onClick={() => submitMutation({ kind: "delete", nodeId: selectedElement.nodeId })} disabled={selectedElement.locked || engine.running || engine.applyingManualEdit} className="flex items-center justify-center gap-1.5 rounded-xl border border-red-200 px-2 py-2 text-[11px] font-bold text-red-600 disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" />Delete</button>
-        </div>
-        <div className="mt-2 grid grid-cols-4 gap-1"><button title="Send backward" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "backward" })} disabled={selectedElement.locked}>−1</button><button title="Send to back" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "back" })} disabled={selectedElement.locked}>Back</button><button title="Bring forward" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "forward" })} disabled={selectedElement.locked}>+1</button><button title="Bring to front" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "front" })} disabled={selectedElement.locked}>Front</button></div>
-        {mutationError && <div className="mt-3 rounded-xl bg-red-50 p-3 text-[11px] leading-4 text-red-700">{mutationError}</div>}
-        <div className="mt-4 text-[11px] leading-4 text-[#9a9aa8]">Manual changes become candidate source revisions and commit only after a successful render.</div>
+      {selectedElement && contextualToolbarPosition && <aside
+        ref={contextualToolbarRef}
+        aria-label="Element inspector"
+        data-testid="canvas-v2-context-toolbar"
+        data-placement={contextualToolbarPosition.placement}
+        className="absolute z-50 flex min-h-14 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[18px] border border-white/[.08] bg-[#1c1c20]/[.98] px-2.5 text-white shadow-[0_18px_60px_rgba(21,18,38,.34)] backdrop-blur-xl"
+        style={contextualToolbarPosition.style}
+      >
+        {selectedElements.length > 1 && <>
+          <span className="px-2 text-xs font-bold text-white/75">{selectedElements.length} selected</span>
+          <button title="Align left" aria-label="Align selected objects left" onClick={() => alignObjectSelection("left")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignLeft className="h-4 w-4" /></button>
+          <button title="Align centers" aria-label="Align selected object centers" onClick={() => alignObjectSelection("center")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignCenter className="h-4 w-4" /></button>
+          <button title="Align right" aria-label="Align selected objects right" onClick={() => alignObjectSelection("right")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignRight className="h-4 w-4" /></button>
+        </>}
+
+        {selectionIsText && <>
+          <button title="Text color" aria-label="Change text color" onClick={() => { setColorProperty("color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><span className="h-5 w-5 rounded-full border-2 border-white/35" style={{ background: selectedVisualStyle?.color || "var(--northstar-ink)" }} /></button>
+          <button aria-label="Text style" title="Text style" onClick={() => setToolbarMenu((current) => current === "font" ? undefined : "font")} className="flex h-9 min-w-[98px] items-center justify-between gap-2 rounded-xl px-3 text-xs font-bold hover:bg-white/[.1]">
+            <span>{selectedVisualStyle?.fontFamily?.includes("Georgia") ? "Bookish" : selectedVisualStyle?.fontFamily?.toLowerCase().includes("mono") ? "Technical" : "Simple"}</span><ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          <button aria-label="Font size" title="Font size" onClick={() => setToolbarMenu((current) => current === "size" ? undefined : "size")} className="flex h-9 min-w-[62px] items-center justify-between gap-2 rounded-xl px-3 text-xs font-bold hover:bg-white/[.1]">
+            <span>{Math.round(Number.parseFloat(selectedVisualStyle?.fontSize || "24"))}</span><ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          <button title="Bold" aria-label="Toggle bold" onClick={() => styleSelection("font-weight", Number.parseInt(selectedVisualStyle?.fontWeight || "400", 10) >= 600 ? "400" : "700")} className={`grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] ${Number.parseInt(selectedVisualStyle?.fontWeight || "400", 10) >= 600 ? "bg-white/[.12]" : ""}`}><Bold className="h-4 w-4" /></button>
+          <button title="Italic" aria-label="Toggle italic" onClick={() => styleSelection("font-style", selectedVisualStyle?.fontStyle === "italic" ? "normal" : "italic")} className={`grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] ${selectedVisualStyle?.fontStyle === "italic" ? "bg-white/[.12]" : ""}`}><Italic className="h-4 w-4" /></button>
+          <button title="Align left" aria-label="Align text left" onClick={() => styleSelection("text-align", "left")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignLeft className="h-4 w-4" /></button>
+          <button title="Align center" aria-label="Align text center" onClick={() => styleSelection("text-align", "center")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignCenter className="h-4 w-4" /></button>
+          <button title="Align right" aria-label="Align text right" onClick={() => styleSelection("text-align", "right")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignRight className="h-4 w-4" /></button>
+        </>}
+
+        {selectionCanFill && <>
+          <button title="Fill color" aria-label="Change fill color" onClick={() => { setColorProperty("background-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-9 items-center gap-2 rounded-xl px-2 hover:bg-white/[.1]"><span className="h-5 w-5 rounded-full border-2 border-white/35" style={{ background: selectedVisualStyle?.backgroundColor || "var(--northstar-surface)" }} /><span className="text-xs font-bold">Fill</span></button>
+          <button title="Border color" aria-label="Change border color" onClick={() => { setColorProperty("border-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Palette className="h-4 w-4" /></button>
+        </>}
+
+        {selectionIsImage && <>
+          <ImageIcon className="mx-2 h-4 w-4 text-[#a99cff]" />
+          <button title="Toggle contain or cover" aria-label="Toggle image fit" onClick={() => styleSelection("object-fit", selectedVisualStyle?.objectFit === "cover" ? "contain" : "cover")} className="h-9 rounded-xl px-3 text-xs font-bold capitalize hover:bg-white/[.1]">{selectedVisualStyle?.objectFit === "cover" ? "Cover" : "Contain"}</button>
+          <button title="Edit image alt text" aria-label="Edit image alt text" onClick={() => { setAltTextDraft(selectedElement.altText ?? ""); setToolbarMenu((current) => current === "image" ? undefined : "image"); }} className="h-9 rounded-xl px-3 text-xs font-bold hover:bg-white/[.1]">Alt text</button>
+        </>}
+
+        <div className="mx-1 h-7 w-px bg-white/[.12]" />
+        <button title="Duplicate" aria-label="Duplicate selected elements" onClick={duplicateSelection} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Copy className="h-4 w-4" /></button>
+        {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
+        <button title="Lock or unlock" aria-label="Toggle lock for selected elements" onClick={() => batchForSelection("Updated selection locks.", (item) => item.nodeId === "canvas" ? undefined : { kind: "lock", nodeId: item.nodeId, locked: !item.locked })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30">{selectedElements.every((item) => item.locked) ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}</button>
+        <button title="More object actions" aria-label="More object actions" onClick={() => setToolbarMenu((current) => current === "more" ? undefined : "more")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Settings2 className="h-4 w-4" /></button>
+        <button title="Clear selection" aria-label="Clear element selection" onClick={() => selectElement(undefined)} className="grid h-9 w-9 place-items-center rounded-xl text-white/70 hover:bg-white/[.1] hover:text-white"><X className="h-4 w-4" /></button>
+
+        {toolbarMenu === "font" && <div aria-label="Text style menu" className={`absolute left-12 w-[180px] rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          {TEXT_STYLE_OPTIONS.map((option) => <button key={option.label} onClick={() => styleSelection("font-family", option.value)} className="flex h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold hover:bg-white/[.1]" style={{ fontFamily: option.value }}>{option.label}</button>)}
+        </div>}
+
+        {toolbarMenu === "size" && <div aria-label="Font size menu" className={`absolute left-[162px] grid w-[104px] grid-cols-2 gap-1 rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          {TEXT_SIZE_OPTIONS.map((size) => <button key={size} onClick={() => styleSelection("font-size", `${size}px`)} className="grid h-10 place-items-center rounded-xl text-sm font-bold hover:bg-white/[.1]">{size}</button>)}
+        </div>}
+
+        {toolbarMenu === "color" && <div aria-label="Color palette" className={`absolute left-1/2 w-[286px] -translate-x-1/2 rounded-[20px] border border-white/[.1] bg-[#1c1c20] p-3 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          <div className="grid grid-cols-6 gap-2">
+            {CANVAS_COLOR_SWATCHES.map((swatch) => <button key={swatch.label} title={swatch.label} aria-label={`Use ${swatch.label}`} onClick={() => styleSelection(colorProperty, swatch.value)} className="h-8 w-8 rounded-full border-2 border-white/20 shadow-inner transition hover:scale-110 hover:border-white/70" style={{ background: swatch.preview }} />)}
+          </div>
+          <div className="mt-3 flex items-center gap-2 border-t border-white/[.1] pt-3">
+            <label title="Choose a custom color" className="relative h-9 w-9 shrink-0 cursor-pointer overflow-hidden rounded-full border-2 border-white/25 bg-[conic-gradient(from_90deg,#ff4d4d,#ffd84d,#53df74,#4dc8ff,#8c5cff,#ff4db8,#ff4d4d)] shadow-inner transition hover:scale-105 hover:border-white/70">
+              <input aria-label="Choose custom color" type="color" value={/^#[0-9a-f]{6}$/i.test(customColorDraft) ? customColorDraft : "#6d59ed"} onChange={(event) => setCustomColorDraft(event.target.value.toUpperCase())} className="absolute inset-0 cursor-pointer opacity-0" />
+            </label>
+            <input aria-label="Custom hex color" value={customColorDraft} maxLength={7} onChange={(event) => setCustomColorDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") commitCustomColor(); }} className="h-9 min-w-0 flex-1 rounded-xl bg-white/[.09] px-3 font-mono text-xs font-bold uppercase outline-none ring-1 ring-white/[.08] focus:ring-2 focus:ring-[#8f7fff]" placeholder="#6D59ED" />
+            <button aria-label="Apply custom color" onClick={commitCustomColor} className="h-9 rounded-xl bg-[#7158ef] px-3 text-xs font-bold hover:bg-[#806af3]">Apply</button>
+          </div>
+        </div>}
+
+        {toolbarMenu === "image" && <form onSubmit={(event) => { event.preventDefault(); submitMutation({ kind: "attribute", nodeId: selectedElement.nodeId, name: "alt", value: altTextDraft }); setToolbarMenu(undefined); }} className={`absolute left-1/2 flex w-[320px] -translate-x-1/2 items-center gap-2 rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-3 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          <input aria-label="Image alt text" value={altTextDraft} onChange={(event) => setAltTextDraft(event.target.value)} placeholder="Describe this image" className="h-10 min-w-0 flex-1 rounded-xl bg-white/[.1] px-3 text-sm outline-none placeholder:text-white/40 focus:ring-2 focus:ring-[#8f7fff]" />
+          <button type="submit" className="h-10 rounded-xl bg-[#7158ef] px-4 text-xs font-bold">Save</button>
+        </form>}
+
+        {toolbarMenu === "more" && <div aria-label="Object actions" className={`absolute right-0 flex items-center gap-1 rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          <button title="Hide" aria-label="Hide selected elements" onClick={() => batchForSelection("Hid selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "visibility", nodeId: item.nodeId, hidden: true })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><EyeOff className="h-4 w-4" /></button>
+          <button title="Send backward" aria-label="Send selected element backward" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "backward" })} disabled={selectionPermanent || selectedElement.locked} className="h-9 rounded-xl px-2 text-[11px] font-bold hover:bg-white/[.1] disabled:opacity-30">−1</button>
+          <button title="Bring forward" aria-label="Bring selected element forward" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "forward" })} disabled={selectionPermanent || selectedElement.locked} className="h-9 rounded-xl px-2 text-[11px] font-bold hover:bg-white/[.1] disabled:opacity-30">+1</button>
+          <button title="Delete" aria-label="Delete selected elements" onClick={() => batchForSelection("Deleted selected objects.", (item) => item.nodeId === "canvas" || item.locked || item.canonicalEvidence ? undefined : { kind: "delete", nodeId: item.nodeId })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit || selectedElements.every((item) => Boolean(item.canonicalEvidence))} className="grid h-9 w-9 place-items-center rounded-xl text-[#ff8f91] hover:bg-red-500/[.14] disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>
+        </div>}
       </aside>}
+      {mutationError && <div role="alert" className="absolute right-5 top-[90px] z-50 max-w-[340px] rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-xs leading-5 text-red-700 shadow-xl backdrop-blur dark:border-red-500/25 dark:bg-[#241d24]/95 dark:text-red-300">{mutationError}</div>}
 
-      {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Layers</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs ${selectionTarget === node.nodeId ? "bg-[#eeeaff] text-[#5744d5]" : "hover:bg-[#f6f5fa]"}`}><button onClick={() => setSelectionTarget(node.nodeId)} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[10px] text-[#9999a8]">{node.tagName}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} className="text-[#777789]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} className="text-[#777789]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
+      {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Objects</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} style={{ paddingLeft: 8 + Math.min(4, node.depth) * 14 }} className={`flex items-center gap-2 rounded-xl py-2 pr-2 text-xs ${selectionNodeIds.includes(node.nodeId) ? "bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]" : "hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]"}`}><button onClick={(event) => { const element = sceneElements.find((item) => item.nodeId === node.nodeId); if (element) selectElement(element, { additive: event.shiftKey || event.metaKey, range: event.shiftKey, directEdit: false }); else { setSelectedElements([]); setSelectionTarget(node.nodeId); } setLayersOpen(false); }} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
 
-      <div className="absolute bottom-6 left-[max(50%,770px)] z-40 flex -translate-x-1/2 items-center gap-1 rounded-2xl border border-[#dddded] bg-white/95 p-2 shadow-[0_18px_55px_rgba(50,45,100,.18)] backdrop-blur-xl">
-        <button onClick={undoCanvas} disabled={!engine.canUndo} title="Undo" className="grid h-11 w-11 place-items-center rounded-xl text-[#646474] disabled:opacity-30"><Undo2 className="h-5 w-5" /></button>
-        <button onClick={redoCanvas} disabled={!engine.canRedo} title="Redo" className="grid h-11 w-11 place-items-center rounded-xl text-[#646474] disabled:opacity-30"><Redo2 className="h-5 w-5" /></button>
-        <div className="mx-1 h-7 w-px bg-[#e2e2eb]" />
-        <button onClick={() => setTool("select")} title="Select" className={`grid h-11 w-11 place-items-center rounded-xl ${tool === "select" ? "bg-[#e9e5ff] text-[#6c57ec]" : "text-[#646474]"}`}><MousePointer2 className="h-5 w-5" /></button>
-        <button onClick={() => setTool("pan")} title="Pan" className={`grid h-11 w-11 place-items-center rounded-xl ${tool === "pan" ? "bg-[#e9e5ff] text-[#6c57ec]" : "text-[#646474]"}`}><Hand className="h-5 w-5" /></button>
-        <div className="mx-1 h-7 w-px bg-[#e2e2eb]" />
-        {TOOL_ITEMS.map(({ label, icon: Icon, primitive }) => <button key={label} title={`Create ${label}`} onClick={() => createPrimitive(primitive)} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-11 w-11 place-items-center rounded-xl text-[#686879] hover:bg-[#f0edff] hover:text-[#6d59ed] disabled:opacity-35"><Icon className="h-5 w-5" /></button>)}
-        <div className="mx-1 h-7 w-px bg-[#e2e2eb]" />
-        <button title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`flex h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold ${layersOpen ? "bg-[#e9e5ff] text-[#6c57ec]" : "text-[#5e5e6e]"}`}><Layers3 className="h-4 w-4" />Layer</button>
+      <div className="absolute bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-2xl border border-[#dddded] bg-white/95 p-2 shadow-[0_18px_55px_rgba(50,45,100,.18)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1c1b23]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.38)]">
+        <button onClick={undoCanvas} disabled={!engine.canUndo} title="Undo" className="grid h-11 w-11 place-items-center rounded-xl text-[#646474] disabled:opacity-30 dark:text-[#aaa6b4]"><Undo2 className="h-5 w-5" /></button>
+        <button onClick={redoCanvas} disabled={!engine.canRedo} title="Redo" className="grid h-11 w-11 place-items-center rounded-xl text-[#646474] disabled:opacity-30 dark:text-[#aaa6b4]"><Redo2 className="h-5 w-5" /></button>
+        <div className="mx-1 h-7 w-px bg-[#e2e2eb] dark:bg-white/[.09]" />
+        <button onClick={() => setTool("select")} title="Select" className={`grid h-11 w-11 place-items-center rounded-xl ${tool === "select" ? "bg-[#e9e5ff] text-[#6c57ec] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] dark:text-[#aaa6b4]"}`}><MousePointer2 className="h-5 w-5" /></button>
+        <button onClick={() => setTool("pan")} title="Pan" className={`grid h-11 w-11 place-items-center rounded-xl ${tool === "pan" ? "bg-[#e9e5ff] text-[#6c57ec] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] dark:text-[#aaa6b4]"}`}><Hand className="h-5 w-5" /></button>
+        <div className="mx-1 h-7 w-px bg-[#e2e2eb] dark:bg-white/[.09]" />
+        {TOOL_ITEMS.map(({ label, icon: Icon, primitive }) => <button key={label} title={`Create ${label}`} onClick={() => createPrimitive(primitive)} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-11 w-11 place-items-center rounded-xl text-[#686879] hover:bg-[#f0edff] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.07] dark:hover:text-[#b3a7ff]"><Icon className="h-5 w-5" /></button>)}
+        <div className="mx-1 h-7 w-px bg-[#e2e2eb] dark:bg-white/[.09]" />
+        <button title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`flex h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold ${layersOpen ? "bg-[#e9e5ff] text-[#6c57ec] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#5e5e6e] dark:text-[#aaa6b4]"}`}><Layers3 className="h-4 w-4" />Layer</button>
       </div>
 
-      <div className="absolute bottom-6 right-6 z-40 flex items-center overflow-hidden rounded-2xl border border-[#dddded] bg-white/95 shadow-lg"><button onClick={() => zoomAtCenter(-0.1)} aria-label="Zoom out" className="grid h-12 w-12 place-items-center"><Minus className="h-4 w-4" /></button><button onClick={() => fitArtboard()} title="Fit artboard" className="h-12 min-w-[76px] border-x border-[#e5e5ed] px-3 text-sm font-bold">{Math.round(viewport.scale * 100)}%</button><button onClick={() => zoomAtCenter(0.1)} aria-label="Zoom in" className="grid h-12 w-12 place-items-center"><Plus className="h-4 w-4" /></button></div>
+      <div className="absolute bottom-5 right-5 z-40 flex items-center overflow-hidden rounded-2xl border border-[#dddded] bg-white/95 shadow-[0_12px_40px_rgba(50,45,100,.14)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1c1b23]/95 dark:shadow-[0_16px_48px_rgba(0,0,0,.34)]"><button onClick={() => zoomAtCenter(-0.1)} aria-label="Zoom out" className="grid h-12 w-12 place-items-center hover:bg-[#f4f2ff] dark:hover:bg-white/[.06]"><Minus className="h-4 w-4" /></button><button onClick={() => fitContent()} title="Fit content (F)" className="h-12 min-w-[76px] border-x border-[#e5e5ed] px-3 text-sm font-bold hover:bg-[#f4f2ff] dark:border-white/[.09] dark:hover:bg-white/[.06]">{Math.round(viewport.scale * 100)}%</button><button onClick={() => zoomAtCenter(0.1)} aria-label="Zoom in" className="grid h-12 w-12 place-items-center hover:bg-[#f4f2ff] dark:hover:bg-white/[.06]"><Plus className="h-4 w-4" /></button><button onClick={() => fitWorkspace()} aria-label="Fit workspace" title="Fit entire workspace" className="grid h-12 w-12 place-items-center border-l border-[#e5e5ed] hover:bg-[#f4f2ff] dark:border-white/[.09] dark:hover:bg-white/[.06]"><Maximize2 className="h-4 w-4" /></button></div>
     </main>
   );
 }

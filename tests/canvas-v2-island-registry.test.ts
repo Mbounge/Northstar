@@ -23,9 +23,9 @@ const observation = {
       targetZoneId: "bottom-left",
       textPreview: "A focused sequence reading",
       bounds,
-      artboardWidthShare: 0.2,
-      artboardHeightShare: 0.3,
-      artboardAreaShare: 0.06,
+      canvasWidthShare: 0.2,
+      canvasHeightShare: 0.3,
+      canvasAreaShare: 0.06,
       centerXShare: 0.2,
       centerYShare: 0.7,
       edgeSpace: { left: 100, top: 200, right: 500, bottom: 400 },
@@ -82,7 +82,7 @@ test("the rendered board compiles into a focused island registry", () => {
     bounds,
     centerXShare: 0.2,
     centerYShare: 0.7,
-    artboardAreaShare: 0.06,
+    canvasAreaShare: 0.06,
     evidenceIds: ["screen-1"],
     annotationNodeIds: ["note-1"],
     relationshipNodeIds: ["link-1"],
@@ -111,7 +111,7 @@ test("island registry exposes unresolved requirements and missing assigned evide
 
 test("island allocation, focused source, and execution are deterministic", () => {
   assert.equal(canvasV2AllocatedIslandId("revision:ABC 123", 4), "island-revision-abc-123-4");
-  const previous = { html: '<main data-canvas-v2-node-id="artboard"><section data-canvas-v2-node-id="insight-island" data-canvas-v2-island-id="insight-island" data-canvas-v2-story-role="analysis" data-canvas-v2-design-region><p>Focused source</p></section></main>', css: "" };
+  const previous = { html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="insight-island" data-canvas-v2-island-id="insight-island" data-canvas-v2-story-role="analysis" data-canvas-v2-design-region><p>Focused source</p></section></main>', css: "" };
   const island = buildCanvasV2IslandRegistry({ observation, compositionState })[0];
   assert.match(canvasV2IslandSourceExcerpt(previous, island) ?? "", /Focused source/);
   const existing = new Set(["insight-island"]);
@@ -161,7 +161,7 @@ test("a hidden rejected create candidate never becomes committed island truth", 
 
 test("the compiler places above and below islands on the promised side of canonical evidence", () => {
   const document = {
-    html: '<main data-canvas-v2-node-id="artboard"><section data-canvas-v2-node-id="grounded-evidence" data-canvas-v2-evidence-region="canonical"><p>Evidence</p></section><section data-canvas-v2-node-id="title" data-canvas-v2-island-id="title" data-canvas-v2-design-region><h1>Title</h1></section><section data-canvas-v2-node-id="analysis" data-canvas-v2-island-id="analysis" data-canvas-v2-design-region><h2>Analysis</h2></section></main>',
+    html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="grounded-evidence" data-canvas-v2-evidence-region="canonical"><p>Evidence</p></section><section data-canvas-v2-node-id="title" data-canvas-v2-island-id="title" data-canvas-v2-design-region><h1>Title</h1></section><section data-canvas-v2-node-id="analysis" data-canvas-v2-island-id="analysis" data-canvas-v2-design-region><h2>Analysis</h2></section></main>',
     css: "",
   };
   const execution = {

@@ -6,6 +6,7 @@ import {
   createCanvasV2CandidateRevision,
   createCanvasV2CommittedRevision,
 } from "@/lib/canvas-v2/revisions";
+import { compileCanvasV2SceneTransaction } from "@/lib/canvas-v2/scene-transaction";
 
 const first = createCanvasV2CommittedRevision({
   id: "revision-1",
@@ -67,4 +68,39 @@ test("candidate creation refuses candidate-on-candidate branching", () => {
     }),
     /must be based on a committed revision/,
   );
+});
+
+test("scene authority remains attached from candidate through commit", () => {
+  const previous = {
+    html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-design-region data-canvas-v2-island-id="island-1" data-canvas-v2-node-id="island-1"></section></main>',
+    css: "",
+  };
+  const next = {
+    html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-design-region data-canvas-v2-island-id="island-1" data-canvas-v2-node-id="island-1"><h2 data-canvas-v2-node-id="heading-1">Insight</h2></section></main>',
+    css: "",
+  };
+  const parent = createCanvasV2CommittedRevision({
+    id: "scene-parent",
+    document: previous,
+    evidence: [],
+    createdAt: "2026-08-11T12:00:00.000Z",
+  });
+  const sceneTransaction = compileCanvasV2SceneTransaction({
+    origin: "northstar",
+    baseRevisionId: parent.id,
+    previous,
+    next,
+  });
+  const candidate = createCanvasV2CandidateRevision({
+    id: "scene-candidate",
+    parent,
+    document: next,
+    sceneTransaction,
+    createdAt: "2026-08-11T12:01:00.000Z",
+  });
+  const committed = commitCanvasV2Candidate({ candidate, expectedParentId: parent.id });
+
+  assert.equal(committed.sceneTransaction?.baseRevisionId, parent.id);
+  assert.equal(committed.sceneTransaction?.origin, "northstar");
+  assert.ok(committed.sceneTransaction?.mutations.some((mutation) => mutation.kind === "create" && mutation.nodeId === "heading-1"));
 });
