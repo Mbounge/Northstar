@@ -15,6 +15,8 @@ test("a visually unsafe candidate is repaired from its exact hidden render befor
   assert.match(hook, /setCandidate\(undefined\)/);
   assert.match(hook, /void askModel\(repairLoop, candidate, observation, committed\)/);
   assert.match(hook, /commitParent: CanvasV2ArtifactRevision = revision/);
+  assert.match(hook, /revision\.id !== commitParent\.id \|\| revision\.id !== committedRef\.current\.id/);
+  assert.match(hook, /cannot complete from an uncommitted render candidate/);
   assert.match(hook, /parent: commitParent/);
   assert.match(hook, /rejectedCandidateContext\(candidate\.document, observation\)/);
   assert.match(hook, /islandExecution: pendingEdit\.islandExecution/);

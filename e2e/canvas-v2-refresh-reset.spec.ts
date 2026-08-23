@@ -40,7 +40,7 @@ test("refresh discards committed canvas, chat, and undo history", async ({ page 
   await expect(committedRevision(page)).toContainText("canvas-v2-initial-");
   await expect(frame).toHaveCount(1);
   await expect(frame.locator('[data-canvas-v2-node-id^="manual-text-"]')).toHaveCount(0);
-  await expect(page.getByText("Ask, inspect, or create.")).toBeVisible();
+  await expect(canvasApp(page).getByRole("complementary").getByRole("heading", { name: "Ask, inspect, or create." })).toBeVisible();
   await expect(page.getByText("What can you help me with?", { exact: true })).toHaveCount(0);
   await expect(canvasApp(page).getByRole("button", { name: "Undo" })).toBeDisabled();
   await expect(canvasApp(page).getByRole("button", { name: "Redo" })).toBeDisabled();

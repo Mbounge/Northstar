@@ -20,8 +20,9 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
-import { useCanvasV2Chat, type CanvasV2ChatTurn } from "@/components/canvas-v2/use-canvas-v2-chat";
+import type { CanvasV2ChatTurn, useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
 import type { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
+import { canvasV2VisibleProgressSteps } from "@/lib/canvas-v2/design-loop";
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import type { CanvasV2InteractionRoute } from "@/lib/canvas-v2/interaction-router";
 import type { CanvasV2ResearchRequirement } from "@/lib/canvas-v2/research-director";
@@ -75,7 +76,7 @@ function ModelAttempts({ attempts }: { attempts: CanvasV2ProviderAttemptAudit[] 
 function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
   const loops = [...(turn.priorLoops ?? []), ...(turn.loop ? [turn.loop] : [])];
   const loop = turn.loop ?? loops.at(-1);
-  const steps = loops.flatMap((entry) => entry.steps);
+  const steps = canvasV2VisibleProgressSteps(loops.flatMap((entry) => entry.steps));
   const researchStatus = loop?.researchStatus ?? (loop?.researchTargets ?? turn.researchTargets ?? []).map<CanvasV2ResearchRequirement>((requestedName) => ({ requestedName, state: "unresolved", usableFlowIds: [], adequateFlowIds: [], visibleFlowIds: [], visibleAdequateFlowIds: [] }));
   return <div
     className="mt-3 border-l border-[#ded9ff] pl-4 dark:border-[#514780]"
@@ -139,17 +140,16 @@ function ChatTurn({ turn, busy, onContinue }: { turn: CanvasV2ChatTurn; busy: bo
 }
 
 export function CanvasV2ChatPanel({
-  routerEndpoint,
+  chat,
   engine,
   selection,
   selections,
 }: {
-  routerEndpoint: string;
+  chat: ReturnType<typeof useCanvasV2Chat>;
   engine: ReturnType<typeof useCanvasV2DesignLoop>;
   selection?: CanvasV2InspectableElement;
   selections?: readonly CanvasV2InspectableElement[];
 }) {
-  const chat = useCanvasV2Chat({ endpoint: routerEndpoint, engine, selection, selections });
   const endRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);

@@ -85,6 +85,7 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
   previous: CanvasV2ArtifactDocument,
   next: CanvasV2ArtifactDocument,
   evidence: readonly CanvasV2EvidenceAsset[],
+  options: { allowUserEvidenceRemoval?: boolean } = {},
 ): string[] {
   const failures: string[] = [];
   const approved = new Map(evidence.map((asset) => [asset.id, asset.url]));
@@ -96,13 +97,16 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
   for (const prior of previousFlows) {
     const current = nextByFlow.get(prior.flowId);
     if (!current) {
-      failures.push(`Canonical research flow must remain on the working surface: ${prior.flowId}.`);
+      if (!options.allowUserEvidenceRemoval) failures.push(`Canonical research flow must remain on the working surface: ${prior.flowId}.`);
       continue;
     }
     if (!prior.laneNodeId || current.laneNodeId !== prior.laneNodeId) failures.push(`Canonical flow lane identity must remain stable: ${prior.flowId}.`);
     const expected = prior.items.map((item) => `${item.evidenceId}\u0000${item.nodeId}\u0000${item.url}\u0000${item.flowIndex ?? ""}`);
     const actual = current.items.map((item) => `${item.evidenceId}\u0000${item.nodeId}\u0000${item.url}\u0000${item.flowIndex ?? ""}`);
-    if (expected.length !== actual.length || expected.some((item, index) => item !== actual[index])) {
+    const completeAndStable = expected.length === actual.length && expected.every((item, index) => item === actual[index]);
+    const stableSubset = options.allowUserEvidenceRemoval && actual.every((item) => expected.includes(item))
+      && actual.every((item, index) => index === 0 || expected.indexOf(actual[index - 1]) < expected.indexOf(item));
+    if (!completeAndStable && !stableSubset) {
       failures.push(`Canonical flow evidence must remain complete, ordered, and source-stable inside its original lane: ${prior.flowId}.`);
     }
     const indices = current.items.flatMap((item) => item.flowIndex === undefined ? [] : [item.flowIndex]);
@@ -112,7 +116,7 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
   const canonicalSources = new Map<string, Set<string>>();
   for (const flow of nextFlows) {
     const indices = flow.items.flatMap((item) => item.flowIndex === undefined ? [] : [item.flowIndex]);
-    if (indices.some((value, index) => value !== index)) failures.push(`Canonical flow screen indices must be complete and contiguous: ${flow.flowId}.`);
+    if (!options.allowUserEvidenceRemoval && indices.some((value, index) => value !== index)) failures.push(`Canonical flow screen indices must be complete and contiguous: ${flow.flowId}.`);
     for (const item of flow.items) {
       if (!item.evidenceId || !item.nodeId || !item.url) failures.push(`Canonical flow ${flow.flowId} contains evidence without a stable identity or source.`);
       if (approved.get(item.evidenceId) !== item.url) failures.push(`Canonical evidence source is not approved: ${item.evidenceId || "unknown"}.`);
@@ -341,22 +345,40 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
   }
   if (title) {
     const titleCenterY = title.bounds.y + title.bounds.height / 2;
-    const safeInnerWidth = Math.max(1, canvas.width - CANVAS_V2_WORKSPACE.documentMargin * 2);
-    const titleWidthShare = title.bounds.width / safeInnerWidth;
+    const nativeWorldSpace = canvas.width >= CANVAS_V2_WORKSPACE.width - 4
+      && canvas.height >= CANVAS_V2_WORKSPACE.height - 4;
     const titleLeftInset = Math.abs(title.bounds.x - canvas.x - CANVAS_V2_WORKSPACE.documentMargin);
-    if (title.targetZoneId !== "top-left"
-      || titleLeftInset > 8
-      || titleCenterY > canvas.y + canvas.height * 0.38) {
+    const titleRight = title.bounds.x + title.bounds.width;
+    const titleBottom = title.bounds.y + title.bounds.height;
+    const insideNativeAuthoringTerritory = title.bounds.x >= CANVAS_V2_WORKSPACE.aiAuthoringOriginX - 4
+      && title.bounds.y >= CANVAS_V2_WORKSPACE.aiAuthoringInset - 4
+      && titleRight <= CANVAS_V2_WORKSPACE.aiAuthoringOriginX + CANVAS_V2_WORKSPACE.aiAuthoringWidth + 4
+      && titleBottom <= CANVAS_V2_WORKSPACE.height - CANVAS_V2_WORKSPACE.aiAuthoringInset + 4;
+    const titleBeginsReadingOrder = !observation.spatial.authoredSurface?.readingOrder?.length
+      || observation.spatial.authoredSurface.readingOrder[0] === title.nodeId;
+    // The compatibility renderer has a temporary local 192px origin. Native
+    // public truth begins at the permanent AI authoring territory to the right
+    // of Chat and may shift farther into verified free space when another
+    // participant already occupies its preferred anchor. Conflating those two
+    // coordinate systems caused successful titles to enter endless repair.
+    if ((nativeWorldSpace && (!insideNativeAuthoringTerritory || !titleBeginsReadingOrder))
+      || (!nativeWorldSpace && (titleLeftInset > 8 || titleCenterY > canvas.y + canvas.height * 0.38))) {
       failures.push(`Title island ${title.nodeId} must begin at the upper-left narrative origin, above the evidence and outside later analytical territories.`);
     }
-    if (titleWidthShare < 0.82) {
-      failures.push(`Title island ${title.nodeId} occupies only ${Math.round(titleWidthShare * 100)}% of the safe inner canvas width. The narrative beginning must own a deliberate full-width horizontal strip inside the compiler-owned perimeter; keep its readable content composed within that strip and reserve the lower margin as intentional story space.`);
+    if (title.bounds.width < Math.min(720, canvas.width * 0.45)) {
+      failures.push(`Title island ${title.nodeId} is too narrow to establish a readable narrative opening. Give the title a deliberate editorial footprint while leaving genuinely occupied multiplayer territory untouched.`);
     }
     const laneBounds = observation.spatial.authoredSurface?.canonicalLaneBounds;
-    if (laneBounds && title.bounds.y + title.bounds.height > laneBounds.y + 4) {
-      failures.push(`Title island ${title.nodeId} must finish before grounded evidence begins. Reflow the canonical rails below the title-and-description chapter instead of placing the narrative origin over or beside source screenshots.`);
-    } else if (laneBounds) {
-      const narrativeGap = laneBounds.y - (title.bounds.y + title.bounds.height);
+    const titleLaneIntersection = laneBounds ? renderedIntersectionArea(title.bounds, laneBounds) : 0;
+    const horizontallySharesLane = Boolean(laneBounds
+      && titleRight > laneBounds.x + 4
+      && title.bounds.x < laneBounds.x + laneBounds.width - 4);
+    if (laneBounds && titleLaneIntersection >= 576) {
+      failures.push(`Title island ${title.nodeId} overlaps grounded evidence. Move the complete title territory into verified free world-space instead of covering source screenshots.`);
+    } else if (laneBounds && horizontallySharesLane && title.bounds.y >= laneBounds.y + laneBounds.height - 4) {
+      failures.push(`Title island ${title.nodeId} begins after grounded evidence despite owning the narrative origin. Place it before the evidence in reading order or beside the atlas in earlier open territory.`);
+    } else if (laneBounds && horizontallySharesLane && titleBottom <= laneBounds.y + 4) {
+      const narrativeGap = laneBounds.y - titleBottom;
       if (narrativeGap < CANVAS_V2_WORKSPACE.documentMargin) {
         failures.push(`Title island ${title.nodeId} leaves only ${Math.round(narrativeGap)}px before grounded evidence. Reserve at least ${CANVAS_V2_WORKSPACE.documentMargin}px of deliberate separation so the title strip and canonical evidence read as distinct story islands.`);
       }

@@ -228,7 +228,18 @@ function assessedFlows(app: AppDataApp, instruction: string, catalog: AppDataCat
     const hasExactScope = scored.some((candidate) => candidate.scopeMatch === "exact");
     return hasExactScope ? assessment.scopeMatch === "exact" : assessment.scopeMatch !== "mismatch";
   });
-  const fallbackPool = preferredPool.length ? preferredPool : selectable.length ? selectable : scored;
+  // A named app is not sufficient grounding by itself. When the user asks for
+  // onboarding, browsing evidence is a different research object—not a
+  // fallback onboarding journey. Keep mismatched captures visible to the
+  // director as supporting catalog context, but never promote them to an
+  // adequate/preferred flow merely because the requested scope is absent.
+  const hasRequestedScope = sessions.length > 0 || platforms.length > 0;
+  const scopeCompatible = selectable.filter((assessment) => assessment.scopeMatch !== "mismatch");
+  const fallbackPool = preferredPool.length
+    ? preferredPool
+    : hasRequestedScope
+      ? scopeCompatible
+      : selectable.length ? selectable : scored;
   const bestScore = Math.max(...fallbackPool.map((assessment) => assessment.score), Number.NEGATIVE_INFINITY);
   return scored
     .map((assessment): FlowAssessment => {

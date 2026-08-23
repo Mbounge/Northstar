@@ -3,6 +3,7 @@ import type {
   CanvasV2CreativeDirection,
   CanvasV2CreativeMoveKind,
   CanvasV2ElementBounds,
+  CanvasV2PlacementOccupantObservation,
   CanvasV2IslandExecutionContract,
   CanvasV2RenderedReflection,
   CanvasV2SpatialStrategy,
@@ -82,6 +83,7 @@ export interface CanvasV2LoopState {
       canvasGeometry: {
         contentBounds: CanvasV2ElementBounds;
         canonicalLaneBounds?: CanvasV2ElementBounds;
+        placementOccupants?: CanvasV2PlacementOccupantObservation[];
       };
       evidenceGeometry: Array<Record<string, unknown>>;
       designRegions: Array<Record<string, unknown>>;
@@ -102,6 +104,35 @@ export interface CanvasV2LoopContinuation {
   researchMode?: CanvasV2ResearchMode;
   researchStatus?: CanvasV2ResearchRequirement[];
   modelSelection?: CanvasV2ModelSelection;
+}
+
+/**
+ * The execution journal records every accepted revision because each one is
+ * authoritative design memory. The chat timeline is a user-facing progress
+ * account, though: consecutive passes through the same design milestone are
+ * one logical step, not several indistinguishable "Established the frame"
+ * entries. Keep research insertions separate (each names newly grounded
+ * evidence) and collapse only adjacent design steps with the same move kind.
+ */
+export function canvasV2VisibleProgressSteps(
+  steps: readonly CanvasV2LoopStep[],
+): CanvasV2LoopStep[] {
+  return steps.reduce<CanvasV2LoopStep[]>((visible, step) => {
+    const previous = visible.at(-1);
+    if (step.kind !== "design" || previous?.kind !== "design" || previous.moveKind !== step.moveKind) {
+      visible.push(step);
+      return visible;
+    }
+    const providerAttempts = [...(previous.providerAttempts ?? []), ...(step.providerAttempts ?? [])];
+    visible[visible.length - 1] = {
+      ...step,
+      turn: previous.turn,
+      ...(providerAttempts.length ? { providerAttempts } : {}),
+      renderRepairCount: (previous.renderRepairCount ?? 0) + (step.renderRepairCount ?? 0) || undefined,
+      renderRepairFailures: [...(previous.renderRepairFailures ?? []), ...(step.renderRepairFailures ?? [])].slice(-12),
+    };
+    return visible;
+  }, []);
 }
 
 export function createCanvasV2Loop(input: {

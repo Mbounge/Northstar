@@ -4,6 +4,7 @@ import { buildCanvasV2EvidenceCopyHandles } from "@/lib/canvas-v2/evidence-handl
 import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/canvas-v2/types";
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { buildCanvasV2SceneObjectInventory } from "@/lib/canvas-v2/scene-transaction";
+import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
 
 const MAX_SOURCE_OUTLINE = 42_000;
 const MAX_CSS_CONTEXT = 32_000;
@@ -110,12 +111,34 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
   const canonicalNodeIds = new Set(manifests.flatMap((flow) => flow.items.map((item) => item.nodeId)));
   const evidenceById = new Map(revision.evidence.map((asset) => [asset.id, asset]));
   const copyHandleByEvidenceId = new Map(buildCanvasV2EvidenceCopyHandles(revision.document).map((item) => [item.evidenceId, item.handle]));
+  const aiAuthoringBounds = {
+    x: CANVAS_V2_WORKSPACE.aiAuthoringOriginX,
+    y: CANVAS_V2_WORKSPACE.aiAuthoringInset,
+    width: CANVAS_V2_WORKSPACE.aiAuthoringWidth,
+    height: CANVAS_V2_WORKSPACE.height - CANVAS_V2_WORKSPACE.aiAuthoringInset * 2,
+  };
+  const placementObstacles = observation.spatial.authoredSurface?.placementOccupants?.map((occupant) => occupant.bounds) ?? [];
+  const recommendedOpenTerritories = [
+    { purpose: "wide-chapter", width: 2_400, height: 1_000 },
+    { purpose: "standard-island", width: 1_600, height: 900 },
+    { purpose: "focused-callout", width: 900, height: 650 },
+  ].flatMap((footprint) => {
+    const placement = findCanvasV2OpenPlacement({
+      preferred: { x: aiAuthoringBounds.x, y: aiAuthoringBounds.y },
+      bounds: aiAuthoringBounds,
+      footprint,
+      obstacles: placementObstacles,
+    });
+    return placement ? [{ ...footprint, ...placement }] : [];
+  });
   return {
     workspace: {
       schema: CANVAS_V2_WORKSPACE.schema,
       bounds: { x: 0, y: 0, width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height },
       safeMargin: CANVAS_V2_WORKSPACE.documentMargin,
-      contract: "The board is one finite coordinate space. Compose inside it; do not create an inner canvas. Preserve user-authored geometry and content unless the user explicitly asks you to change it.",
+      aiAuthoringBounds,
+      recommendedOpenTerritories,
+      contract: "The board is one finite world-space coordinate system. The AI authoring bounds are honest object geometry, not a camera illusion. Inspect placementOccupants before every turn; select genuinely open territory inside the authorship bounds and never overlap, cover, move, resize, or restyle an existing user, research, or unchanged Northstar object. recommendedOpenTerritories are collision-free starting footprints, not mandatory templates: choose the one suited to the composition or derive another verified free footprint from the complete occupant map. Preserve user-authored geometry and content unless the user explicitly asks you to change it.",
       userEdits: canvasV2UserEditLedger(revision.document.html),
       objectGraph: buildCanvasV2SceneObjectInventory(revision.document).slice(0, 220),
       lastSceneTransaction: revision.sceneTransaction ? {
@@ -124,7 +147,7 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
         stylesheetChanged: revision.sceneTransaction.stylesheetChanged,
         mutations: revision.sceneTransaction.mutations.slice(0, 120),
       } : undefined,
-      authorshipContract: "Every listed object has stable identity and remains directly selectable after commit. Preserve userEdited objects exactly. Develop an existing island through its identified descendants; create new objects only inside the declared island transaction.",
+      authorshipContract: "Every listed object has stable identity and remains directly selectable after commit. Preserve userEdited objects exactly and treat their rendered bounds as multiplayer placement obstacles. Develop an existing island through its identified descendants; create new objects only inside the declared island transaction and only in collision-free world-space territory.",
     },
     source: {
       htmlOutline: compactSource(revision),

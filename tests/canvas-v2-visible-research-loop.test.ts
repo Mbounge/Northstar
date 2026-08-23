@@ -74,6 +74,50 @@ test("the model sees both explicitly named apps and chooses exact complete flows
   assert.deepEqual(result.evidence.filter((asset) => asset.screen).map((asset) => asset.app), ["Awin", "Awin"]);
 });
 
+test("a named app cannot substitute browsing evidence for an onboarding request", () => {
+  const browsingOnly: AppDataCatalog = { tenantId: "tenant", apps: [{
+    id: "app:awin",
+    name: "Awin",
+    totalScreens: 2,
+    flows: [{
+      id: "flow:awin:browsing",
+      name: "Managing affiliate links",
+      appName: "Awin",
+      platform: "mobile",
+      sessionType: "browsing",
+      scope: "journey",
+      screens: [0, 1].map((index) => ({
+        id: `awin-browsing-${index}`,
+        name: `Browsing ${index + 1}`,
+        imageUrl: `https://evidence.test/awin/browsing/${index}.png`,
+        appName: "Awin",
+        flowName: "Managing affiliate links",
+        platform: "mobile",
+        sessionType: "browsing",
+        index,
+      })),
+    }],
+  }] };
+  const index = buildCanvasV2ResearchCatalogIndex(browsingOnly, "Compare Awin onboarding", revision(), ["Awin"]);
+  assert.deepEqual(index.requirements[0]?.adequateFlowIds, []);
+  assert.equal(index.requirements[0]?.preferredFlow, undefined);
+  assert.equal(index.apps[0]?.flows[0]?.scopeMatch, "mismatch");
+  assert.equal(index.apps[0]?.flows[0]?.selection, "supporting");
+  assert.equal(nextCanvasV2RequiredResearch(index), undefined);
+  assert.throws(() => resolveCanvasV2ResearchDecision(browsingOnly, {
+    schema: "canvas-v2.decision.v1",
+    decision: "research",
+    moveKind: "research",
+    creativeDirection,
+    spatialStrategy,
+    reflection,
+    appId: "app:awin",
+    flowId: "flow:awin:browsing",
+    summary: "Ground Awin.",
+    expectedVisualResult: "Show Awin onboarding.",
+  }, [], index), /supporting evidence/);
+});
+
 test("production research is evidence-first and synthesis cannot complete on the final retrieval turn", () => {
   const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
   assert.match(route, /if \(groundingRequired\)/);

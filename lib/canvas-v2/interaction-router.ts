@@ -89,3 +89,20 @@ export function parseCanvasV2InteractionDecision(
 export function canvasV2RouteMutatesCanvas(route: CanvasV2InteractionRoute): boolean {
   return route === "transform" || route === "research-design" || route === "selection-transform";
 }
+
+/**
+ * Routing may clarify an instruction, but it is not allowed to rewrite the
+ * research object. Preserve the user's exact words alongside any paraphrase so
+ * deterministic app/flow selection still sees terms such as onboarding,
+ * browsing, mobile, web, and explicitly named taxonomy paths.
+ */
+export function canvasV2AuthoritativeCanvasInstruction(message: string, routedInstruction: string): string {
+  const original = message.trim();
+  const routed = routedInstruction.trim();
+  if (!original) return routed;
+  const comparableOriginal = original.replace(/\s+/g, " ").toLowerCase();
+  const comparableRouted = routed.replace(/\s+/g, " ").toLowerCase();
+  return comparableRouted.includes(comparableOriginal)
+    ? routed
+    : `${routed}\n\nAuthoritative user request (preserve exact product and journey scope): ${original}`;
+}

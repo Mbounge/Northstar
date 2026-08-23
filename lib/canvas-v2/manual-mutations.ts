@@ -133,6 +133,13 @@ function storedNumber(element: HTMLElement, key: "canvasV2ManualX" | "canvasV2Ma
   return Number.isFinite(authoredValue) ? authoredValue : 0;
 }
 
+function storedDimension(element: HTMLElement, key: "canvasV2ManualWidth" | "canvasV2ManualHeight"): number {
+  const value = Number(element.dataset[key]);
+  if (Number.isFinite(value) && value > 0) return value;
+  const authoredValue = Number.parseFloat(key === "canvasV2ManualWidth" ? element.style.width : element.style.height);
+  return Number.isFinite(authoredValue) && authoredValue > 0 ? authoredValue : 240;
+}
+
 function findUniqueNode(document: Document, nodeId: string): HTMLElement {
   const normalized = nodeId.trim();
   if (!normalized) throw new Error("A manual mutation requires a stable node identity.");
@@ -150,13 +157,6 @@ function assertMutableNode(element: HTMLElement): void {
 
 function assertDeletableNode(element: HTMLElement): void {
   assertMutableNode(element);
-  if (
-    element.dataset.canvasV2CanonicalFlow
-    || element.dataset.canvasV2EvidenceRole === "canonical"
-    || element.querySelector('[data-canvas-v2-canonical-flow], [data-canvas-v2-evidence-role="canonical"]')
-  ) {
-    throw new Error("Grounded evidence is protected. Move, resize, or copy it instead of deleting the source evidence.");
-  }
 }
 
 function markUserEdit(element: HTMLElement, kind: CanvasV2ManualMutation["kind"]): void {
@@ -211,8 +211,8 @@ export function applyCanvasV2ManualMutation(
     setGeometryStyle(element, "top", `${y}px`);
     markUserEdit(element, mutation.kind);
   } else if (mutation.kind === "resize") {
-    const width = Math.max(24, finite(mutation.width, "Width"));
-    const height = Math.max(24, finite(mutation.height, "Height"));
+    const width = Math.max(Math.max(1, Math.min(24, storedDimension(element, "canvasV2ManualWidth") * 0.1)), finite(mutation.width, "Width"));
+    const height = Math.max(Math.max(1, Math.min(24, storedDimension(element, "canvasV2ManualHeight") * 0.1)), finite(mutation.height, "Height"));
     element.dataset.canvasV2ManualWidth = String(width);
     element.dataset.canvasV2ManualHeight = String(height);
     setGeometryStyle(element, "width", `${width}px`);
@@ -223,8 +223,8 @@ export function applyCanvasV2ManualMutation(
   } else if (mutation.kind === "transform") {
     const x = storedNumber(element, "canvasV2ManualX") + finite(mutation.deltaX, "Horizontal movement");
     const y = storedNumber(element, "canvasV2ManualY") + finite(mutation.deltaY, "Vertical movement");
-    const width = Math.max(24, finite(mutation.width, "Width"));
-    const height = Math.max(24, finite(mutation.height, "Height"));
+    const width = Math.max(Math.max(1, Math.min(24, storedDimension(element, "canvasV2ManualWidth") * 0.1)), finite(mutation.width, "Width"));
+    const height = Math.max(Math.max(1, Math.min(24, storedDimension(element, "canvasV2ManualHeight") * 0.1)), finite(mutation.height, "Height"));
     element.dataset.canvasV2ManualX = String(x);
     element.dataset.canvasV2ManualY = String(y);
     element.dataset.canvasV2ManualWidth = String(width);

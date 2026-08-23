@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  canvasV2AuthoritativeCanvasInstruction,
   canvasV2RouteMutatesCanvas,
   parseCanvasV2InteractionDecision,
 } from "../lib/canvas-v2/interaction-router";
@@ -36,6 +37,20 @@ test("design and research routes carry a self-contained canvas instruction", () 
   assert.equal(research.researchMode, "synthesis");
 });
 
+test("routing paraphrases cannot erase the user's journey scope", () => {
+  const instruction = canvasV2AuthoritativeCanvasInstruction(
+    "Compare Awin and Whop onboarding",
+    "Build a comparison of the two monetization journeys.",
+  );
+  assert.match(instruction, /two monetization journeys/);
+  assert.match(instruction, /Authoritative user request/);
+  assert.match(instruction, /Awin and Whop onboarding/);
+  assert.equal(
+    canvasV2AuthoritativeCanvasInstruction("Compare Awin onboarding", "Compare Awin onboarding with clear evidence."),
+    "Compare Awin onboarding with clear evidence.",
+  );
+});
+
 test("selection transformation requires and preserves the exact stable target", () => {
   assert.throws(() => parseCanvasV2InteractionDecision({ route: "selection-transform", summary: "Edit it.", canvasInstruction: "Make it concise." }, "Make it concise"), /Select an canvas element/);
   const decision = parseCanvasV2InteractionDecision({ route: "selection-transform", summary: "Edit it.", canvasInstruction: "Make it concise." }, "Make it concise", selection);
@@ -49,8 +64,10 @@ test("the chat controller delegates only mutating routes to the observed design 
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
   assert.match(hook, /canvasV2RouteMutatesCanvas/);
   assert.match(hook, /if \(!canvasV2RouteMutatesCanvas\(decision\.route\)\)/);
-  assert.match(hook, /input\.engine\.start\(decision\.canvasInstruction/);
+  assert.match(hook, /canvasV2AuthoritativeCanvasInstruction/);
+  assert.match(hook, /input\.engine\.start\(canvasInstruction/);
   assert.match(route, /Route by semantic intent, not by word matching/);
+  assert.match(route, /journey\/session type/);
   for (const interaction of ["conversation", "inspect", "transform", "research-design", "selection-transform"]) assert.match(route, new RegExp(interaction));
   assert.match(workspace, /routerEndpoint="\/api\/canvas-v2\/route"|routerEndpoint = "\/api\/canvas-v2\/route"/);
   assert.doesNotMatch(`${hook}\n${route}\n${workspace}`, /@\/lib\/canvas-ai\//);

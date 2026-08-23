@@ -34,7 +34,7 @@ Route by semantic intent, not by word matching. Mentioning an app or the canvas 
 For research-design, identify every app or product the user explicitly asks North Star to research or compare in researchTargets. Preserve the user's names without inventing catalog availability. Return an empty array when no specific product is named. For every other route return an empty array.
 For research-design, set researchMode to evidence only when the requested deliverable is the evidence itself—for example, showing or adding a flow or screenshots without interpretation. Set it to synthesis when the user wants comparison, analysis, explanation, insights, strategy, an executive artifact, or any designed argument grounded in the evidence. For every other route use none.
 For conversation and inspect, provide the final concise answer in answer. Inspection must be grounded only in supplied source, evidence, and render context; acknowledge uncertainty when appropriate.
-For mutating routes, provide a concise summary of what you will do and a self-contained canvasInstruction that preserves the user's material intent. Do not design the artifact in this response; the observed design loop owns that work.
+For mutating routes, provide a concise summary of what you will do and a self-contained canvasInstruction that preserves the user's material intent. Product names, requested journey/session type (for example onboarding versus browsing), platform, taxonomy path, and requested evidence scope are authoritative and may never be generalized, substituted, or dropped during paraphrase. Do not design the artifact in this response; the observed design loop owns that work.
 Return JSON only.`;
 
 const RESPONSE_SCHEMA = {

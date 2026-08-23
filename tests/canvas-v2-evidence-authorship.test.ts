@@ -151,6 +151,24 @@ test("an analytical copy cannot substitute for a missing or reordered canonical 
   assert.match(validateCanvasV2EvidenceContinuity(canonical, reordered, evidence).join(" "), /complete, ordered|screen order/);
 });
 
+test("an explicit user delete may remove canonical screenshots without weakening model continuity", () => {
+  const removedFirstScreen = document(`
+    <img data-canvas-v2-node-id="flow-awin-icon" data-canvas-v2-evidence-id="icon:awin" data-canvas-v2-evidence-role="canonical" src="https://evidence.test/awin/icon.png">
+    <img data-canvas-v2-node-id="flow-awin-screen-2" data-canvas-v2-evidence-id="screen:awin-2" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="1" src="https://evidence.test/awin/2.png">
+  `);
+  assert.match(validateCanvasV2EvidenceContinuity(canonical, removedFirstScreen, evidence).join(" "), /must remain visible|complete, ordered/);
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(canonical, removedFirstScreen, evidence, { allowUserEvidenceRemoval: true }), []);
+
+  const removedFlow = { html: '<main data-canvas-v2-node-id="canvas"></main>', css: "" };
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(canonical, removedFlow, evidence, { allowUserEvidenceRemoval: true }), []);
+
+  const reorderedSubset = document(`
+    <img data-canvas-v2-node-id="flow-awin-screen-2" data-canvas-v2-evidence-id="screen:awin-2" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="1" src="https://evidence.test/awin/2.png">
+    <img data-canvas-v2-node-id="flow-awin-icon" data-canvas-v2-evidence-id="icon:awin" data-canvas-v2-evidence-role="canonical" src="https://evidence.test/awin/icon.png">
+  `);
+  assert.match(validateCanvasV2EvidenceContinuity(canonical, reorderedSubset, evidence, { allowUserEvidenceRemoval: true }).join(" "), /ordered/);
+});
+
 test("every canonical flow requires complete contiguous screen indices", () => {
   const invalid = { ...canonical, html: canonical.html.replace('data-canvas-v2-flow-index="1"', 'data-canvas-v2-flow-index="4"') };
   const empty = { html: '<main data-canvas-v2-node-id="canvas"></main>', css: "" };
@@ -520,6 +538,16 @@ test("islands preserve one upper-left story origin and distinct readable territo
   };
   assert.deepEqual(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered), []);
 
+  rendered.spatial.designRegions[0] = {
+    ...rendered.spatial.designRegions[0],
+    targetZoneId: undefined,
+  };
+  assert.deepEqual(
+    validateCanvasV2RenderedIslandNarrativeIntegrity(rendered),
+    [],
+    "rendered title geometry remains authoritative when an optional planning zone is absent",
+  );
+
   rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 1_090, 420, 560, 320);
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /192px canvas safe area/);
 
@@ -530,10 +558,53 @@ test("islands preserve one upper-left story origin and distinct readable territo
     region("title-island", "title", 192, 192, 480, 180),
     region("comparison-island", "comparison", 920, 420, 560, 320),
   ];
-  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /full-width horizontal strip/);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /too narrow to establish a readable narrative opening/);
 
   rendered.spatial.designRegions = [region("comparison-island", "comparison", 920, 360, 560, 360)];
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /exactly one title-and-description island/);
+});
+
+test("native world-space titles begin at the honest authoring origin and may move right around occupied territory", () => {
+  const rendered = observation();
+  const region = (nodeId: string, storyRole: "title" | "comparison", x: number, y: number, width: number, height: number) => ({
+    nodeId,
+    islandId: nodeId,
+    storyRole,
+    placementMode: "evidence-relative-island" as const,
+    bounds: { x, y, width, height },
+    canvasWidthShare: width / 12_000,
+    canvasHeightShare: height / 8_000,
+    canvasAreaShare: width * height / (12_000 * 8_000),
+    centerXShare: (x + width / 2) / 12_000,
+    centerYShare: (y + height / 2) / 8_000,
+    edgeSpace: { left: x, top: y, right: 12_000 - x - width, bottom: 8_000 - y - height },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+  });
+  rendered.contentBounds = { x: 0, y: 0, width: 12_000, height: 8_000 };
+  rendered.spatial.evidence = rendered.spatial.evidence.map((item, index) => ({
+    ...item,
+    bounds: { x: 2_200 + index * 180, y: 2_600, width: 120, height: 240 },
+  }));
+  rendered.spatial.designRegions = [
+    region("title-island", "title", 2_500, 1_200, 1_600, 360),
+    region("comparison-island", "comparison", 4_500, 2_300, 1_500, 920),
+  ];
+  rendered.spatial.authoredSurface = {
+    canvasBounds: rendered.contentBounds,
+    authoredAreaShare: 0.02,
+    readingOrder: ["title-island", "comparison-island"],
+    canonicalLaneBounds: { x: 2_200, y: 2_600, width: 480, height: 240 },
+    zones: [],
+  };
+  assert.deepEqual(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered), []);
+
+  rendered.spatial.designRegions[0] = region("title-island", "title", 0, 1_200, 1_600, 360);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /upper-left narrative origin/);
+
+  rendered.spatial.designRegions[0] = region("title-island", "title", 2_200, 2_520, 1_600, 360);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /overlaps grounded evidence/);
 });
 
 test("bounded model context exposes factual analysis-copy geometry and authored relationships", () => {

@@ -6,6 +6,7 @@ import { canvasV2ChatStatusForLoop, type CanvasV2ChatStatus } from "@/lib/canvas
 import type { CanvasV2LoopContinuation, CanvasV2LoopState } from "@/lib/canvas-v2/design-loop";
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import {
+  canvasV2AuthoritativeCanvasInstruction,
   canvasV2RouteMutatesCanvas,
   type CanvasV2InteractionDecision,
   type CanvasV2InteractionRoute,
@@ -137,7 +138,8 @@ export function useCanvasV2Chat(input: {
         return;
       }
       if (!decision.canvasInstruction) throw new Error("North Star returned no canvas instruction.");
-      const runId = input.engine.start(decision.canvasInstruction, input.engine.displayedObservation, undefined, decision.researchTargets, decision.researchMode, modelSelection);
+      const canvasInstruction = canvasV2AuthoritativeCanvasInstruction(message, decision.canvasInstruction);
+      const runId = input.engine.start(canvasInstruction, input.engine.displayedObservation, undefined, decision.researchTargets, decision.researchMode, modelSelection);
       if (!runId) throw new Error("The canvas is not ready to begin another design run.");
       activeRoutingTurnId.current = undefined;
       activeDesignTurnId.current = turnId;
@@ -146,7 +148,7 @@ export function useCanvasV2Chat(input: {
         status: "running",
         route: decision.route,
         routeSummary: decision.summary,
-        canvasInstruction: decision.canvasInstruction,
+        canvasInstruction,
         runId,
         retry: undefined,
         researchTargets: decision.researchTargets,

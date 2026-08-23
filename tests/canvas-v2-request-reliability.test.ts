@@ -106,6 +106,29 @@ test("a non-retryable request failure stops after its first response", async () 
   assert.equal(calls, 1);
 });
 
+test("an HTML proxy failure is reported by HTTP status instead of as malformed model output", async () => {
+  let calls = 0;
+  await assert.rejects(
+    requestCanvasV2Json({
+      endpoint: "/canvas-v2",
+      body: {},
+      signal: new AbortController().signal,
+      requestId: "proxy-failure",
+      policy: { maxAttempts: 3, timeoutMs: 100, baseDelayMs: 1, maxDelayMs: 2 },
+      fetcher: async () => {
+        calls += 1;
+        return new Response("<!doctype html><title>Not found</title>", { status: 404 });
+      },
+      wait: immediateWait,
+    }),
+    (error) => error instanceof CanvasV2RequestError
+      && error.code === "provider-rejected"
+      && error.message === "North Star request failed (404)."
+      && error.attempts === 1,
+  );
+  assert.equal(calls, 1);
+});
+
 test("a timed-out provider attempt is bounded and retryable", async () => {
   let calls = 0;
   const fetcher: typeof fetch = async (_input, init) => {

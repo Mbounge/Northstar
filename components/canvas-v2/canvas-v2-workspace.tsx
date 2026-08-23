@@ -42,6 +42,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { CanvasV2CanvasScene, type CanvasV2TransientGeometry } from "@/components/canvas-v2/canvas-scene";
 import { CanvasV2ChatPanel } from "@/components/canvas-v2/canvas-v2-chat-panel";
 import { CanvasV2ResearchPanel } from "@/components/canvas-v2/canvas-v2-research-panel";
+import { useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
 import { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
 import { useTheme } from "@/components/theme-provider";
 import { insertCanvasV2EvidenceAsset } from "@/lib/canvas-v2/evidence-insertion";
@@ -79,11 +80,11 @@ import {
   CANVAS_V2_EMPTY_INSETS,
   canvasV2FrameableSceneBounds,
   centeredCanvasV2WorkspaceOrigin,
+  clampCanvasV2WorkspaceScale,
   constrainCanvasV2WorkspaceViewport,
   fitCanvasV2WorkspaceBounds,
   resizeCanvasV2WorkspaceBounds,
   translateCanvasV2WorkspaceBounds,
-  zoomCanvasV2WorkspaceAtPoint,
   type CanvasV2ResizeHandle,
   type CanvasV2WorkspaceInsets,
   type CanvasV2WorkspaceViewport,
@@ -146,8 +147,8 @@ function sameInspectableElements(
   });
 }
 
-function topLevelCanvasSelection(elements: readonly CanvasV2InspectableElement[]): CanvasV2InspectableElement[] {
-  const candidates = elements.filter((element) => {
+function eligibleCanvasSelection(elements: readonly CanvasV2InspectableElement[]): CanvasV2InspectableElement[] {
+  return elements.filter((element) => {
     const { x, y, width, height } = element.bounds;
     return element.nodeId !== "canvas"
       && element.kind !== "root"
@@ -165,8 +166,18 @@ function topLevelCanvasSelection(elements: readonly CanvasV2InspectableElement[]
         height: CANVAS_V2_WORKSPACE.height,
       });
   });
-  const candidateIds = new Set(candidates.map((element) => element.nodeId));
-  return candidates.filter((element) => !element.parentNodeId || !candidateIds.has(element.parentNodeId));
+}
+
+function individualMarqueeSelection(
+  hits: readonly CanvasV2InspectableElement[],
+  scene: readonly CanvasV2InspectableElement[],
+): CanvasV2InspectableElement[] {
+  const candidates = eligibleCanvasSelection(hits);
+  const parentIds = new Set(scene.flatMap((element) => element.parentNodeId ? [element.parentNodeId] : []));
+  // A marquee is precision selection: it targets painted leaf objects only.
+  // Semantic containers remain useful click targets, but their large group or
+  // island bounds must never swallow every child touched by a drag rectangle.
+  return candidates.filter((element) => !parentIds.has(element.nodeId));
 }
 
 function synchronizeSelectionWithNativeScene(
@@ -306,6 +317,16 @@ export function CanvasV2Workspace({
   const [hoveredElement, setHoveredElement] = useState<CanvasV2InspectableElement>();
   const [selectedElements, setSelectedElements] = useState<CanvasV2InspectableElement[]>([]);
   const selectedElement = selectedElements[selectedElements.length - 1];
+  // Conversation and run lifecycle belong to the workspace, not to the
+  // collapsible presentation panel. Closing the panel or visiting Apps must
+  // never discard a routing request, transcript, selected model, or the turn
+  // that is following the active design loop.
+  const chat = useCanvasV2Chat({
+    endpoint: routerEndpoint,
+    engine,
+    selection: selectedElement,
+    selections: selectedElements,
+  });
   const [selectionTarget, setSelectionTarget] = useState<string>();
   const [draftBounds, setDraftBounds] = useState<CanvasV2InspectableElement["bounds"]>();
   const [draftElementBounds, setDraftElementBounds] = useState<Record<string, CanvasV2InspectableElement["bounds"]>>({});
@@ -319,7 +340,7 @@ export function CanvasV2Workspace({
   const [colorProperty, setColorProperty] = useState<CanvasV2EditableStyleProperty>("background-color");
   const [customColorDraft, setCustomColorDraft] = useState("#6d59ed");
   const [altTextDraft, setAltTextDraft] = useState("");
-  const [toolbarWidth, setToolbarWidth] = useState(420);
+  const [toolbarSize, setToolbarSize] = useState({ width: 420, height: 58 });
   // The finite canvas begins at the viewport origin. The previous bootstrap
   // used a legacy artboard-style offset ({ x: 450, y: 72 }) which was outside
   // the legal camera range at 24%. Until the first zoom normalized that
@@ -397,7 +418,9 @@ export function CanvasV2Workspace({
     selectElement(element, intent);
   }, [selectElement]);
   const refreshSelection = useCallback((elements: CanvasV2InspectableElement[]) => {
-    elements = topLevelCanvasSelection(elements);
+    // The native compiler already exposes only real selectable objects.
+    // Do not promote refreshed leaf selections back to semantic containers.
+    elements = eligibleCanvasSelection(elements);
     setSelectedElements((current) => sameInspectableElements(current, elements) ? current : elements);
     const primary = elements[elements.length - 1];
     if (primary?.kind === "image") setAltTextDraft(primary.altText ?? "");
@@ -447,22 +470,56 @@ export function CanvasV2Workspace({
     };
   }, [chatOpen]);
 
+  // The camera belongs exclusively to the person using the board. North Star
+  // publishes honest world-space geometry to the right of the floating panel;
+  // accepting a revision never pans or zooms the viewport. Explicit Fit,
+  // wheel, pan, and zoom controls are the only camera writers.
+  const claimCameraForUser = useCallback(() => {}, []);
+
   const receiveScene = useCallback((elements: CanvasV2InspectableElement[]) => {
     sceneElementsRef.current = elements;
     setSceneElements((current) => sameInspectableElements(current, elements) ? current : elements);
-    // Scene observation owns semantic geometry only. It must never mutate the
-    // camera: doing so after an AI commit caused the correctly inset document
-    // to snap back against the viewport edge as soon as the delayed snapshot
-    // settled. The finite canvas, authored coordinates, and user camera are
-    // independent authorities. Only explicit pan, zoom, or Fit commands move
-    // the camera.
   }, []);
 
-  const constrainViewport = useCallback((candidate: CanvasV2WorkspaceViewport) => (
-    constrainCanvasV2WorkspaceViewport(candidate, cameraSize(), CANVAS_V2_EMPTY_INSETS)
-  ), [cameraSize]);
+  const constrainViewport = useCallback((candidate: CanvasV2WorkspaceViewport) => {
+    const constrained = constrainCanvasV2WorkspaceViewport(candidate, cameraSize(), CANVAS_V2_EMPTY_INSETS);
+    const current = viewportRef.current;
+    const continuousAxis = (value: number, currentValue: number, constrainedValue: number) => {
+      // AI focus may temporarily place an honest canvas edge inside a chrome
+      // inset. Manual navigation must continue from that visible coordinate,
+      // but it may only move the camera back toward the ordinary finite-board
+      // range—not farther into synthetic overscroll.
+      if (currentValue > constrainedValue && value >= constrainedValue) return Math.min(currentValue, value);
+      if (currentValue < constrainedValue && value <= constrainedValue) return Math.max(currentValue, value);
+      return constrainedValue;
+    };
+    return {
+      ...constrained,
+      x: continuousAxis(candidate.x, current.x, constrained.x),
+      y: continuousAxis(candidate.y, current.y, constrained.y),
+    };
+  }, [cameraSize]);
+
+  const zoomViewportAtPoint = useCallback((
+    current: CanvasV2WorkspaceViewport,
+    nextScale: number,
+    anchor: { x: number; y: number },
+  ) => {
+    const currentScale = clampCanvasV2WorkspaceScale(current.scale);
+    const workspaceAnchor = {
+      x: (anchor.x - current.x) / currentScale,
+      y: (anchor.y - current.y) / currentScale,
+    };
+    const scale = clampCanvasV2WorkspaceScale(nextScale);
+    return constrainViewport({
+      scale,
+      x: anchor.x - workspaceAnchor.x * scale,
+      y: anchor.y - workspaceAnchor.y * scale,
+    });
+  }, [constrainViewport]);
 
   const fitContent = useCallback((geometry = geometryRef.current) => {
+    claimCameraForUser();
     const authoredBounds = canvasV2FrameableSceneBounds(sceneElementsRef.current);
     commitViewport(fitCanvasV2WorkspaceBounds(
       authoredBounds ?? { x: 0, y: 0, width: geometry.width, height: geometry.height },
@@ -470,16 +527,17 @@ export function CanvasV2Workspace({
       contentInsets(),
       authoredBounds ? 96 : 48,
     ));
-  }, [cameraSize, commitViewport, contentInsets]);
+  }, [cameraSize, claimCameraForUser, commitViewport, contentInsets]);
 
   const fitWorkspace = useCallback(() => {
+    claimCameraForUser();
     commitViewport(fitCanvasV2WorkspaceBounds(
       { x: 0, y: 0, width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height },
       cameraSize(),
       contentInsets(),
       36,
     ));
-  }, [cameraSize, commitViewport, contentInsets]);
+  }, [cameraSize, claimCameraForUser, commitViewport, contentInsets]);
 
   const receiveGeometry = useCallback((geometry: CanvasV2CanvasGeometry) => {
     geometryRef.current = geometry;
@@ -491,16 +549,18 @@ export function CanvasV2Workspace({
   }, []);
 
   const zoomAtCenter = (delta: number) => {
+    claimCameraForUser();
     const camera = cameraSize();
     const insets = contentInsets();
     const anchor = {
       x: insets.left + (camera.width - insets.left - insets.right) / 2,
       y: insets.top + (camera.height - insets.top - insets.bottom) / 2,
     };
-    commitViewport((current) => zoomCanvasV2WorkspaceAtPoint(current, current.scale + delta, anchor, camera, CANVAS_V2_EMPTY_INSETS));
+    commitViewport((current) => zoomViewportAtPoint(current, current.scale + delta, anchor));
   };
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    claimCameraForUser();
     const target = event.target as HTMLElement;
     const panning = tool === "pan" || spacePan || event.button === 1;
     if (!panning) {
@@ -521,6 +581,7 @@ export function CanvasV2Workspace({
   };
 
   const forwardedWorkspacePointer = useCallback((event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => {
+    if (event.phase === "down") claimCameraForUser();
     // Pointer move events report `button === -1` in Chromium even while the
     // primary button remains held. Once a select gesture owns the pointer,
     // route the complete sequence through marquee handling by pointer id.
@@ -554,7 +615,7 @@ export function CanvasV2Workspace({
       return;
     }
     commitViewport((current) => constrainViewport({ ...current, x: pan.originX + event.clientX - pan.x, y: pan.originY + event.clientY - pan.y }));
-  }, [commitViewport, constrainViewport, selectElement, tool, workspacePoint]);
+  }, [claimCameraForUser, commitViewport, constrainViewport, selectElement, tool, workspacePoint]);
 
   const finishMarquee = (gesture: MarqueeGesture) => {
     const bounds = {
@@ -566,13 +627,14 @@ export function CanvasV2Workspace({
     const hits = bounds.width < 3 && bounds.height < 3
       ? []
       : sceneElementsRef.current.filter((item) => item.nodeId !== "canvas" && canvasV2BoundsIntersect(bounds, item.bounds));
-    const topLevelHits = topLevelCanvasSelection(hits);
+    const preciseHits = individualMarqueeSelection(hits, sceneElementsRef.current);
     setSelectedElements((current) => gesture.additive
-      ? [...current.filter((item) => !topLevelHits.some((hit) => hit.nodeId === item.nodeId)), ...topLevelHits]
-      : topLevelHits);
-    setSelectionTarget(topLevelHits.at(-1)?.nodeId);
+      ? [...current.filter((item) => !preciseHits.some((hit) => hit.nodeId === item.nodeId)), ...preciseHits]
+      : preciseHits);
+    setSelectionTarget(preciseHits.at(-1)?.nodeId);
     marqueeRef.current = undefined;
     setMarquee(undefined);
+    workspaceRef.current?.focus({ preventScroll: true });
   };
 
   const updateDirectGesture = (pointerId: number, clientX: number, clientY: number) => {
@@ -635,7 +697,15 @@ export function CanvasV2Workspace({
         setSnapGuides(snapped.guides);
         return true;
       }
-      const next = resizeCanvasV2WorkspaceBounds(directGesture.original, directGesture.handle ?? "south-east", { x: deltaX, y: deltaY });
+      const relativeMinimum = {
+        width: Math.max(1, Math.min(24, directGesture.original.width * 0.1)),
+        height: Math.max(1, Math.min(24, directGesture.original.height * 0.1)),
+      };
+      const relativeDelta = {
+        x: deltaX * Math.max(0.05, Math.min(1, directGesture.original.width / 24)),
+        y: deltaY * Math.max(0.05, Math.min(1, directGesture.original.height / 24)),
+      };
+      const next = resizeCanvasV2WorkspaceBounds(directGesture.original, directGesture.handle ?? "south-east", relativeDelta, relativeMinimum);
       const nextElements = Object.fromEntries(directGesture.originals.map((item) => [item.nodeId, scaleCanvasV2ObjectBounds(item.bounds, directGesture.original, next)]));
       directGesture.draftBounds = next;
       directGesture.draftElementBounds = nextElements;
@@ -794,6 +864,7 @@ export function CanvasV2Workspace({
   };
 
   const beginDirectGesture = (kind: DirectGesture["kind"], event: ReactPointerEvent<HTMLElement>, handle?: CanvasV2ResizeHandle) => {
+    claimCameraForUser();
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -814,13 +885,15 @@ export function CanvasV2Workspace({
       workspaceRef.current?.focus({ preventScroll: true });
       return;
     }
+    claimCameraForUser();
     if (tool !== "select" || event.button !== 0) return;
     setLayersOpen(false);
     const additive = Boolean(event.shiftKey || event.metaKey);
     const selectedNodeIds = selectedElements.map((item) => item.nodeId);
+    const currentNativeScene = engine.readNativeScene();
     const selectionOwnsTarget = !additive && (
       Boolean(event.element.parentNodeId && selectedNodeIds.includes(event.element.parentNodeId))
-      || canvasV2NativeSceneSelectionContainsTarget(engine.nativeScene, selectedNodeIds, event.element.nodeId)
+      || canvasV2NativeSceneSelectionContainsTarget(currentNativeScene, selectedNodeIds, event.element.nodeId)
     );
     const alreadySelected = selectedElements.some((item) => item.nodeId === event.element.nodeId);
     const nextSelection = selectionOwnsTarget
@@ -853,12 +926,22 @@ export function CanvasV2Workspace({
 
   const submitMutation = (mutation: CanvasV2ManualMutation) => {
     try {
-      const sourceScene = engine.nativeScene;
+      // Event handlers may run again before React has painted the preceding
+      // manual commit. Read the hook's synchronous native authority instead
+      // of the render-closure snapshot so rapid, sequential object edits do
+      // not build from a stale revision and snap back on release.
+      const sourceScene = engine.readNativeScene();
       const nextNativeScene = sourceScene ? applyCanvasV2NativeSceneMutation(sourceScene, mutation) : undefined;
       const document = nextNativeScene
         ? serializeCanvasV2NativeScene(nextNativeScene)
         : applyCanvasV2ManualMutation(engine.committed.document, mutation);
-      if (!engine.applyManualDocument(document, describeCanvasV2ManualMutation(mutation), undefined, nextNativeScene)) {
+      if (!engine.applyManualDocument(document, describeCanvasV2ManualMutation(mutation), undefined, nextNativeScene, {
+        // Model turns must retain their grounded sources. An explicit human
+        // delete is different: user ownership wins, including for a canonical
+        // screenshot or an entire selected set of screenshots.
+        allowEvidenceRemoval: mutation.kind === "delete"
+          || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete")),
+      })) {
         // Busy-state rejections are control flow, not product errors. Controls
         // are disabled while AI work is active; a racing keyboard/pointer
         // event should simply leave committed truth untouched and never leak
@@ -1019,16 +1102,13 @@ export function CanvasV2Workspace({
         setSpacePan(true);
       } else if (event.key === "Escape") {
         selectElement(undefined);
-      } else if (event.key.toLowerCase() === "f" && !command) {
-        event.preventDefault();
-        fitContent();
       } else if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redoCanvas(); else undoCanvas();
       } else if (command && event.key.toLowerCase() === "a") {
         event.preventDefault();
         window.getSelection()?.removeAllRanges();
-        const selectable = topLevelCanvasSelection(sceneElementsRef.current);
+        const selectable = individualMarqueeSelection(sceneElementsRef.current, sceneElementsRef.current);
         setSelectedElements(selectable);
         setSelectionTarget(selectable.at(-1)?.nodeId);
         setToolbarMenu(undefined);
@@ -1061,7 +1141,7 @@ export function CanvasV2Workspace({
         }));
       } else if ((event.key === "Delete" || event.key === "Backspace") && selectedElements.length) {
         event.preventDefault();
-        batchForSelection(`Deleted selected objects.`, (item) => item.nodeId === "canvas" || item.locked || item.canonicalEvidence ? undefined : { kind: "delete", nodeId: item.nodeId });
+        batchForSelection(`Deleted selected objects.`, (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "delete", nodeId: item.nodeId });
       }
     };
     const keyup = (event: KeyboardEvent) => {
@@ -1076,23 +1156,22 @@ export function CanvasV2Workspace({
   });
 
   const navigateWorkspaceWheel = useCallback((event: { clientX: number; clientY: number; deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean }) => {
+    claimCameraForUser();
     if (event.ctrlKey || event.metaKey) {
       const rect = workspaceRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
       commitViewport((current) => {
-        return zoomCanvasV2WorkspaceAtPoint(
+        return zoomViewportAtPoint(
           current,
           current.scale * Math.exp(-event.deltaY * 0.002),
           { x: localX, y: localY },
-          cameraSize(),
-          CANVAS_V2_EMPTY_INSETS,
         );
       });
       return;
     }
     commitViewport((current) => constrainViewport({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
-  }, [cameraSize, commitViewport, constrainViewport]);
+  }, [claimCameraForUser, commitViewport, constrainViewport, zoomViewportAtPoint]);
 
   const wheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1120,6 +1199,14 @@ export function CanvasV2Workspace({
     }));
   }, [draftElementBounds, draftRotations, selectedElements]);
   const activeSelectionBounds = draftBounds ?? unionCanvasV2ObjectBounds(selectedElements.map((item) => item.bounds));
+  const visibleResizeHandles = activeSelectionBounds ? RESIZE_HANDLES.filter(({ handle }) => {
+    const screenWidth = activeSelectionBounds.width * viewport.scale;
+    const screenHeight = activeSelectionBounds.height * viewport.scale;
+    if (screenWidth < 18 && screenHeight < 18) return handle === "south-east";
+    if (screenWidth < 18) return handle === "north" || handle === "east" || handle === "south";
+    if (screenHeight < 18) return handle === "west" || handle === "south" || handle === "east";
+    return true;
+  }) : RESIZE_HANDLES;
   const selectionPermanent = selectedElements.some((item) => item.nodeId === "canvas");
   const selectionIsText = Boolean(selectedElements.length === 1 && selectedElement?.textEditable && (
     selectedElement.textPreview !== undefined
@@ -1128,35 +1215,89 @@ export function CanvasV2Workspace({
   const selectionIsImage = selectedElements.length === 1 && selectedElement?.kind === "image";
   const selectionCanFill = selectedElements.length === 1 && !selectionIsText && !selectionIsImage && !selectionPermanent;
   const selectedVisualStyle = selectedElement?.visualStyle;
-  const sourceNodes = useMemo(
-    () => readCanvasV2BoardObjectGraph(engine.committed.document).filter((node) => node.kind !== "root"),
-    [engine.committed],
-  );
+  const sourceNodes = useMemo(() => {
+    const selectableIds = new Set(sceneElements.map((element) => element.nodeId));
+    // Layers mirrors the objects a person can actually select on the board.
+    // Generated section/flow/island wrappers remain internal layout structure
+    // and must not reintroduce implicit groups through an alternate UI path.
+    // Explicit user-created groups are selectable scene elements and remain.
+    return readCanvasV2BoardObjectGraph(engine.committed.document)
+      .filter((node) => node.kind !== "root" && selectableIds.has(node.nodeId));
+  }, [engine.committed, sceneElements]);
   const contextualToolbarPosition = useMemo(() => {
     if (!activeSelectionBounds) return undefined;
     const availableWidth = workspaceRef.current?.clientWidth ?? 1_440;
     const availableHeight = workspaceRef.current?.clientHeight ?? 900;
+    const toolbarHeight = toolbarSize.height;
+    const bottomChrome = 92;
     const rawCenter = viewport.x + (activeSelectionBounds.x + activeSelectionBounds.width / 2) * viewport.scale;
-    const halfToolbar = Math.min(toolbarWidth, availableWidth - 32) / 2;
+    const resolvedToolbarWidth = Math.min(toolbarSize.width, availableWidth - 32);
+    const halfToolbar = resolvedToolbarWidth / 2;
     const minimumCenter = (chatOpen ? 430 : 16) + halfToolbar + 12;
     const maximumCenter = Math.max(minimumCenter, availableWidth - halfToolbar - 16);
-    const left = Math.max(minimumCenter, Math.min(maximumCenter, rawCenter));
+    const clampCenter = (center: number) => Math.max(minimumCenter, Math.min(maximumCenter, center));
+    const clampTop = (top: number) => Math.max(18, Math.min(availableHeight - bottomChrome - toolbarHeight, top));
+    const selectionLeft = viewport.x + activeSelectionBounds.x * viewport.scale;
+    const selectionRight = viewport.x + (activeSelectionBounds.x + activeSelectionBounds.width) * viewport.scale;
     const selectionTop = viewport.y + activeSelectionBounds.y * viewport.scale;
     const selectionBottom = viewport.y + (activeSelectionBounds.y + activeSelectionBounds.height) * viewport.scale;
-    // Reserve screen-space for the fixed-size rotate targets. The contextual
-    // toolbar previously sat directly on top of the north rotate handles at
-    // normal zoom, so the toolbar swallowed the drag before the object could
-    // receive it. Keep chrome and manipulation controls in separate bands.
-    const above = selectionTop - 116;
-    const below = selectionBottom + 60;
-    const placement = above >= 18 || below + 58 > availableHeight - 18 ? "above" as const : "below" as const;
-    return { placement, style: { left, top: placement === "above" ? Math.max(18, above) : Math.min(availableHeight - 70, below) } };
-  }, [activeSelectionBounds, chatOpen, toolbarWidth, viewport]);
+    const selectedIds = new Set(selectedElements.map((item) => item.nodeId));
+    const occupied = sceneElements
+      .filter((item) => !selectedIds.has(item.nodeId) && !item.hidden)
+      .map((item) => ({
+        left: viewport.x + item.bounds.x * viewport.scale - 8,
+        top: viewport.y + item.bounds.y * viewport.scale - 8,
+        right: viewport.x + (item.bounds.x + item.bounds.width) * viewport.scale + 8,
+        bottom: viewport.y + (item.bounds.y + item.bounds.height) * viewport.scale + 8,
+      }));
+    const chrome = [canvasMenuRef.current, statusPillRef.current]
+      .flatMap((element) => {
+        if (!element) return [];
+        const bounds = element.getBoundingClientRect();
+        return [{ left: bounds.left - 8, top: bounds.top - 8, right: bounds.right + 8, bottom: bounds.bottom + 8 }];
+      });
+    // The inspector belongs outside the selected object. Ranking only against
+    // neighboring objects allowed the real, measured toolbar to shave across
+    // a tiny zoomed-out selection and consume its resize target.
+    const selectionObstacle = {
+      left: selectionLeft - 18,
+      top: selectionTop - 18,
+      right: selectionRight + 18,
+      bottom: selectionBottom + 18,
+    };
+    const candidates = [
+      { placement: "above" as const, center: rawCenter, top: selectionTop - toolbarHeight - 54 },
+      { placement: "below" as const, center: rawCenter, top: selectionBottom + 54 },
+      { placement: "below" as const, center: selectionRight + 54 + halfToolbar, top: (selectionTop + selectionBottom - toolbarHeight) / 2 },
+      { placement: "below" as const, center: selectionLeft - 54 - halfToolbar, top: (selectionTop + selectionBottom - toolbarHeight) / 2 },
+      // Dense evidence rails can occupy every local direction. A stable top
+      // dock is the final collision-free escape hatch and remains outside the
+      // floating chat/menu/status chrome.
+      { placement: "below" as const, center: rawCenter, top: 18 },
+    ].map((candidate) => ({ ...candidate, center: clampCenter(candidate.center), top: clampTop(candidate.top) }));
+    const intersectionArea = (candidate: typeof candidates[number], obstacle: typeof occupied[number]) => {
+      const left = candidate.center - halfToolbar;
+      const right = candidate.center + halfToolbar;
+      const overlapWidth = Math.max(0, Math.min(right, obstacle.right) - Math.max(left, obstacle.left));
+      const overlapHeight = Math.max(0, Math.min(candidate.top + toolbarHeight, obstacle.bottom) - Math.max(candidate.top, obstacle.top));
+      return overlapWidth * overlapHeight;
+    };
+    const ranked = candidates.map((candidate, index) => ({
+      candidate,
+      index,
+      overlap: [...occupied, ...chrome, selectionObstacle].reduce((total, obstacle) => total + intersectionArea(candidate, obstacle), 0),
+    })).sort((left, right) => left.overlap - right.overlap || left.index - right.index);
+    const chosen = ranked[0].candidate;
+    return { placement: chosen.placement, style: { left: chosen.center, top: chosen.top } };
+  }, [activeSelectionBounds, chatOpen, sceneElements, selectedElements, toolbarSize, viewport]);
 
   useEffect(() => {
     const toolbar = contextualToolbarRef.current;
     if (!toolbar || !selectedElement) return;
-    const update = () => setToolbarWidth(toolbar.offsetWidth);
+    const update = () => setToolbarSize((current) => {
+      const next = { width: toolbar.offsetWidth, height: toolbar.offsetHeight };
+      return current.width === next.width && current.height === next.height ? current : next;
+    });
     update();
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
     observer?.observe(toolbar);
@@ -1175,8 +1316,8 @@ export function CanvasV2Workspace({
       </div>
 
       <div ref={statusPillRef} className="absolute right-5 top-5 z-50 flex h-14 items-center gap-3 rounded-2xl border border-[#dedfea] bg-white px-2.5 shadow-[0_10px_32px_rgba(51,45,95,.13)] dark:border-white/[.1] dark:bg-[#1d1c24] dark:shadow-[0_14px_40px_rgba(0,0,0,.32)]">
-        <span className={`h-2 w-2 rounded-full ${engine.running ? "animate-pulse bg-[#735dff]" : "bg-emerald-400"}`} />
-        <span data-testid="canvas-v2-loop-status" className="text-xs font-black capitalize text-[#343442] dark:text-[#f1eff6]">{engine.loop?.status.replaceAll("-", " ") ?? "ready"}</span>
+        <span className={`h-2 w-2 rounded-full ${chat.busy ? "animate-pulse bg-[#735dff]" : "bg-emerald-400"}`} />
+        <span data-testid="canvas-v2-loop-status" className="text-xs font-black capitalize text-[#343442] dark:text-[#f1eff6]">{chat.routing ? "understanding request" : engine.loop?.status.replaceAll("-", " ") ?? (chat.busy ? "working" : "ready")}</span>
         <span className="h-6 w-px bg-[#e5e5ed] dark:bg-white/[.09]" />
         <span data-testid="canvas-v2-committed-revision" className="max-w-[150px] truncate font-mono text-[10px] text-[#8b8b99]">{engine.committed.id}</span>
         <button type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title="Toggle theme" className="grid h-9 w-9 place-items-center rounded-[11px] text-[#676573] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#aaa6b4] dark:hover:bg-white/[.07] dark:hover:text-[#c1b8ff]">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
@@ -1193,7 +1334,7 @@ export function CanvasV2Workspace({
           <button aria-label="Collapse North Star panel" onClick={() => setChatOpen(false)} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
         </div>
 
-        {panel === "chat" ? <CanvasV2ChatPanel routerEndpoint={routerEndpoint} engine={engine} selection={selectedElement} selections={selectedElements} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.running || engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex flex-1 flex-col items-center justify-center p-8 text-center"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#f0edff] text-[#6d59ed] dark:bg-[#292439] dark:text-[#ad9fff]"><Shapes /></div><h2 className="mt-4 font-bold capitalize">{panel}</h2><p className="mt-2 max-w-[250px] text-sm leading-6 text-[#777789] dark:text-[#9995a5]">Create text, frames, shapes, and tables from the toolbar, then edit them directly on the workspace.</p></div>}
+        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.running || engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex flex-1 flex-col items-center justify-center p-8 text-center"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#f0edff] text-[#6d59ed] dark:bg-[#292439] dark:text-[#ad9fff]"><Shapes /></div><h2 className="mt-4 font-bold capitalize">{panel}</h2><p className="mt-2 max-w-[250px] text-sm leading-6 text-[#777789] dark:text-[#9995a5]">Create text, frames, shapes, and tables from the toolbar, then edit them directly on the workspace.</p></div>}
       </aside>}
 
       <section
@@ -1273,7 +1414,7 @@ export function CanvasV2Workspace({
               const bounds = draftElementBounds[element.nodeId] ?? element.bounds;
               return <div key={element.nodeId} aria-hidden className="pointer-events-none absolute border border-[#8d7cff]/70" style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, rotate: `${draftRotations[element.nodeId] ?? element.rotation ?? 0}deg` }} />;
             })}
-            {selectedElement && activeSelectionBounds && <div data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: 1 / viewport.scale }}>
+            {selectedElement && activeSelectionBounds && <div data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: 1 / viewport.scale, rotate: selectedElements.length === 1 ? `${draftRotations[selectedElement.nodeId] ?? selectedElement.rotation ?? 0}deg` : undefined }}>
               {selectedElements.length > 1 && !selectionPermanent && <button
                 type="button"
                 aria-label={`Move ${selectedElements.length} selected objects`}
@@ -1282,10 +1423,14 @@ export function CanvasV2Workspace({
                 onPointerDown={(event) => beginDirectGesture("move", event)}
                 className="pointer-events-auto absolute inset-0 z-[5] cursor-move bg-transparent"
               />}
-              {!selectionPermanent && RESIZE_HANDLES.map(({ handle, className, cursor }) => <button key={handle} aria-label={`Resize ${selectedElement.nodeId} from ${handle}`} onPointerDown={(event) => beginDirectGesture("resize", event, handle)} style={{ scale: `${0.625 / viewport.scale}` }} className={`pointer-events-auto absolute z-10 h-4 w-4 rounded-sm border-2 border-[#6d5df5] bg-white dark:bg-[#1f1d27] ${className} ${cursor}`} />)}
+              {!selectionPermanent && visibleResizeHandles.map(({ handle, className, cursor }) => <button key={handle} aria-label={`Resize ${selectedElement.nodeId} from ${handle}`} onPointerDown={(event) => beginDirectGesture("resize", event, handle)} style={{ scale: `${0.625 / viewport.scale}` }} className={`pointer-events-auto absolute z-10 h-4 w-4 rounded-sm border-2 border-[#6d5df5] bg-white dark:bg-[#1f1d27] ${className} ${cursor}`} />)}
               {!selectionPermanent && ROTATE_CORNERS.map(({ corner, className, iconClassName }) => {
-                const offset = -(22 / viewport.scale + 14);
-                return <button key={corner} aria-label={`Rotate selected objects from ${corner}`} title="Drag to rotate" onPointerDown={(event) => beginDirectGesture("rotate", event)} style={{ scale: `${1 / viewport.scale}`, ...(corner.includes("west") ? { left: offset } : { right: offset }), ...(corner.includes("north") ? { top: offset } : { bottom: offset }) }} className={`group pointer-events-auto absolute z-20 h-7 w-7 cursor-grab rounded-full bg-transparent active:cursor-grabbing ${className}`}><span className={`pointer-events-none absolute grid h-6 w-6 scale-75 place-items-center rounded-full border border-[#dad6ff] bg-white text-[#6d59ed] opacity-0 shadow-lg transition group-hover:scale-100 group-hover:opacity-100 group-focus-visible:scale-100 group-focus-visible:opacity-100 dark:border-[#554a89] dark:bg-[#211e2b] dark:text-[#b9adff] ${iconClassName}`}><RotateCw className="h-3.5 w-3.5" /></span></button>;
+                // Keep the invisible rotation hit target compact and entirely
+                // outside the selected corner. Oversized 28px targets around
+                // tiny zoomed-out screens intercepted clicks meant for nearby
+                // objects even while no rotate icon was visible.
+                const offset = -(14 / viewport.scale + 10);
+                return <button key={corner} aria-label={`Rotate selected objects from ${corner}`} title="Drag to rotate" onPointerDown={(event) => beginDirectGesture("rotate", event)} style={{ scale: `${0.6 / viewport.scale}`, ...(corner.includes("west") ? { left: offset } : { right: offset }), ...(corner.includes("north") ? { top: offset } : { bottom: offset }) }} className={`group pointer-events-auto absolute z-20 h-7 w-7 cursor-grab rounded-full bg-transparent active:cursor-grabbing ${className}`}><span className={`pointer-events-none absolute grid h-6 w-6 scale-75 place-items-center rounded-full border border-[#dad6ff] bg-white text-[#6d59ed] opacity-0 shadow-lg transition group-hover:scale-100 group-hover:opacity-100 group-focus-visible:scale-100 group-focus-visible:opacity-100 dark:border-[#554a89] dark:bg-[#211e2b] dark:text-[#b9adff] ${iconClassName}`}><RotateCw className="h-3.5 w-3.5" /></span></button>;
               })}
             </div>}
             {snapGuides.map((guide, index) => <div key={`${guide.axis}-${guide.position}-${index}`} aria-hidden className="pointer-events-none absolute z-30 bg-[#ef4fb8]" style={guide.axis === "x" ? { left: guide.position, top: guide.from, width: 1, height: guide.to - guide.from } : { left: guide.from, top: guide.position, width: guide.to - guide.from, height: 1 }} />)}
@@ -1338,13 +1483,15 @@ export function CanvasV2Workspace({
             theme={theme}
             onObservation={engine.receiveObservation}
             onCaptureError={engine.captureFailed}
+            onNativeScene={engine.receiveNativeScene}
+            placementReferenceScene={engine.nativeScene}
             bare
             framePointerEvents="none"
           />
         </div>
       )}
 
-      {selectedElement && contextualToolbarPosition && <aside
+      {selectedElement && contextualToolbarPosition && !layersOpen && <aside
         ref={contextualToolbarRef}
         aria-label="Element inspector"
         data-testid="canvas-v2-context-toolbar"
@@ -1389,6 +1536,7 @@ export function CanvasV2Workspace({
         <button title="Duplicate" aria-label="Duplicate selected elements" onClick={duplicateSelection} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Copy className="h-4 w-4" /></button>
         {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
         <button title="Lock or unlock" aria-label="Toggle lock for selected elements" onClick={() => batchForSelection("Updated selection locks.", (item) => item.nodeId === "canvas" ? undefined : { kind: "lock", nodeId: item.nodeId, locked: !item.locked })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30">{selectedElements.every((item) => item.locked) ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}</button>
+        <button title="Delete" aria-label="Delete selected elements" onClick={() => batchForSelection("Deleted selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "delete", nodeId: item.nodeId })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit || selectedElements.every((item) => item.locked)} className="grid h-9 w-9 place-items-center rounded-xl text-[#ff8f91] hover:bg-red-500/[.14] disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>
         <button title="More object actions" aria-label="More object actions" onClick={() => setToolbarMenu((current) => current === "more" ? undefined : "more")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Settings2 className="h-4 w-4" /></button>
         <button title="Clear selection" aria-label="Clear element selection" onClick={() => selectElement(undefined)} className="grid h-9 w-9 place-items-center rounded-xl text-white/70 hover:bg-white/[.1] hover:text-white"><X className="h-4 w-4" /></button>
 
@@ -1422,7 +1570,6 @@ export function CanvasV2Workspace({
           <button title="Hide" aria-label="Hide selected elements" onClick={() => batchForSelection("Hid selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "visibility", nodeId: item.nodeId, hidden: true })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><EyeOff className="h-4 w-4" /></button>
           <button title="Send backward" aria-label="Send selected element backward" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "backward" })} disabled={selectionPermanent || selectedElement.locked} className="h-9 rounded-xl px-2 text-[11px] font-bold hover:bg-white/[.1] disabled:opacity-30">−1</button>
           <button title="Bring forward" aria-label="Bring selected element forward" onClick={() => submitMutation({ kind: "layer", nodeId: selectedElement.nodeId, direction: "forward" })} disabled={selectionPermanent || selectedElement.locked} className="h-9 rounded-xl px-2 text-[11px] font-bold hover:bg-white/[.1] disabled:opacity-30">+1</button>
-          <button title="Delete" aria-label="Delete selected elements" onClick={() => batchForSelection("Deleted selected objects.", (item) => item.nodeId === "canvas" || item.locked || item.canonicalEvidence ? undefined : { kind: "delete", nodeId: item.nodeId })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit || selectedElements.every((item) => Boolean(item.canonicalEvidence))} className="grid h-9 w-9 place-items-center rounded-xl text-[#ff8f91] hover:bg-red-500/[.14] disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>
         </div>}
       </aside>}
       {mutationError && <div role="alert" className="absolute right-5 top-[90px] z-50 max-w-[340px] rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-xs leading-5 text-red-700 shadow-xl backdrop-blur dark:border-red-500/25 dark:bg-[#241d24]/95 dark:text-red-300">{mutationError}</div>}
@@ -1441,7 +1588,7 @@ export function CanvasV2Workspace({
         <button title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`flex h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold ${layersOpen ? "bg-[#e9e5ff] text-[#6c57ec] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#5e5e6e] dark:text-[#aaa6b4]"}`}><Layers3 className="h-4 w-4" />Layer</button>
       </div>
 
-      <div className="absolute bottom-5 right-5 z-40 flex items-center overflow-hidden rounded-2xl border border-[#dddded] bg-white/95 shadow-[0_12px_40px_rgba(50,45,100,.14)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1c1b23]/95 dark:shadow-[0_16px_48px_rgba(0,0,0,.34)]"><button onClick={() => zoomAtCenter(-0.1)} aria-label="Zoom out" className="grid h-12 w-12 place-items-center hover:bg-[#f4f2ff] dark:hover:bg-white/[.06]"><Minus className="h-4 w-4" /></button><button onClick={() => fitContent()} title="Fit content (F)" className="h-12 min-w-[76px] border-x border-[#e5e5ed] px-3 text-sm font-bold hover:bg-[#f4f2ff] dark:border-white/[.09] dark:hover:bg-white/[.06]">{Math.round(viewport.scale * 100)}%</button><button onClick={() => zoomAtCenter(0.1)} aria-label="Zoom in" className="grid h-12 w-12 place-items-center hover:bg-[#f4f2ff] dark:hover:bg-white/[.06]"><Plus className="h-4 w-4" /></button><button onClick={() => fitWorkspace()} aria-label="Fit workspace" title="Fit entire workspace" className="grid h-12 w-12 place-items-center border-l border-[#e5e5ed] hover:bg-[#f4f2ff] dark:border-white/[.09] dark:hover:bg-white/[.06]"><Maximize2 className="h-4 w-4" /></button></div>
+      <div className="absolute bottom-5 right-5 z-40 flex items-center overflow-hidden rounded-2xl border border-[#dddded] bg-white/95 shadow-[0_12px_40px_rgba(50,45,100,.14)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1c1b23]/95 dark:shadow-[0_16px_48px_rgba(0,0,0,.34)]"><button onClick={() => zoomAtCenter(-0.1)} aria-label="Zoom out" className="grid h-12 w-12 place-items-center hover:bg-[#f4f2ff] dark:hover:bg-white/[.06]"><Minus className="h-4 w-4" /></button><button onClick={() => fitContent()} title="Fit content" className="h-12 min-w-[76px] border-x border-[#e5e5ed] px-3 text-sm font-bold hover:bg-[#f4f2ff] dark:border-white/[.09] dark:hover:bg-white/[.06]">{Math.round(viewport.scale * 100)}%</button><button onClick={() => zoomAtCenter(0.1)} aria-label="Zoom in" className="grid h-12 w-12 place-items-center hover:bg-[#f4f2ff] dark:hover:bg-white/[.06]"><Plus className="h-4 w-4" /></button><button onClick={() => fitWorkspace()} aria-label="Fit workspace" title="Fit entire workspace" className="grid h-12 w-12 place-items-center border-l border-[#e5e5ed] hover:bg-[#f4f2ff] dark:border-white/[.09] dark:hover:bg-white/[.06]"><Maximize2 className="h-4 w-4" /></button></div>
     </main>
   );
 }

@@ -12,6 +12,7 @@ export async function proxy(request: NextRequest) {
     process.env.NORTHSTAR_E2E === "1" &&
     (request.nextUrl.pathname.startsWith("/__northstar-e2e") ||
       request.nextUrl.pathname.startsWith("/canvas-v2-e2e") ||
+      request.nextUrl.pathname === "/canvas" ||
       request.nextUrl.pathname === "/api/canvas-ai/artifact-ack")
   ) {
     return NextResponse.next({ request })

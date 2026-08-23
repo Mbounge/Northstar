@@ -76,6 +76,17 @@ export interface CanvasV2SpatialNodeObservation {
   };
 }
 
+export interface CanvasV2PlacementOccupantObservation {
+  nodeId: string;
+  parentNodeId?: string;
+  kind: "frame" | "group" | "island" | "text" | "image" | "shape" | "table" | "evidence" | "object";
+  owner: "user" | "northstar" | "research";
+  userEdited: boolean;
+  locked: boolean;
+  canonicalEvidence: boolean;
+  bounds: CanvasV2ElementBounds;
+}
+
 export interface CanvasV2SpatialIntersection {
   firstNodeId: string;
   secondNodeId: string;
@@ -267,6 +278,10 @@ export interface CanvasV2SurfaceZoneObservation {
   bounds: CanvasV2ElementBounds;
   designRegionNodeIds: string[];
   canonicalLaneNodeIds: string[];
+  /** Every top-level object intersecting this zone, including manual objects. */
+  occupantNodeIds?: string[];
+  /** Human-owned objects are immutable placement obstacles for Northstar. */
+  userOwnedNodeIds?: string[];
   occupiedAreaShare: number;
   availableAreaShare: number;
 }
@@ -284,6 +299,8 @@ export interface CanvasV2AuthoredSurfaceObservation {
   bottommostRegionNodeId?: string;
   canonicalLaneBounds?: CanvasV2ElementBounds;
   analysisEvidenceBounds?: CanvasV2ElementBounds;
+  /** Complete top-level world-space occupancy used for multiplayer placement. */
+  placementOccupants?: CanvasV2PlacementOccupantObservation[];
   zones: CanvasV2SurfaceZoneObservation[];
 }
 

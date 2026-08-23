@@ -10,6 +10,7 @@ import {
   constrainCanvasV2WorkspaceViewport,
   fitCanvasV2WorkspaceBounds,
   focusCanvasV2WorkspaceBounds,
+  revealCanvasV2WorkspaceBounds,
   resizeCanvasV2WorkspaceBounds,
   translateCanvasV2WorkspaceBounds,
   zoomCanvasV2WorkspaceAtPoint,
@@ -20,7 +21,15 @@ const insets = { left: 430, top: 0, right: 0, bottom: 0 };
 
 test("Patch 8 owns one explicit finite coordinate space", () => {
   assert.deepEqual({ width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height }, { width: 12_000, height: 8_000 });
+  assert.equal(CANVAS_V2_WORKSPACE.aiAuthoringOriginX, 1_920);
   assert.equal(CANVAS_V2_WORKSPACE.aiAuthoringInset, 1_200);
+  assert.equal(CANVAS_V2_WORKSPACE.aiAuthoringWidth, 8_880);
+  assert.equal(
+    CANVAS_V2_WORKSPACE.aiAuthoringOriginX
+      + CANVAS_V2_WORKSPACE.aiAuthoringWidth
+      + CANVAS_V2_WORKSPACE.aiAuthoringInset,
+    CANVAS_V2_WORKSPACE.width,
+  );
   assert.equal(CANVAS_V2_WORKSPACE.cameraOverscroll, 0);
 });
 
@@ -45,19 +54,41 @@ test("AI focus preserves working zoom and keeps content beyond chrome padding", 
   const working = { x: -400, y: -200, scale: 0.24 };
   const chrome = { left: 430, top: 116, right: 32, bottom: 92 };
   const focused = focusCanvasV2WorkspaceBounds(
-    { x: CANVAS_V2_WORKSPACE.aiAuthoringInset, y: CANVAS_V2_WORKSPACE.aiAuthoringInset, width: 9_000, height: 1_600 },
+    { x: CANVAS_V2_WORKSPACE.aiAuthoringOriginX, y: CANVAS_V2_WORKSPACE.aiAuthoringInset, width: CANVAS_V2_WORKSPACE.aiAuthoringWidth, height: 1_600 },
     working,
     camera,
     chrome,
     96,
   );
   const leadingEdge = canvasV2WorkspaceToScreen(
-    { x: CANVAS_V2_WORKSPACE.aiAuthoringInset, y: CANVAS_V2_WORKSPACE.aiAuthoringInset },
+    { x: CANVAS_V2_WORKSPACE.aiAuthoringOriginX, y: CANVAS_V2_WORKSPACE.aiAuthoringInset },
     focused,
   );
   assert.equal(focused.scale, working.scale);
   assert.ok(leadingEdge.x >= chrome.left + 96);
   assert.ok(leadingEdge.y >= chrome.top + 96);
+});
+
+test("AI reveal preserves working zoom even for an oversized accepted composition", () => {
+  const working = { x: -400, y: -200, scale: 0.24 };
+  const chrome = { left: 430, top: 116, right: 32, bottom: 92 };
+  const compact = revealCanvasV2WorkspaceBounds(
+    { x: 1_920, y: 1_200, width: 1_600, height: 900 },
+    working,
+    camera,
+    chrome,
+    72,
+  );
+  assert.equal(compact.scale, working.scale);
+
+  const landscape = revealCanvasV2WorkspaceBounds(
+    { x: 1_920, y: 1_200, width: 5_200, height: 3_200 },
+    working,
+    camera,
+    chrome,
+    72,
+  );
+  assert.equal(landscape.scale, working.scale);
 });
 
 test("zooming at a point preserves the world point under the pointer", () => {
@@ -84,6 +115,25 @@ test("camera, movement, resize, and creation remain inside the finite board", ()
   const origin = centeredCanvasV2WorkspaceOrigin({ width: 360, height: 240 }, fitted, camera, insets);
   assert.ok(origin.x >= 0);
   assert.ok(origin.y >= 0);
+});
+
+test("thin primitives keep axis-specific relative resize minima", () => {
+  const divider = { x: 300, y: 200, width: 1, height: 235 };
+  const touched = resizeCanvasV2WorkspaceBounds(
+    divider,
+    "east",
+    { x: 0.2, y: 0 },
+    { width: 1, height: 23.5 },
+  );
+  assert.equal(touched.height, 235);
+  assert.ok(touched.width > 1 && touched.width < 2);
+  const contracted = resizeCanvasV2WorkspaceBounds(
+    divider,
+    "east",
+    { x: -100, y: 0 },
+    { width: 1, height: 23.5 },
+  );
+  assert.equal(contracted.width, 1);
 });
 
 test("the finite canvas edge can meet every viewport edge without fake outer workspace", () => {

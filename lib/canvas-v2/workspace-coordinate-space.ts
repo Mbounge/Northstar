@@ -1,5 +1,9 @@
 export const CANVAS_V2_WORKSPACE_SCHEMA = "canvas-v2.workspace.v1" as const;
 
+const CANVAS_V2_WORKSPACE_WIDTH = 12_000;
+const CANVAS_V2_AI_AUTHORING_ORIGIN_X = 1_920;
+const CANVAS_V2_AI_AUTHORING_INSET = 1_200;
+
 export interface CanvasV2WorkspacePoint {
   x: number;
   y: number;
@@ -32,12 +36,23 @@ export type CanvasV2ResizeHandle = "north" | "north-east" | "east" | "south-east
  */
 export const CANVAS_V2_WORKSPACE = Object.freeze({
   schema: CANVAS_V2_WORKSPACE_SCHEMA,
-  width: 12_000,
+  width: CANVAS_V2_WORKSPACE_WIDTH,
   height: 8_000,
-  // AI-authored material owns a permanent ten-percent perimeter on the
-  // 12,000px-wide finite canvas. This is document geometry, not camera
-  // padding, so it remains true at every zoom and after manual navigation.
-  aiAuthoringInset: 1_200,
+  // The floating chat occupies the opening screen territory at the default
+  // working zoom. AI-authored material therefore begins at one permanent,
+  // asymmetric world-space origin rather than borrowing a temporary camera
+  // offset. At 24%, 1,920 world pixels become 460.8 screen pixels: enough to
+  // clear the 390px chat panel and its breathing room even when the user pans
+  // the camera all the way to the finite canvas edge.
+  aiAuthoringOriginX: CANVAS_V2_AI_AUTHORING_ORIGIN_X,
+  aiAuthoringInset: CANVAS_V2_AI_AUTHORING_INSET,
+  // This is the only legal full-width AI composition strip. Keeping the
+  // width beside its origin prevents the impossible former contract where a
+  // 9,600px title beginning at x=1,920 could not also retain the 1,200px
+  // right perimeter on a 12,000px board.
+  aiAuthoringWidth: CANVAS_V2_WORKSPACE_WIDTH
+    - CANVAS_V2_AI_AUTHORING_ORIGIN_X
+    - CANVAS_V2_AI_AUTHORING_INSET,
   // Islands retain a compact internal editorial margin inside the authored
   // document. This is intentionally distinct from the canvas perimeter.
   documentMargin: 192,
@@ -238,6 +253,24 @@ export function focusCanvasV2WorkspaceBounds(
   });
 }
 
+/**
+ * Reveal a newly accepted AI transaction without ever changing zoom.
+ *
+ * North Star is another participant on the board, not the owner of the
+ * camera. A large authored region therefore remains pannable at the user's
+ * current working scale. Only the explicit Fit command is allowed to change
+ * zoom to show an entire composition at once.
+ */
+export function revealCanvasV2WorkspaceBounds(
+  bounds: CanvasV2WorkspaceBounds,
+  viewport: CanvasV2WorkspaceViewport,
+  camera: CanvasV2WorkspaceSize,
+  insets: CanvasV2WorkspaceInsets = CANVAS_V2_EMPTY_INSETS,
+  padding = 64,
+): CanvasV2WorkspaceViewport {
+  return focusCanvasV2WorkspaceBounds(bounds, viewport, camera, insets, padding);
+}
+
 export function translateCanvasV2WorkspaceBounds(
   bounds: CanvasV2WorkspaceBounds,
   delta: CanvasV2WorkspacePoint,
@@ -255,22 +288,24 @@ export function resizeCanvasV2WorkspaceBounds(
   bounds: CanvasV2WorkspaceBounds,
   handle: CanvasV2ResizeHandle,
   delta: CanvasV2WorkspacePoint,
-  minimumSize = 24,
+  minimumSize: number | { width: number; height: number } = 24,
 ): CanvasV2WorkspaceBounds {
+  const minimumWidth = typeof minimumSize === "number" ? minimumSize : minimumSize.width;
+  const minimumHeight = typeof minimumSize === "number" ? minimumSize : minimumSize.height;
   const right = bounds.x + bounds.width;
   const bottom = bounds.y + bounds.height;
   let left = bounds.x;
   let top = bounds.y;
   let nextRight = right;
   let nextBottom = bottom;
-  if (handle.includes("west")) left = Math.min(right - minimumSize, bounds.x + finite(delta.x));
-  if (handle.includes("east")) nextRight = Math.max(bounds.x + minimumSize, right + finite(delta.x));
-  if (handle.includes("north")) top = Math.min(bottom - minimumSize, bounds.y + finite(delta.y));
-  if (handle.includes("south")) nextBottom = Math.max(bounds.y + minimumSize, bottom + finite(delta.y));
-  left = clamp(left, 0, CANVAS_V2_WORKSPACE.width - minimumSize);
-  top = clamp(top, 0, CANVAS_V2_WORKSPACE.height - minimumSize);
-  nextRight = clamp(nextRight, left + minimumSize, CANVAS_V2_WORKSPACE.width);
-  nextBottom = clamp(nextBottom, top + minimumSize, CANVAS_V2_WORKSPACE.height);
+  if (handle.includes("west")) left = Math.min(right - minimumWidth, bounds.x + finite(delta.x));
+  if (handle.includes("east")) nextRight = Math.max(bounds.x + minimumWidth, right + finite(delta.x));
+  if (handle.includes("north")) top = Math.min(bottom - minimumHeight, bounds.y + finite(delta.y));
+  if (handle.includes("south")) nextBottom = Math.max(bounds.y + minimumHeight, bottom + finite(delta.y));
+  left = clamp(left, 0, CANVAS_V2_WORKSPACE.width - minimumWidth);
+  top = clamp(top, 0, CANVAS_V2_WORKSPACE.height - minimumHeight);
+  nextRight = clamp(nextRight, left + minimumWidth, CANVAS_V2_WORKSPACE.width);
+  nextBottom = clamp(nextBottom, top + minimumHeight, CANVAS_V2_WORKSPACE.height);
   return { x: left, y: top, width: nextRight - left, height: nextBottom - top };
 }
 

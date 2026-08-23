@@ -26,6 +26,14 @@ test("the integrated shell exposes chat, selection, pan, and zoom without legacy
   assert.doesNotMatch(workspace, /@\/lib\/canvas-ai\//);
 });
 
+test("collapsing the panel cannot discard conversation or in-flight routing state", () => {
+  assert.match(workspace, /const chat = useCanvasV2Chat\(/);
+  assert.match(workspace, /<CanvasV2ChatPanel chat=\{chat\}/);
+  const panel = fs.readFileSync(path.join(root, "components/canvas-v2/canvas-v2-chat-panel.tsx"), "utf8");
+  assert.doesNotMatch(panel, /const chat = useCanvasV2Chat\(/);
+  assert.match(workspace, /chat\.routing \? "understanding request"/);
+});
+
 test("Shapes and Apps integrations stay native to V2 rather than silently using V1", () => {
   assert.match(workspace, /CanvasV2ResearchPanel/);
   assert.match(workspace, /Create text, frames, shapes, and tables/);

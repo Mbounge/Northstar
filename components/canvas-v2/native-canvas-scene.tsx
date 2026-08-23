@@ -4,6 +4,7 @@ import {
   createElement,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,6 +15,7 @@ import {
 
 import {
   applyCanvasV2ArtifactTheme,
+  applyCanvasV2ArtifactThemeToElement,
   createCanvasV2ArtifactThemeState,
   type CanvasV2ArtifactTheme,
 } from "@/lib/canvas-v2/artifact-theme";
@@ -88,6 +90,62 @@ function absoluteGeometry(node: CanvasV2NativeSceneNode, byId: Map<string, Canva
     parentId = parent.parentId;
   }
   return { x, y, width: node.geometry.width, height: node.geometry.height };
+}
+
+function roundSceneMetric(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/**
+ * The iframe compiles structure and the initial authored coordinate system,
+ * but the public scene is the final visual authority. It can have app-loaded
+ * fonts that an isolated srcDoc cannot inherit. Reconcile flow geometry from
+ * the actual public DOM once, before handing native truth to the interaction
+ * engine, so detaching a node preserves the exact box the user was looking at
+ * instead of an approximation measured with fallback font metrics.
+ */
+function reconcilePublicSceneGeometry(
+  scene: CanvasV2NativeSceneDocument,
+  root: HTMLElement,
+): CanvasV2NativeSceneDocument {
+  const rootRect = root.getBoundingClientRect();
+  const scaleX = rootRect.width / scene.width;
+  const scaleY = rootRect.height / scene.height;
+  if (!Number.isFinite(scaleX) || scaleX <= 0 || !Number.isFinite(scaleY) || scaleY <= 0) return scene;
+  const elements = new Map<string, HTMLElement>();
+  for (const node of scene.nodes) {
+    const selector = `[data-canvas-v2-native-scene-id="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(node.id) : node.id.replaceAll('"', '\\"')}"]`;
+    const element = root.querySelector<HTMLElement>(selector);
+    if (element) elements.set(node.id, element);
+  }
+  let changed = false;
+  const nodes = scene.nodes.map((node) => {
+    // Absolute canvas objects already have authoritative world geometry from
+    // the native scene. Reading their painted browser pixels back through the
+    // camera scale quantizes sub-pixel coordinates and silently moves an
+    // untouched collaborator on every later AI commit. Reconciliation exists
+    // only to materialize browser-owned normal-flow layout.
+    if (node.layoutMode === "absolute") return node;
+    const element = elements.get(node.id);
+    if (!element || node.geometry.rotation !== 0) return node;
+    const rect = element.getBoundingClientRect();
+    const parentRect = node.parentId ? elements.get(node.parentId)?.getBoundingClientRect() : rootRect;
+    if (!parentRect || rect.width <= 0 || rect.height <= 0) return node;
+    const geometry = {
+      ...node.geometry,
+      x: roundSceneMetric((rect.left - parentRect.left) / scaleX),
+      y: roundSceneMetric((rect.top - parentRect.top) / scaleY),
+      width: roundSceneMetric(rect.width / scaleX),
+      height: roundSceneMetric(rect.height / scaleY),
+    };
+    if (geometry.x === node.geometry.x
+      && geometry.y === node.geometry.y
+      && geometry.width === node.geometry.width
+      && geometry.height === node.geometry.height) return node;
+    changed = true;
+    return { ...node, geometry };
+  });
+  return changed ? { ...scene, nodes } : scene;
 }
 
 function inspectNativeNode(
@@ -194,8 +252,11 @@ export function CanvasV2NativeCanvasScene({
   transientGeometry,
 }: CanvasV2NativeCanvasSceneProps) {
   const compilerRef = useRef<HTMLIFrameElement>(null);
+  const publicSceneRef = useRef<HTMLDivElement>(null);
   const compileSequenceRef = useRef(0);
+  const reconciledSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
   const themeStateRef = useRef(createCanvasV2ArtifactThemeState());
+  const publicThemeStateRef = useRef(createCanvasV2ArtifactThemeState());
   const [scene, setScene] = useState<CanvasV2NativeSceneDocument>();
   const [compileError, setCompileError] = useState<string>();
   const activePointerRef = useRef<{ pointerId: number; element?: CanvasV2InspectableElement } | undefined>(undefined);
@@ -219,7 +280,6 @@ export function CanvasV2NativeCanvasScene({
         || document.documentElement.dataset.canvasV2RevisionId !== revision.id) return;
       const next = compileCanvasV2NativeScene({ document, revision, width, height });
       setScene(next);
-      onNativeScene?.(next);
       setCompileError(undefined);
     } catch (error) {
       setCompileError(error instanceof Error ? error.message : "The native scene could not be compiled.");
@@ -229,6 +289,28 @@ export function CanvasV2NativeCanvasScene({
   useEffect(() => {
     if (compilerRef.current?.contentDocument?.body) void compile();
   }, [compile]);
+
+  useLayoutEffect(() => {
+    const root = publicSceneRef.current;
+    if (!root || !renderedScene) return;
+    applyCanvasV2ArtifactThemeToElement(root, theme, publicThemeStateRef.current);
+  }, [renderedScene, theme]);
+
+  useLayoutEffect(() => {
+    if (!renderedScene || reconciledSceneRef.current === renderedScene) return;
+    const root = publicSceneRef.current;
+    const reconciled = root ? reconcilePublicSceneGeometry(renderedScene, root) : renderedScene;
+    reconciledSceneRef.current = reconciled;
+    // A committed override is already native truth for absolute objects, but
+    // its still-flowing text and layout children were first measured in the
+    // isolated compiler. Reconcile those children against the public canvas
+    // as well. This is what preserves the exact stretched/wrapped box when a
+    // person later detaches a heading or label. Absolute user geometry is
+    // deliberately ignored by reconcilePublicSceneGeometry, so a verifier
+    // can never rewrite a completed drag or resize.
+    if (!sceneOverride && reconciled !== scene) setScene(reconciled);
+    onNativeScene?.(reconciled);
+  }, [onNativeScene, renderedScene, scene, sceneOverride]);
 
   const targetNode = useCallback((target: EventTarget | null) => {
     const element = target && typeof (target as Element).closest === "function"
@@ -399,6 +481,7 @@ export function CanvasV2NativeCanvasScene({
         style={{ left: -100_000, top: -100_000, width, height }}
       />
       <div
+        ref={publicSceneRef}
         data-testid="canvas-v2-native-scene"
         data-canvas-v2-native-scene="true"
         data-revision-id={revision.id}
@@ -410,7 +493,7 @@ export function CanvasV2NativeCanvasScene({
           userSelect: "none",
           colorScheme: theme,
           "--northstar-ink": theme === "dark" ? "#f4f3f8" : "#151620",
-          "--northstar-muted": theme === "dark" ? "#aaa6b4" : "#737686",
+          "--northstar-muted": theme === "dark" ? "#c7c3cf" : "#737686",
           "--northstar-violet": theme === "dark" ? "#9d8cff" : "#6b4dff",
           "--northstar-line": theme === "dark" ? "rgba(255,255,255,.12)" : "rgba(78,67,135,.14)",
           "--northstar-surface": theme === "dark" ? "#1b1a22" : "#ffffff",

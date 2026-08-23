@@ -12,7 +12,7 @@ export interface CanvasV2FlowInsertion {
 
 const FLOW_CSS = `
 /* canvas-v2-flow-layout-v4: complete canonical journeys stay on one intrinsic horizontal rail */
-.northstar-canvas.canvas-v2-canvas--evidence-wide { box-sizing:border-box; width:100%; min-width:100%; min-height:100%; max-width:none; padding:${CANVAS_V2_WORKSPACE.aiAuthoringInset}px; overflow:visible; }
+.northstar-canvas.canvas-v2-canvas--evidence-wide { box-sizing:border-box; width:100%; min-width:100%; min-height:100%; max-width:none; padding:0; overflow:visible; }
 .canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:100%; max-width:none; padding:0; background:transparent; color:var(--northstar-ink); font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
 .canvas-v2-grounded-evidence--standalone { min-width:1680px; padding:52px 96px 96px; background:transparent; }
 .canvas-v2-grounded-title { margin:0 0 28px; color:var(--northstar-ink); font-size:9px; font-weight:850; letter-spacing:.18em; text-transform:uppercase; }
@@ -23,9 +23,11 @@ const FLOW_CSS = `
 .canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:var(--northstar-muted); font-size:11px; line-height:1.35; }
 .canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; min-width:0; max-width:none; column-gap:18px; padding-right:0; overflow:visible; }
 .canvas-v2-flow-screen { display:block; width:auto; height:235px; max-width:none; flex:none; object-fit:contain; filter:drop-shadow(0 12px 20px rgba(32,24,80,.09)); }
-.canvas-v2-flow-segment { box-sizing:border-box; display:flex; width:132px; height:235px; flex:none; align-items:flex-start; padding:12px 18px 0 14px; border-left:1px solid var(--northstar-line); color:var(--northstar-muted); font-size:9px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
-.canvas-v2-flow-segment-label { display:-webkit-box; max-width:102px; overflow:hidden; overflow-wrap:normal; word-break:normal; -webkit-box-orient:vertical; -webkit-line-clamp:4; }
-.canvas-v2-flow-segment--branch { border-left-color:var(--northstar-violet); color:var(--northstar-violet); }
+.canvas-v2-flow-segment { box-sizing:border-box; display:grid; grid-template-columns:1px minmax(0,1fr); column-gap:14px; width:132px; height:235px; flex:none; align-items:start; color:var(--northstar-muted); font-size:9px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
+.canvas-v2-flow-segment-rule { width:1px; height:235px; background:var(--northstar-line); }
+.canvas-v2-flow-segment-label { display:-webkit-box; max-width:102px; margin-top:12px; overflow:hidden; overflow-wrap:normal; word-break:normal; -webkit-box-orient:vertical; -webkit-line-clamp:4; }
+.canvas-v2-flow-segment--branch { color:var(--northstar-violet); }
+.canvas-v2-flow-segment--branch .canvas-v2-flow-segment-rule { background:var(--northstar-violet); }
 `;
 
 function stableTokenHash(value: string): string {
@@ -137,11 +139,15 @@ export function insertCanvasV2CanonicalFlow(input: {
       marker.dataset.canvasV2SegmentKind = segment.kind;
       marker.title = segment.name;
       marker.setAttribute("aria-label", segment.name);
+      const markerRule = parsed.createElement("div");
+      markerRule.className = "canvas-v2-flow-segment-rule";
+      markerRule.dataset.canvasV2NodeId = `${marker.dataset.canvasV2NodeId}-rule`;
       const markerLabel = parsed.createElement("span");
       markerLabel.className = "canvas-v2-flow-segment-label";
       markerLabel.dataset.canvasV2NodeId = `${marker.dataset.canvasV2NodeId}-label`;
       markerLabel.textContent = canvasV2CompactJourneySegmentLabel(segment.name);
-      marker.append(markerLabel);
+      marker.removeAttribute("data-canvas-v2-node-id");
+      marker.append(markerRule, markerLabel);
       sequence.append(marker);
     }
     const image = parsed.createElement("img");

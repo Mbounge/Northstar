@@ -54,7 +54,8 @@ import {
 } from "@/lib/canvas-v2/research-director";
 import type { CanvasV2ResearchMode } from "@/lib/canvas-v2/interaction-router";
 import type { CanvasV2ModelSelection } from "@/lib/canvas-v2/model-catalog";
-import type { CanvasV2NativeSceneDocument } from "@/lib/canvas-v2/native-scene";
+import { projectCanvasV2ObservationToNativeScene, type CanvasV2NativeSceneDocument } from "@/lib/canvas-v2/native-scene";
+import { validateCanvasV2MultiplayerPlacement } from "@/lib/canvas-v2/multiplayer-placement";
 
 interface PendingManualEdit {
   summary: string;
@@ -157,6 +158,9 @@ function rejectedCandidateContext(
       ...(observation.spatial.authoredSurface?.canonicalLaneBounds
         ? { canonicalLaneBounds: observation.spatial.authoredSurface.canonicalLaneBounds }
         : {}),
+      ...(observation.spatial.authoredSurface?.placementOccupants
+        ? { placementOccupants: observation.spatial.authoredSurface.placementOccupants.slice(0, 80) }
+        : {}),
     },
     evidenceGeometry,
     designRegions,
@@ -188,6 +192,17 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const [manualNotice, setManualNotice] = useState<string>();
   const [observations, setObservations] = useState<Record<string, CanvasV2RenderObservation>>({});
   const [nativeScene, setNativeScene] = useState<CanvasV2NativeSceneDocument>();
+  // Direct manipulation can finish more than once before React has rendered
+  // the preceding commit (a quick drag followed by resize is the common
+  // case). State-only authority leaves the second gesture reading the prior
+  // revision and its release is then discarded as stale. Keep the committed
+  // revision and native scene synchronously readable by the event pipeline;
+  // React state remains the render subscription, not the transaction lock.
+  const committedRef = useRef<CanvasV2ArtifactRevision>(initial);
+  const nativeSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
+  const inspectionScenesRef = useRef(new Map<string, CanvasV2NativeSceneDocument>());
+  const historyRef = useRef<CanvasV2ArtifactRevision[]>([initial]);
+  const historyIndexRef = useRef(0);
   const observationsRef = useRef<Record<string, CanvasV2RenderObservation>>({});
   const [instruction, setInstruction] = useState("");
   const [loop, setLoop] = useState<CanvasV2LoopState>();
@@ -208,13 +223,64 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const running = canvasV2LoopIsActive(loop);
   const applyingManualEdit = Boolean(pendingManualEdit && candidate);
   const receiveNativeScene = useCallback((next: CanvasV2NativeSceneDocument) => {
-    if (next.revisionId !== committed.id) return;
+    if (next.revisionId !== committedRef.current.id) {
+      // Candidate compilation is hidden, but its collision-free native
+      // geometry is the exact scene that must become visible if validation
+      // accepts it. Retaining it prevents the committed renderer from
+      // reinterpreting source HTML at a different origin one frame later.
+      inspectionScenesRef.current.set(next.revisionId, next);
+      return;
+    }
     // The compiler establishes native truth for a newly committed AI source.
     // A direct manual mutation then updates that scene synchronously. Any
     // later compiler callback for the *same* revision is verification only;
     // it may never replace the already-authoritative native coordinates.
-    setNativeScene((current) => current?.revisionId === next.revisionId ? current : next);
-  }, [committed.id]);
+    if (nativeSceneRef.current?.revisionId === next.revisionId) {
+      const current = nativeSceneRef.current;
+      const nextById = new Map(next.nodes.map((node) => [node.id, node]));
+      let flowGeometryChanged = false;
+      const nodes = current.nodes.map((node) => {
+        // Public-font and normal-flow layout can settle after the hidden
+        // compiler has produced the candidate. Accept that one measured
+        // refinement for flow nodes only. Absolute objects—including every
+        // completed manual move/resize—remain transactionally immutable.
+        if (node.layoutMode !== "flow") return node;
+        const measured = nextById.get(node.id);
+        if (!measured || measured.layoutMode !== "flow") return node;
+        const geometryChanged = measured.geometry.x !== node.geometry.x
+          || measured.geometry.y !== node.geometry.y
+          || measured.geometry.width !== node.geometry.width
+          || measured.geometry.height !== node.geometry.height;
+        if (!geometryChanged) return node;
+        flowGeometryChanged = true;
+        return { ...node, geometry: measured.geometry };
+      });
+      if (!flowGeometryChanged) return;
+      const reconciled = { ...current, nodes };
+      nativeSceneRef.current = reconciled;
+      setNativeScene(reconciled);
+      return;
+    }
+    nativeSceneRef.current = next;
+    setNativeScene(next);
+    const observed = observationsRef.current[next.revisionId];
+    if (observed) {
+      const projected = projectCanvasV2ObservationToNativeScene(observed, next);
+      observationsRef.current = { ...observationsRef.current, [next.revisionId]: projected };
+      setObservations((current) => ({ ...current, [next.revisionId]: projected }));
+    }
+  }, []);
+
+  const discardInspectionScene = (revisionId?: string) => {
+    if (!revisionId) return;
+    inspectionScenesRef.current.delete(revisionId);
+    settledCandidateRevisionIds.current.delete(revisionId);
+  };
+
+  const readNativeScene = useCallback(() => {
+    const current = nativeSceneRef.current;
+    return current?.revisionId === committedRef.current.id ? current : undefined;
+  }, []);
 
   const publishLoop = (next: CanvasV2LoopState | undefined) => {
     loopRef.current = next;
@@ -222,12 +288,20 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   };
 
   const acceptCommittedRevision = (revision: CanvasV2ArtifactRevision) => {
+    committedRef.current = revision;
+    // Compute and publish history synchronously. A state-updater callback is
+    // not a transaction lock: several direct gestures can finish before React
+    // executes it, and an undo followed by a new edit must branch from the
+    // travelled revision rather than resurrecting the discarded future.
+    const nextHistory = [
+      ...historyRef.current.slice(0, historyIndexRef.current + 1),
+      revision,
+    ].slice(-50);
+    historyRef.current = nextHistory;
+    historyIndexRef.current = nextHistory.length - 1;
     setCommitted(revision);
-    setHistory((current) => {
-      const next = [...current.slice(0, historyIndex + 1), revision].slice(-50);
-      setHistoryIndex(next.length - 1);
-      return next;
-    });
+    setHistory(nextHistory);
+    setHistoryIndex(historyIndexRef.current);
   };
 
   const askModel = async (
@@ -284,6 +358,20 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         providerAttempts: payload.providerAttempts,
       };
       if (payload.decision.decision === "complete") {
+        // A rendered candidate is still private until every compiler and
+        // multiplayer check has accepted it. During a repair turn `revision`
+        // is the rejected candidate while `commitParent` remains the public
+        // canvas. Letting the model complete from that private document made
+        // the run say "Completed" even though the visible committed revision
+        // never changed. Completion is authoritative only when the model has
+        // observed the exact revision currently owned by the public canvas.
+        if (revision.id !== commitParent.id || revision.id !== committedRef.current.id) {
+          const renderFailure = activeLoop.renderRepair?.failures?.slice(-3).join(" ");
+          throw new Error([
+            "North Star cannot complete from an uncommitted render candidate. It must return a corrected edit that passes render-before-commit validation.",
+            renderFailure,
+          ].filter(Boolean).join(" "));
+        }
         publishLoop({
           ...completeCanvasV2Loop(loopWithProvider, payload.decision.summary, payload.decision.creativeDirection, payload.decision.spatialStrategy, payload.decision.compositionState, payload.decision.reflection),
           researchStatus: payload.researchStatus,
@@ -382,6 +470,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     // state. It must never leave the primary run action looking enabled while
     // silently refusing the user's objective.
     if (candidate) {
+      discardInspectionScene(candidate.id);
       setCandidate(undefined);
       setPendingEdit(undefined);
       setPendingManualEdit(undefined);
@@ -404,6 +493,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const stop = () => {
     const activeLoop = loopRef.current;
     if (pendingManualEdit && candidate) {
+      discardInspectionScene(candidate.id);
       setCandidate(undefined);
       setPendingManualEdit(undefined);
       setManualError(undefined);
@@ -414,6 +504,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     requestController.current?.abort();
     requestController.current = undefined;
     activeRunId.current = undefined;
+    discardInspectionScene(candidate?.id);
     setCandidate(undefined);
     setPendingEdit(undefined);
     setPendingActionKind("design");
@@ -426,6 +517,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     summary: string,
     evidence?: readonly CanvasV2EvidenceAsset[],
     nativeSceneRevision?: CanvasV2NativeSceneDocument,
+    options: { allowEvidenceRemoval?: boolean } = {},
   ): boolean => {
     // Native object edits already carry measured, finite-canvas geometry. They
     // do not need to wait for the compatibility HTML compiler to rediscover
@@ -433,33 +525,39 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     // made the canvas look ready while a hidden transaction still rejected a
     // quick follow-up resize/group action. Validate source safety, then commit
     // native truth synchronously; the off-screen compiler remains a verifier.
-    if (running || candidate || (!nativeSceneRevision && !observationsRef.current[committed.id])) return false;
+    const currentCommitted = committedRef.current;
+    if (running || candidate || (!nativeSceneRevision && !observationsRef.current[currentCommitted.id])) return false;
+    if (nativeSceneRevision && nativeSceneRevision.revisionId !== currentCommitted.id) return false;
     try {
       const safeDocument = assertCanvasV2ArtifactDocument(document);
-      const nextEvidence = evidence ?? committed.evidence;
+      const nextEvidence = evidence ?? currentCommitted.evidence;
       const failures = [
         ...validateCanvasV2EvidenceBindings(safeDocument, nextEvidence),
-        ...validateCanvasV2EvidenceContinuity(committed.document, safeDocument, nextEvidence),
+        ...validateCanvasV2EvidenceContinuity(currentCommitted.document, safeDocument, nextEvidence, {
+          allowUserEvidenceRemoval: options.allowEvidenceRemoval,
+        }),
       ];
       if (failures.length) throw new Error(Array.from(new Set(failures)).join(" "));
       const nextCandidate = createCanvasV2CandidateRevision({
         id: id("manual-revision"),
-        parent: committed,
+        parent: currentCommitted,
         document: safeDocument,
         evidence: nextEvidence,
         createdAt: new Date().toISOString(),
         sceneTransaction: compileCanvasV2SceneTransaction({
           origin: "user",
-          baseRevisionId: committed.id,
-          previous: committed.document,
+          baseRevisionId: currentCommitted.id,
+          previous: currentCommitted.document,
           next: safeDocument,
         }),
       });
       setManualError(undefined);
       setManualNotice(undefined);
       if (nativeSceneRevision) {
-        const nextCommitted = commitCanvasV2Candidate({ candidate: nextCandidate, expectedParentId: committed.id });
-        setNativeScene({ ...nativeSceneRevision, revisionId: nextCommitted.id });
+        const nextCommitted = commitCanvasV2Candidate({ candidate: nextCandidate, expectedParentId: currentCommitted.id });
+        const nextNativeScene = { ...nativeSceneRevision, revisionId: nextCommitted.id };
+        nativeSceneRef.current = nextNativeScene;
+        setNativeScene(nextNativeScene);
         acceptCommittedRevision(nextCommitted);
         setManualNotice(summary);
         return true;
@@ -474,8 +572,10 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   };
 
   const receiveObservation = (observation: CanvasV2RenderObservation) => {
-    observationsRef.current = { ...observationsRef.current, [observation.revisionId]: observation };
-    setObservations((current) => ({ ...current, [observation.revisionId]: observation }));
+    const activeScene = nativeSceneRef.current?.revisionId === observation.revisionId ? nativeSceneRef.current : undefined;
+    const factualObservation = activeScene ? projectCanvasV2ObservationToNativeScene(observation, activeScene) : observation;
+    observationsRef.current = { ...observationsRef.current, [observation.revisionId]: factualObservation };
+    setObservations((current) => ({ ...current, [observation.revisionId]: factualObservation }));
     if (candidate && observation.revisionId === candidate.id) {
       if (settledCandidateRevisionIds.current.has(candidate.id)) return;
       settledCandidateRevisionIds.current.add(candidate.id);
@@ -497,6 +597,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         } catch (error) {
           setManualError(error instanceof Error ? error.message : "The manual revision could not be committed.");
         }
+        discardInspectionScene(candidate.id);
         setCandidate(undefined);
         setPendingManualEdit(undefined);
         return;
@@ -508,9 +609,17 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         ...validateCanvasV2RenderedDesignRegionTerritoryIntegrity(observation),
         ...validateCanvasV2RenderedIslandNarrativeIntegrity(observation),
         ...validateCanvasV2RenderedRelationshipGeometry(observation),
+        ...(pendingEdit?.sceneTransaction && observationsRef.current[committed.id]
+          ? validateCanvasV2MultiplayerPlacement({
+              previous: observationsRef.current[committed.id],
+              candidate: observation,
+              transaction: pendingEdit.sceneTransaction,
+            })
+          : []),
       ];
       if (integrityFailures.length) {
         const message = summarizeRenderedIntegrityFailures(integrityFailures);
+        discardInspectionScene(candidate.id);
         setCandidate(undefined);
         const failedMove = [pendingEdit?.summary, pendingEdit?.expectedVisualResult].filter(Boolean).join(" — ").slice(0, 1_600);
         setPendingEdit(undefined);
@@ -562,6 +671,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         ? settleCanvasV2ResearchRequirement(loop.researchStatus, pendingResearch.appId, pendingResearch.flowId)
         : loop.researchStatus,
     });
+    const acceptedScene = inspectionScenesRef.current.get(candidate.id);
+    if (acceptedScene) {
+      nativeSceneRef.current = acceptedScene;
+      setNativeScene(acceptedScene);
+    }
+    discardInspectionScene(candidate.id);
     acceptCommittedRevision(nextCommitted);
     setCandidate(undefined);
     setPendingEdit(undefined);
@@ -574,6 +689,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
 
   const captureFailed = (message: string) => {
     if (pendingManualEdit && candidate) {
+      discardInspectionScene(candidate.id);
       setCandidate(undefined);
       setPendingManualEdit(undefined);
       setManualNotice(undefined);
@@ -582,6 +698,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     }
     if (activeRunId.current !== loop?.id) return;
     if (!loop || loop.status !== "rendering") return;
+    discardInspectionScene(candidate?.id);
     setCandidate(undefined);
     setPendingEdit(undefined);
     setPendingActionKind("design");
@@ -592,10 +709,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
 
   const travelHistory = (direction: -1 | 1) => {
     if (running || candidate) return;
-    const nextIndex = historyIndex + direction;
-    const revision = history[nextIndex];
+    const nextIndex = historyIndexRef.current + direction;
+    const revision = historyRef.current[nextIndex];
     if (!revision) return;
+    historyIndexRef.current = nextIndex;
     setHistoryIndex(nextIndex);
+    committedRef.current = revision;
+    nativeSceneRef.current = undefined;
+    setNativeScene(undefined);
     setCommitted(revision);
     publishLoop(undefined);
     setManualError(undefined);
@@ -624,6 +745,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     stop,
     applyManualDocument,
     nativeScene: nativeScene?.revisionId === committed.id ? nativeScene : undefined,
+    readNativeScene,
     receiveNativeScene,
     undo: () => travelHistory(-1),
     redo: () => travelHistory(1),

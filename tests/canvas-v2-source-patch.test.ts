@@ -35,9 +35,10 @@ test("bounded patches preserve canonical rails and bind evidence copies server-s
   assert.match(next.css, /canvas-v2-canonical-evidence-geometry-guard/);
   assert.ok(next.css.indexOf("canvas-v2-canonical-evidence-geometry-guard") > next.css.indexOf("canvas-v2-model-layer:analysis"));
   assert.match(next.css, /width:max-content!important/);
-  assert.match(next.css, /canvas-v2-canvas--evidence-wide\{[^}]*padding:1200px!important/);
-  assert.match(next.css, /canvas-v2-canvas--evidence-wide>\[data-canvas-v2-design-region\]\{[^}]*position:relative!important[^}]*inset:auto!important[^}]*max-width:100%!important/);
-  assert.match(next.css, /data-canvas-v2-story-role="title"[^}]*grid-column:1\/-1!important[^}]*margin-bottom:112px!important/);
+  assert.match(next.css, /canvas-v2-canvas--evidence-wide\{[^}]*padding:0!important/);
+  assert.match(next.css, /canvas-v2-canvas--evidence-wide>\[data-canvas-v2-design-region\]\{[^}]*position:relative!important[^}]*inset:auto!important[^}]*max-width:8880px!important/);
+  assert.match(next.css, /data-canvas-v2-story-role="title"[^}]*grid-column:1\/-1!important[^}]*max-width:8880px!important[^}]*margin-bottom:192px!important/);
+  assert.doesNotMatch(next.css, /data-canvas-v2-story-role="title"[^}]*(?:^|[;{])width:8880px!important/);
   assert.match(next.css, /\.canvas-v2-flow-lane\{[^}]*transform:none!important[^}]*grid-template-columns:170px max-content!important/);
   assert.match(next.css, /\.canvas-v2-flow-screen\{[^}]*transform:none!important[^}]*height:235px!important/);
   assert.match(next.css, /data-canvas-v2-scale-intent="peer"[^}]*max-height:376px!important/);

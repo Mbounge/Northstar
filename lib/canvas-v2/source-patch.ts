@@ -25,23 +25,24 @@ const ANALYSIS_COPY_MAX_HEIGHT: Record<CanvasV2EvidenceScaleIntent, number> = {
   peer: Math.round(CANONICAL_SCREEN_HEIGHT * 1.6),
   "bounded-emphasis": Math.round(CANONICAL_SCREEN_HEIGHT * 2.75),
 };
+const CANVAS_V2_AI_COMPOSITION_WIDTH = CANVAS_V2_WORKSPACE.aiAuthoringWidth;
 const EVIDENCE_GEOMETRY_GUARD = `${EVIDENCE_GEOMETRY_GUARD_START}
 /* Canonical rails determine the canvas's minimum intrinsic width. Authored
    regions remain free to grow or recompose around this immutable source record.
-   The root padding is a compiler-owned canvas safe area: model CSS may shape
-   the interior story, but no chapter may render flush against an canvas edge. */
-.northstar-canvas.canvas-v2-canvas--evidence-wide{box-sizing:border-box!important;position:relative!important;inset:0!important;transform:none!important;float:none!important;contain:none!important;clip-path:none!important;width:100%!important;inline-size:100%!important;min-width:100%!important;max-width:none!important;max-inline-size:none!important;min-height:100%!important;overflow:visible!important;padding:${CANVAS_V2_WORKSPACE.aiAuthoringInset}px!important}
+   The runtime body owns the compiler safe area. A compatibility root remains
+   a transparent layout participant and must not introduce a second inset. */
+.northstar-canvas.canvas-v2-canvas--evidence-wide{box-sizing:border-box!important;position:relative!important;inset:0!important;transform:none!important;float:none!important;contain:none!important;clip-path:none!important;width:100%!important;inline-size:100%!important;min-width:100%!important;max-width:none!important;max-inline-size:none!important;min-height:100%!important;overflow:visible!important;padding:0!important}
 /* Top-level islands participate in the canvas's real layout. Neutralizing
    absolute offsets here removes an entire class of overlap, off-canvas, and
    edge-clinging candidates before the browser ever observes them. The model
    can still author genuinely two-dimensional compositions with parent grid
    areas, columns, normal-flow order, alignment, and deliberate margins. */
-.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region]{box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;float:none!important;max-width:100%!important}
-/* The title owns a full narrative strip in normal flow. The model retains
-   complete control of its internal composition and visual language, while the
-   compiler guarantees a stable story origin and deliberate air before the
-   evidence atlas. */
-.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region][data-canvas-v2-story-role="title"]{grid-column:1/-1!important;align-self:start!important;justify-self:stretch!important;width:auto!important;min-width:0!important;max-width:none!important;margin-bottom:112px!important}
+.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region]{box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;float:none!important;max-width:${CANVAS_V2_AI_COMPOSITION_WIDTH}px!important}
+/* The narrative opener participates in normal flow but does not reserve the
+   entire authorship strip. A forced full-width object prevented Northstar from
+   composing around a collaborator already using part of the upper canvas.
+   Model-authored width remains intact and the hard max keeps it finite. */
+.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region][data-canvas-v2-story-role="title"]{grid-column:1/-1!important;align-self:start!important;justify-self:start!important;min-width:0!important;max-width:${CANVAS_V2_AI_COMPOSITION_WIDTH}px!important;margin-top:0!important;margin-bottom:${CANVAS_V2_WORKSPACE.documentMargin}px!important}
 /* Canonical evidence is immutable source geometry. Analytical authorship may
    place the atlas as one whole story chapter, but may never transform,
    position, shrink, wrap, or restyle its internal lanes and screens. */

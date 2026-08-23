@@ -5,6 +5,7 @@ import type {
   CanvasV2DesignRegionObservation,
   CanvasV2ElementBounds,
   CanvasV2EvidenceRenderObservation,
+  CanvasV2PlacementOccupantObservation,
   CanvasV2SpatialIntersection,
   CanvasV2SpatialNodeObservation,
   CanvasV2SpatialObservation,
@@ -72,6 +73,61 @@ function visibleIdentifiedElements(document: Document): HTMLElement[] {
       const rect = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0 && rect.width > 0 && rect.height > 0;
     });
+}
+
+function structuralCanvasRoot(element: HTMLElement): boolean {
+  return element.dataset.canvasV2WorkspaceRoot === "true"
+    || element.dataset.canvasV2PermanentRoot === "true"
+    || element.dataset.canvasV2NodeId === "canvas"
+    || element.dataset.canvasV2NodeId === "canvas-root";
+}
+
+function placementKind(element: HTMLElement): CanvasV2PlacementOccupantObservation["kind"] {
+  if (element.dataset.canvasV2Group === "true") return "group";
+  if (element.dataset.canvasV2IslandId || element.dataset.canvasV2DesignRegion !== undefined) return "island";
+  if (element.dataset.canvasV2CanonicalFlow || element.querySelector("[data-canvas-v2-canonical-flow]")) return "evidence";
+  if (element.tagName === "IMG") return "image";
+  if (/^H[1-6]$/.test(element.tagName) || ["P", "SPAN", "SMALL", "STRONG", "EM", "LABEL"].includes(element.tagName)) return "text";
+  if (element.tagName === "TABLE") return "table";
+  if (element.dataset.canvasV2UserEdited?.includes("create") && element.tagName === "SECTION") return "frame";
+  if (["SVG", "PATH", "LINE", "CIRCLE", "RECT", "POLYGON"].includes(element.tagName)) return "shape";
+  return "object";
+}
+
+function observePlacementOccupants(document: Document, view: Window): CanvasV2PlacementOccupantObservation[] {
+  const visible = visibleIdentifiedElements(document);
+  return visible.flatMap((element) => {
+    if (structuralCanvasRoot(element)) return [];
+    // Connectors, axes, and relationship paths may deliberately cross the
+    // objects they explain. They are geometry owned by their declared
+    // endpoints, not independent placement territory. Treating them as
+    // standalone occupants made a cohesive composition collide with itself.
+    if (element.hasAttribute("data-canvas-v2-relationship-source")
+      || element.hasAttribute("data-canvas-v2-relationship-target")) return [];
+    const identifiedAncestor = element.parentElement?.closest<HTMLElement>("[data-canvas-v2-node-id]");
+    // Occupancy is expressed by independently placeable roots, not every
+    // nested paragraph and image inside them. A structural canvas wrapper is
+    // transparent; every other identified ancestor owns its descendants'
+    // footprint for placement purposes.
+    if (identifiedAncestor && !structuralCanvasRoot(identifiedAncestor)) return [];
+    if (!visibleElement(element, view)) return [];
+    const userEdited = Boolean(element.dataset.canvasV2UserEdited) || element.dataset.canvasV2LastAuthor === "user";
+    const canonicalEvidence = Boolean(
+      element.dataset.canvasV2CanonicalFlow
+      || element.closest("[data-canvas-v2-canonical-flow]")
+      || element.querySelector("[data-canvas-v2-canonical-flow]"),
+    );
+    return [{
+      nodeId: element.dataset.canvasV2NodeId!,
+      ...(identifiedAncestor?.dataset.canvasV2NodeId ? { parentNodeId: identifiedAncestor.dataset.canvasV2NodeId } : {}),
+      kind: placementKind(element),
+      owner: userEdited ? "user" as const : canonicalEvidence ? "research" as const : "northstar" as const,
+      userEdited,
+      locked: element.dataset.canvasV2Locked === "true",
+      canonicalEvidence,
+      bounds: elementBounds(element),
+    }];
+  });
 }
 
 interface RelationshipPoint {
@@ -296,6 +352,7 @@ function observeAuthoredSurface(
   document: Document,
   designRegions: readonly CanvasV2DesignRegionObservation[],
   evidence: readonly CanvasV2EvidenceRenderObservation[],
+  placementOccupants: readonly CanvasV2PlacementOccupantObservation[],
 ): CanvasV2AuthoredSurfaceObservation {
   const canvas = document.body;
   const canvasBounds = elementBounds(canvas);
@@ -325,9 +382,9 @@ function observeAuthoredSurface(
     const zoneArea = Math.max(1, zoneBounds.width * zoneBounds.height);
     const designRegionNodeIds = designRegions.filter((region) => intersectionArea(region.bounds, zoneBounds) > 4).map((region) => region.nodeId);
     const canonicalLaneNodeIds = canonicalLanes.filter((lane) => intersectionArea(lane.bounds, zoneBounds) > 4).map((lane) => lane.nodeId);
+    const zoneOccupants = placementOccupants.filter((occupant) => intersectionArea(occupant.bounds, zoneBounds) > 4);
     const occupiedArea = Math.min(zoneArea, [
-      ...designRegions.map((region) => region.bounds),
-      ...canonicalLanes.map((lane) => lane.bounds),
+      ...placementOccupants.map((occupant) => occupant.bounds),
     ].reduce((sum, item) => sum + intersectionArea(item, zoneBounds), 0));
     const occupiedAreaShare = ratioPrecision(occupiedArea / zoneArea);
     return {
@@ -335,6 +392,8 @@ function observeAuthoredSurface(
       bounds: zoneBounds,
       designRegionNodeIds,
       canonicalLaneNodeIds,
+      occupantNodeIds: zoneOccupants.map((occupant) => occupant.nodeId),
+      userOwnedNodeIds: zoneOccupants.filter((occupant) => occupant.owner === "user").map((occupant) => occupant.nodeId),
       occupiedAreaShare,
       availableAreaShare: ratioPrecision(1 - occupiedAreaShare),
     };
@@ -349,6 +408,7 @@ function observeAuthoredSurface(
     ...(byY[0] ? { topmostRegionNodeId: byY[0].nodeId, bottommostRegionNodeId: byY.at(-1)!.nodeId } : {}),
     ...(canonicalLaneBounds ? { canonicalLaneBounds } : {}),
     ...(analysisEvidenceBounds ? { analysisEvidenceBounds } : {}),
+    placementOccupants: [...placementOccupants],
     zones,
   };
 }
@@ -552,6 +612,7 @@ export function observeCanvasV2SpatialLayout(document: Document): CanvasV2Spatia
   const nodes = view ? elements.map((element) => observeNode(element, view)) : [];
   const evidence = view ? observeEvidence(document, view) : [];
   const designRegions = view ? observeDesignRegions(document, view) : [];
+  const placementOccupants = view ? observePlacementOccupants(document, view) : [];
   return {
     measuredNodeCount: allElements.length,
     reportedNodeCount: nodes.length,
@@ -564,6 +625,6 @@ export function observeCanvasV2SpatialLayout(document: Document): CanvasV2Spatia
     authoredRelationships: view ? observeAuthoredRelationships(document, view) : [],
     authoredAnnotations: view ? observeAuthoredAnnotations(document, view) : [],
     designRegions,
-    authoredSurface: observeAuthoredSurface(document, designRegions, evidence),
+    authoredSurface: observeAuthoredSurface(document, designRegions, evidence, placementOccupants),
   };
 }

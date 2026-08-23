@@ -30,7 +30,12 @@ import {
 } from "@/lib/canvas-v2/element-inspection";
 import { observeCanvasV2SpatialLayout } from "@/lib/canvas-v2/spatial-observation";
 import { CanvasV2NativeCanvasScene } from "@/components/canvas-v2/native-canvas-scene";
-import type { CanvasV2NativeSceneDocument } from "@/lib/canvas-v2/native-scene";
+import {
+  compileCanvasV2NativeScene,
+  projectCanvasV2ObservationToNativeScene,
+  type CanvasV2NativeSceneDocument,
+} from "@/lib/canvas-v2/native-scene";
+import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 
 export interface CanvasV2CanvasSceneProps {
   revision: CanvasV2ArtifactRevision;
@@ -50,6 +55,7 @@ export interface CanvasV2CanvasSceneProps {
   onSceneSnapshot?: (elements: CanvasV2InspectableElement[]) => void;
   onNativeScene?: (scene: CanvasV2NativeSceneDocument) => void;
   nativeSceneOverride?: CanvasV2NativeSceneDocument;
+  placementReferenceScene?: CanvasV2NativeSceneDocument;
   onElementDoubleClick?: (element: CanvasV2InspectableElement) => void;
   onElementTextCommit?: (element: CanvasV2InspectableElement, text: string) => void;
   onGeometry?: (geometry: CanvasV2CanvasGeometry) => void;
@@ -222,6 +228,8 @@ function CanvasV2ObservationScene({
   onElementPointer,
   transientGeometry,
   captureEnabled = true,
+  onNativeScene,
+  placementReferenceScene,
 }: CanvasV2CanvasSceneProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const themeStateRef = useRef(createCanvasV2ArtifactThemeState());
@@ -698,7 +706,7 @@ function CanvasV2ObservationScene({
         })
         .map(bounds);
 
-      onObservation({
+      const compatibilityObservation: CanvasV2RenderObservation = {
         schema: CANVAS_V2_OBSERVATION_SCHEMA,
         revisionId: revision.id,
         screenshotDataUrl,
@@ -716,7 +724,23 @@ function CanvasV2ObservationScene({
         ...(designDetails.length ? { designDetails } : {}),
         spatial: observeCanvasV2SpatialLayout(frameDocument),
         capturedAt: new Date().toISOString(),
+      };
+      // Render-before-commit decisions must inspect the same native world
+      // geometry the user will receive after commit. The compatibility iframe
+      // is only a measuring instrument; validating its temporary local origin
+      // made correctly placed title islands fail and repair themselves back to
+      // the hidden left edge. Compile and project before publishing factual
+      // observation so placement, collision, and narrative checks all share
+      // the 12,000×8,000 board coordinate system.
+      const candidateScene = compileCanvasV2NativeScene({
+        document: frameDocument,
+        revision,
+        width: CANVAS_V2_WORKSPACE.width,
+        height: CANVAS_V2_WORKSPACE.height,
+        placementReferenceScene,
       });
+      onNativeScene?.(candidateScene);
+      onObservation(projectCanvasV2ObservationToNativeScene(compatibilityObservation, candidateScene));
     } catch (captureError) {
       const message = captureError instanceof Error ? captureError.message : "Candidate capture failed.";
       setError(message);

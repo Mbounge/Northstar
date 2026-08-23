@@ -19,6 +19,7 @@ const THEMED_PROPERTIES = [
   "outline-color",
   "fill",
   "stroke",
+  "opacity",
 ] as const;
 
 const MEDIA_TAGS = new Set(["IMG", "VIDEO", "CANVAS", "PICTURE", "SOURCE"]);
@@ -36,6 +37,33 @@ function restoreTheme(state: CanvasV2ArtifactThemeState): void {
     });
   });
   state.originals.clear();
+}
+
+function themeElements(
+  elements: Element[],
+  view: Window,
+  theme: CanvasV2ArtifactTheme,
+  state: CanvasV2ArtifactThemeState,
+): void {
+  restoreTheme(state);
+  if (theme === "light") return;
+
+  elements.forEach((element) => {
+    if (MEDIA_TAGS.has(element.tagName) || element.getAttribute("data-canvas-v2-theme-preserve") === "true") return;
+    const computed = view.getComputedStyle(element);
+    const original = new Map<string, StoredStyle>();
+    const style = (element as HTMLElement | SVGElement).style;
+    THEMED_PROPERTIES.forEach((property) => {
+      const next = themedValue(element, property, computed);
+      if (!next) return;
+      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property) });
+      // Authored compositions may contain stylesheet declarations marked
+      // !important. The visible native scene must still obey the workspace
+      // theme, so the final scoped override is intentionally inline-important.
+      style.setProperty(property, next, "important");
+    });
+    if (original.size) state.originals.set(element, original);
+  });
 }
 
 function parseColor(value: string): { red: number; green: number; blue: number; alpha: number } | undefined {
@@ -64,8 +92,8 @@ function darkText(value: string): string | undefined {
   const color = colorFacts(value);
   if (!color || !color.neutral || color.brightness >= 205) return undefined;
   if (color.brightness < 70) return "#f4f3f8";
-  if (color.brightness < 150) return "#d5d1dc";
-  return "#aaa6b4";
+  if (color.brightness < 150) return "#dedbe5";
+  return "#c7c3cf";
 }
 
 function darkSurface(value: string): string | undefined {
@@ -93,9 +121,21 @@ function darkVector(value: string): string | undefined {
   return color.brightness < 120 ? "#f0eef5" : "#aaa6b4";
 }
 
+export function canvasV2ReadableDarkTextOpacity(value: string, hasText: boolean): string | undefined {
+  const opacity = Number(value);
+  return hasText && Number.isFinite(opacity) && opacity < 0.72 ? "0.72" : undefined;
+}
+
 function themedValue(element: Element, property: string, computed: CSSStyleDeclaration): string | undefined {
   const value = computed.getPropertyValue(property).trim();
   if (!value || value === "none" || value === "currentcolor") return undefined;
+  if (property === "opacity") {
+    // Editorial compositions commonly use low opacity to create hierarchy on
+    // white. The same value compounds with muted ink on the dark workspace and
+    // can make captions effectively disappear. Preserve hierarchy, but enforce
+    // a readable floor for any authored region that carries text.
+    return canvasV2ReadableDarkTextOpacity(value, Boolean(element.textContent?.trim()));
+  }
   if (property === "color") return darkText(value);
   if (property === "background-color") {
     const color = colorFacts(value);
@@ -133,17 +173,24 @@ export function applyCanvasV2ArtifactTheme(
   const view = frameDocument.defaultView;
   if (!view) return;
   const elements = [frameDocument.documentElement, frameDocument.body, ...Array.from(frameDocument.body.querySelectorAll<Element>("*"))];
-  elements.forEach((element) => {
-    if (MEDIA_TAGS.has(element.tagName) || element.getAttribute("data-canvas-v2-theme-preserve") === "true") return;
-    const computed = view.getComputedStyle(element);
-    const original = new Map<string, StoredStyle>();
-    const style = (element as HTMLElement | SVGElement).style;
-    THEMED_PROPERTIES.forEach((property) => {
-      const next = themedValue(element, property, computed);
-      if (!next) return;
-      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property) });
-      style.setProperty(property, next, "important");
-    });
-    if (original.size) state.originals.set(element, original);
-  });
+  themeElements(elements, view, theme, state);
+}
+
+/**
+ * Applies the artifact theme to the public native scene only. This second pass
+ * is required because authored stylesheet rules are re-mounted beside the
+ * native nodes and can otherwise override the compiler's themed inline style.
+ */
+export function applyCanvasV2ArtifactThemeToElement(
+  root: Element,
+  theme: CanvasV2ArtifactTheme,
+  state: CanvasV2ArtifactThemeState,
+): void {
+  root.setAttribute("data-canvas-v2-theme", theme);
+  const view = root.ownerDocument.defaultView;
+  if (!view) {
+    restoreTheme(state);
+    return;
+  }
+  themeElements([root, ...Array.from(root.querySelectorAll<Element>("*"))], view, theme, state);
 }

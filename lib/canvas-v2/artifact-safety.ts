@@ -56,11 +56,14 @@ export function validateCanvasV2EvidenceContinuity(
   previous: CanvasV2ArtifactDocument,
   next: CanvasV2ArtifactDocument,
   evidence: readonly CanvasV2EvidenceAsset[],
+  options: { allowUserEvidenceRemoval?: boolean } = {},
 ): string[] {
   const failures: string[] = [];
   const nextIds = new Set(Array.from(next.html.matchAll(/\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]));
-  for (const asset of evidence) if (!nextIds.has(asset.id)) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
-  failures.push(...validateCanvasV2EvidenceAuthorshipTransition(previous, next, evidence));
+  if (!options.allowUserEvidenceRemoval) {
+    for (const asset of evidence) if (!nextIds.has(asset.id)) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
+  }
+  failures.push(...validateCanvasV2EvidenceAuthorshipTransition(previous, next, evidence, options));
   return Array.from(new Set(failures));
 }
 

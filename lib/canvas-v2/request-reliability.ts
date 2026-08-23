@@ -199,6 +199,11 @@ export async function requestCanvasV2Json<T>(input: {
       try {
         payload = raw ? JSON.parse(raw) : undefined;
       } catch {
+        // A proxy, authentication layer, or framework error page can return
+        // HTML for a failed HTTP response. That is an infrastructure/status
+        // failure, not malformed model output, and must not consume a model
+        // correction retry or mislead the user about the provider response.
+        if (!response.ok) throw failureFromResponse(response, undefined, attempt);
         throw new CanvasV2RequestError({
           error: "North Star received an unreadable provider response.",
           code: "invalid-response",

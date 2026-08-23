@@ -430,8 +430,8 @@ export async function POST(request: NextRequest) {
         summary: "Expanded the living canvas into a connected two-dimensional discovery landscape.",
         expectedVisualResult: "Four distant editorial regions remain visible on a 3600 by 2400 warm-white surface joined by a continuous diagonal argument.",
         document: {
-          html: `<main class="northstar-canvas large-landscape" data-e2e-large-canvas="true" data-canvas-v2-node-id="canvas" aria-label="Large two-dimensional discovery landscape"><svg data-canvas-v2-node-id="landscape-path" class="landscape-path" viewBox="0 0 3300 2060" aria-label="Discovery path"><path d="M240 270 C850 300 760 900 1500 940 S2380 1180 3060 1810"/><circle cx="240" cy="270" r="8"/><circle cx="1500" cy="940" r="8"/><circle cx="3060" cy="1810" r="8"/></svg><header data-canvas-v2-node-id="large-origin" class="large-region origin"><span>01 · governing question</span><h1>Where does uncertainty<br/>become useful?</h1><p>Follow the discovery path from raw evidence to a decision worth making.</p></header><section data-canvas-v2-node-id="large-evidence" class="large-region evidence"><span>02 · evidence field</span><h2>What changed?</h2><p>Separate the observed behavior from the story the team tells about it.</p></section><section data-canvas-v2-node-id="large-opportunity" class="large-region opportunity"><span>03 · opportunity</span><h2>What becomes possible?</h2><p>Find the smallest intervention that changes the trajectory and increases learning.</p></section><section data-canvas-v2-node-id="large-decision" class="large-region decision"><span>04 · decision</span><h2>Act where the next signal<br/>arrives fastest.</h2><p>A useful decision creates evidence, not merely alignment.</p></section><p data-canvas-v2-node-id="large-coordinate-x" class="coordinate coordinate-x">breadth of market understanding →</p><p data-canvas-v2-node-id="large-coordinate-y" class="coordinate coordinate-y">depth of validated learning →</p></main>`,
-          css: `.northstar-canvas{position:relative;box-sizing:border-box;width:3600px;min-width:3600px;height:2400px;min-height:2400px;background:#fefdfb;color:#18171f;font-family:Inter,ui-sans-serif,system-ui,sans-serif}.large-landscape{overflow:visible}.landscape-path{position:absolute;left:150px;top:150px;width:3300px;height:2060px;overflow:visible}.landscape-path path{fill:none;stroke:rgba(104,77,255,.30);stroke-width:2;stroke-dasharray:8 13}.landscape-path circle{fill:#684dff}.large-region{position:absolute;width:660px}.large-region span{color:#684dff;font-size:12px;font-weight:900;letter-spacing:.18em;text-transform:uppercase}.large-region h1,.large-region h2{margin:20px 0 22px;letter-spacing:-.058em}.large-region h1{font-size:72px;line-height:.93}.large-region h2{font-size:46px;line-height:.98}.large-region p{max-width:520px;margin:0;color:#676471;font-size:17px;line-height:1.55}.origin{left:210px;top:210px}.evidence{left:1000px;top:720px}.opportunity{left:2020px;top:1050px}.decision{left:2780px;top:1740px}.coordinate{position:absolute;margin:0;color:#aaa5b4;font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.coordinate-x{left:210px;bottom:95px}.coordinate-y{left:74px;top:2000px;transform:rotate(-90deg);transform-origin:left top}`,
+          html: `<main class="northstar-canvas large-landscape" data-e2e-large-canvas="true" data-canvas-v2-node-id="canvas" aria-label="Large two-dimensional discovery landscape"><svg data-canvas-v2-node-id="landscape-path" class="landscape-path" viewBox="0 0 3300 2060" aria-label="Discovery path" data-canvas-v2-relationship-source="large-origin" data-canvas-v2-relationship-target="large-decision" data-canvas-v2-visual-role="discovery-path"><path d="M240 270 C850 300 760 900 1500 940 S2380 1180 3060 1810"/><circle cx="240" cy="270" r="8"/><circle cx="1500" cy="940" r="8"/><circle cx="3060" cy="1810" r="8"/></svg><header data-canvas-v2-node-id="large-origin" data-canvas-v2-design-region data-canvas-v2-island-id="large-origin" data-canvas-v2-story-role="title" class="large-region origin"><span>01 · governing question</span><h1>Where does uncertainty<br/>become useful?</h1><p>Follow the discovery path from raw evidence to a decision worth making.</p></header><section data-canvas-v2-node-id="large-evidence" data-canvas-v2-design-region data-canvas-v2-island-id="large-evidence" data-canvas-v2-story-role="evidence-reading" class="large-region evidence"><span>02 · evidence field</span><h2>What changed?</h2><p>Separate the observed behavior from the story the team tells about it.</p></section><section data-canvas-v2-node-id="large-opportunity" data-canvas-v2-design-region data-canvas-v2-island-id="large-opportunity" data-canvas-v2-story-role="analysis" class="large-region opportunity"><span>03 · opportunity</span><h2>What becomes possible?</h2><p>Find the smallest intervention that changes the trajectory and increases learning.</p></section><section data-canvas-v2-node-id="large-decision" data-canvas-v2-design-region data-canvas-v2-island-id="large-decision" data-canvas-v2-story-role="implication" class="large-region decision"><span>04 · decision</span><h2>Act where the next signal<br/>arrives fastest.</h2><p>A useful decision creates evidence, not merely alignment.</p></section><p data-canvas-v2-node-id="large-coordinate-x" class="coordinate coordinate-x">breadth of market understanding →</p><p data-canvas-v2-node-id="large-coordinate-y" class="coordinate coordinate-y">depth of validated learning →</p></main>`,
+          css: `.northstar-canvas{position:relative;box-sizing:border-box;width:3600px;min-width:3600px;height:2400px;min-height:2400px;background:#fefdfb;color:#18171f;font-family:Inter,ui-sans-serif,system-ui,sans-serif}.large-landscape{overflow:visible}.landscape-path{position:absolute;left:150px;top:150px;width:3300px;height:2060px;overflow:visible}.landscape-path path{fill:none;stroke:rgba(104,77,255,.30);stroke-width:2;stroke-dasharray:8 13}.landscape-path circle{fill:#684dff}.large-region{position:absolute;width:660px}.large-region span{color:#684dff;font-size:12px;font-weight:900;letter-spacing:.18em;text-transform:uppercase}.large-region h1,.large-region h2{margin:20px 0 22px;letter-spacing:-.058em}.large-region h1{font-size:72px;line-height:.93}.large-region h2{font-size:46px;line-height:.98}.large-region p{max-width:520px;margin:0;color:#676471;font-size:17px;line-height:1.55}.origin{left:0;top:0;width:760px}.evidence{left:1000px;top:720px}.opportunity{left:2020px;top:1050px}.decision{left:2740px;top:1740px}.coordinate{position:absolute;margin:0;color:#aaa5b4;font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.coordinate-x{left:210px;top:2200px}.coordinate-y{left:74px;top:2000px;transform:rotate(-90deg);transform-origin:left top}`,
         },
       },
       evidence: [],
@@ -467,6 +467,39 @@ export async function POST(request: NextRequest) {
     },
     evidence: revision.evidence,
   });
+
+  if (body.instruction?.toLowerCase().includes("render-safe title composition")) {
+    if (revision.state === "committed" && revision.document.html.includes("data-e2e-safe-title")) return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "complete",
+        creativeDirection: direction("Prove that title authorship begins safely and remains visible as native canvas objects.", []),
+        spatialStrategy: spatial("Preserve the compiler-placed title territory inside the finite canvas.", "stable"),
+        reflection: reflection("The title composition is visible, inset, and committed.", "No render-safety repair remains.", "Complete after observing the accepted native scene."),
+        summary: "The title composition committed inside the compiler-owned safe area and is visible beside the open chat panel.",
+      },
+      evidence: [],
+    });
+    return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "edit",
+        moveKind: "framing",
+        creativeDirection: direction("Prove that title authorship begins safely and remains visible as native canvas objects.", []),
+        spatialStrategy: spatial("Author one intrinsic title territory and let the compiler own board placement.", "vertical"),
+        reflection: reflection("The surface is empty.", "A visible title composition is required.", "Create the title without hard-coding canvas coordinates."),
+        summary: "Composed a render-safe title territory.",
+        expectedVisualResult: "A title and description appear visibly inset from the finite canvas edges.",
+        document: {
+          html: '<section data-e2e-safe-title="true" data-canvas-v2-node-id="safe-title-region" data-canvas-v2-design-region data-canvas-v2-story-role="title" aria-label="Render-safe title composition"><p data-canvas-v2-node-id="safe-title-kicker">North Star composition</p><h1 data-canvas-v2-node-id="safe-title-heading">A clear beginning.</h1><p data-canvas-v2-node-id="safe-title-description">The compiler owns placement; the model owns the composition.</p></section>',
+          // Deliberately adversarial source rules reproduce the former top=0
+          // failure. Runtime compiler guards must win without a repair turn.
+          css: 'html,body{padding:0!important}.northstar-title{position:absolute;left:0;top:0}.northstar-title{}[data-e2e-safe-title]{position:absolute;left:0;top:0;width:920px;padding:54px 64px;border-top:3px solid #6b4dff;background:#fefdfb;color:#171721;font-family:Inter,ui-sans-serif,system-ui,sans-serif}[data-e2e-safe-title] p{max-width:620px;margin:0;color:#676471;font-size:18px;line-height:1.55}[data-e2e-safe-title] p:first-child{margin-bottom:18px;color:#6b4dff;font-size:11px;font-weight:900;letter-spacing:.18em;text-transform:uppercase}[data-e2e-safe-title] h1{margin:0 0 24px;font-size:68px;line-height:.94;letter-spacing:-.058em}',
+        },
+      },
+      evidence: [],
+    });
+  }
 
   if (!(body.run?.researchTargets?.length)) {
     if (revision.document.html.includes("data-e2e-generic-transform")) return NextResponse.json({

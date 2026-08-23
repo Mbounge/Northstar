@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canvasV2VisibleProgressSteps,
   completeCanvasV2Loop,
   createCanvasV2Loop,
   failCanvasV2Loop,
@@ -95,6 +96,25 @@ test("the model can continue beyond the former automatic edit ceiling", () => {
   });
   assert.equal(continued.status, "thinking");
   assert.equal(continued.steps.length, 12);
+});
+
+test("the visible timeline coalesces corrective design passes without hiding research", () => {
+  const steps = [
+    { turn: 1, revisionId: "research-awin", kind: "research" as const, moveKind: "research" as const, summary: "Grounded Awin.", expectedVisualResult: "Awin is visible.", creativeDirection, spatialStrategy, reflection },
+    { turn: 2, revisionId: "research-whop", kind: "research" as const, moveKind: "research" as const, summary: "Grounded Whop.", expectedVisualResult: "Whop is visible.", creativeDirection, spatialStrategy, reflection },
+    { turn: 3, revisionId: "frame-draft", kind: "design" as const, moveKind: "framing" as const, summary: "Established the opening.", expectedVisualResult: "A title is visible.", creativeDirection, spatialStrategy, reflection, providerAttempts: [{ model: "gpt-5.6-luna", role: "visual-director" as const, attempt: 1, outcome: "completed" as const, durationMs: 1_000 }] },
+    { turn: 4, revisionId: "frame-corrected", kind: "design" as const, moveKind: "framing" as const, summary: "Resolved the narrative title.", expectedVisualResult: "The opening is complete.", creativeDirection, spatialStrategy, reflection, providerAttempts: [{ model: "gpt-5.6-luna", role: "source-author" as const, attempt: 1, outcome: "completed" as const, durationMs: 2_000 }] },
+    { turn: 5, revisionId: "comparison", kind: "design" as const, moveKind: "composition" as const, summary: "Developed the comparison.", expectedVisualResult: "The comparison is visible.", creativeDirection, spatialStrategy, reflection },
+  ];
+  const visible = canvasV2VisibleProgressSteps(steps);
+  assert.deepEqual(visible.map((step) => [step.revisionId, step.moveKind]), [
+    ["research-awin", "research"],
+    ["research-whop", "research"],
+    ["frame-corrected", "framing"],
+    ["comparison", "composition"],
+  ]);
+  assert.equal(visible[2]?.summary, "Resolved the narrative title.");
+  assert.deepEqual(visible[2]?.providerAttempts?.map((attempt) => attempt.role), ["visual-director", "source-author"]);
 });
 
 test("provider exhaustion pauses on the verified revision and remains continuable", () => {

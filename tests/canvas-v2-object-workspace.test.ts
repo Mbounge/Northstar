@@ -51,12 +51,20 @@ test("human object structure is included in subsequent AI routing and design con
   assert.match(context, /data-canvas-v2-group/);
 });
 
-test("canonical evidence remains protected while geometry stays editable", () => {
+test("canonical evidence remains a normal directly editable canvas object", () => {
   const source = readFileSync("lib/canvas-v2/manual-mutations.ts", "utf8");
-  assert.match(source, /Grounded evidence is protected/);
-  assert.match(source, /Move, resize, or copy it/);
-  assert.match(source, /querySelector\('\[data-canvas-v2-canonical-flow\]/);
+  const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
+  assert.doesNotMatch(source, /Grounded evidence is protected/);
+  assert.doesNotMatch(workspace, /item\.canonicalEvidence \? undefined : \{ kind: "delete"/);
+  assert.match(workspace, /aria-label="Delete selected elements"/);
   assert.match(source, /canvasV2EvidenceCopyOf/);
   assert.match(source, /canvasV2EvidenceRole = "copy"/);
-  assert.doesNotMatch(source, /if \(mutation\.kind === "move"\)[\s\S]{0,200}assertDeletableNode/);
+});
+
+test("journey divider rule and label are independent native objects", () => {
+  const insertion = readFileSync("lib/canvas-v2/flow-insertion.ts", "utf8");
+  assert.match(insertion, /markerRule\.dataset\.canvasV2NodeId/);
+  assert.match(insertion, /markerLabel\.dataset\.canvasV2NodeId/);
+  assert.match(insertion, /marker\.removeAttribute\("data-canvas-v2-node-id"\)/);
+  assert.match(insertion, /marker\.append\(markerRule, markerLabel\)/);
 });
