@@ -23,6 +23,7 @@ import {
   CANVAS_V2_DEFAULT_MODEL,
   type CanvasV2ModelSelection,
 } from "@/lib/canvas-v2/model-catalog";
+import type { CanvasV2SelectionPolicy, CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 
 export interface CanvasV2ChatTurn {
   id: string;
@@ -41,6 +42,7 @@ export interface CanvasV2ChatTurn {
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
   providerAttempts?: CanvasV2ProviderAttemptAudit[];
+  workingContext?: CanvasV2WorkingContext;
 }
 
 interface DesignEngine {
@@ -49,7 +51,7 @@ interface DesignEngine {
   loop?: CanvasV2LoopState;
   running: boolean;
   applyingManualEdit: boolean;
-  start: (instruction: string, observation?: CanvasV2RenderObservation, continuation?: CanvasV2LoopContinuation, researchTargets?: string[], researchMode?: CanvasV2ResearchMode, modelSelection?: CanvasV2ModelSelection) => string | undefined;
+  start: (instruction: string, observation?: CanvasV2RenderObservation, continuation?: CanvasV2LoopContinuation, researchTargets?: string[], researchMode?: CanvasV2ResearchMode, modelSelection?: CanvasV2ModelSelection, workingContext?: CanvasV2WorkingContext) => string | undefined;
   stop: () => void;
 }
 
@@ -62,6 +64,7 @@ export function useCanvasV2Chat(input: {
   engine: DesignEngine;
   selection?: CanvasV2InspectableElement;
   selections?: readonly CanvasV2InspectableElement[];
+  getWorkingContext?: (selectionPolicy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined;
 }) {
   const [draft, setDraft] = useState("");
   const [turns, setTurns] = useState<CanvasV2ChatTurn[]>([]);
@@ -113,6 +116,7 @@ export function useCanvasV2Chat(input: {
           observation: input.engine.displayedObservation,
           selection: input.selection,
           selections: input.selections,
+          workingContext: input.getWorkingContext?.("none"),
           history,
           modelSelection,
         },
@@ -139,7 +143,8 @@ export function useCanvasV2Chat(input: {
       }
       if (!decision.canvasInstruction) throw new Error("North Star returned no canvas instruction.");
       const canvasInstruction = canvasV2AuthoritativeCanvasInstruction(message, decision.canvasInstruction);
-      const runId = input.engine.start(canvasInstruction, input.engine.displayedObservation, undefined, decision.researchTargets, decision.researchMode, modelSelection);
+      const workingContext = input.getWorkingContext?.(decision.selectionPolicy ?? "none");
+      const runId = input.engine.start(canvasInstruction, input.engine.displayedObservation, undefined, decision.researchTargets, decision.researchMode, modelSelection, workingContext);
       if (!runId) throw new Error("The canvas is not ready to begin another design run.");
       activeRoutingTurnId.current = undefined;
       activeDesignTurnId.current = turnId;
@@ -154,6 +159,7 @@ export function useCanvasV2Chat(input: {
         researchTargets: decision.researchTargets,
         researchMode: decision.researchMode,
         providerAttempts: payload.providerAttempts,
+        workingContext,
       } : item));
     } catch (error) {
       if (routingSequence.current !== sequence || activeRoutingTurnId.current !== turnId) return;
@@ -183,8 +189,17 @@ export function useCanvasV2Chat(input: {
     if (busy) return;
     const turn = turns.find((candidate) => candidate.id === turnId);
     if (!turn || turn.status !== "incomplete" || !turn.canvasInstruction || !turn.loop) return;
+    const priorWorkingContext = turn.loop.workingContext ?? turn.workingContext;
+    // Continuation is authority over the scene that exists *now*, not the
+    // scene that existed when the interrupted turn began. Rebuild the compact
+    // context so a human text/geometry edit made during the pause is visible
+    // to Northstar with its current authorship and edit version.
+    const workingContext = input.getWorkingContext
+      ? input.getWorkingContext(priorWorkingContext?.selectionPolicy ?? "none")
+      : priorWorkingContext;
     const continuation: CanvasV2LoopContinuation = {
       previousRunId: turn.loop.id,
+      historyTransactionId: turn.loop.historyTransactionId,
       priorSteps: [...(turn.loop.priorSteps ?? []), ...turn.loop.steps],
       creativeDirection: turn.loop.creativeDirection,
       spatialStrategy: turn.loop.spatialStrategy,
@@ -193,8 +208,9 @@ export function useCanvasV2Chat(input: {
       researchMode: turn.loop.researchMode ?? turn.researchMode,
       researchStatus: turn.loop.researchStatus,
       modelSelection: turn.loop.modelSelection,
+      workingContext,
     };
-    const runId = input.engine.start(turn.canvasInstruction, input.engine.displayedObservation, continuation, undefined, undefined, continuation.modelSelection ?? modelSelection);
+    const runId = input.engine.start(turn.canvasInstruction, input.engine.displayedObservation, continuation, undefined, undefined, continuation.modelSelection ?? modelSelection, workingContext);
     if (!runId) {
       setTurns((current) => current.map((candidate) => candidate.id === turnId ? { ...candidate, error: "The latest committed canvas is still preparing for continuation." } : candidate));
       return;
@@ -206,6 +222,7 @@ export function useCanvasV2Chat(input: {
       runId,
       priorLoops: [...(candidate.priorLoops ?? []), ...(candidate.loop ? [candidate.loop] : [])],
       loop: undefined,
+      workingContext,
       error: undefined,
       retry: undefined,
     } : candidate));

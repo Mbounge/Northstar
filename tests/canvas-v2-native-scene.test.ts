@@ -5,11 +5,494 @@ import test from "node:test";
 import {
   CANVAS_V2_NATIVE_SCENE_SCHEMA,
   applyCanvasV2NativeSceneMutation,
+  canvasV2NativeSceneLeafNeedsIdentity,
+  canvasV2NativeSceneNodeHasRenderableNamespace,
+  canvasV2NativeSceneNodeLooksWritable,
+  canvasV2NativeSceneNodeIsWritable,
+  canvasV2NativeSceneNodeSupportsTextEditing,
+  canvasV2NativeScenePaintedEdges,
+  canvasV2NativeSceneNodeOwnsVisibleSurface,
+  canvasV2NativeSceneNodeUsesHostBackground,
   canvasV2NativeSceneSelectionContainsTarget,
+  canvasV2PreferredRootPlacement,
+  materializeCanvasV2NativeScenePaintedEdges,
+  normalizeCanvasV2ReactInlineStyle,
+  promoteCanvasV2AuthoredRelationships,
   projectCanvasV2ObservationToNativeScene,
+  reconcileCanvasV2NativeConnectors,
   serializeCanvasV2NativeScene,
   type CanvasV2NativeSceneDocument,
 } from "../lib/canvas-v2/native-scene";
+
+test("explicit style longhands remain authoritative in the public React scene", () => {
+  assert.deepEqual(normalizeCanvasV2ReactInlineStyle({
+    background: "var(--northstar-surface)",
+    "background-color": "#ff4f2e",
+    "background-position": "center",
+    "background-position-x": "12px",
+    "background-position-y": "18px",
+  }), {
+    "background-color": "#ff4f2e",
+    "background-position-x": "12px",
+    "background-position-y": "18px",
+  });
+
+  assert.deepEqual(normalizeCanvasV2ReactInlineStyle({
+    font: "600 18px/1.2 Inter, sans-serif",
+    "font-family": "Georgia, serif",
+    "font-size": "22px",
+    "font-variant": "small-caps",
+    "font-variant-numeric": "tabular-nums",
+  }), {
+    "font-family": "Georgia, serif",
+    "font-size": "22px",
+    "font-variant-numeric": "tabular-nums",
+  });
+});
+
+test("only vector leaves with a real SVG parent reach the public React scene", () => {
+  const htmlPath = { namespace: "html" as const, tagName: "path" };
+  const orphanedSvgPath = { namespace: "svg" as const, tagName: "path" };
+  const svgRoot = { namespace: "svg" as const, tagName: "svg" };
+  const htmlRoot = { namespace: "html" as const, tagName: "section" };
+
+  assert.equal(canvasV2NativeSceneNodeHasRenderableNamespace(htmlPath), false);
+  assert.equal(canvasV2NativeSceneNodeHasRenderableNamespace(orphanedSvgPath), false);
+  assert.equal(canvasV2NativeSceneNodeHasRenderableNamespace(orphanedSvgPath, svgRoot), true);
+  assert.equal(canvasV2NativeSceneNodeHasRenderableNamespace(svgRoot, htmlRoot), true);
+  assert.equal(canvasV2NativeSceneNodeHasRenderableNamespace(htmlRoot), true);
+});
+
+test("iterative top-level sections keep authored sibling reading order", () => {
+  const authored = { x: 64, y: 284, width: 1_560, height: 92 };
+  assert.deepEqual(canvasV2PreferredRootPlacement({
+    anchor: { x: 5_000, y: 1_050 },
+    authored,
+    authoredOrigin: { x: 64, y: 284 },
+    marginTop: 28,
+    previous: {
+      placed: { x: 5_000, y: 1_050, width: 1_560, height: 184 },
+      authored: { x: 64, y: 58, width: 1_560, height: 184 },
+      newlyPlaced: false,
+      marginBottom: 0,
+    },
+  }), { x: 5_000, y: 1_262 });
+
+  assert.deepEqual(canvasV2PreferredRootPlacement({
+    anchor: { x: 5_000, y: 1_050 },
+    authored: { x: 80, y: 424, width: 1_200, height: 160 },
+    authoredOrigin: { x: 64, y: 58 },
+    previous: {
+      placed: { x: 5_000, y: 1_050, width: 1_560, height: 184 },
+      authored: { x: 64, y: 58, width: 1_560, height: 184 },
+      newlyPlaced: true,
+    },
+  }), { x: 5_016, y: 1_416 });
+});
+
+test("explicit narrative relations place a new island beside its declared anchor", () => {
+  assert.deepEqual(canvasV2PreferredRootPlacement({
+    anchor: { x: 5_000, y: 1_050 },
+    authored: { x: 64, y: 284, width: 1_200, height: 720 },
+    authoredOrigin: { x: 64, y: 284 },
+    relation: "right",
+    marginTop: 24,
+    previous: {
+      placed: { x: 5_000, y: 1_050, width: 1_560, height: 900 },
+      authored: { x: 64, y: 58, width: 1_560, height: 900 },
+      newlyPlaced: false,
+    },
+  }), { x: 6_752, y: 1_050 });
+});
+
+test("a first new section uses the viewport anchor while aligning with the next durable root", () => {
+  assert.deepEqual(canvasV2PreferredRootPlacement({
+    anchor: { x: 5_000, y: 1_050 },
+    authored: { x: 64, y: 58, width: 1_560, height: 184 },
+    authoredOrigin: { x: 64, y: 58 },
+    next: { placed: { x: 5_120, y: 1_650, width: 1_560, height: 760 } },
+  }), { x: 5_120, y: 1_050 });
+});
+
+test("authored copy leaves become precise text objects while inline formatting stays owned", () => {
+  assert.equal(canvasV2NativeSceneLeafNeedsIdentity({
+    hasAuthoredAncestor: true,
+    hasText: true,
+    ownedByAuthoredTextObject: true,
+    tagName: "EM",
+    width: 280,
+    height: 42,
+    visible: true,
+    hasPaint: true,
+  }), false);
+  assert.equal(canvasV2NativeSceneLeafNeedsIdentity({
+    hasAuthoredAncestor: false,
+    hasText: true,
+    tagName: "EM",
+    width: 280,
+    height: 42,
+    visible: true,
+    hasPaint: true,
+  }), true);
+  assert.equal(canvasV2NativeSceneLeafNeedsIdentity({
+    hasAuthoredAncestor: true,
+    hasText: true,
+    ownedByAuthoredTextObject: false,
+    tagName: "P",
+    width: 420,
+    height: 54,
+    visible: true,
+    hasPaint: true,
+  }), true);
+});
+
+test("compound copy with anonymous inline formatting edits as one text object", () => {
+  const source = scene();
+  const parent = source.nodes[0];
+  parent.tagName = "div";
+  parent.kind = "object";
+  parent.childIds = ["emphasis"];
+  parent.content = [
+    { kind: "node", id: "emphasis" },
+    { kind: "text", value: "What value is offered before effort?" },
+  ];
+  const emphasis = structuredClone(parent);
+  emphasis.id = "emphasis";
+  emphasis.sourceNodeId = undefined;
+  emphasis.parentId = parent.id;
+  emphasis.tagName = "strong";
+  emphasis.kind = "text";
+  emphasis.selectable = false;
+  emphasis.childIds = [];
+  emphasis.content = [{ kind: "text", value: "Entry promise" }];
+  source.nodes.push(emphasis);
+  const byId = new Map(source.nodes.map((node) => [node.id, node]));
+
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(parent, byId), true);
+  emphasis.sourceNodeId = "independent-heading";
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(parent, byId), false);
+});
+
+test("declared and obvious legacy writing surfaces accept first text without making decoration editable", () => {
+  const writable = scene().nodes[0];
+  writable.tagName = "div";
+  writable.kind = "object";
+  writable.directText = undefined;
+  writable.content = [];
+  writable.geometry = { ...writable.geometry, width: 360, height: 140 };
+  writable.attributes = {
+    "data-canvas-v2-node-id": "workshop-answer-field",
+    "data-canvas-v2-writable": "true",
+    "aria-label": "Workshop answer",
+  };
+  writable.sourceNodeId = "workshop-answer-field";
+  const byId = new Map([[writable.id, writable]]);
+  assert.equal(canvasV2NativeSceneNodeIsWritable(writable), true);
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(writable, byId), true);
+
+  const legacy = structuredClone(writable);
+  legacy.attributes = {
+    "data-canvas-v2-node-id": "candidate-notes-field",
+    "aria-label": "Candidate notes field",
+  };
+  legacy.sourceNodeId = "candidate-notes-field";
+  legacy.resolvedStyle = {
+    "background-color": "rgb(255, 255, 255)",
+    "border-top-width": "1px",
+    "border-top-style": "solid",
+    "border-top-color": "rgb(220, 220, 230)",
+    "border-right-width": "1px",
+    "border-right-style": "solid",
+    "border-right-color": "rgb(220, 220, 230)",
+  };
+  assert.equal(canvasV2NativeSceneNodeLooksWritable(legacy), true);
+
+  const decoration = structuredClone(legacy);
+  decoration.sourceNodeId = "composition-accent-block";
+  decoration.attributes = { "data-canvas-v2-node-id": "composition-accent-block", "aria-label": "Composition accent" };
+  assert.equal(canvasV2NativeSceneNodeLooksWritable(decoration), false);
+});
+
+test("first writing-surface edit is one native mutation with durable growth and human authorship", () => {
+  const source = scene();
+  const writable = source.nodes[0];
+  writable.tagName = "div";
+  writable.kind = "object";
+  writable.attributes["data-canvas-v2-writable"] = "true";
+  writable.directText = undefined;
+  writable.content = [];
+  writable.geometry = { ...writable.geometry, width: 360, height: 80 };
+
+  const edited = applyCanvasV2NativeSceneMutation(source, {
+    kind: "text",
+    nodeId: "note",
+    text: "A human-authored workshop answer that wraps safely.",
+    nativeContent: [{ sceneNodeId: "note", content: [{ kind: "text", value: "A human-authored workshop answer that wraps safely." }] }],
+    layout: { height: 132 },
+  });
+  const result = edited.nodes[0];
+  assert.equal(result.geometry.width, 360);
+  assert.equal(result.geometry.height, 132);
+  assert.equal(result.directText, "A human-authored workshop answer that wraps safely.");
+  assert.equal(result.lastAuthor, "user");
+  assert.equal(result.editVersion, 1);
+  assert.match(result.attributes["data-canvas-v2-user-edited"], /text/);
+  assert.match(serializeCanvasV2NativeScene(edited).html, /data-canvas-v2-writable="true"/);
+});
+
+test("compound text commits preserve inline emphasis and update exact text segments", () => {
+  const source = scene();
+  const parent = source.nodes[0];
+  parent.tagName = "blockquote";
+  parent.kind = "object";
+  parent.childIds = ["emphasis"];
+  parent.content = [
+    { kind: "text", value: "The better pattern is " },
+    { kind: "node", id: "emphasis" },
+  ];
+  const emphasis = structuredClone(parent);
+  emphasis.id = "emphasis";
+  emphasis.sourceNodeId = undefined;
+  emphasis.parentId = parent.id;
+  emphasis.tagName = "em";
+  emphasis.kind = "text";
+  emphasis.selectable = false;
+  emphasis.childIds = [];
+  emphasis.attributes = { class: "accent" };
+  emphasis.content = [{ kind: "text", value: "earned." }];
+  source.nodes.push(emphasis);
+
+  const edited = applyCanvasV2NativeSceneMutation(source, {
+    kind: "text",
+    nodeId: "note",
+    text: "The best pattern is earned.",
+    nativeContent: [
+      { sceneNodeId: "note", content: [{ kind: "text", value: "The best pattern is " }, { kind: "node", id: "emphasis" }] },
+      { sceneNodeId: "emphasis", content: [{ kind: "text", value: "earned." }] },
+    ],
+  });
+
+  assert.deepEqual(edited.nodes.find((node) => node.id === "note")?.content, [
+    { kind: "text", value: "The best pattern is " },
+    { kind: "node", id: "emphasis" },
+  ]);
+  assert.deepEqual(edited.nodes.find((node) => node.id === "emphasis")?.content, [{ kind: "text", value: "earned." }]);
+  assert.match(serializeCanvasV2NativeScene(edited).html, /The best pattern is <em[^>]*class="accent"[^>]*>earned\.<\/em>/);
+});
+
+test("a lone CSS-painted edge becomes an independent selectable line", () => {
+  const source = scene();
+  const note = source.nodes[0];
+  note.selectable = false;
+  note.geometry.width = 420;
+  note.geometry.height = 96;
+  note.resolvedStyle = {
+    "border-top-width": "0px",
+    "border-right-width": "0px",
+    "border-bottom-width": "0px",
+    "border-left-width": "2px",
+    "border-left-style": "solid",
+    "border-left-color": "rgb(168, 154, 255)",
+    "padding-left": "18px",
+  };
+  assert.deepEqual(canvasV2NativeScenePaintedEdges(note), [{
+    edge: "left",
+    width: 2,
+    style: "solid",
+    color: "rgb(168, 154, 255)",
+  }]);
+
+  const materialized = materializeCanvasV2NativeScenePaintedEdges(source);
+  const owner = materialized.nodes.find((node) => node.id === "note")!;
+  const line = materialized.nodes.find((node) => node.sourceNodeId === "note-border-left")!;
+  assert.equal(owner.selectable, false);
+  assert.equal(owner.inlineStyle["border-left-width"], "0px");
+  assert.equal(owner.inlineStyle["padding-left"], "20px");
+  assert.deepEqual(owner.childIds, ["note-border-left"]);
+  assert.equal(line.parentId, "note");
+  assert.equal(line.kind, "shape");
+  assert.equal(line.tagName, "span");
+  assert.equal(line.selectable, true);
+  assert.deepEqual(line.geometry, { x: 0, y: 0, width: 2, height: 96, rotation: 0, zIndex: 1 });
+  assert.equal(line.inlineStyle["background-color"], "rgb(168, 154, 255)");
+  const serialized = serializeCanvasV2NativeScene(materialized).html;
+  assert.match(serialized, /<p[^>]*>[^]*<span[^>]*data-canvas-v2-node-id="note-border-left"/);
+  assert.doesNotMatch(serialized, /<p[^>]*>[^]*<div[^>]*data-canvas-v2-node-id="note-border-left"/);
+});
+
+test("the public host, rather than a compatibility root, owns the canvas background", () => {
+  const root = scene().nodes[0];
+  root.kind = "root";
+  assert.equal(canvasV2NativeSceneNodeUsesHostBackground(root), true);
+  root.kind = "frame";
+  assert.equal(canvasV2NativeSceneNodeUsesHostBackground(root), false);
+  root.attributes.class = "northstar-canvas legacy-composition-wrapper";
+  assert.equal(canvasV2NativeSceneNodeUsesHostBackground(root), true);
+});
+
+test("a visibly painted AI card remains its own selectable surface beside its stable children", () => {
+  const card = scene().nodes[0];
+  card.tagName = "article";
+  card.kind = "object";
+  card.resolvedStyle = { "background-color": "rgb(20, 20, 29)", opacity: "1" };
+  assert.equal(canvasV2NativeSceneNodeOwnsVisibleSurface(card), true);
+
+  card.resolvedStyle = { "background-color": "rgba(0, 0, 0, 0)", opacity: "1" };
+  assert.equal(canvasV2NativeSceneNodeOwnsVisibleSurface(card), false);
+
+  card.resolvedStyle = {
+    "background-color": "transparent",
+    "border-top-width": "1px",
+    "border-top-style": "solid",
+    "border-top-color": "rgb(110, 92, 255)",
+    "border-right-width": "1px",
+    "border-right-style": "solid",
+    "border-right-color": "rgb(110, 92, 255)",
+  };
+  assert.equal(canvasV2NativeSceneNodeOwnsVisibleSurface(card), true);
+});
+
+test("AI relationship paths become directly selectable native connectors with durable SVG children", () => {
+  const source = scene();
+  const first = source.nodes[0];
+  first.id = "signal";
+  first.sourceNodeId = "signal";
+  first.geometry = { x: 100, y: 100, width: 120, height: 80, rotation: 0, zIndex: 2 };
+  first.attributes = { "data-canvas-v2-node-id": "signal" };
+  const second = structuredClone(first);
+  second.id = "decision";
+  second.sourceNodeId = "decision";
+  second.geometry.x = 620;
+  second.attributes = { "data-canvas-v2-node-id": "decision" };
+  const relationship = structuredClone(first);
+  relationship.id = "relationship-signal-decision";
+  relationship.sourceNodeId = "relationship-signal-decision";
+  relationship.tagName = "path";
+  relationship.namespace = "svg";
+  relationship.kind = "shape";
+  relationship.geometry = { x: 220, y: 80, width: 400, height: 180, rotation: 0, zIndex: 1 };
+  relationship.attributes = {
+    "data-canvas-v2-node-id": "relationship-signal-decision",
+    "data-canvas-v2-relationship-source": "signal",
+    "data-canvas-v2-relationship-target": "decision",
+    d: "M 220 140 Q 420 20 620 140",
+    stroke: "#7259e8",
+  };
+  relationship.content = [];
+  relationship.directText = undefined;
+  source.rootIds = [first.id, second.id, relationship.id];
+  source.nodes = [first, second, relationship];
+
+  promoteCanvasV2AuthoredRelationships(source, [{
+    nodeId: relationship.sourceNodeId,
+    sourceNodeId: first.sourceNodeId,
+    targetNodeId: second.sourceNodeId,
+    startInParent: { x: 220, y: 140 },
+    endInParent: { x: 620, y: 140 },
+    controlInParent: { x: 420, y: 20 },
+    curved: true,
+    arrow: true,
+    stroke: "rgb(114, 89, 232)",
+    strokeWidth: 4,
+  }]);
+  reconcileCanvasV2NativeConnectors(source);
+
+  const connector = source.nodes.find((node) => node.sourceNodeId === "relationship-signal-decision")!;
+  assert.equal(connector.tagName, "svg");
+  assert.equal(connector.namespace, "svg");
+  assert.equal(connector.kind, "connector");
+  assert.equal(connector.selectable, true);
+  assert.equal(connector.attributes["data-canvas-v2-connector-from"], "signal");
+  assert.equal(connector.attributes["data-canvas-v2-connector-to"], "decision");
+  assert.equal(connector.attributes["data-canvas-v2-connector-variant"], "curve");
+  assert.equal(connector.attributes["data-canvas-v2-connector-arrow"], "true");
+  const path = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "path")!;
+  const hit = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "hit")!;
+  const arrow = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "end")!;
+  assert.equal(path.tagName, "path");
+  assert.equal(path.attributes.stroke, "rgb(114, 89, 232)");
+  assert.equal(hit.tagName, "path");
+  assert.equal(hit.attributes.stroke, "transparent");
+  assert.equal(hit.attributes["stroke-width"], "20");
+  assert.equal(hit.attributes["vector-effect"], "non-scaling-stroke");
+  assert.equal(hit.attributes["pointer-events"], "stroke");
+  assert.equal(hit.attributes.d, path.attributes.d);
+  assert.equal(arrow.tagName, "polyline");
+
+  const attachedPath = path.attributes.d;
+  const movedEndpoint = applyCanvasV2NativeSceneMutation(source, { kind: "move", nodeId: "decision", deltaX: 160, deltaY: 90 });
+  const movedConnector = movedEndpoint.nodes.find((node) => node.sourceNodeId === "relationship-signal-decision")!;
+  const movedPath = movedEndpoint.nodes.find((node) => node.parentId === movedConnector.id && node.attributes["data-canvas-v2-connector-part"] === "path")!;
+  const movedHit = movedEndpoint.nodes.find((node) => node.parentId === movedConnector.id && node.attributes["data-canvas-v2-connector-part"] === "hit")!;
+  assert.notEqual(movedPath.attributes.d, attachedPath);
+  assert.equal(movedHit.attributes.d, movedPath.attributes.d);
+
+  const recoloured = applyCanvasV2NativeSceneMutation(movedEndpoint, { kind: "style", nodeId: "relationship-signal-decision", property: "background-color", value: "#171721" });
+  const recolouredConnector = recoloured.nodes.find((node) => node.sourceNodeId === "relationship-signal-decision")!;
+  assert.equal(recoloured.nodes.find((node) => node.parentId === recolouredConnector.id && node.attributes["data-canvas-v2-connector-part"] === "path")?.attributes.stroke, "#171721");
+  assert.equal(recoloured.nodes.find((node) => node.parentId === recolouredConnector.id && node.attributes["data-canvas-v2-connector-part"] === "hit")?.attributes.stroke, "transparent");
+
+  const serialized = serializeCanvasV2NativeScene(recoloured).html;
+  assert.match(serialized, /<svg[^>]*data-canvas-v2-node-id="relationship-signal-decision"/);
+  assert.match(serialized, /<path[^>]*data-canvas-v2-connector-part="hit"/);
+  assert.equal((serialized.match(/data-canvas-v2-node-id="relationship-signal-decision"/g) ?? []).length, 1);
+});
+
+test("human and AI connector variants share one selectable SVG mutation lifecycle", () => {
+  let source = scene();
+  for (const [index, variant] of (["straight", "arrow", "curve"] as const).entries()) {
+    source = applyCanvasV2NativeSceneMutation(source, {
+      kind: "create",
+      nodeId: `connector-${variant}`,
+      primitive: "connector",
+      connectorVariant: variant,
+      x: 320,
+      y: 400 + index * 180,
+      endX: 720,
+      endY: 460 + index * 180,
+    });
+    const connector = source.nodes.find((node) => node.sourceNodeId === `connector-${variant}`)!;
+    const visiblePath = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "path")!;
+    const hitPath = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "hit")!;
+    const end = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "end")!;
+    assert.equal(connector.tagName, "svg", `${variant} owns a valid SVG root`);
+    assert.equal(connector.namespace, "svg", `${variant} owns the SVG namespace`);
+    assert.equal(connector.selectable, true, `${variant} is directly selectable`);
+    assert.equal(hitPath.attributes.stroke, "transparent", `${variant} hit path remains invisible`);
+    assert.equal(hitPath.attributes["stroke-width"], "20", `${variant} has a forgiving hit target`);
+    assert.equal(hitPath.attributes.d, visiblePath.attributes.d, `${variant} hit geometry matches its visible geometry`);
+    assert.equal(end.tagName, variant === "arrow" ? "polyline" : "circle", `${variant} has the intended ending`);
+  }
+
+  const beforeMoveConnector = source.nodes.find((node) => node.sourceNodeId === "connector-curve")!;
+  const beforeMove = source.nodes.find((node) => node.id === "connector-curve-path")?.attributes.d;
+  const moved = applyCanvasV2NativeSceneMutation(source, { kind: "move", nodeId: "connector-curve", deltaX: 75, deltaY: 45 });
+  const movedConnector = moved.nodes.find((node) => node.sourceNodeId === "connector-curve")!;
+  const movedPath = moved.nodes.find((node) => node.parentId === movedConnector.id && node.attributes["data-canvas-v2-connector-part"] === "path")!;
+  const movedHit = moved.nodes.find((node) => node.parentId === movedConnector.id && node.attributes["data-canvas-v2-connector-part"] === "hit")!;
+  assert.equal(movedPath.attributes.d, beforeMove, "a whole-connector move keeps its local curve and handles rigidly aligned");
+  assert.equal(movedConnector.geometry.x, beforeMoveConnector.geometry.x + 75);
+  assert.equal(movedConnector.geometry.y, beforeMoveConnector.geometry.y + 45);
+  assert.equal(movedHit.attributes.d, movedPath.attributes.d);
+  assert.equal(movedConnector.attributes["data-canvas-v2-connector-from"], undefined, "moving a whole connector detaches stale endpoint anchors");
+  assert.equal(movedConnector.attributes["data-canvas-v2-connector-to"], undefined, "moving a whole connector detaches stale endpoint anchors");
+
+  const reshaped = applyCanvasV2NativeSceneMutation(moved, {
+    kind: "connector-curve",
+    nodeId: "connector-curve",
+    x: 680,
+    y: 1_020,
+  });
+  const reshapedConnector = reshaped.nodes.find((node) => node.sourceNodeId === "connector-curve")!;
+  const reshapedPath = reshaped.nodes.find((node) => node.parentId === reshapedConnector.id && node.attributes["data-canvas-v2-connector-part"] === "path")!;
+  const reshapedHit = reshaped.nodes.find((node) => node.parentId === reshapedConnector.id && node.attributes["data-canvas-v2-connector-part"] === "hit")!;
+  assert.notEqual(reshapedPath.attributes.d, movedPath.attributes.d);
+  assert.equal(reshapedHit.attributes.d, reshapedPath.attributes.d);
+
+  const serialized = serializeCanvasV2NativeScene(reshaped).html;
+  assert.doesNotMatch(serialized, /(?:^|<div[^>]*>)<path\b/, "no connector path is serialized as a bare HTML child");
+  assert.equal((serialized.match(/data-canvas-v2-connector-part="hit"/g) ?? []).length, 3);
+});
 import type { CanvasV2RenderObservation } from "../lib/canvas-v2/types";
 
 function scene(): CanvasV2NativeSceneDocument {
@@ -74,16 +557,20 @@ test("thin primitives retain relative resize authority through the committed nat
   assert.equal(resized.nodes[0].geometry.height, 196);
 });
 
-test("every visible object kind shares one complete native mutation lifecycle", () => {
-  const kinds = ["text", "image", "shape", "frame", "table", "island", "object", "group"] as const;
+test("every box-shaped visible object kind shares one complete native mutation lifecycle", () => {
+  // Connectors deliberately use their own two-endpoint lifecycle rather than
+  // rectangle resize and rotation; that behavior is covered by the connector
+  // geometry and human-authoring suites.
+  const kinds = ["text", "note", "image", "shape", "line", "drawing", "frame", "table", "island", "object", "group"] as const;
   for (const kind of kinds) {
     const source = scene();
     const node = source.nodes[0];
     node.kind = kind;
     node.tagName = kind === "image" ? "img"
       : kind === "table" ? "table"
+        : kind === "drawing" ? "svg"
         : kind === "frame" || kind === "island" ? "section"
-          : kind === "text" ? "p"
+          : kind === "text" || kind === "note" ? "p"
             : "div";
     node.content = kind === "image" ? [] : node.content;
     node.directText = kind === "image" ? undefined : node.directText;
@@ -222,6 +709,112 @@ test("candidate observations are projected onto the exact public native world be
   assert.equal(projected.spatial.authoredSurface?.zones.length, 9);
 });
 
+test("native projection removes detached cards from their former region's overflow and collision facts", () => {
+  const source = scene();
+  const template = source.nodes[0];
+  const region = structuredClone(template);
+  const footer = structuredClone(template);
+  const card = structuredClone(template);
+  const cardText = structuredClone(template);
+  region.id = "region";
+  region.sourceNodeId = "region";
+  region.tagName = "section";
+  region.kind = "island";
+  region.geometry = { x: 100, y: 100, width: 600, height: 500, rotation: 0, zIndex: 0 };
+  region.childIds = ["footer"];
+  region.content = [{ kind: "node", id: "footer" }];
+  region.attributes = { "data-canvas-v2-node-id": "region", "data-canvas-v2-design-region": "" };
+  footer.id = "footer";
+  footer.sourceNodeId = "footer";
+  footer.parentId = "region";
+  footer.geometry = { x: 40, y: 420, width: 300, height: 40, rotation: 0, zIndex: 0 };
+  footer.attributes = { "data-canvas-v2-node-id": "footer" };
+  card.id = "card";
+  card.sourceNodeId = "card";
+  card.parentId = undefined;
+  card.detachedFromParentId = "region";
+  card.detachedFromParentIndex = 0;
+  card.tagName = "article";
+  card.kind = "object";
+  card.geometry = { x: 1_200, y: 900, width: 500, height: 360, rotation: 0, zIndex: 0 };
+  card.childIds = ["card-text"];
+  card.content = [{ kind: "node", id: "card-text" }];
+  card.attributes = {
+    "data-canvas-v2-node-id": "card",
+    "data-canvas-v2-detached": "true",
+    "data-canvas-v2-detached-from": "region",
+  };
+  cardText.id = "card-text";
+  cardText.sourceNodeId = "card-text";
+  cardText.parentId = "card";
+  cardText.tagName = "p";
+  cardText.geometry = { x: 24, y: 24, width: 360, height: 48, rotation: 0, zIndex: 0 };
+  cardText.attributes = { "data-canvas-v2-node-id": "card-text" };
+  source.rootIds = ["region", "card"];
+  source.nodes = [region, footer, card, cardText];
+
+  const observedNode = (nodeId: string, parentNodeId: string | undefined, bounds: { x: number; y: number; width: number; height: number }) => ({
+    nodeId,
+    ...(parentNodeId ? { parentNodeId } : {}),
+    tagName: nodeId === "region" ? "section" : nodeId === "card" ? "article" : "p",
+    textPreview: nodeId === "card-text" ? "Frame the choice" : nodeId === "footer" ? "Name the evidence" : undefined,
+    bounds,
+    contentBox: { clientWidth: bounds.width, clientHeight: bounds.height, scrollWidth: bounds.width, scrollHeight: bounds.height },
+    layout: { display: "block", position: "static", zIndex: "auto", overflowX: "visible", overflowY: "visible" },
+  });
+  const observation: CanvasV2RenderObservation = {
+    schema: "canvas-v2.observation.v1",
+    revisionId: source.revisionId,
+    screenshotDataUrl: "data:image/png;base64,AA==",
+    viewport: { width: 1_680, height: 945, deviceScaleFactor: 1 },
+    contentBounds: { x: 0, y: 0, width: 1_680, height: 945 },
+    runtimeErrors: [],
+    missingEvidenceIds: [],
+    spatial: {
+      measuredNodeCount: 4,
+      reportedNodeCount: 4,
+      nodes: [
+        observedNode("region", undefined, { x: 100, y: 100, width: 600, height: 500 }),
+        observedNode("footer", "region", { x: 140, y: 520, width: 300, height: 40 }),
+        observedNode("card", "region", { x: 200, y: 300, width: 900, height: 360 }),
+        observedNode("card-text", "card", { x: 150, y: 520, width: 360, height: 48 }),
+      ],
+      notableIntersections: [],
+      textCollisions: [{
+        firstNodeId: "footer",
+        secondNodeId: "card-text",
+        intersection: { x: 150, y: 520, width: 290, height: 40 },
+        firstCoverage: 0.96,
+        secondCoverage: 0.67,
+      }],
+      contentOverflowNodeIds: ["region"],
+      evidence: [],
+      designRegions: [{
+        nodeId: "region",
+        bounds: { x: 100, y: 100, width: 600, height: 500 },
+        canvasWidthShare: 0.35,
+        canvasHeightShare: 0.53,
+        canvasAreaShare: 0.19,
+        centerXShare: 0.24,
+        centerYShare: 0.37,
+        edgeSpace: { left: 100, top: 100, right: 980, bottom: 345 },
+        contentOverflowX: 400,
+        contentOverflowY: 60,
+        clipsOverflow: false,
+      }],
+    },
+    capturedAt: "2026-08-25T12:00:00.000Z",
+  };
+
+  const projected = projectCanvasV2ObservationToNativeScene(observation, source);
+  assert.equal(projected.spatial.nodes.find((node) => node.nodeId === "card")?.parentNodeId, undefined);
+  assert.equal(projected.spatial.nodes.find((node) => node.nodeId === "card-text")?.parentNodeId, "card");
+  assert.equal(projected.spatial.designRegions?.[0]?.contentOverflowX, 0);
+  assert.equal(projected.spatial.designRegions?.[0]?.contentOverflowY, 0);
+  assert.deepEqual(projected.spatial.contentOverflowNodeIds, []);
+  assert.deepEqual(projected.spatial.textCollisions, []);
+});
+
 test("detaching text materializes parent-dependent typography for the complete subtree", () => {
   const source = scene();
   const copy = source.nodes[0];
@@ -280,6 +873,64 @@ test("detaching text materializes parent-dependent typography for the complete s
   assert.match(document.html, /font-size:32px/);
   assert.match(document.html, /font-weight:780/);
   assert.match(document.html, /color:rgb\(104, 77, 255\)/);
+});
+
+test("moving a composed block preserves ancestry-dependent layout throughout its subtree", () => {
+  const source = scene();
+  const card = source.nodes[0];
+  const rail = structuredClone(card);
+  const parent = structuredClone(card);
+  parent.id = "comparison";
+  parent.sourceNodeId = "comparison";
+  parent.tagName = "section";
+  parent.kind = "island";
+  parent.geometry = { x: 900, y: 700, width: 1_200, height: 760, rotation: 0, zIndex: 0 };
+  parent.childIds = ["note"];
+  parent.content = [{ kind: "node", id: "note" }];
+  parent.attributes = { "data-canvas-v2-node-id": "comparison" };
+  card.parentId = "comparison";
+  card.layoutMode = "flow";
+  card.tagName = "article";
+  card.kind = "object";
+  card.geometry = { x: 80, y: 64, width: 720, height: 620, rotation: 0, zIndex: 0 };
+  card.childIds = ["territory-rail"];
+  card.content = [{ kind: "node", id: "territory-rail" }];
+  card.resolvedStyle = { display: "grid", "grid-template-rows": "120px 1fr", "row-gap": "36px", padding: "0" };
+  rail.id = "territory-rail";
+  rail.sourceNodeId = "territory-rail";
+  rail.parentId = "note";
+  rail.tagName = "div";
+  rail.kind = "group";
+  rail.layoutMode = "flow";
+  rail.geometry = { x: 0, y: 156, width: 720, height: 420, rotation: 0, zIndex: 0 };
+  rail.childIds = [];
+  rail.content = [];
+  rail.attributes = { "data-canvas-v2-node-id": "territory-rail" };
+  rail.inlineStyle = {};
+  rail.resolvedStyle = {
+    display: "grid",
+    "grid-template-columns": "1fr 1fr 1fr",
+    "column-gap": "28px",
+    "margin-top": "42px",
+    "min-height": "360px",
+  };
+  source.rootIds = ["comparison"];
+  source.nodes = [parent, card, rail];
+
+  const moved = applyCanvasV2NativeSceneMutation(source, { kind: "move", nodeId: "note", deltaX: 160, deltaY: 90 });
+  const movedCard = moved.nodes.find((node) => node.id === "note")!;
+  const movedRail = moved.nodes.find((node) => node.id === "territory-rail")!;
+  assert.equal(movedCard.parentId, undefined);
+  assert.equal(movedCard.inlineStyle.display, "grid");
+  assert.equal(movedCard.inlineStyle["grid-template-rows"], "120px 1fr");
+  assert.equal(movedRail.inlineStyle.display, "grid");
+  assert.equal(movedRail.inlineStyle["grid-template-columns"], "1fr 1fr 1fr");
+  assert.equal(movedRail.inlineStyle["column-gap"], "28px");
+  assert.equal(movedRail.inlineStyle["margin-top"], "42px");
+  assert.equal(movedRail.inlineStyle["min-height"], "360px");
+  const serialized = serializeCanvasV2NativeScene(moved).html;
+  assert.match(serialized, /grid-template-columns:1fr 1fr 1fr/);
+  assert.match(serialized, /margin-top:42px/);
 });
 
 test("a stale compiled layout marker cannot override a later user mutation", () => {
@@ -588,10 +1239,10 @@ test("marquee selection targets individual leaves instead of semantic group boun
   assert.doesNotMatch(workspace, /const topLevelHits = topLevelCanvasSelection\(hits\)/);
 });
 
-test("generated semantic wrappers never return as implicit groups through Layers", () => {
+test("transparent semantic wrappers never return as implicit groups through Layers", () => {
   const compiler = readFileSync("lib/canvas-v2/native-scene.ts", "utf8");
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
-  assert.match(compiler, /!explicitGroup && hasStableDescendant\(node\)/);
+  assert.match(compiler, /!explicitGroup && !ownsVisibleSurface && hasStableDescendant\(node\)/);
   assert.match(compiler, /node\.selectable = false/);
   assert.match(workspace, /selectableIds\.has\(node\.nodeId\)/);
   assert.match(workspace, /Explicit user-created groups are selectable scene elements/);

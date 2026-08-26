@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { canvasV2SpatialNodeClipsContent } from "../lib/canvas-v2/spatial-observation";
+
 test("the renderer returns a bounded factual spatial map for every visible stable node", () => {
   const source = readFileSync("lib/canvas-v2/spatial-observation.ts", "utf8");
   const preview = readFileSync("components/canvas-v2/canvas-scene.tsx", "utf8");
@@ -12,6 +14,8 @@ test("the renderer returns a bounded factual spatial map for every visible stabl
   assert.match(source, /parentNodeId/);
   assert.match(source, /contentOverflowNodeIds/);
   assert.match(source, /notableIntersections/);
+  assert.match(source, /hasIdentifiedDescendant/);
+  assert.match(source, /multi-line headings invisible to collision and line-height validation/);
   assert.match(source, /observeDesignRegions/);
   assert.match(source, /centerXShare/);
   assert.match(source, /edgeSpace/);
@@ -61,4 +65,14 @@ test("the browser proof includes a distinct relationship composition with declar
   assert.match(fixture, /intentionalOverlaps: \[/);
   assert.match(fixture, /class=\"map-rail\"/);
   assert.match(fixture, /data-canvas-v2-node-id=\"evidence-lens\"/);
+});
+
+test("content overflow reports only content that is actually clipped or scroll-bound", () => {
+  const node = (overflowX: string, overflowY: string) => ({
+    contentBox: { clientWidth: 100, clientHeight: 50, scrollWidth: 108, scrollHeight: 56 },
+    layout: { display: "block", position: "static", zIndex: "auto", overflowX, overflowY },
+  });
+  assert.equal(canvasV2SpatialNodeClipsContent(node("visible", "visible")), false);
+  assert.equal(canvasV2SpatialNodeClipsContent(node("hidden", "visible")), true);
+  assert.equal(canvasV2SpatialNodeClipsContent(node("visible", "auto")), true);
 });

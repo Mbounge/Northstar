@@ -4,8 +4,8 @@ export interface CanvasV2CanvasGeometry {
 }
 
 export const CANVAS_V2_MIN_CANVAS: CanvasV2CanvasGeometry = { width: 1680, height: 945 };
-// Intrinsic authored content is measured inside the finite Patch 8 workspace.
-// The camera may reveal unused board territory without inflating model captures.
+// Intrinsic authored content is measured as one local composition, independent
+// from the much larger world plane. World geometry must not inflate captures.
 export const CANVAS_V2_MAX_CANVAS: CanvasV2CanvasGeometry = { width: 12_000, height: 8_000 };
 export const CANVAS_V2_MAX_CAPTURE_EDGE = 2_400;
 export const CANVAS_V2_MAX_CAPTURE_PIXELS = 4_500_000;

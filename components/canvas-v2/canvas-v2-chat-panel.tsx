@@ -99,12 +99,23 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
     {steps.map((step, index) => <div
       key={step.revisionId}
       className="relative pb-4 last:pb-1"
+      data-testid="canvas-v2-design-turn"
+      data-canvas-v2-design-turn={step.turn}
+      data-canvas-v2-design-revision={step.revisionId}
       data-canvas-v2-provider-attempt-audit={step.providerAttempts?.length ? JSON.stringify(step.providerAttempts) : undefined}
       data-canvas-v2-render-repair-audit={step.renderRepairFailures?.length ? JSON.stringify(step.renderRepairFailures) : undefined}
     >
       <span className="absolute -left-[21px] top-0.5 grid h-3 w-3 place-items-center rounded-full bg-white ring-1 ring-[#8778ef]"><Check className="h-2 w-2 text-[#6552df]" /></span>
       <div className="text-[10px] font-black uppercase tracking-[.12em] text-[#7564e9]">{MOVE_LABEL[step.moveKind]} · {index + 1}</div>
       <p className="mt-1 text-[13px] leading-5 text-[#555566] dark:text-[#c5c1cd]">{step.summary}</p>
+      <details className="group mt-2 rounded-[10px] border border-[#efedf7] bg-[#faf9fd] px-2.5 py-2 dark:border-white/[.07] dark:bg-white/[.025]">
+        <summary className="cursor-pointer list-none text-[9px] font-black uppercase tracking-[.11em] text-[#858093] marker:hidden group-open:text-[#6e5be0]">Inspect design turn</summary>
+        <div className="mt-2 grid gap-1.5 text-[10px] leading-[1.45] text-[#777181] dark:text-[#aaa4b2]">
+          <p><span className="font-bold text-[#575164] dark:text-[#d2ccd9]">Visible goal · </span>{step.expectedVisualResult}</p>
+          <p><span className="font-bold text-[#575164] dark:text-[#d2ccd9]">Observed result · </span>{step.reflection.observedResult}</p>
+          {step.islandExecution && <p><span className="font-bold text-[#575164] dark:text-[#d2ccd9]">Composition · </span>{step.islandExecution.target.action} {step.islandExecution.target.storyRole} · {step.islandExecution.territory.targetZoneId.replaceAll("-", " ")}</p>}
+        </div>
+      </details>
       {step.providerAttempts?.length ? <div className="mt-1 text-[9px] font-semibold uppercase tracking-[.08em] text-[#a19bab]">{step.providerAttempts.filter((attempt) => attempt.outcome === "completed").map((attempt) => `${attempt.role === "visual-director" ? "art direction" : attempt.role === "source-author" ? "authorship" : "model"} ${(attempt.durationMs / 1_000).toFixed(1)}s`).join(" · ")}{step.renderRepairCount ? ` · ${step.renderRepairCount} render repair${step.renderRepairCount === 1 ? "" : "s"}` : ""}</div> : null}
     </div>)}
     {(turn.status === "running" || turn.status === "routing") && <div className="relative flex items-center gap-2 pb-1 text-[13px] text-[#747486]">
@@ -127,13 +138,13 @@ function ChatTurn({ turn, busy, onContinue }: { turn: CanvasV2ChatTurn; busy: bo
         {turn.answer && <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]">{turn.answer}</p>}
         {turn.routeSummary && !turn.answer && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
         {turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}
-        {turn.loop?.finalSummary && <div className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d] dark:border-white/[.08] dark:text-[#d4d1da]">{turn.loop.finalSummary}</div>}
-        {turn.status === "incomplete" && <div className="mt-3 rounded-xl border border-[#e3ddff] bg-[#f8f6ff] px-3.5 py-3 text-xs leading-5 text-[#5d5870] dark:border-[#504477] dark:bg-[#272331] dark:text-[#c9c3d3]">
-          <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">{turn.loop?.status === "paused" ? "Provider pause." : "Continuation required."}</span> {turn.loop?.status === "paused" ? (turn.loop.pauseReason ?? "Both model providers are temporarily unavailable.") : "North Star reached the safe revision boundary before declaring the composition complete."} The latest verified canvas is preserved.</p>
+        {turn.loop?.finalSummary && <div data-testid="canvas-v2-final-summary" className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d] dark:border-white/[.08] dark:text-[#d4d1da]">{turn.loop.finalSummary}</div>}
+        {turn.status === "incomplete" && <div data-testid="canvas-v2-turn-recovery" className="mt-3 rounded-xl border border-[#e3ddff] bg-[#f8f6ff] px-3.5 py-3 text-xs leading-5 text-[#5d5870] dark:border-[#504477] dark:bg-[#272331] dark:text-[#c9c3d3]">
+          <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">{turn.loop?.status === "paused" ? "Connection interrupted." : "Continuation required."}</span> {turn.loop?.status === "paused" ? (turn.loop.pauseReason ?? "North Star was interrupted while reviewing the canvas.") : "North Star reached the revision boundary before declaring the composition complete."} The latest verified canvas is preserved.</p>
           <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Continue from this canvas</button>
         </div>}
         {turn.status === "stopped" && <div className="mt-3 text-xs font-semibold text-[#777789]">Stopped. The latest committed canvas remains visible.</div>}
-        {turn.error && <div className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
+        {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
       </div>
     </div>
   </article>;

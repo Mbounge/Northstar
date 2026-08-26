@@ -15,6 +15,7 @@ import {
   CANVAS_V2_DEFAULT_MODEL,
   type CanvasV2ModelSelection,
 } from "@/lib/canvas-v2/model-catalog";
+import type { CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 
 /**
  * Context is compacted independently from execution. This is not a turn cap:
@@ -53,6 +54,8 @@ export interface CanvasV2LoopStep {
 
 export interface CanvasV2LoopState {
   id: string;
+  /** Stable undo transaction shared by every accepted revision in this user turn. */
+  historyTransactionId: string;
   instruction: string;
   status: CanvasV2LoopStatus;
   steps: CanvasV2LoopStep[];
@@ -72,6 +75,7 @@ export interface CanvasV2LoopState {
   providerAttempts?: CanvasV2ProviderAttemptAudit[];
   modelSelection?: CanvasV2ModelSelection;
   activeModel?: string;
+  workingContext?: CanvasV2WorkingContext;
   renderRepair?: {
     attempt: number;
     maxAttempts: number;
@@ -92,10 +96,23 @@ export interface CanvasV2LoopState {
       cssTail: string;
     };
   };
+  /**
+   * A private candidate may exhaust its tightly scoped render repairs without
+   * making the public canvas unsafe. In that case North Star replans from the
+   * last committed render inside the same user turn instead of asking the
+   * person to resume an implementation failure manually.
+   */
+  structuralRecovery?: {
+    attempt: number;
+    failures: string[];
+    failedActions: Array<CanvasV2IslandExecutionContract["target"]["action"]>;
+  };
 }
 
 export interface CanvasV2LoopContinuation {
   previousRunId: string;
+  /** A paused continuation remains part of the original undoable AI turn. */
+  historyTransactionId?: string;
   priorSteps?: CanvasV2LoopStep[];
   creativeDirection?: CanvasV2CreativeDirection;
   spatialStrategy?: CanvasV2SpatialStrategy;
@@ -104,35 +121,21 @@ export interface CanvasV2LoopContinuation {
   researchMode?: CanvasV2ResearchMode;
   researchStatus?: CanvasV2ResearchRequirement[];
   modelSelection?: CanvasV2ModelSelection;
+  workingContext?: CanvasV2WorkingContext;
 }
 
 /**
  * The execution journal records every accepted revision because each one is
- * authoritative design memory. The chat timeline is a user-facing progress
- * account, though: consecutive passes through the same design milestone are
- * one logical step, not several indistinguishable "Established the frame"
- * entries. Keep research insertions separate (each names newly grounded
- * evidence) and collapse only adjacent design steps with the same move kind.
+ * authoritative design memory. The chat timeline is also the user's durable
+ * inspection trail: every accepted render must remain visible even when two
+ * consecutive commits share a move kind. Hidden provider retries and rejected
+ * render candidates are never steps, so preserving this journal does not add
+ * corrective noise or expose uncommitted work.
  */
 export function canvasV2VisibleProgressSteps(
   steps: readonly CanvasV2LoopStep[],
 ): CanvasV2LoopStep[] {
-  return steps.reduce<CanvasV2LoopStep[]>((visible, step) => {
-    const previous = visible.at(-1);
-    if (step.kind !== "design" || previous?.kind !== "design" || previous.moveKind !== step.moveKind) {
-      visible.push(step);
-      return visible;
-    }
-    const providerAttempts = [...(previous.providerAttempts ?? []), ...(step.providerAttempts ?? [])];
-    visible[visible.length - 1] = {
-      ...step,
-      turn: previous.turn,
-      ...(providerAttempts.length ? { providerAttempts } : {}),
-      renderRepairCount: (previous.renderRepairCount ?? 0) + (step.renderRepairCount ?? 0) || undefined,
-      renderRepairFailures: [...(previous.renderRepairFailures ?? []), ...(step.renderRepairFailures ?? [])].slice(-12),
-    };
-    return visible;
-  }, []);
+  return [...steps];
 }
 
 export function createCanvasV2Loop(input: {
@@ -142,17 +145,20 @@ export function createCanvasV2Loop(input: {
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
   modelSelection?: CanvasV2ModelSelection;
+  workingContext?: CanvasV2WorkingContext;
 }): CanvasV2LoopState {
   const instruction = input.instruction.trim();
   if (!instruction) throw new Error("Canvas V2 requires a design instruction.");
   return {
     id: input.id,
+    historyTransactionId: input.continuation?.historyTransactionId ?? input.id,
     instruction,
     status: "thinking",
     steps: [],
     researchTargets: Array.from(new Set((input.continuation?.researchTargets ?? input.researchTargets ?? []).map((target) => target.trim()).filter(Boolean))).slice(0, 12),
     researchMode: input.continuation?.researchMode ?? input.researchMode,
     modelSelection: input.continuation?.modelSelection ?? input.modelSelection ?? CANVAS_V2_DEFAULT_MODEL,
+    workingContext: input.continuation?.workingContext ?? input.workingContext,
     ...(input.continuation ? {
       continuationOf: input.continuation.previousRunId,
       priorSteps: (input.continuation.priorSteps ?? []).slice(-CANVAS_V2_MAX_CONTEXT_STEPS),
@@ -216,6 +222,7 @@ export function recordCanvasV2CommittedEdit(input: {
     ...(input.researchStatus ? { researchStatus: input.researchStatus } : {}),
   };
   delete next.renderRepair;
+  delete next.structuralRecovery;
   return next;
 }
 
@@ -237,6 +244,29 @@ export function stopCanvasV2Loop(loop: CanvasV2LoopState): CanvasV2LoopState {
 
 export function pauseCanvasV2Loop(loop: CanvasV2LoopState, reason: string): CanvasV2LoopState {
   return { ...withoutRetry(loop), status: "paused", error: undefined, pauseReason: reason };
+}
+
+export function recoverCanvasV2LoopAfterRejectedCandidate(
+  loop: CanvasV2LoopState,
+  failures: readonly string[],
+  failedAction?: CanvasV2IslandExecutionContract["target"]["action"],
+): CanvasV2LoopState {
+  const next: CanvasV2LoopState = {
+    ...withoutRetry(loop),
+    status: "thinking",
+    error: undefined,
+    pauseReason: undefined,
+    structuralRecovery: {
+      attempt: (loop.structuralRecovery?.attempt ?? 0) + 1,
+      failures: Array.from(new Set([...(loop.structuralRecovery?.failures ?? []), ...failures])).slice(-18),
+      failedActions: Array.from(new Set([
+        ...(loop.structuralRecovery?.failedActions ?? []),
+        ...(failedAction ? [failedAction] : []),
+      ])),
+    },
+  };
+  delete next.renderRepair;
+  return next;
 }
 
 export function failCanvasV2Loop(loop: CanvasV2LoopState, error: string): CanvasV2LoopState {

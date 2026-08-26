@@ -46,13 +46,22 @@ test("the compiler exposes the finite scene bounds while the outer canvas owns n
   assert.match(workspace, /fitContent/);
   assert.match(workspace, /CANVAS_V2_WORKSPACE\.width/);
   assert.match(workspace, /data-canvas-v2-workspace-surface/);
-  assert.match(workspace, /backgroundColor: theme === "dark" \? "#111117" : "#fefeff"/);
+  assert.match(workspace, /backgroundColor: theme === "dark" \? "#0d0e16" : "#fafbff"/);
   assert.match(workspace, /onWorkspaceWheel=\{navigateWorkspaceWheel\}/);
   assert.match(preview, /frameDocument\.addEventListener\("wheel", wheel, \{ passive: false \}\)/);
   assert.match(preview, /applyCanvasV2ArtifactTheme/);
   assert.match(workspace, /theme=\{theme\}/);
   assert.match(workspace, /Switch to.*light.*dark.*mode/);
-  assert.match(workspace, /backgroundPosition/);
+  assert.match(workspace, /canvasV2NavigationAtmosphere/);
+  assert.match(workspace, /new ResizeObserver\(update\)/);
+  assert.match(workspace, /navigationAtmosphere\.primaryX/);
+  assert.match(workspace, /backgroundRepeat: "no-repeat"/);
+  assert.match(workspace, /backgroundSize: "100% 100%"/);
+  assert.match(workspace, /showCanvasGrid &&/);
+  assert.match(workspace, /data-testid="canvas-v2-grid-overlay"/);
+  const largeSurface = workspace.slice(workspace.indexOf('data-testid="canvas-v2-workspace-surface"'));
+  assert.doesNotMatch(largeSurface, /radial-gradient\(circle, .* 1px, transparent 1px\)/);
+  assert.doesNotMatch(largeSurface, /backgroundPosition/);
   assert.match(preview, /className="block border-0 bg-transparent"/);
   assert.doesNotMatch(preview, /className="block border-0 bg-white"/);
   assert.doesNotMatch(workspace, /bg-\[#e9eaf2\]|shadow-\[0_28px_90px/);
@@ -68,4 +77,55 @@ test("V2 starts on the canonical clean surface without an inner starter card", (
   assert.doesNotMatch(loop, /Your living analysis canvas/);
   assert.match(grammar, /Cards, panels, pills/);
   assert.match(grammar, /width:max-content/);
+});
+
+test("continuous camera and object previews avoid scene-wide React work", () => {
+  const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
+  const nativeScene = readFileSync("components/canvas-v2/native-canvas-scene.tsx", "utf8");
+  const viewportPreview = workspace.slice(
+    workspace.indexOf("const applyViewportVisual"),
+    workspace.indexOf("const stopPendingViewportFrame"),
+  );
+  const objectPreview = workspace.slice(
+    workspace.indexOf("const publishDirectGesturePreview"),
+    workspace.indexOf("const cancelDirectGesturePreview"),
+  );
+  const marqueePreview = workspace.slice(
+    workspace.indexOf("const publishMarqueePreview"),
+    workspace.indexOf("const paintSnapGuides"),
+  );
+  assert.match(workspace, /const previewViewport = useCallback/);
+  assert.match(workspace, /workspaceSurfaceRef\.current/);
+  assert.match(viewportPreview, /surface\.style\.transform = `translate\(/);
+  assert.match(viewportPreview, /workspaceSizeRef\.current/);
+  assert.doesNotMatch(viewportPreview, /getBoundingClientRect\(|cameraSize\(\)|contentInsets\(\)/);
+  assert.match(workspace, /requestAnimationFrame/);
+  assert.match(workspace, /scheduleWheelCommit/);
+  assert.match(workspace, /addEventListener\("wheel", wheel, \{ capture: true, passive: false \}\)/);
+  const contextualToolbar = workspace.slice(
+    workspace.indexOf('aria-label="Element inspector"'),
+    workspace.indexOf('className="absolute z-50', workspace.indexOf('aria-label="Element inspector"')),
+  );
+  assert.match(contextualToolbar, /navigateWorkspaceWheel\(event\)/, "screen-space controls must forward navigation outside the capture surface");
+  assert.match(viewportPreview, /toolbar\.style\.transform = `translate3d/, "camera previews move contextual controls in real time");
+  assert.doesNotMatch(viewportPreview, /toolbar\.style\.translate/, "camera previews preserve Tailwind's centering translate");
+  assert.match(workspace, /addEventListener\("gesturechange", suppressBrowserZoom/);
+  assert.match(workspace, /touchAction: "none"/);
+  assert.match(workspace, /workspaceKeydownHandlerRef/);
+  assert.match(workspace, /data-canvas-v2-render-count/);
+  assert.match(workspace, /ref=\{canvasSceneRef\}/);
+  assert.match(objectPreview, /paintSelectionPreview\(gesture, pending\)/);
+  assert.doesNotMatch(objectPreview, /setDraft|setSnapGuides|serializeCanvasV2NativeScene/);
+  assert.match(marqueePreview, /marqueeElement\.style\.width/);
+  assert.doesNotMatch(marqueePreview, /setMarquee/);
+  assert.match(nativeScene, /memo\(function NativeNode/);
+  assert.match(nativeScene, /useImperativeHandle\(imperativeRef, \(\) => \(\{ applyTransientGeometry \}\)/);
+  assert.match(nativeScene, /transientStyleSnapshotsRef/);
+  assert.match(nativeScene, /setCompiledRevisionId\(revision\.id\)/);
+  assert.match(nativeScene, /compiledRevisionId !== revision\.id && <iframe/);
+  assert.match(nativeScene, /querySelectorAll<HTMLElement>\("\[data-canvas-v2-node-id\]"\)/);
+  assert.match(nativeScene, /contentVisibility: "auto"/);
+  assert.match(nativeScene, /decoding: node\.attributes\.decoding \?\? "async"/);
+  assert.doesNotMatch(nativeScene, /transientGeometry=\{transientGeometry\}/);
+  assert.doesNotMatch(workspace, /transientGeometry=\{transientGeometry\}/);
 });

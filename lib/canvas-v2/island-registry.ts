@@ -11,6 +11,52 @@ export const CANVAS_V2_WHOLE_BOARD_ISLAND_ID = "__whole-board__";
 
 export type CanvasV2IslandTargetContract = CanvasV2IslandExecutionContract["target"];
 
+const REQUIREMENT_STOP_WORDS = new Set([
+  "a", "an", "and", "the", "to", "of", "with", "for", "into", "from", "on", "in",
+  "add", "complete", "finish", "finished", "make", "ensure", "explicit", "existing",
+]);
+
+function requirementTerms(value: string): Set<string> {
+  return new Set(value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ")
+    .filter((term) => term.length > 2 && !REQUIREMENT_STOP_WORDS.has(term))
+    .map((term) => term.length > 4 && term.endsWith("s") ? term.slice(0, -1) : term));
+}
+
+/**
+ * Lifecycle requirements are compiler-owned obligations, but a director may
+ * naturally paraphrase one while retaining it. Map a high-overlap paraphrase
+ * back to the exact committed wording so harmless prose drift cannot exhaust
+ * the provider retry budget; genuinely new obligations remain untouched and
+ * are rejected by the existing finishing-contract validator.
+ */
+export function reconcileCanvasV2OpenRequirements(
+  existing: readonly string[],
+  proposed: readonly string[],
+): string[] {
+  const reconciled = proposed.map((requirement) => {
+    const normalized = requirement.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const exact = existing.find((candidate) => (
+      candidate.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === normalized
+    ));
+    if (exact) return exact;
+    const proposedTerms = requirementTerms(requirement);
+    const candidates = existing.map((candidate) => {
+      const candidateTerms = requirementTerms(candidate);
+      const shared = Array.from(proposedTerms).filter((term) => candidateTerms.has(term)).length;
+      const smaller = Math.min(proposedTerms.size, candidateTerms.size);
+      return { candidate, shared, ratio: smaller ? shared / smaller : 0, smaller };
+    }).sort((left, right) => right.shared - left.shared || right.ratio - left.ratio);
+    const best = candidates[0];
+    const requiredShared = best ? Math.min(3, Math.max(2, Math.ceil(best.smaller * 0.4))) : Infinity;
+    if (best && best.shared >= requiredShared && best.ratio >= 0.35) return best.candidate;
+    return requirement;
+  });
+  // One broad committed obligation may naturally be returned as several
+  // narrower bullets. Map every paraphrase independently, then collapse those
+  // bullets back to the single compiler-owned requirement.
+  return Array.from(new Set(reconciled));
+}
+
 /**
  * A render-rejected create candidate is present in the candidate DOM, but it
  * has not entered committed lifecycle truth. Source validation for a hidden

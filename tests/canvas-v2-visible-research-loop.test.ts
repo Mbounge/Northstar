@@ -417,7 +417,7 @@ test("the production loop materializes research before another model turn and re
   assert.match(hook, /id\("research-revision"\)/);
   assert.match(hook, /kind: pendingActionKind/);
   assert.match(hook, /canvas is still preparing its first visual observation/);
-  assert.match(workspace, /bottom-5 left-1\/2/);
+  assert.match(workspace, /bottom-\[18px\] left-1\/2/);
   assert.match(workspace, /bottom-24[^\n]*2xl:bottom-5/);
   assert.match(workspace, /Collapse North Star panel/);
   assert.match(loop, /CANVAS_V2_MAX_CONTEXT_STEPS = 24/);

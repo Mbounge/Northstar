@@ -16,6 +16,22 @@ import { resolveCanvasV2EvidenceRole } from "@/lib/canvas-v2/evidence-authorship
 export const CANVAS_V2_MAX_SPATIAL_NODES = 240;
 export const CANVAS_V2_MAX_SPATIAL_INTERSECTIONS = 60;
 
+const CANVAS_V2_CLIPPING_OVERFLOW_VALUES = new Set(["hidden", "clip", "auto", "scroll"]);
+
+/**
+ * scrollWidth/scrollHeight can exceed the client box for line-height rounding,
+ * shadows, and intentionally visible decorative marks. Those are not clipped
+ * content and must not keep a resolved composition in a model repair loop.
+ */
+export function canvasV2SpatialNodeClipsContent(
+  node: Pick<CanvasV2SpatialNodeObservation, "contentBox" | "layout">,
+): boolean {
+  const clipsX = CANVAS_V2_CLIPPING_OVERFLOW_VALUES.has(node.layout.overflowX);
+  const clipsY = CANVAS_V2_CLIPPING_OVERFLOW_VALUES.has(node.layout.overflowY);
+  return (clipsX && node.contentBox.scrollWidth > node.contentBox.clientWidth + 2)
+    || (clipsY && node.contentBox.scrollHeight > node.contentBox.clientHeight + 2);
+}
+
 function precision(value: number): number {
   return Number.isFinite(value) ? Math.round(value * 10) / 10 : 0;
 }
@@ -145,38 +161,119 @@ function distanceFromPointToBounds(point: RelationshipPoint, bounds: CanvasV2Ele
   return Math.hypot(dx, dy);
 }
 
+function depthInsideBounds(point: RelationshipPoint, bounds: CanvasV2ElementBounds): number {
+  const right = bounds.x + bounds.width;
+  const bottom = bounds.y + bounds.height;
+  if (point.x <= bounds.x || point.x >= right || point.y <= bounds.y || point.y >= bottom) return 0;
+  return precision(Math.min(point.x - bounds.x, right - point.x, point.y - bounds.y, bottom - point.y));
+}
+
+function escapeDeltaFromBounds(point: RelationshipPoint, bounds: CanvasV2ElementBounds): RelationshipPoint {
+  const right = bounds.x + bounds.width;
+  const bottom = bounds.y + bounds.height;
+  if (point.x <= bounds.x || point.x >= right || point.y <= bounds.y || point.y >= bottom) return { x: 0, y: 0 };
+  const candidates = [
+    { x: precision(bounds.x - point.x), y: 0 },
+    { x: precision(right - point.x), y: 0 },
+    { x: 0, y: precision(bounds.y - point.y) },
+    { x: 0, y: precision(bottom - point.y) },
+  ];
+  return candidates.sort((first, second) => Math.hypot(first.x, first.y) - Math.hypot(second.x, second.y))[0];
+}
+
 function anchorTolerance(bounds: CanvasV2ElementBounds): number {
   return precision(Math.max(8, Math.min(32, Math.max(bounds.width, bounds.height) * 0.18)));
 }
 
-function relationshipGeometryEndpoints(element: Element): { start: RelationshipPoint; end: RelationshipPoint } | undefined {
-  const geometry = element as SVGGeometryElement;
+interface RelationshipGeometryEndpoints {
+  start: RelationshipPoint;
+  mid: RelationshipPoint;
+  end: RelationshipPoint;
+  localStart: RelationshipPoint;
+  localMid: RelationshipPoint;
+  localEnd: RelationshipPoint;
+  transform: DOMMatrix;
+}
+
+function relationshipGeometryEndpoints(element: Element): RelationshipGeometryEndpoints | undefined {
+  // Promoted native relationships carry semantic identity on their connector
+  // root while the measurable route lives on its path child. Keep observing
+  // that route on later AI turns so typed native connectors do not become a
+  // validation blind spot after compatibility serialization.
+  const geometry = (typeof (element as SVGGeometryElement).getTotalLength === "function"
+    ? element
+    : element.querySelector('[data-canvas-v2-connector-part="path"]')) as SVGGeometryElement | null;
+  if (!geometry) return undefined;
   if (typeof geometry.getTotalLength !== "function" || typeof geometry.getPointAtLength !== "function" || typeof geometry.getScreenCTM !== "function") return undefined;
   try {
     const length = geometry.getTotalLength();
     const transform = geometry.getScreenCTM();
     if (!Number.isFinite(length) || !transform) return undefined;
-    const start = geometry.getPointAtLength(0).matrixTransform(transform);
-    const end = geometry.getPointAtLength(length).matrixTransform(transform);
+    const localStart = geometry.getPointAtLength(0);
+    const localMid = geometry.getPointAtLength(length / 2);
+    const localEnd = geometry.getPointAtLength(length);
+    const start = localStart.matrixTransform(transform);
+    const mid = localMid.matrixTransform(transform);
+    const end = localEnd.matrixTransform(transform);
     return {
       start: { x: precision(start.x), y: precision(start.y) },
+      mid: { x: precision(mid.x), y: precision(mid.y) },
       end: { x: precision(end.x), y: precision(end.y) },
+      localStart: { x: precision(localStart.x), y: precision(localStart.y) },
+      localMid: { x: precision(localMid.x), y: precision(localMid.y) },
+      localEnd: { x: precision(localEnd.x), y: precision(localEnd.y) },
+      transform,
     };
   } catch {
     return undefined;
   }
 }
 
+function nearestPointOnBounds(point: RelationshipPoint, bounds: CanvasV2ElementBounds): RelationshipPoint {
+  const right = bounds.x + bounds.width;
+  const bottom = bounds.y + bounds.height;
+  const x = Math.max(bounds.x, Math.min(right, point.x));
+  const y = Math.max(bounds.y, Math.min(bottom, point.y));
+  if (point.x <= bounds.x || point.x >= right || point.y <= bounds.y || point.y >= bottom) {
+    return { x: precision(x), y: precision(y) };
+  }
+  const candidates = [
+    { x: bounds.x, y: point.y },
+    { x: right, y: point.y },
+    { x: point.x, y: bounds.y },
+    { x: point.x, y: bottom },
+  ];
+  return candidates.sort((first, second) => distanceBetweenPoints(point, first) - distanceBetweenPoints(point, second))[0];
+}
+
+function renderedPointToLocal(point: RelationshipPoint, transform: DOMMatrix): RelationshipPoint | undefined {
+  const determinant = transform.a * transform.d - transform.b * transform.c;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-8) return undefined;
+  const translatedX = point.x - transform.e;
+  const translatedY = point.y - transform.f;
+  return {
+    x: precision((transform.d * translatedX - transform.c * translatedY) / determinant),
+    y: precision((-transform.b * translatedX + transform.a * translatedY) / determinant),
+  };
+}
+
 function closestRelationshipAnchor(
   point: RelationshipPoint,
   nodeIds: readonly string[],
   byNodeId: ReadonlyMap<string, Element>,
-): { nodeId: string; distance: number; tolerance: number } | undefined {
+): { nodeId: string; distance: number; tolerance: number; interiorDepth: number; bounds: CanvasV2ElementBounds; escapeDelta: RelationshipPoint } | undefined {
   return nodeIds.flatMap((nodeId) => {
     const target = byNodeId.get(nodeId);
     if (!target) return [];
     const bounds = elementBounds(target);
-    return [{ nodeId, distance: precision(distanceFromPointToBounds(point, bounds)), tolerance: anchorTolerance(bounds) }];
+    return [{
+      nodeId,
+      distance: precision(distanceFromPointToBounds(point, bounds)),
+      tolerance: anchorTolerance(bounds),
+      interiorDepth: depthInsideBounds(point, bounds),
+      bounds,
+      escapeDelta: escapeDeltaFromBounds(point, bounds),
+    }];
   }).sort((first, second) => first.distance - second.distance)[0];
 }
 
@@ -205,20 +302,40 @@ function observeAuthoredRelationships(document: Document, view: Window): CanvasV
         const reversed = reverseDistance < forwardDistance;
         const sourceAnchor = reversed ? reverseSource : forwardSource;
         const targetAnchor = reversed ? reverseTarget : forwardTarget;
+        const sourceEndpoint = reversed ? endpoints.end : endpoints.start;
+        const targetEndpoint = reversed ? endpoints.start : endpoints.end;
+        const sourceSuggestedPoint = sourceAnchor ? nearestPointOnBounds(sourceEndpoint, sourceAnchor.bounds) : undefined;
+        const targetSuggestedPoint = targetAnchor ? nearestPointOnBounds(targetEndpoint, targetAnchor.bounds) : undefined;
+        const sourceSuggestedLocalPoint = sourceSuggestedPoint ? renderedPointToLocal(sourceSuggestedPoint, endpoints.transform) : undefined;
+        const targetSuggestedLocalPoint = targetSuggestedPoint ? renderedPointToLocal(targetSuggestedPoint, endpoints.transform) : undefined;
+        const suggestedStartLocalPoint = reversed ? targetSuggestedLocalPoint : sourceSuggestedLocalPoint;
+        const suggestedEndLocalPoint = reversed ? sourceSuggestedLocalPoint : targetSuggestedLocalPoint;
         geometry = {
           geometryStartPoint: endpoints.start,
           geometryEndPoint: endpoints.end,
+          geometryStartLocalPoint: endpoints.localStart,
+          geometryMidLocalPoint: endpoints.localMid,
+          geometryEndLocalPoint: endpoints.localEnd,
+          ...(suggestedStartLocalPoint ? { geometrySuggestedStartLocalPoint: suggestedStartLocalPoint } : {}),
+          ...(suggestedEndLocalPoint ? { geometrySuggestedEndLocalPoint: suggestedEndLocalPoint } : {}),
           geometryOrientation: reversed ? "reversed" : "forward",
           geometrySpan: precision(distanceBetweenPoints(endpoints.start, endpoints.end)),
           ...(sourceAnchor ? {
             sourceAnchorNodeId: sourceAnchor.nodeId,
             sourceAnchorDistance: sourceAnchor.distance,
             sourceAnchorTolerance: sourceAnchor.tolerance,
+            sourceAnchorInteriorDepth: sourceAnchor.interiorDepth,
+            sourceAnchorBounds: sourceAnchor.bounds,
+            ...(sourceSuggestedPoint ? { sourceAnchorSuggestedPoint: sourceSuggestedPoint } : {}),
           } : {}),
           ...(targetAnchor ? {
             targetAnchorNodeId: targetAnchor.nodeId,
             targetAnchorDistance: targetAnchor.distance,
             targetAnchorTolerance: targetAnchor.tolerance,
+            targetAnchorInteriorDepth: targetAnchor.interiorDepth,
+            targetAnchorBounds: targetAnchor.bounds,
+            targetAnchorEscapeDelta: targetAnchor.escapeDelta,
+            ...(targetSuggestedPoint ? { targetAnchorSuggestedPoint: targetSuggestedPoint } : {}),
           } : {}),
         };
       }
@@ -413,14 +530,36 @@ function observeAuthoredSurface(
   };
 }
 
+function hasIdentifiedDescendant(element: HTMLElement): boolean {
+  return Boolean(element.querySelector("[data-canvas-v2-node-id]"));
+}
+
+function observedLeafTextLineCount(element: HTMLElement): number | undefined {
+  // A readable primitive may contain anonymous inline styling or <br> nodes.
+  // Treat it as one observed leaf until it owns another independently
+  // selectable canvas object. The old DOM-children check made precisely those
+  // multi-line headings invisible to collision and line-height validation.
+  if (hasIdentifiedDescendant(element) || !element.textContent?.trim()) return undefined;
+  const range = element.ownerDocument.createRange();
+  range.selectNodeContents(element);
+  const lineTops: number[] = [];
+  for (const rect of Array.from(range.getClientRects())) {
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    if (!lineTops.some((top) => Math.abs(top - rect.top) <= 1)) lineTops.push(rect.top);
+  }
+  return lineTops.length || undefined;
+}
+
 function observeNode(element: HTMLElement, view: Window): CanvasV2SpatialNodeObservation {
   const style = view.getComputedStyle(element);
   const text = element.textContent?.replace(/\s+/g, " ").trim();
+  const textLineCount = observedLeafTextLineCount(element);
   return {
     nodeId: element.dataset.canvasV2NodeId || "unknown",
     parentNodeId: parentNodeId(element),
     tagName: element.tagName.toLowerCase(),
     ...(text ? { textPreview: text.slice(0, 180) } : {}),
+    ...(textLineCount ? { textLineCount } : {}),
     bounds: elementBounds(element),
     contentBox: {
       clientWidth: precision(element.clientWidth),
@@ -483,6 +622,40 @@ function notableIntersections(elements: HTMLElement[], nodes: CanvasV2SpatialNod
     }
   }
   return intersections;
+}
+
+function renderedTextCollisions(elements: HTMLElement[], nodes: CanvasV2SpatialNodeObservation[]): CanvasV2SpatialIntersection[] {
+  const textIndexes = elements.flatMap((element, index) => (
+    !hasIdentifiedDescendant(element) && /[a-z0-9]{2}/i.test(element.textContent?.trim() ?? "") ? [index] : []
+  ));
+  const collisions: CanvasV2SpatialIntersection[] = [];
+  for (let firstOffset = 0; firstOffset < textIndexes.length && collisions.length < 48; firstOffset += 1) {
+    for (let secondOffset = firstOffset + 1; secondOffset < textIndexes.length && collisions.length < 48; secondOffset += 1) {
+      const firstIndex = textIndexes[firstOffset];
+      const secondIndex = textIndexes[secondOffset];
+      const firstElement = elements[firstIndex];
+      const secondElement = elements[secondIndex];
+      const firstRegion = firstElement.closest<HTMLElement>("[data-canvas-v2-design-region]")?.dataset.canvasV2NodeId;
+      const secondRegion = secondElement.closest<HTMLElement>("[data-canvas-v2-design-region]")?.dataset.canvasV2NodeId;
+      if (!firstRegion || firstRegion !== secondRegion) continue;
+      const first = nodes[firstIndex];
+      const second = nodes[secondIndex];
+      const overlap = intersection(first.bounds, second.bounds);
+      if (!overlap || overlap.width < 2 || overlap.height < 2) continue;
+      const overlapArea = overlap.width * overlap.height;
+      const firstArea = Math.max(1, first.bounds.width * first.bounds.height);
+      const secondArea = Math.max(1, second.bounds.width * second.bounds.height);
+      if (overlapArea / Math.min(firstArea, secondArea) < 0.025) continue;
+      collisions.push({
+        firstNodeId: first.nodeId,
+        secondNodeId: second.nodeId,
+        intersection: overlap,
+        firstCoverage: precision(overlapArea / firstArea),
+        secondCoverage: precision(overlapArea / secondArea),
+      });
+    }
+  }
+  return collisions;
 }
 
 function clippingAncestors(image: HTMLImageElement, imageBounds: DOMRect, view: Window): string[] {
@@ -618,9 +791,8 @@ export function observeCanvasV2SpatialLayout(document: Document): CanvasV2Spatia
     reportedNodeCount: nodes.length,
     nodes,
     notableIntersections: notableIntersections(elements, nodes),
-    contentOverflowNodeIds: nodes
-      .filter((node) => node.contentBox.scrollWidth > node.contentBox.clientWidth + 2 || node.contentBox.scrollHeight > node.contentBox.clientHeight + 2)
-      .map((node) => node.nodeId),
+    textCollisions: renderedTextCollisions(elements, nodes),
+    contentOverflowNodeIds: nodes.filter(canvasV2SpatialNodeClipsContent).map((node) => node.nodeId),
     evidence,
     authoredRelationships: view ? observeAuthoredRelationships(document, view) : [],
     authoredAnnotations: view ? observeAuthoredAnnotations(document, view) : [],

@@ -1,10 +1,48 @@
-import type { CanvasV2ArtifactDocument, CanvasV2ArtifactRevision, CanvasV2ElementBounds, CanvasV2RenderObservation, CanvasV2SurfaceZoneId } from "@/lib/canvas-v2/types";
+import type { CanvasV2ArtifactDocument, CanvasV2ArtifactRevision, CanvasV2ElementBounds, CanvasV2RenderObservation, CanvasV2SpatialIntersection, CanvasV2SurfaceZoneId, CanvasV2TerritoryRelation } from "@/lib/canvas-v2/types";
 import type { CanvasV2BoardObjectKind } from "@/lib/canvas-v2/board-object-graph";
-import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
-import type { CanvasV2ManualMutation } from "@/lib/canvas-v2/manual-mutations";
+import { CANVAS_V2_WORKSPACE, type CanvasV2WorkspacePoint } from "@/lib/canvas-v2/workspace-coordinate-space";
+import type { CanvasV2ManualMutation, CanvasV2ShapeVariant } from "@/lib/canvas-v2/manual-mutations";
+import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorBendFromPoint, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
 
 export const CANVAS_V2_NATIVE_SCENE_SCHEMA = "canvas-v2.native-scene.v1" as const;
+
+/**
+ * React warns when an inline CSS shorthand is updated beside one of its
+ * longhands. Native canvas nodes can legitimately contain both: the isolated
+ * compiler materializes resolved longhands, and a later human edit adds a
+ * precise longhand such as `background-color`. Keep those explicit values
+ * authoritative and remove only the overlapping shorthand before React owns
+ * the public node. This also ensures palette and typography edits remain
+ * visible after a node has been detached from its authored CSS ancestry.
+ */
+export function normalizeCanvasV2ReactInlineStyle(source: Readonly<Record<string, string>>): Record<string, string> {
+  const style = { ...source };
+  const fontLonghands = [
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "font-stretch",
+    "font-variant",
+    "font-variant-ligatures",
+    "font-variant-caps",
+    "font-variant-numeric",
+    "font-variant-east-asian",
+    "font-variant-alternates",
+    "font-variant-position",
+    "line-height",
+  ];
+  if (style.font && fontLonghands.some((property) => style[property] !== undefined)) delete style.font;
+  if (Object.keys(style).some((property) => property.startsWith("font-variant-") && property !== "font-variant")) {
+    delete style["font-variant"];
+  }
+
+  const backgroundLonghands = Object.keys(style).filter((property) => property.startsWith("background-") && property !== "background");
+  if (style.background && backgroundLonghands.length) delete style.background;
+  if (style["background-position-x"] || style["background-position-y"]) delete style["background-position"];
+  return style;
+}
 
 export interface CanvasV2NativeSceneGeometry {
   x: number;
@@ -62,6 +100,371 @@ export interface CanvasV2NativeSceneDocument {
   css: string;
   rootIds: string[];
   nodes: CanvasV2NativeSceneNode[];
+}
+
+const CANVAS_V2_SVG_ONLY_TAGS = new Set([
+  "circle", "clipPath", "defs", "ellipse", "g", "line", "marker", "mask",
+  "path", "pattern", "polygon", "polyline", "rect", "stop", "symbol", "text",
+  "textPath", "tspan", "use",
+]);
+
+/**
+ * React creates SVG elements through their parent namespace. A malformed
+ * model fragment such as a bare <path>, or a transient mutation that leaves a
+ * vector leaf orphaned, would otherwise be created as an unknown HTML tag and
+ * emit one browser error for every leaf. Keep that invalid intermediate state
+ * out of the public scene; valid authored relationships are promoted to a
+ * native <svg> root before rendering.
+ */
+export function canvasV2NativeSceneNodeHasRenderableNamespace(
+  node: Pick<CanvasV2NativeSceneNode, "namespace" | "tagName">,
+  parent?: Pick<CanvasV2NativeSceneNode, "namespace" | "tagName">,
+): boolean {
+  if (node.namespace === "html") return !CANVAS_V2_SVG_ONLY_TAGS.has(node.tagName);
+  return node.tagName === "svg" || parent?.namespace === "svg";
+}
+
+export interface CanvasV2AuthoredRelationshipPromotion {
+  nodeId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  startInParent: CanvasV2ConnectorPoint;
+  endInParent: CanvasV2ConnectorPoint;
+  controlInParent: CanvasV2ConnectorPoint;
+  curved: boolean;
+  arrow: boolean;
+  stroke: string;
+  strokeWidth: number;
+  strokeDasharray?: string;
+  opacity?: string;
+}
+
+export function canvasV2NativeSceneLeafNeedsIdentity(input: {
+  hasAuthoredAncestor: boolean;
+  hasText: boolean;
+  ownedByAuthoredTextObject?: boolean;
+  tagName: string;
+  width: number;
+  height: number;
+  visible: boolean;
+  hasPaint: boolean;
+}): boolean {
+  const tagIsPrimitive = /^(H[1-6]|P|SPAN|SMALL|STRONG|EM|LABEL|BUTTON|HR|SVG|PATH|LINE|CIRCLE|RECT|POLYGON|POLYLINE|ELLIPSE)$/.test(input.tagName);
+  const tagIsTextObject = /^(BLOCKQUOTE|BUTTON|DD|DIV|DT|FIGCAPTION|H[1-6]|LABEL|LI|P|SMALL|SPAN)$/.test(input.tagName);
+  const independentlyEditableText = input.hasText && tagIsTextObject && !input.ownedByAuthoredTextObject;
+  return (independentlyEditableText || !input.hasAuthoredAncestor)
+    && input.width > 0
+    && input.height > 0
+    && input.visible
+    && (tagIsPrimitive || input.hasPaint);
+}
+
+export function canvasV2NativeSceneNodeUsesHostBackground(node: CanvasV2NativeSceneNode): boolean {
+  return node.kind === "root"
+    || node.sourceNodeId === "canvas"
+    || node.attributes["data-canvas-v2-workspace-root"] === "true"
+    || node.attributes["data-canvas-v2-permanent-root"] === "true"
+    || node.attributes.class?.split(/\s+/).includes("northstar-canvas");
+}
+
+export type CanvasV2PaintedEdge = "top" | "right" | "bottom" | "left";
+
+export interface CanvasV2PaintedEdgeDescriptor {
+  edge: CanvasV2PaintedEdge;
+  width: number;
+  style: string;
+  color: string;
+}
+
+const CANVAS_V2_PHRASING_EDGE_OWNERS = new Set([
+  "a", "b", "bdi", "bdo", "button", "cite", "code", "data", "del", "em",
+  "h1", "h2", "h3", "h4", "h5", "h6", "i", "ins", "kbd", "label", "mark",
+  "p", "q", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var",
+]);
+
+/** Resolve the final browser paint instead of guessing from a CSS shorthand. */
+export function canvasV2NativeScenePaintedEdges(node: CanvasV2NativeSceneNode): CanvasV2PaintedEdgeDescriptor[] {
+  return (["top", "right", "bottom", "left"] as const).flatMap((edge) => {
+    const width = Number.parseFloat(node.resolvedStyle?.[`border-${edge}-width`] ?? node.inlineStyle[`border-${edge}-width`] ?? "0");
+    const style = node.resolvedStyle?.[`border-${edge}-style`] ?? node.inlineStyle[`border-${edge}-style`] ?? "none";
+    const color = node.resolvedStyle?.[`border-${edge}-color`] ?? node.inlineStyle[`border-${edge}-color`] ?? "transparent";
+    return Number.isFinite(width) && width > 0 && style !== "none" && color !== "transparent" && color !== "rgba(0, 0, 0, 0)"
+      ? [{ edge, width: round(width), style, color }]
+      : [];
+  });
+}
+
+function canvasV2CssPaintIsVisible(value: string | undefined): boolean {
+  const paint = value?.trim().toLowerCase();
+  if (!paint || paint === "none" || paint === "transparent") return false;
+  const alpha = /^(?:rgba|hsla)\([^)]*[,/]\s*(0(?:\.0+)?)\s*\)$/.exec(paint);
+  return !alpha;
+}
+
+/**
+ * A model-authored wrapper that visibly paints a card, panel, frame, or
+ * filled region is itself a canvas object. Keep it selectable even when its
+ * heading and copy also carry stable IDs. Transparent layout wrappers remain
+ * structural and are deliberately not promoted into accidental groups.
+ */
+export function canvasV2NativeSceneNodeOwnsVisibleSurface(node: CanvasV2NativeSceneNode): boolean {
+  if (node.hidden || canvasV2NativeSceneNodeUsesHostBackground(node)) return false;
+  const opacity = Number.parseFloat(node.resolvedStyle?.opacity ?? node.inlineStyle.opacity ?? "1");
+  if (Number.isFinite(opacity) && opacity <= 0) return false;
+  const backgroundColor = node.resolvedStyle?.["background-color"] ?? node.inlineStyle["background-color"];
+  const backgroundImage = node.resolvedStyle?.["background-image"] ?? node.inlineStyle["background-image"];
+  const boxShadow = node.resolvedStyle?.["box-shadow"] ?? node.inlineStyle["box-shadow"];
+  return canvasV2CssPaintIsVisible(backgroundColor)
+    || canvasV2CssPaintIsVisible(backgroundImage)
+    || canvasV2CssPaintIsVisible(boxShadow)
+    || canvasV2NativeScenePaintedEdges(node).length >= 2;
+}
+
+/**
+ * A single CSS edge on a structural wrapper is visually a line, not the
+ * wrapper itself. Promote that paint into a stable native child so it has its
+ * own identity, line-sized bounds, Layers entry, and full manual-edit
+ * lifecycle. The equivalent padding compensation keeps neighbouring copy at
+ * the exact authored coordinate after the wrapper stops painting the edge.
+ */
+export function materializeCanvasV2NativeScenePaintedEdges(
+  source: CanvasV2NativeSceneDocument,
+): CanvasV2NativeSceneDocument {
+  const scene = cloneScene(source);
+  const usedSceneIds = new Set(scene.nodes.map((node) => node.id));
+  const usedSourceIds = new Set(scene.nodes.flatMap((node) => node.sourceNodeId ? [node.sourceNodeId] : []));
+  const candidates = [...scene.nodes];
+
+  for (const owner of candidates) {
+    if (owner.selectable || owner.hidden || owner.kind === "root" || !owner.sourceNodeId) continue;
+    const painted = canvasV2NativeScenePaintedEdges(owner);
+    // A lone edge is an authored rule/line. Multi-edge borders remain the
+    // container's frame paint; splitting every card outline into four fake
+    // objects would make the object model less truthful, not more.
+    if (painted.length !== 1) continue;
+    const descriptor = painted[0];
+    const edge = descriptor.edge;
+    let sourceNodeId = `${owner.sourceNodeId}-border-${edge}`;
+    let suffix = 2;
+    while (usedSourceIds.has(sourceNodeId)) sourceNodeId = `${owner.sourceNodeId}-border-${edge}-${suffix++}`;
+    let id = sourceNodeId;
+    while (usedSceneIds.has(id)) id = `${sourceNodeId}-${suffix++}`;
+    usedSourceIds.add(sourceNodeId);
+    usedSceneIds.add(id);
+
+    const vertical = edge === "left" || edge === "right";
+    const width = vertical ? descriptor.width : owner.geometry.width;
+    const height = vertical ? owner.geometry.height : descriptor.width;
+    const paddingProperty = `padding-${edge}`;
+    const borderWidthProperty = `border-${edge}-width`;
+    const borderStyleProperty = `border-${edge}-style`;
+    const resolvedPadding = Number.parseFloat(owner.resolvedStyle?.[paddingProperty] ?? owner.inlineStyle[paddingProperty] ?? "0");
+    const compensatedPadding = round((Number.isFinite(resolvedPadding) ? resolvedPadding : 0) + descriptor.width);
+    owner.inlineStyle[paddingProperty] = `${compensatedPadding}px`;
+    owner.inlineStyle[borderWidthProperty] = "0px";
+    owner.inlineStyle[borderStyleProperty] = "none";
+    owner.attributes[`data-canvas-v2-materialized-border-${edge}`] = "true";
+    if (owner.resolvedStyle) {
+      owner.resolvedStyle[paddingProperty] = `${compensatedPadding}px`;
+      owner.resolvedStyle[borderWidthProperty] = "0px";
+      owner.resolvedStyle[borderStyleProperty] = "none";
+    }
+
+    const line: CanvasV2NativeSceneNode = {
+      id,
+      sourceNodeId,
+      parentId: owner.id,
+      childIds: [],
+      order: scene.nodes.length,
+      // A selectable rule can belong to a paragraph, heading, label, or other
+      // phrasing container. Rendering a div there produces invalid HTML and a
+      // React hydration warning even though the line is absolutely positioned.
+      // Span preserves the identical native geometry without violating the
+      // owner's content model.
+      tagName: CANVAS_V2_PHRASING_EDGE_OWNERS.has(owner.tagName) ? "span" : "div",
+      namespace: "html",
+      layoutMode: "absolute",
+      kind: "shape",
+      selectable: true,
+      hidden: false,
+      locked: false,
+      canonicalEvidence: owner.canonicalEvidence,
+      userEdited: false,
+      ...(owner.lastAuthor ? { lastAuthor: owner.lastAuthor } : {}),
+      editVersion: 0,
+      geometry: {
+        x: edge === "right" ? round(owner.geometry.width - descriptor.width) : 0,
+        y: edge === "bottom" ? round(owner.geometry.height - descriptor.width) : 0,
+        width: round(width),
+        height: round(height),
+        rotation: 0,
+        zIndex: Math.max(1, owner.geometry.zIndex + 1),
+      },
+      attributes: {
+        "data-canvas-v2-node-id": sourceNodeId,
+        "data-canvas-v2-native-runtime-node": "true",
+        "data-canvas-v2-native-scene-id": id,
+        "data-canvas-v2-painted-edge": edge,
+        "data-canvas-v2-painted-edge-owner": owner.sourceNodeId,
+        "aria-label": `${edge[0].toUpperCase()}${edge.slice(1)} accent line · ${owner.sourceNodeId}`,
+      },
+      inlineStyle: {
+        margin: "0",
+        padding: "0",
+        "background-color": descriptor.color,
+        "border-radius": "0",
+      },
+      resolvedStyle: {
+        "background-color": descriptor.color,
+        opacity: owner.resolvedStyle?.opacity ?? "1",
+      },
+      content: [],
+    };
+    owner.childIds.push(id);
+    owner.content.push({ kind: "node", id });
+    scene.nodes.push(line);
+  }
+  scene.nodes.forEach((node, order) => { node.order = order; });
+  return scene;
+}
+
+const CANVAS_V2_INLINE_TEXT_TAGS = new Set([
+  "a", "b", "bdi", "bdo", "br", "cite", "code", "data", "del", "em", "i", "ins", "kbd", "mark", "q", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var", "wbr",
+]);
+const CANVAS_V2_TEXT_CONTAINER_TAGS = new Set([
+  "blockquote", "button", "dd", "div", "dt", "figcaption", "h1", "h2", "h3", "h4", "h5", "h6", "label", "li", "p", "small", "span",
+]);
+
+const CANVAS_V2_WRITABLE_SURFACE_PATTERN = /(?:^|[\s_-])(answer|assumption|candidate|capture|cell|comment|evidence|feedback|field|idea|input|note|notes|objection|prompt|question|record|response|slot|thought|write|writing)(?:$|[\s_-])/i;
+
+/**
+ * Writable is an object capability, not a guess made by the React editor.
+ * Northstar declares it explicitly. The compiler also upgrades obvious blank
+ * legacy writing surfaces so already-created boards gain the same behavior.
+ */
+export function canvasV2NativeSceneNodeIsWritable(node: CanvasV2NativeSceneNode): boolean {
+  return node.attributes["data-canvas-v2-writable"] === "true";
+}
+
+export function canvasV2NativeSceneNodeLooksWritable(node: CanvasV2NativeSceneNode): boolean {
+  if (node.attributes["data-canvas-v2-writable"] === "false"
+    || !node.sourceNodeId
+    || node.hidden
+    || node.locked
+    || node.namespace !== "html"
+    || !CANVAS_V2_TEXT_CONTAINER_TAGS.has(node.tagName)
+    || node.childIds.length
+    || node.content.some((item) => item.kind === "text" && item.value.trim())
+    || node.geometry.width < 72
+    || node.geometry.height < 28) return false;
+  if (node.attributes["data-canvas-v2-writable"] === "true") return true;
+  const semanticText = [
+    node.sourceNodeId,
+    node.attributes.id,
+    node.attributes.class,
+    node.attributes["aria-label"],
+    node.attributes["data-canvas-v2-visual-role"],
+    node.attributes["data-canvas-v2-content-role"],
+  ].filter(Boolean).join(" ");
+  const hasSurface = canvasV2NativeSceneNodeOwnsVisibleSurface(node)
+    || canvasV2NativeScenePaintedEdges(node).length > 0;
+  return hasSurface && CANVAS_V2_WRITABLE_SURFACE_PATTERN.test(semanticText);
+}
+
+/**
+ * Text ownership follows the selectable authored object, not incidental
+ * formatting markup inside it. A blockquote containing an anonymous <em>, or
+ * a comparison row containing an anonymous <strong>, therefore edits as one
+ * text object. Independently authored descendants remain separate objects and
+ * keep the container out of text mode.
+ */
+export function canvasV2NativeSceneNodeSupportsTextEditing(
+  node: CanvasV2NativeSceneNode,
+  byId: ReadonlyMap<string, CanvasV2NativeSceneNode>,
+): boolean {
+  if (!node.selectable || node.locked || node.namespace !== "html" || !CANVAS_V2_TEXT_CONTAINER_TAGS.has(node.tagName)) return false;
+  const inlineSubtree = (candidate: CanvasV2NativeSceneNode, seen: Set<string>): boolean => {
+    if (seen.has(candidate.id)) return false;
+    seen.add(candidate.id);
+    if (candidate.sourceNodeId || !CANVAS_V2_INLINE_TEXT_TAGS.has(candidate.tagName)) return false;
+    return candidate.childIds.every((childId) => {
+      const child = byId.get(childId);
+      return Boolean(child && inlineSubtree(child, seen));
+    });
+  };
+  const hasText = (candidate: CanvasV2NativeSceneNode, seen: Set<string>): boolean => {
+    if (seen.has(candidate.id)) return false;
+    seen.add(candidate.id);
+    if (candidate.content.some((item) => item.kind === "text" && item.value.length > 0)) return true;
+    return candidate.childIds.some((childId) => {
+      const child = byId.get(childId);
+      return Boolean(child && hasText(child, seen));
+    });
+  };
+  const ownsEditableSubtree = node.childIds.every((childId) => {
+    const child = byId.get(childId);
+    return Boolean(child && inlineSubtree(child, new Set()));
+  });
+  return ownsEditableSubtree && (hasText(node, new Set()) || canvasV2NativeSceneNodeIsWritable(node));
+}
+
+interface CanvasV2AuthoredPlacementRect extends CanvasV2WorkspacePoint {
+  width: number;
+  height: number;
+}
+
+/**
+ * A model revision often inserts one new top-level section between roots that
+ * already have durable world coordinates. Anchor that section to the nearest
+ * authored sibling instead of treating it as an unrelated object competing
+ * for the generic viewport origin. This preserves the document's reading
+ * order across iterative turns while the open-placement search still owns
+ * collision avoidance.
+ */
+export function canvasV2PreferredRootPlacement(input: {
+  anchor: CanvasV2WorkspacePoint;
+  authored: CanvasV2AuthoredPlacementRect;
+  authoredOrigin: CanvasV2WorkspacePoint;
+  groundedOffset?: number;
+  marginTop?: number;
+  relation?: CanvasV2TerritoryRelation;
+  previous?: {
+    placed: CanvasV2AuthoredPlacementRect;
+    authored: CanvasV2AuthoredPlacementRect;
+    newlyPlaced: boolean;
+    marginBottom?: number;
+  };
+  next?: { placed: CanvasV2AuthoredPlacementRect };
+}): CanvasV2WorkspacePoint {
+  if (input.previous) {
+    const authoredGap = input.previous.newlyPlaced
+      ? Math.max(0, input.authored.y - input.previous.authored.y - input.previous.authored.height)
+      : Math.max(0, input.marginTop ?? 0, input.previous.marginBottom ?? 0);
+    const authoredDeltaX = input.previous.newlyPlaced
+      ? input.authored.x - input.previous.authored.x
+      : 0;
+    const explicitGap = Math.max(CANVAS_V2_WORKSPACE.documentMargin, authoredGap);
+    if (input.relation === "right") return {
+      x: input.previous.placed.x + input.previous.placed.width + explicitGap,
+      y: input.previous.placed.y,
+    };
+    if (input.relation === "left") return {
+      x: input.previous.placed.x - input.authored.width - explicitGap,
+      y: input.previous.placed.y,
+    };
+    if (input.relation === "above") return {
+      x: input.previous.placed.x,
+      y: input.previous.placed.y - input.authored.height - explicitGap,
+    };
+    return {
+      x: input.previous.placed.x + authoredDeltaX,
+      y: input.previous.placed.y + input.previous.placed.height + authoredGap,
+    };
+  }
+  return {
+    x: input.next?.placed.x ?? input.anchor.x + input.authored.x - input.authoredOrigin.x,
+    y: input.anchor.y + input.authored.y - input.authoredOrigin.y + (input.groundedOffset ?? 0),
+  };
 }
 
 /**
@@ -180,10 +583,135 @@ function nativeMeasuredGeometry(
   };
 }
 
+function relationshipNodeIds(value: string | null): string[] {
+  return Array.from(new Set((value ?? "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)));
+}
+
+function pointDistanceFromRect(point: CanvasV2ConnectorPoint, rect: DOMRect): number {
+  const dx = Math.max(rect.left - point.x, 0, point.x - rect.right);
+  const dy = Math.max(rect.top - point.y, 0, point.y - rect.bottom);
+  return Math.hypot(dx, dy);
+}
+
+function measureCanvasV2AuthoredRelationship(
+  element: Element,
+  bodyRect: DOMRect,
+  bySourceNodeId: ReadonlyMap<string, Element>,
+): CanvasV2AuthoredRelationshipPromotion | undefined {
+  const nodeId = element.getAttribute("data-canvas-v2-node-id")?.trim();
+  const sourceNodeIds = relationshipNodeIds(element.getAttribute("data-canvas-v2-relationship-source"));
+  const targetNodeIds = relationshipNodeIds(element.getAttribute("data-canvas-v2-relationship-target"));
+  const geometryCandidates = [element, ...Array.from(element.querySelectorAll("path[d],line,polyline,polygon"))];
+  const geometry = geometryCandidates.find((candidate) => (
+    typeof (candidate as SVGGeometryElement).getTotalLength === "function"
+    && typeof (candidate as SVGGeometryElement).getPointAtLength === "function"
+    && typeof (candidate as SVGGeometryElement).getScreenCTM === "function"
+  )) as SVGGeometryElement | undefined;
+  if (!nodeId || !sourceNodeIds.length || !targetNodeIds.length) return undefined;
+  try {
+    const computed = element.ownerDocument.defaultView?.getComputedStyle(geometry ?? element);
+    let rawStart: CanvasV2ConnectorPoint;
+    let rawMid: CanvasV2ConnectorPoint;
+    let rawEnd: CanvasV2ConnectorPoint;
+    let authoredPath = "";
+    let markerEnd = "";
+    let authoredStrokeWidth = Number.NaN;
+    let authoredStroke = "";
+    let authoredDash = "";
+    let authoredOpacity = "";
+    let curved = false;
+    if (geometry) {
+      const length = geometry.getTotalLength();
+      const transform = geometry.getScreenCTM();
+      if (!Number.isFinite(length) || !transform) return undefined;
+      const rendered = (at: number) => {
+        const point = geometry.getPointAtLength(at).matrixTransform(transform);
+        return { x: point.x, y: point.y };
+      };
+      rawStart = rendered(0);
+      rawMid = rendered(length / 2);
+      rawEnd = rendered(length);
+      authoredPath = geometry.getAttribute("d") ?? "";
+      markerEnd = geometry.getAttribute("marker-end") ?? computed?.getPropertyValue("marker-end") ?? "";
+      authoredStrokeWidth = Number.parseFloat(computed?.strokeWidth ?? "");
+      authoredStroke = computed?.stroke ?? "";
+      authoredDash = computed?.strokeDasharray ?? "";
+      authoredOpacity = computed?.opacity ?? "";
+      const lineMidpoint = { x: (rawStart.x + rawEnd.x) / 2, y: (rawStart.y + rawEnd.y) / 2 };
+      curved = /[cqsta]/i.test(authoredPath) || Math.hypot(rawMid.x - lineMidpoint.x, rawMid.y - lineMidpoint.y) > 8;
+    } else {
+      // Northstar may intentionally express a restrained relationship as a
+      // rotated CSS rule rather than an SVG path. It still declares semantic
+      // endpoints and must therefore enter the native connector lifecycle.
+      // Recover the painted segment from its center, authored width and
+      // resolved transform before the measuring DOM is discarded.
+      const rect = element.getBoundingClientRect();
+      const metrics = computedTransformMetrics(computed);
+      const offsetWidth = Number((element as HTMLElement).offsetWidth);
+      const segmentLength = (Number.isFinite(offsetWidth) && offsetWidth > 0 ? offsetWidth : Math.hypot(rect.width, rect.height)) * metrics.scaleX;
+      const borderWidth = Number.parseFloat(computed?.borderTopWidth ?? "");
+      const backgroundThickness = Number((element as HTMLElement).offsetHeight);
+      const paintedBackground = Boolean(computed?.backgroundColor && computed.backgroundColor !== "transparent" && computed.backgroundColor !== "rgba(0, 0, 0, 0)");
+      if (!Number.isFinite(segmentLength) || segmentLength <= 0 || (!(borderWidth > 0) && !(backgroundThickness > 0 && paintedBackground))) return undefined;
+      const radians = metrics.rotation * Math.PI / 180;
+      const direction = { x: Math.cos(radians), y: Math.sin(radians) };
+      rawMid = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      rawStart = { x: rawMid.x - direction.x * segmentLength / 2, y: rawMid.y - direction.y * segmentLength / 2 };
+      rawEnd = { x: rawMid.x + direction.x * segmentLength / 2, y: rawMid.y + direction.y * segmentLength / 2 };
+      authoredStrokeWidth = borderWidth > 0 ? borderWidth : backgroundThickness;
+      authoredStroke = borderWidth > 0 ? computed?.borderTopColor ?? "" : computed?.backgroundColor ?? "";
+      authoredDash = computed?.borderTopStyle === "dashed" ? `${Math.max(8, authoredStrokeWidth * 3)} ${Math.max(7, authoredStrokeWidth * 2)}` : "";
+      authoredOpacity = computed?.opacity ?? "";
+    }
+    const closest = (point: CanvasV2ConnectorPoint, ids: readonly string[]) => ids.flatMap((id) => {
+      const target = bySourceNodeId.get(id);
+      return target ? [{ id, distance: pointDistanceFromRect(point, target.getBoundingClientRect()) }] : [];
+    }).sort((left, right) => left.distance - right.distance)[0];
+    const forwardSource = closest(rawStart, sourceNodeIds);
+    const forwardTarget = closest(rawEnd, targetNodeIds);
+    const reverseSource = closest(rawEnd, sourceNodeIds);
+    const reverseTarget = closest(rawStart, targetNodeIds);
+    if (!forwardSource || !forwardTarget || !reverseSource || !reverseTarget) return undefined;
+    const reversed = reverseSource.distance + reverseTarget.distance < forwardSource.distance + forwardTarget.distance;
+    const source = reversed ? reverseSource : forwardSource;
+    const target = reversed ? reverseTarget : forwardTarget;
+    const start = reversed ? rawEnd : rawStart;
+    const end = reversed ? rawStart : rawEnd;
+    const parentRect = element.parentElement?.getBoundingClientRect() ?? bodyRect;
+    const parentOrigin = { x: parentRect.left, y: parentRect.top };
+    const control = {
+      x: 2 * rawMid.x - (start.x + end.x) / 2,
+      y: 2 * rawMid.y - (start.y + end.y) / 2,
+    };
+    return {
+      nodeId,
+      sourceNodeId: source.id,
+      targetNodeId: target.id,
+      startInParent: { x: round(start.x - parentOrigin.x), y: round(start.y - parentOrigin.y) },
+      endInParent: { x: round(end.x - parentOrigin.x), y: round(end.y - parentOrigin.y) },
+      controlInParent: { x: round(control.x - parentOrigin.x), y: round(control.y - parentOrigin.y) },
+      curved,
+      arrow: Boolean((markerEnd && markerEnd !== "none") || element.querySelector("marker,[data-canvas-v2-connector-part='end']")),
+      stroke: authoredStroke && authoredStroke !== "none" && authoredStroke !== "rgba(0, 0, 0, 0)" ? authoredStroke : "#6754de",
+      strokeWidth: round(Math.max(2.5, Math.min(5.5, Number.isFinite(authoredStrokeWidth) ? authoredStrokeWidth : 4))),
+      ...(authoredDash && authoredDash !== "none" ? { strokeDasharray: authoredDash } : {}),
+      ...(authoredOpacity && authoredOpacity !== "1" ? { opacity: authoredOpacity } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function kindFor(element: Element): CanvasV2BoardObjectKind {
   const html = element as HTMLElement;
   const nodeId = html.dataset?.canvasV2NodeId;
   if (html.dataset?.canvasV2WorkspaceRoot === "true" || html.dataset?.canvasV2PermanentRoot === "true" || nodeId === "canvas") return "root";
+  // Native connector roots survive compatibility serialization as SVGs. Do
+  // not demote them back to generic shapes on the next AI turn: their typed
+  // endpoints, curve controls, hit target and attachment lifecycle are all
+  // durable scene state.
+  if (html.dataset?.canvasV2Primitive === "connector") return "connector";
+  if (html.dataset?.canvasV2PaintedEdge) return "shape";
   if (html.dataset?.canvasV2Group === "true") return "group";
   if (html.dataset?.canvasV2IslandId || html.dataset?.canvasV2DesignRegion !== undefined) return "island";
   if (html.dataset?.canvasV2EvidenceId) return element.tagName === "IMG" ? "image" : "evidence";
@@ -259,6 +787,17 @@ const DETACHMENT_STYLE_PROPERTIES = [
   "padding-right",
   "padding-bottom",
   "padding-left",
+  "margin-top",
+  "margin-right",
+  "margin-bottom",
+  "margin-left",
+  "box-sizing",
+  "width",
+  "height",
+  "min-width",
+  "min-height",
+  "max-width",
+  "max-height",
   "overflow-x",
   "overflow-y",
   "grid-template-columns",
@@ -273,65 +812,22 @@ const DETACHMENT_STYLE_PROPERTIES = [
   "justify-content",
   "align-items",
   "align-content",
+  "justify-self",
+  "align-self",
+  "flex-basis",
+  "flex-grow",
+  "flex-shrink",
+  "grid-column-start",
+  "grid-column-end",
+  "grid-row-start",
+  "grid-row-end",
+  "order",
   "object-fit",
   "object-position",
   "fill",
   "stroke",
   "stroke-width",
 ] as const;
-
-const DETACHMENT_TEXT_STYLE_PROPERTIES = new Set<string>([
-  "display",
-  "color",
-  "font-family",
-  "font-size",
-  "font-weight",
-  "font-style",
-  "font-stretch",
-  "font-variant",
-  "font-feature-settings",
-  "font-kerning",
-  "line-height",
-  "letter-spacing",
-  "text-align",
-  "text-decoration-line",
-  "text-decoration-color",
-  "text-decoration-style",
-  "text-transform",
-  "text-indent",
-  "text-shadow",
-  "white-space",
-  "word-break",
-  "overflow-wrap",
-  "writing-mode",
-  "background-color",
-  "background-image",
-  "background-position",
-  "background-size",
-  "background-repeat",
-  "border-top-color",
-  "border-top-style",
-  "border-top-width",
-  "border-right-color",
-  "border-right-style",
-  "border-right-width",
-  "border-bottom-color",
-  "border-bottom-style",
-  "border-bottom-width",
-  "border-left-color",
-  "border-left-style",
-  "border-left-width",
-  "border-top-left-radius",
-  "border-top-right-radius",
-  "border-bottom-right-radius",
-  "border-bottom-left-radius",
-  "box-shadow",
-  "opacity",
-  "padding-top",
-  "padding-right",
-  "padding-bottom",
-  "padding-left",
-]);
 
 function resolvedDetachmentStyle(computed?: CSSStyleDeclaration): Record<string, string> {
   if (!computed) return {};
@@ -362,6 +858,51 @@ function directText(element: Element): string | undefined {
 }
 
 /**
+ * Compatibility documents often use one full-board `canvas` root whose
+ * children remain in normal flow. Flow geometry cannot be moved by merely
+ * changing native x/y metadata, so place the root's content inset at the
+ * current viewport anchor before browser measurement. Once established, that
+ * inset is copied from native reference truth on later AI turns so existing
+ * work never jumps back to the source document's upper-left origin.
+ */
+function placeFreshCanvasRootContentAtViewport(input: {
+  document: Document;
+  placementReferenceScene?: CanvasV2NativeSceneDocument;
+  preferredPlacement?: CanvasV2WorkspacePoint;
+}): void {
+  const root = input.document.body.querySelector<HTMLElement>('[data-canvas-v2-node-id="canvas"]');
+  if (!root) return;
+  const referenceRoot = input.placementReferenceScene?.nodes.find((node) => node.kind === "root" && node.sourceNodeId === "canvas");
+  const preserved = referenceRoot?.attributes["data-canvas-v2-viewport-placed"] === "true";
+  const hasFlowContent = Array.from(root.children).some((child) => {
+    const position = input.document.defaultView?.getComputedStyle(child).position;
+    return position !== "absolute" && position !== "fixed";
+  });
+  // An explicitly positioned two-dimensional composition already owns its
+  // internal coordinates. It is translated as one native cohort below;
+  // adding root padding would distort its relationship geometry.
+  if (!preserved && !hasFlowContent) return;
+  const referenceHasContent = Boolean(input.placementReferenceScene?.nodes.some((node) => (
+    node.kind !== "root" && node.sourceNodeId && !node.hidden
+  )));
+  if (!preserved && (!input.preferredPlacement || referenceHasContent)) return;
+
+  const bodyRect = input.document.body.getBoundingClientRect();
+  const rootRect = root.getBoundingClientRect();
+  const preservedLeft = Number.parseFloat(referenceRoot?.inlineStyle["padding-left"] ?? "");
+  const preservedTop = Number.parseFloat(referenceRoot?.inlineStyle["padding-top"] ?? "");
+  const desiredLeft = preserved && Number.isFinite(preservedLeft)
+    ? preservedLeft
+    : Math.max(0, Math.min(rootRect.width - 1, input.preferredPlacement!.x - (rootRect.left - bodyRect.left)));
+  const desiredTop = preserved && Number.isFinite(preservedTop)
+    ? preservedTop
+    : Math.max(0, Math.min(rootRect.height - 1, input.preferredPlacement!.y - (rootRect.top - bodyRect.top)));
+  root.style.setProperty("padding-left", `${round(desiredLeft)}px`, "important");
+  root.style.setProperty("padding-top", `${round(desiredTop)}px`, "important");
+  root.setAttribute("data-canvas-v2-viewport-placed", "true");
+}
+
+/**
  * Compile a fully laid-out HTML candidate into the live native scene format.
  * The iframe document is an isolated measuring instrument: none of its DOM
  * nodes, focus state, scrolling, or coordinate system survives this boundary.
@@ -378,19 +919,52 @@ export function compileCanvasV2NativeScene(input: {
    * new top-level objects search for open territory around it.
    */
   placementReferenceScene?: CanvasV2NativeSceneDocument;
+  /**
+   * Exact existing top-level AI islands whose coordinates may be remeasured
+   * for an explicit whole-board recompose or a bounded cardinal placement
+   * repair. Every omitted root remains pinned to committed native truth,
+   * including user work and grounded evidence.
+   */
+  relocatablePlacementNodeIds?: readonly string[];
+  /** Current unobscured world-space anchor for genuinely new AI work. */
+  preferredPlacement?: CanvasV2WorkspacePoint;
 }): CanvasV2NativeSceneDocument {
+  placeFreshCanvasRootContentAtViewport(input);
+  const relocatablePlacementNodeIds = new Set(input.relocatablePlacementNodeIds ?? []);
+  if (relocatablePlacementNodeIds.size) {
+    // Serialized native compatibility source carries an !important geometry
+    // guard. It is correct for ordinary edits, but it also made a deliberate
+    // recompose physically incapable of moving an existing island: authored
+    // CSS could resize the root while its old x/y always won. Remove only the
+    // compiler-owned geometry metadata from explicitly authorized AI roots in
+    // this private measuring document. The accepted scene serializes fresh
+    // native coordinates immediately after validation.
+    input.document.body.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]").forEach((element) => {
+      const nodeId = element.dataset.canvasV2NodeId;
+      if (!nodeId || !relocatablePlacementNodeIds.has(nodeId)) return;
+      element.removeAttribute("data-canvas-v2-scene-layout");
+      for (const property of [
+        "--canvas-v2-scene-x",
+        "--canvas-v2-scene-y",
+        "--canvas-v2-scene-width",
+        "--canvas-v2-scene-height",
+        "--canvas-v2-scene-rotation",
+      ]) element.style.removeProperty(property);
+    });
+  }
   const bodyRect = input.document.body.getBoundingClientRect();
   const allElements = Array.from(input.document.body.querySelectorAll("*"))
     .filter((element) => !["SCRIPT", "STYLE", "LINK", "META", "BASE", "TEMPLATE"].includes(element.tagName));
   const runtimeIds = new Map<Element, string>();
   const usedIds = new Set<string>();
+  const measuredMargins = new Map<string, { top: number; bottom: number }>();
   let renderSequence = 0;
   for (const [elementIndex, element] of allElements.entries()) {
     let sourceNodeId = element.getAttribute("data-canvas-v2-node-id")?.trim();
     if (!sourceNodeId && element.children.length === 0) {
+      const authoredAncestor = element.parentElement?.closest("[data-canvas-v2-node-id]");
       const computed = input.document.defaultView?.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
-      const tagIsPrimitive = /^(H[1-6]|P|SPAN|SMALL|STRONG|EM|LABEL|BUTTON|HR|SVG|PATH|LINE|CIRCLE|RECT|POLYGON|POLYLINE|ELLIPSE)$/.test(element.tagName);
       const hasPaint = Boolean(element.textContent?.trim())
         || element.tagName === "HR"
         || computed?.backgroundColor !== "rgba(0, 0, 0, 0)"
@@ -398,7 +972,19 @@ export function compileCanvasV2NativeScene(input: {
           Number.parseFloat(computed?.getPropertyValue(`border-${edge}-width`) ?? "0") > 0
           && computed?.getPropertyValue(`border-${edge}-style`) !== "none"
         ));
-      if (rect.width > 0 && rect.height > 0 && computed?.display !== "none" && computed?.visibility !== "hidden" && (tagIsPrimitive || hasPaint)) {
+      const authoredAncestorOwnsInlineText = Boolean(authoredAncestor
+        && CANVAS_V2_TEXT_CONTAINER_TAGS.has(authoredAncestor.tagName.toLowerCase())
+        && Array.from(authoredAncestor.children).every((child) => CANVAS_V2_INLINE_TEXT_TAGS.has(child.tagName.toLowerCase())));
+      if (canvasV2NativeSceneLeafNeedsIdentity({
+        hasAuthoredAncestor: Boolean(authoredAncestor),
+        hasText: Boolean(element.textContent?.trim()),
+        ownedByAuthoredTextObject: authoredAncestorOwnsInlineText,
+        tagName: element.tagName,
+        width: rect.width,
+        height: rect.height,
+        visible: computed?.display !== "none" && computed?.visibility !== "hidden",
+        hasPaint,
+      })) {
         sourceNodeId = `primitive-${elementIndex + 1}`;
         while (usedIds.has(sourceNodeId)) sourceNodeId = `${sourceNodeId}-leaf`;
         // Visible authored leaves are canvas objects even if a model or legacy
@@ -413,6 +999,21 @@ export function compileCanvasV2NativeScene(input: {
     runtimeIds.set(element, id);
   }
 
+  const elementsBySourceNodeId = new Map<string, Element>();
+  for (const element of allElements) {
+    const sourceNodeId = element.getAttribute("data-canvas-v2-node-id")?.trim();
+    if (sourceNodeId && !elementsBySourceNodeId.has(sourceNodeId)) elementsBySourceNodeId.set(sourceNodeId, element);
+  }
+  // Model-authored relationships may choose any visual treatment, but a path
+  // that explicitly declares both semantic endpoints is a real canvas object.
+  // Measure its authored route before the isolated DOM is discarded so it can
+  // be promoted into the same native connector lifecycle as a human-created
+  // connector without flattening Northstar's aesthetic decisions.
+  const authoredRelationshipPromotions = allElements.flatMap((element) => {
+    const promotion = measureCanvasV2AuthoredRelationship(element, bodyRect, elementsBySourceNodeId);
+    return promotion ? [promotion] : [];
+  });
+
   const nodes = allElements.map((element, order): CanvasV2NativeSceneNode => {
     const id = runtimeIds.get(element)!;
     const sourceNodeId = element.getAttribute("data-canvas-v2-node-id")?.trim() || undefined;
@@ -423,6 +1024,10 @@ export function compileCanvasV2NativeScene(input: {
     const computed = input.document.defaultView?.getComputedStyle(element);
     const html = element as HTMLElement;
     const measuredGeometry = nativeMeasuredGeometry(element, rect, parentRect, computed);
+    measuredMargins.set(id, {
+      top: Math.max(0, Number.parseFloat(computed?.marginTop ?? "0") || 0),
+      bottom: Math.max(0, Number.parseFloat(computed?.marginBottom ?? "0") || 0),
+    });
     const nativeMetric = (property: string, fallback: number) => {
       // Browser measurements are normalized once when compatibility HTML is
       // first compiled. A serialized native scene already owns exact world
@@ -504,6 +1109,13 @@ export function compileCanvasV2NativeScene(input: {
   // deepest stable objects only. A text node that merely contains an
   // unaddressed <em>/<strong> child remains selectable as one object.
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of nodes) {
+    if (canvasV2NativeSceneNodeLooksWritable(node)) {
+      // Persist the upgrade through native serialization so the capability is
+      // stable across undo/redo, later AI turns, and future compiles.
+      node.attributes["data-canvas-v2-writable"] = "true";
+    }
+  }
   const hasStableDescendant = (node: CanvasV2NativeSceneNode): boolean => {
     const pending = [...node.childIds];
     const visited = new Set<string>();
@@ -520,7 +1132,8 @@ export function compileCanvasV2NativeScene(input: {
   };
   for (const node of nodes) {
     const explicitGroup = node.attributes["data-canvas-v2-group"] === "true";
-    if (!explicitGroup && hasStableDescendant(node)) node.selectable = false;
+    const ownsVisibleSurface = canvasV2NativeSceneNodeOwnsVisibleSurface(node);
+    if (!explicitGroup && !ownsVisibleSurface && hasStableDescendant(node)) node.selectable = false;
   }
 
   // Source documents from early V2 phases may place authored siblings directly
@@ -528,20 +1141,22 @@ export function compileCanvasV2NativeScene(input: {
   // compatibility root. Normalize both forms into the same useful opening
   // territory. This is a one-time scene compilation offset, never a camera
   // change, so zoom and pan remain wholly user-owned.
-  const preferredLeft = CANVAS_V2_WORKSPACE.aiAuthoringOriginX;
-  const preferredTop = CANVAS_V2_WORKSPACE.aiAuthoringInset;
+  const preferredLeft = input.preferredPlacement?.x ?? CANVAS_V2_WORKSPACE.aiAuthoringOriginX;
+  const preferredTop = input.preferredPlacement?.y ?? CANVAS_V2_WORKSPACE.aiAuthoringOriginY;
   const roots = nodes.filter((node) => !node.parentId);
   const fullWorkspaceRoot = roots.find((node) => node.kind === "root" && node.geometry.width >= input.width * 0.9);
   const placementNodes = fullWorkspaceRoot
     ? nodes.filter((node) => node.parentId === fullWorkspaceRoot.id)
     : roots;
   const visiblePlacementNodes = placementNodes.filter((node) => !node.hidden && node.geometry.width > 0 && node.geometry.height > 0);
+  const authoredPlacementGeometry = new Map(visiblePlacementNodes.map((node) => [node.id, { ...node.geometry }]));
   const referenceScene = input.placementReferenceScene;
   const referencedNodeIds = new Set<string>();
   if (referenceScene) {
     for (const node of visiblePlacementNodes) {
       if (!node.sourceNodeId) continue;
-      const referenceBounds = nativeAbsoluteBounds(referenceScene, node.sourceNodeId);
+      if (relocatablePlacementNodeIds.has(node.sourceNodeId)) continue;
+      const referenceBounds = canvasV2NativeSceneAbsoluteBounds(referenceScene, node.sourceNodeId);
       if (!referenceBounds) continue;
       // Preserve the durable anchor, but retain the candidate's newly
       // measured footprint so intentional content/style updates can grow.
@@ -550,21 +1165,48 @@ export function compileCanvasV2NativeScene(input: {
       referencedNodeIds.add(node.id);
     }
   }
+  const viewportPlacedRoot = fullWorkspaceRoot?.attributes["data-canvas-v2-viewport-placed"] === "true";
+  const cohortPlacedNodeIds = new Set<string>();
+  const absoluteCohort = fullWorkspaceRoot && !viewportPlacedRoot
+    ? visiblePlacementNodes.filter((node) => !referencedNodeIds.has(node.id) && node.layoutMode === "absolute")
+    : [];
+  if (fullWorkspaceRoot && absoluteCohort.length && absoluteCohort.length === visiblePlacementNodes.length - referencedNodeIds.size) {
+    const left = Math.min(...absoluteCohort.map((node) => node.geometry.x));
+    const top = Math.min(...absoluteCohort.map((node) => node.geometry.y));
+    const right = Math.max(...absoluteCohort.map((node) => node.geometry.x + node.geometry.width));
+    const bottom = Math.max(...absoluteCohort.map((node) => node.geometry.y + node.geometry.height));
+    const width = right - left;
+    const height = bottom - top;
+    const preferredX = preferredLeft - fullWorkspaceRoot.geometry.x;
+    const preferredY = preferredTop - fullWorkspaceRoot.geometry.y;
+    const targetX = Math.max(0, Math.min(preferredX, fullWorkspaceRoot.geometry.width - width));
+    const targetY = Math.max(0, Math.min(preferredY, fullWorkspaceRoot.geometry.height - height));
+    const deltaX = targetX - left;
+    const deltaY = targetY - top;
+    for (const node of absoluteCohort) {
+      node.geometry.x = round(node.geometry.x + deltaX);
+      node.geometry.y = round(node.geometry.y + deltaY);
+      cohortPlacedNodeIds.add(node.id);
+    }
+  }
   const alreadyPlacedNodes = visiblePlacementNodes.filter((node) => (
-    referencedNodeIds.has(node.id) || Boolean(node.attributes["data-canvas-v2-scene-layout"])
+    viewportPlacedRoot
+    || cohortPlacedNodeIds.has(node.id)
+    || referencedNodeIds.has(node.id)
+    || (!referenceScene && Boolean(node.attributes["data-canvas-v2-scene-layout"]))
   ));
   const newlyMeasuredNodes = visiblePlacementNodes.filter((node) => !alreadyPlacedNodes.includes(node));
   if (newlyMeasuredNodes.length) {
-    const inset = CANVAS_V2_WORKSPACE.aiAuthoringInset;
+    const inset = CANVAS_V2_WORKSPACE.documentMargin;
     const placementOriginX = fullWorkspaceRoot?.geometry.x ?? 0;
     const placementOriginY = fullWorkspaceRoot?.geometry.y ?? 0;
     const placementWidth = fullWorkspaceRoot?.geometry.width ?? input.width;
     const placementHeight = fullWorkspaceRoot?.geometry.height ?? input.height;
     const bounds = {
-      x: Math.max(0, CANVAS_V2_WORKSPACE.aiAuthoringOriginX - placementOriginX),
+      x: Math.max(0, inset - placementOriginX),
       y: Math.max(0, inset - placementOriginY),
       width: Math.min(placementWidth, input.width - inset - placementOriginX)
-        - Math.max(0, CANVAS_V2_WORKSPACE.aiAuthoringOriginX - placementOriginX),
+        - Math.max(0, inset - placementOriginX),
       height: Math.min(placementHeight, input.height - inset - placementOriginY)
         - Math.max(0, inset - placementOriginY),
     };
@@ -580,22 +1222,55 @@ export function compileCanvasV2NativeScene(input: {
     // awkward sibling force the entire turn back onto occupied evidence. Each
     // accepted placement becomes the next obstacle, so sequential additions
     // remain collision-free without moving existing user/research objects.
+    const measuredOriginX = Math.min(...newlyMeasuredNodes.map((node) => authoredPlacementGeometry.get(node.id)!.x));
+    const measuredOriginY = Math.min(...newlyMeasuredNodes.map((node) => authoredPlacementGeometry.get(node.id)!.y));
+    const positionedNodeIds = new Set(alreadyPlacedNodes.map((node) => node.id));
+    const newlyPlacedNodeIds = new Set<string>();
     for (const node of newlyMeasuredNodes) {
+      const authored = authoredPlacementGeometry.get(node.id)!;
+      const nodeIndex = visiblePlacementNodes.indexOf(node);
+      const declaredAnchorNodeId = node.attributes["data-canvas-v2-territory-anchor"];
+      const declaredAnchor = declaredAnchorNodeId
+        ? visiblePlacementNodes.find((candidate) => (
+          positionedNodeIds.has(candidate.id)
+          && (candidate.sourceNodeId === declaredAnchorNodeId || candidate.id === declaredAnchorNodeId)
+        ))
+        : undefined;
+      const previous = declaredAnchor
+        ?? visiblePlacementNodes.slice(0, nodeIndex).reverse().find((candidate) => positionedNodeIds.has(candidate.id));
+      const next = visiblePlacementNodes.slice(nodeIndex + 1).find((candidate) => positionedNodeIds.has(candidate.id));
+      const previousAuthored = previous ? authoredPlacementGeometry.get(previous.id)! : undefined;
+      const margins = measuredMargins.get(node.id);
+      const previousMargins = previous ? measuredMargins.get(previous.id) : undefined;
       const footprint = { width: node.geometry.width, height: node.geometry.height };
       const isGroundedEvidence = node.attributes.class?.split(/\s+/).includes("canvas-v2-grounded-evidence")
         || node.childIds.some((childId) => nodesById.get(childId)?.attributes["data-canvas-v2-canonical-flow"] !== undefined);
+      const preferred = canvasV2PreferredRootPlacement({
+        anchor: { x: preferredLeft - placementOriginX, y: preferredTop - placementOriginY },
+        authored,
+        authoredOrigin: { x: measuredOriginX, y: measuredOriginY },
+        groundedOffset: isGroundedEvidence && !previous ? 600 : 0,
+        marginTop: margins?.top,
+        relation: node.attributes["data-canvas-v2-territory-relation"] as CanvasV2TerritoryRelation | undefined,
+        ...(previous && previousAuthored ? {
+          previous: {
+            placed: previous.geometry,
+            authored: previousAuthored,
+            newlyPlaced: newlyPlacedNodeIds.has(previous.id),
+            marginBottom: previousMargins?.bottom,
+          },
+        } : {}),
+        ...(next ? { next: { placed: next.geometry } } : {}),
+      });
       const placement = findCanvasV2OpenPlacement({
-        preferred: {
-          x: preferredLeft - placementOriginX,
-          // Reserve a real narrative opening above the first canonical atlas.
-          // This is world-space placement, not a camera offset, so a later
-          // title and reading axis can occupy the opening without moving or
-          // covering already grounded research.
-          y: preferredTop - placementOriginY + (isGroundedEvidence ? 600 : 0),
-        },
+        preferred,
         bounds,
         footprint,
         obstacles,
+        // Consecutive document roots already express their intended spacing
+        // through measured flow/margins. Keep that authored rhythm; unrelated
+        // first roots still receive the normal multiplayer safety gap.
+        gap: previous && !previous.userEdited ? 0 : undefined,
       });
       if (placement) {
         node.geometry.x = round(placement.x);
@@ -614,10 +1289,12 @@ export function compileCanvasV2NativeScene(input: {
         width: footprint.width,
         height: footprint.height,
       });
+      positionedNodeIds.add(node.id);
+      newlyPlacedNodeIds.add(node.id);
     }
   }
 
-  const compiledScene: CanvasV2NativeSceneDocument = {
+  const compiledScene = materializeCanvasV2NativeScenePaintedEdges({
     schema: CANVAS_V2_NATIVE_SCENE_SCHEMA,
     revisionId: input.revision.id,
     width: input.width,
@@ -625,12 +1302,14 @@ export function compileCanvasV2NativeScene(input: {
     css: input.revision.document.css,
     rootIds: nodes.filter((node) => !node.parentId).map((node) => node.id),
     nodes,
-  };
+  });
   // Earlier 8C revisions made a visually moved child absolute but left its
   // structural parent attached. Upgrade those revisions at the compiler
   // boundary: a user-moved object that was not subsequently regrouped is a
   // root-level canvas object and must not follow its former group later.
   normalizeUserDetachedNodes(compiledScene);
+  promoteCanvasV2AuthoredRelationships(compiledScene, authoredRelationshipPromotions);
+  reconcileCanvasV2NativeConnectors(compiledScene);
   return compiledScene;
 }
 
@@ -642,7 +1321,7 @@ export function canvasV2NativeSceneSourceNodeMap(scene: CanvasV2NativeSceneDocum
   return new Map(scene.nodes.flatMap((node) => node.sourceNodeId ? [[node.sourceNodeId, node] as const] : []));
 }
 
-function nativeAbsoluteBounds(
+export function canvasV2NativeSceneAbsoluteBounds(
   scene: CanvasV2NativeSceneDocument,
   sourceNodeId: string | undefined,
 ): CanvasV2ElementBounds | undefined {
@@ -698,12 +1377,91 @@ export function projectCanvasV2ObservationToNativeScene(
   scene: CanvasV2NativeSceneDocument,
 ): CanvasV2RenderObservation {
   if (observation.revisionId !== scene.revisionId) return observation;
-  const projectBounds = (bounds: CanvasV2ElementBounds, nodeId: string) => nativeAbsoluteBounds(scene, nodeId) ?? bounds;
+  const nativeById = canvasV2NativeSceneNodeMap(scene);
+  const nativeBySourceId = canvasV2NativeSceneSourceNodeMap(scene);
+  const projectBounds = (bounds: CanvasV2ElementBounds, nodeId: string) => canvasV2NativeSceneAbsoluteBounds(scene, nodeId) ?? bounds;
+  const projectedParentNodeId = (nodeId: string, fallback?: string): string | undefined => {
+    const native = nativeBySourceId.get(nodeId);
+    if (!native) return fallback;
+    let parentId = native.parentId;
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = nativeById.get(parentId);
+      if (!parent) return undefined;
+      if (parent.sourceNodeId) return parent.sourceNodeId;
+      parentId = parent.parentId;
+    }
+    return undefined;
+  };
+  const nativeDescendantIds = (rootId: string): string[] => {
+    const descendants: string[] = [];
+    const pending = [...(nativeById.get(rootId)?.childIds ?? [])];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const id = pending.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const node = nativeById.get(id);
+      if (!node) continue;
+      descendants.push(id);
+      pending.push(...node.childIds);
+    }
+    return descendants;
+  };
+  const ownsSemanticDetachment = (rootId: string): boolean => {
+    const structuralIds = new Set([rootId, ...nativeDescendantIds(rootId)]);
+    return scene.nodes.some((node) => node.detachedFromParentId && structuralIds.has(node.detachedFromParentId));
+  };
+  const nativeSubtreeOverflow = (sourceNodeId: string, bounds: CanvasV2ElementBounds) => {
+    const root = nativeBySourceId.get(sourceNodeId);
+    if (!root || !ownsSemanticDetachment(root.id)) return undefined;
+    const descendantBounds = nativeDescendantIds(root.id).flatMap((id) => {
+      const node = nativeById.get(id);
+      if (!node || node.hidden || !node.sourceNodeId) return [];
+      const projected = canvasV2NativeSceneAbsoluteBounds(scene, node.sourceNodeId);
+      return projected ? [projected] : [];
+    });
+    const painted = unionNativeBounds(descendantBounds);
+    if (!painted) return { x: 0, y: 0 };
+    return {
+      x: round(Math.max(0, bounds.x - painted.x, painted.x + painted.width - (bounds.x + bounds.width))),
+      y: round(Math.max(0, bounds.y - painted.y, painted.y + painted.height - (bounds.y + bounds.height))),
+    };
+  };
   const authoredSurface = observation.spatial.authoredSurface;
   const canvasBounds = { x: 0, y: 0, width: scene.width, height: scene.height };
+  const projectedNodes = observation.spatial.nodes.map((node) => ({
+    ...node,
+    ...(projectedParentNodeId(node.nodeId, node.parentNodeId)
+      ? { parentNodeId: projectedParentNodeId(node.nodeId, node.parentNodeId) }
+      : { parentNodeId: undefined }),
+    bounds: projectBounds(node.bounds, node.nodeId),
+  }));
+  const projectedNodeById = new Map(projectedNodes.map((node) => [node.nodeId, node]));
+  const projectIntersection = (intersection: CanvasV2SpatialIntersection): CanvasV2SpatialIntersection | undefined => {
+    const first = projectedNodeById.get(intersection.firstNodeId);
+    const second = projectedNodeById.get(intersection.secondNodeId);
+    if (!first || !second) return intersection;
+    const x = Math.max(first.bounds.x, second.bounds.x);
+    const y = Math.max(first.bounds.y, second.bounds.y);
+    const right = Math.min(first.bounds.x + first.bounds.width, second.bounds.x + second.bounds.width);
+    const bottom = Math.min(first.bounds.y + first.bounds.height, second.bounds.y + second.bounds.height);
+    if (right <= x || bottom <= y) return undefined;
+    const width = round(right - x);
+    const height = round(bottom - y);
+    const area = width * height;
+    return {
+      ...intersection,
+      intersection: { x: round(x), y: round(y), width, height },
+      firstCoverage: round(area / Math.max(1, first.bounds.width * first.bounds.height)),
+      secondCoverage: round(area / Math.max(1, second.bounds.width * second.bounds.height)),
+    };
+  };
   const projectedEvidence = observation.spatial.evidence.map((item) => ({ ...item, bounds: projectBounds(item.bounds, item.nodeId) }));
   const projectedRegions = observation.spatial.designRegions?.map((region) => {
     const bounds = projectBounds(region.bounds, region.nodeId);
+    const nativeOverflow = nativeSubtreeOverflow(region.nodeId, bounds);
     return {
       ...region,
       bounds,
@@ -718,15 +1476,22 @@ export function projectCanvasV2ObservationToNativeScene(
         right: round(scene.width - bounds.x - bounds.width),
         bottom: round(scene.height - bounds.y - bounds.height),
       },
+      ...(nativeOverflow ? {
+        contentOverflowX: nativeOverflow.x,
+        contentOverflowY: nativeOverflow.y,
+      } : {}),
     };
   });
   const projectedOccupants = authoredSurface?.placementOccupants?.map((occupant) => ({
     ...occupant,
+    ...(projectedParentNodeId(occupant.nodeId, occupant.parentNodeId)
+      ? { parentNodeId: projectedParentNodeId(occupant.nodeId, occupant.parentNodeId) }
+      : { parentNodeId: undefined }),
     bounds: projectBounds(occupant.bounds, occupant.nodeId),
   }));
   const canonicalLanes = scene.nodes.flatMap((node) => {
     if (!node.sourceNodeId || node.attributes["data-canvas-v2-canonical-flow"] === undefined) return [];
-    const bounds = nativeAbsoluteBounds(scene, node.sourceNodeId);
+    const bounds = canvasV2NativeSceneAbsoluteBounds(scene, node.sourceNodeId);
     return bounds ? [{ nodeId: node.sourceNodeId, bounds }] : [];
   });
   const projectedCanonicalLaneBounds = unionNativeBounds(canonicalLanes.map((lane) => lane.bounds))
@@ -770,7 +1535,21 @@ export function projectCanvasV2ObservationToNativeScene(
     contentBounds: canvasBounds,
     spatial: {
       ...observation.spatial,
-      nodes: observation.spatial.nodes.map((node) => ({ ...node, bounds: projectBounds(node.bounds, node.nodeId) })),
+      nodes: projectedNodes,
+      notableIntersections: observation.spatial.notableIntersections.flatMap((intersection) => {
+        const projected = projectIntersection(intersection);
+        return projected ? [projected] : [];
+      }),
+      textCollisions: observation.spatial.textCollisions?.flatMap((intersection) => {
+        const projected = projectIntersection(intersection);
+        return projected ? [projected] : [];
+      }),
+      contentOverflowNodeIds: observation.spatial.contentOverflowNodeIds.filter((nodeId) => {
+        const bounds = projectedNodeById.get(nodeId)?.bounds;
+        if (!bounds) return true;
+        const overflow = nativeSubtreeOverflow(nodeId, bounds);
+        return !overflow || overflow.x > 2 || overflow.y > 2;
+      }),
       evidence: projectedEvidence,
       designRegions: projectedRegions,
       authoredRelationships: observation.spatial.authoredRelationships?.map((relationship) => ({
@@ -892,32 +1671,23 @@ function freezeFlowSiblings(scene: CanvasV2NativeSceneDocument, node: CanvasV2Na
 function materializeResolvedSubtreeStyle(scene: CanvasV2NativeSceneDocument, node: CanvasV2NativeSceneNode): void {
   const byId = canvasV2NativeSceneNodeMap(scene);
   const visited = new Set<string>();
-  const visit = (current: CanvasV2NativeSceneNode, isSelectionRoot = false) => {
+  const visit = (current: CanvasV2NativeSceneNode) => {
     if (visited.has(current.id)) return;
     visited.add(current.id);
     if (current.resolvedStyle) {
-      // Explicit author/user styles remain authoritative. Resolved values
-      // fill only the properties that were supplied through inheritance or
-      // ancestry-sensitive selectors and would otherwise vanish when this
-      // subtree becomes a root-level canvas object.
-      // The selected object may depend on any ancestor-sensitive paint or
-      // internal layout property, so preserve its complete resolved surface.
-      // Descendants only need materialization when they paint text; retaining
-      // dozens of redundant computed properties on every image in a 48-screen
-      // flow needlessly pushed valid revisions over the artifact size limit.
-      const resolved = isSelectionRoot || current.kind === "text" || current.directText?.trim()
-        ? Object.fromEntries(Object.entries(current.resolvedStyle).filter(([property]) => (
-            isSelectionRoot || DETACHMENT_TEXT_STYLE_PROPERTIES.has(property)
-          )))
-        : {};
-      current.inlineStyle = { ...resolved, ...current.inlineStyle };
+      // Detaching a selected card or island removes every ancestry-sensitive
+      // selector in one move. Preserve the resolved layout and paint of the
+      // complete subtree—not only its text leaves—so nested grids, gaps,
+      // margins and rails remain pixel-identical while the object changes
+      // world position. Explicit author/user inline styles still win.
+      current.inlineStyle = { ...current.resolvedStyle, ...current.inlineStyle };
     }
     for (const childId of current.childIds) {
       const child = byId.get(childId);
       if (child) visit(child);
     }
   };
-  visit(node, true);
+  visit(node);
 }
 
 function detachNativeNodeFromParent(scene: CanvasV2NativeSceneDocument, node: CanvasV2NativeSceneNode): void {
@@ -1009,10 +1779,10 @@ function normalizeUserDetachedNodes(scene: CanvasV2NativeSceneDocument): void {
   }
 }
 
-function nativePrimitiveNode(
+function nativePrimitiveNodes(
   scene: CanvasV2NativeSceneDocument,
   mutation: Extract<CanvasV2ManualMutation, { kind: "create" }>,
-): CanvasV2NativeSceneNode {
+): CanvasV2NativeSceneNode[] {
   const base = {
     id: mutation.nodeId,
     sourceNodeId: mutation.nodeId,
@@ -1029,6 +1799,8 @@ function nativePrimitiveNode(
     editVersion: 1,
     attributes: {
       "data-canvas-v2-node-id": mutation.nodeId,
+      "data-canvas-v2-origin": "user",
+      "data-canvas-v2-primitive": mutation.primitive,
       "data-canvas-v2-user-edited": "create",
       "data-canvas-v2-last-author": "user",
       "data-canvas-v2-edit-version": "1",
@@ -1037,40 +1809,473 @@ function nativePrimitiveNode(
     },
     inlineStyle: {},
   };
-  if (mutation.primitive === "text") return {
+  const width = Math.max(1, round(mutation.width ?? (mutation.primitive === "table" ? 480 : mutation.primitive === "frame" ? 360 : mutation.primitive === "text" ? 220 : 160)));
+  const height = Math.max(1, round(mutation.height ?? (mutation.primitive === "table" ? 120 : mutation.primitive === "frame" ? 240 : mutation.primitive === "text" ? 48 : 160)));
+  if (mutation.primitive === "text") return [{
     ...base,
     tagName: "p",
     kind: "text",
-    geometry: { x: round(mutation.x), y: round(mutation.y), width: 220, height: 48, rotation: 0, zIndex: 0 },
+    geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
     inlineStyle: { margin: "0", font: "600 28px/1.3 Inter,system-ui,sans-serif", color: "var(--northstar-ink)" },
     directText: "New text",
     content: [{ kind: "text", value: "New text" }],
-  };
-  if (mutation.primitive === "frame") return {
+  }];
+  if (mutation.primitive === "note") return [{
+    ...base,
+    tagName: "article",
+    kind: "note",
+    geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
+    attributes: { ...base.attributes, "aria-label": "Note" },
+    inlineStyle: {
+      padding: "20px",
+      border: "1px solid #e8d37a",
+      "border-radius": "8px",
+      background: "#fff2a8",
+      color: "#332e1e",
+      "box-shadow": "0 8px 22px rgba(71,59,10,.12)",
+      font: "600 18px/1.45 Inter,system-ui,sans-serif",
+    },
+    directText: "Add a note",
+    content: [{ kind: "text", value: "Add a note" }],
+  }];
+  if (mutation.primitive === "frame") return [{
     ...base,
     tagName: "section",
     kind: "frame",
-    geometry: { x: round(mutation.x), y: round(mutation.y), width: 360, height: 240, rotation: 0, zIndex: 0 },
+    geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
+    attributes: { ...base.attributes, "aria-label": "Frame" },
     inlineStyle: { border: "2px solid var(--northstar-violet)", "border-radius": "20px", background: "var(--northstar-surface)" },
     content: [],
-  };
-  if (mutation.primitive === "shape") return {
+  }];
+  if (mutation.primitive === "shape") {
+    const variant: CanvasV2ShapeVariant = mutation.shapeVariant ?? "rectangle";
+    const variantStyle: Record<string, string> = variant === "ellipse"
+      ? { "border-radius": "999px" }
+      : variant === "diamond"
+        ? { "border-radius": "18px", "clip-path": "polygon(50% 0,100% 50%,50% 100%,0 50%)" }
+        : variant === "triangle"
+          ? { "border-radius": "0", "clip-path": "polygon(50% 0,100% 100%,0 100%)" }
+          : variant === "pill" ? { "border-radius": "999px" } : { "border-radius": "24px" };
+    return [{
+      ...base,
+      tagName: "div",
+      kind: "shape",
+      geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
+      attributes: { ...base.attributes, "data-canvas-v2-shape": variant, "aria-label": `${variant} shape` },
+      inlineStyle: { ...variantStyle, background: "#7661f3" },
+      content: [],
+    }];
+  }
+  if (mutation.primitive === "connector") {
+    const endX = round(mutation.endX ?? mutation.x + width);
+    const endY = round(mutation.endY ?? mutation.y);
+    const variant: CanvasV2ConnectorVariant = mutation.connectorVariant ?? "arrow";
+    const bend = variant === "curve" ? 72 : 0;
+    const geometry = buildCanvasV2ConnectorGeometry({ start: { x: mutation.x, y: mutation.y }, end: { x: endX, y: endY }, variant, bend });
+    const endpointLayers = [mutation.fromNodeId, mutation.toNodeId].flatMap((nodeId) => {
+      const endpoint = nodeId ? scene.nodes.find((node) => node.sourceNodeId === nodeId) : undefined;
+      return endpoint ? [endpoint.geometry.zIndex] : [];
+    });
+    const pathId = `${mutation.nodeId}-path`;
+    const hitId = `${mutation.nodeId}-hit`;
+    const startId = `${mutation.nodeId}-start`;
+    const endId = `${mutation.nodeId}-end`;
+    const root: CanvasV2NativeSceneNode = {
+      ...base,
+      childIds: [pathId, hitId, startId, endId],
+      tagName: "svg",
+      namespace: "svg",
+      kind: "connector",
+      geometry: {
+        ...geometry.bounds,
+        rotation: 0,
+        zIndex: endpointLayers.length === 2 ? Math.min(...endpointLayers) - 1 : 0,
+      },
+      attributes: {
+        ...base.attributes,
+        viewBox: `0 0 ${geometry.bounds.width} ${geometry.bounds.height}`,
+        "aria-label": `${variant} connector`,
+        "data-canvas-v2-connector-variant": variant,
+        "data-canvas-v2-connector-from-x": String(round(mutation.x)),
+        "data-canvas-v2-connector-from-y": String(round(mutation.y)),
+        "data-canvas-v2-connector-to-x": String(endX),
+        "data-canvas-v2-connector-to-y": String(endY),
+        "data-canvas-v2-connector-bend": String(bend),
+        "data-canvas-v2-connector-control-x": String(geometry.control.x),
+        "data-canvas-v2-connector-control-y": String(geometry.control.y),
+        ...(mutation.fromNodeId ? { "data-canvas-v2-connector-from": mutation.fromNodeId } : {}),
+        ...(mutation.toNodeId ? { "data-canvas-v2-connector-to": mutation.toNodeId } : {}),
+      },
+      inlineStyle: { overflow: "visible" },
+      content: [{ kind: "node", id: pathId }, { kind: "node", id: hitId }, { kind: "node", id: startId }, { kind: "node", id: endId }],
+    };
+    const connectorChild = (id: string, tagName: string, attributes: Record<string, string>): CanvasV2NativeSceneNode => ({
+      id,
+      parentId: root.id,
+      childIds: [],
+      order: scene.nodes.length + root.childIds.indexOf(id) + 1,
+      tagName,
+      namespace: "svg",
+      layoutMode: "flow",
+      kind: "connector",
+      selectable: false,
+      hidden: false,
+      locked: false,
+      canonicalEvidence: false,
+      userEdited: true,
+      lastAuthor: "user",
+      editVersion: 1,
+      geometry: { x: 0, y: 0, width: geometry.bounds.width, height: geometry.bounds.height, rotation: 0, zIndex: 0 },
+      attributes,
+      inlineStyle: {},
+      content: [],
+    });
+    return [
+      root,
+      connectorChild(pathId, "path", { "data-canvas-v2-connector-part": "path", d: geometry.path, fill: "none", stroke: "#6754de", "stroke-width": "4", "stroke-linecap": "round" }),
+      connectorChild(hitId, "path", { "data-canvas-v2-connector-part": "hit", d: geometry.path, fill: "none", stroke: "transparent", "stroke-width": "20", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke", "pointer-events": "stroke" }),
+      connectorChild(startId, "circle", { "data-canvas-v2-connector-part": "start", cx: String(geometry.localStart.x), cy: String(geometry.localStart.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "#6754de", "stroke-width": "2.5" }),
+      connectorChild(endId, variant === "arrow" ? "polyline" : "circle", variant === "arrow"
+        ? { "data-canvas-v2-connector-part": "end", points: geometry.arrowPoints, fill: "none", stroke: "#6754de", "stroke-width": "3.5", "stroke-linecap": "round", "stroke-linejoin": "round" }
+        : { "data-canvas-v2-connector-part": "end", cx: String(geometry.localEnd.x), cy: String(geometry.localEnd.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "#6754de", "stroke-width": "2.5" }),
+    ];
+  }
+  if (mutation.primitive === "line") {
+    const endX = round(mutation.endX ?? mutation.x + width);
+    const endY = round(mutation.endY ?? mutation.y);
+    const lineWidth = Math.max(1, round(Math.hypot(endX - mutation.x, endY - mutation.y)));
+    const rotation = round(Math.atan2(endY - mutation.y, endX - mutation.x) * 180 / Math.PI);
+    return [{
+      ...base,
+      tagName: "div",
+      kind: "line",
+      geometry: { x: round(mutation.x + (endX - mutation.x) / 2 - lineWidth / 2), y: round(mutation.y + (endY - mutation.y) / 2 - 2), width: lineWidth, height: 4, rotation, zIndex: 0 },
+      attributes: { ...base.attributes, "aria-label": "Line" },
+      inlineStyle: { background: "#6754de", "border-radius": "999px" },
+      content: [],
+    }];
+  }
+  if (mutation.primitive === "image") return [{
     ...base,
-    tagName: "div",
-    kind: "shape",
-    geometry: { x: round(mutation.x), y: round(mutation.y), width: 160, height: 160, rotation: 0, zIndex: 0 },
-    inlineStyle: { "border-radius": "24px", background: "#7661f3" },
+    tagName: "img",
+    kind: "image",
+    geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
+    attributes: {
+      ...base.attributes,
+      "data-canvas-v2-local-image": "true",
+      src: mutation.src ?? "",
+      alt: mutation.alt ?? "",
+      loading: "lazy",
+      decoding: "async",
+    },
+    inlineStyle: { "border-radius": "16px", "object-fit": "cover", background: "#edeaf8" },
     content: [],
-  };
-  return {
+  }];
+  if (mutation.primitive === "drawing") {
+    const pathId = `${mutation.nodeId}-stroke`;
+    const points = (mutation.points?.length ? mutation.points : [{ x: 4, y: 36 }, { x: 32, y: 8 }, { x: 68, y: 50 }, { x: 112, y: 14 }, { x: 156, y: 34 }])
+      .map((point) => `${round(point.x)},${round(point.y)}`).join(" ");
+    const root: CanvasV2NativeSceneNode = {
+      ...base,
+      childIds: [pathId],
+      tagName: "svg",
+      namespace: "svg",
+      kind: "drawing",
+      geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
+      attributes: { ...base.attributes, viewBox: `0 0 ${width} ${height}`, "aria-label": "Freehand drawing" },
+      inlineStyle: { overflow: "visible" },
+      content: [{ kind: "node", id: pathId }],
+    };
+    const stroke: CanvasV2NativeSceneNode = {
+      id: pathId,
+      parentId: root.id,
+      childIds: [],
+      order: scene.nodes.length + 1,
+      tagName: "polyline",
+      namespace: "svg",
+      layoutMode: "flow",
+      kind: "drawing",
+      selectable: false,
+      hidden: false,
+      locked: false,
+      canonicalEvidence: false,
+      userEdited: true,
+      lastAuthor: "user",
+      editVersion: 1,
+      geometry: { x: 0, y: 0, width, height, rotation: 0, zIndex: 0 },
+      attributes: { points, fill: "none", stroke: "#6754de", "stroke-width": "10", "stroke-linecap": "round", "stroke-linejoin": "round" },
+      inlineStyle: {},
+      content: [],
+    };
+    return [root, stroke];
+  }
+  return [{
     ...base,
     tagName: "table",
     kind: "table",
-    geometry: { x: round(mutation.x), y: round(mutation.y), width: 480, height: 120, rotation: 0, zIndex: 0 },
+    geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
+    attributes: { ...base.attributes, "aria-label": "Table" },
     inlineStyle: { "border-collapse": "collapse", background: "var(--northstar-surface)", color: "var(--northstar-ink)" },
     directText: "Cell 1    Cell 2\nCell 3    Cell 4",
     content: [{ kind: "text", value: "Cell 1    Cell 2\nCell 3    Cell 4" }],
+  }];
+}
+
+function nativeAbsoluteOrigin(scene: CanvasV2NativeSceneDocument, node: CanvasV2NativeSceneNode): { x: number; y: number } {
+  const byId = canvasV2NativeSceneNodeMap(scene);
+  let x = node.geometry.x;
+  let y = node.geometry.y;
+  let parentId = node.parentId;
+  const seen = new Set<string>();
+  while (parentId && !seen.has(parentId)) {
+    seen.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    x += parent.geometry.x;
+    y += parent.geometry.y;
+    parentId = parent.parentId;
+  }
+  return { x, y };
+}
+
+function uniqueNativeNodeId(scene: CanvasV2NativeSceneDocument, preferred: string): string {
+  const used = new Set(scene.nodes.map((node) => node.id));
+  let candidate = preferred;
+  let suffix = 2;
+  while (used.has(candidate)) candidate = `${preferred}-${suffix++}`;
+  return candidate;
+}
+
+/**
+ * Turn an explicitly related authored SVG path into a genuine native
+ * connector while preserving its colour, weight, dash, opacity and route.
+ * The visible stroke remains model-governed. A second transparent path owns a
+ * generous screen-stable pointer corridor, making thin and zoomed-out routes
+ * as easy to hover and select as every other canvas object.
+ */
+export function promoteCanvasV2AuthoredRelationships(
+  scene: CanvasV2NativeSceneDocument,
+  promotions: readonly CanvasV2AuthoredRelationshipPromotion[],
+): void {
+  for (const promotion of promotions) {
+    const connector = scene.nodes.find((node) => node.sourceNodeId === promotion.nodeId);
+    if (!connector || connector.kind === "connector") continue;
+    const parent = connector.parentId ? scene.nodes.find((node) => node.id === connector.parentId) : undefined;
+    const parentOrigin = parent ? nativeAbsoluteOrigin(scene, parent) : { x: 0, y: 0 };
+    const start = {
+      x: round(parentOrigin.x + promotion.startInParent.x),
+      y: round(parentOrigin.y + promotion.startInParent.y),
+    };
+    const end = {
+      x: round(parentOrigin.x + promotion.endInParent.x),
+      y: round(parentOrigin.y + promotion.endInParent.y),
+    };
+    const control = {
+      x: round(parentOrigin.x + promotion.controlInParent.x),
+      y: round(parentOrigin.y + promotion.controlInParent.y),
+    };
+    const variant: CanvasV2ConnectorVariant = promotion.curved ? "curve" : promotion.arrow ? "arrow" : "straight";
+    const bend = variant === "curve" ? canvasV2ConnectorBendFromPoint(start, end, control) : 0;
+    const geometry = buildCanvasV2ConnectorGeometry({
+      start,
+      end,
+      variant,
+      bend,
+      ...(variant === "curve" ? { control } : {}),
+    });
+
+    // Authored relationship leaves are normally paths, but prune any private
+    // descendants defensively before replacing the leaf with a connector root.
+    const descendants = new Set<string>();
+    const pending = [...connector.childIds];
+    const byId = canvasV2NativeSceneNodeMap(scene);
+    while (pending.length) {
+      const id = pending.pop()!;
+      if (descendants.has(id)) continue;
+      descendants.add(id);
+      pending.push(...(byId.get(id)?.childIds ?? []));
+    }
+    scene.nodes = scene.nodes.filter((node) => !descendants.has(node.id));
+
+    const pathId = uniqueNativeNodeId(scene, `${connector.id}::path`);
+    const hitId = uniqueNativeNodeId(scene, `${connector.id}::hit`);
+    const endId = promotion.arrow ? uniqueNativeNodeId(scene, `${connector.id}::arrow`) : undefined;
+    const childIds = [pathId, hitId, ...(endId ? [endId] : [])];
+    const originalAttributes = { ...connector.attributes };
+    for (const attribute of ["d", "fill", "marker-end", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "vector-effect", "pointer-events"]) {
+      delete originalAttributes[attribute];
+    }
+    connector.tagName = "svg";
+    connector.namespace = "svg";
+    connector.layoutMode = "absolute";
+    connector.kind = "connector";
+    connector.selectable = true;
+    connector.geometry = {
+      x: round(geometry.bounds.x - parentOrigin.x),
+      y: round(geometry.bounds.y - parentOrigin.y),
+      width: geometry.bounds.width,
+      height: geometry.bounds.height,
+      rotation: 0,
+      zIndex: connector.geometry.zIndex,
+    };
+    connector.childIds = childIds;
+    connector.content = childIds.map((id) => ({ kind: "node" as const, id }));
+    connector.directText = undefined;
+    connector.attributes = {
+      ...originalAttributes,
+      viewBox: `0 0 ${geometry.bounds.width} ${geometry.bounds.height}`,
+      "aria-label": originalAttributes["aria-label"] ?? `${promotion.curved ? "Curved " : ""}${promotion.arrow ? "arrow " : ""}relationship from ${promotion.sourceNodeId} to ${promotion.targetNodeId}`,
+      "data-canvas-v2-primitive": "connector",
+      "data-canvas-v2-native-relationship": "true",
+      "data-canvas-v2-connector-variant": variant,
+      "data-canvas-v2-connector-from": promotion.sourceNodeId,
+      "data-canvas-v2-connector-to": promotion.targetNodeId,
+      "data-canvas-v2-connector-from-x": String(start.x),
+      "data-canvas-v2-connector-from-y": String(start.y),
+      "data-canvas-v2-connector-to-x": String(end.x),
+      "data-canvas-v2-connector-to-y": String(end.y),
+      "data-canvas-v2-connector-bend": String(bend),
+      "data-canvas-v2-connector-control-x": String(geometry.control.x),
+      "data-canvas-v2-connector-control-y": String(geometry.control.y),
+      ...(promotion.arrow ? { "data-canvas-v2-connector-arrow": "true" } : {}),
+    };
+    connector.inlineStyle = { ...connector.inlineStyle, overflow: "visible", "pointer-events": "auto" };
+
+    const child = (id: string, tagName: string, attributes: Record<string, string>): CanvasV2NativeSceneNode => ({
+      id,
+      parentId: connector.id,
+      childIds: [],
+      order: connector.order + childIds.indexOf(id) + 1,
+      tagName,
+      namespace: "svg",
+      layoutMode: "flow",
+      kind: "connector",
+      selectable: false,
+      hidden: false,
+      locked: connector.locked,
+      canonicalEvidence: connector.canonicalEvidence,
+      userEdited: connector.userEdited,
+      ...(connector.lastAuthor ? { lastAuthor: connector.lastAuthor } : {}),
+      editVersion: connector.editVersion,
+      geometry: { x: 0, y: 0, width: geometry.bounds.width, height: geometry.bounds.height, rotation: 0, zIndex: 0 },
+      attributes,
+      inlineStyle: {},
+      content: [],
+    });
+    const sharedVisibleStroke = {
+      fill: "none",
+      stroke: promotion.stroke,
+      "stroke-width": String(promotion.strokeWidth),
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "pointer-events": "none",
+      ...(promotion.strokeDasharray ? { "stroke-dasharray": promotion.strokeDasharray } : {}),
+      ...(promotion.opacity ? { opacity: promotion.opacity } : {}),
+    };
+    scene.nodes.push(
+      child(pathId, "path", {
+        "data-canvas-v2-connector-part": "path",
+        d: geometry.path,
+        ...sharedVisibleStroke,
+      }),
+      child(hitId, "path", {
+        "data-canvas-v2-connector-part": "hit",
+        d: geometry.path,
+        fill: "none",
+        stroke: "transparent",
+        "stroke-width": "20",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        "vector-effect": "non-scaling-stroke",
+        "pointer-events": "stroke",
+      }),
+      ...(endId ? [child(endId, "polyline", {
+        "data-canvas-v2-connector-part": "end",
+        points: geometry.arrowPoints,
+        ...sharedVisibleStroke,
+      })] : []),
+    );
+  }
+}
+
+/** Keep relationship endpoints attached through move, resize, group and undo. */
+export function reconcileCanvasV2NativeConnectors(scene: CanvasV2NativeSceneDocument): void {
+  const bySourceId = canvasV2NativeSceneSourceNodeMap(scene);
+  const byId = canvasV2NativeSceneNodeMap(scene);
+  const numberAttribute = (node: CanvasV2NativeSceneNode, name: string, fallback: number) => {
+    const value = Number(node.attributes[name]);
+    return Number.isFinite(value) ? value : fallback;
   };
+  const endpointBounds = (node: CanvasV2NativeSceneNode) => {
+    const origin = nativeAbsoluteOrigin(scene, node);
+    return { x: origin.x, y: origin.y, width: node.geometry.width, height: node.geometry.height };
+  };
+  for (const connector of scene.nodes.filter((node) => node.kind === "connector")) {
+    const fromId = connector.attributes["data-canvas-v2-connector-from"];
+    const toId = connector.attributes["data-canvas-v2-connector-to"];
+    const from = fromId ? bySourceId.get(fromId) : undefined;
+    const to = toId ? bySourceId.get(toId) : undefined;
+    if (fromId && !from) delete connector.attributes["data-canvas-v2-connector-from"];
+    if (toId && !to) delete connector.attributes["data-canvas-v2-connector-to"];
+    const freeStart = {
+      x: numberAttribute(connector, "data-canvas-v2-connector-from-x", connector.geometry.x + 16),
+      y: numberAttribute(connector, "data-canvas-v2-connector-from-y", connector.geometry.y + connector.geometry.height / 2),
+    };
+    const freeEnd = {
+      x: numberAttribute(connector, "data-canvas-v2-connector-to-x", connector.geometry.x + connector.geometry.width - 16),
+      y: numberAttribute(connector, "data-canvas-v2-connector-to-y", connector.geometry.y + connector.geometry.height / 2),
+    };
+    const fromCenter: CanvasV2ConnectorPoint = from ? (() => { const bounds = endpointBounds(from); return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }; })() : freeStart;
+    const toCenter: CanvasV2ConnectorPoint = to ? (() => { const bounds = endpointBounds(to); return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }; })() : freeEnd;
+    const start = from ? canvasV2ConnectorBoundaryAnchor(endpointBounds(from), toCenter) : freeStart;
+    const end = to ? canvasV2ConnectorBoundaryAnchor(endpointBounds(to), fromCenter) : freeEnd;
+    connector.attributes["data-canvas-v2-connector-from-x"] = String(round(start.x));
+    connector.attributes["data-canvas-v2-connector-from-y"] = String(round(start.y));
+    connector.attributes["data-canvas-v2-connector-to-x"] = String(round(end.x));
+    connector.attributes["data-canvas-v2-connector-to-y"] = String(round(end.y));
+    const variantValue = connector.attributes["data-canvas-v2-connector-variant"];
+    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" ? variantValue : "arrow";
+    const storedControlX = Number(connector.attributes["data-canvas-v2-connector-control-x"]);
+    const storedControlY = Number(connector.attributes["data-canvas-v2-connector-control-y"]);
+    const geometry = buildCanvasV2ConnectorGeometry({
+      start,
+      end,
+      variant,
+      bend: numberAttribute(connector, "data-canvas-v2-connector-bend", 72),
+      ...(variant === "curve" && Number.isFinite(storedControlX) && Number.isFinite(storedControlY)
+        ? { control: { x: storedControlX, y: storedControlY } }
+        : {}),
+    });
+    if (variant === "curve") {
+      connector.attributes["data-canvas-v2-connector-control-x"] = String(geometry.control.x);
+      connector.attributes["data-canvas-v2-connector-control-y"] = String(geometry.control.y);
+    }
+    const parentOrigin = connector.parentId
+      ? nativeAbsoluteOrigin(scene, byId.get(connector.parentId)!)
+      : { x: 0, y: 0 };
+    connector.geometry.x = round(geometry.bounds.x - parentOrigin.x);
+    connector.geometry.y = round(geometry.bounds.y - parentOrigin.y);
+    connector.geometry.width = geometry.bounds.width;
+    connector.geometry.height = geometry.bounds.height;
+    connector.geometry.rotation = 0;
+    connector.attributes.viewBox = `0 0 ${geometry.bounds.width} ${geometry.bounds.height}`;
+    for (const childId of connector.childIds) {
+      const child = byId.get(childId);
+      if (!child) continue;
+      child.geometry.width = geometry.bounds.width;
+      child.geometry.height = geometry.bounds.height;
+      const part = child.attributes["data-canvas-v2-connector-part"];
+      if (part === "path" || part === "hit") child.attributes.d = geometry.path;
+      else if (part === "start") {
+        child.attributes.cx = String(geometry.localStart.x);
+        child.attributes.cy = String(geometry.localStart.y);
+      } else if (part === "end" && child.tagName === "polyline") child.attributes.points = geometry.arrowPoints;
+      else if (part === "end") {
+        child.attributes.cx = String(geometry.localEnd.x);
+        child.attributes.cy = String(geometry.localEnd.y);
+      }
+    }
+  }
 }
 
 function applyAtomicNativeMutation(
@@ -1079,9 +2284,9 @@ function applyAtomicNativeMutation(
 ): void {
   if (mutation.kind === "create") {
     if (scene.nodes.some((node) => node.sourceNodeId === mutation.nodeId)) throw new Error("A created node requires a unique identity.");
-    const node = nativePrimitiveNode(scene, mutation);
-    scene.nodes.push(node);
-    scene.rootIds.push(node.id);
+    const nodes = nativePrimitiveNodes(scene, mutation);
+    scene.nodes.push(...nodes);
+    scene.rootIds.push(nodes[0].id);
     return;
   }
   if (mutation.kind === "group") {
@@ -1105,6 +2310,7 @@ function applyAtomicNativeMutation(
       geometry: { ...mutation.bounds, rotation: 0, zIndex: Math.max(0, ...groupedNodes.map((node) => node.geometry.zIndex)) },
       attributes: {
         "data-canvas-v2-node-id": mutation.groupNodeId,
+        "data-canvas-v2-origin": "user",
         "data-canvas-v2-group": "true",
         "data-canvas-v2-user-edited": "group",
         "data-canvas-v2-last-author": "user",
@@ -1135,15 +2341,35 @@ function applyAtomicNativeMutation(
   }
   const node = sourceNode(scene, mutation.nodeId);
   if (mutation.kind === "move") {
-    prepareNativeGeometryMutation(scene, node);
-    node.geometry.x = round(node.geometry.x + mutation.deltaX);
-    node.geometry.y = round(node.geometry.y + mutation.deltaY);
+    if (node.kind === "connector") {
+      const value = (name: string, fallback: number) => {
+        const current = Number(node.attributes[name]);
+        return Number.isFinite(current) ? current : fallback;
+      };
+      const origin = nativeAbsoluteOrigin(scene, node);
+      node.attributes["data-canvas-v2-connector-from-x"] = String(round(value("data-canvas-v2-connector-from-x", origin.x + 16) + mutation.deltaX));
+      node.attributes["data-canvas-v2-connector-from-y"] = String(round(value("data-canvas-v2-connector-from-y", origin.y + node.geometry.height / 2) + mutation.deltaY));
+      node.attributes["data-canvas-v2-connector-to-x"] = String(round(value("data-canvas-v2-connector-to-x", origin.x + node.geometry.width - 16) + mutation.deltaX));
+      node.attributes["data-canvas-v2-connector-to-y"] = String(round(value("data-canvas-v2-connector-to-y", origin.y + node.geometry.height / 2) + mutation.deltaY));
+      if (node.attributes["data-canvas-v2-connector-variant"] === "curve") {
+        node.attributes["data-canvas-v2-connector-control-x"] = String(round(value("data-canvas-v2-connector-control-x", origin.x + node.geometry.width / 2) + mutation.deltaX));
+        node.attributes["data-canvas-v2-connector-control-y"] = String(round(value("data-canvas-v2-connector-control-y", origin.y + node.geometry.height / 2) + mutation.deltaY));
+      }
+      delete node.attributes["data-canvas-v2-connector-from"];
+      delete node.attributes["data-canvas-v2-connector-to"];
+    } else {
+      prepareNativeGeometryMutation(scene, node);
+      node.geometry.x = round(node.geometry.x + mutation.deltaX);
+      node.geometry.y = round(node.geometry.y + mutation.deltaY);
+    }
   } else if (mutation.kind === "resize") {
+    if (node.kind === "connector") throw new Error("Drag a connector endpoint to resize it.");
     prepareNativeGeometryMutation(scene, node);
     node.geometry.width = Math.max(Math.max(1, Math.min(24, node.geometry.width * 0.1)), round(mutation.width));
     node.geometry.height = Math.max(Math.max(1, Math.min(24, node.geometry.height * 0.1)), round(mutation.height));
     if (mutation.fontSize !== undefined) node.inlineStyle["font-size"] = `${round(mutation.fontSize)}px`;
   } else if (mutation.kind === "transform") {
+    if (node.kind === "connector") throw new Error("Drag a connector endpoint to transform it.");
     prepareNativeGeometryMutation(scene, node);
     node.geometry.x = round(node.geometry.x + mutation.deltaX);
     node.geometry.y = round(node.geometry.y + mutation.deltaY);
@@ -1151,13 +2377,72 @@ function applyAtomicNativeMutation(
     node.geometry.height = Math.max(Math.max(1, Math.min(24, node.geometry.height * 0.1)), round(mutation.height));
     if (mutation.fontSize !== undefined) node.inlineStyle["font-size"] = `${round(mutation.fontSize)}px`;
   } else if (mutation.kind === "text") {
-    node.content = [{ kind: "text", value: mutation.text }];
-    node.childIds = [];
-    node.directText = mutation.text;
+    const byId = canvasV2NativeSceneNodeMap(scene);
+    const descendants = (rootId: string) => {
+      const ids = new Set<string>();
+      const pending = [...(byId.get(rootId)?.childIds ?? [])];
+      while (pending.length) {
+        const id = pending.pop()!;
+        if (ids.has(id)) continue;
+        ids.add(id);
+        pending.push(...(byId.get(id)?.childIds ?? []));
+      }
+      return ids;
+    };
+    const originalDescendants = descendants(node.id);
+    if (mutation.nativeContent?.length) {
+      const editableIds = new Set([node.id, ...originalDescendants]);
+      for (const update of mutation.nativeContent) {
+        const target = editableIds.has(update.sceneNodeId) ? byId.get(update.sceneNodeId) : undefined;
+        if (!target) continue;
+        const content: CanvasV2NativeSceneNode["content"] = [];
+        for (const item of update.content) {
+          if (item.kind === "text") content.push({ kind: "text", value: item.value });
+          else if (editableIds.has(item.id) && byId.has(item.id)) content.push({ kind: "node", id: item.id });
+        }
+        target.content = content;
+        target.childIds = content.flatMap((item) => item.kind === "node" ? [item.id] : []);
+        const direct = content.filter((item): item is { kind: "text"; value: string } => item.kind === "text").map((item) => item.value).join("");
+        target.directText = direct || undefined;
+      }
+      const remainingDescendants = descendants(node.id);
+      scene.nodes = scene.nodes.filter((candidate) => !originalDescendants.has(candidate.id) || remainingDescendants.has(candidate.id));
+    } else {
+      scene.nodes = scene.nodes.filter((candidate) => !originalDescendants.has(candidate.id));
+      node.content = [{ kind: "text", value: mutation.text }];
+      node.childIds = [];
+      node.directText = mutation.text;
+    }
+    if (mutation.layout?.width !== undefined) node.geometry.width = Math.max(node.geometry.width, round(mutation.layout.width));
+    if (mutation.layout?.height !== undefined) node.geometry.height = Math.max(node.geometry.height, round(mutation.layout.height));
   } else if (mutation.kind === "style") {
-    node.inlineStyle[mutation.property] = mutation.value;
+    if ((node.kind === "drawing" || node.kind === "connector") && mutation.property === "background-color") {
+      const byId = canvasV2NativeSceneNodeMap(scene);
+      for (const childId of node.childIds) {
+        const stroke = byId.get(childId);
+        if (stroke?.attributes.stroke && stroke.attributes["data-canvas-v2-connector-part"] !== "hit") stroke.attributes.stroke = mutation.value;
+      }
+    } else node.inlineStyle[mutation.property] = mutation.value;
   } else if (mutation.kind === "attribute") {
     node.attributes.alt = mutation.value;
+  } else if (mutation.kind === "image-source") {
+    if (node.kind !== "image" || node.attributes["data-canvas-v2-local-image"] !== "true") throw new Error("Replace is available only for a user image object.");
+    node.attributes.src = mutation.src;
+    if (mutation.alt !== undefined) node.attributes.alt = mutation.alt;
+  } else if (mutation.kind === "connector-endpoint") {
+    if (node.kind !== "connector") throw new Error("Endpoints are available only for a connector object.");
+    const coordinatePrefix = mutation.endpoint === "from" ? "data-canvas-v2-connector-from" : "data-canvas-v2-connector-to";
+    node.attributes[`${coordinatePrefix}-x`] = String(round(mutation.x));
+    node.attributes[`${coordinatePrefix}-y`] = String(round(mutation.y));
+    if (mutation.attachNodeId) {
+      const target = sourceNode(scene, mutation.attachNodeId);
+      if (target.id === node.id || target.kind === "root" || target.kind === "connector" || target.hidden) throw new Error("That object cannot own a connector endpoint.");
+      node.attributes[coordinatePrefix] = mutation.attachNodeId;
+    } else delete node.attributes[coordinatePrefix];
+  } else if (mutation.kind === "connector-curve") {
+    if (node.kind !== "connector" || node.attributes["data-canvas-v2-connector-variant"] !== "curve") throw new Error("Curve adjustment is available only for a curved connector.");
+    node.attributes["data-canvas-v2-connector-control-x"] = String(round(mutation.x));
+    node.attributes["data-canvas-v2-connector-control-y"] = String(round(mutation.y));
   } else if (mutation.kind === "delete") {
     // Deleting a child from an authored flex/grid rail is a spatial edit, not
     // a request to recompose the rail. Freeze the measured sibling geometry
@@ -1179,7 +2464,7 @@ function applyAtomicNativeMutation(
     const copies = Array.from(cloneIds).map(([sourceId, copyId]) => {
       const source = byId.get(sourceId)!;
       const sourceNodeId = sourceId === node.id ? mutation.newNodeId : source.sourceNodeId ? `${mutation.newNodeId}-${source.sourceNodeId}` : undefined;
-      return {
+      const copy: CanvasV2NativeSceneNode = {
         ...source,
         id: copyId,
         ...(sourceNodeId ? { sourceNodeId } : { sourceNodeId: undefined }),
@@ -1193,6 +2478,11 @@ function applyAtomicNativeMutation(
         canonicalEvidence: false,
         evidence: source.evidence ? { ...source.evidence, role: "analysis-copy", sourceNodeId: source.sourceNodeId } : undefined,
       } satisfies CanvasV2NativeSceneNode;
+      if (copy.kind === "connector") {
+        delete copy.attributes["data-canvas-v2-connector-from"];
+        delete copy.attributes["data-canvas-v2-connector-to"];
+      }
+      return copy;
     });
     scene.nodes.push(...copies);
     if (node.parentId) {
@@ -1218,6 +2508,7 @@ function applyAtomicNativeMutation(
     node.locked = mutation.locked;
     node.attributes["data-canvas-v2-locked"] = String(mutation.locked);
   } else if (mutation.kind === "rotate") {
+    if (node.kind === "connector") throw new Error("A connector is controlled by its two endpoints.");
     prepareNativeGeometryMutation(scene, node);
     node.geometry.rotation = round(mutation.rotation);
     node.attributes["data-canvas-v2-rotation"] = String(node.geometry.rotation);
@@ -1261,6 +2552,7 @@ export function applyCanvasV2NativeSceneMutation(
   if (mutation.kind === "batch") {
     for (const item of mutation.mutations) applyAtomicNativeMutation(scene, item);
   } else applyAtomicNativeMutation(scene, mutation);
+  reconcileCanvasV2NativeConnectors(scene);
   scene.nodes.forEach((node, order) => { node.order = order; });
   return scene;
 }

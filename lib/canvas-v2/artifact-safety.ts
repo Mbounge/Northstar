@@ -43,6 +43,10 @@ export function validateCanvasV2EvidenceBindings(
     const attributes = image[1];
     const source = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
     const evidenceId = /\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    const localUserImage = /\bdata-canvas-v2-local-image\s*=\s*["']true["']/i.test(attributes)
+      && /\bdata-canvas-v2-origin\s*=\s*["']user["']/i.test(attributes)
+      && Boolean(source && /^blob:[^\s"'<>]+$/i.test(source));
+    if (localUserImage) continue;
     if (!source || !evidenceId) {
       failures.push("Every image must bind an approved evidence id to its exact source URL.");
       continue;

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canvasV2BoundsIntersect,
   canvasV2RotationFromPointer,
+  constrainCanvasV2ResizeAspectRatio,
   scaleCanvasV2FontSize,
   scaleCanvasV2ObjectBounds,
   snapCanvasV2ObjectDelta,
@@ -23,6 +24,30 @@ test("group resizing scales children around the selection bounds", () => {
     { x: 0, y: 0, width: 200, height: 200 },
     { x: 100, y: 100, width: 400, height: 300 },
   ), { x: 200, y: 175, width: 200, height: 150 });
+
+  assert.deepEqual(scaleCanvasV2ObjectBounds(
+    { x: 20, y: 50, width: 180, height: 4 },
+    { x: 0, y: 0, width: 200, height: 100 },
+    { x: 0, y: 0, width: 100, height: 50 },
+  ), { x: 10, y: 25, width: 90, height: 4 });
+});
+
+test("Shift resize preserves aspect ratio from corners and edge centres", () => {
+  assert.deepEqual(constrainCanvasV2ResizeAspectRatio(
+    { x: 100, y: 100, width: 200, height: 100 },
+    { x: 100, y: 100, width: 300, height: 120 },
+    "south-east",
+  ), { x: 100, y: 100, width: 300, height: 150 });
+  assert.deepEqual(constrainCanvasV2ResizeAspectRatio(
+    { x: 100, y: 100, width: 200, height: 100 },
+    { x: 50, y: 70, width: 250, height: 130 },
+    "north-west",
+  ), { x: 40, y: 70, width: 260, height: 130 });
+  assert.deepEqual(constrainCanvasV2ResizeAspectRatio(
+    { x: 100, y: 100, width: 200, height: 100 },
+    { x: 100, y: 100, width: 300, height: 100 },
+    "east",
+  ), { x: 100, y: 75, width: 300, height: 150 });
 });
 
 test("resize gestures scale typography proportionally with the selected geometry", () => {

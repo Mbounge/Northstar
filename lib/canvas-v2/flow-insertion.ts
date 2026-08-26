@@ -14,14 +14,14 @@ const FLOW_CSS = `
 /* canvas-v2-flow-layout-v4: complete canonical journeys stay on one intrinsic horizontal rail */
 .northstar-canvas.canvas-v2-canvas--evidence-wide { box-sizing:border-box; width:100%; min-width:100%; min-height:100%; max-width:none; padding:0; overflow:visible; }
 .canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:100%; max-width:none; padding:0; background:transparent; color:var(--northstar-ink); font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
-.canvas-v2-grounded-evidence--standalone { min-width:1680px; padding:52px 96px 96px; background:transparent; }
+.canvas-v2-grounded-evidence--standalone { min-width:1680px; padding:52px 0 96px 96px; background:transparent; }
 .canvas-v2-grounded-title { margin:0 0 28px; color:var(--northstar-ink); font-size:9px; font-weight:850; letter-spacing:.18em; text-transform:uppercase; }
 .canvas-v2-flow-lane { display:grid; grid-template-columns:170px max-content; align-items:start; gap:24px; width:max-content; min-width:100%; max-width:none; min-height:270px; padding:16px 0; }
 .canvas-v2-flow-identity { display:flex; align-items:center; gap:12px; align-self:start; padding-top:94px; }
 .canvas-v2-flow-icon { width:46px; height:46px; flex:none; border-radius:13px; object-fit:contain; box-shadow:0 10px 24px rgba(39,30,93,.10); }
 .canvas-v2-flow-app { margin:0; color:var(--northstar-ink); font-size:18px; font-weight:850; letter-spacing:-.02em; }
 .canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:var(--northstar-muted); font-size:11px; line-height:1.35; }
-.canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; min-width:0; max-width:none; column-gap:18px; padding-right:0; overflow:visible; }
+.canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; min-width:0; max-width:none; column-gap:10px; padding-right:0; overflow:visible; }
 .canvas-v2-flow-screen { display:block; width:auto; height:235px; max-width:none; flex:none; object-fit:contain; filter:drop-shadow(0 12px 20px rgba(32,24,80,.09)); }
 .canvas-v2-flow-segment { box-sizing:border-box; display:grid; grid-template-columns:1px minmax(0,1fr); column-gap:14px; width:132px; height:235px; flex:none; align-items:start; color:var(--northstar-muted); font-size:9px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
 .canvas-v2-flow-segment-rule { width:1px; height:235px; background:var(--northstar-line); }
@@ -162,6 +162,10 @@ export function insertCanvasV2CanonicalFlow(input: {
   });
   lane.append(identity, sequence);
   region.append(lane);
+  region.dataset.canvasV2Origin = "research";
+  for (const element of Array.from(region.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))) {
+    if (!element.dataset.canvasV2Origin) element.dataset.canvasV2Origin = "research";
+  }
 
   const evidence = mergeEvidence(input.currentEvidence, input.evidence.filter((asset) => asset.id === `icon:${input.app.id}` || screenEvidence.some((screen) => screen.id === asset.id)));
   const document = assertCanvasV2ArtifactDocument({ ...input.document, html: parsed.body.innerHTML, css: input.document.css.includes("canvas-v2-flow-layout-v4") ? input.document.css : `${input.document.css}\n${FLOW_CSS}` });

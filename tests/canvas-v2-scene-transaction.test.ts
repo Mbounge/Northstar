@@ -5,7 +5,27 @@ import {
   assertCanvasV2SceneTransaction,
   compileCanvasV2SceneTransaction,
   normalizeCanvasV2SceneObjectIdentities,
+  reconcileCanvasV2ObjectAuthorship,
 } from "../lib/canvas-v2/scene-transaction";
+import type { CanvasV2WorkingContext } from "../lib/canvas-v2/working-context";
+
+function workingContext(input: { policy?: "modify" | "reference"; editable?: string[]; protected?: string[] } = {}): CanvasV2WorkingContext {
+  const selectedNodeIds = ["human-note"];
+  return {
+    schema: "canvas-v2.working-context.v1",
+    scope: "selection",
+    selectionPolicy: input.policy ?? "modify",
+    selectedNodeIds,
+    visibleBounds: { x: 0, y: 0, width: 1_600, height: 900 },
+    viewportScale: 1,
+    visibleNodeIds: selectedNodeIds,
+    nearbyNodeIds: selectedNodeIds,
+    editableNodeIds: input.editable ?? selectedNodeIds,
+    protectedNodeIds: input.protected ?? [],
+    objects: [],
+    relationships: [],
+  };
+}
 
 test("model-authored island descendants become stable selectable canvas objects", () => {
   const normalized = normalizeCanvasV2SceneObjectIdentities({
@@ -51,6 +71,44 @@ test("AI scene authorship cannot silently replace a human-edited object", () => 
     () => compileCanvasV2SceneTransaction({ origin: "northstar", baseRevisionId: "revision-1", previous, next }),
     /Human-authored canvas object human-note changed/,
   );
+});
+
+test("an explicit editable selection can change while unselected human work remains protected", () => {
+  const previous = {
+    html: `<section data-canvas-v2-node-id="human-frame" data-canvas-v2-origin="user" data-canvas-v2-user-edited="create" data-canvas-v2-last-author="user"><p data-canvas-v2-node-id="human-note" data-canvas-v2-origin="northstar" data-canvas-v2-user-edited="text" data-canvas-v2-last-author="user" data-canvas-v2-edit-version="3">Human wording</p><p data-canvas-v2-node-id="other-note" data-canvas-v2-origin="user" data-canvas-v2-user-edited="create" data-canvas-v2-last-author="user">Keep me</p></section>`,
+    css: "",
+  };
+  const rawNext = {
+    html: `<section data-canvas-v2-node-id="human-frame" data-canvas-v2-origin="user" data-canvas-v2-user-edited="create" data-canvas-v2-last-author="user"><p data-canvas-v2-node-id="human-note">AI wording</p><p data-canvas-v2-node-id="other-note" data-canvas-v2-origin="user" data-canvas-v2-user-edited="create" data-canvas-v2-last-author="user">Keep me</p></section>`,
+    css: "",
+  };
+  const next = reconcileCanvasV2ObjectAuthorship({ previous, next: rawNext, origin: "northstar" });
+  assert.match(next.html, /data-canvas-v2-node-id="human-note"[^>]*data-canvas-v2-origin="northstar"/);
+  assert.match(next.html, /data-canvas-v2-node-id="human-note"[^>]*data-canvas-v2-last-author="northstar"/);
+  assert.match(next.html, /data-canvas-v2-node-id="human-note"[^>]*data-canvas-v2-edit-version="4"/);
+  assert.match(next.html, /data-canvas-v2-node-id="human-note"[^>]*data-canvas-v2-user-edited="text"/);
+  const transaction = compileCanvasV2SceneTransaction({
+    origin: "northstar",
+    baseRevisionId: "revision-3",
+    previous,
+    next,
+    workingContext: workingContext(),
+  });
+  assert.equal(transaction.targeting?.selectionPolicy, "modify");
+  assert.ok(transaction.mutations.some((mutation) => mutation.nodeId === "human-note" && mutation.kind === "update"));
+  assert.ok(transaction.protectedUserNodeIds.includes("other-note"));
+});
+
+test("reference, locked, and hidden objects stay immutable even when supplied as selection context", () => {
+  const userPrevious = { html: `<p data-canvas-v2-node-id="human-note" data-canvas-v2-user-edited="text">Keep this</p>`, css: "" };
+  const userNext = { html: `<p data-canvas-v2-node-id="human-note" data-canvas-v2-user-edited="text">Changed</p>`, css: "" };
+  assert.throws(() => compileCanvasV2SceneTransaction({ origin: "northstar", baseRevisionId: "revision", previous: userPrevious, next: userNext, workingContext: workingContext({ policy: "reference", editable: [] }) }), /Human-authored canvas object/);
+
+  for (const state of ["data-canvas-v2-locked=\"true\"", "data-canvas-v2-hidden=\"true\""] as const) {
+    const previous = { html: `<p data-canvas-v2-node-id="human-note" ${state}>Keep this</p>`, css: "" };
+    const next = { html: `<p data-canvas-v2-node-id="human-note" ${state}>Changed</p>`, css: "" };
+    assert.throws(() => compileCanvasV2SceneTransaction({ origin: "northstar", baseRevisionId: "revision", previous, next, workingContext: workingContext() }), /Locked|Hidden/);
+  }
 });
 
 test("transaction validation rejects a stale or incomplete mutation ledger", () => {

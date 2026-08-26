@@ -54,7 +54,8 @@ export async function POST(request: NextRequest) {
   } else if (message === "What can you help me with?") {
     decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "conversation", summary: "Answered in chat without using the canvas.", answer: "I can answer questions, inspect the visible canvas, research account evidence, or design and transform the canvas with each revision shown as it happens." };
   } else if (body.selection?.nodeId) {
-    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "selection-transform", summary: `I’ll transform the selected ${body.selection.nodeId} element.`, canvasInstruction: `${message}\n\nSelected node: ${body.selection.nodeId}.` };
+    const selectionPolicy = /\b(compare|alternative|beside|annotate|reference|matrix from|based on)\b/i.test(message) ? "reference" as const : "modify" as const;
+    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "selection-transform", summary: selectionPolicy === "reference" ? `I’ll use the selected ${body.selection.nodeId} element as a preserved reference.` : `I’ll transform the selected ${body.selection.nodeId} element.`, canvasInstruction: `${message}\n\nSelected node: ${body.selection.nodeId}.`, selectionPolicy };
   } else {
     const researchTargets = requestedResearchTargets(message);
     decision = needsAccountResearch(message, researchTargets)

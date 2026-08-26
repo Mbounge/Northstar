@@ -20,6 +20,7 @@ export function insertCanvasV2EvidenceAsset(input: {
   if (Array.from(parsed.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]")).some((element) => element.dataset.canvasV2NodeId === input.nodeId)) throw new Error("Evidence insertion requires a unique node identity.");
   const image = parsed.createElement("img");
   image.dataset.canvasV2NodeId = input.nodeId;
+  image.dataset.canvasV2Origin = "research";
   image.dataset.canvasV2EvidenceId = input.asset.id;
   const existingEvidence = Array.from(parsed.querySelectorAll<HTMLImageElement>("img[data-canvas-v2-evidence-id]"));
   for (const candidate of existingEvidence) {

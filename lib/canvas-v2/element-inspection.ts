@@ -1,18 +1,31 @@
+import { buildCanvasV2ConnectorGeometry, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+
 export interface CanvasV2InspectableElement {
   nodeId: string;
   parentNodeId?: string;
   tagName: string;
-  kind?: "root" | "frame" | "group" | "island" | "text" | "image" | "shape" | "table" | "evidence" | "object";
+  kind?: "root" | "frame" | "group" | "island" | "text" | "note" | "image" | "shape" | "line" | "connector" | "drawing" | "table" | "evidence" | "object";
   label?: string;
   textPreview?: string;
   textEditable: boolean;
+  /** The object intentionally accepts new human-authored text when empty. */
+  writable?: boolean;
   locked: boolean;
   hidden: boolean;
   userEdited?: boolean;
+  origin?: "user" | "northstar" | "research" | "imported";
+  lastAuthor?: "user" | "northstar";
   editVersion?: number;
   rotation?: number;
   canonicalEvidence?: boolean;
   altText?: string;
+  connector?: {
+    variant: CanvasV2ConnectorVariant;
+    from: { x: number; y: number; attachedNodeId?: string };
+    to: { x: number; y: number; attachedNodeId?: string };
+    control: { x: number; y: number };
+    bend: number;
+  };
   visualStyle?: {
     color: string;
     backgroundColor: string;
@@ -63,8 +76,13 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
   const parent = element.parentElement?.closest("[data-canvas-v2-node-id]");
   const workspaceRoot = element.getAttribute("data-canvas-v2-workspace-root") === "true";
   const permanentRootAttribute = element.getAttribute("data-canvas-v2-permanent-root") === "true";
+  const authoredPrimitive = element.getAttribute("data-canvas-v2-primitive");
   const kind = workspaceRoot || permanentRootAttribute || nodeId === "canvas"
     ? "root"
+    : authoredPrimitive === "note" || authoredPrimitive === "line" || authoredPrimitive === "connector" || authoredPrimitive === "drawing"
+      ? authoredPrimitive
+    : element.hasAttribute("data-canvas-v2-painted-edge")
+      ? "shape"
     : element.getAttribute("data-canvas-v2-group") === "true"
       ? "group"
       : element.hasAttribute("data-canvas-v2-island-id") || element.hasAttribute("data-canvas-v2-design-region")
@@ -81,6 +99,27 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
                   ? "shape"
                   : "object";
   const permanentRoot = kind === "root";
+  const connector = kind === "connector" ? (() => {
+    const numberAttribute = (name: string, fallback: number) => {
+      const value = Number(element.getAttribute(name));
+      return Number.isFinite(value) ? value : fallback;
+    };
+    const variantValue = element.getAttribute("data-canvas-v2-connector-variant");
+    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" ? variantValue : "arrow";
+    const from = { x: numberAttribute("data-canvas-v2-connector-from-x", rect.left), y: numberAttribute("data-canvas-v2-connector-from-y", rect.top + rect.height / 2) };
+    const to = { x: numberAttribute("data-canvas-v2-connector-to-x", rect.right), y: numberAttribute("data-canvas-v2-connector-to-y", rect.top + rect.height / 2) };
+    const bend = numberAttribute("data-canvas-v2-connector-bend", variant === "curve" ? 72 : 0);
+    const controlX = Number(element.getAttribute("data-canvas-v2-connector-control-x"));
+    const controlY = Number(element.getAttribute("data-canvas-v2-connector-control-y"));
+    const geometry = buildCanvasV2ConnectorGeometry({ start: from, end: to, variant, bend, ...(Number.isFinite(controlX) && Number.isFinite(controlY) ? { control: { x: controlX, y: controlY } } : {}) });
+    return {
+      variant,
+      from: { ...from, ...(element.getAttribute("data-canvas-v2-connector-from") ? { attachedNodeId: element.getAttribute("data-canvas-v2-connector-from")! } : {}) },
+      to: { ...to, ...(element.getAttribute("data-canvas-v2-connector-to") ? { attachedNodeId: element.getAttribute("data-canvas-v2-connector-to")! } : {}) },
+      control: geometry.control,
+      bend,
+    };
+  })() : undefined;
   return {
     nodeId,
     parentNodeId: parent?.getAttribute("data-canvas-v2-node-id") ?? undefined,
@@ -88,17 +127,23 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
     kind,
     label: element.getAttribute("aria-label") ?? undefined,
     textPreview: text ? text.slice(0, 120) : undefined,
-    // The finite board is the coordinate surface, never a user object. This
+    // The world canvas is the coordinate surface, never a user object. This
     // remains false even while the board is empty so a blank double-click can
     // only deselect; it cannot turn the old canvas wrapper into an editor.
-    textEditable: !permanentRoot && element.childElementCount === 0,
+    textEditable: !permanentRoot && (kind === "text" || kind === "note"),
     locked: permanentRoot || element.getAttribute("data-canvas-v2-locked") === "true",
     hidden: (element as HTMLElement).hidden || element.getAttribute("data-canvas-v2-hidden") === "true",
     userEdited: element.hasAttribute("data-canvas-v2-user-edited"),
+    origin: (() => {
+      const value = element.getAttribute("data-canvas-v2-origin");
+      return value === "user" || value === "northstar" || value === "research" || value === "imported" ? value : undefined;
+    })(),
+    lastAuthor: element.getAttribute("data-canvas-v2-last-author") === "user" ? "user" : element.getAttribute("data-canvas-v2-last-author") === "northstar" ? "northstar" : undefined,
     editVersion: Number(element.getAttribute("data-canvas-v2-edit-version")) || 0,
     rotation: Number(element.getAttribute("data-canvas-v2-rotation")) || 0,
     canonicalEvidence: Boolean(element.closest("[data-canvas-v2-canonical-flow]")),
     altText: element.tagName === "IMG" ? element.getAttribute("alt") ?? "" : undefined,
+    ...(connector ? { connector } : {}),
     visualStyle: {
       color: computed?.color ?? "",
       backgroundColor: computed?.backgroundColor ?? "",

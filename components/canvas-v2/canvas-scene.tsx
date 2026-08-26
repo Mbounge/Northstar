@@ -1,7 +1,7 @@
 "use client";
 
 import { toJpeg } from "html-to-image";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { buildCanvasV2RuntimeDocument } from "@/lib/canvas-v2/runtime-document";
 import {
@@ -29,13 +29,17 @@ import {
   type CanvasV2SelectionIntent,
 } from "@/lib/canvas-v2/element-inspection";
 import { observeCanvasV2SpatialLayout } from "@/lib/canvas-v2/spatial-observation";
-import { CanvasV2NativeCanvasScene } from "@/components/canvas-v2/native-canvas-scene";
+import {
+  CanvasV2NativeCanvasScene,
+  type CanvasV2NativeCanvasSceneHandle,
+} from "@/components/canvas-v2/native-canvas-scene";
 import {
   compileCanvasV2NativeScene,
   projectCanvasV2ObservationToNativeScene,
   type CanvasV2NativeSceneDocument,
 } from "@/lib/canvas-v2/native-scene";
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
+import type { CanvasV2NativeTextContentUpdate } from "@/lib/canvas-v2/manual-mutations";
 
 export interface CanvasV2CanvasSceneProps {
   revision: CanvasV2ArtifactRevision;
@@ -56,10 +60,13 @@ export interface CanvasV2CanvasSceneProps {
   onNativeScene?: (scene: CanvasV2NativeSceneDocument) => void;
   nativeSceneOverride?: CanvasV2NativeSceneDocument;
   placementReferenceScene?: CanvasV2NativeSceneDocument;
+  /** Existing AI-owned roots that an explicit whole-board recompose may move. */
+  relocatablePlacementNodeIds?: readonly string[];
+  preferredPlacement?: { x: number; y: number };
   onElementDoubleClick?: (element: CanvasV2InspectableElement) => void;
-  onElementTextCommit?: (element: CanvasV2InspectableElement, text: string) => void;
+  onElementTextCommit?: (element: CanvasV2InspectableElement, text: string, nativeContent?: CanvasV2NativeTextContentUpdate[], layout?: { width?: number; height?: number }) => void;
   onGeometry?: (geometry: CanvasV2CanvasGeometry) => void;
-  onWorkspaceWheel?: (event: { clientX: number; clientY: number; deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean }) => void;
+  onWorkspaceWheel?: (event: { clientX: number; clientY: number; deltaX: number; deltaY: number; deltaMode?: number; ctrlKey: boolean; metaKey: boolean; shiftKey?: boolean }) => void;
   onWorkspacePointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => void;
   onElementPointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => void;
   transientGeometry?: Readonly<Record<string, CanvasV2TransientGeometry>>;
@@ -163,7 +170,11 @@ async function captureAuthoredDesignDetails(
 ): Promise<NonNullable<CanvasV2RenderObservation["designDetails"]>> {
   const canvas = frameDocument.body;
   const canvasRect = canvas.getBoundingClientRect();
-  const canvasArea = Math.max(1, canvasRect.width * canvasRect.height);
+  // Screenshot metadata describes the compact authored publication, not the
+  // remote edges of the finite navigation world.
+  const compositionWidth = CANVAS_V2_WORKSPACE.aiAuthoringWidth;
+  const compositionHeight = CANVAS_V2_WORKSPACE.aiAuthoringHeight;
+  const compositionArea = compositionWidth * compositionHeight;
   const regions = Array.from(frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-design-region]"))
     .filter((region) => !region.parentElement?.closest("[data-canvas-v2-design-region]"))
     .sort((left, right) => {
@@ -193,9 +204,9 @@ async function captureAuthoredDesignDetails(
       label: region.getAttribute("aria-label")?.trim() || heading || "Authored design region",
       width: Math.round(rect.width),
       height: Math.round(rect.height),
-      centerXShare: Number(((rect.left + rect.width / 2 - canvasRect.left) / Math.max(1, canvasRect.width)).toFixed(3)),
-      centerYShare: Number(((rect.top + rect.height / 2 - canvasRect.top) / Math.max(1, canvasRect.height)).toFixed(3)),
-      canvasAreaShare: Number(((rect.width * rect.height) / canvasArea).toFixed(3)),
+      centerXShare: Number(((rect.left + rect.width / 2 - canvasRect.left) / compositionWidth).toFixed(3)),
+      centerYShare: Number(((rect.top + rect.height / 2 - canvasRect.top) / compositionHeight).toFixed(3)),
+      canvasAreaShare: Number(((rect.width * rect.height) / compositionArea).toFixed(3)),
       readingIndex,
       ...(region.getAttribute("data-canvas-v2-visual-role") ? { visualRole: region.getAttribute("data-canvas-v2-visual-role")! } : {}),
       screenshotDataUrl,
@@ -230,6 +241,8 @@ function CanvasV2ObservationScene({
   captureEnabled = true,
   onNativeScene,
   placementReferenceScene,
+  relocatablePlacementNodeIds,
+  preferredPlacement,
 }: CanvasV2CanvasSceneProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const themeStateRef = useRef(createCanvasV2ArtifactThemeState());
@@ -336,7 +349,7 @@ function CanvasV2ObservationScene({
       permanentRoot.style.removeProperty("outline");
     }
     frameDocument.getSelection()?.removeAllRanges();
-    frameDocument.documentElement.dataset.canvasV2SelectMode = "true";
+    frameDocument.documentElement.setAttribute("data-canvas-v2-select-mode", "true");
     const nativeSelectionGuard = frameDocument.createElement("style");
     nativeSelectionGuard.dataset.canvasV2NativeSelectionGuard = "true";
     nativeSelectionGuard.textContent = `
@@ -374,8 +387,9 @@ function CanvasV2ObservationScene({
       const forward = workspaceWheelRef.current;
       if (!forward) return;
       event.preventDefault();
-      forward({ ...hostPoint(event.clientX, event.clientY), deltaX: event.deltaX, deltaY: event.deltaY, ctrlKey: event.ctrlKey, metaKey: event.metaKey });
+      forward({ ...hostPoint(event.clientX, event.clientY), deltaX: event.deltaX, deltaY: event.deltaY, deltaMode: event.deltaMode, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey });
     };
+    const suppressBrowserZoom = (event: Event) => event.preventDefault();
     let forwardingPointer: number | undefined;
     let forwardingElement: CanvasV2InspectableElement | undefined;
     let forwardingStart: { x: number; y: number } | undefined;
@@ -436,11 +450,11 @@ function CanvasV2ObservationScene({
         // object or suppress inline text editing.
         if (!forwardingMoved) return;
         event.preventDefault();
-        elementPointerRef.current({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, element: forwardingElement });
+        elementPointerRef.current({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: forwardingElement });
         return;
       }
       event.preventDefault();
-      workspacePointerRef.current?.({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button });
+      workspacePointerRef.current?.({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
     };
     const pointerUp = (event: globalThis.PointerEvent) => {
       if (forwardingPointer !== event.pointerId) return;
@@ -450,11 +464,11 @@ function CanvasV2ObservationScene({
         forwardingElement = undefined;
         if (forwardingMoved) event.preventDefault();
         forwardingStart = undefined;
-        elementPointerRef.current({ phase: "up", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, element });
+        elementPointerRef.current({ phase: "up", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element });
         return;
       }
       event.preventDefault();
-      workspacePointerRef.current?.({ phase: "up", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button });
+      workspacePointerRef.current?.({ phase: "up", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
     };
     const keydown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -475,6 +489,9 @@ function CanvasV2ObservationScene({
       onSelectionRefresh?.(selectable);
     };
     frameDocument.addEventListener("wheel", wheel, { passive: false });
+    frameDocument.addEventListener("gesturestart", suppressBrowserZoom, { passive: false });
+    frameDocument.addEventListener("gesturechange", suppressBrowserZoom, { passive: false });
+    frameDocument.addEventListener("gestureend", suppressBrowserZoom, { passive: false });
     frameDocument.addEventListener("keydown", keydown, true);
     frameDocument.addEventListener("pointerdown", pointerDown, true);
     frameDocument.addEventListener("pointermove", pointerMove, true);
@@ -482,13 +499,16 @@ function CanvasV2ObservationScene({
     frameDocument.addEventListener("pointercancel", pointerUp, true);
     return () => {
       frameDocument.removeEventListener("wheel", wheel);
+      frameDocument.removeEventListener("gesturestart", suppressBrowserZoom);
+      frameDocument.removeEventListener("gesturechange", suppressBrowserZoom);
+      frameDocument.removeEventListener("gestureend", suppressBrowserZoom);
       frameDocument.removeEventListener("keydown", keydown, true);
       frameDocument.removeEventListener("pointerdown", pointerDown, true);
       frameDocument.removeEventListener("pointermove", pointerMove, true);
       frameDocument.removeEventListener("pointerup", pointerUp, true);
       frameDocument.removeEventListener("pointercancel", pointerUp, true);
       nativeSelectionGuard.remove();
-      delete frameDocument.documentElement.dataset.canvasV2SelectMode;
+      frameDocument.documentElement.removeAttribute("data-canvas-v2-select-mode");
       frameDocument.getSelection()?.removeAllRanges();
       for (const item of selectionStyles) {
         if (item.value) item.element.style.setProperty("user-select", item.value, item.priority);
@@ -731,13 +751,15 @@ function CanvasV2ObservationScene({
       // made correctly placed title islands fail and repair themselves back to
       // the hidden left edge. Compile and project before publishing factual
       // observation so placement, collision, and narrative checks all share
-      // the 12,000×8,000 board coordinate system.
+      // the shared large-world canvas coordinate system.
       const candidateScene = compileCanvasV2NativeScene({
         document: frameDocument,
         revision,
         width: CANVAS_V2_WORKSPACE.width,
         height: CANVAS_V2_WORKSPACE.height,
         placementReferenceScene,
+        relocatablePlacementNodeIds,
+        preferredPlacement,
       });
       onNativeScene?.(candidateScene);
       onObservation(projectCanvasV2ObservationToNativeScene(compatibilityObservation, candidateScene));
@@ -782,10 +804,13 @@ function CanvasV2ObservationScene({
  * compiler because the model still consumes rendered screenshots in Patch 8C.
  * The live workspace always renders the compiled native scene instead.
  */
-export function CanvasV2CanvasScene(props: CanvasV2CanvasSceneProps) {
+export type CanvasV2CanvasSceneHandle = CanvasV2NativeCanvasSceneHandle;
+
+export const CanvasV2CanvasScene = forwardRef<CanvasV2CanvasSceneHandle, CanvasV2CanvasSceneProps>(function CanvasV2CanvasScene(props, imperativeRef) {
   if (props.captureEnabled === false) {
     return (
       <CanvasV2NativeCanvasScene
+        ref={imperativeRef}
         revision={props.revision}
         theme={props.theme ?? "light"}
         width={props.width ?? CANVAS_V2_MIN_CANVAS.width}
@@ -810,4 +835,4 @@ export function CanvasV2CanvasScene(props: CanvasV2CanvasSceneProps) {
     );
   }
   return <CanvasV2ObservationScene {...props} />;
-}
+});

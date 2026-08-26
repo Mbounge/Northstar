@@ -51,6 +51,8 @@ export interface CanvasV2SpatialNodeObservation {
   parentNodeId?: string;
   tagName: string;
   textPreview?: string;
+  /** Number of distinct rendered text lines for a leaf text node. */
+  textLineCount?: number;
   bounds: CanvasV2ElementBounds;
   contentBox: {
     clientWidth: number;
@@ -137,6 +139,12 @@ export interface CanvasV2AuthoredRelationshipObservation {
   visualRole?: string;
   geometryStartPoint?: { x: number; y: number };
   geometryEndPoint?: { x: number; y: number };
+  geometryStartLocalPoint?: { x: number; y: number };
+  geometryMidLocalPoint?: { x: number; y: number };
+  geometryEndLocalPoint?: { x: number; y: number };
+  /** Exact local-space endpoints that attach the authored path to the measured objects. */
+  geometrySuggestedStartLocalPoint?: { x: number; y: number };
+  geometrySuggestedEndLocalPoint?: { x: number; y: number };
   geometryOrientation?: "forward" | "reversed";
   sourceAnchorNodeId?: string;
   targetAnchorNodeId?: string;
@@ -144,6 +152,15 @@ export interface CanvasV2AuthoredRelationshipObservation {
   targetAnchorDistance?: number;
   sourceAnchorTolerance?: number;
   targetAnchorTolerance?: number;
+  /** Distance an endpoint penetrates inside the referenced object's box. */
+  sourceAnchorInteriorDepth?: number;
+  targetAnchorInteriorDepth?: number;
+  sourceAnchorBounds?: CanvasV2ElementBounds;
+  targetAnchorBounds?: CanvasV2ElementBounds;
+  sourceAnchorSuggestedPoint?: { x: number; y: number };
+  targetAnchorSuggestedPoint?: { x: number; y: number };
+  /** Shortest rendered-space movement that returns the target endpoint to its perimeter. */
+  targetAnchorEscapeDelta?: { x: number; y: number };
   geometrySpan?: number;
   missingSourceNodeIds?: string[];
   missingTargetNodeIds?: string[];
@@ -309,6 +326,8 @@ export interface CanvasV2SpatialObservation {
   reportedNodeCount: number;
   nodes: CanvasV2SpatialNodeObservation[];
   notableIntersections: CanvasV2SpatialIntersection[];
+  /** Rendered leaf-text collisions inside the same authored region. */
+  textCollisions?: CanvasV2SpatialIntersection[];
   contentOverflowNodeIds: string[];
   evidence: CanvasV2EvidenceRenderObservation[];
   authoredRelationships?: CanvasV2AuthoredRelationshipObservation[];

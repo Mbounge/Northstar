@@ -89,22 +89,22 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
       position:relative;
       /* HTML is only the native scene's measuring surface. Its compact local
          perimeter is compiled into object geometry; the native compiler then
-         translates the accepted composition into the larger 1,200px board
-         authorship inset. Keeping those coordinate spaces separate prevents
-         a body-level island from becoming a 12,000 x 8,000 canvas overlay. */
+         translates the accepted composition near the person's viewport.
+         Keeping those coordinate spaces separate prevents a body-level island
+         from becoming a full-world canvas overlay. */
       padding:${CANVAS_V2_WORKSPACE.documentMargin}px!important;
       color:var(--northstar-ink);
       font-family:Inter,ui-sans-serif,system-ui,sans-serif;
     }
     ${escapeStyleEnd(document.css)}
     /* Reassert the compiler coordinate perimeter after model CSS. Source
-       authors are allowed to style their composition, never the finite
+       authors are allowed to style their composition, never the world-sized
        measuring surface that establishes native object coordinates. */
     html > body {
       box-sizing:border-box!important;
       padding:${CANVAS_V2_WORKSPACE.documentMargin}px!important;
     }
-    /* The body is the finite canvas. The model source root is only a transparent
+    /* The body is the world canvas. The model source root is only a transparent
        full-canvas scene layer; it never owns an offset, intrinsic edge, scroll
        boundary, clipping boundary, or independent coordinate system. */
     body > [data-canvas-v2-node-id="canvas"] {

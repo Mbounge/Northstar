@@ -19,6 +19,7 @@ import {
   buildCanvasV2StructuredProviderRequest,
   extractCanvasV2StructuredText,
 } from "@/lib/canvas-v2/structured-provider";
+import { canvasV2LocalEvaluationEnabled } from "@/lib/canvas-v2/local-evaluation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,10 +32,12 @@ Choose exactly one route based on what the user is asking to happen now:
 - research-design: the requested visual artifact needs product/app evidence, flows, screenshots, icons, or account research before or during design.
 - selection-transform: the user explicitly wants the currently selected element changed.
 Route by semantic intent, not by word matching. Mentioning an app or the canvas does not by itself request a visual mutation. Questions that can be answered in chat stay in chat. Never claim to have changed or researched anything in this routing response.
+Evidence is optional. Route creative construction, planning, facilitation, organization, speculative exploration, and synthesis of facts already supplied by the user to transform. Do not route to research-design merely because external evidence could make an answer richer, because the prompt concerns a business decision, or because North Star could invent an evidence framework. Use research-design only when the user explicitly asks North Star to retrieve or inspect evidence, or when the requested claims and deliverable materially depend on product/app/account facts that are not already supplied. A prompt can produce a complete premium canvas without research.
 For research-design, identify every app or product the user explicitly asks North Star to research or compare in researchTargets. Preserve the user's names without inventing catalog availability. Return an empty array when no specific product is named. For every other route return an empty array.
 For research-design, set researchMode to evidence only when the requested deliverable is the evidence itself—for example, showing or adding a flow or screenshots without interpretation. Set it to synthesis when the user wants comparison, analysis, explanation, insights, strategy, an executive artifact, or any designed argument grounded in the evidence. For every other route use none.
 For conversation and inspect, provide the final concise answer in answer. Inspection must be grounded only in supplied source, evidence, and render context; acknowledge uncertainty when appropriate.
 For mutating routes, provide a concise summary of what you will do and a self-contained canvasInstruction that preserves the user's material intent. Product names, requested journey/session type (for example onboarding versus browsing), platform, taxonomy path, and requested evidence scope are authoritative and may never be generalized, substituted, or dropped during paraphrase. Do not design the artifact in this response; the observed design loop owns that work.
+For selection-transform, set selectionPolicy to modify only when the user explicitly asks to rewrite, restyle, move, resize, replace, delete, or otherwise change the selected objects themselves. Set it to reference when the selected objects are evidence or anchors for new work such as comparison, annotation, an alternative beside them, or a derived matrix; reference means preserve the selected objects exactly. For every other route set selectionPolicy to none.
 Return JSON only.`;
 
 const RESPONSE_SCHEMA = {
@@ -45,10 +48,11 @@ const RESPONSE_SCHEMA = {
     summary: { type: "string" },
     answer: { type: "string" },
     canvasInstruction: { type: "string" },
+    selectionPolicy: { type: "string", enum: ["none", "modify", "reference"] },
     researchTargets: { type: "array", items: { type: "string" }, maxItems: 12 },
     researchMode: { type: "string", enum: ["none", "evidence", "synthesis"] },
   },
-  required: ["route", "summary", "researchTargets", "researchMode"],
+  required: ["route", "summary", "selectionPolicy", "researchTargets", "researchMode"],
 };
 
 function imagePart(observation?: CanvasV2RenderObservation) {
@@ -59,7 +63,7 @@ function imagePart(observation?: CanvasV2RenderObservation) {
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "You must be signed in to use North Star.", code: "invalid-request", retryable: false }, { status: 401 });
+  if (!user && !canvasV2LocalEvaluationEnabled()) return NextResponse.json({ error: "You must be signed in to use North Star.", code: "invalid-request", retryable: false }, { status: 401 });
   try {
     const body = await request.json() as {
       message?: unknown;

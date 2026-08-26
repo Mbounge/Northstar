@@ -2,6 +2,7 @@
 
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { canvasV2LocalEvaluationEnabled } from '@/lib/canvas-v2/local-evaluation'
 
 export async function proxy(request: NextRequest) {
   // Browser release-gate harnesses must exercise their real iframe boundaries
@@ -13,6 +14,7 @@ export async function proxy(request: NextRequest) {
     (request.nextUrl.pathname.startsWith("/__northstar-e2e") ||
       request.nextUrl.pathname.startsWith("/canvas-v2-e2e") ||
       request.nextUrl.pathname === "/canvas" ||
+      (canvasV2LocalEvaluationEnabled() && request.nextUrl.pathname.startsWith("/api/canvas-v2/")) ||
       request.nextUrl.pathname === "/api/canvas-ai/artifact-ack")
   ) {
     return NextResponse.next({ request })

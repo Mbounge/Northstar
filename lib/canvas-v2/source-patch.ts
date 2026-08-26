@@ -2,9 +2,10 @@ import { assertCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from
 import { readCanvasV2CanonicalFlowManifests } from "@/lib/canvas-v2/evidence-authorship";
 import { normalizeCanvasV2ModelSource } from "@/lib/canvas-v2/model-source-normalization";
 import { buildCanvasV2EvidenceCopyHandles } from "@/lib/canvas-v2/evidence-handles";
-import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
+import type { CanvasV2ArtifactDocument, CanvasV2AuthoredRelationshipObservation, CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
-import { normalizeCanvasV2SceneObjectIdentities } from "@/lib/canvas-v2/scene-transaction";
+import { normalizeCanvasV2SceneObjectIdentities, reconcileCanvasV2ObjectAuthorship } from "@/lib/canvas-v2/scene-transaction";
+import type { CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 
 export type CanvasV2SourcePatchOperation =
   | { op: "insert-before" | "insert-after" | "append-html" | "replace-node"; targetNodeId: string; html: string }
@@ -84,12 +85,171 @@ function userEditedNodeIds(html: string): Set<string> {
   ).filter((nodeId): nodeId is string => Boolean(nodeId)));
 }
 
+function declaredCanvasNodeIds(html: string): string[] {
+  return Array.from(html.matchAll(/<([a-z][\w:-]*)\b([^>]*)>/gi), (match) => attribute(match[2], "data-canvas-v2-node-id"))
+    .filter((nodeId): nodeId is string => Boolean(nodeId));
+}
+
+function assertCanvasV2SelectionScopedCss(css: string, authorizedNodeIds: ReadonlySet<string>, label: string): void {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  if (!source || source.includes("@") || !authorizedNodeIds.size) {
+    throw new Error(`${label} CSS must contain only direct rules for exact authorized stable node IDs.`);
+  }
+  const selectorGroups = Array.from(source.matchAll(/(?:^|})\s*([^{}]+)\{/g), (match) => match[1].trim());
+  if (!selectorGroups.length) throw new Error(`${label} CSS must contain at least one exact stable-node rule.`);
+  for (const selector of selectorGroups.flatMap((group) => group.split(",").map((item) => item.trim()).filter(Boolean))) {
+    const authorized = Array.from(authorizedNodeIds).some((nodeId) => new RegExp(
+      `\\[\\s*data-canvas-v2-node-id\\s*=\\s*["']${escapedRegExp(nodeId)}["']\\s*\\]`,
+      "i",
+    ).test(selector));
+    if (!authorized) throw new Error(`${label} CSS selector is not scoped to an exact authorized stable node ID: ${selector}`);
+  }
+}
+
+function workspaceMetadataNodeIds(html: string): string[] {
+  return Array.from(html.matchAll(/<template\b([^>]*\bdata-canvas-v2-workspace-root\s*=\s*["']true["'][^>]*)>/gi), (match) => (
+    attribute(match[1], "data-canvas-v2-node-id")
+  )).filter((nodeId): nodeId is string => Boolean(nodeId));
+}
+
+/**
+ * The fresh-canvas template is a source marker, not a rendered layout parent.
+ * CSS aimed at it is guaranteed dead code and previously sent whole-board
+ * recompositions through three futile render-repair passes.
+ */
+function assertCanvasV2CssDoesNotTargetWorkspaceMetadata(css: string, html: string): void {
+  const metadataIds = workspaceMetadataNodeIds(html);
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const selectorGroups = Array.from(source.matchAll(/(?:^|})\s*([^{}]+)\{/g), (match) => match[1].trim());
+  for (const selector of selectorGroups.flatMap((group) => group.split(",").map((item) => item.trim()).filter(Boolean))) {
+    const targetsMetadataAttribute = /\[\s*data-canvas-v2-workspace-root(?:\s*=\s*["']?true["']?)?\s*\]/i.test(selector);
+    const targetsMetadataId = metadataIds.some((nodeId) => new RegExp(
+      `\\[\\s*data-canvas-v2-node-id\\s*=\\s*["']${escapedRegExp(nodeId)}["']\\s*\\]`,
+      "i",
+    ).test(selector));
+    if (targetsMetadataAttribute || targetsMetadataId) {
+      throw new Error(`Canvas workspace metadata is inert and cannot be a CSS layout target: ${selector}. Style the exact body-level island nodes instead.`);
+    }
+  }
+}
+
 export interface CanvasV2SourceNodeRange {
   start: number;
   openEnd: number;
   closeStart: number;
   end: number;
   tagName: string;
+}
+
+/**
+ * Last-resort render safety for optional authored relationship marks. The
+ * model receives its ordinary correction passes first. If those are exhausted,
+ * remove only exact invalid relationship elements and render the recovered
+ * candidate again before commit.
+ */
+export function retireCanvasV2BrokenAuthoredRelationships(
+  document: CanvasV2ArtifactDocument,
+  nodeIds: readonly string[],
+): CanvasV2ArtifactDocument {
+  const ranges = Array.from(new Set(nodeIds)).flatMap((nodeId) => {
+    const range = findCanvasV2SourceNodeRange(document.html, nodeId);
+    if (!range) return [];
+    const openingTag = document.html.slice(range.start, range.openEnd);
+    if (!/\bdata-canvas-v2-relationship-(?:source|target)\s*=/i.test(openingTag)) return [];
+    return [{ range }];
+  }).sort((left, right) => right.range.start - left.range.start);
+  if (!ranges.length) return document;
+  let html = document.html;
+  for (const { range } of ranges) html = `${html.slice(0, range.start)}${html.slice(range.end)}`;
+  return assertCanvasV2ArtifactDocument({ ...document, html });
+}
+
+/** Remove only exact optional SVG relationship-label elements. Required
+ * relationship paths and their endpoint metadata are never eligible. */
+export function retireCanvasV2CollidingRelationshipLabels(
+  document: CanvasV2ArtifactDocument,
+  nodeIds: readonly string[],
+): CanvasV2ArtifactDocument {
+  const ranges = Array.from(new Set(nodeIds)).flatMap((nodeId) => {
+    const range = findCanvasV2SourceNodeRange(document.html, nodeId);
+    if (!range || range.tagName !== "text") return [];
+    const openingTag = document.html.slice(range.start, range.openEnd);
+    if (!/(?:transition|connector|relationship).*(?:label|verb)|(?:label|verb).*(?:transition|connector|relationship)/i.test(nodeId)
+      || /\bdata-canvas-v2-relationship-(?:source|target)\s*=/i.test(openingTag)) return [];
+    return [{ range }];
+  }).sort((left, right) => right.range.start - left.range.start);
+  if (!ranges.length) return document;
+  let html = document.html;
+  for (const { range } of ranges) html = `${html.slice(0, range.start)}${html.slice(range.end)}`;
+  return assertCanvasV2ArtifactDocument({ ...document, html });
+}
+
+function relationshipMetric(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+function setOpeningTagAttribute(openingTag: string, name: string, value: string): string {
+  const existing = new RegExp(`(\\b${escapedRegExp(name)}\\s*=\\s*)(["'])(.*?)\\2`, "i");
+  if (existing.test(openingTag)) return openingTag.replace(existing, `$1"${value}"`);
+  return openingTag.replace(/\s*\/?>$/, (ending) => ` ${name}="${value}"${ending}`);
+}
+
+/**
+ * Convert browser-measured relationship anchors back into the authored SVG's
+ * own coordinate space. The model continues to own route, stroke, dash, and
+ * marker styling; this repair changes only the two clerical endpoints and
+ * keeps the original curve midpoint as the path's visual route.
+ */
+export function repairCanvasV2RenderedRelationshipGeometry(
+  document: CanvasV2ArtifactDocument,
+  relationships: readonly CanvasV2AuthoredRelationshipObservation[],
+): CanvasV2ArtifactDocument {
+  const repairs = relationships.flatMap((relationship) => {
+    const start = relationship.geometrySuggestedStartLocalPoint;
+    const end = relationship.geometrySuggestedEndLocalPoint;
+    if (!start || !end) return [];
+    const range = findCanvasV2SourceNodeRange(document.html, relationship.nodeId);
+    if (!range || !["path", "line", "polyline"].includes(range.tagName)) return [];
+    const openingTag = document.html.slice(range.start, range.openEnd);
+    if (!/\bdata-canvas-v2-relationship-(?:source|target)\s*=/i.test(openingTag)) return [];
+    let repairedOpeningTag = openingTag;
+    if (range.tagName === "path") {
+      const mid = relationship.geometryMidLocalPoint ?? {
+        x: (start.x + end.x) / 2,
+        y: (start.y + end.y) / 2,
+      };
+      // A quadratic control that passes through the authored path midpoint at
+      // t=.5 preserves the model's chosen whitespace channel while snapping
+      // only its endpoints to the measured source and target perimeters.
+      const control = {
+        x: 2 * mid.x - (start.x + end.x) / 2,
+        y: 2 * mid.y - (start.y + end.y) / 2,
+      };
+      const d = `M ${relationshipMetric(start.x)} ${relationshipMetric(start.y)} Q ${relationshipMetric(control.x)} ${relationshipMetric(control.y)} ${relationshipMetric(end.x)} ${relationshipMetric(end.y)}`;
+      repairedOpeningTag = setOpeningTagAttribute(repairedOpeningTag, "d", d);
+    } else if (range.tagName === "line") {
+      repairedOpeningTag = setOpeningTagAttribute(repairedOpeningTag, "x1", relationshipMetric(start.x));
+      repairedOpeningTag = setOpeningTagAttribute(repairedOpeningTag, "y1", relationshipMetric(start.y));
+      repairedOpeningTag = setOpeningTagAttribute(repairedOpeningTag, "x2", relationshipMetric(end.x));
+      repairedOpeningTag = setOpeningTagAttribute(repairedOpeningTag, "y2", relationshipMetric(end.y));
+    } else {
+      const mid = relationship.geometryMidLocalPoint ?? {
+        x: (start.x + end.x) / 2,
+        y: (start.y + end.y) / 2,
+      };
+      repairedOpeningTag = setOpeningTagAttribute(
+        repairedOpeningTag,
+        "points",
+        `${relationshipMetric(start.x)},${relationshipMetric(start.y)} ${relationshipMetric(mid.x)},${relationshipMetric(mid.y)} ${relationshipMetric(end.x)},${relationshipMetric(end.y)}`,
+      );
+    }
+    if (repairedOpeningTag === openingTag) return [];
+    return [{ start: range.start, openEnd: range.openEnd, openingTag: repairedOpeningTag }];
+  }).sort((left, right) => right.start - left.start);
+  if (!repairs.length) return document;
+  let html = document.html;
+  for (const repair of repairs) html = `${html.slice(0, repair.start)}${repair.openingTag}${html.slice(repair.openEnd)}`;
+  return assertCanvasV2ArtifactDocument({ ...document, html });
 }
 
 /** Locate an identified element without trusting model-provided selectors. */
@@ -219,12 +379,29 @@ function expandEvidenceCopies(
   });
 }
 
-function upsertCssLayer(css: string, layerId: string, layer: string): string {
+function upsertCssLayer(css: string, layerId: string, layer: string, mergeExisting = false): string {
   const start = `/* canvas-v2-model-layer:${layerId} */`;
   const end = `/* /canvas-v2-model-layer:${layerId} */`;
   const pattern = new RegExp(`${escapedRegExp(start)}[\\s\\S]*?${escapedRegExp(end)}`, "g");
-  const block = `${start}\n${layer}\n${end}`;
+  const existing = mergeExisting ? pattern.exec(css)?.[0] : undefined;
+  pattern.lastIndex = 0;
+  const existingLayer = existing?.slice(start.length, -end.length).trim();
+  const block = `${start}\n${existingLayer ? `${existingLayer}\n` : ""}${layer}\n${end}`;
   return pattern.test(css) ? css.replace(pattern, block) : `${css.trim()}\n\n${block}\n`;
+}
+
+function assertMergedCssLayersPreserveExistingSource(previousCss: string, nextCss: string): void {
+  const layerPattern = /\/\* canvas-v2-model-layer:([^*]+) \*\/([\s\S]*?)\/\* \/canvas-v2-model-layer:\1 \*\//g;
+  for (const match of previousCss.matchAll(layerPattern)) {
+    const layerId = match[1].trim();
+    const previousLayer = match[2].trim();
+    const start = `/* canvas-v2-model-layer:${layerId} */`;
+    const end = `/* /canvas-v2-model-layer:${layerId} */`;
+    const nextLayer = new RegExp(`${escapedRegExp(start)}([\\s\\S]*?)${escapedRegExp(end)}`).exec(nextCss)?.[1].trim();
+    if (!nextLayer || (previousLayer && !nextLayer.includes(previousLayer))) {
+      throw new Error(`Render repair must preserve the complete existing CSS layer ${layerId} and append only its bounded correction.`);
+    }
+  }
 }
 
 function enforceCanonicalEvidenceGeometry(css: string): string {
@@ -260,6 +437,7 @@ function enforceDesignIslandTopology(html: string): string {
         .replace(/\s*data-canvas-v2-story-role\s*=\s*["'][^"']*["']/ig, "")
         .replace(/\s*data-canvas-v2-placement-mode\s*=\s*["'][^"']*["']/ig, "")
         .replace(/\s*data-canvas-v2-territory-relation\s*=\s*["'][^"']*["']/ig, "")
+        .replace(/\s*data-canvas-v2-territory-anchor\s*=\s*["'][^"']*["']/ig, "")
         .replace(/\s*data-canvas-v2-target-zone\s*=\s*["'][^"']*["']/ig, "")
         .replace(/\s*data-canvas-v2-evidence-interleave\s*=\s*["'][^"']*["']/ig, "");
     } else {
@@ -275,22 +453,63 @@ export function applyCanvasV2SourcePatch(input: {
   operations: readonly CanvasV2SourcePatchOperation[];
   evidence: readonly CanvasV2EvidenceAsset[];
   scaleIntentByEvidenceId?: ReadonlyMap<string, CanvasV2EvidenceScaleIntent>;
+  workingContext?: CanvasV2WorkingContext;
+  /** Render repair CSS is a delta over the rejected candidate layer. */
+  mergeExistingCssLayers?: boolean;
 }): CanvasV2ArtifactDocument {
   const protectedLaneIds = new Set(readCanvasV2CanonicalFlowManifests(input.previous).map((flow) => flow.laneNodeId));
-  const protectedUserNodeIds = userEditedNodeIds(input.previous.html);
+  const editableNodeIds = new Set(input.workingContext?.scope === "selection" && input.workingContext.selectionPolicy === "modify"
+    ? input.workingContext.editableNodeIds
+    : []);
+  const referenceNodeIds = new Set(input.workingContext?.scope === "selection" && input.workingContext.selectionPolicy === "reference"
+    ? input.workingContext.selectedNodeIds
+    : []);
+  const referenceCreatedNodeIds = new Set(input.operations.flatMap((operation) => (
+    referenceNodeIds.size
+    && (operation.op === "insert-before" || operation.op === "insert-after")
+    && referenceNodeIds.has(operation.targetNodeId)
+      ? declaredCanvasNodeIds(operation.html)
+      : []
+  )));
+  const protectedUserNodeIds = new Set([
+    ...Array.from(userEditedNodeIds(input.previous.html)).filter((nodeId) => !editableNodeIds.has(nodeId)),
+    ...(input.workingContext?.protectedNodeIds ?? []),
+  ]);
   let html = input.previous.html;
   let css = input.previous.css;
   for (const operation of input.operations) {
     if (operation.op === "upsert-css") {
-      css = upsertCssLayer(css, operation.layerId, operation.css);
+      assertCanvasV2CssDoesNotTargetWorkspaceMetadata(operation.css, html);
+      if (input.workingContext?.scope === "selection") {
+        if (input.workingContext.selectionPolicy === "modify") {
+          assertCanvasV2SelectionScopedCss(operation.css, editableNodeIds, "A selection-scoped");
+        } else if (input.workingContext.selectionPolicy === "reference") {
+          assertCanvasV2SelectionScopedCss(operation.css, referenceCreatedNodeIds, "A reference-derived");
+        }
+      }
+      css = upsertCssLayer(css, operation.layerId, operation.css, input.mergeExistingCssLayers);
       continue;
     }
     const range = findCanvasV2SourceNodeRange(html, operation.targetNodeId);
     if (!range) throw new Error(`Patch target does not exist in the committed source: ${operation.targetNodeId}.`);
+    const targetOpeningTag = html.slice(range.start, range.openEnd);
+    const workspaceMetadataTarget = range.tagName === "template"
+      && /\bdata-canvas-v2-workspace-root\s*=\s*["']true["']/i.test(targetOpeningTag);
+    if (input.workingContext?.scope === "selection") {
+      if (input.workingContext.selectionPolicy === "reference") {
+        if ((operation.op !== "insert-before" && operation.op !== "insert-after") || !referenceNodeIds.has(operation.targetNodeId)) {
+          throw new Error(`A reference-scoped turn may only insert new identified work immediately beside an exact selected reference; existing node ${operation.targetNodeId} is immutable.`);
+        }
+      }
+      if (input.workingContext.selectionPolicy === "modify" && !editableNodeIds.has(operation.targetNodeId)) {
+        throw new Error(`Selection-scoped edit cannot mutate unselected node ${operation.targetNodeId}. Target only the exact editable selection.`);
+      }
+    }
     if (protectedLaneIds.has(operation.targetNodeId) && (operation.op === "replace-node" || operation.op === "remove-node" || operation.op === "append-html")) {
       throw new Error(`Canonical evidence lane is immutable; insert analysis before or after it instead: ${operation.targetNodeId}.`);
     }
     if (operation.op === "replace-node" || operation.op === "remove-node") {
+      if (workspaceMetadataTarget) throw new Error("Canvas workspace metadata is immutable. Insert new identified objects beside it instead.");
       const protectedDescendant = Array.from(protectedUserNodeIds).find((nodeId) => {
         const protectedRange = findCanvasV2SourceNodeRange(html, nodeId);
         return protectedRange && protectedRange.start >= range.start && protectedRange.end <= range.end;
@@ -302,15 +521,26 @@ export function applyCanvasV2SourcePatch(input: {
       : "";
     if (operation.op === "insert-before") html = `${html.slice(0, range.start)}${fragment}${html.slice(range.start)}`;
     else if (operation.op === "insert-after") html = `${html.slice(0, range.end)}${fragment}${html.slice(range.end)}`;
+    // The canvas root is inert metadata, not a hidden DOM container. Treat the
+    // model's natural "append to canvas-root" operation as a body-level append
+    // after every existing island. Inserting directly after the template put
+    // every later chapter before the durable title and made CSS repairs chase
+    // an impossible narrative-order failure.
+    else if (operation.op === "append-html" && workspaceMetadataTarget) html = `${html}${fragment}`;
     else if (operation.op === "append-html") html = `${html.slice(0, range.closeStart)}${fragment}${html.slice(range.closeStart)}`;
     else if (operation.op === "replace-node") html = `${html.slice(0, range.start)}${fragment}${html.slice(range.end)}`;
     else html = `${html.slice(0, range.start)}${html.slice(range.end)}`;
   }
+  if (input.mergeExistingCssLayers) assertMergedCssLayersPreserveExistingSource(input.previous.css, css);
   if (protectedLaneIds.size) css = enforceCanonicalEvidenceGeometry(css);
   const normalized = normalizeCanvasV2ModelSource({ document: { html, css }, previous: input.previous, evidence: input.evidence });
-  const document = assertCanvasV2ArtifactDocument(normalizeCanvasV2SceneObjectIdentities({
-    ...normalized,
-    html: enforceDesignIslandTopology(normalized.html),
+  const document = assertCanvasV2ArtifactDocument(reconcileCanvasV2ObjectAuthorship({
+    previous: input.previous,
+    next: normalizeCanvasV2SceneObjectIdentities({
+      ...normalized,
+      html: enforceDesignIslandTopology(normalized.html),
+    }),
+    origin: "northstar",
   }));
   const evidenceFailures = validateCanvasV2EvidenceBindings(document, input.evidence);
   if (evidenceFailures.length) throw new Error(evidenceFailures.join(" "));

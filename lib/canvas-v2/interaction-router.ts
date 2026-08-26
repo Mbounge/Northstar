@@ -1,4 +1,5 @@
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
+import type { CanvasV2SelectionPolicy } from "@/lib/canvas-v2/working-context";
 
 export const CANVAS_V2_INTERACTION_SCHEMA = "canvas-v2.interaction.v1" as const;
 
@@ -17,6 +18,7 @@ export interface CanvasV2InteractionDecision {
   summary: string;
   answer?: string;
   canvasInstruction?: string;
+  selectionPolicy?: CanvasV2SelectionPolicy;
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
 }
@@ -72,13 +74,24 @@ export function parseCanvasV2InteractionDecision(
   if (!canvasInstruction) throw new Error("Canvas V2 router requires a canvas instruction.");
   if (route === "selection-transform" && selection) {
     const activeSelection = selections?.length ? selections : [selection];
-    canvasInstruction += `\n\nTransform only the selected stable canvas node${activeSelection.length === 1 ? "" : "s"} as one coherent user selection unless the requested result requires a small coherent parent adjustment. Preserve their human-authored geometry unless the request explicitly changes it. Selected objects: ${JSON.stringify(activeSelection)}.`;
+    const selectionPolicy: CanvasV2SelectionPolicy = input.selectionPolicy === "reference" ? "reference" : "modify";
+    canvasInstruction += selectionPolicy === "reference"
+      ? `\n\nUse the selected stable canvas node${activeSelection.length === 1 ? "" : "s"} only as explicit references for the requested new work. Preserve every selected object exactly. Selected objects: ${JSON.stringify(activeSelection)}.`
+      : `\n\nTransform only the selected stable canvas node${activeSelection.length === 1 ? "" : "s"} as one coherent user selection. Preserve every unselected object and preserve selected geometry unless the request explicitly changes it. Selected objects: ${JSON.stringify(activeSelection)}.`;
+    return {
+      schema: CANVAS_V2_INTERACTION_SCHEMA,
+      route,
+      summary,
+      canvasInstruction,
+      selectionPolicy,
+    };
   }
   return {
     schema: CANVAS_V2_INTERACTION_SCHEMA,
     route,
     summary,
     canvasInstruction,
+    selectionPolicy: "none",
     ...(route === "research-design" ? {
       researchTargets: researchTargets(input.researchTargets),
       researchMode: input.researchMode === "evidence" ? "evidence" : "synthesis",

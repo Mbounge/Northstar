@@ -104,8 +104,14 @@ export function validateCanvasV2MultiplayerPlacement(input: {
   const candidateOccupants = occupants(input.candidate);
   const candidateById = new Map(candidateOccupants.map((occupant) => [occupant.nodeId, occupant]));
   const failures: string[] = [];
+  const explicitlyEditableUserNodeIds = new Set(input.transaction.targeting?.selectionPolicy === "modify"
+    ? input.transaction.targeting.editableNodeIds
+    : []);
+  const immutableReferenceNodeIds = new Set(input.transaction.targeting?.selectionPolicy === "reference"
+    ? input.transaction.targeting.selectedNodeIds
+    : []);
 
-  for (const existing of previousOccupants.filter((occupant) => occupant.owner === "user")) {
+  for (const existing of previousOccupants.filter((occupant) => occupant.owner === "user" && !explicitlyEditableUserNodeIds.has(occupant.nodeId))) {
     const rendered = candidateById.get(existing.nodeId);
     if (!rendered) {
       failures.push(`Human-owned canvas object ${existing.nodeId} is no longer visibly rendered. Preserve it as a multiplayer participant and compose around its world-space bounds.`);
@@ -113,6 +119,17 @@ export function validateCanvasV2MultiplayerPlacement(input: {
     }
     if (geometryChanged(existing.bounds, rendered.bounds)) {
       failures.push(`Human-owned canvas object ${existing.nodeId} changed rendered geometry during AI authorship. Its position and size are immutable placement obstacles; restore them and choose open territory elsewhere.`);
+    }
+  }
+
+  for (const existing of previousOccupants.filter((occupant) => immutableReferenceNodeIds.has(occupant.nodeId))) {
+    const rendered = candidateById.get(existing.nodeId);
+    if (!rendered) {
+      failures.push(`Selected reference ${existing.nodeId} is no longer visibly rendered. It is an immutable anchor for this turn.`);
+      continue;
+    }
+    if (geometryChanged(existing.bounds, rendered.bounds)) {
+      failures.push(`Selected reference ${existing.nodeId} changed rendered geometry. Preserve its exact position and size and place derived work around it.`);
     }
   }
 

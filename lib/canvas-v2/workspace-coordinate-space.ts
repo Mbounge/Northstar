@@ -1,8 +1,16 @@
 export const CANVAS_V2_WORKSPACE_SCHEMA = "canvas-v2.workspace.v1" as const;
 
-const CANVAS_V2_WORKSPACE_WIDTH = 12_000;
-const CANVAS_V2_AI_AUTHORING_ORIGIN_X = 1_920;
-const CANVAS_V2_AI_AUTHORING_INSET = 1_200;
+// Figma-class whiteboards expose a very large, centered coordinate plane even
+// though their internal numeric space is necessarily finite. 2^17 keeps the
+// browser layout surface comfortably below Chromium's CSS limits while giving
+// Northstar the same approximately -65.5k..+65.5k practical range.
+const CANVAS_V2_WORKSPACE_EXTENT = 131_072;
+// Composition scale is intentionally independent from world scale. Expanding
+// the navigable plane must never stretch typography or percentage-based grids.
+const CANVAS_V2_AI_AUTHORING_WIDTH = 8_880;
+const CANVAS_V2_AI_AUTHORING_HEIGHT = 8_000;
+const CANVAS_V2_AI_AUTHORING_ORIGIN_X = (CANVAS_V2_WORKSPACE_EXTENT - CANVAS_V2_AI_AUTHORING_WIDTH) / 2;
+const CANVAS_V2_AI_AUTHORING_ORIGIN_Y = (CANVAS_V2_WORKSPACE_EXTENT - CANVAS_V2_AI_AUTHORING_HEIGHT) / 2;
 
 export interface CanvasV2WorkspacePoint {
   x: number;
@@ -30,37 +38,31 @@ export interface CanvasV2WorkspaceInsets {
 export type CanvasV2ResizeHandle = "north" | "north-east" | "east" | "south-east" | "south" | "south-west" | "west" | "north-west";
 
 /**
- * Patch 8 establishes one explicit, finite board. The viewport is only a
- * camera over these coordinates; it is not another canvas and it never owns
- * artifact geometry.
+ * One large world-space canvas. The viewport is only a camera over these
+ * coordinates; it is not another canvas and it never owns artifact geometry.
+ * The distant implementation bounds are a numeric safety rail, not an
+ * artboard users should encounter during ordinary work.
  */
 export const CANVAS_V2_WORKSPACE = Object.freeze({
   schema: CANVAS_V2_WORKSPACE_SCHEMA,
-  width: CANVAS_V2_WORKSPACE_WIDTH,
-  height: 8_000,
+  width: CANVAS_V2_WORKSPACE_EXTENT,
+  height: CANVAS_V2_WORKSPACE_EXTENT,
   // The floating chat occupies the opening screen territory at the default
   // working zoom. AI-authored material therefore begins at one permanent,
-  // asymmetric world-space origin rather than borrowing a temporary camera
-  // offset. At 24%, 1,920 world pixels become 460.8 screen pixels: enough to
-  // clear the 390px chat panel and its breathing room even when the user pans
-  // the camera all the way to the finite canvas edge.
+  // viewport-relative anchor. These centered values are only the deterministic
+  // fallback used when no measured camera context is available.
   aiAuthoringOriginX: CANVAS_V2_AI_AUTHORING_ORIGIN_X,
-  aiAuthoringInset: CANVAS_V2_AI_AUTHORING_INSET,
-  // This is the only legal full-width AI composition strip. Keeping the
-  // width beside its origin prevents the impossible former contract where a
-  // 9,600px title beginning at x=1,920 could not also retain the 1,200px
-  // right perimeter on a 12,000px board.
-  aiAuthoringWidth: CANVAS_V2_WORKSPACE_WIDTH
-    - CANVAS_V2_AI_AUTHORING_ORIGIN_X
-    - CANVAS_V2_AI_AUTHORING_INSET,
+  aiAuthoringOriginY: CANVAS_V2_AI_AUTHORING_ORIGIN_Y,
+  aiAuthoringWidth: CANVAS_V2_AI_AUTHORING_WIDTH,
+  aiAuthoringHeight: CANVAS_V2_AI_AUTHORING_HEIGHT,
   // Islands retain a compact internal editorial margin inside the authored
   // document. This is intentionally distinct from the canvas perimeter.
   documentMargin: 192,
   grid: 24,
   minScale: 0.04,
   maxScale: 2.5,
-  // The finite canvas has an honest edge. The camera may align that edge with
-  // the viewport, but it never travels into a synthetic outer workspace.
+  // The distant numeric edge remains honest; ordinary navigation has over a
+  // hundred thousand world units in every direction around the opening view.
   cameraOverscroll: 0,
 });
 
@@ -124,6 +126,28 @@ export function clampCanvasV2WorkspaceScale(value: number): number {
   return clamp(finite(value, 1), CANVAS_V2_WORKSPACE.minScale, CANVAS_V2_WORKSPACE.maxScale);
 }
 
+/**
+ * WheelEvent deltas are pixels on trackpads, lines on many mice, and pages on
+ * a few accessibility devices. Normalize them before camera math so the same
+ * physical gesture does not become unusably fast on one input class.
+ */
+export function canvasV2NormalizedWheelDelta(delta: number, deltaMode = 0, pageSize = 800): number {
+  const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? Math.max(1, finite(pageSize, 800)) : 1;
+  return finite(delta) * unit;
+}
+
+/** A light pan gain keeps precision while matching native macOS trackpad pace. */
+export function canvasV2TrackpadPanDelta(normalizedDelta: number): number {
+  return finite(normalizedDelta) * 1.2;
+}
+
+/** Pointer-anchored pinch zoom uses a responsive continuous curve. */
+export function canvasV2TrackpadZoomScale(currentScale: number, normalizedDeltaY: number): number {
+  return clampCanvasV2WorkspaceScale(
+    clampCanvasV2WorkspaceScale(currentScale) * Math.exp(-finite(normalizedDeltaY) * 0.003),
+  );
+}
+
 export function canvasV2WorkspaceToScreen(
   point: CanvasV2WorkspacePoint,
   viewport: CanvasV2WorkspaceViewport,
@@ -163,6 +187,66 @@ export function canvasV2VisibleWorkspaceBounds(
   };
 }
 
+export interface CanvasV2NavigationAtmosphere {
+  primaryX: number;
+  primaryY: number;
+  secondaryX: number;
+  secondaryY: number;
+  angle: number;
+}
+
+/**
+ * Resolve the next North Star authoring anchor from the visible, unobscured
+ * world-space territory. This is a read of camera context, never a camera
+ * mutation: accepting an AI revision cannot pan or zoom the person.
+ */
+export function canvasV2ViewportPlacementAnchor(
+  viewport: CanvasV2WorkspaceViewport,
+  camera: CanvasV2WorkspaceSize,
+  insets: CanvasV2WorkspaceInsets = CANVAS_V2_EMPTY_INSETS,
+  screenPadding = 48,
+): CanvasV2WorkspacePoint {
+  const visible = canvasV2VisibleWorkspaceBounds(viewport, camera, insets);
+  const worldPadding = Math.max(0, finite(screenPadding)) / clampCanvasV2WorkspaceScale(viewport.scale);
+  return {
+    x: clamp(visible.x + worldPadding, CANVAS_V2_WORKSPACE.documentMargin, CANVAS_V2_WORKSPACE.width - CANVAS_V2_WORKSPACE.documentMargin),
+    y: clamp(visible.y + worldPadding, CANVAS_V2_WORKSPACE.documentMargin, CANVAS_V2_WORKSPACE.height - CANVAS_V2_WORKSPACE.documentMargin),
+  };
+}
+
+/**
+ * A continuous host-owned atmosphere. Its focal light drifts with the world
+ * position beneath the camera, providing directional navigation feedback
+ * without tiles, dots, finite paint rectangles, or a second canvas layer.
+ */
+export function canvasV2NavigationAtmosphere(
+  viewport: CanvasV2WorkspaceViewport,
+  camera: CanvasV2WorkspaceSize,
+  _insets: CanvasV2WorkspaceInsets = CANVAS_V2_EMPTY_INSETS,
+): CanvasV2NavigationAtmosphere {
+  const scale = clampCanvasV2WorkspaceScale(viewport.scale);
+  // Scenery belongs to the complete viewport, not the content-safe area used
+  // for AI placement. Normalize around the opening world center rather than
+  // across the full 131k plane; otherwise ordinary navigation would move the
+  // velvet by imperceptible fractions of a percent.
+  const availableWidth = Math.max(1, camera.width);
+  const availableHeight = Math.max(1, camera.height);
+  const worldCenterX = (availableWidth / 2 - viewport.x) / scale;
+  const worldCenterY = (availableHeight / 2 - viewport.y) / scale;
+  const localX = Math.tanh((worldCenterX - CANVAS_V2_WORKSPACE.width / 2) / 4_000);
+  const localY = Math.tanh((worldCenterY - CANVAS_V2_WORKSPACE.height / 2) / 3_200);
+  const metric = (value: number) => Math.round(value * 100) / 100;
+  return {
+    primaryX: metric(47 + localX * 41),
+    primaryY: metric(7 + localY * 12),
+    // A quieter counter-field keeps the scenery dimensional without competing
+    // with the moving velvet focal light.
+    secondaryX: metric(83 - localX * 11),
+    secondaryY: metric(96 - localY * 6),
+    angle: metric(128 + (localX - localY) * 6),
+  };
+}
+
 export function constrainCanvasV2WorkspaceViewport(
   viewport: CanvasV2WorkspaceViewport,
   camera: CanvasV2WorkspaceSize,
@@ -184,6 +268,26 @@ export function constrainCanvasV2WorkspaceViewport(
     ? top + (availableHeight - scaledHeight) / 2
     : clamp(finite(viewport.y), bottom - scaledHeight, top);
   return { x, y, scale };
+}
+
+/**
+ * A new board opens with its world origin under the viewport midpoint.
+ * This is camera bootstrap only: subsequent navigation and AI commits retain
+ * the person's exact working view.
+ */
+export function centeredCanvasV2WorkspaceViewport(
+  camera: CanvasV2WorkspaceSize,
+  scale = 0.24,
+  insets: CanvasV2WorkspaceInsets = CANVAS_V2_EMPTY_INSETS,
+): CanvasV2WorkspaceViewport {
+  const normalizedScale = clampCanvasV2WorkspaceScale(scale);
+  const availableWidth = Math.max(1, camera.width - insets.left - insets.right);
+  const availableHeight = Math.max(1, camera.height - insets.top - insets.bottom);
+  return constrainCanvasV2WorkspaceViewport({
+    x: insets.left + (availableWidth - CANVAS_V2_WORKSPACE.width * normalizedScale) / 2,
+    y: insets.top + (availableHeight - CANVAS_V2_WORKSPACE.height * normalizedScale) / 2,
+    scale: normalizedScale,
+  }, camera, insets);
 }
 
 export function zoomCanvasV2WorkspaceAtPoint(

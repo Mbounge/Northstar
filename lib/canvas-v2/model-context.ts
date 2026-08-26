@@ -5,11 +5,20 @@ import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { buildCanvasV2SceneObjectInventory } from "@/lib/canvas-v2/scene-transaction";
 import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
+import type { CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 
 const MAX_SOURCE_OUTLINE = 42_000;
 const MAX_CSS_CONTEXT = 32_000;
 const MAX_SPATIAL_NODES = 90;
 const MAX_USER_EDITS = 40;
+
+function compositionRelativeShares(bounds: { width: number; height: number }) {
+  return {
+    canvasWidthShare: Number((bounds.width / CANVAS_V2_WORKSPACE.aiAuthoringWidth).toFixed(3)),
+    canvasHeightShare: Number((bounds.height / CANVAS_V2_WORKSPACE.aiAuthoringHeight).toFixed(3)),
+    canvasAreaShare: Number(((bounds.width * bounds.height) / (CANVAS_V2_WORKSPACE.aiAuthoringWidth * CANVAS_V2_WORKSPACE.aiAuthoringHeight)).toFixed(3)),
+  };
+}
 
 function compilerOwnedRailFurniture(nodeId: string | undefined): boolean {
   return Boolean(nodeId && /-segment-[a-z0-9-]+-label$/i.test(nodeId));
@@ -106,16 +115,36 @@ function compactCss(css: string): string {
   return `${css.slice(0, Math.round(MAX_CSS_CONTEXT * 0.55))}\n/* bounded CSS context: middle omitted; upsert a named override layer */\n${css.slice(-Math.round(MAX_CSS_CONTEXT * 0.45))}`;
 }
 
-export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevision, observation: CanvasV2RenderObservation) {
+export function buildCanvasV2BoundedModelContext(
+  revision: CanvasV2ArtifactRevision,
+  observation: CanvasV2RenderObservation,
+  workingContext?: CanvasV2WorkingContext,
+) {
   const manifests = readCanvasV2CanonicalFlowManifests(revision.document);
   const canonicalNodeIds = new Set(manifests.flatMap((flow) => flow.items.map((item) => item.nodeId)));
   const evidenceById = new Map(revision.evidence.map((asset) => [asset.id, asset]));
   const copyHandleByEvidenceId = new Map(buildCanvasV2EvidenceCopyHandles(revision.document).map((item) => [item.evidenceId, item.handle]));
+  const clampAuthoringOrigin = (value: number | undefined, fallback: number, extent: number, footprint: number) => (
+    Math.min(
+      extent - CANVAS_V2_WORKSPACE.documentMargin - footprint,
+      Math.max(CANVAS_V2_WORKSPACE.documentMargin, Number.isFinite(value) ? value! : fallback),
+    )
+  );
   const aiAuthoringBounds = {
-    x: CANVAS_V2_WORKSPACE.aiAuthoringOriginX,
-    y: CANVAS_V2_WORKSPACE.aiAuthoringInset,
+    x: clampAuthoringOrigin(
+      workingContext?.visibleBounds.x,
+      CANVAS_V2_WORKSPACE.aiAuthoringOriginX,
+      CANVAS_V2_WORKSPACE.width,
+      CANVAS_V2_WORKSPACE.aiAuthoringWidth,
+    ),
+    y: clampAuthoringOrigin(
+      workingContext?.visibleBounds.y,
+      CANVAS_V2_WORKSPACE.aiAuthoringOriginY,
+      CANVAS_V2_WORKSPACE.height,
+      CANVAS_V2_WORKSPACE.aiAuthoringHeight,
+    ),
     width: CANVAS_V2_WORKSPACE.aiAuthoringWidth,
-    height: CANVAS_V2_WORKSPACE.height - CANVAS_V2_WORKSPACE.aiAuthoringInset * 2,
+    height: CANVAS_V2_WORKSPACE.aiAuthoringHeight,
   };
   const placementObstacles = observation.spatial.authoredSurface?.placementOccupants?.map((occupant) => occupant.bounds) ?? [];
   const recommendedOpenTerritories = [
@@ -131,14 +160,36 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
     });
     return placement ? [{ ...footprint, ...placement }] : [];
   });
+  // The navigation world is intentionally enormous, but authored visual scale
+  // is still judged against the compact local composition surface. Feeding the
+  // director world-relative shares made a healthy 17–21% fit-view publication
+  // look like zero-area microtext and triggered destructive whole-board
+  // enlargement passes. Absolute bounds remain world-space placement truth;
+  // only the visual occupancy ratios use the authoring surface denominator.
+  const modelDesignRegions = (observation.spatial.designRegions ?? []).map((region) => ({
+    ...region,
+    ...compositionRelativeShares(region.bounds),
+  }));
+  const modelAuthoredAreaShare = Number((modelDesignRegions.reduce(
+    (sum, region) => sum + region.bounds.width * region.bounds.height,
+    0,
+  ) / (CANVAS_V2_WORKSPACE.aiAuthoringWidth * CANVAS_V2_WORKSPACE.aiAuthoringHeight)).toFixed(3));
   return {
+    collaboration: workingContext ? {
+      ...workingContext,
+      contract: workingContext.scope === "selection"
+        ? workingContext.selectionPolicy === "modify"
+          ? "The selectedNodeIds are the only existing objects authorized for direct mutation. Preserve all unselected, locked, hidden, and protected objects exactly. A selected object is not permission to rebuild its island or surrounding board."
+          : "The selectedNodeIds are preserved reference objects. Derive or place new work from them without changing their content, pixels, styling, geometry, visibility, lock state, identity, or relationships."
+        : "No object selection authorizes mutation. Read the visibleBounds and nearbyNodeIds as the person's current working territory, place new work near that viewport without moving existing objects, and preserve the user's camera.",
+    } : undefined,
     workspace: {
       schema: CANVAS_V2_WORKSPACE.schema,
       bounds: { x: 0, y: 0, width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height },
       safeMargin: CANVAS_V2_WORKSPACE.documentMargin,
       aiAuthoringBounds,
       recommendedOpenTerritories,
-      contract: "The board is one finite world-space coordinate system. The AI authoring bounds are honest object geometry, not a camera illusion. Inspect placementOccupants before every turn; select genuinely open territory inside the authorship bounds and never overlap, cover, move, resize, or restyle an existing user, research, or unchanged Northstar object. recommendedOpenTerritories are collision-free starting footprints, not mandatory templates: choose the one suited to the composition or derive another verified free footprint from the complete occupant map. Preserve user-authored geometry and content unless the user explicitly asks you to change it.",
+      contract: "The board is one large centered world-space coordinate system, not an artboard or slide. workspace.bounds are host navigation safety rails only: NEVER use them to choose CSS widths, heights, font sizes, viewport units, percentages, or spacing. aiAuthoringBounds are the complete local measuring surface for this authored composition; keep the same compact editorial scale as an 8880 × 8000 composition and let the compiler translate it near the person. All canvasWidthShare, canvasHeightShare, canvasAreaShare, and authoredAreaShare values are deliberately normalized to aiAuthoringBounds—not the distant 131072-unit navigation world—so never enlarge a healthy composition merely because its absolute world coordinates are large. Inspect placementOccupants before every turn; select genuinely open territory near the person's visible working area and never overlap, cover, move, resize, or restyle an existing user, research, or unchanged Northstar object. recommendedOpenTerritories are collision-free starting footprints, not mandatory templates: choose the one suited to the composition or derive another verified free footprint from the complete occupant map. Preserve user-authored geometry and content unless the user explicitly asks you to change it.",
       userEdits: canvasV2UserEditLedger(revision.document.html),
       objectGraph: buildCanvasV2SceneObjectInventory(revision.document).slice(0, 220),
       lastSceneTransaction: revision.sceneTransaction ? {
@@ -196,9 +247,7 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
             bounds: item.bounds,
             canonicalPeerHeight: item.canonicalPeerHeight,
             scaleVsCanonicalHeight: item.scaleVsCanonicalHeight,
-            canvasWidthShare: item.canvasWidthShare,
-            canvasHeightShare: item.canvasHeightShare,
-            canvasAreaShare: item.canvasAreaShare,
+            ...compositionRelativeShares(item.bounds),
             designRegionNodeId: item.designRegionNodeId,
             designRegionWidthShare: item.designRegionWidthShare,
             designRegionHeightShare: item.designRegionHeightShare,
@@ -217,7 +266,8 @@ export function buildCanvasV2BoundedModelContext(revision: CanvasV2ArtifactRevis
             readingOrder: [],
             zones: [],
           }),
-          designRegions: (observation.spatial.designRegions ?? []).slice(0, 32),
+          authoredAreaShare: modelAuthoredAreaShare,
+          designRegions: modelDesignRegions.slice(0, 32),
         },
         canonicalEvidenceIntegrity: manifests.map((flow) => {
           const screens = flow.items.filter((item) => item.flowIndex !== undefined);

@@ -12,6 +12,7 @@
     "test:canvas-v2": "node --import tsx --test tests/canvas-v2*.test.ts",
     "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=0 playwright test",
     "test:e2e:canvas-v2": "playwright test e2e/canvas-v2-*.spec.ts",
+    "evaluate:canvas-v2:compositions": "tsx scripts/run-canvas-v2-composition-evaluation.ts",
     "check:canvas-v2-cutover": "node scripts/verify-canvas-v2-cutover-readiness.mjs",
     "check:canvas-v2-production-proof": "node scripts/verify-canvas-v2-production-proof.mjs",
     "check": "npm run typecheck && npm run test && npm run lint && npm run test:e2e",

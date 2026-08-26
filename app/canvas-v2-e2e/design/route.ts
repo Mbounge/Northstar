@@ -14,12 +14,29 @@ import {
   buildCanvasV2ResearchCatalogIndex,
   canvasV2ResearchStatusForDecision,
 } from "@/lib/canvas-v2/research-director";
+import { findCanvasV2SourceNodeRange } from "@/lib/canvas-v2/source-patch";
+import { parseCanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 
 function appendCanvasObject(html: string, object: string): string {
   const mainClose = html.lastIndexOf("</main>");
   return mainClose >= 0
     ? `${html.slice(0, mainClose)}${object}${html.slice(mainClose)}`
     : `${html}${object}`;
+}
+
+function replaceCanvasObjectText(html: string, nodeId: string, text: string): string {
+  const range = findCanvasV2SourceNodeRange(html, nodeId);
+  if (!range || range.openEnd === range.closeStart) throw new Error(`Deterministic selection target does not exist or cannot contain text: ${nodeId}.`);
+  const escaped = text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return `${html.slice(0, range.openEnd)}${escaped}${html.slice(range.closeStart)}`;
+}
+
+function markCanvasObject(html: string, nodeId: string, attribute: string): string {
+  const range = findCanvasV2SourceNodeRange(html, nodeId);
+  if (!range) throw new Error(`Deterministic selection target does not exist: ${nodeId}.`);
+  const opening = html.slice(range.start, range.openEnd);
+  if (opening.includes(attribute)) return html;
+  return `${html.slice(0, range.openEnd - 1)} ${attribute}>${html.slice(range.openEnd)}`;
 }
 
 function insertBeforeGroundedEvidence(html: string, object: string): string {
@@ -183,7 +200,7 @@ const BASE_CSS = `
 
 export async function POST(request: NextRequest) {
   if (process.env.NODE_ENV === "production" || process.env.NORTHSTAR_E2E !== "1") return NextResponse.json({ error: "Not found" }, { status: 404 });
-  let body: { revision?: CanvasV2ArtifactRevision; observation?: CanvasV2RenderObservation; instruction?: string; run?: { researchTargets?: string[] } };
+  let body: { revision?: CanvasV2ArtifactRevision; observation?: CanvasV2RenderObservation; instruction?: string; run?: { researchTargets?: string[]; workingContext?: unknown } };
   try {
     body = await request.json() as typeof body;
   } catch {
@@ -198,6 +215,198 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing legible canonical rail detail observations" }, { status: 400 });
   }
   const attempt = Number(request.headers.get("x-canvas-v2-attempt")) || 1;
+  const workingContext = parseCanvasV2WorkingContext(body.run?.workingContext);
+
+  if (body.instruction?.includes("Continue the workshop from my written priority")) {
+    const targetNodeId = workingContext?.editableNodeIds.includes("priority-answer-field") ? "priority-answer-field" : undefined;
+    const targetRange = targetNodeId ? findCanvasV2SourceNodeRange(revision.document.html, targetNodeId) : undefined;
+    const humanText = targetRange ? revision.document.html.slice(targetRange.openEnd, targetRange.closeStart).replace(/<[^>]+>/g, "").trim() : "";
+    if (!targetNodeId || !targetRange || !humanText || !/data-canvas-v2-last-author=["']user["']/.test(revision.document.html.slice(targetRange.start, targetRange.openEnd))) {
+      return NextResponse.json({ error: "The continuation requires the exact human-written priority field.", code: "invalid-request", retryable: false }, { status: 409 });
+    }
+    if (revision.document.html.includes("data-e2e-writable-continuation")) return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "complete",
+        creativeDirection: direction("Continue the workshop from the selected human priority without rewriting it.", []),
+        spatialStrategy: spatial("Preserve the human field and place one supporting Northstar response beside the established workshop.", "stable"),
+        reflection: reflection("The human priority remains intact and the new response turns it into a concrete next move.", "No collaboration requirement remains open.", "Complete after observing preserved mixed authorship."),
+        summary: `Kept your priority—“${humanText}”—intact and added a focused next step for turning it into a testable customer conversation.`,
+      },
+      evidence: revision.evidence,
+    });
+    const continuation = `<aside data-e2e-writable-continuation="true" data-canvas-v2-node-id="priority-continuation" data-canvas-v2-design-region data-canvas-v2-story-role="implication" data-canvas-v2-territory-relation="right" data-canvas-v2-placement-mode="attached" data-canvas-v2-territory-anchor="writable-workshop" data-canvas-v2-target-zone="middle-right"><p data-canvas-v2-node-id="continuation-kicker">Northstar continuation</p><h2 data-canvas-v2-node-id="continuation-title">Make the pain observable before making the solution persuasive.</h2><p data-canvas-v2-node-id="continuation-copy">Use the next conversation to capture the trigger, present workaround, and cost of doing nothing. Keep the answer field as the human-owned decision anchor.</p></aside>`;
+    return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "edit",
+        moveKind: "analysis",
+        creativeDirection: direction("Continue the workshop from the selected human priority without rewriting it.", []),
+        spatialStrategy: spatial("Preserve the human field and place one supporting Northstar response beside the established workshop.", "horizontal"),
+        reflection: reflection("The selected field contains a durable human priority.", "The board needs a bounded next step that responds to that priority.", "Add one adjacent implication while preserving the selected object byte-for-byte."),
+        summary: "Added a focused Northstar continuation beside the preserved human priority.",
+        expectedVisualResult: "The original workshop and human-written field remain unchanged beside one concise next-step island.",
+        document: {
+          html: appendCanvasObject(revision.document.html, continuation),
+          css: `${revision.document.css}\n[data-e2e-writable-continuation]{box-sizing:border-box;width:720px;min-height:360px;padding:52px 58px;border-left:3px solid #d85d3f;background:var(--northstar-surface);color:var(--northstar-ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}[data-e2e-writable-continuation] p{margin:0;font-size:28px;line-height:1.45}[data-e2e-writable-continuation] p:first-child{color:#d85d3f;font-size:28px;font-weight:850;letter-spacing:.12em;text-transform:uppercase}[data-e2e-writable-continuation] h2{margin:28px 0 24px;font:700 48px/1.02 Georgia,serif;letter-spacing:-.04em}`,
+        },
+      },
+      evidence: revision.evidence,
+    });
+  }
+
+  if (body.instruction?.includes("Exercise writable surface closure")) {
+    if (revision.document.html.includes("data-e2e-writable-surface")) return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "complete",
+        creativeDirection: direction("Create a workshop surface whose visible writing areas are genuine native objects.", []),
+        spatialStrategy: spatial("Preserve the compact workshop field and every independently editable object.", "stable"),
+        reflection: reflection("The writing surfaces are visible, selectable, and declared as native writable objects.", "No interaction affordance remains unresolved.", "Complete after observing the editable workshop field."),
+        summary: "Created a focused workshop with three real writing areas for priorities, evidence, and the next decision.",
+      },
+      evidence: revision.evidence,
+    });
+    const workshop = `<section data-e2e-writable-surface="true" data-canvas-v2-node-id="writable-workshop" data-canvas-v2-design-region data-canvas-v2-story-role="title" aria-label="Writable workshop"><p data-canvas-v2-node-id="writable-kicker">Working session · human input</p><h1 data-canvas-v2-node-id="writable-title">Turn the open question into a shared decision.</h1><p data-canvas-v2-node-id="writable-intro">Each quiet block below is a real canvas object. Select it, double-click, and write directly into the composition.</p><article class="e2e-layout-surface" data-canvas-v2-node-id="editable-layout-surface"><p class="e2e-editable-copy">Double-click any word in this sentence and the caret belongs exactly there.</p><div class="e2e-layout-rail"><span>Frame the choice</span><span>Name the evidence</span><span>Record the decision</span></div></article><div class="e2e-writable-grid"><div><p data-canvas-v2-node-id="priority-label">Priority to test</p><div class="e2e-writing-field" data-canvas-v2-node-id="priority-answer-field" data-canvas-v2-writable="true" aria-label="Priority answer field"></div></div><div><p data-canvas-v2-node-id="evidence-label">Evidence we need</p><div class="e2e-writing-field" data-canvas-v2-node-id="evidence-notes-field" data-canvas-v2-writable="true" aria-label="Evidence notes field"></div></div><div><p data-canvas-v2-node-id="decision-label">Next decision</p><div class="e2e-writing-field" data-canvas-v2-node-id="decision-record-field" data-canvas-v2-writable="true" aria-label="Decision record field"></div></div></div><p data-canvas-v2-node-id="writable-footer">The structure stays Northstar-authored; what you write becomes durable human truth.</p></section>`;
+    return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "edit",
+        moveKind: "composition",
+        creativeDirection: direction("Create a workshop surface whose visible writing areas are genuine native objects.", []),
+        spatialStrategy: spatial("Place one compact three-part working field near the active viewport.", "horizontal"),
+        reflection: reflection("The canvas does not yet contain a human-input workshop.", "The user needs visible writing areas that behave like real objects.", "Author the complete workshop with explicit native writable semantics."),
+        summary: "Created a focused workshop with directly editable writing areas.",
+        expectedVisualResult: "A polished workshop appears with three independently selectable blank writing fields.",
+        document: {
+          html: appendCanvasObject(revision.document.html, workshop),
+          css: `${revision.document.css}\n[data-e2e-writable-surface]{box-sizing:border-box;width:1420px;min-height:850px;padding:64px 72px;border-top:3px solid #6b4dff;background:var(--northstar-surface);color:var(--northstar-ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}[data-e2e-writable-surface]>p{margin:0}[data-e2e-writable-surface]>p:first-child{color:#6b4dff;font-size:28px;font-weight:850;letter-spacing:.13em;text-transform:uppercase}[data-e2e-writable-surface] h1{max-width:960px;margin:22px 0 24px;font:700 64px/.98 Georgia,serif;letter-spacing:-.045em}[data-e2e-writable-surface]>p:nth-of-type(2){max-width:900px;color:var(--northstar-muted);font-size:28px;line-height:1.45}.e2e-layout-surface{box-sizing:border-box;display:grid;grid-template-rows:auto 1fr;row-gap:24px;width:100%;min-height:180px;margin-top:42px;padding:28px 32px;border-left:3px solid #6b4dff;background:rgba(107,77,255,.045);font-size:24px}.e2e-layout-surface .e2e-editable-copy{margin:0;color:var(--northstar-ink);font:650 30px/1.25 Georgia,serif}.e2e-layout-surface .e2e-layout-rail{display:grid;grid-template-columns:repeat(3,1fr);column-gap:28px;margin-top:12px}.e2e-layout-surface .e2e-layout-rail span{color:var(--northstar-muted);font-size:24px;line-height:1.3}.e2e-writable-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:56px}.e2e-writable-grid>div>p{margin:0 0 14px;color:#6b4dff;font-size:28px;font-weight:820;letter-spacing:.08em;text-transform:uppercase}.e2e-writing-field{box-sizing:border-box;width:100%;height:170px;padding:22px 24px;border:1px solid var(--northstar-line);border-radius:10px;background:var(--northstar-surface-subtle);color:var(--northstar-ink);font-size:28px;line-height:1.42;text-align:left}.e2e-writing-field:focus{border-color:#6b4dff;box-shadow:0 0 0 3px rgba(107,77,255,.12)}[data-e2e-writable-surface]>p:last-child{margin-top:36px;color:var(--northstar-muted);font-size:28px;font-style:italic}`,
+        },
+      },
+      evidence: revision.evidence,
+    });
+  }
+
+  if (body.instruction?.includes("Exercise collaboration continuation closure")) {
+    const targetNodeId = workingContext?.editableNodeIds.length === 1 ? workingContext.editableNodeIds[0] : undefined;
+    if (workingContext?.scope !== "selection" || workingContext.selectionPolicy !== "modify" || !targetNodeId) {
+      return NextResponse.json({ error: "Missing exact editable collaboration target", code: "invalid-request", retryable: false }, { status: 409 });
+    }
+    const targetRange = findCanvasV2SourceNodeRange(revision.document.html, targetNodeId);
+    if (!targetRange) return NextResponse.json({ error: "Collaboration target no longer exists", code: "invalid-request", retryable: false }, { status: 409 });
+    const selectedText = revision.document.html.slice(targetRange.openEnd, targetRange.closeStart).replace(/<[^>]+>/g, "").trim();
+
+    if (revision.document.html.includes('data-e2e-collaboration-final="true"')) return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "complete",
+        creativeDirection: direction("Continue from the exact human-modified selection without rebuilding the board.", []),
+        spatialStrategy: spatial("Preserve geometry, identity, camera ownership, and every unselected object.", "stable"),
+        reflection: reflection("The stable selected object now contains the continuation written from the human revision.", "No collaboration repair remains.", "Complete after observing the verified mixed-authorship result."),
+        summary: "Northstar continued from the exact human-modified canvas and preserved its authorship history.",
+      },
+      evidence: revision.evidence,
+    });
+
+    if (!revision.document.html.includes('data-e2e-collaboration-partial="true"')) {
+      const marked = markCanvasObject(revision.document.html, targetNodeId, 'data-e2e-collaboration-partial="true"');
+      return NextResponse.json({
+        decision: {
+          schema: CANVAS_V2_DECISION_SCHEMA,
+          decision: "edit",
+          moveKind: "refinement",
+          creativeDirection: direction("Begin one bounded selected-text collaboration turn, then pause safely.", ["Continue from any human revision made during the pause"]),
+          spatialStrategy: spatial("Keep the selected object's stable identity and geometry unchanged.", "stable"),
+          reflection: reflection("The selected human object is the only authorized target.", "The turn must pause after one verified partial edit.", "Write the partial text without touching the rest of the board."),
+          summary: "Created a verified partial draft on the selected human object.",
+          expectedVisualResult: "Only the selected text reads “Northstar partial draft.” and its stable object identity remains unchanged.",
+          document: {
+            html: replaceCanvasObjectText(marked, targetNodeId, "Northstar partial draft."),
+            css: revision.document.css,
+          },
+        },
+        evidence: revision.evidence,
+      });
+    }
+
+    if (selectedText === "Northstar partial draft.") return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "complete",
+        creativeDirection: direction("Complete the bounded selected-text draft and leave it ready for human revision.", []),
+        spatialStrategy: spatial("Preserve the selected object's stable identity, geometry, and surrounding canvas.", "stable"),
+        reflection: reflection("The selected human object now contains the requested partial draft.", "The object is ready for a human revision in the normal conversation flow.", "Complete without exposing a synthetic provider failure."),
+        summary: "Created a bounded draft on the selected object and left the rest of the canvas unchanged.",
+      },
+      evidence: revision.evidence,
+    });
+
+    const targetContext = workingContext.objects.find((object) => object.nodeId === targetNodeId);
+    if (selectedText !== "Human continuation edit."
+      || targetContext?.textPreview !== "Human continuation edit."
+      || targetContext.lastAuthor !== "user"
+      || targetContext.editVersion < 3) {
+      return NextResponse.json({ error: "Continuation did not receive the latest human-authored scene context", code: "invalid-request", retryable: false }, { status: 409 });
+    }
+    const marked = markCanvasObject(revision.document.html, targetNodeId, 'data-e2e-collaboration-final="true"');
+    return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "edit",
+        moveKind: "refinement",
+        creativeDirection: direction("Continue from the exact human-modified selection without rebuilding the board.", []),
+        spatialStrategy: spatial("Keep the selected object's stable identity and geometry unchanged.", "stable"),
+        reflection: reflection("The continuation context contains the user's latest text, authorship, and edit version.", "One bounded continuation remains.", "Revise only that exact human-modified object."),
+        summary: "Continued from the latest human revision on the selected object.",
+        expectedVisualResult: "The same selected object reads “Northstar continued from the human revision.” and every surrounding object remains unchanged.",
+        document: {
+          html: replaceCanvasObjectText(marked, targetNodeId, "Northstar continued from the human revision."),
+          css: revision.document.css,
+        },
+      },
+      evidence: revision.evidence,
+    });
+  }
+
+  if (body.instruction?.includes("Rewrite this selected heading to Evidence-led decision.")) {
+    const targetNodeId = workingContext?.editableNodeIds.length === 1 ? workingContext.editableNodeIds[0] : undefined;
+    if (workingContext?.scope !== "selection" || workingContext.selectionPolicy !== "modify" || !targetNodeId) {
+      return NextResponse.json({ error: "Missing exact editable selection context", code: "invalid-request", retryable: false }, { status: 409 });
+    }
+    const targetRange = findCanvasV2SourceNodeRange(revision.document.html, targetNodeId);
+    if (!targetRange) return NextResponse.json({ error: "Selected target no longer exists", code: "invalid-request", retryable: false }, { status: 409 });
+    const selectedText = revision.document.html.slice(targetRange.openEnd, targetRange.closeStart).replace(/<[^>]+>/g, "").trim();
+    if (selectedText !== "Evidence-led decision.") {
+      return NextResponse.json({
+        decision: {
+          schema: CANVAS_V2_DECISION_SCHEMA,
+          decision: "edit",
+          moveKind: "refinement",
+          creativeDirection: direction("Apply the requested selected-heading rewrite without touching the surrounding composition.", []),
+          spatialStrategy: spatial("Preserve all native geometry and change only the selected heading's text.", "stable"),
+          reflection: reflection("The selected heading is the only authorized target.", "The requested wording must be committed and observed.", "Make one exact stable-node text replacement."),
+          summary: "Rewrote only the selected heading.",
+          expectedVisualResult: "The selected heading reads “Evidence-led decision.” while every unselected object remains unchanged.",
+          document: {
+            html: replaceCanvasObjectText(revision.document.html, targetNodeId, "Evidence-led decision."),
+            css: revision.document.css,
+          },
+        },
+        evidence: revision.evidence,
+      });
+    }
+    return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "complete",
+        creativeDirection: direction("Hold the exact selected-heading revision and preserve the rest of the board.", []),
+        spatialStrategy: spatial("Preserve the verified selected-object result and all surrounding geometry.", "stable"),
+        reflection: reflection("The exact selected heading now carries the requested wording.", "No further selected-object work remains.", "Complete after observing the bounded revision."),
+        summary: "The selected heading was updated without rebuilding or changing the surrounding canvas.",
+      },
+      evidence: revision.evidence,
+    });
+  }
 
   if (body.instruction === "Audit partial research for Awin and Ghost" || body.instruction === "Interrupt Awin and Ghost research") {
     if (body.instruction === "Interrupt Awin and Ghost research") await new Promise((resolve) => setTimeout(resolve, 700));
@@ -368,8 +577,8 @@ export async function POST(request: NextRequest) {
         summary: "Composed a precise causal relationship from signal through evidence and interpretation to decision.",
         expectedVisualResult: "Four editorial stages align on one continuous rail, with one intentional violet overlap emphasizing interpretation.",
         document: {
-          html: `<main class="northstar-canvas e2e-spatial-map" data-e2e-spatial-map="true" data-canvas-v2-node-id="canvas" aria-label="Editorial relationship map"><header data-canvas-v2-node-id="map-header"><p data-canvas-v2-node-id="map-kicker">North Star reasoning model</p><h1 data-canvas-v2-node-id="map-title">From signal to conviction.</h1><p data-canvas-v2-node-id="map-deck">A decision becomes trustworthy when every transformation remains visible.</p></header><section data-canvas-v2-node-id="causal-rail" class="map-rail"><article data-canvas-v2-node-id="stage-signal" class="map-stage"><span data-canvas-v2-node-id="signal-index">01</span><h2 data-canvas-v2-node-id="signal-title">Signal</h2><p data-canvas-v2-node-id="signal-copy">Something changed.</p></article><article data-canvas-v2-node-id="stage-evidence" class="map-stage"><span data-canvas-v2-node-id="evidence-index">02</span><h2 data-canvas-v2-node-id="evidence-title">Evidence</h2><p data-canvas-v2-node-id="evidence-copy">The change becomes observable.</p></article><article data-canvas-v2-node-id="stage-interpretation" class="map-stage map-stage--focus"><div data-canvas-v2-node-id="evidence-lens" class="map-lens" aria-label="Intentional evidence and interpretation overlap"></div><span data-canvas-v2-node-id="interpretation-index">03</span><h2 data-canvas-v2-node-id="interpretation-title">Interpretation</h2><p data-canvas-v2-node-id="interpretation-copy">Evidence acquires meaning in context.</p></article><article data-canvas-v2-node-id="stage-decision" class="map-stage"><span data-canvas-v2-node-id="decision-index">04</span><h2 data-canvas-v2-node-id="decision-title">Decision</h2><p data-canvas-v2-node-id="decision-copy">Conviction becomes action.</p></article></section><footer data-canvas-v2-node-id="map-footer"><p data-canvas-v2-node-id="map-implication">The quality of the decision is limited by the least visible transformation.</p></footer></main>`,
-          css: `.northstar-canvas{--ink:#18171f;--muted:#706e7c;--line:rgba(35,31,55,.20);--violet:#6b4dff;box-sizing:border-box;width:1680px;min-width:1680px;min-height:945px;padding:74px 92px 72px;background:#fefdfb;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.e2e-spatial-map header{display:grid;grid-template-columns:1fr 430px;column-gap:100px;width:1440px}.e2e-spatial-map header>p:first-child{grid-column:1/-1;margin:0 0 18px;color:var(--violet);font-size:10px;font-weight:850;letter-spacing:.18em;text-transform:uppercase}.e2e-spatial-map h1{margin:0;font-size:64px;line-height:.94;letter-spacing:-.06em}.e2e-spatial-map header>p:last-child{align-self:end;margin:0;color:var(--muted);font-size:16px;line-height:1.55}.map-rail{position:relative;display:grid;grid-template-columns:250px 300px 480px 260px;gap:50px;align-items:center;width:1440px;margin-top:145px}.map-rail::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line)}.map-stage{position:relative;z-index:1;min-height:180px;padding:36px 16px 28px 0;background:#fefdfb}.map-stage span{color:#9a97a5;font-size:10px;font-weight:800;letter-spacing:.16em}.map-stage h2{margin:34px 0 10px;font-size:22px;letter-spacing:-.035em}.map-stage p{max-width:240px;margin:0;color:var(--muted);font-size:13px;line-height:1.5}.map-stage--focus{padding-left:84px;background:transparent}.map-stage--focus h2{position:relative;margin-top:23px;font-size:34px}.map-stage--focus span,.map-stage--focus p{position:relative}.map-lens{position:absolute;z-index:-1;left:12px;top:-54px;width:300px;height:300px;border:1px solid rgba(107,77,255,.28);border-radius:50%;background:rgba(107,77,255,.09)}.e2e-spatial-map footer{width:1440px;margin-top:128px;padding-top:24px;border-top:1px solid var(--line)}.e2e-spatial-map footer p{max-width:720px;margin:0;font-size:24px;font-weight:720;line-height:1.25;letter-spacing:-.025em}`,
+          html: `<main class="northstar-canvas e2e-spatial-map" data-e2e-spatial-map="true" data-canvas-v2-node-id="canvas" aria-label="Editorial relationship map"><section class="map-composition" data-canvas-v2-node-id="map-composition" data-canvas-v2-design-region data-canvas-v2-story-role="title" data-canvas-v2-visual-role="causal-relationship-map"><header data-canvas-v2-node-id="map-header"><p data-canvas-v2-node-id="map-kicker">North Star reasoning model</p><h1 data-canvas-v2-node-id="map-title">From signal to conviction.</h1><p data-canvas-v2-node-id="map-deck">A decision becomes trustworthy when every transformation remains visible.</p></header><section data-canvas-v2-node-id="causal-rail" data-canvas-v2-relationship-source="stage-signal" data-canvas-v2-relationship-target="stage-decision" class="map-rail"><article data-canvas-v2-node-id="stage-signal" class="map-stage"><span data-canvas-v2-node-id="signal-index">01</span><h2 data-canvas-v2-node-id="signal-title">Signal</h2><p data-canvas-v2-node-id="signal-copy">Something changed.</p></article><article data-canvas-v2-node-id="stage-evidence" class="map-stage"><span data-canvas-v2-node-id="evidence-index">02</span><h2 data-canvas-v2-node-id="evidence-title">Evidence</h2><p data-canvas-v2-node-id="evidence-copy">The change becomes observable.</p></article><article data-canvas-v2-node-id="stage-interpretation" class="map-stage map-stage--focus"><div data-canvas-v2-node-id="evidence-lens" class="map-lens" aria-label="Intentional evidence and interpretation overlap"></div><span data-canvas-v2-node-id="interpretation-index">03</span><h2 data-canvas-v2-node-id="interpretation-title">Interpretation</h2><p data-canvas-v2-node-id="interpretation-copy">Evidence acquires meaning in context.</p></article><article data-canvas-v2-node-id="stage-decision" class="map-stage"><span data-canvas-v2-node-id="decision-index">04</span><h2 data-canvas-v2-node-id="decision-title">Decision</h2><p data-canvas-v2-node-id="decision-copy">Conviction becomes action.</p></article></section><footer data-canvas-v2-node-id="map-footer"><p data-canvas-v2-node-id="map-implication">The quality of the decision is limited by the least visible transformation.</p></footer></section></main>`,
+          css: `.northstar-canvas{--ink:#18171f;--muted:#706e7c;--line:rgba(35,31,55,.20);--violet:#6b4dff;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.map-composition{box-sizing:border-box;width:1800px;min-width:1800px;min-height:1120px;padding:74px 92px 72px;background:var(--northstar-surface)}.e2e-spatial-map header{display:grid;grid-template-columns:1fr 560px;column-gap:100px;width:1616px}.e2e-spatial-map header>p:first-child{grid-column:1/-1;margin:0 0 18px;color:var(--violet);font-size:28px;font-weight:850;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}.e2e-spatial-map h1{margin:0;font-size:68px;line-height:.94;letter-spacing:-.06em}.e2e-spatial-map header>p:last-child{align-self:end;margin:0;color:var(--muted);font-size:28px;line-height:1.4}.map-rail{position:relative;display:grid;grid-template-columns:300px 330px 480px 330px;gap:56px;align-items:center;width:1616px;margin-top:120px}.map-rail::before{content:"";position:absolute;left:0;right:0;top:50%;height:2px;background:var(--line)}.map-stage{position:relative;z-index:1;min-height:250px;padding:36px 18px 28px 0;background:var(--northstar-surface)}.map-stage span{color:#8d899a;font-size:24px;font-weight:800;letter-spacing:.12em;white-space:nowrap}.map-stage h2{margin:30px 0 14px;font-size:40px;letter-spacing:-.035em}.map-stage p{max-width:320px;margin:0;color:var(--muted);font-size:28px;line-height:1.35}.map-stage--focus{padding-left:84px;background:transparent}.map-stage--focus h2{position:relative;margin-top:23px;font-size:44px}.map-stage--focus span,.map-stage--focus p{position:relative}.map-lens{position:absolute;z-index:-1;left:12px;top:-46px;width:340px;height:340px;border:2px solid rgba(107,77,255,.28);border-radius:50%;background:rgba(107,77,255,.09)}.e2e-spatial-map footer{width:1616px;margin-top:112px;padding-top:28px;border-top:2px solid var(--line)}.e2e-spatial-map footer p{max-width:980px;margin:0;font-size:28px;font-weight:720;line-height:1.3;letter-spacing:-.025em}`,
         },
       },
       evidence: [],
@@ -399,8 +608,8 @@ export async function POST(request: NextRequest) {
         summary: "Composed a market-entry decision landscape that makes evidence, assumptions, convergence, and timing immediately inspectable.",
         expectedVisualResult: "A premium asymmetric decision field distinguishes observed signals from assumptions and connects three wedge criteria to sequenced decisions.",
         document: {
-          html: `<main class="northstar-canvas market-landscape" data-e2e-market-landscape="true" data-canvas-v2-node-id="canvas" aria-label="Market entry decision landscape"><header data-canvas-v2-node-id="market-header"><p data-canvas-v2-node-id="market-kicker">North Star · market entry</p><h1 data-canvas-v2-node-id="market-title">Find the wedge<br/>that teaches fastest.</h1><p data-canvas-v2-node-id="market-deck">A decision landscape for entering a vertical SaaS market without confusing confidence with evidence.</p></header><aside data-canvas-v2-node-id="signal-rail" class="signal-rail"><p data-canvas-v2-node-id="signal-label">Observed signals</p><ol data-canvas-v2-node-id="signal-list"><li data-canvas-v2-node-id="signal-one"><strong>Workflow pain</strong><span>Repeated manual reconciliation</span></li><li data-canvas-v2-node-id="signal-two"><strong>Reachable buyer</strong><span>A concentrated operator community</span></li><li data-canvas-v2-node-id="signal-three"><strong>Learning velocity</strong><span>Usage reveals value inside one week</span></li></ol><div data-canvas-v2-node-id="assumption-note" class="assumption-note"><b>Assumption · unverified</b><span>The end user can influence budget.</span></div></aside><section data-canvas-v2-node-id="wedge-field" class="wedge-field"><div data-canvas-v2-node-id="wedge-shape" class="wedge-shape"></div><p data-canvas-v2-node-id="criterion-pain" class="criterion criterion--pain">Urgent enough<br/>to change</p><p data-canvas-v2-node-id="criterion-reach" class="criterion criterion--reach">Narrow enough<br/>to reach</p><p data-canvas-v2-node-id="criterion-learn" class="criterion criterion--learn">Fast enough<br/>to learn</p><div data-canvas-v2-node-id="entry-wedge" class="entry-wedge"><span>The entry wedge</span><h2>Own reconciliation<br/>before owning workflow.</h2><p>Start where pain is frequent, the buyer is reachable, and each use produces proprietary learning.</p></div></section><section data-canvas-v2-node-id="decision-horizons" class="decision-horizons"><p data-canvas-v2-node-id="horizons-label">Decision horizons</p><article data-canvas-v2-node-id="horizon-now"><span>Now · 0–30 days</span><h3>Prove pain frequency.</h3><p>Observe ten real reconciliations and measure the cost of delay.</p></article><article data-canvas-v2-node-id="horizon-next"><span>Next · 30–90 days</span><h3>Prove repeatable reach.</h3><p>Test whether one channel can create five qualified learning loops.</p></article><article data-canvas-v2-node-id="horizon-later"><span>Later · after signal</span><h3>Expand from evidence.</h3><p>Broaden the workflow only after retention identifies the durable job.</p></article></section><footer data-canvas-v2-node-id="market-footer">Evidence narrows the choice. The choice creates the next evidence.</footer></main>`,
-          css: `.northstar-canvas{--ink:#17171f;--muted:#6d6b78;--rule:rgba(34,31,53,.16);--violet:#684dff;--blue:#2f6fff;--amber:#c47a20;position:relative;box-sizing:border-box;width:2140px;min-width:2140px;min-height:1420px;padding:72px 86px 84px;background:#fefdfb;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.market-landscape header{width:1040px}.market-landscape header>p:first-child{margin:0 0 22px;color:var(--violet);font-size:10px;font-weight:900;letter-spacing:.18em;text-transform:uppercase}.market-landscape h1{margin:0;font-size:68px;line-height:.91;letter-spacing:-.062em}.market-landscape header>p:last-child{max-width:630px;margin:24px 0 0;color:var(--muted);font-size:17px;line-height:1.55}.signal-rail{position:absolute;left:86px;top:420px;width:430px;border-top:1px solid var(--rule);padding-top:18px}.signal-rail>p{margin:0 0 30px;color:var(--blue);font-size:10px;font-weight:850;letter-spacing:.16em;text-transform:uppercase}.signal-rail ol{list-style:none;margin:0;padding:0}.signal-rail li{display:grid;grid-template-columns:44px 1fr;padding:18px 0;border-top:1px solid rgba(34,31,53,.09);counter-increment:signal}.signal-rail li::before{content:"0" counter(signal);color:#aaa7b2;font-size:11px}.signal-rail strong,.signal-rail span{display:block}.signal-rail strong{font-size:17px}.signal-rail span{grid-column:2;margin-top:5px;color:var(--muted);font-size:13px}.assumption-note{margin-top:34px;padding-left:16px;border-left:2px solid #e1a24f}.assumption-note b,.assumption-note span{display:block}.assumption-note b{color:var(--amber);font-size:10px;letter-spacing:.12em;text-transform:uppercase}.assumption-note span{margin-top:8px;color:#55525f;font-size:14px}.wedge-field{position:absolute;left:650px;top:270px;width:1370px;height:650px}.wedge-shape{position:absolute;left:350px;top:90px;width:570px;height:440px;background:rgba(104,77,255,.08);clip-path:polygon(0 0,100% 50%,0 100%)}.criterion{position:absolute;margin:0;color:#5b5868;font-size:14px;font-weight:720;line-height:1.35}.criterion::after{content:"";position:absolute;height:1px;background:var(--rule);transform-origin:left}.criterion--pain{left:0;top:70px}.criterion--pain::after{left:125px;top:32px;width:370px;transform:rotate(18deg)}.criterion--reach{left:5px;top:300px}.criterion--reach::after{left:126px;top:18px;width:360px}.criterion--learn{left:0;top:525px}.criterion--learn::after{left:125px;top:-3px;width:370px;transform:rotate(-18deg)}.entry-wedge{position:absolute;left:565px;top:185px;width:660px}.entry-wedge span{color:var(--violet);font-size:10px;font-weight:900;letter-spacing:.16em;text-transform:uppercase}.entry-wedge h2{margin:15px 0 18px;font-size:42px;line-height:.98;letter-spacing:-.05em}.entry-wedge p{max-width:540px;margin:0;color:var(--muted);font-size:15px;line-height:1.55}.decision-horizons{position:absolute;left:650px;top:970px;display:grid;grid-template-columns:180px repeat(3,380px);gap:28px;width:1370px;padding-top:22px;border-top:1px solid var(--rule)}.decision-horizons>p{margin:0;color:#918e9d;font-size:10px;font-weight:850;letter-spacing:.15em;text-transform:uppercase}.decision-horizons article{padding-left:18px;border-left:1px solid var(--rule)}.decision-horizons span{color:var(--violet);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.decision-horizons h3{margin:13px 0 9px;font-size:22px;letter-spacing:-.035em}.decision-horizons article p{max-width:320px;margin:0;color:var(--muted);font-size:13px;line-height:1.5}.market-landscape footer{position:absolute;left:86px;bottom:78px;width:430px;padding-top:18px;border-top:1px solid var(--rule);font-size:20px;font-weight:720;line-height:1.25;letter-spacing:-.025em}`,
+          html: `<main class="northstar-canvas market-landscape" data-e2e-market-landscape="true" data-canvas-v2-node-id="canvas" aria-label="Market entry decision landscape"><section class="northstar-canvas market-composition" data-canvas-v2-node-id="market-composition" data-canvas-v2-design-region data-canvas-v2-story-role="title" data-canvas-v2-visual-role="market-entry-landscape"><header data-canvas-v2-node-id="market-header"><p data-canvas-v2-node-id="market-kicker">North Star · market entry</p><h1 data-canvas-v2-node-id="market-title">Find the wedge<br/>that teaches fastest.</h1><p data-canvas-v2-node-id="market-deck">A decision landscape for entering a vertical SaaS market without confusing confidence with evidence.</p></header><aside data-canvas-v2-node-id="signal-rail" class="signal-rail"><p data-canvas-v2-node-id="signal-label">Observed signals</p><ol data-canvas-v2-node-id="signal-list"><li data-canvas-v2-node-id="signal-one"><strong>Workflow pain</strong><span>Repeated manual reconciliation</span></li><li data-canvas-v2-node-id="signal-two"><strong>Reachable buyer</strong><span>A concentrated operator community</span></li><li data-canvas-v2-node-id="signal-three"><strong>Learning velocity</strong><span>Usage reveals value inside one week</span></li></ol><div data-canvas-v2-node-id="assumption-note" class="assumption-note"><b>Assumption · unverified</b><span>The end user can influence budget.</span></div></aside><section data-canvas-v2-node-id="wedge-field" class="wedge-field"><div data-canvas-v2-node-id="wedge-shape" class="wedge-shape"></div><p data-canvas-v2-node-id="criterion-pain" class="criterion criterion--pain">Urgent enough<br/>to change</p><p data-canvas-v2-node-id="criterion-reach" class="criterion criterion--reach">Narrow enough<br/>to reach</p><p data-canvas-v2-node-id="criterion-learn" class="criterion criterion--learn">Fast enough<br/>to learn</p><div data-canvas-v2-node-id="entry-wedge" class="entry-wedge"><span>The entry wedge</span><h2>Own reconciliation<br/>before owning workflow.</h2><p>Start where pain is frequent, the buyer is reachable, and each use produces proprietary learning.</p></div></section><section data-canvas-v2-node-id="decision-horizons" class="decision-horizons"><p data-canvas-v2-node-id="horizons-label">Decision horizons</p><article data-canvas-v2-node-id="horizon-now"><span>Now · 0–30 days</span><h3>Prove pain frequency.</h3><p>Observe ten real reconciliations and measure the cost of delay.</p></article><article data-canvas-v2-node-id="horizon-next"><span>Next · 30–90 days</span><h3>Prove repeatable reach.</h3><p>Test whether one channel can create five qualified learning loops.</p></article><article data-canvas-v2-node-id="horizon-later"><span>Later · after signal</span><h3>Expand from evidence.</h3><p>Broaden the workflow only after retention identifies the durable job.</p></article></section><footer data-canvas-v2-node-id="market-footer">Evidence narrows the choice. The choice creates the next evidence.</footer></section></main>`,
+          css: `.northstar-canvas{--ink:#17171f;--muted:#6d6b78;--rule:rgba(34,31,53,.16);--violet:#684dff;--blue:#2f6fff;--amber:#c47a20;position:relative;box-sizing:border-box;width:2140px;min-width:2140px;min-height:1420px;padding:64px 80px 72px;background:#fefdfb;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.market-landscape header{width:1080px}.market-landscape header>p:first-child{margin:0 0 16px;color:var(--violet);font-size:28px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}.market-landscape h1{margin:0;font-size:72px;line-height:.91;letter-spacing:-.062em}.market-landscape header>p:last-child{max-width:880px;margin:20px 0 0;color:var(--muted);font-size:28px;line-height:1.35}.signal-rail{position:absolute;left:80px;top:420px;width:470px;border-top:2px solid var(--rule);padding-top:16px}.signal-rail>p{margin:0 0 14px;color:var(--blue);font-size:28px;font-weight:850;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}.signal-rail ol{list-style:none;margin:0;padding:0}.signal-rail li{display:grid;grid-template-columns:48px 1fr;padding:12px 0;border-top:1px solid rgba(34,31,53,.09);counter-increment:signal;font-size:28px}.signal-rail li::before{content:"0" counter(signal);color:#8f8b99;font-size:24px}.signal-rail strong,.signal-rail span{display:block}.signal-rail strong{font-size:24px}.signal-rail span{grid-column:2;margin-top:3px;color:var(--muted);font-size:24px;line-height:1.25}.assumption-note{margin-top:18px;padding-left:16px;border-left:3px solid #e1a24f;font-size:24px}.assumption-note b,.assumption-note span{display:block}.assumption-note b{color:var(--amber);font-size:24px;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}.assumption-note span{margin-top:6px;color:#55525f;font-size:24px;line-height:1.25}.wedge-field{position:absolute;left:620px;top:280px;width:1440px;height:620px;font-size:24px}.wedge-shape{position:absolute;left:390px;top:100px;width:500px;height:390px;background:rgba(104,77,255,.08);clip-path:polygon(0 0,100% 50%,0 100%)}.criterion{position:absolute;margin:0;color:#5b5868;font-size:28px;font-weight:720;line-height:1.2}.criterion::after{content:"";position:absolute;height:2px;background:var(--rule);transform-origin:left}.criterion--pain{left:0;top:80px}.criterion--pain::after{left:220px;top:36px;width:300px;transform:rotate(18deg)}.criterion--reach{left:0;top:280px}.criterion--reach::after{left:220px;top:30px;width:310px}.criterion--learn{left:0;top:490px}.criterion--learn::after{left:220px;top:5px;width:300px;transform:rotate(-18deg)}.entry-wedge{position:absolute;left:600px;top:165px;width:740px;font-size:24px}.entry-wedge span{color:var(--violet);font-size:24px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}.entry-wedge h2{margin:14px 0 16px;font-size:44px;line-height:.98;letter-spacing:-.05em}.entry-wedge p{max-width:700px;margin:0;color:var(--muted);font-size:28px;line-height:1.35}.decision-horizons{position:absolute;left:620px;top:960px;display:grid;grid-template-columns:210px repeat(3,365px);gap:24px;width:1440px;padding-top:18px;border-top:2px solid var(--rule);font-size:24px}.decision-horizons>p{margin:0;color:#817d8e;font-size:28px;font-weight:850;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}.decision-horizons article{padding-left:14px;border-left:2px solid var(--rule);font-size:24px}.decision-horizons span{color:var(--violet);font-size:24px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}.decision-horizons h3{margin:10px 0 7px;font-size:40px;line-height:1;letter-spacing:-.035em}.decision-horizons article p{max-width:340px;margin:0;color:var(--muted);font-size:28px;line-height:1.25}.market-landscape footer{position:absolute;left:80px;bottom:72px;width:470px;padding-top:16px;border-top:2px solid var(--rule);font-size:24px;font-weight:720;line-height:1.25;letter-spacing:-.025em}`,
         },
       },
       evidence: [],
@@ -501,6 +710,37 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  if (body.instruction?.toLowerCase().includes("fourth positioning territory")) {
+    if (revision.document.html.includes("data-e2e-positioning-counter-territory")) return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "complete",
+        creativeDirection: mapDirection(),
+        spatialStrategy: mapSpatial(),
+        reflection: reflection("The original positioning composition remains intact and a distinct counter-position is visible beside it.", "No requested alternative remains unresolved.", "Complete after observing preservation and the new nearby territory."),
+        summary: "The preserved positioning composition now has a visually distinct counter-territory to its right.",
+      },
+      evidence: revision.evidence,
+    });
+    return NextResponse.json({
+      decision: {
+        schema: CANVAS_V2_DECISION_SCHEMA,
+        decision: "edit",
+        moveKind: "composition",
+        creativeDirection: mapDirection(),
+        spatialStrategy: mapSpatial(),
+        reflection: reflection("The original conceptual composition is complete and must remain stable.", "The requested counter-position is not yet visible.", "Add one independently editable adjacent territory without rebuilding prior work."),
+        summary: "Added a preserved counter-position beside the original composition.",
+        expectedVisualResult: "The original composition remains unchanged while a contrasting fourth positioning territory appears to its right.",
+        document: {
+          html: appendCanvasObject(revision.document.html, '<section data-e2e-positioning-counter-territory="true" data-canvas-v2-node-id="positioning-counter-territory" data-canvas-v2-design-region data-canvas-v2-story-role="synthesis" data-canvas-v2-visual-role="counter-position"><p data-canvas-v2-node-id="counter-position-label">Counter-position · deliberate friction</p><h2 data-canvas-v2-node-id="counter-position-title">Support that asks you to slow down.</h2><p data-canvas-v2-node-id="counter-position-copy">Challenge the shared promise of effortless speed: make thoughtful escalation and visible human judgment the product advantage.</p></section>'),
+          css: `${revision.document.css}\n[data-e2e-positioning-counter-territory]{box-sizing:border-box;width:940px;min-height:520px;margin:140px 0 0 1860px;padding:62px 72px;border-left:4px solid #684dff;background:var(--northstar-surface);color:var(--northstar-ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}[data-e2e-positioning-counter-territory] p:first-child{margin:0;color:#684dff;font-size:28px;font-weight:850;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}[data-e2e-positioning-counter-territory] h2{max-width:760px;margin:52px 0 34px;font:750 64px/.98 Georgia,serif;letter-spacing:-.045em}[data-e2e-positioning-counter-territory] p:last-child{max-width:720px;margin:0;color:var(--northstar-muted);font-size:28px;line-height:1.45}`,
+        },
+      },
+      evidence: revision.evidence,
+    });
+  }
+
   if (!(body.run?.researchTargets?.length)) {
     if (revision.document.html.includes("data-e2e-generic-transform")) return NextResponse.json({
       decision: {
@@ -524,8 +764,8 @@ export async function POST(request: NextRequest) {
         summary: "Created a focused editorial visual answer without invoking account research.",
         expectedVisualResult: "A direct-on-surface visual thesis appears with no unrelated product evidence.",
         document: {
-          html: `<main class="northstar-canvas generic-transform" data-e2e-generic-transform="true" data-canvas-v2-node-id="canvas" aria-label="Conceptual visual answer"><p data-canvas-v2-node-id="generic-kicker">North Star · visual reasoning</p><h1 data-canvas-v2-node-id="generic-title">Make the decision<br/>legible.</h1><p data-canvas-v2-node-id="generic-copy">The canvas changed because the request called for a visual answer. No account research was required or fabricated.</p></main>`,
-          css: `.northstar-canvas{box-sizing:border-box;width:1680px;min-width:1680px;min-height:945px;padding:120px 130px;background:#fefdfb;color:#18171f;font-family:Inter,ui-sans-serif,system-ui,sans-serif}.generic-transform>p:first-child{margin:0;color:#684dff;font-size:11px;font-weight:900;letter-spacing:.18em;text-transform:uppercase}.generic-transform h1{margin:28px 0 30px;font-size:78px;line-height:.9;letter-spacing:-.065em}.generic-transform>p:last-child{max-width:620px;margin:0;padding-top:22px;border-top:1px solid rgba(35,31,55,.16);color:#676471;font-size:17px;line-height:1.6}`,
+          html: `<main class="northstar-canvas generic-transform" data-canvas-v2-node-id="canvas" aria-label="Conceptual visual answer"><section data-e2e-generic-transform="true" data-canvas-v2-node-id="generic-transform" data-canvas-v2-design-region data-canvas-v2-story-role="title"><p data-canvas-v2-node-id="generic-kicker">North Star · visual reasoning</p><h1 data-canvas-v2-node-id="generic-title">Make the decision<br/>legible.</h1><p data-canvas-v2-node-id="generic-copy">The canvas changed because the request called for a visual answer. No account research was required or fabricated.</p></section></main>`,
+          css: `.northstar-canvas{box-sizing:border-box;width:1680px;min-width:1680px;min-height:945px;background:transparent;color:#18171f;font-family:Inter,ui-sans-serif,system-ui,sans-serif}[data-e2e-generic-transform]{box-sizing:border-box;width:1420px;min-height:705px;padding:120px 130px;background:var(--northstar-surface)}[data-e2e-generic-transform]>p:first-child{margin:0;color:#684dff;font-size:28px;font-weight:900;letter-spacing:.18em;text-transform:uppercase;white-space:nowrap}[data-e2e-generic-transform] h1{margin:28px 0 30px;font-size:78px;line-height:.9;letter-spacing:-.065em}[data-e2e-generic-transform]>p:last-child{max-width:820px;margin:0;padding-top:22px;border-top:1px solid rgba(35,31,55,.16);color:#676471;font-size:28px;line-height:1.6}`,
         },
       },
       evidence: revision.evidence,

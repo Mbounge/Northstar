@@ -1,6 +1,6 @@
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
 
-export type CanvasV2BoardObjectKind = "root" | "frame" | "group" | "island" | "text" | "image" | "shape" | "table" | "evidence" | "object";
+export type CanvasV2BoardObjectKind = "root" | "frame" | "group" | "island" | "text" | "note" | "image" | "shape" | "line" | "connector" | "drawing" | "table" | "evidence" | "object";
 
 export interface CanvasV2BoardObject {
   nodeId: string;
@@ -14,12 +14,16 @@ export interface CanvasV2BoardObject {
   locked: boolean;
   userEdited: boolean;
   lastAuthor?: "user" | "northstar";
+  origin?: "user" | "northstar" | "research" | "imported";
   editVersion: number;
   rotation: number;
   canonicalEvidence: boolean;
 }
 function kindFor(element: HTMLElement): CanvasV2BoardObjectKind {
   if (element.dataset.canvasV2WorkspaceRoot === "true" || element.dataset.canvasV2PermanentRoot === "true" || element.dataset.canvasV2NodeId === "canvas") return "root";
+  const primitive = element.dataset.canvasV2Primitive;
+  if (primitive === "note" || primitive === "line" || primitive === "connector" || primitive === "drawing") return primitive;
+  if (element.dataset.canvasV2PaintedEdge) return "shape";
   if (element.dataset.canvasV2Group === "true") return "group";
   if (element.dataset.canvasV2IslandId || element.dataset.canvasV2DesignRegion !== undefined) return "island";
   if (element.dataset.canvasV2EvidenceId) return "evidence";
@@ -60,6 +64,11 @@ export function readCanvasV2BoardObjectGraph(artifact: CanvasV2ArtifactDocument)
       hidden: element.hidden,
       locked: element.dataset.canvasV2Locked === "true",
       userEdited: Boolean(element.dataset.canvasV2UserEdited),
+      origin: element.dataset.canvasV2Origin === "user" || element.dataset.canvasV2Origin === "northstar" || element.dataset.canvasV2Origin === "research" || element.dataset.canvasV2Origin === "imported"
+        ? element.dataset.canvasV2Origin
+        : element.dataset.canvasV2EvidenceId || element.closest("[data-canvas-v2-canonical-flow]") ? "research"
+          : element.dataset.canvasV2LastAuthor === "northstar" ? "northstar"
+            : element.dataset.canvasV2UserEdited?.includes("create") ? "user" : "imported",
       lastAuthor: element.dataset.canvasV2LastAuthor === "user" ? "user" : element.dataset.canvasV2LastAuthor === "northstar" ? "northstar" : undefined,
       editVersion: Number(element.dataset.canvasV2EditVersion) || 0,
       rotation: Number(element.dataset.canvasV2Rotation) || 0,

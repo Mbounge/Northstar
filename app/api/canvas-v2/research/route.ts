@@ -3,6 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { loadAppDataCatalog, resolveAppDataTenantId } from "@/lib/app-data/canvas-v2-catalog";
 import { runCanvasV2Research, type CanvasV2ResearchOperation, type CanvasV2ResearchQuery } from "@/lib/canvas-v2/research-adapter";
+import {
+  canvasV2LocalEvaluationEnabled,
+  emptyCanvasV2LocalEvaluationCatalog,
+} from "@/lib/canvas-v2/local-evaluation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +20,8 @@ function string(value: unknown, maximum = 240): string | undefined {
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "You must be signed in to research account evidence." }, { status: 401 });
+  const localEvaluation = canvasV2LocalEvaluationEnabled();
+  if (!user && !localEvaluation) return NextResponse.json({ error: "You must be signed in to research account evidence." }, { status: 401 });
   try {
     const body = await request.json() as Record<string, unknown>;
     const operation = string(body.operation) as CanvasV2ResearchOperation | undefined;
@@ -30,8 +35,9 @@ export async function POST(request: NextRequest) {
       sessionType: body.sessionType === "onboarding" || body.sessionType === "browsing" ? body.sessionType : undefined,
       limit: typeof body.limit === "number" ? body.limit : undefined,
     };
-    const tenantId = await resolveAppDataTenantId(supabase, user.id);
-    const catalog = await loadAppDataCatalog(supabase, tenantId);
+    const catalog = user
+      ? await loadAppDataCatalog(supabase, await resolveAppDataTenantId(supabase, user.id))
+      : emptyCanvasV2LocalEvaluationCatalog();
     return NextResponse.json({ result: runCanvasV2Research(catalog, query) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Canvas V2 research failed." }, { status: 400 });

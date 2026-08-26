@@ -17,14 +17,19 @@ import {
   resolveCanvasV2EvidenceRole,
   validateCanvasV2RenderedAnalysisEvidenceScale,
   validateCanvasV2RenderedDesignRegionContentIntegrity,
+  validateCanvasV2RenderedDesignRegionLegibility,
   validateCanvasV2RenderedDesignRegionTerritoryIntegrity,
   validateCanvasV2RenderedComparisonCommunication,
   validateCanvasV2RenderedEvidenceIntegrity,
   validateCanvasV2RenderedIslandNarrativeIntegrity,
   validateCanvasV2RenderedRelationshipGeometry,
+  invalidCanvasV2RenderedRelationshipNodeIds,
+  collidingCanvasV2OptionalRelationshipLabelNodeIds,
 } from "../lib/canvas-v2/evidence-authorship";
 import { buildCanvasV2BoundedModelContext } from "../lib/canvas-v2/model-context";
+import { canvasV2LocalIntegrityRepairTarget } from "../lib/canvas-v2/narrative-placement";
 import type { CanvasV2ArtifactDocument, CanvasV2RenderObservation } from "../lib/canvas-v2/types";
+import { CANVAS_V2_WORKSPACE } from "../lib/canvas-v2/workspace-coordinate-space";
 
 const evidence = [
   { id: "icon:awin", url: "https://evidence.test/awin/icon.png", label: "Awin icon", description: "App icon" },
@@ -81,6 +86,38 @@ test("model context separates grounded identity assets from exact sequential scr
   assert.match(context.source.htmlOutline, /IMMUTABLE CANONICAL LANE · 2 screens/);
   assert.match(context.source.htmlOutline, /GROUNDED IDENTITY ASSETS flow-awin-icon:lane-0-identity-0/);
   assert.doesNotMatch(context.source.htmlOutline, /IMMUTABLE CANONICAL LANE · 3 screens/);
+});
+
+test("model context carries exact browser-owned selection and viewport authority", () => {
+  const context = buildCanvasV2BoundedModelContext({
+    schema: "canvas-v2.artifact.v1",
+    id: "revision",
+    state: "committed",
+    document: canonical,
+    evidence,
+    createdAt: "2026-08-13T12:00:00.000Z",
+  }, observation(), {
+    schema: "canvas-v2.working-context.v1",
+    scope: "selection",
+    selectionPolicy: "modify",
+    selectedNodeIds: ["editorial-title"],
+    selectedBounds: { x: 2_120, y: 1_440, width: 520, height: 88 },
+    visibleBounds: { x: 1_900, y: 1_200, width: 1_680, height: 945 },
+    viewportScale: 0.72,
+    visibleNodeIds: ["editorial-title", "flow-awin"],
+    nearbyNodeIds: ["editorial-title", "flow-awin"],
+    editableNodeIds: ["editorial-title"],
+    protectedNodeIds: ["flow-awin"],
+    objects: [],
+    relationships: [],
+  });
+  assert.deepEqual(context.collaboration?.selectedNodeIds, ["editorial-title"]);
+  assert.deepEqual(context.collaboration?.editableNodeIds, ["editorial-title"]);
+  assert.deepEqual(context.collaboration?.visibleBounds, { x: 1_900, y: 1_200, width: 1_680, height: 945 });
+  assert.equal(context.collaboration?.viewportScale, 0.72);
+  assert.deepEqual(context.workspace.aiAuthoringBounds, { x: 1_900, y: 1_200, width: 8_880, height: 8_000 });
+  assert.match(context.collaboration?.contract ?? "", /only existing objects authorized for direct mutation/);
+  assert.match(context.collaboration?.contract ?? "", /not permission to rebuild its island/);
 });
 
 test("compiler-owned canonical label furniture never becomes a model design opportunity", () => {
@@ -344,6 +381,148 @@ test("authored design regions may grow but cannot clip information they introduc
   assert.match(validateCanvasV2RenderedDesignRegionContentIntegrity(rendered).join(" "), /Preserve every authored label/);
   rendered.spatial.designRegions[0] = { ...rendered.spatial.designRegions[0], clipsOverflow: false };
   assert.deepEqual(validateCanvasV2RenderedDesignRegionContentIntegrity(rendered), []);
+  rendered.spatial.designRegions[0] = {
+    ...rendered.spatial.designRegions[0],
+    bounds: { ...rendered.spatial.designRegions[0].bounds, width: 8_880, height: 2_500 },
+    contentOverflowX: 7_393,
+  };
+  assert.match(validateCanvasV2RenderedDesignRegionContentIntegrity(rendered).join(" "), /paints 7393 canvas units beyond its horizontal composition box.*hidden artboard.*runaway margins/);
+});
+
+test("authored island copy remains readable at whole-board canvas scale", () => {
+  const rendered = observation();
+  rendered.spatial.designRegions = [{
+    nodeId: "analysis",
+    bounds: { x: 192, y: 192, width: 2_400, height: 1_200 },
+    canvasWidthShare: 0.2,
+    canvasHeightShare: 0.15,
+    canvasAreaShare: 0.03,
+    centerXShare: 0.12,
+    centerYShare: 0.1,
+    edgeSpace: { left: 192, top: 192, right: 9_408, bottom: 6_608 },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+  }];
+  const spatialNode = (input: { nodeId: string; parentNodeId?: string; tagName: string; textPreview?: string; fontSize?: string; lineHeight?: string; textLineCount?: number }) => ({
+    ...input,
+    bounds: { x: 240, y: 240, width: 1_200, height: 120 },
+    contentBox: { clientWidth: 1_200, clientHeight: 120, scrollWidth: 1_200, scrollHeight: 120 },
+    layout: { display: "block", position: "static", zIndex: "auto", fontSize: input.fontSize, lineHeight: input.lineHeight, overflowX: "visible", overflowY: "visible" },
+  });
+  rendered.spatial.nodes = [
+    spatialNode({ nodeId: "analysis", tagName: "section", textPreview: "Evidence ledger" }),
+    spatialNode({ nodeId: "analysis-heading", parentNodeId: "analysis", tagName: "h2", textPreview: "What the evidence says", fontSize: "34px" }),
+    spatialNode({ nodeId: "analysis-copy", parentNodeId: "analysis", tagName: "p", textPreview: "The narrow wedge still needs validation.", fontSize: "20px" }),
+    spatialNode({ nodeId: "analysis-status", parentNodeId: "analysis", tagName: "small", textPreview: "Assumption", fontSize: "18px" }),
+    spatialNode({ nodeId: "analysis-default-copy", parentNodeId: "analysis", tagName: "span", textPreview: "Awaiting evidence" }),
+  ];
+  assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /Sample only: analysis-heading=34px.*analysis-copy=20px.*analysis-status=18px.*analysis-default-copy=16px.*Repair all 4 undersized leaves in one scoped pass/);
+  rendered.spatial.nodes = rendered.spatial.nodes.map((node) => ({
+    ...node,
+    layout: {
+      ...node.layout,
+      fontSize: node.tagName === "h2" ? "48px" : node.tagName === "p" ? "32px" : node.tagName === "small" || node.tagName === "span" ? "24px" : node.layout.fontSize,
+    },
+  }));
+  assert.deepEqual(validateCanvasV2RenderedDesignRegionLegibility(rendered), []);
+
+  rendered.spatial.nodes = rendered.spatial.nodes.map((node) => node.nodeId === "analysis-heading" ? {
+    ...node,
+    layout: { ...node.layout, fontSize: "520px" },
+  } : node);
+  assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /analysis-heading=520px \(maximum 280px\).*navigation world is not permission to inflate typography/);
+
+  rendered.spatial.nodes = rendered.spatial.nodes.map((node) => node.nodeId === "analysis-status" ? {
+    ...node,
+    textPreview: "OPEN QUESTION",
+    textLineCount: 2,
+  } : node);
+  assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /analysis-status=\"OPEN QUESTION\" \(2 lines\).*one atomic reading unit.*white-space: nowrap/);
+
+  rendered.spatial.nodes = rendered.spatial.nodes.map((node) => node.nodeId === "analysis-status" ? {
+    ...node,
+    textLineCount: 1,
+  } : node);
+  assert.doesNotMatch(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /short categorical label/);
+
+  rendered.spatial.nodes = rendered.spatial.nodes.map((node) => node.nodeId === "analysis-heading" ? {
+    ...node,
+    textPreview: "ACTIVATION DECLINED",
+    textLineCount: 2,
+    layout: { ...node.layout, fontSize: "80px", lineHeight: "54px" },
+  } : node);
+  assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /visibly unsafe leading: analysis-heading=.*ACTIVATION DECLINED.*80px type on 54px leading/);
+
+  rendered.spatial.nodes = rendered.spatial.nodes.map((node) => node.nodeId === "analysis-heading" ? {
+    ...node,
+    textLineCount: 2,
+    layout: { ...node.layout, lineHeight: "72px" },
+  } : node);
+  assert.doesNotMatch(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /visibly unsafe leading/);
+
+  rendered.spatial.nodes.push(spatialNode({
+    nodeId: "diverge-prompt",
+    parentNodeId: "analysis",
+    tagName: "p",
+    textPreview: "In silence first, name the people who might feel the sharpest problem and keep each possibility open.",
+    fontSize: "34px",
+    lineHeight: "46px",
+    textLineCount: 18,
+  }));
+  assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /unreadable sliver columns: diverge-prompt=.*18 lines/);
+
+  rendered.spatial.textCollisions = [{
+    firstNodeId: "analysis-status",
+    secondNodeId: "analysis-default-copy",
+    intersection: { x: 400, y: 400, width: 18, height: 24 },
+    firstCoverage: 0.12,
+    secondCoverage: 0.1,
+  }];
+  assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /renders overlapping readable text.*OPEN QUESTION.*Awaiting evidence.*create a real gap/);
+
+  rendered.spatial.designRegions.push({
+    ...rendered.spatial.designRegions[0],
+    nodeId: "comparison",
+    bounds: { x: 2_800, y: 192, width: 2_400, height: 1_200 },
+    centerXShare: 0.34,
+    edgeSpace: { left: 2_800, top: 192, right: 6_800, bottom: 6_608 },
+  });
+  rendered.spatial.nodes.push(
+    {
+      ...spatialNode({ nodeId: "comparison", tagName: "section", textPreview: "Comparison field" }),
+      bounds: { x: 2_800, y: 192, width: 2_400, height: 1_200 },
+    },
+    {
+      ...spatialNode({ nodeId: "escaped-instruction", parentNodeId: "analysis", tagName: "p", textPreview: "Work silently first.", fontSize: "28px" }),
+      bounds: { x: 2_500, y: 300, width: 520, height: 48 },
+    },
+    {
+      ...spatialNode({ nodeId: "comparison-heading", parentNodeId: "comparison", tagName: "h2", textPreview: "Which segment earns our focus?", fontSize: "40px" }),
+      bounds: { x: 2_900, y: 300, width: 720, height: 64 },
+    },
+  );
+  rendered.spatial.textCollisions = [{
+    firstNodeId: "escaped-instruction",
+    secondNodeId: "comparison-heading",
+    intersection: { x: 2_900, y: 300, width: 120, height: 48 },
+    firstCoverage: 0.23,
+    secondCoverage: 0.12,
+  }];
+  const crossIslandFailure = validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" ");
+  assert.match(crossIslandFailure, /Authored design region analysis lets readable object escaped-instruction=.*escape its island.*comparison-heading=.*neighboring islands may never depend on overflow/);
+  assert.doesNotMatch(crossIslandFailure, /Authored design region comparison lets/);
+
+  rendered.spatial.nodes.push(spatialNode({ nodeId: "transition-label-notice", parentNodeId: "analysis", tagName: "text", textPreview: "NOTICE", fontSize: "24px" }));
+  rendered.spatial.textCollisions = [{
+    firstNodeId: "analysis-heading",
+    secondNodeId: "transition-label-notice",
+    intersection: { x: 420, y: 410, width: 60, height: 20 },
+    firstCoverage: 0.08,
+    secondCoverage: 0.5,
+  }];
+  assert.deepEqual(collidingCanvasV2OptionalRelationshipLabelNodeIds(rendered), ["transition-label-notice"]);
+  assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /transition-label-notice is optional relationship annotation.*remove that exact label entirely/);
 });
 
 test("a stage that claims direct sourcing cannot render as an empty evidence block", () => {
@@ -491,20 +670,71 @@ test("chosen relationship geometry must remain attached after later recompositio
     targetAnchorDistance: 4,
     sourceAnchorTolerance: 18,
     targetAnchorTolerance: 18,
+    geometryStartPoint: { x: 90, y: 120 },
+    geometryEndPoint: { x: 600, y: 160 },
+    sourceAnchorSuggestedPoint: { x: 100, y: 120 },
   }];
-  assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(" "), /detached from source analysis-awin/);
+  assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(" "), /detached from source analysis-awin.*attach it at approximately \(100\.0, 120\.0\)/);
+  assert.deepEqual(invalidCanvasV2RenderedRelationshipNodeIds(rendered), ["friction-bridge"]);
 
   rendered.spatial.authoredRelationships[0] = {
     ...rendered.spatial.authoredRelationships[0],
     sourceAnchorDistance: 3,
   };
   assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+  assert.deepEqual(invalidCanvasV2RenderedRelationshipNodeIds(rendered), []);
 
   rendered.spatial.authoredRelationships[0] = {
     ...rendered.spatial.authoredRelationships[0],
+    targetAnchorInteriorDepth: 96,
+  };
+  assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(" "), /enters the readable interior of target analysis-whop/);
+  assert.deepEqual(invalidCanvasV2RenderedRelationshipNodeIds(rendered), ["friction-bridge"]);
+
+  rendered.spatial.authoredRelationships[0] = {
+    ...rendered.spatial.authoredRelationships[0],
+    targetAnchorInteriorDepth: 0,
     missingTargetNodeIds: ["analysis-whop"],
   };
   assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(" "), /references missing target nodes/);
+  assert.deepEqual(invalidCanvasV2RenderedRelationshipNodeIds(rendered), ["friction-bridge"]);
+});
+
+test("bounded model context judges visual occupancy against the local authoring surface, not the navigation world", () => {
+  const rendered = observation();
+  rendered.contentBounds = { x: 0, y: 0, width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height };
+  rendered.spatial.designRegions = [{
+    nodeId: "analysis",
+    islandId: "analysis",
+    storyRole: "analysis",
+    bounds: { x: CANVAS_V2_WORKSPACE.aiAuthoringOriginX, y: CANVAS_V2_WORKSPACE.aiAuthoringOriginY, width: 4_440, height: 4_000 },
+    canvasWidthShare: 0.034,
+    canvasHeightShare: 0.031,
+    canvasAreaShare: 0.001,
+    centerXShare: 0.5,
+    centerYShare: 0.5,
+    edgeSpace: { left: 0, top: 0, right: 0, bottom: 0 },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+  }];
+  rendered.spatial.authoredSurface = {
+    canvasBounds: rendered.contentBounds,
+    authoredAreaShare: 0.001,
+    readingOrder: ["analysis"],
+    zones: [],
+  };
+  const context = buildCanvasV2BoundedModelContext({
+    schema: "canvas-v2.artifact.v1",
+    id: "revision",
+    state: "committed",
+    document: canonical,
+    evidence,
+    createdAt: "2026-08-13T12:00:00.000Z",
+  }, rendered);
+  assert.equal(context.render.spatial.authoredSurface.authoredAreaShare, 0.25);
+  assert.equal(context.render.spatial.authoredSurface.designRegions[0]?.canvasAreaShare, 0.25);
+  assert.match(context.workspace.contract, /normalized to aiAuthoringBounds/);
 });
 
 test("islands preserve one upper-left story origin and distinct readable territories", () => {
@@ -549,7 +779,7 @@ test("islands preserve one upper-left story origin and distinct readable territo
   );
 
   rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 1_090, 420, 560, 320);
-  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /192px canvas safe area/);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /192px composition safe area/);
 
   rendered.spatial.designRegions[1] = region("comparison-island", "comparison", 360, 110, 560, 360);
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /materially overlap/);
@@ -566,45 +796,135 @@ test("islands preserve one upper-left story origin and distinct readable territo
 
 test("native world-space titles begin at the honest authoring origin and may move right around occupied territory", () => {
   const rendered = observation();
+  const worldWidth = CANVAS_V2_WORKSPACE.width;
+  const worldHeight = CANVAS_V2_WORKSPACE.height;
+  const originX = CANVAS_V2_WORKSPACE.aiAuthoringOriginX;
+  const originY = CANVAS_V2_WORKSPACE.aiAuthoringOriginY;
   const region = (nodeId: string, storyRole: "title" | "comparison", x: number, y: number, width: number, height: number) => ({
     nodeId,
     islandId: nodeId,
     storyRole,
     placementMode: "evidence-relative-island" as const,
     bounds: { x, y, width, height },
-    canvasWidthShare: width / 12_000,
-    canvasHeightShare: height / 8_000,
-    canvasAreaShare: width * height / (12_000 * 8_000),
-    centerXShare: (x + width / 2) / 12_000,
-    centerYShare: (y + height / 2) / 8_000,
-    edgeSpace: { left: x, top: y, right: 12_000 - x - width, bottom: 8_000 - y - height },
+    canvasWidthShare: width / worldWidth,
+    canvasHeightShare: height / worldHeight,
+    canvasAreaShare: width * height / (worldWidth * worldHeight),
+    centerXShare: (x + width / 2) / worldWidth,
+    centerYShare: (y + height / 2) / worldHeight,
+    edgeSpace: { left: x, top: y, right: worldWidth - x - width, bottom: worldHeight - y - height },
     contentOverflowX: 0,
     contentOverflowY: 0,
     clipsOverflow: false,
   });
-  rendered.contentBounds = { x: 0, y: 0, width: 12_000, height: 8_000 };
+  rendered.contentBounds = { x: 0, y: 0, width: worldWidth, height: worldHeight };
   rendered.spatial.evidence = rendered.spatial.evidence.map((item, index) => ({
     ...item,
-    bounds: { x: 2_200 + index * 180, y: 2_600, width: 120, height: 240 },
+    bounds: { x: originX + 280 + index * 180, y: originY + 1_400, width: 120, height: 240 },
   }));
   rendered.spatial.designRegions = [
-    region("title-island", "title", 2_500, 1_200, 1_600, 360),
-    region("comparison-island", "comparison", 4_500, 2_300, 1_500, 920),
+    region("title-island", "title", originX + 580, originY, 1_600, 360),
+    region("comparison-island", "comparison", originX + 2_580, originY + 1_100, 1_500, 920),
   ];
   rendered.spatial.authoredSurface = {
     canvasBounds: rendered.contentBounds,
     authoredAreaShare: 0.02,
     readingOrder: ["title-island", "comparison-island"],
-    canonicalLaneBounds: { x: 2_200, y: 2_600, width: 480, height: 240 },
+    canonicalLaneBounds: { x: originX + 280, y: originY + 1_400, width: 480, height: 240 },
     zones: [],
   };
   assert.deepEqual(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered), []);
 
-  rendered.spatial.designRegions[0] = region("title-island", "title", 0, 1_200, 1_600, 360);
-  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /upper-left narrative origin/);
+  rendered.spatial.designRegions[1] = region(
+    "comparison-island",
+    "comparison",
+    originX + 2_580,
+    originY + 1_100,
+    1_500,
+    CANVAS_V2_WORKSPACE.aiAuthoringHeight + 20,
+  );
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /exceeds the local 8880 × 8000 composition footprint/);
+  rendered.spatial.designRegions[1] = region("comparison-island", "comparison", originX + 2_580, originY + 1_100, 1_500, 920);
 
-  rendered.spatial.designRegions[0] = region("title-island", "title", 2_200, 2_520, 1_600, 360);
+  rendered.spatial.designRegions[0] = region("title-island", "title", 0, originY, 1_600, 360);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /composition safe area/);
+
+  rendered.spatial.designRegions[0] = region("title-island", "title", originX + 200, originY + 1_320, 1_600, 360);
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /overlaps grounded evidence/);
+
+  rendered.spatial.designRegions = [
+    region("title-island", "title", originX + 580, originY, 1_600, 360),
+    region("comparison-island", "comparison", originX + 2_580, originY + 1_100, 1_500, 920),
+  ];
+  rendered.spatial.authoredSurface.readingOrder = ["comparison-island", "title-island"];
+  const originFailures = validateCanvasV2RenderedIslandNarrativeIntegrity(rendered);
+  assert.match(originFailures.join(" "), /Narrative island comparison-island appears before the established title origin/);
+  assert.deepEqual(canvasV2LocalIntegrityRepairTarget(rendered.spatial.designRegions, originFailures), {
+    islandId: "comparison-island",
+    nodeId: "comparison-island",
+    storyRole: "comparison",
+    targetZoneId: undefined,
+  });
+});
+
+test("ordinary authored chapters stay in one close narrative footprint", () => {
+  const rendered = observation();
+  const worldWidth = CANVAS_V2_WORKSPACE.width;
+  const worldHeight = CANVAS_V2_WORKSPACE.height;
+  const originX = CANVAS_V2_WORKSPACE.aiAuthoringOriginX;
+  const originY = CANVAS_V2_WORKSPACE.aiAuthoringOriginY;
+  const region = (nodeId: string, storyRole: "title" | "comparison", x: number, y: number, width: number, height: number) => ({
+    nodeId,
+    islandId: nodeId,
+    storyRole,
+    placementMode: "evidence-relative-island" as const,
+    bounds: { x, y, width, height },
+    canvasWidthShare: width / worldWidth,
+    canvasHeightShare: height / worldHeight,
+    canvasAreaShare: width * height / (worldWidth * worldHeight),
+    centerXShare: (x + width / 2) / worldWidth,
+    centerYShare: (y + height / 2) / worldHeight,
+    edgeSpace: { left: x, top: y, right: worldWidth - x - width, bottom: worldHeight - y - height },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+  });
+  rendered.contentBounds = { x: 0, y: 0, width: worldWidth, height: worldHeight };
+  rendered.spatial.designRegions = [
+    region("title-island", "title", originX, originY, 1_600, 420),
+    region("diverge-island", "comparison", originX, originY + 720, 2_200, 1_100),
+    region("challenge-island", "comparison", originX + 7_200, originY + 720, 1_400, 1_100),
+  ];
+  rendered.spatial.authoredSurface = {
+    canvasBounds: rendered.contentBounds,
+    authoredAreaShare: 0.02,
+    readingOrder: ["title-island", "diverge-island", "challenge-island"],
+    zones: [],
+  };
+
+  rendered.spatial.designRegions = [
+    region("title-island", "title", originX, originY, 1_600, 420),
+    region("diverge-island", "comparison", originX, originY + 720, 2_200, 1_100),
+    region("challenge-island", "comparison", originX, originY + 2_100, 2_200, 2_309),
+  ];
+  assert.doesNotMatch(
+    validateCanvasV2RenderedIslandNarrativeIntegrity(rendered, "Design a 60-minute founder workshop.").join(" "),
+    /compact narrative envelope/,
+    "a close three-island narrative must not fail because fractional layout lands a few pixels beyond an old fixed-height cliff",
+  );
+
+  rendered.spatial.designRegions = [
+    region("title-island", "title", originX, originY, 1_600, 420),
+    region("diverge-island", "comparison", originX, originY + 720, 2_200, 1_100),
+    region("challenge-island", "comparison", originX + 7_200, originY + 720, 1_400, 1_100),
+  ];
+
+  const failures = validateCanvasV2RenderedIslandNarrativeIntegrity(rendered, "Design a 60-minute founder workshop.").join(" ");
+  assert.match(failures, /visible proximity/);
+  assert.deepEqual(
+    validateCanvasV2RenderedIslandNarrativeIntegrity(rendered, "Create an expansive panoramic workshop wall across the canvas."),
+    [],
+    "an explicitly expansive user brief may deliberately use the wider world",
+  );
 });
 
 test("bounded model context exposes factual analysis-copy geometry and authored relationships", () => {

@@ -7,6 +7,7 @@ import {
   createCanvasV2Loop,
   failCanvasV2Loop,
   pauseCanvasV2Loop,
+  recoverCanvasV2LoopAfterRejectedCandidate,
   recordCanvasV2CommittedEdit,
   stopCanvasV2Loop,
 } from "@/lib/canvas-v2/design-loop";
@@ -64,6 +65,20 @@ const islandExecution = {
   requiredVisualRoles: ["narrative-title"],
   directorCheckpointJson: JSON.stringify({ materialMove: "Establish the narrative opening." }),
 };
+const workingContext = {
+  schema: "canvas-v2.working-context.v1" as const,
+  scope: "selection" as const,
+  selectionPolicy: "modify" as const,
+  selectedNodeIds: ["editorial-title"],
+  visibleBounds: { x: 1_900, y: 1_200, width: 1_680, height: 945 },
+  viewportScale: 0.72,
+  visibleNodeIds: ["editorial-title"],
+  nearbyNodeIds: ["editorial-title"],
+  editableNodeIds: ["editorial-title"],
+  protectedNodeIds: [],
+  objects: [],
+  relationships: [],
+};
 
 test("each rendered edit advances one observed turn", () => {
   const started = createCanvasV2Loop({ id: "run-1", instruction: "Recompose the board" });
@@ -98,7 +113,7 @@ test("the model can continue beyond the former automatic edit ceiling", () => {
   assert.equal(continued.steps.length, 12);
 });
 
-test("the visible timeline coalesces corrective design passes without hiding research", () => {
+test("the visible timeline preserves every accepted design render and research step", () => {
   const steps = [
     { turn: 1, revisionId: "research-awin", kind: "research" as const, moveKind: "research" as const, summary: "Grounded Awin.", expectedVisualResult: "Awin is visible.", creativeDirection, spatialStrategy, reflection },
     { turn: 2, revisionId: "research-whop", kind: "research" as const, moveKind: "research" as const, summary: "Grounded Whop.", expectedVisualResult: "Whop is visible.", creativeDirection, spatialStrategy, reflection },
@@ -110,11 +125,14 @@ test("the visible timeline coalesces corrective design passes without hiding res
   assert.deepEqual(visible.map((step) => [step.revisionId, step.moveKind]), [
     ["research-awin", "research"],
     ["research-whop", "research"],
+    ["frame-draft", "framing"],
     ["frame-corrected", "framing"],
     ["comparison", "composition"],
   ]);
-  assert.equal(visible[2]?.summary, "Resolved the narrative title.");
-  assert.deepEqual(visible[2]?.providerAttempts?.map((attempt) => attempt.role), ["visual-director", "source-author"]);
+  assert.equal(visible[2]?.summary, "Established the opening.");
+  assert.equal(visible[3]?.summary, "Resolved the narrative title.");
+  assert.deepEqual(visible[2]?.providerAttempts?.map((attempt) => attempt.role), ["visual-director"]);
+  assert.deepEqual(visible[3]?.providerAttempts?.map((attempt) => attempt.role), ["source-author"]);
 });
 
 test("provider exhaustion pauses on the verified revision and remains continuable", () => {
@@ -123,6 +141,38 @@ test("provider exhaustion pauses on the verified revision and remains continuabl
   assert.equal(paused.status, "paused");
   assert.equal(paused.pauseReason, "Both providers are temporarily unavailable.");
   assert.equal(paused.error, undefined);
+});
+
+test("render-rejected private candidates replan internally from committed truth", () => {
+  const started = createCanvasV2Loop({ id: "run-recovery", instruction: "Create a workshop." });
+  const rendering = {
+    ...started,
+    status: "rendering" as const,
+    renderRepair: {
+      attempt: 3,
+      maxAttempts: 3,
+      failures: ["candidate overlaps the title"],
+    },
+  };
+  const firstRecovery = recoverCanvasV2LoopAfterRejectedCandidate(rendering, ["candidate overlaps the title"], "recompose");
+  assert.equal(firstRecovery.status, "thinking");
+  assert.equal(firstRecovery.renderRepair, undefined);
+  assert.deepEqual(firstRecovery.structuralRecovery, {
+    attempt: 1,
+    failures: ["candidate overlaps the title"],
+    failedActions: ["recompose"],
+  });
+  const secondRecovery = recoverCanvasV2LoopAfterRejectedCandidate(
+    { ...firstRecovery, status: "rendering", renderRepair: { attempt: 3, maxAttempts: 3, failures: ["candidate clips the decision record"] } },
+    ["candidate clips the decision record"],
+    "repair",
+  );
+  assert.equal(secondRecovery.status, "thinking");
+  assert.deepEqual(secondRecovery.structuralRecovery, {
+    attempt: 2,
+    failures: ["candidate overlaps the title", "candidate clips the decision record"],
+    failedActions: ["recompose", "repair"],
+  });
 });
 
 test("continuation starts a fresh bounded run while preserving design direction", () => {
@@ -142,6 +192,7 @@ test("continuation starts a fresh bounded run while preserving design direction"
     instruction: "Recompose",
     continuation: {
       previousRunId: "run-1",
+      historyTransactionId: "run-1",
       priorSteps: [priorStep],
       creativeDirection,
       spatialStrategy,
@@ -157,6 +208,29 @@ test("continuation starts a fresh bounded run while preserving design direction"
   assert.equal(continued.spatialStrategy?.layoutSystem, spatialStrategy.layoutSystem);
   assert.deepEqual(continued.researchTargets, ["Awin", "Ghost"]);
   assert.equal(continued.researchMode, "synthesis");
+  assert.equal(continued.historyTransactionId, "run-1");
+});
+
+test("selection and viewport authority survive every turn and explicit continuation", () => {
+  const started = createCanvasV2Loop({ id: "run-selection", instruction: "Rewrite this heading", workingContext });
+  assert.deepEqual(started.workingContext, workingContext);
+  const committed = recordCanvasV2CommittedEdit({
+    loop: { ...started, status: "rendering" },
+    revisionId: "revision-selection",
+    moveKind: "refinement",
+    summary: "Rewrote the exact selected heading.",
+    expectedVisualResult: "Only the heading copy changes.",
+    creativeDirection,
+    spatialStrategy,
+    reflection,
+  });
+  assert.deepEqual(committed.workingContext, workingContext);
+  const continued = createCanvasV2Loop({
+    id: "run-selection-continuation",
+    instruction: "Continue",
+    continuation: { previousRunId: started.id, workingContext },
+  });
+  assert.deepEqual(continued.workingContext, workingContext);
 });
 
 test("completion, stop, and failure are terminal without synthetic repair", () => {

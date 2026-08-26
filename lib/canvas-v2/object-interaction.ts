@@ -1,3 +1,5 @@
+import type { CanvasV2ResizeHandle } from "@/lib/canvas-v2/workspace-coordinate-space";
+
 export interface CanvasV2ObjectBounds {
   x: number;
   y: number;
@@ -43,9 +45,42 @@ export function scaleCanvasV2ObjectBounds(
   return {
     x: nextSelection.x + (item.x - originalSelection.x) * scaleX,
     y: nextSelection.y + (item.y - originalSelection.y) * scaleY,
-    width: Math.max(MIN_OBJECT_SIZE, item.width * scaleX),
-    height: Math.max(MIN_OBJECT_SIZE, item.height * scaleY),
+    // A line or divider is intentionally thinner than the normal object
+    // minimum. Aggregate resize must preserve that authored thin dimension
+    // instead of inflating a 4px stroke into a 24px rectangle.
+    width: Math.max(Math.min(MIN_OBJECT_SIZE, item.width), item.width * scaleX),
+    height: Math.max(Math.min(MIN_OBJECT_SIZE, item.height), item.height * scaleY),
   };
+}
+
+/**
+ * Shift-resize keeps the selection's aspect ratio while the opposite edge or
+ * corner remains the visual anchor. Edge handles expand around the untouched
+ * axis centre; corner handles retain the ordinary opposite-corner anchor.
+ */
+export function constrainCanvasV2ResizeAspectRatio(
+  original: CanvasV2ObjectBounds,
+  proposed: CanvasV2ObjectBounds,
+  handle: CanvasV2ResizeHandle,
+): CanvasV2ObjectBounds {
+  const horizontal = handle.includes("east") || handle.includes("west");
+  const vertical = handle.includes("north") || handle.includes("south");
+  const widthScale = proposed.width / Math.max(1, original.width);
+  const heightScale = proposed.height / Math.max(1, original.height);
+  const scale = horizontal && vertical
+    ? Math.abs(widthScale - 1) >= Math.abs(heightScale - 1) ? widthScale : heightScale
+    : horizontal ? widthScale : heightScale;
+  const width = original.width * Math.max(0.01, scale);
+  const height = original.height * Math.max(0.01, scale);
+  const right = original.x + original.width;
+  const bottom = original.y + original.height;
+  const x = horizontal
+    ? handle.includes("west") ? right - width : original.x
+    : original.x + (original.width - width) / 2;
+  const y = vertical
+    ? handle.includes("north") ? bottom - height : original.y
+    : original.y + (original.height - height) / 2;
+  return { x, y, width, height };
 }
 
 /**

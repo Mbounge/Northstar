@@ -6,6 +6,7 @@ import {
   canvasV2AllocatedIslandId,
   canvasV2CommittedIslandIdsForSourceValidation,
   canvasV2IslandSourceExcerpt,
+  reconcileCanvasV2OpenRequirements,
   reconcileCanvasV2EvidenceRelativeIslandOrder,
   validateCanvasV2IslandExecution,
 } from "../lib/canvas-v2/island-registry";
@@ -107,6 +108,30 @@ test("island registry exposes unresolved requirements and missing assigned evide
   assert.deepEqual(registry[0].openRequirements, ["Add the closing observed screen"]);
   assert.deepEqual(registry[0].requiredEvidenceIds, ["screen-1", "screen-2"]);
   assert.deepEqual(registry[0].missingRequiredEvidenceIds, ["screen-2"]);
+});
+
+test("semantic requirement paraphrases retain exact committed lifecycle wording", () => {
+  const existing = [
+    "Complete an explicit assumptions ledger with OBSERVED FACTS, ASSUMPTIONS, and OPEN QUESTIONS treatment.",
+    "Complete the evidence-to-decision pathway showing what input would unlock each decision gate.",
+    "Review and refine the NOW / NEXT / LATER actions and prerequisite gates after the dependency field is rendered.",
+  ];
+  assert.deepEqual(reconcileCanvasV2OpenRequirements(existing, [
+    "Complete the assumptions ledger with OBSERVED FACTS, ASSUMPTIONS, and OPEN QUESTIONS treatment.",
+    "Review and refine the NOW / NEXT / LATER actions and prerequisite gates after the ledger and evidence pathway are integrated.",
+  ]), [existing[0], existing[2]]);
+  assert.deepEqual(reconcileCanvasV2OpenRequirements(existing, [
+    "Add decorative polish and a celebratory footer.",
+  ]), ["Add decorative polish and a celebratory footer."]);
+  const workshop = [
+    "Complete the remaining Challenge, Commit, and Write the decision chapters elsewhere on the canvas.",
+    "Add participant instructions, working agreements, timer cues, voting or prioritization affordances, and a parking lot across the finished workshop surface.",
+  ];
+  assert.deepEqual(reconcileCanvasV2OpenRequirements(workshop, [
+    "Complete the Write the decision chapter with chosen segment, rationale, owner, next experiment, success signal, and review date.",
+    "Add visible voting or prioritization affordances for the Commit phase.",
+    "Add a parking lot for unresolved questions.",
+  ]), workshop);
 });
 
 test("island allocation, focused source, and execution are deterministic", () => {

@@ -6,19 +6,28 @@ test("a visually unsafe candidate is repaired from its exact hidden render befor
   const hook = readFileSync("components/canvas-v2/use-canvas-v2-design-loop.ts", "utf8");
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
   assert.match(hook, /MAX_RENDER_REPAIRS = 3/);
-  assert.match(hook, /validateCanvasV2RenderedAnalysisEvidenceScale\(observation\)/);
-  assert.match(hook, /validateCanvasV2RenderedDesignRegionContentIntegrity\(observation\)/);
-  assert.match(hook, /validateCanvasV2RenderedDesignRegionTerritoryIntegrity\(observation\)/);
-  assert.match(hook, /validateCanvasV2RenderedIslandNarrativeIntegrity\(observation\)/);
-  const territoryCheck = hook.indexOf("validateCanvasV2RenderedDesignRegionTerritoryIntegrity(observation)");
-  assert.match(hook, /validateCanvasV2RenderedRelationshipGeometry\(observation\)/);
+  assert.match(hook, /validateCanvasV2RenderedAnalysisEvidenceScale\(factualObservation\)/);
+  assert.match(hook, /validateCanvasV2RenderedDesignRegionContentIntegrity\(factualObservation\)/);
+  assert.match(hook, /validateCanvasV2RenderedDesignRegionLegibility\(factualObservation\)/);
+  assert.match(hook, /validateCanvasV2RenderedDesignRegionTerritoryIntegrity\(factualObservation\)/);
+  assert.match(hook, /validateCanvasV2RenderedIslandNarrativeIntegrity\(factualObservation\)/);
+  assert.match(hook, /validateCanvasV2RenderedRelationshipGeometry\(factualObservation\)/);
+  assert.match(hook, /invalidCanvasV2RenderedRelationshipNodeIds\(factualObservation\)/);
+  assert.match(hook, /retireCanvasV2BrokenAuthoredRelationships\(candidate\.document, invalidRelationshipNodeIds\)/);
+  assert.match(hook, /id\("relationship-recovery-revision"\)/);
+  assert.match(hook, /publishLoop\(\{ \.\.\.loop, status: "rendering" \}\)/);
   assert.match(hook, /setCandidate\(undefined\)/);
-  assert.match(hook, /void askModel\(repairLoop, candidate, observation, committed\)/);
+  assert.match(hook, /const repairFromCommitted = pendingEdit\?\.islandExecution\?\.target\.action === "recompose"/);
+  assert.match(hook, /const wholeBoard = execution\.target\.action === "recompose"/);
+  assert.match(hook, /const exactPlacementRepair = execution\.target\.action === "repair"/);
+  assert.match(hook, /\["above", "below", "left", "right"\]\.includes\(execution\.territory\.relation\)/);
+  assert.match(hook, /node\.sourceNodeId !== exactPlacementRepair/);
+  assert.match(hook, /void askModel\(repairLoop, repairRevision, repairObservation, publicCommitted\)/);
   assert.match(hook, /commitParent: CanvasV2ArtifactRevision = revision/);
   assert.match(hook, /revision\.id !== commitParent\.id \|\| revision\.id !== committedRef\.current\.id/);
   assert.match(hook, /cannot complete from an uncommitted render candidate/);
   assert.match(hook, /parent: commitParent/);
-  assert.match(hook, /rejectedCandidateContext\(candidate\.document, observation\)/);
+  assert.match(hook, /rejectedCandidateContext\(candidate\.document, factualObservation\)/);
   assert.match(hook, /islandExecution: pendingEdit\.islandExecution/);
   assert.match(hook, /cssTail: document\.css\.slice\(-18_000\)/);
   assert.match(hook, /scaleVsCanonicalHeight/);
@@ -26,6 +35,7 @@ test("a visually unsafe candidate is repaired from its exact hidden render befor
   assert.match(hook, /inspectionCandidate: candidate/);
   assert.match(workspace, /canvas-v2-candidate-inspection-surface/);
   assert.match(workspace, /revision=\{engine\.inspectionCandidate\}/);
+  assert.match(workspace, /relocatablePlacementNodeIds=\{engine\.inspectionRelocatableNodeIds\}/);
   assert.match(workspace, /left: -100_000/);
 
   const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
@@ -36,8 +46,19 @@ test("a visually unsafe candidate is repaired from its exact hidden render befor
   assert.match(route, /The uncommitted candidate failed rendered-integrity validation/);
   assert.match(route, /Render repair must preserve the exact failed island transaction/);
   assert.match(route, /repairExecutionContract/);
+  assert.match(route, /retry-whole-board-from-committed-source/);
+  assert.match(route, /Never target canvas-root or reproduce a rejected CSS layer/);
+  assert.match(route, /canvasV2RenderRepairMustPreserveSemanticCopy/);
+  assert.match(route, /This hidden render repair may correct styling and geometry only/);
+  assert.doesNotMatch(route, /explicitPromptCoverageFailures: promptCoverageFailures/);
 
-  const integrityCheck = hook.indexOf("const integrityFailures = [");
+  const nativeScene = readFileSync("lib/canvas-v2/native-scene.ts", "utf8");
+  assert.match(nativeScene, /relocatablePlacementNodeIds/);
+  assert.match(nativeScene, /removeAttribute\("data-canvas-v2-scene-layout"\)/);
+  assert.match(nativeScene, /if \(relocatablePlacementNodeIds\.has\(node\.sourceNodeId\)\) continue/);
+
+  const integrityCheck = hook.indexOf("const nonRelationshipIntegrityFailures = [");
+  const territoryCheck = hook.indexOf("validateCanvasV2RenderedDesignRegionTerritoryIntegrity(factualObservation)", integrityCheck);
   const commit = hook.indexOf("const nextCommitted = commitCanvasV2Candidate", integrityCheck);
   assert.ok(integrityCheck >= 0 && commit > integrityCheck, "rendered integrity must be checked before candidate commit");
   assert.ok(territoryCheck >= integrityCheck && commit > territoryCheck, "canonical territory must be checked before candidate commit");

@@ -73,6 +73,18 @@ test("the standard Awin and Whop journey produces a complete growing evidence-le
   await expect(frame.getByText("The better pattern is not fewer steps.", { exact: false })).toBeVisible();
   await expect(frame.locator('[data-canvas-v2-research-unavailable]')).toHaveCount(0);
 
+  // Framing, two research insertions, composition, analysis, and refinement
+  // are progressive verified revisions inside one Northstar turn. The user
+  // sees those passes happen, but one undo restores the exact pre-turn canvas
+  // and one redo restores the final verified composition.
+  const completedTurnRevision = await committedRevision(page).textContent();
+  await canvasApp(page).getByRole("button", { name: "Undo" }).click();
+  await expect(committedRevision(page)).toHaveText("canvas-v2-initial-revision");
+  await expect(frame.locator("[data-e2e-stage]")).toHaveCount(0);
+  await canvasApp(page).getByRole("button", { name: "Redo" }).click();
+  await expect(committedRevision(page)).toHaveText(completedTurnRevision ?? "");
+  await expect(frame.locator('[data-e2e-stage="refinement"]')).toHaveCount(1);
+
   const switchToDark = page.getByRole("button", { name: "Switch to dark mode" });
   if (await switchToDark.count()) await switchToDark.click();
   await expect(page.getByRole("button", { name: "Switch to light mode" })).toBeVisible();
@@ -110,6 +122,104 @@ test("the standard Awin and Whop journey produces a complete growing evidence-le
       .map((screen) => screen.dataset.canvasV2NodeId ?? "unknown-screen");
   }));
   expect(clippedScreens).toEqual([]);
+
+  // The populated board keeps one public native scene. Its full-size hidden
+  // compiler is retired after measurement, evidence images decode lazily, and
+  // camera bursts still avoid one React render per input event.
+  await expect(page.getByTestId("canvas-v2-native-compiler")).toHaveCount(0);
+  const evidenceImages = frame.locator('img[data-canvas-v2-evidence-role="canonical"]');
+  await expect(evidenceImages.first()).toHaveAttribute("loading", "lazy");
+  await expect(evidenceImages.first()).toHaveAttribute("decoding", "async");
+  await expect(evidenceImages.first()).toHaveCSS("content-visibility", "auto");
+  expect(await frame.locator('[data-canvas-v2-native-runtime-node="true"]').count()).toBeGreaterThan(100);
+  const workspace = page.getByRole("region", { name: "Canvas workspace" });
+  const populatedCameraBurst = await workspace.evaluate((element) => {
+    const before = Number(element.getAttribute("data-canvas-v2-render-count"));
+    const bounds = element.getBoundingClientRect();
+    let handled = true;
+    for (let index = 0; index < 64; index += 1) {
+      handled &&= !element.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: bounds.left + bounds.width * 0.72,
+        clientY: bounds.top + bounds.height * 0.54,
+        deltaX: 1.5,
+        deltaY: 1,
+      }));
+    }
+    return { before, during: Number(element.getAttribute("data-canvas-v2-render-count")), handled };
+  });
+  expect(populatedCameraBurst).toMatchObject({ during: populatedCameraBurst.before, handled: true });
+  await expect.poll(() => workspace.getAttribute("data-canvas-v2-camera-preview")).toBeNull();
+  // Image settling and the final AI observation may legitimately publish a
+  // few unrelated workspace renders here. The camera burst itself must still
+  // be decisively sublinear rather than producing 64 scene renders.
+  expect(Number(await workspace.getAttribute("data-canvas-v2-render-count")) - populatedCameraBurst.before).toBeLessThanOrEqual(8);
+});
+
+test("Northstar revises the exact selected human-authored object without rebuilding the board or moving the camera", async ({ page }) => {
+  test.setTimeout(90_000);
+  await send(page, STANDARD_PROMPT);
+  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
+  await page.getByTitle("Fit content").click();
+
+  const frame = canvasFrame(page);
+  const workspace = page.getByRole("region", { name: "Canvas workspace" });
+  const surface = workspace.getByTestId("canvas-v2-workspace-surface");
+  const deck = frame.locator('[data-canvas-v2-node-id="editorial-deck"]');
+  await canvasApp(page).getByTitle("Create Text").click();
+  const humanText = frame.locator('[data-canvas-v2-node-id^="manual-text-"]');
+  await expect(humanText).toHaveCount(1);
+  const humanTextId = await humanText.getAttribute("data-canvas-v2-node-id");
+  expect(humanTextId).toBeTruthy();
+  await expect(humanText).toHaveText("New text");
+  await expect(humanText).toHaveAttribute("data-canvas-v2-origin", "user");
+  await expect(humanText).toHaveAttribute("data-canvas-v2-user-edited", /create/);
+  await expect(humanText).toHaveAttribute("data-canvas-v2-last-author", "user");
+  await expect(humanText).toHaveAttribute("data-canvas-v2-edit-version", "1");
+  await expect(page.getByText(`Selected · ${humanTextId}`, { exact: true })).toBeVisible();
+  const before = {
+    nodeCount: await frame.locator("[data-canvas-v2-node-id]").count(),
+    deckSourceState: await deck.evaluate((element) => ({
+      text: element.textContent,
+      className: element.getAttribute("class"),
+      origin: element.getAttribute("data-canvas-v2-origin"),
+      lastAuthor: element.getAttribute("data-canvas-v2-last-author"),
+      editVersion: element.getAttribute("data-canvas-v2-edit-version"),
+    })),
+    deckBounds: await deck.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    }),
+    cameraTransform: await surface.evaluate((element) => getComputedStyle(element).transform),
+    zoom: await page.getByTestId("canvas-v2-navigation-controls").locator('button[title*="Pinch to zoom"]').textContent(),
+    revision: await committedRevision(page).textContent(),
+  };
+
+  await send(page, "Rewrite this selected heading to Evidence-led decision.");
+  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
+  await expect(humanText).toHaveText("Evidence-led decision.");
+  await expect(humanText).toHaveCount(1);
+  await expect(humanText).toHaveAttribute("data-canvas-v2-origin", "user");
+  await expect(humanText).toHaveAttribute("data-canvas-v2-user-edited", /create/);
+  await expect(humanText).toHaveAttribute("data-canvas-v2-last-author", "northstar");
+  await expect(humanText).toHaveAttribute("data-canvas-v2-edit-version", "2");
+  await expect(committedRevision(page)).not.toHaveText(before.revision ?? "");
+  expect(await frame.locator("[data-canvas-v2-node-id]").count()).toBe(before.nodeCount);
+  expect(await deck.evaluate((element) => ({
+    text: element.textContent,
+    className: element.getAttribute("class"),
+    origin: element.getAttribute("data-canvas-v2-origin"),
+    lastAuthor: element.getAttribute("data-canvas-v2-last-author"),
+    editVersion: element.getAttribute("data-canvas-v2-edit-version"),
+  }))).toEqual(before.deckSourceState);
+  expect(await deck.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  })).toEqual(before.deckBounds);
+  expect(await surface.evaluate((element) => getComputedStyle(element).transform)).toBe(before.cameraTransform);
+  expect(await page.getByTestId("canvas-v2-navigation-controls").locator('button[title*="Pinch to zoom"]').textContent()).toBe(before.zoom);
+  await expect(page.getByText("The selected heading was updated without rebuilding or changing the surrounding canvas.")).toBeVisible();
 });
 
 test("single and multi-selected canonical screenshots delete through toolbar and keyboard transactions", async ({ page }) => {
@@ -178,10 +288,10 @@ test("AI authorship finds real open territory around an existing human object an
   });
   const humanBefore = await worldGeometry(humanShape);
   const surface = canvasApp(page).getByRole("region", { name: "Canvas workspace" }).getByTestId("canvas-v2-workspace-surface");
-  const camera = async () => surface.evaluate((element) => ({
-    left: Number.parseFloat(getComputedStyle(element).left),
-    top: Number.parseFloat(getComputedStyle(element).top),
-  }));
+  const camera = async () => surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  });
   const cameraBeforeAuthorship = await camera();
   // The object remains on the multiplayer board, but the prompt is a
   // whole-board composition request rather than an explicit selection edit.
@@ -222,15 +332,15 @@ test("AI authorship finds real open territory around an existing human object an
   }, await humanShape.getAttribute("data-canvas-v2-node-id"));
   expect(rootOverlaps).toEqual([]);
 
-  const cameraBefore = await surface.evaluate((element) => getComputedStyle(element).left);
+  const cameraBefore = await surface.evaluate((element) => element.getBoundingClientRect().left);
   const titleWorldBefore = await worldGeometry(title);
   const titleScreenBefore = await title.boundingBox();
-  await canvasApp(page).getByTitle("Pan").click();
+  await canvasApp(page).getByTitle("Pan", { exact: true }).click();
   await page.mouse.move(920, 500);
   await page.mouse.down();
   await page.mouse.move(680, 500, { steps: 6 });
   await page.mouse.up();
-  await expect.poll(() => surface.evaluate((element) => getComputedStyle(element).left)).not.toBe(cameraBefore);
+  await expect.poll(() => surface.evaluate((element) => element.getBoundingClientRect().left)).not.toBe(cameraBefore);
   await expect.poll(() => worldGeometry(humanShape)).toEqual(humanBefore);
   await expect.poll(() => worldGeometry(title)).toEqual(titleWorldBefore);
   const titleScreenAfter = await title.boundingBox();
@@ -350,10 +460,10 @@ test("every AI-authored stage is honestly placed outside chat without moving the
     await route.continue();
   });
   const surface = canvasApp(page).getByRole("region", { name: "Canvas workspace" }).getByTestId("canvas-v2-workspace-surface");
-  const camera = async () => surface.evaluate((element) => ({
-    left: Number.parseFloat(getComputedStyle(element).left),
-    top: Number.parseFloat(getComputedStyle(element).top),
-  }));
+  const camera = async () => surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  });
   const initialCamera = await camera();
   await send(page, STANDARD_PROMPT);
   const frame = canvasFrame(page);
@@ -365,12 +475,14 @@ test("every AI-authored stage is honestly placed outside chat without moving the
     await expect.poll(async () => {
       const targetBounds = await target.boundingBox();
       const panelBounds = await panel.boundingBox();
-      if (!targetBounds || !panelBounds) return false;
-      return targetBounds.x >= panelBounds.x + panelBounds.width + 12
-        && targetBounds.y >= 80
-        && targetBounds.x < 1_440
-        && targetBounds.y < 850;
-    }).toBe(true);
+      if (!targetBounds || !panelBounds) return { clearOfPanel: false, belowChrome: false, insideViewport: false };
+      return {
+        clearOfPanel: targetBounds.x >= panelBounds.x + panelBounds.width + 12,
+        panelGap: Math.round((targetBounds.x - panelBounds.x - panelBounds.width) * 10) / 10,
+        belowChrome: targetBounds.y >= 80,
+        insideViewport: targetBounds.x < 1_440 && targetBounds.y < 850,
+      };
+    }).toMatchObject({ clearOfPanel: true, belowChrome: true, insideViewport: true });
   };
 
   await expectRevealedBesidePanel(frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"]'));
@@ -429,10 +541,10 @@ test("a formerly edge-bound title commits as visible native objects without a re
 test("AI never changes the camera and manual navigation remains authoritative", async ({ page }) => {
   test.setTimeout(90_000);
   const surface = canvasApp(page).getByRole("region", { name: "Canvas workspace" }).getByTestId("canvas-v2-workspace-surface");
-  const camera = async () => surface.evaluate((element) => ({
-    left: Number.parseFloat(getComputedStyle(element).left),
-    top: Number.parseFloat(getComputedStyle(element).top),
-  }));
+  const camera = async () => surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  });
   const before = await camera();
   await send(page, STANDARD_PROMPT);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
@@ -550,10 +662,10 @@ test("AI-authored screenshots use the same atomic move and resize lifecycle as n
   // Generated lanes and flows are layout structure, never implicit groups.
   // They do not appear as selectable objects in Layers, and manipulating a
   // sibling screen moves only that precise screen.
-  await page.getByRole("button", { name: "Layer", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   const layers = page.getByRole("complementary", { name: "Layers panel" });
   await expect(layers.getByRole("button").filter({ hasText: formerLandingParentId! })).toHaveCount(0);
-  await page.getByRole("button", { name: "Layer", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   const detachedLandingBeforeSiblingMove = await landing.boundingBox();
   const signInBeforeSiblingMove = await signIn.boundingBox();
   expect(detachedLandingBeforeSiblingMove).not.toBeNull();
@@ -847,6 +959,42 @@ test("the production canvas route shares camera, singular selection, and mutatio
 
   await expect(frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"] [data-canvas-v2-evidence-role="canonical"]')).toHaveCount(48);
   await expect(frame.locator('[data-canvas-v2-canonical-flow="flow:whop:onboarding"] [data-canvas-v2-evidence-role="canonical"]')).toHaveCount(18);
+  await expect(page.getByTestId("canvas-v2-native-compiler")).toHaveCount(0);
+  expect(await frame.locator('[data-canvas-v2-native-runtime-node="true"]').count()).toBeGreaterThan(100);
+  const workspace = page.getByRole("region", { name: "Canvas workspace" });
+  const productionSurface = workspace.getByTestId("canvas-v2-workspace-surface");
+  await canvasApp(page).getByTitle("Create Text").click();
+  const productionHumanText = frame.locator('[data-canvas-v2-node-id^="manual-text-"]');
+  await expect(productionHumanText).toHaveCount(1);
+  await expect(productionHumanText).toHaveAttribute("data-canvas-v2-origin", "user");
+  const productionNodeCount = await frame.locator("[data-canvas-v2-node-id]").count();
+  const productionCamera = await productionSurface.evaluate((element) => getComputedStyle(element).transform);
+  const productionDeckText = await frame.locator('[data-canvas-v2-node-id="editorial-deck"]').textContent();
+  await send(page, "Rewrite this selected heading to Evidence-led decision.");
+  await expect(productionHumanText).toHaveText("Evidence-led decision.", { timeout: 60_000 });
+  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
+  await expect(productionHumanText).toHaveAttribute("data-canvas-v2-origin", "user");
+  await expect(productionHumanText).toHaveAttribute("data-canvas-v2-user-edited", /create/);
+  await expect(productionHumanText).toHaveAttribute("data-canvas-v2-last-author", "northstar");
+  await expect(productionHumanText).toHaveAttribute("data-canvas-v2-edit-version", "2");
+  expect(await frame.locator("[data-canvas-v2-node-id]").count()).toBe(productionNodeCount);
+  expect(await frame.locator('[data-canvas-v2-node-id="editorial-deck"]').textContent()).toBe(productionDeckText);
+  expect(await productionSurface.evaluate((element) => getComputedStyle(element).transform)).toBe(productionCamera);
+  await expect(page.getByTitle("Fit content")).toHaveText("24%");
+
+  // Human creation and the following Northstar edit share one coherent
+  // history without being merged: undo restores the user's authored text,
+  // and redo returns the exact AI revision.
+  const selectedAiRevision = await committedRevision(page).textContent();
+  await canvasApp(page).getByRole("button", { name: "Undo" }).click();
+  await expect(productionHumanText).toHaveText("New text");
+  await expect(productionHumanText).toHaveAttribute("data-canvas-v2-last-author", "user");
+  await canvasApp(page).getByRole("button", { name: "Redo" }).click();
+  await expect(committedRevision(page)).toHaveText(selectedAiRevision ?? "");
+  await expect(productionHumanText).toHaveText("Evidence-led decision.");
+  await expect(page.getByTestId("canvas-v2-native-compiler")).toHaveCount(0);
+  await page.waitForTimeout(1_800);
+
   const first = frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"] [data-canvas-v2-flow-index="0"]');
   const second = frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"] [data-canvas-v2-flow-index="1"]');
   const firstBounds = await first.boundingBox();
@@ -878,7 +1026,10 @@ test("the production canvas route shares camera, singular selection, and mutatio
   const center = { x: before!.x + before!.width / 2, y: before!.y + before!.height / 2 };
   await page.mouse.move(center.x, center.y);
   await page.mouse.down();
-  await page.mouse.move(center.x - 92, center.y + 134, { steps: 7 });
+  const dragPreviewRenderCount = Number(await workspace.getAttribute("data-canvas-v2-render-count"));
+  await page.mouse.move(center.x - 92, center.y + 134, { steps: 24 });
+  expect(Number(await workspace.getAttribute("data-canvas-v2-render-count")) - dragPreviewRenderCount).toBeLessThanOrEqual(2);
+  await expect(terminal).toHaveAttribute("data-canvas-v2-native-transient", "true");
   await page.mouse.up();
   const moved = await terminal.boundingBox();
   expect(moved).not.toBeNull();
@@ -890,7 +1041,9 @@ test("the production canvas route shares camera, singular selection, and mutatio
   expect(resizeHandleBounds).not.toBeNull();
   await page.mouse.move(resizeHandleBounds!.x + resizeHandleBounds!.width / 2, resizeHandleBounds!.y + resizeHandleBounds!.height / 2);
   await page.mouse.down();
-  await page.mouse.move(resizeHandleBounds!.x + 46, resizeHandleBounds!.y + 56, { steps: 6 });
+  const resizePreviewRenderCount = Number(await workspace.getAttribute("data-canvas-v2-render-count"));
+  await page.mouse.move(resizeHandleBounds!.x + 46, resizeHandleBounds!.y + 56, { steps: 24 });
+  expect(Number(await workspace.getAttribute("data-canvas-v2-render-count")) - resizePreviewRenderCount).toBeLessThanOrEqual(2);
   const resized = await terminal.boundingBox();
   await page.mouse.up();
   expect(resized).not.toBeNull();
@@ -976,10 +1129,10 @@ test("an unrelated market problem routes to a distinct composition without fabri
 test("a large two-dimensional discovery landscape grows, fits, remains selectable, and resets on reload", async ({ page }) => {
   test.setTimeout(180_000);
   const surface = canvasApp(page).getByRole("region", { name: "Canvas workspace" }).getByTestId("canvas-v2-workspace-surface");
-  const camera = async () => surface.evaluate((element) => ({
-    left: Number.parseFloat(getComputedStyle(element).left),
-    top: Number.parseFloat(getComputedStyle(element).top),
-  }));
+  const camera = async () => surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  });
   const cameraBeforeAuthorship = await camera();
   await send(page, "Create a large two-dimensional discovery landscape that places evidence, opportunity, experiments, and the final decision across both axes.");
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 30_000 });
@@ -1041,13 +1194,100 @@ test("a large two-dimensional discovery landscape grows, fits, remains selectabl
 test("manual creation and history remain usable on the same source-authority path", async ({ page }) => {
   await canvasApp(page).getByTitle("Create Text").click();
   const frame = canvasFrame(page);
+  const text = frame.getByText("New text", { exact: true });
+  await expect(text).toBeVisible();
+
+  const textBounds = await text.boundingBox();
+  expect(textBounds).not.toBeNull();
+  // Enter through the painted glyph area, away from the resize hit targets
+  // intentionally surrounding a selected text object's edges.
+  await text.dblclick({ position: { x: Math.min(20, textBounds!.width * 0.25), y: textBounds!.height / 2 } });
+  const inlineEditor = frame.getByRole("textbox", { name: /Edit manual-text-.+ on canvas/ });
+  await expect(inlineEditor).toBeVisible();
+  await inlineEditor.fill("Edited exactly once");
+  await inlineEditor.press("ControlOrMeta+Enter");
+  await expect(frame.getByText("Edited exactly once", { exact: true })).toBeVisible();
+  await canvasApp(page).getByRole("button", { name: "Undo" }).click();
   await expect(frame.getByText("New text", { exact: true })).toBeVisible();
   await canvasApp(page).getByRole("button", { name: "Undo" }).click();
   await expect(frame.getByText("New text", { exact: true })).toHaveCount(0);
   await canvasApp(page).getByRole("button", { name: "Redo" }).click();
-  await expect(frame.getByText("New text", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Layer", exact: true }).click();
+  await canvasApp(page).getByRole("button", { name: "Redo" }).click();
+  await expect(frame.getByText("Edited exactly once", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await expect(page.getByRole("complementary", { name: "Layers panel" })).toContainText("manual-text");
+});
+
+test("trackpad navigation previews continuously without rerendering the scene per wheel event", async ({ page }) => {
+  const workspace = page.getByRole("region", { name: "Canvas workspace" });
+  const surface = workspace.getByTestId("canvas-v2-workspace-surface");
+  const controls = page.getByTestId("canvas-v2-navigation-controls");
+  const percentage = controls.locator('button[title*="Pinch to zoom"]');
+  await expect(controls).toBeVisible();
+  await expect(percentage).toContainText("24%");
+  await expect(page.getByTestId("canvas-v2-native-compiler")).toHaveCount(0);
+
+  const controlsBounds = await controls.boundingBox();
+  const viewportSize = page.viewportSize();
+  expect(controlsBounds).not.toBeNull();
+  expect(viewportSize).not.toBeNull();
+  expect(controlsBounds!.height).toBeLessThanOrEqual(42);
+  expect(viewportSize!.width - controlsBounds!.x - controlsBounds!.width).toBeLessThanOrEqual(24);
+  expect(viewportSize!.height - controlsBounds!.y - controlsBounds!.height).toBeLessThanOrEqual(24);
+
+  const cameraBefore = await surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  });
+  const previewResult = await workspace.evaluate((element) => {
+    const renderCount = Number(element.getAttribute("data-canvas-v2-render-count"));
+    const bounds = element.getBoundingClientRect();
+    let browserZoomSuppressed = true;
+    for (let index = 0; index < 48; index += 1) {
+      const unhandled = element.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: bounds.left + bounds.width * 0.62,
+        clientY: bounds.top + bounds.height * 0.48,
+        deltaX: 2.5,
+        deltaY: 1.75,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      }));
+      browserZoomSuppressed &&= !unhandled;
+    }
+    return {
+      before: renderCount,
+      during: Number(element.getAttribute("data-canvas-v2-render-count")),
+      previewActive: element.getAttribute("data-canvas-v2-camera-preview"),
+      browserZoomSuppressed,
+    };
+  });
+  expect(previewResult.during).toBe(previewResult.before);
+  expect(previewResult.previewActive).toBe("active");
+  expect(previewResult.browserZoomSuppressed).toBe(true);
+  await expect.poll(() => surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  })).not.toEqual(cameraBefore);
+  await expect.poll(() => workspace.getAttribute("data-canvas-v2-camera-preview")).toBeNull();
+  const committedRenderCount = Number(await workspace.getAttribute("data-canvas-v2-render-count"));
+  expect(committedRenderCount - previewResult.before).toBeLessThanOrEqual(2);
+
+  const scaleBefore = Number.parseInt(await percentage.textContent() ?? "0", 10);
+  const pinchHandledByCanvas = await workspace.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return !element.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      clientX: bounds.left + bounds.width * 0.55,
+      clientY: bounds.top + bounds.height * 0.44,
+      deltaY: -80,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      ctrlKey: true,
+    }));
+  });
+  expect(pinchHandledByCanvas).toBe(true);
+  await expect.poll(async () => Number.parseInt(await percentage.textContent() ?? "0", 10)).toBeGreaterThan(scaleBefore);
 });
 
 test("Patch 8A uses one finite workspace and preserves direct human manipulation as source truth", async ({ page }) => {
@@ -1056,25 +1296,34 @@ test("Patch 8A uses one finite workspace and preserves direct human manipulation
   await expect(surface).toBeVisible();
   await expect(surface).toHaveCSS("width", "12000px");
   await expect(surface).toHaveCSS("height", "8000px");
-  // The first rendered camera must already be legal. Previously the surface
-  // booted at a stale positive offset and only snapped onto the real canvas
-  // after the first zoom, creating a phantom boundary for manual objects.
-  await expect(surface).toHaveCSS("left", "0px");
-  await expect(surface).toHaveCSS("top", "0px");
-  await expect(workspace).toHaveCSS("background-color", "rgb(17, 17, 23)");
+  // The first rendered camera must already be legal and centered on the true
+  // finite board. A fresh session cannot begin at a phantom positive offset
+  // or silently privilege the canvas's upper-left corner.
+  await expect.poll(async () => surface.evaluate((element) => {
+    const workspace = element.closest<HTMLElement>('[aria-label="Canvas workspace"]');
+    if (!workspace) return false;
+    const surfaceBounds = element.getBoundingClientRect();
+    const workspaceBounds = workspace.getBoundingClientRect();
+    const scale = surfaceBounds.width / 12_000;
+    return Math.abs(surfaceBounds.left + 6_000 * scale - (workspaceBounds.left + workspaceBounds.width / 2)) < 0.1
+      && Math.abs(surfaceBounds.top + 4_000 * scale - (workspaceBounds.top + workspaceBounds.height / 2)) < 0.1;
+  })).toBe(true);
+  await expect(workspace).toHaveCSS("background-color", "rgb(13, 14, 22)");
   const frame = canvasFrame(page);
   await expect(frame).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 
-  const cameraBeforeIframeNavigation = await surface.evaluate((element) => ({
-    left: getComputedStyle(element).left,
-    top: getComputedStyle(element).top,
-  }));
-  await frame.hover({ position: { x: 640, y: 420 } });
+  const cameraBeforeIframeNavigation = await surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  });
+  const workspaceBounds = await workspace.boundingBox();
+  expect(workspaceBounds).not.toBeNull();
+  await page.mouse.move(workspaceBounds!.x + 640, workspaceBounds!.y + 420);
   await page.mouse.wheel(96, 128);
-  await expect.poll(() => surface.evaluate((element) => ({
-    left: getComputedStyle(element).left,
-    top: getComputedStyle(element).top,
-  }))).not.toEqual(cameraBeforeIframeNavigation);
+  await expect.poll(() => surface.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top };
+  })).not.toEqual(cameraBeforeIframeNavigation);
 
   const composer = page.getByLabel("Message North Star");
   await composer.fill("Build a balanced executive comparison with representative flows, clear annotations, and a visible working surface so I can inspect how the solution came together.");
@@ -1088,9 +1337,9 @@ test("Patch 8A uses one finite workspace and preserves direct human manipulation
   expect(composerGeometry.clientHeight).toBeGreaterThanOrEqual(composerGeometry.scrollHeight - 2);
 
   await page.getByRole("button", { name: "Switch to light mode" }).click();
-  await expect(workspace).toHaveCSS("background-color", "rgb(254, 254, 255)");
+  await expect(workspace).toHaveCSS("background-color", "rgb(250, 251, 255)");
   await page.getByRole("button", { name: "Switch to dark mode" }).click();
-  await expect(workspace).toHaveCSS("background-color", "rgb(17, 17, 23)");
+  await expect(workspace).toHaveCSS("background-color", "rgb(13, 14, 22)");
 
   await page.getByRole("button", { name: "Collapse North Star panel" }).click();
   await expect(page.getByTestId("canvas-v2-floating-panel")).toHaveCount(0);
@@ -1120,16 +1369,25 @@ test("Patch 8A uses one finite workspace and preserves direct human manipulation
 
   const resizeHandle = page.getByRole("button", { name: /Resize manual-shape-.+ from south-east/ });
   const handleBounds = await resizeHandle.boundingBox();
+  const revisionBeforeResize = await committedRevision(page).textContent();
   expect(handleBounds).not.toBeNull();
   await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
   await page.mouse.down();
-  await page.mouse.move(handleBounds!.x + 48, handleBounds!.y + 36, { steps: 4 });
+  const resizePreviewRenderCount = Number(await workspace.getAttribute("data-canvas-v2-render-count"));
+  await page.mouse.move(handleBounds!.x + 48, handleBounds!.y + 36, { steps: 24 });
+  // Pointer traffic never drives scene rendering. A bounded pair of unrelated
+  // shell/observer settles is allowed in development, independent of 24 input
+  // events and protected further by memoized native nodes.
+  expect(Number(await workspace.getAttribute("data-canvas-v2-render-count")) - resizePreviewRenderCount).toBeLessThanOrEqual(2);
+  await expect(shape).toHaveAttribute("data-canvas-v2-native-transient", "true");
   const liveResizeBounds = await shape.boundingBox();
   const selectionBounds = page.getByTestId("canvas-v2-element-selection");
   const liveSelectionBounds = await selectionBounds.boundingBox();
   expect(liveResizeBounds).not.toBeNull();
   expect(liveSelectionBounds).not.toBeNull();
+  await expect(committedRevision(page)).toHaveText(revisionBeforeResize ?? "");
   await page.mouse.up();
+  await expect(committedRevision(page)).not.toHaveText(revisionBeforeResize ?? "");
   await expect(shape).toHaveAttribute("data-canvas-v2-edit-version", "3");
   await expect(shape).toHaveAttribute("data-canvas-v2-user-edited", /transform/);
   const releaseFrameBounds = await page.evaluate(async ({ shapeId }) => {
@@ -1230,7 +1488,10 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
   const firstMarqueeBounds = await marquee.boundingBox();
   expect(firstMarqueeBounds).not.toBeNull();
   await expect(marquee).toHaveCSS("border-top-width", "1px");
-  await page.mouse.move(marqueeEnd.x, marqueeEnd.y, { steps: 6 });
+  const workspace = page.getByRole("region", { name: "Canvas workspace" });
+  const marqueePreviewRenderCount = Number(await workspace.getAttribute("data-canvas-v2-render-count"));
+  await page.mouse.move(marqueeEnd.x, marqueeEnd.y, { steps: 24 });
+  expect(Number(await workspace.getAttribute("data-canvas-v2-render-count"))).toBe(marqueePreviewRenderCount);
   const finalMarqueeBounds = await marquee.boundingBox();
   expect(finalMarqueeBounds).not.toBeNull();
   expect(Math.abs(finalMarqueeBounds!.x - firstMarqueeBounds!.x)).toBeLessThan(1);
@@ -1371,13 +1632,13 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
       ) < 2);
   }).toBe(true);
 
-  await page.getByRole("button", { name: "Layer", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await expect(page.getByRole("complementary", { name: "Layers panel" })).toContainText("manual-group-");
 
-  await page.getByRole("button", { name: "Layer", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await inspector.getByRole("button", { name: /Ungroup/ }).click();
   await expect(group).toHaveCount(0);
-  await page.getByRole("button", { name: "Layer", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await page.getByRole("complementary", { name: "Layers panel" }).getByRole("button", { name: /^textmanual-text-/ }).click();
   const beforeNudge = await text.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
@@ -1404,7 +1665,7 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
   // Layers is an unobstructed alternate selection surface. Opening it hides
   // the contextual toolbar until a layer is chosen, then restores the toolbar
   // for the newly selected native object.
-  await page.getByRole("button", { name: "Layer", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await page.getByRole("complementary", { name: "Layers panel" }).getByRole("button", { name: /^objectmanual-shape-/ }).click();
   const rotateHandle = page.getByRole("button", { name: /Rotate selected objects from north-east/ });
   const rotateBounds = await rotateHandle.boundingBox();

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange } from "../lib/canvas-v2/source-patch";
+import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange, repairCanvasV2RenderedRelationshipGeometry, retireCanvasV2BrokenAuthoredRelationships, retireCanvasV2CollidingRelationshipLabels } from "../lib/canvas-v2/source-patch";
 import { validateCanvasV2EvidenceContinuity } from "../lib/canvas-v2/artifact-safety";
 import { compactCanvasV2IslandSourceForModel } from "../lib/canvas-v2/model-context";
+import type { CanvasV2WorkingContext } from "../lib/canvas-v2/working-context";
 
 const evidence = [{ id: "screen-1", url: "https://evidence.test/screen-1.png", label: "Screen 1" }];
 const previous = {
@@ -11,11 +12,178 @@ const previous = {
   css: ".northstar-canvas { display:block; }",
 };
 
+function selectionContext(policy: "modify" | "reference" = "modify"): CanvasV2WorkingContext {
+  return {
+    schema: "canvas-v2.working-context.v1",
+    scope: "selection",
+    selectionPolicy: policy,
+    selectedNodeIds: ["selected-title"],
+    selectedBounds: { x: 400, y: 300, width: 480, height: 72 },
+    visibleBounds: { x: 0, y: 0, width: 1_600, height: 900 },
+    viewportScale: 1,
+    visibleNodeIds: ["selected-title", "unselected-note"],
+    nearbyNodeIds: ["selected-title", "unselected-note"],
+    editableNodeIds: policy === "modify" ? ["selected-title"] : [],
+    protectedNodeIds: policy === "reference" ? ["selected-title"] : ["unselected-note"],
+    objects: [],
+    relationships: [],
+  };
+}
+
 test("source node ranges survive nested elements with the same tag", () => {
   const html = '<main data-canvas-v2-node-id="a"><main data-canvas-v2-node-id="b"></main></main>';
   const range = findCanvasV2SourceNodeRange(html, "a");
   assert.equal(range?.start, 0);
   assert.equal(range?.end, html.length);
+});
+
+test("exhausted relationship repair retires only exact broken relationship marks", () => {
+  const document = {
+    html: '<section data-canvas-v2-node-id="island"><p data-canvas-v2-node-id="copy">Keep me</p><svg data-canvas-v2-node-id="logic"><path data-canvas-v2-node-id="broken-line" data-canvas-v2-relationship-source="copy" data-canvas-v2-relationship-target="result" d="M0 0L10 10"></path><path data-canvas-v2-node-id="good-line" data-canvas-v2-relationship-source="copy" data-canvas-v2-relationship-target="result" d="M0 0L20 20"></path></svg><p data-canvas-v2-node-id="result">Result</p></section>',
+    css: '[data-canvas-v2-node-id="island"]{display:grid}',
+  };
+  const recovered = retireCanvasV2BrokenAuthoredRelationships(document, ["broken-line", "copy", "unknown"]);
+  assert.doesNotMatch(recovered.html, /broken-line/);
+  assert.match(recovered.html, /good-line/);
+  assert.match(recovered.html, /Keep me/);
+  assert.equal(recovered.css, document.css);
+});
+
+test("relationship recovery removes only colliding optional SVG labels", () => {
+  const document = {
+    html: '<section data-canvas-v2-node-id="island"><h2 data-canvas-v2-node-id="stage-title">Evidence</h2><svg data-canvas-v2-node-id="logic"><path data-canvas-v2-node-id="required-line" data-canvas-v2-relationship-source="stage-title" data-canvas-v2-relationship-target="result" d="M0 0L20 20"></path><text data-canvas-v2-node-id="transition-label-notice">NOTICE</text><text data-canvas-v2-node-id="confidence-label">CONFIDENCE</text></svg><p data-canvas-v2-node-id="result">Result</p></section>',
+    css: "",
+  };
+  const recovered = retireCanvasV2CollidingRelationshipLabels(document, ["transition-label-notice", "required-line", "stage-title", "confidence-label"]);
+  assert.doesNotMatch(recovered.html, /transition-label-notice/);
+  assert.match(recovered.html, /required-line/);
+  assert.match(recovered.html, /stage-title/);
+  assert.match(recovered.html, /confidence-label/);
+});
+
+test("relationship geometry recovery snaps only measured endpoints while preserving the authored route and styling", () => {
+  const document = {
+    html: '<section data-canvas-v2-node-id="island"><svg data-canvas-v2-node-id="logic"><path data-canvas-v2-node-id="required-line" data-canvas-v2-relationship-source="source" data-canvas-v2-relationship-target="target" marker-end="url(#arrow)" d="M 20 30 C 80 5 140 95 200 70"></path></svg></section>',
+    css: '[data-canvas-v2-node-id="required-line"]{stroke:#6d4aff}',
+  };
+  const recovered = repairCanvasV2RenderedRelationshipGeometry(document, [{
+    nodeId: "required-line",
+    tagName: "path",
+    sourceNodeIds: ["source"],
+    targetNodeIds: ["target"],
+    bounds: { x: 20, y: 5, width: 180, height: 90 },
+    geometryMidLocalPoint: { x: 108, y: 48 },
+    geometrySuggestedStartLocalPoint: { x: 32, y: 42 },
+    geometrySuggestedEndLocalPoint: { x: 188, y: 76 },
+  }]);
+  assert.match(recovered.html, /d="M 32 42 Q 106 37 188 76"/);
+  assert.match(recovered.html, /marker-end="url\(#arrow\)"/);
+  assert.match(recovered.html, /data-canvas-v2-relationship-source="source"/);
+  assert.equal(recovered.css, document.css);
+});
+
+test("appending to inert workspace metadata creates a body-level native object", () => {
+  const workspace = {
+    html: '<template data-canvas-v2-node-id="canvas-root" data-canvas-v2-workspace-root="true"></template><section data-canvas-v2-node-id="title" data-canvas-v2-design-region data-canvas-v2-story-role="title"><h1 data-canvas-v2-node-id="heading">Title</h1></section>',
+    css: "",
+  };
+  const next = applyCanvasV2SourcePatch({
+    previous: workspace,
+    evidence: [],
+    operations: [{
+      op: "append-html",
+      targetNodeId: "canvas-root",
+      html: '<section data-canvas-v2-node-id="analysis" data-canvas-v2-design-region><h2 data-canvas-v2-node-id="analysis-heading">Analysis</h2></section>',
+    }],
+  });
+  assert.ok(next.html.indexOf('data-canvas-v2-node-id="title"') < next.html.indexOf('data-canvas-v2-node-id="analysis"'));
+  assert.match(next.html, /<\/section><section[^>]+data-canvas-v2-node-id="analysis"/);
+  assert.doesNotMatch(next.html, /<template[^>]*><section/);
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: workspace,
+    evidence: [],
+    operations: [{ op: "remove-node", targetNodeId: "canvas-root" }],
+  }), /workspace metadata is immutable/i);
+});
+
+test("model CSS cannot use inert workspace metadata as a layout parent", () => {
+  const workspace = {
+    html: '<template data-canvas-v2-node-id="canvas-root" data-canvas-v2-workspace-root="true"></template><section data-canvas-v2-node-id="title" data-canvas-v2-design-region><h1 data-canvas-v2-node-id="heading">Title</h1></section>',
+    css: "",
+  };
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: workspace,
+    evidence: [],
+    operations: [{
+      op: "upsert-css",
+      layerId: "dead-root-grid",
+      css: '[data-canvas-v2-node-id="canvas-root"]{display:grid;grid-template-rows:2000px 4000px}',
+    }],
+  }), /workspace metadata is inert.*body-level island nodes/i);
+  assert.doesNotThrow(() => applyCanvasV2SourcePatch({
+    previous: workspace,
+    evidence: [],
+    operations: [{
+      op: "upsert-css",
+      layerId: "live-island-layout",
+      css: '[data-canvas-v2-node-id="title"]{width:3200px;margin-bottom:192px}',
+    }],
+  }));
+});
+
+test("render repair keeps the original visual layer while appending a bounded correction", () => {
+  const workspace = {
+    html: '<template data-canvas-v2-node-id="canvas-root" data-canvas-v2-workspace-root="true"></template><section data-canvas-v2-node-id="title" data-canvas-v2-design-region><h1 data-canvas-v2-node-id="heading">Title</h1><p data-canvas-v2-node-id="eyebrow">Context</p></section>',
+    css: '/* canvas-v2-model-layer:title-style */\n[data-canvas-v2-node-id="heading"]{font-size:120px;line-height:1}\n/* /canvas-v2-model-layer:title-style */',
+  };
+  const repaired = applyCanvasV2SourcePatch({
+    previous: workspace,
+    evidence: [],
+    mergeExistingCssLayers: true,
+    operations: [{
+      op: "upsert-css",
+      layerId: "title-style",
+      css: '[data-canvas-v2-node-id="eyebrow"]{font-size:28px}',
+    }],
+  });
+  assert.match(repaired.css, /heading[^}]*font-size:120px/);
+  assert.match(repaired.css, /eyebrow[^}]*font-size:28px/);
+  assert.equal((repaired.css.match(/\/\* canvas-v2-model-layer:title-style \*\//g) ?? []).length, 1);
+  const repairedAgain = applyCanvasV2SourcePatch({
+    previous: repaired,
+    evidence: [],
+    mergeExistingCssLayers: true,
+    operations: [{
+      op: "upsert-css",
+      layerId: "title-style",
+      css: '[data-canvas-v2-node-id="eyebrow"]{line-height:1.3}',
+    }],
+  });
+  assert.match(repairedAgain.css, /heading[^}]*font-size:120px/);
+  assert.match(repairedAgain.css, /eyebrow[^}]*font-size:28px/);
+  assert.match(repairedAgain.css, /eyebrow[^}]*line-height:1\.3/);
+  assert.equal((repairedAgain.css.match(/\/\* canvas-v2-model-layer:title-style \*\//g) ?? []).length, 1);
+});
+
+test("a later design turn cannot erase an established layer by reusing its ID", () => {
+  const workspace = {
+    html: '<template data-canvas-v2-node-id="canvas-root" data-canvas-v2-workspace-root="true"></template><section data-canvas-v2-node-id="title" data-canvas-v2-design-region><div data-canvas-v2-node-id="kicker">DECISION LANDSCAPE</div><h1 data-canvas-v2-node-id="heading">Title</h1></section>',
+    css: '/* canvas-v2-model-layer:title-style */\n[data-canvas-v2-node-id="kicker"]{font-size:24px;white-space:nowrap}\n[data-canvas-v2-node-id="heading"]{font-size:78px}\n/* /canvas-v2-model-layer:title-style */',
+  };
+  const next = applyCanvasV2SourcePatch({
+    previous: workspace,
+    evidence: [],
+    mergeExistingCssLayers: true,
+    operations: [{
+      op: "upsert-css",
+      layerId: "title-style",
+      css: '[data-canvas-v2-node-id="heading"]{max-width:720px}',
+    }],
+  });
+  assert.match(next.css, /kicker[^}]*font-size:24px[^}]*white-space:nowrap/);
+  assert.match(next.css, /heading[^}]*font-size:78px/);
+  assert.match(next.css, /heading[^}]*max-width:720px/);
+  assert.equal((next.css.match(/\/\* canvas-v2-model-layer:title-style \*\//g) ?? []).length, 1);
 });
 
 test("bounded patches preserve canonical rails and bind evidence copies server-side", () => {
@@ -122,6 +290,87 @@ test("model patches cannot erase human-edited nodes or their containing subtree"
     operations: [{ op: "insert-after", targetNodeId: "lane", html: '<p data-canvas-v2-node-id="new-analysis">Analysis</p>' }],
   });
   assert.match(appended.html, /data-canvas-v2-user-edited="move text"/);
+});
+
+test("selection patches can revise only the exact editable stable object", () => {
+  const selectionDocument = {
+    html: '<main data-canvas-v2-node-id="canvas"><h2 data-canvas-v2-node-id="selected-title" data-canvas-v2-origin="northstar" data-canvas-v2-user-edited="text" data-canvas-v2-last-author="user" data-canvas-v2-edit-version="1">Human title</h2><p data-canvas-v2-node-id="unselected-note" data-canvas-v2-origin="user" data-canvas-v2-user-edited="create" data-canvas-v2-last-author="user">Keep this</p></main>',
+    css: "",
+  };
+  const revised = applyCanvasV2SourcePatch({
+    previous: selectionDocument,
+    evidence: [],
+    workingContext: selectionContext(),
+    operations: [
+      { op: "replace-node", targetNodeId: "selected-title", html: '<h2 data-canvas-v2-node-id="selected-title">Northstar revision</h2>' },
+      { op: "upsert-css", layerId: "selected-title", css: '[data-canvas-v2-node-id="selected-title"]{color:#181820}' },
+    ],
+  });
+  assert.match(revised.html, /data-canvas-v2-node-id="selected-title"[^>]*data-canvas-v2-origin="northstar"/);
+  assert.match(revised.html, /data-canvas-v2-node-id="selected-title"[^>]*data-canvas-v2-user-edited="text"/);
+  assert.match(revised.html, /data-canvas-v2-node-id="selected-title"[^>]*data-canvas-v2-last-author="northstar"/);
+  assert.match(revised.html, /data-canvas-v2-node-id="selected-title"[^>]*data-canvas-v2-edit-version="2"/);
+  assert.match(revised.html, />Northstar revision<\/h2>/);
+  assert.match(revised.html, />Keep this<\/p>/);
+
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: selectionDocument,
+    evidence: [],
+    workingContext: selectionContext(),
+    operations: [{ op: "replace-node", targetNodeId: "unselected-note", html: '<p data-canvas-v2-node-id="unselected-note">Wrong target</p>' }],
+  }), /cannot mutate unselected node/);
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: selectionDocument,
+    evidence: [],
+    workingContext: selectionContext(),
+    operations: [{ op: "insert-after", targetNodeId: "unselected-note", html: '<p data-canvas-v2-node-id="unexpected">Unexpected</p>' }],
+  }), /cannot mutate unselected node/);
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: selectionDocument,
+    evidence: [],
+    workingContext: selectionContext(),
+    operations: [{ op: "upsert-css", layerId: "global", css: ".northstar-canvas h2{color:red}" }],
+  }), /must contain only direct rules for exact authorized stable node IDs|not scoped to an exact authorized stable node ID/);
+});
+
+test("reference selections allow only new exactly-scoped work beside the immutable anchor", () => {
+  const selectionDocument = {
+    html: '<main data-canvas-v2-node-id="canvas"><h2 data-canvas-v2-node-id="selected-title">Reference</h2></main>',
+    css: "",
+  };
+  const derived = applyCanvasV2SourcePatch({
+    previous: selectionDocument,
+    evidence: [],
+    workingContext: selectionContext("reference"),
+    operations: [
+      { op: "insert-after", targetNodeId: "selected-title", html: '<aside data-canvas-v2-node-id="derived-comparison">Derived comparison</aside>' },
+      { op: "upsert-css", layerId: "derived-comparison", css: '[data-canvas-v2-node-id="derived-comparison"]{display:grid;gap:16px}' },
+    ],
+  });
+  assert.match(derived.html, /data-canvas-v2-node-id="selected-title">Reference<\/h2>/);
+  assert.match(derived.html, /data-canvas-v2-node-id="derived-comparison"/);
+  for (const operation of [
+    { op: "replace-node" as const, targetNodeId: "selected-title", html: '<h2 data-canvas-v2-node-id="selected-title">Changed</h2>' },
+    { op: "append-html" as const, targetNodeId: "selected-title", html: '<span data-canvas-v2-node-id="nested">Changed</span>' },
+    { op: "remove-node" as const, targetNodeId: "selected-title" },
+  ]) {
+    assert.throws(() => applyCanvasV2SourcePatch({ previous: selectionDocument, evidence: [], workingContext: selectionContext("reference"), operations: [operation] }), /may only insert new identified work immediately beside an exact selected reference/);
+  }
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: { html: selectionDocument.html.replace("</main>", '<p data-canvas-v2-node-id="other">Other</p></main>'), css: "" },
+    evidence: [],
+    workingContext: selectionContext("reference"),
+    operations: [{ op: "insert-after", targetNodeId: "other", html: '<aside data-canvas-v2-node-id="wrong-anchor">Wrong anchor</aside>' }],
+  }), /may only insert new identified work immediately beside an exact selected reference/);
+  assert.throws(() => applyCanvasV2SourcePatch({
+    previous: selectionDocument,
+    evidence: [],
+    workingContext: selectionContext("reference"),
+    operations: [
+      { op: "insert-after", targetNodeId: "selected-title", html: '<aside data-canvas-v2-node-id="derived-comparison">Derived comparison</aside>' },
+      { op: "upsert-css", layerId: "unsafe-reference", css: ".northstar-canvas h2{color:red}" },
+    ],
+  }), /not scoped to an exact authorized stable node ID/);
 });
 
 test("the compiler owns stable programmatic island identity", () => {

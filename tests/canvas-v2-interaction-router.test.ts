@@ -54,8 +54,13 @@ test("routing paraphrases cannot erase the user's journey scope", () => {
 test("selection transformation requires and preserves the exact stable target", () => {
   assert.throws(() => parseCanvasV2InteractionDecision({ route: "selection-transform", summary: "Edit it.", canvasInstruction: "Make it concise." }, "Make it concise"), /Select an canvas element/);
   const decision = parseCanvasV2InteractionDecision({ route: "selection-transform", summary: "Edit it.", canvasInstruction: "Make it concise." }, "Make it concise", selection);
+  assert.equal(decision.selectionPolicy, "modify");
   assert.match(decision.canvasInstruction || "", /finding-title/);
   assert.match(decision.canvasInstruction || "", /Transform only the selected stable canvas node/);
+
+  const reference = parseCanvasV2InteractionDecision({ route: "selection-transform", selectionPolicy: "reference", summary: "Compare it.", canvasInstruction: "Create a comparison." }, "Compare this", selection);
+  assert.equal(reference.selectionPolicy, "reference");
+  assert.match(reference.canvasInstruction || "", /immutable evidence|Preserve every selected object exactly/);
 });
 
 test("the chat controller delegates only mutating routes to the observed design loop", () => {
@@ -67,6 +72,9 @@ test("the chat controller delegates only mutating routes to the observed design 
   assert.match(hook, /canvasV2AuthoritativeCanvasInstruction/);
   assert.match(hook, /input\.engine\.start\(canvasInstruction/);
   assert.match(route, /Route by semantic intent, not by word matching/);
+  assert.match(route, /Evidence is optional/);
+  assert.match(route, /creative construction, planning, facilitation, organization, speculative exploration/);
+  assert.match(route, /A prompt can produce a complete premium canvas without research/);
   assert.match(route, /journey\/session type/);
   for (const interaction of ["conversation", "inspect", "transform", "research-design", "selection-transform"]) assert.match(route, new RegExp(interaction));
   assert.match(workspace, /routerEndpoint="\/api\/canvas-v2\/route"|routerEndpoint = "\/api\/canvas-v2\/route"/);

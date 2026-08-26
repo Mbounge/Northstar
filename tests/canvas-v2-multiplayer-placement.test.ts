@@ -54,7 +54,11 @@ function observation(revisionId: string, placementOccupants: CanvasV2PlacementOc
   };
 }
 
-function transaction(mutations: CanvasV2SceneTransaction["mutations"], stylesheetChanged = false): CanvasV2SceneTransaction {
+function transaction(
+  mutations: CanvasV2SceneTransaction["mutations"],
+  stylesheetChanged = false,
+  targeting?: CanvasV2SceneTransaction["targeting"],
+): CanvasV2SceneTransaction {
   return {
     schema: CANVAS_V2_SCENE_TRANSACTION_SCHEMA,
     origin: "northstar",
@@ -64,8 +68,27 @@ function transaction(mutations: CanvasV2SceneTransaction["mutations"], styleshee
     beforeObjectCount: 2,
     afterObjectCount: 3,
     stylesheetChanged,
+    ...(targeting ? { targeting } : {}),
   };
 }
+
+test("a selected reference remains an immutable rendered anchor regardless of owner", () => {
+  const previous = observation("before", [occupant("northstar-title", "northstar", 2_400, 1_600)]);
+  const candidate = observation("candidate", [occupant("northstar-title", "northstar", 2_460, 1_600)]);
+  const failures = validateCanvasV2MultiplayerPlacement({
+    previous,
+    candidate,
+    transaction: transaction([], true, {
+      scope: "selection",
+      selectionPolicy: "reference",
+      selectedNodeIds: ["northstar-title"],
+      editableNodeIds: [],
+      protectedNodeIds: ["northstar-title"],
+      visibleBounds: { x: 2_000, y: 1_200, width: 1_600, height: 900 },
+    }),
+  }).join(" ");
+  assert.match(failures, /Selected reference northstar-title changed rendered geometry/);
+});
 
 test("Northstar may author in genuinely open multiplayer territory", () => {
   const previous = observation("before", [
