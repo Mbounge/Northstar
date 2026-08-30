@@ -69,7 +69,7 @@ export function AskBar() {
       <div
         data-northstar-gateway
         data-transitioning={transitioning ? "true" : "false"}
-        className={`group absolute left-1/2 w-[min(590px,calc(100vw-48px))] -translate-x-1/2 border border-white/60 bg-white/58 shadow-[0_12px_44px_rgba(53,58,108,.12),inset_0_1px_0_rgba(255,255,255,.8)] backdrop-blur-2xl transition-[transform,border-radius,box-shadow,background-color] duration-500 ease-[cubic-bezier(.22,1,.36,1)] dark:border-white/[.12] dark:bg-[#17171f]/68 dark:shadow-[0_16px_48px_rgba(0,0,0,.28),inset_0_1px_0_rgba(255,255,255,.06)] ${expanded ? "rounded-[25px]" : "rounded-full"} ${transitioning ? "-translate-y-6 scale-[1.018] shadow-[0_26px_80px_rgba(76,67,180,.24)]" : "hover:shadow-[0_16px_52px_rgba(53,58,108,.16)]"}`}
+        className={`absolute left-1/2 w-[min(590px,calc(100vw-48px))] -translate-x-1/2 border border-white/60 bg-white/58 shadow-[0_12px_44px_rgba(53,58,108,.12),inset_0_1px_0_rgba(255,255,255,.8)] backdrop-blur-2xl transition-[transform,border-radius,box-shadow,background-color] duration-500 ease-[cubic-bezier(.22,1,.36,1)] dark:border-white/[.12] dark:bg-[#17171f]/68 dark:shadow-[0_16px_48px_rgba(0,0,0,.28),inset_0_1px_0_rgba(255,255,255,.06)] ${expanded ? "rounded-[25px]" : "rounded-full"} ${transitioning ? "-translate-y-6 scale-[1.018] shadow-[0_26px_80px_rgba(76,67,180,.24)]" : "hover:shadow-[0_16px_52px_rgba(53,58,108,.16)]"}`}
       >
         <div className="flex w-full items-end gap-2 p-2">
           <button
@@ -97,9 +97,6 @@ export function AskBar() {
           />
 
           <div className="relative mb-0.5 shrink-0">
-            <span className="pointer-events-none absolute bottom-[calc(100%+10px)] right-0 translate-y-1 whitespace-nowrap rounded-full border border-white/70 bg-white/88 px-3 py-1.5 text-[10px] font-semibold tracking-[.01em] text-[#5e5d6d] opacity-0 shadow-[0_8px_28px_rgba(50,46,92,.12)] backdrop-blur-xl transition duration-200 group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 dark:border-white/[.1] dark:bg-[#23222c]/92 dark:text-[#d4d0dd]">
-              {hasPrompt ? "Continue in Canvas" : "Open Canvas"}
-            </span>
             <button
               type="button"
               onClick={openCanvas}
