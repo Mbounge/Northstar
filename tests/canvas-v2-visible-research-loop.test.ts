@@ -118,10 +118,82 @@ test("a named app cannot substitute browsing evidence for an onboarding request"
   }, [], index), /supporting evidence/);
 });
 
+test("a router flow hint cannot override the user's requested journey scope", () => {
+  const screens = (flowName: string, count: number, sessionType: string) => Array.from({ length: count }, (_, index) => ({
+    id: `${flowName}-${index}`,
+    name: `Screen ${index + 1}`,
+    imageUrl: `https://evidence.test/awin/${flowName}/${index}.png`,
+    appName: "Awin",
+    flowName,
+    platform: "mobile",
+    sessionType,
+    index,
+  }));
+  const scopedCatalog: AppDataCatalog = { tenantId: "tenant", apps: [{
+    id: "app:awin",
+    name: "Awin",
+    totalScreens: 72,
+    flows: [
+      {
+        id: "flow:awin:explore",
+        name: "Explore · Searching and browsing · Managing affiliate links · Opening external support article",
+        appName: "Awin",
+        platform: "mobile",
+        sessionType: "browsing",
+        scope: "journey",
+        completeJourney: true,
+        screens: screens("Explore", 25, "browsing"),
+      },
+      {
+        id: "flow:awin:onboarding",
+        name: "Account activation and first login",
+        appName: "Awin",
+        platform: "mobile",
+        sessionType: "onboarding",
+        scope: "journey",
+        completeJourney: true,
+        screens: screens("Onboarding", 47, "onboarding"),
+      },
+    ],
+  }] };
+  const instruction = "Build a balanced executive comparison of Awin and Whop onboarding. Choose representative flows and screenshots, keep the main board simple, and leave your working surface visible so I can inspect how the solution came together.";
+  const index = buildCanvasV2ResearchCatalogIndex(scopedCatalog, instruction, revision(), [
+    "Awin — Explore · Searching and browsing · Managing affiliate links · Opening external support article",
+    "Awin",
+  ]);
+
+  assert.equal(index.requirements[0]?.preferredFlow?.id, "flow:awin:onboarding");
+  assert.deepEqual(index.requirements[0]?.adequateFlowIds, ["flow:awin:onboarding"]);
+  assert.deepEqual(nextCanvasV2RequiredResearch(index), {
+    appId: "app:awin",
+    appName: "Awin",
+    flowId: "flow:awin:onboarding",
+    flowName: "Account activation and first login",
+    screenCount: 47,
+  });
+});
+
 test("production research is evidence-first and synthesis cannot complete on the final retrieval turn", () => {
   const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
-  assert.match(route, /if \(groundingRequired\)/);
-  assert.match(route, /The design model was not called/);
+  const designLoop = readFileSync("components/canvas-v2/use-canvas-v2-design-loop.ts", "utf8");
+  assert.match(route, /if \(groundingRequired && requiredResearch\)/);
+  assert.match(route, /const discoveryDirectorRequired/);
+  assert.match(route, /mergeCanvasV2EvidencePackets\(\s*body\.revision\.evidencePackets,\s*retrievedEvidenceBridge\.packets/);
+  assert.match(route, /requiredVisualEvidenceForBrief\(creativeCheckpointBrief\)/);
+  assert.match(route, /const synthesisTurn = decisionPolicy\.phase !== "ground-required-evidence"/);
+  assert.doesNotMatch(route, /const synthesisTurn = researchMode !== "evidence"/);
+  assert.match(route, /authoritativeEvidenceCopyHandles[\s\S]*flowIndex === undefined/);
+  assert.match(route, /brief\.targetIsland\.action === "repair" && existingScreenSelections\.length/);
+  assert.match(route, /bounded analytical copies are evidence witnesses, not a duplicate flow/);
+  assert.match(route, /canvasV2EvidencePacketsNeedingMaterialization\(\s*body\.revision\.document,\s*persistedEvidencePackets/);
+  assert.match(route, /snapshotEvidencePackets,\s*researchStatus:[\s\S]*northstar-account-evidence-materializer/);
+  assert.match(designLoop, /if \(payload\.snapshotEvidencePackets\?\.length\)[\s\S]*insertCanvasV2EvidencePackets/);
+  assert.ok(designLoop.indexOf("if (payload.snapshotEvidencePackets?.length)") < designLoop.indexOf("if (!payload.decision)"));
+  assert.match(designLoop, /pendingEdit\.moveKind === "research" \? "research" : pendingActionKind[\s\S]*label: "Reading the grounded evidence"/);
+  assert.match(designLoop, /Reuse their already-verified detail atlas/);
+  assert.match(designLoop, /moreRequiredFlowsRemain \? "research-fast-revision" : "research-revision"/);
+  const chatPanel = readFileSync("components/canvas-v2/canvas-v2-chat-panel.tsx", "utf8");
+  assert.match(chatPanel, /committedSteps\.at\(-1\)\?\.kind === "research"[\s\S]*label: "Reading the grounded evidence"/);
   const unresolved = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", revision(), ["Awin", "Whop"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(unresolved, "synthesis", []).permittedDecisions, ["research"]);
   assert.deepEqual(nextCanvasV2RequiredResearch(unresolved), {
@@ -138,7 +210,10 @@ test("production research is evidence-first and synthesis cannot complete on the
 
   const bothVisible = revision('<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-canonical-flow="flow:awin:onboarding"></article><article data-canvas-v2-canonical-flow="flow:whop:onboarding"></article></main>');
   const grounded = buildCanvasV2ResearchCatalogIndex(catalog, "Compare Awin and Whop onboarding", bothVisible, ["Awin", "Whop"]);
-  assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "research" }]).permittedDecisions, ["edit"]);
+  const firstSynthesis = canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "research" }]);
+  assert.deepEqual(firstSynthesis.permittedDecisions, ["edit"]);
+  assert.match(firstSynthesis.reason, /Declare only the continuation moves genuinely warranted/);
+  assert.doesNotMatch(firstSynthesis.reason, /at least three/);
   const refinement = canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }], { nextMoves: ["Develop the relationship"] });
   assert.equal(refinement.phase, "resolve-grounded-synthesis");
   assert.deepEqual(refinement.permittedDecisions, ["edit"]);
@@ -146,6 +221,20 @@ test("production research is evidence-first and synthesis cannot complete on the
   assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }, { kind: "design" }], { nextMoves: [], unresolvedOpportunities: [] }).permittedDecisions, ["research", "edit", "complete"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "synthesis", [{ kind: "research" }, { kind: "design" }, { kind: "design" }], { nextMoves: [], unresolvedOpportunities: ["Make the relationship visible"] }).permittedDecisions, ["edit"]);
   assert.deepEqual(canvasV2ResearchDecisionPolicy(grounded, "evidence", [{ kind: "research" }]).permittedDecisions, ["research", "edit", "complete"]);
+});
+
+test("snapshot-only account requests do not fabricate a product research requirement", () => {
+  const index = buildCanvasV2ResearchCatalogIndex(
+    catalog,
+    "Show Awin marketing and business snapshots",
+    revision(),
+    ["Awin"],
+    undefined,
+    { requireProductEvidence: false },
+  );
+  assert.deepEqual(index.requirements, []);
+  assert.deepEqual(index.explicitlyNamedAppIds, []);
+  assert.equal(canvasV2ResearchDecisionPolicy(index, "synthesis", []).phase, "open-design");
 });
 
 test("the production catalog is target-scoped, relevance-ranked, and bounded without truncating a selected flow", () => {
@@ -281,6 +370,52 @@ test("broad onboarding prefers a complete shared-entry journey over its branch-o
   assert.equal(exactBranch.apps[0]?.flows[0]?.id, "flow:branch");
 });
 
+test("an exact router flow target resolves inside its connected app and accepts a visible composite journey", () => {
+  const screens = (flowName: string, count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `${flowName}-${index}`,
+    name: `Step ${index + 1}`,
+    imageUrl: `https://evidence.test/awin/${index}.png`,
+    appName: "Awin",
+    flowName,
+    platform: "mobile",
+    sessionType: "onboarding",
+    index,
+  }));
+  const exactFlowCatalog: AppDataCatalog = { tenantId: "tenant", apps: [{
+    id: "app:awin",
+    name: "Awin",
+    totalScreens: 21,
+    flows: [
+      { id: "flow:awin:publisher", name: "Publisher & Affiliate Solutions", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "flow", screens: screens("publisher", 9) },
+      { id: "flow:awin:publisher-complete", name: "Landing & Persona Selection → Publisher & Affiliate Solutions", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "path", completeJourney: true, screens: screens("publisher-complete", 12) },
+    ],
+  }] };
+  const visible = revision('<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-canonical-flow="flow:awin:publisher-complete"></article></main>');
+  const index = buildCanvasV2ResearchCatalogIndex(
+    exactFlowCatalog,
+    "Inspect my Awin Publisher & Affiliate Solutions onboarding evidence.",
+    visible,
+    ["Awin", "Publisher & Affiliate Solutions"],
+  );
+  assert.deepEqual(index.requirements.map((requirement) => [requirement.requestedName, requirement.appName, requirement.state]), [
+    ["Awin", "Awin", "visible"],
+    ["Publisher & Affiliate Solutions", "Awin", "visible"],
+  ]);
+  assert.deepEqual(index.requirements[1]?.adequateFlowIds, ["flow:awin:publisher", "flow:awin:publisher-complete"]);
+  assert.deepEqual(index.requirements[1]?.visibleAdequateFlowIds, ["flow:awin:publisher-complete"]);
+  assert.equal(nextCanvasV2RequiredResearch(index), undefined);
+
+  const expandedRouterTarget = buildCanvasV2ResearchCatalogIndex(
+    exactFlowCatalog,
+    "Inspect my Awin Publisher & Affiliate Solutions mobile onboarding evidence.",
+    visible,
+    ["Awin", "Awin · Publisher & Affiliate Solutions mobile onboarding flow"],
+  );
+  assert.equal(expandedRouterTarget.requirements[1]?.state, "visible");
+  assert.deepEqual(expandedRouterTarget.requirements[1]?.visibleAdequateFlowIds, ["flow:awin:publisher-complete"]);
+  assert.equal(nextCanvasV2RequiredResearch(expandedRouterTarget), undefined);
+});
+
 test("required research is selected from full catalog truth even when the bounded model index omits it", () => {
   const screens = (flowName: string, count: number) => Array.from({ length: count }, (_, index) => ({
     id: `${flowName}-${index}`,
@@ -310,6 +445,90 @@ test("required research is selected from full catalog truth even when the bounde
     flowId: "flow:whop:canonical",
     flowName: "User Onboarding",
     screenCount: 17,
+  });
+});
+
+test("an app-prefixed flow target selects the named canonical flow over a larger semantic match", () => {
+  const screens = (flowName: string, count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `${flowName}-${index}`,
+    name: `Step ${index + 1}`,
+    imageUrl: `https://evidence.test/whop/${flowName}/${index}.png`,
+    appName: "Whop",
+    flowName,
+    platform: "mobile",
+    sessionType: "onboarding",
+    index,
+  }));
+  const targetedCatalog: AppDataCatalog = { tenantId: "tenant", apps: [{
+    id: "app:whop",
+    name: "Whop",
+    totalScreens: 211,
+    flows: [
+      { id: "flow:whop:user-onboarding", name: "User Onboarding", appName: "Whop", platform: "mobile", sessionType: "onboarding", scope: "journey", completeJourney: true, screens: screens("user-onboarding", 17) },
+      { id: "flow:whop:dashboard", name: "Dashboard · Returning to community home and user settings", appName: "Whop", platform: "mobile", sessionType: "onboarding", scope: "journey", completeJourney: true, screens: screens("dashboard", 194) },
+    ],
+  }] };
+  const index = buildCanvasV2ResearchCatalogIndex(
+    targetedCatalog,
+    "Build a balanced executive comparison of Awin and Whop onboarding.",
+    revision(),
+    ["Whop — User Onboarding"],
+  );
+  assert.deepEqual(nextCanvasV2RequiredResearch(index), {
+    appId: "app:whop",
+    appName: "Whop",
+    flowId: "flow:whop:user-onboarding",
+    flowName: "User Onboarding",
+    screenCount: 17,
+  });
+});
+
+test("specific journey targets are grounded before their generic app aliases", () => {
+  const screens = (appName: string, flowName: string, count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `${appName}-${flowName}-${index}`,
+    name: `Step ${index + 1}`,
+    imageUrl: `https://evidence.test/${appName}/${flowName}/${index}.png`,
+    appName,
+    flowName,
+    platform: "mobile",
+    sessionType: "onboarding",
+    index,
+  }));
+  const targetedCatalog: AppDataCatalog = { tenantId: "tenant", apps: [
+    {
+      id: "app:awin",
+      name: "Awin",
+      totalScreens: 49,
+      flows: [
+        { id: "flow:awin:broad", name: "Managing Affiliate Links", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "journey", completeJourney: true, screens: screens("Awin", "broad", 5) },
+        { id: "flow:awin:creator", name: "Creator & Influencer Onboarding", appName: "Awin", platform: "mobile", sessionType: "onboarding", scope: "journey", completeJourney: true, screens: screens("Awin", "creator", 44) },
+      ],
+    },
+    {
+      id: "app:whop",
+      name: "Whop",
+      totalScreens: 17,
+      flows: [{ id: "flow:whop:user", name: "User Onboarding", appName: "Whop", platform: "mobile", sessionType: "onboarding", scope: "journey", completeJourney: true, screens: screens("Whop", "user", 17) }],
+    },
+  ] };
+  const index = buildCanvasV2ResearchCatalogIndex(
+    targetedCatalog,
+    "Build a balanced executive comparison of Awin and Whop onboarding.",
+    revision(),
+    ["Awin", "Whop", "Awin Creator & Influencer Onboarding", "Whop User Onboarding"],
+  );
+  assert.deepEqual(index.requirements.map((requirement) => requirement.requestedName), [
+    "Awin Creator & Influencer Onboarding",
+    "Whop User Onboarding",
+    "Awin",
+    "Whop",
+  ]);
+  assert.deepEqual(nextCanvasV2RequiredResearch(index), {
+    appId: "app:awin",
+    appName: "Awin",
+    flowId: "flow:awin:creator",
+    flowName: "Creator & Influencer Onboarding",
+    screenCount: 44,
   });
 });
 
@@ -368,6 +587,36 @@ test("every router target resolves to visible, unavailable, or unresolved resear
   const terminal = resolveCanvasV2ResearchCompletion(terminalIndex, "The available comparison is complete.", '<p data-canvas-v2-research-unavailable="Ghost"></p><p data-canvas-v2-research-unavailable="Empty"></p><p data-canvas-v2-research-unavailable="Partial"></p>');
   assert.equal(terminal.ready, true);
   assert.match(terminal.summary, /Evidence unavailable in this account: Ghost, Empty, Partial/);
+
+  const unavailableAwinIndex = {
+    ...terminalIndex,
+    requirements: terminalIndex.requirements.map((requirement) => requirement.requestedName === "Awin"
+      ? { ...requirement, state: "unavailable" as const }
+      : { ...requirement, state: "visible" as const }),
+  };
+  const visibleLimitation = resolveCanvasV2ResearchCompletion(
+    unavailableAwinIndex,
+    "The evidence boundary is explicit.",
+    "<section><h2>Findings withheld until authorized evidence arrives</h2><p>The current evidence set contains no authorized Awin app screenshots or data packets.</p></section>",
+  );
+  assert.equal(visibleLimitation.ready, true, "target-specific visible limitation prose is authoritative even when the model omits compiler metadata");
+  assert.deepEqual(visibleLimitation.unacknowledgedUnavailable, []);
+
+  const islandScopedLimitation = resolveCanvasV2ResearchCompletion(
+    unavailableAwinIndex,
+    "The evidence boundary is explicit.",
+    '<section data-canvas-v2-design-region><h1>Awin onboarding to growth</h1><p><strong>EVIDENCE BOUNDARY</strong> No authorized screenshots or marketing/business source passages are available in this turn.</p></section>',
+  );
+  assert.equal(islandScopedLimitation.ready, true, "a named source and its explicit limitation may be separate reading objects in the same authored island");
+  assert.deepEqual(islandScopedLimitation.unacknowledgedUnavailable, []);
+
+  const unrelatedLimitation = resolveCanvasV2ResearchCompletion(
+    unavailableAwinIndex,
+    "The evidence boundary is explicit.",
+    "<p>No authorized Whop screenshots are available.</p><p>Awin is the requested comparison.</p>",
+  );
+  assert.equal(unrelatedLimitation.ready, false, "a limitation for another source cannot acknowledge Awin");
+  assert.deepEqual(unrelatedLimitation.unacknowledgedUnavailable, ["Awin"]);
 });
 
 test("research moves from unresolved through pending to canonical visibility", () => {
@@ -378,6 +627,13 @@ test("research moves from unresolved through pending to canonical visibility", (
   const visible = settleCanvasV2ResearchRequirement(pending, "app:awin", "flow:awin:onboarding");
   assert.equal(visible?.[0]?.state, "visible");
   assert.deepEqual(visible?.[0]?.visibleFlowIds, ["flow:awin:onboarding"]);
+});
+
+test("generic connected-app aliases collapse into one coverage requirement", () => {
+  const index = buildCanvasV2ResearchCatalogIndex(catalog, "Inspect Awin onboarding", revision(), ["Awin app", "Awin"]);
+  assert.equal(index.requirements.length, 1);
+  assert.equal(index.requirements[0]?.requestedName, "Awin");
+  assert.equal(index.requirements[0]?.appId, "app:awin");
 });
 
 test("evidence metadata alone cannot impersonate a visibly committed flow", () => {
@@ -406,20 +662,25 @@ test("the production loop materializes research before another model turn and re
   assert.match(route, /deterministicResearchDecision/);
   assert.match(route, /resolveCanvasV2ResearchDecision/);
   assert.match(route, /nextCanvasV2RequiredResearch/);
-  assert.ok(route.indexOf("const requiredResearch =") < route.indexOf("const provider = await"));
+  assert.ok(route.indexOf("const requiredResearch =") < route.indexOf("const creativeBriefProvider = await"));
   assert.match(route, /northstar-deterministic-research-director/);
   assert.match(route, /railDetailParts/);
   assert.match(route, /resolveCanvasV2ResearchCompletion/);
   assert.match(route, /researchTargets/);
+  assert.match(route, /buildCanvasV2EvidenceCopyHandles\(body\.revision\.document\)/);
+  assert.match(route, /bounded analytical copies are evidence witnesses, not a duplicate flow/);
   assert.doesNotMatch(route, /loadCanvasV2EvidenceVisuals|buildCanvasV2AgentResearch/);
   assert.match(hook, /insertCanvasV2CanonicalFlow/);
   assert.match(hook, /settleCanvasV2ResearchRequirement/);
-  assert.match(hook, /id\("research-revision"\)/);
-  assert.match(hook, /kind: pendingActionKind/);
-  assert.match(hook, /canvas is still preparing its first visual observation/);
+  assert.match(hook, /payload\.researchStatus \?\? loopWithProvider\.researchStatus/);
+  assert.match(hook, /id\(moreRequiredFlowsRemain \? "research-fast-revision" : "research-revision"\)/);
+  assert.match(hook, /kind: committedActionKind/);
+  assert.doesNotMatch(hook, /canvas is still preparing its first visual observation/);
+  assert.match(hook, /pendingInitialRequest/);
   assert.match(workspace, /bottom-\[18px\] left-1\/2/);
   assert.match(workspace, /bottom-24[^\n]*2xl:bottom-5/);
   assert.match(workspace, /Collapse North Star panel/);
+  assert.match(workspace, /engine\.running \? "working"/);
   assert.match(loop, /CANVAS_V2_MAX_CONTEXT_STEPS = 24/);
   assert.doesNotMatch(loop, /edit-limit-reached/);
   assert.doesNotMatch(`${route}\n${hook}`, /@\/lib\/canvas-ai\//);

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment -- frozen superseded V1 contract fixture */
 // @ts-nocheck -- superseded by northstar-canonical-unbounded-geometry-production-sandbox.test.ts
 import assert from "node:assert/strict";
 import fs from "node:fs";

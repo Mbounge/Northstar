@@ -5,7 +5,19 @@ import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { buildCanvasV2SceneObjectInventory } from "@/lib/canvas-v2/scene-transaction";
 import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
-import type { CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
+import {
+  compactCanvasV2WorkingContextForModel,
+  type CanvasV2WorkingContext,
+} from "@/lib/canvas-v2/working-context";
+import { compactCanvasV2EvidencePacketsForModel } from "@/lib/canvas-v2/evidence-packets";
+import {
+  canvasV2PacketIdsInWorkingSet,
+  type CanvasV2DiscoveryPhase,
+  type CanvasV2DiscoveryWorkingSet,
+} from "@/lib/canvas-v2/discovery-working-set";
+import { buildCanvasV2DiscoveryContextRuntime } from "@/lib/canvas-v2/discovery-context-runtime";
+import { compactCanvasV2DiscoveryStateForModel } from "@/lib/canvas-v2/discovery-state";
+import { canvasV2EvidenceLedComparisonRequested } from "@/lib/canvas-v2/composition-requirements";
 
 const MAX_SOURCE_OUTLINE = 42_000;
 const MAX_CSS_CONTEXT = 32_000;
@@ -89,7 +101,22 @@ export function compactCanvasV2IslandSourceForModel(
     : `${source.slice(0, 12_000)}\n<!-- focused island source middle omitted -->\n${source.slice(-6_000)}`;
 }
 
-function compactSource(revision: CanvasV2ArtifactRevision): string {
+function compactSourceNodeSnippet(html: string, nodeId: string, maximum = 12_000): string | undefined {
+  const range = findCanvasV2SourceNodeRange(html, nodeId);
+  if (!range) return undefined;
+  const source = html.slice(range.start, range.end);
+  if (source.length <= maximum) return source;
+  const opening = html.slice(range.start, range.openEnd);
+  const closing = range.closeStart < range.end ? html.slice(range.closeStart, range.end) : "";
+  const innerBudget = Math.max(800, maximum - opening.length - closing.length - 120);
+  return `${opening}${source.slice(opening.length, opening.length + Math.round(innerBudget * 0.66))}\n<!-- bounded relevant object body; full source remains server-owned -->\n${source.slice(Math.max(opening.length, source.length - closing.length - Math.round(innerBudget * 0.34)), source.length - closing.length)}${closing}`;
+}
+
+function compactSource(
+  revision: CanvasV2ArtifactRevision,
+  workingContext?: CanvasV2WorkingContext,
+  workingSet?: CanvasV2DiscoveryWorkingSet,
+): string {
   let html = revision.document.html;
   const copyHandleByEvidenceId = new Map(buildCanvasV2EvidenceCopyHandles(revision.document).map((item) => [item.evidenceId, item.handle]));
   const manifests = readCanvasV2CanonicalFlowManifests(revision.document);
@@ -107,7 +134,45 @@ function compactSource(revision: CanvasV2ArtifactRevision): string {
   }
   html = compactAnalysisEvidenceCopies(html, copyHandleByEvidenceId);
   if (html.length <= MAX_SOURCE_OUTLINE) return html;
-  return `${html.slice(0, Math.round(MAX_SOURCE_OUTLINE * 0.68))}\n<!-- bounded source outline: middle omitted -->\n${html.slice(-Math.round(MAX_SOURCE_OUTLINE * 0.32))}`;
+
+  // Never use an arbitrary head/tail cut for a large board. It can omit the
+  // one selected or visible object in the middle of the source and then tempt
+  // the model to rebuild an island it could not see. Keep exact relevant
+  // objects plus a stable whole-board identity map; source patches still run
+  // against the complete committed document on the server.
+  const inventory = buildCanvasV2SceneObjectInventory(revision.document);
+  const priorityNodeIds = Array.from(new Set([
+    ...(workingContext?.selectedNodeIds ?? []),
+    ...(workingContext?.editableNodeIds ?? []),
+    ...(workingContext?.visibleNodeIds ?? []),
+    ...(workingContext?.nearbyNodeIds ?? []),
+    ...(workingContext?.protectedNodeIds ?? []),
+    ...(workingSet?.nodes.flatMap((node) => node.canvasNodeId ? [node.canvasNodeId] : []) ?? []),
+    ...inventory.slice(0, 18).map((object) => object.nodeId),
+  ])).slice(0, 48);
+  const snippets: string[] = [];
+  let snippetCharacters = 0;
+  for (const nodeId of priorityNodeIds) {
+    const snippet = compactSourceNodeSnippet(html, nodeId);
+    if (!snippet || snippetCharacters + snippet.length > 30_000) continue;
+    snippets.push(`<!-- relevant object: ${nodeId} -->\n${snippet}`);
+    snippetCharacters += snippet.length;
+  }
+  const inventoryLines = inventory.slice(0, 420).map((object) => [
+    object.nodeId,
+    object.tagName,
+    object.parentNodeId ? `parent=${object.parentNodeId}` : "",
+    object.islandId ? `island=${object.islandId}` : "",
+    object.origin ? `origin=${object.origin}` : "",
+    object.userEdited ? `human-edit=v${object.editVersion}` : "",
+    object.locked ? "locked" : "",
+    object.hidden ? "hidden" : "",
+    object.evidenceId ? `evidence=${object.evidenceId}` : "",
+  ].filter(Boolean).join(" · "));
+  let identityMap = inventoryLines.join("\n");
+  const remaining = Math.max(2_000, MAX_SOURCE_OUTLINE - snippetCharacters - 900);
+  if (identityMap.length > remaining) identityMap = `${identityMap.slice(0, remaining)}\n… ${inventory.length - inventoryLines.length} additional server-owned objects remain available by stable identity`;
+  return `${snippets.join("\n")}\n<canvas-v2-source-map total-objects="${inventory.length}" mode="relevance-first">\n${identityMap}\n</canvas-v2-source-map>`.slice(0, MAX_SOURCE_OUTLINE);
 }
 
 function compactCss(css: string): string {
@@ -119,11 +184,34 @@ export function buildCanvasV2BoundedModelContext(
   revision: CanvasV2ArtifactRevision,
   observation: CanvasV2RenderObservation,
   workingContext?: CanvasV2WorkingContext,
+  operation: {
+    instruction?: string;
+    phase?: CanvasV2DiscoveryPhase;
+    characterBudget?: number;
+    evidencePolicy?: "available" | "required" | "exclude";
+    contextProfile?: string;
+    requestedDiscoveryNodeIds?: readonly string[];
+    previousDiscoveryWorkingSet?: CanvasV2DiscoveryWorkingSet;
+  } = {},
 ) {
+  const discoveryRuntime = buildCanvasV2DiscoveryContextRuntime({
+    revision,
+    workingContext,
+    operation,
+  });
+  const discoveryWorkingSet = discoveryRuntime.workingSet;
+  const workingPacketIds = new Set(canvasV2PacketIdsInWorkingSet(discoveryWorkingSet));
+  const workingEvidenceIds = new Set(discoveryWorkingSet.nodes.flatMap((node) => node.evidenceId ? [node.evidenceId] : []));
   const manifests = readCanvasV2CanonicalFlowManifests(revision.document);
   const canonicalNodeIds = new Set(manifests.flatMap((flow) => flow.items.map((item) => item.nodeId)));
   const evidenceById = new Map(revision.evidence.map((asset) => [asset.id, asset]));
   const copyHandleByEvidenceId = new Map(buildCanvasV2EvidenceCopyHandles(revision.document).map((item) => [item.evidenceId, item.handle]));
+  // A comparison may be compact, but it may never become one-sided. The
+  // working set can omit stable records for token efficiency; once the user
+  // explicitly asks to compare visual evidence, keep every canonical lane in
+  // the bounded evidence directory (still capped below) so synthesis retains
+  // the complete relevant frame.
+  const preserveCanonicalComparisonBalance = canvasV2EvidenceLedComparisonRequested(operation.instruction ?? "");
   const clampAuthoringOrigin = (value: number | undefined, fallback: number, extent: number, footprint: number) => (
     Math.min(
       extent - CANVAS_V2_WORKSPACE.documentMargin - footprint,
@@ -176,7 +264,7 @@ export function buildCanvasV2BoundedModelContext(
   ) / (CANVAS_V2_WORKSPACE.aiAuthoringWidth * CANVAS_V2_WORKSPACE.aiAuthoringHeight)).toFixed(3));
   return {
     collaboration: workingContext ? {
-      ...workingContext,
+      ...compactCanvasV2WorkingContextForModel(workingContext),
       contract: workingContext.scope === "selection"
         ? workingContext.selectionPolicy === "modify"
           ? "The selectedNodeIds are the only existing objects authorized for direct mutation. Preserve all unselected, locked, hidden, and protected objects exactly. A selected object is not permission to rebuild its island or surrounding board."
@@ -201,11 +289,21 @@ export function buildCanvasV2BoundedModelContext(
       authorshipContract: "Every listed object has stable identity and remains directly selectable after commit. Preserve userEdited objects exactly and treat their rendered bounds as multiplayer placement obstacles. Develop an existing island through its identified descendants; create new objects only inside the declared island transaction and only in collision-free world-space territory.",
     },
     source: {
-      htmlOutline: compactSource(revision),
+      htmlOutline: compactSource(revision, workingContext, discoveryWorkingSet),
       cssContext: compactCss(revision.document.css),
       patchContract: "Return source patch operations against stable node IDs. The server applies them to the complete committed source.",
     },
-    canonicalEvidence: manifests.map((flow) => {
+    discoveryWorkingSet,
+    discoveryModelContext: discoveryRuntime.modelContext,
+    discoveryContextReceipt: discoveryRuntime.receipt,
+    discoveryState: compactCanvasV2DiscoveryStateForModel(revision.discoveryState),
+    discoveryContract: "The discoveryState is the evolving inquiry-level understanding and is not a fixed workflow. The discovery graph is durable evidence memory; discoveryModelContext is the delta-first, quality-preserving subset for this operation. Full payloads are present only for changed or mandatory records; stableReferences preserve unchanged identities and can be expanded by exact ID when material. Never treat omission from this call as deletion from memory, never replay unchanged raw payloads merely to continue reasoning, preserve human judgments, and keep every material statement in its correct epistemic category.",
+    canonicalEvidence: manifests.filter((flow) => (
+      preserveCanonicalComparisonBalance
+      || !revision.evidencePackets?.length
+      || flow.items.some((item) => workingEvidenceIds.has(item.evidenceId))
+      || discoveryWorkingSet.nodes.some((node) => node.packetId && workingPacketIds.has(node.packetId) && node.tags.some((tag) => tag === flow.flowId))
+    )).slice(0, 12).map((flow) => {
       const identityItems = flow.items.filter((item) => item.flowIndex === undefined);
       const screenItems = flow.items.filter((item) => item.flowIndex !== undefined);
       const laneApp = flow.items.map((item) => evidenceById.get(item.evidenceId)?.app).find((value): value is string => Boolean(value));
@@ -217,12 +315,16 @@ export function buildCanvasV2BoundedModelContext(
           const asset = evidenceById.get(item.evidenceId);
           return { copyHandle: copyHandleByEvidenceId.get(item.evidenceId), evidenceId: item.evidenceId, nodeId: item.nodeId, label: asset?.label, app: asset?.app ?? laneApp, description: asset?.description };
         }),
-        screens: screenItems.map((item) => {
+        screens: screenItems.slice(0, 80).map((item) => {
           const asset = evidenceById.get(item.evidenceId);
           return { index: item.flowIndex, copyHandle: copyHandleByEvidenceId.get(item.evidenceId), evidenceId: item.evidenceId, nodeId: item.nodeId, label: asset?.label, app: asset?.app, flow: asset?.flow, screen: asset?.screen };
         }),
       };
     }),
+    groundedEvidencePackets: compactCanvasV2EvidencePacketsForModel(
+      revision.evidencePackets?.filter((packet) => workingPacketIds.has(packet.id)),
+    ),
+    evidenceContract: "Every fact and metric remains bound to its packet source, authority, time range, filters, and limitations. Observed and supplied facts may be stated directly; calculated values must retain their definition; inferred values must remain visibly framed as interpretation. Never invent a metric, silently broaden a time range, discard a filter, or present a screenshot as behavioral performance. Use only the packets material to the person's request. Evidence-free creative work must remain evidence-free.",
     render: {
       viewport: observation.viewport,
       contentBounds: observation.contentBounds,

@@ -44,6 +44,11 @@ test("retrieves an ordered flow with exact screenshot evidence bindings", () => 
     ["screen:screen:1", "https://assets.example/role.png"],
     ["screen:screen:2", "https://assets.example/account.png"],
   ]);
+  assert.equal(result.packets.length, 1);
+  assert.equal(result.packets[0]?.kind, "screenshot-sequence");
+  assert.deepEqual(result.packets[0]?.assets.map((asset) => asset.sequenceIndex), [undefined, 0, 1]);
+  assert.equal(result.packets[0]?.source.permission, "authorized");
+  assert.match(result.packets[0]?.limitations[0] ?? "", /visible product behavior and interface structure/);
 });
 
 test("semantic screenshot search stays grounded in catalog identities", () => {

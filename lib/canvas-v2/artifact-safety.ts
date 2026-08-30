@@ -305,13 +305,27 @@ export function validateCanvasV2QuantitativeClaimLabels(
     ...evidence.flatMap((asset) => [asset.label, asset.description, asset.screen, asset.flow].filter((value): value is string => Boolean(value))),
   ].join(" ");
   const groundedPercentages = new Set(Array.from(groundedText.matchAll(/\b\d+(?:\.\d+)?%/g), (match) => match[0]));
-  const groundedFractions = new Set(Array.from(groundedText.matchAll(/\b\d+\s*\/\s*\d+\b/g), (match) => match[0].replace(/\s+/g, "")));
+  const groundedFractions = new Set([
+    ...Array.from(groundedText.matchAll(/\b\d+\s*\/\s*\d+\b/g), (match) => match[0].replace(/\s+/g, "")),
+    // People naturally write "5 of 6" while a composition may typeset the
+    // same supplied fact as "5/6". Preserve that epistemic equivalence rather
+    // than rejecting the user's own evidence as newly invented precision.
+    ...Array.from(groundedText.matchAll(/\b(\d+)\s+(?:out\s+of|of)\s+(?:the\s+)?(\d+)\b/gi), (match) => `${match[1]}/${match[2]}`),
+  ]);
   const failures: string[] = [];
+  const visibleQualifierContext = (index: number, length: number) => text.slice(
+    Math.max(0, index - 240),
+    index + length + 240,
+  );
+  const isClearlyProposedPrecision = (context: string) => /\b(?:hypothesis|hypothetical|illustrative|estimate|estimated|assumption|assumed|proposal|proposed|target|threshold|criterion|criteria|decision\s+gate|pass(?:es|ed|ing)?|fail(?:s|ed|ing)?|minimum|maximum|at\s+least|at\s+most|no\s+more\s+than|require[sd]?)\b/i.test(context);
   for (const match of text.matchAll(/\b\d+(?:\.\d+)?%/g)) {
     if (groundedPercentages.has(match[0])) continue;
     const index = match.index ?? 0;
-    const context = text.slice(Math.max(0, index - 110), index + match[0].length + 110);
-    if (!/\b(?:hypothesis|hypothetical|illustrative|estimate|estimated|assumption|assumed)\b/i.test(context)) {
+    // Labels often live in a sibling caption around an image or axis. Keep the
+    // guard local to the same visual neighborhood while allowing enough room
+    // for accessible witness copy between the label and the value.
+    const context = visibleQualifierContext(index, match[0].length);
+    if (!isClearlyProposedPrecision(context)) {
       failures.push(`Unsupported quantitative precision ${match[0]} must be visibly labeled as a hypothesis or illustrative estimate, not presented as observed evidence.`);
     }
   }
@@ -324,8 +338,8 @@ export function validateCanvasV2QuantitativeClaimLabels(
     // them from unsupported ratios such as 35/47.
     if (numerator?.startsWith("0") || denominator?.startsWith("0")) continue;
     const index = match.index ?? 0;
-    const context = text.slice(Math.max(0, index - 110), index + match[0].length + 110);
-    if (!/\b(?:hypothesis|hypothetical|illustrative|estimate|estimated|assumption|assumed)\b/i.test(context)) {
+    const context = visibleQualifierContext(index, match[0].length);
+    if (!isClearlyProposedPrecision(context)) {
       failures.push(`Unsupported quantitative precision ${normalized} must be visibly labeled as a hypothesis or illustrative estimate, not presented as observed evidence.`);
     }
   }

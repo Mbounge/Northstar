@@ -51,6 +51,10 @@ export interface AppDataApp {
   iconUrl?: string;
   category?: string;
   description?: string;
+  rank?: string;
+  revenue?: string;
+  employees?: string;
+  lastScan?: string;
   totalScreens: number;
   flows: AppDataFlow[];
 }
@@ -385,6 +389,10 @@ export function normalizeAppDataRows(rows: UnknownRecord[], tenantId: string): A
       iconUrl: imageUrl(text(row, ["icon_url", "logo_url", "icon"])),
       category: text(row, ["category", "app_type"]),
       description: text(row, ["description", "summary"]),
+      rank: text(row, ["rank"]),
+      revenue: text(row, ["revenue"]),
+      employees: text(row, ["employees"]),
+      lastScan: text(row, ["last_scan", "captured_at", "updated_at"]),
       totalScreens: new Set(flows.flatMap((flow) => flow.screens.map((screen) => screen.imageUrl ?? screen.id))).size,
       flows,
     };
@@ -400,7 +408,7 @@ export async function resolveAppDataTenantId(supabase: SupabaseClient, userId: s
 }
 
 export async function loadAppDataCatalog(supabase: SupabaseClient, tenantId: string): Promise<AppDataCatalog> {
-  const { data, error } = await supabase.from("target_apps").select(`app_name, category, icon_url, app_sessions (platform, session_type, session_intel, total_screens, steps_data, flows_data)`).eq("tenant_id", tenantId).order("app_name", { ascending: true });
+  const { data, error } = await supabase.from("target_apps").select(`app_name, category, icon_url, rank, revenue, employees, last_scan, app_sessions (platform, session_type, session_intel, total_screens, steps_data, flows_data)`).eq("tenant_id", tenantId).order("app_name", { ascending: true });
   if (error) throw new Error("North Star could not load the apps in this account.");
   const rows = await Promise.all(((data ?? []) as UnknownRecord[]).map(async (row) => {
     const appName = text(row, ["app_name", "name"]) ?? "Untitled app";

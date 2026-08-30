@@ -55,6 +55,70 @@ export interface CanvasV2WorkingContext {
   relationships: CanvasV2WorkingRelationship[];
 }
 
+/**
+ * The complete working context is browser/server authority, not prompt
+ * payload. Models receive a bounded collaboration view: exact selection and
+ * edit authority, a small set of relevant object witnesses, and counts for
+ * everything else. Canonical evidence pixels and the full protected atlas
+ * remain revision-owned and are addressed through evidence/discovery handles.
+ */
+export function compactCanvasV2WorkingContextForModel(
+  context: CanvasV2WorkingContext | undefined,
+  options: { includeFocusObjects?: boolean } = {},
+) {
+  if (!context) return undefined;
+  const selected = new Set([...context.selectedNodeIds, ...context.editableNodeIds]);
+  const visible = new Set([...context.visibleNodeIds, ...context.nearbyNodeIds]);
+  const focusObjects = options.includeFocusObjects === false ? [] : context.objects
+    .filter((object) => (
+      selected.has(object.nodeId)
+      || object.userEdited
+      || (!object.canonicalEvidence && visible.has(object.nodeId))
+    ))
+    .sort((left, right) => (
+      Number(selected.has(right.nodeId)) - Number(selected.has(left.nodeId))
+      || Number(right.userEdited) - Number(left.userEdited)
+      || left.bounds.y - right.bounds.y
+      || left.bounds.x - right.bounds.x
+    ))
+    .slice(0, 48)
+    .map((object) => ({
+      ...object,
+      ...(object.textPreview ? { textPreview: object.textPreview.slice(0, 240) } : {}),
+    }));
+  const focusIds = new Set(focusObjects.map((object) => object.nodeId));
+  const countByOrigin = context.objects.reduce<Record<string, number>>((counts, object) => {
+    counts[object.origin] = (counts[object.origin] ?? 0) + 1;
+    return counts;
+  }, {});
+  return {
+    schema: context.schema,
+    scope: context.scope,
+    selectionPolicy: context.selectionPolicy,
+    selectedNodeIds: context.selectedNodeIds.slice(0, 40),
+    selectedBounds: context.selectedBounds,
+    visibleBounds: context.visibleBounds,
+    viewportScale: context.viewportScale,
+    visibleNodeIds: context.visibleNodeIds.slice(0, 64),
+    nearbyNodeIds: context.nearbyNodeIds.slice(0, 64),
+    editableNodeIds: context.editableNodeIds.slice(0, 40),
+    protectedNodeIds: context.protectedNodeIds.slice(0, 80),
+    focusObjects,
+    relationships: context.relationships.filter((relationship) => (
+      focusIds.has(relationship.nodeId)
+      || relationship.sourceNodeIds.some((nodeId) => focusIds.has(nodeId))
+      || relationship.targetNodeIds.some((nodeId) => focusIds.has(nodeId))
+    )).slice(0, 24),
+    objectSummary: {
+      total: context.objects.length,
+      canonicalEvidence: context.objects.filter((object) => object.canonicalEvidence).length,
+      userEdited: context.objects.filter((object) => object.userEdited).length,
+      protected: context.protectedNodeIds.length,
+      byOrigin: countByOrigin,
+    },
+  };
+}
+
 const ORIGINS = new Set<CanvasV2ObjectOrigin>(["user", "northstar", "research", "imported"]);
 
 function boundedNumber(value: unknown, fallback = 0): number {

@@ -7,6 +7,7 @@ import { parseCanvasV2DesignDecision } from "@/lib/canvas-v2/model-response";
 import {
   applyCanvasV2SourcePatch,
   findCanvasV2SourceNodeRange,
+  normalizeCanvasV2SourcePatchHeadingHierarchy,
   parseCanvasV2SourcePatch,
   type CanvasV2EvidenceScaleIntent,
 } from "@/lib/canvas-v2/source-patch";
@@ -29,7 +30,17 @@ import {
   compileCanvasV2CompositionState,
   validateCanvasV2CompositionContinuity,
 } from "@/lib/canvas-v2/composition-continuity";
-import { validateCanvasV2RequestedCompositionCoverage } from "@/lib/canvas-v2/composition-requirements";
+import {
+  canvasV2CompletionContradictsMaterialMove,
+  canvasV2EvidenceLedComparisonRequested,
+  canvasV2EffectiveCompletionRecommendation,
+  canvasV2RequiresProgressiveEvidenceSynthesis,
+  canvasV2RequiredIndependentTerritoryCount,
+  shouldCompleteCanvasV2ResolvedOptionalContinuation,
+  validateCanvasV2AtomicTerritoryPlan,
+  validateCanvasV2DeferredSemanticJobIsolation,
+  validateCanvasV2RequestedCompositionCoverage,
+} from "@/lib/canvas-v2/composition-requirements";
 import {
   CANVAS_V2_WHOLE_BOARD_ISLAND_ID,
   buildCanvasV2IslandRegistry,
@@ -40,7 +51,24 @@ import {
   validateCanvasV2IslandExecution,
 } from "@/lib/canvas-v2/island-registry";
 import { CANVAS_V2_MAX_CONTEXT_STEPS } from "@/lib/canvas-v2/design-loop";
-import { loadAppDataCatalog, resolveAppDataTenantId } from "@/lib/app-data/canvas-v2-catalog";
+import { canvasV2AuthoritativeUserRequest } from "@/lib/canvas-v2/interaction-router";
+import {
+  loadAppDataCatalog,
+  resolveAppDataTenantId,
+  type AppDataCatalog,
+} from "@/lib/app-data/canvas-v2-catalog";
+import {
+  createCanvasV2AccountEvidenceProvider,
+  canvasV2EvidenceDomainsForInstruction,
+  canvasV2ProductEvidenceRequestedForInstruction,
+} from "@/lib/canvas-v2/account-evidence-provider";
+import { runCanvasV2EvidenceBridge } from "@/lib/canvas-v2/evidence-bridge";
+import { createCanvasV2OpenAIWebEvidenceProvider } from "@/lib/canvas-v2/external-evidence-provider";
+import { mergeCanvasV2EvidencePackets } from "@/lib/canvas-v2/evidence-packets";
+import { canvasV2EvidencePacketsNeedingMaterialization } from "@/lib/canvas-v2/evidence-packet-insertion";
+import { syncCanvasV2DiscoveryGraph } from "@/lib/canvas-v2/discovery-graph";
+import { buildCanvasV2DiscoveryModelReferenceCodec } from "@/lib/canvas-v2/discovery-model-references";
+import { buildCanvasV2EvidenceCopyHandles } from "@/lib/canvas-v2/evidence-handles";
 import { NORTHSTAR_V2_CANVAS_GRAMMAR } from "@/lib/canvas-v2/northstar-canvas-grammar";
 import {
   buildCanvasV2ResearchCatalogIndex,
@@ -62,8 +90,13 @@ import {
   validateCanvasV2SelectedAnalysisEvidence,
 } from "@/lib/canvas-v2/artifact-safety";
 import { buildCanvasV2BoundedModelContext, compactCanvasV2IslandSourceForModel } from "@/lib/canvas-v2/model-context";
-import { parseCanvasV2WorkingContext, type CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 import {
+  compactCanvasV2WorkingContextForModel,
+  parseCanvasV2WorkingContext,
+  type CanvasV2WorkingContext,
+} from "@/lib/canvas-v2/working-context";
+import {
+  canvasV2CanonicalEvidenceScale,
   validateCanvasV2RenderedAnalysisEvidenceScale,
   validateCanvasV2RenderedDesignRegionContentIntegrity,
   validateCanvasV2RenderedDesignRegionLegibility,
@@ -73,6 +106,7 @@ import {
   validateCanvasV2RenderedRelationshipGeometry,
 } from "@/lib/canvas-v2/evidence-authorship";
 import {
+  CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS,
   CanvasV2ProviderError,
   canvasV2ProviderErrorResponse,
   fetchCanvasV2ProviderJsonWithModelChain,
@@ -86,6 +120,8 @@ import {
 import {
   buildCanvasV2StructuredProviderRequest,
   extractCanvasV2StructuredText,
+  type CanvasV2ModelInputImage,
+  type CanvasV2ModelInputPart,
 } from "@/lib/canvas-v2/structured-provider";
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 import {
@@ -98,6 +134,52 @@ import {
   canvasV2LocalEvaluationEnabled,
   emptyCanvasV2LocalEvaluationCatalog,
 } from "@/lib/canvas-v2/local-evaluation";
+import {
+  CANVAS_V2_DISCOVERY_STATE_SCHEMA,
+  applyCanvasV2EmergentDepthSignal,
+  applyCanvasV2DiscoveryTransition,
+  buildCanvasV2SensemakingPresentationBrief,
+  compactCanvasV2DiscoveryStateForModel,
+  completeCanvasV2DiscoveryState,
+  createCanvasV2DiscoveryState,
+  parseCanvasV2EmergentDepthSignal,
+  reconcileCanvasV2PresentedValidations,
+  synchronizeCanvasV2DiscoveryState,
+  type CanvasV2DiscoveryMove,
+  type CanvasV2DiscoverySourceCategory,
+  type CanvasV2DiscoveryState,
+  type CanvasV2DiscoveryStateTransition,
+  type CanvasV2InquiryInterpretation,
+} from "@/lib/canvas-v2/discovery-state";
+import {
+  assertCanvasV2AuthoredPatchLanguage,
+  assertCanvasV2UserFacingLanguage,
+  findCanvasV2InternalLanguageLeaks,
+} from "@/lib/canvas-v2/presentation-language";
+import {
+  CANVAS_V2_DISCOVERY_ORCHESTRATOR_SYSTEM,
+  CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA,
+  canvasV2DiscoveryMoveNeedsRetrieval,
+  constrainCanvasV2DelegatedComparisonClarification,
+  deterministicCanvasV2ProductResearchTransition,
+  directCanvasV2CreationTransition,
+  parseCanvasV2DiscoveryTransition,
+} from "@/lib/canvas-v2/discovery-orchestrator";
+import { constrainCanvasV2ExternalDiscoveryProgress } from "@/lib/canvas-v2/discovery-reliability";
+import type { CanvasV2EvidenceDomain } from "@/lib/canvas-v2/evidence-bridge";
+import {
+  reconcileCanvasV2AuthoredStageEvidence,
+  validateCanvasV2AuthoredStageEvidenceContract,
+} from "@/lib/canvas-v2/stage-evidence-contract";
+import {
+  canvasV2ChatAttachmentEvidence,
+  canvasV2ChatAttachmentHandle,
+  canvasV2ChatAttachmentModelParts,
+  canvasV2ChatImageAttachments,
+  canvasV2ChatTextAttachments,
+  canvasV2UploadedEvidenceModelParts,
+  parseCanvasV2ChatAttachments,
+} from "@/lib/canvas-v2/chat-attachments";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -106,6 +188,41 @@ const NORTHSTAR_DESIGN_REFERENCE_PATHS = [
   "public/northstar/design-references/strategic-storyline-atlas.png",
   "public/northstar/design-references/evidence-constellation.png",
 ];
+let northstarDesignReferencePartsPromise: Promise<Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>> | undefined;
+const CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS = 16;
+
+function compactDiscoveryCollaboration(context: CanvasV2WorkingContext | undefined) {
+  const compact = compactCanvasV2WorkingContextForModel(context, { includeFocusObjects: false });
+  return compact ? {
+    ...compact,
+    contract: "This is a compact browser-state summary for choosing the next discovery move. Exact canvas source, evidence identity, provenance, and mutation authority remain server-owned and are supplied to the visual and source-authoring stages when required.",
+  } : undefined;
+}
+
+function compactDiscoveryProductAvailability(
+  catalog: AppDataCatalog,
+  instruction: string,
+  targetNames: readonly string[],
+) {
+  const relevance = `${instruction} ${targetNames.join(" ")}`.toLowerCase();
+  return catalog.apps
+    .map((app, index) => ({ app, index, relevant: relevance.includes(app.name.toLowerCase()) }))
+    .sort((left, right) => Number(right.relevant) - Number(left.relevant) || left.index - right.index)
+    .slice(0, 12)
+    .map(({ app }) => ({
+      name: app.name.slice(0, 160),
+      totalScreens: app.totalScreens,
+      category: app.category?.slice(0, 120),
+      flows: app.flows.slice(0, 12).map((flow) => ({
+        name: flow.name.slice(0, 240),
+        platform: flow.platform?.slice(0, 80),
+        sessionType: flow.sessionType?.slice(0, 80),
+        scope: flow.scope,
+        screenCount: flow.screens.length,
+        completeJourney: Boolean(flow.completeJourney),
+      })),
+    }));
+}
 const CREATIVE_DIRECTOR_SYSTEM = `You are North Star's visual director. Read the exact rendered overview, readable analytical-region captures, grounded evidence atlas, current creative direction, recent committed moves, and optional North Star taste reference. Return one concise JSON art-direction brief for the next visible source patch. Diagnose the most consequential visible weakness and prescribe one materially different, prompt-specific move that improves the communication.
 
 When collaboration.scope=selection, that explicit human targeting supersedes ordinary whole-board opportunity seeking. For selectionPolicy=modify, prescribe the smallest complete change to the exact collaboration.editableNodeIds and preserve every other object; never turn a heading rewrite or selected-object restyle into an island rebuild. For selectionPolicy=reference, treat every selected node as immutable evidence or an anchor and prescribe one new bounded result near it. Locked, hidden, protected, and unselected objects are never editable. The current viewport is factual working context, not permission to move the camera.
@@ -114,11 +231,11 @@ A balanced two-column layout, three-column dashboard, repeated cards or panels, 
 
 Let the communication problem determine the form. Editorial narratives, evidence fields, journeys, causal maps, comparison matrices, storyboards, annotated sequences, spatial arguments, data portraits, and original hybrids are possibilities, never prescribed templates. The board may compose above, below, beside, diagonally around, across, or within grounded evidence; it is not a webpage that must stack sections from top to bottom.
 
-Treat each island as one chapter in a spatial story, never as decoration placed merely to occupy a zone. The permanent title-and-description island is chapter one: give it a deliberate bounded footprint in verified open territory above or beside the evidence, with generous separation and a clear reading origin. It may be wide when the actual occupancy map permits, but it must never claim the entire canvas by policy, overlap a collaborator's object, or rely on a camera offset to appear available. Every later island needs a prompt-critical purpose, a deliberate relationship to the evidence or an established island, and a distinct readable territory. If the desired territory currently contains canonical evidence or another occupant, prescribe a collision-free recomposition that preserves every existing object and opens real space above, beside, or below it; never prescribe an absolute overlay into occupied coordinates. Finish any developing island—including its assigned screenshots, labels, explanation, hierarchy, and styling—before opening another chapter.
+Treat each island as one chapter in a spatial story, never as decoration placed merely to occupy a zone. The discovery move determines which chapter should be authored next; do not force every board to include framing when an evidence reading, comparison, decision object, or other prompt-critical chapter has greater information value. When a title-and-description island exists, it is the publication-level title for the user's entire prompt—not the heading of the first analytical island. Keep it singular, topmost, and first, and never place a later composition above it or before it on the opening row. The complete grounded-evidence atlas is itself a legitimate story chapter, so a later analysis, comparison, implication, or synthesis island may deliberately continue below the full atlas instead of clustering directly around the title. Every island needs a prompt-critical purpose, a deliberate relationship to the evidence or an established island, and a distinct readable territory. If the desired territory currently contains canonical evidence or another occupant, prescribe a collision-free recomposition that preserves every existing object and opens real space above, beside, or below the complete evidence chapter; never prescribe an absolute overlay into occupied coordinates. Finish any developing island—including its assigned screenshots, labels, explanation, hierarchy, and styling—before opening another chapter.
 
 A later turn is not an improvement merely because it is different. Identify the strongest exact visible qualities of the current committed render—such as a legible stage axis, coherent evidence scale, effective asymmetry, complete labels, or a clear reading order—and preserve them as an explicit preservation contract. Name the concrete regression risk of the proposed move. If a mature region already communicates well, extend it or make a bounded correction instead of replacing it with a speculative structure that can collapse its geometry, erase information, or create inert territory. Treat all islands as one publication: inherit the strongest established font families, body-copy scale, heading ratios, palette, rule weights, and spacing cadence. A deliberate contrast may express meaning, but a later island may never look like compressed debug output or an unrelated miniature theme beside the narrative title.
 
-Select no more than eight exact short evidence handles from canonicalEvidence whenever the move depends on screenshots or app identity. Those selections become an executable contract; the server resolves them to the full tenant evidence IDs. Assign every selection an explicit scaleIntent: identity-mark for app icons, peer for screenshots that should stay roughly 0.75–1.6× their canonical peer height, or bounded-emphasis for a screenshot whose exact observed detail genuinely needs a larger but still integrated treatment no greater than 2.75× its canonical peer height. Never choose bounded-emphasis merely to fill a column, create symmetry, or make evidence feel important. When a stage map calls several blocks SOURCED or OBSERVED SCREEN, select one exact handle for every such block so the visual sequence is self-explanatory; otherwise explicitly treat the unsupported blocks as interpretation and do not leave empty screenshot footprints. Name a focused set of one to three short kebab-case authoredVisualRoles for the visible structures that could carry this turn (for example thesis-anchor, evidence-callout, comparison-axis, stage-transition, causal-connector, or an original role you devise). Do not use card, panel, column, grid, or dashboard as a visual role. The source author must materially realize at least one central role as data-canvas-v2-visual-role rather than spending the patch on metadata.
+Select an argument-appropriate set of no more than ${CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS} exact short evidence handles from canonicalEvidence whenever the move depends on screenshots or app identity. This is a safety ceiling, never a target or a layout quota. Never default to three screenshots per app or force equal witness counts merely for symmetry: one decisive screen may prove a focused point, while a journey or transition claim may need several distinct moments from one side and fewer from another. Every selected screen must carry a different decision-relevant part of the argument; the complete canonical rails remain visible as the source record. Those selections become an executable contract; the server resolves them to the full tenant evidence IDs. Assign every selection an explicit scaleIntent: identity-mark for app icons, peer for screenshots that should stay roughly 0.75–1.6× their canonical peer height, or bounded-emphasis for a screenshot whose exact observed detail genuinely needs a larger but still integrated treatment no greater than 2.75× its canonical peer height. Never choose bounded-emphasis merely to fill a column, create symmetry, or make evidence feel important. When a stage map calls several blocks SOURCED or OBSERVED SCREEN, select one exact handle for every such block so the visual sequence is self-explanatory; otherwise explicitly treat the unsupported blocks as interpretation and do not leave empty screenshot footprints. Name a focused set of one to three short kebab-case authoredVisualRoles for the visible structures that could carry this turn (for example thesis-anchor, evidence-callout, comparison-axis, stage-transition, causal-connector, or an original role you devise). Do not use card, panel, column, grid, or dashboard as a visual role. The source author must materially realize at least one central role as data-canvas-v2-visual-role rather than spending the patch on metadata.
 
 When a named app is visibly discussed in authored analysis, use its exact grounded identity handle as an identity-mark analysis copy at least once. Never substitute a generic letter tile, emoji, invented logo, or arbitrary black badge for available tenant identity evidence.
 
@@ -126,13 +243,19 @@ Read render.spatial.analysisEvidenceGeometry as factual scale evidence. A copied
 
 Read render.spatial.authoredSurface as factual whole-board placement. Its placementOccupants list is the complete top-level multiplayer occupancy map: it includes user-created or detached objects, grounded research, and existing Northstar regions with exact rendered bounds and ownership. Its design-region centers, shares, reading order, nine named zones, zone occupancy, and edge space reveal whether the authored analysis is habitually collapsed into one webpage-like stack while usable territory remains elsewhere. Before every move, inspect every placement occupant and choose genuinely open world-space inside workspace.aiAuthoringBounds. Never prescribe a region that overlaps, covers, moves, resizes, or restyles a user-owned object or an unchanged existing object; a user object is a collaborator's durable decision, not spare background. Record the exact intended move in targetTerritory, anchored to an existing stable node, and select an exact targetZoneId. Choose the next location deliberately—above, below, left, right, diagonally offset, interleaved, spanning, or recomposing—according to the argument, reading order, and factual free space. placementMode=evidence-relative-island means a self-contained authored territory placed around the evidence—not another vertical section; attached means a bounded extension of an established region; interleaved means a deliberate, explicitly marked relationship with the evidence rail; recompose means the existing authored regions are moved together as one whole-board change. Use islands when they make separate insights inspectable, but do not scatter arbitrary widgets or fill every zone. Negative space may remain, but it must feel intentional and counterbalanced; never prescribe empty width for its own sake. A completion recommendation uses relation none, placementMode=attached, and still names the dominant stable anchor and zone whose whole-board render was reviewed.
 
+Explicit human spatial language is binding. When the person asks for a separate island, composition, chapter, surface, or territory "beside" or "next to" another, create it with relation=left or relation=right in genuinely open nearby space. If neither side is collision-free, prescribe the smallest whole-board recomposition that opens that relationship instead of silently turning the request into another vertical section.
+
 The finite world is navigation capacity, not a target publication footprint. Unless the user explicitly asks for an expansive at-scale landscape, keep an ordinary single-prompt composition compact enough to remain comfortably legible at fit view—typically about 3,600–5,600 canvas pixels wide and 2,000–3,600px high. Never inflate a resolved composition to 7,000–9,000px merely because distant canvas territory exists or because the overview contains whitespace. Large-world prompts may deliberately exceed that range when distance itself carries meaning.
 
 The islandRegistry is the authoritative programmatic map of independently editable authored compositions. Choose exactly one targetIsland action: create allocates the supplied new island ID; develop advances an existing island's core argument; enrich adds missing evidence or explanation to an existing island; repair corrects a concrete rendered or factual defect; recompose coordinates the whole board; complete closes the whole-board review. Never identify an island with prose. For develop, enrich, or repair, choose an exact existing island ID and preserve its stable identity. For create, choose only the server-allocated new island ID and a purposeful open zone. For recompose or complete, choose __whole-board__. The current turn receives a focused capture and source excerpt for its chosen existing island while retaining the whole-board overview, so an island can mature across turns without losing the surrounding composition.
 
 Every create, develop, enrich, or repair decision must explicitly declare the target island's resultingMaturity, resolutionRationale, and openRequirements after this proposed visible turn. developing means this exact island still has one or more local prompt-critical requirements, which must be listed. resolved means the island is fully composed, its intended information and evidence are present, its hierarchy and styling are coherent, and openRequirements is empty. An openRequirement belongs to the current island only: never attach future chapters, neighboring working surfaces, later stages, or whole-board deliverables to this island's lifecycle. Put those wider-board needs in remainingOpportunities and nextMoves; the global prompt-coverage ledger decides which independent island comes next. A create turn must therefore finish the bounded island it creates atomically; use later enrich or repair turns only when a newly observed defect genuinely belongs inside that same island. Once an island declares local open requirements, they are a monotonic finishing contract: later turns may retain an exact requirement or remove it when satisfied, but may not replace it with a new polish goal and perpetually move the finish line. All evidence ever assigned to the island is likewise durable. When islandRegistry contains developing or evidence-incomplete work, continue one of those exact identities before creating another island; do not proliferate half-finished story fragments. A later turn may return to any resolved island for a bounded enrichment or repair, but consecutive refinements of the same resolved chapter are not progress: advance the wider story, recompose, or complete. Recompose never changes island maturity by implication. Complete is legal only when every island in islandRegistry is already resolved, has no open requirements, and retains all evidence previously assigned to it. Never use whole-board completion to fabricate resolved island state.
 
-Give every island one stable storyRole. The first analytical island is always a narrative title territory: a strong prompt-specific title and descriptive orientation with a deliberate, legible footprint placed in collision-free territory near the beginning of the reading order. Preserve generous negative space between it, the evidence atlas, and every collaborator-owned object. That story beginning remains reserved for the title for the life of the board; later islands cannot reuse or cover it. It establishes what the board is about, why the evidence matters, and the visual thesis without becoming a generic dashboard header. Its exact width, wrapping, and origin must respond to the current placementOccupants map rather than forcing a full-width strip through occupied space. Later islands may orient, read evidence, compare, analyze, express a relationship, state an implication, or synthesize. Choose them because the story needs them, sequence them coherently around the evidence, and preserve the storyRole when returning to an existing island. Never create islands merely to occupy empty zones. Ordinary consecutive chapters must remain in close visual proximity to their narrative neighbor—normally about 192–480px apart—and the complete publication should wrap into a compact two-dimensional neighborhood around the title. Do not make the user pan far right, down, or across empty territory to discover the next turn. A long serial exhibition is appropriate only when the user's prompt explicitly asks for an expansive or panoramic canvas.
+When discoveryMove.kind is design-validation, author one natural human-facing learning chapter rather than another analysis report. Make the unresolved question, practical method, a short sequence of actions, signals that would strengthen or change the current view, and the decision those findings unlock easy to use. Never imply that North Star performed the interview, experiment, measurement, or other consequential external action. When discoveryMove.kind is integrate-validation, show what the person learned, how it changed the current view, and the resulting decision or next question with the human-supplied record visibly respected. These are ordinary editorial chapters: never print validationBacklog, linkedUncertaintyIds, result effect enums, or other private field names.
+
+One island owns one primary semantic job. State that exact job in currentSemanticJob. State every already-understood prompt-critical job that must receive a later independently editable territory in deferredSemanticJobs; keep those same deferred jobs explicit in remainingOpportunities and nextMoves. These are execution fields, not a prose summary: currentSemanticJob is the only job the next source patch may visibly materialize, and deferredSemanticJobs are prohibited from the current island. When the instruction explicitly requests separate, distinct, or independently editable compositions, territories, chapters, surfaces, maps, paths, or outputs, treat that wording as a structural contract across the same run. Resolve one bounded island per observed turn; do not compress another required territory into a nested section merely to claim the whole prompt is complete. Keep the later territory out of the current island, observe the committed result, and then create the next independently editable island. This is not an island quota: one coherent job should remain one composition, and cards or containers still have to earn their place.
+
+Give every island one stable storyRole. Let the active discovery move determine the first and subsequent roles: a board that does not need a publication title may begin directly with an evidence reading, comparison, analysis, decision surface, relationship, implication, synthesis, or framing. A title-and-description island is optional; when the story genuinely needs a publication-level headline or governing thesis, make that the complete currentSemanticJob, select storyRole=title, and defer the analytical chapters. Never hide the board's h1/title treatment inside a comparison, analysis, or implementation island. Permit at most one title island, keep it focused on title, orientation, thesis, framing, and kicker work, and preserve it as the topmost first chapter for the rest of the run. Sequence every later chapter after the title and coherently around existing evidence while preserving its storyRole when returning to it. The grounded-evidence atlas counts as an intervening narrative chapter: an analytical island below the complete atlas follows the title correctly and does not owe the title a direct 192–480px gutter. Never create islands merely to occupy empty zones. Ordinary genuinely consecutive chapters must remain in close visual proximity to their narrative neighbor—normally about 192–480px apart—and the complete publication should wrap into a compact two-dimensional neighborhood. Do not make the user pan far right, down, or across empty territory to discover the next turn. A long serial exhibition is appropriate only when the user's prompt explicitly asks for an expansive or panoramic canvas.
 
 For a screenshot-led comparison, adjacent prose columns and small evidence thumbnails are not a resolved visual argument. Decide which prompt-specific visual form makes the central insight spatially inspectable: evidence choreography, juxtaposition, annotation, a connector, bracket, axis, sequence handoff, causal path, or a better device you invent. Relationship geometry is optional, never a box to tick. Do not prescribe it merely because none exists.
 
@@ -148,6 +271,8 @@ Use real evidence and exact app identity; never invent product facts or quantita
 
 Keep completionRationale as a terse internal verification judgment. Separately write completionSummary as the final handoff to the person who asked for the work: two to four outcome-first sentences explaining what North Star created, the most useful idea or organizing insight in the composition, and how the user can continue editing or directing it. Speak like a thoughtful collaborator, not a validator. Never expose internal terms or identifiers such as islands, openRequirements, contentOverflowNodeIds, compiler, render-safe, lifecycle, revision IDs, repair counts, maturity states, provider attempts, or validation diagnostics. Do not claim evidence or factual findings that were not supplied.
 
+The discoveryModelContext is deliberately delta-first. Full changed and mandatory records are supplied; unchanged stableReferences remain valid durable memory. If—and only if—one omitted or referenced record is materially necessary to make the next visual decision, return its exact ID in requestedDiscoveryNodeIds and keep the rest of the brief coherent. Otherwise return an empty list. Never request broad expansion, never guess omitted content, and never use expansion as a substitute for visual judgment.
+
 ${NORTHSTAR_V2_CANVAS_GRAMMAR}`;
 const CREATIVE_BRIEF_SCHEMA = {
   type: "object",
@@ -155,6 +280,8 @@ const CREATIVE_BRIEF_SCHEMA = {
   properties: {
     visualDiagnosis: { type: "string" },
     materialMove: { type: "string" },
+    currentSemanticJob: { type: "string" },
+    deferredSemanticJobs: { type: "array", minItems: 0, maxItems: 6, items: { type: "string" } },
     spatialDirection: { type: "string" },
     targetIsland: {
       type: "object",
@@ -186,7 +313,7 @@ const CREATIVE_BRIEF_SCHEMA = {
     evidenceSelections: {
       type: "array",
       minItems: 0,
-      maxItems: 8,
+      maxItems: CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS,
       items: {
         type: "object",
         additionalProperties: false,
@@ -199,6 +326,7 @@ const CREATIVE_BRIEF_SCHEMA = {
         required: ["evidenceHandle", "roleInArgument", "intendedTreatment", "scaleIntent"],
       },
     },
+    requestedDiscoveryNodeIds: { type: "array", minItems: 0, maxItems: 12, items: { type: "string" } },
     authoredVisualRoles: { type: "array", minItems: 1, maxItems: 3, items: { type: "string" } },
     antiRepetition: { type: "string" },
     visualVocabulary: { type: "array", minItems: 1, maxItems: 6, items: { type: "string" } },
@@ -218,7 +346,7 @@ const CREATIVE_BRIEF_SCHEMA = {
     remainingOpportunities: { type: "array", minItems: 0, maxItems: 6, items: { type: "string" } },
     nextMoves: { type: "array", minItems: 0, maxItems: 5, items: { type: "string" } },
   },
-  required: ["visualDiagnosis", "materialMove", "spatialDirection", "targetIsland", "targetTerritory", "evidenceChoreography", "evidenceSelections", "authoredVisualRoles", "antiRepetition", "visualVocabulary", "paletteDirection", "whyThisTurn", "preservedStrengths", "regressionRisk", "completionRecommendation", "completionRationale", "completionSummary", "visualThesis", "compositionStrategy", "hierarchyAndScale", "spacingRhythm", "relationshipLogic", "growthDirection", "remainingOpportunities", "nextMoves"],
+  required: ["visualDiagnosis", "materialMove", "currentSemanticJob", "deferredSemanticJobs", "spatialDirection", "targetIsland", "targetTerritory", "evidenceChoreography", "evidenceSelections", "requestedDiscoveryNodeIds", "authoredVisualRoles", "antiRepetition", "visualVocabulary", "paletteDirection", "whyThisTurn", "preservedStrengths", "regressionRisk", "completionRecommendation", "completionRationale", "completionSummary", "visualThesis", "compositionStrategy", "hierarchyAndScale", "spacingRhythm", "relationshipLogic", "growthDirection", "remainingOpportunities", "nextMoves"],
 } as const;
 
 /**
@@ -269,11 +397,21 @@ const SOURCE_AUTHOR_SYSTEM = `You are North Star's bounded source author. Execut
 
 The collaboration contract is binding. When collaboration.scope=selection and selectionPolicy=modify, existing-node mutation operations may target only collaboration.editableNodeIds; preserve all unselected nodes byte-for-byte and keep CSS selectors scoped to those exact stable IDs. When selectionPolicy=reference, selected nodes are immutable: create the derived work in the director's new bounded island and never replace, remove, append into, restyle, move, resize, hide, unlock, or reparent a selected reference. Insert that new identified island immediately before or after an exact selected reference. Every CSS selector in a reference-scoped turn must include an exact data-canvas-v2-node-id attribute selector for one of the newly created nodes; global, root, element-only, and class-only rules are forbidden. Never mutate collaboration.protectedNodeIds. A small selected-object request is not authorization to rebuild its parent island or the surrounding board.
 
+When a title island exists, it is the immutable publication-level opening for the user's whole prompt. Preserve it as the first source and spatial chapter; never insert or position a later island above it or before it on the opening row. The complete grounded-evidence atlas may follow that opening, and later analytical islands may continue below the atlas. Execute the compiler-owned target relation exactly, even when the director originally preferred another direction.
+
 Every visible authored primitive—text block, shape, connector, divider, image, table, frame, or other independently painted leaf—must receive its own unique data-canvas-v2-node-id so the user can select and transform it independently. Layout-only wrappers may remain anonymous; never merge separate visible primitives into one object merely to simplify layout.
 
-Return only decision, moveKind, summary, expectedVisualResult, and patch. Do not return a creative direction, spatial strategy, composition ledger, reflection, research decision, completion decision, full document, or prose outside the JSON contract. The server owns those responsibilities.
+Return only decision, moveKind, summary, expectedVisualResult, emergentDepth, and patch. Do not return a creative direction, spatial strategy, composition ledger, reflection, research decision, completion decision, full document, or prose outside the JSON contract. The server owns those responsibilities.
 
-Use only exact target node IDs from source.htmlOutline and executionContract.editableNodeIds. That editable-node directory is the authoritative target shortlist. If a semantic child you want is absent, append a new uniquely identified child inside an exact existing parent; never invent a target ID and assume it exists. Obey executionContract.targetIsland exactly. A create action must materialize one new top-level analytical territory whose data-canvas-v2-node-id is the supplied islandId and whose data-canvas-v2-story-role exactly matches storyRole. Develop, enrich, and repair must update that exact existing island without renaming, duplicating, or changing its story role. The narrative beginning of every authored board is permanently reserved for exactly one title island. Use a real h1/h2 plus a descriptive paragraph, establish the prompt-specific story, and place the title's bounded outer region in verified free territory near the beginning of the reading order. Its exact width, wrapping, and origin must respond to workspace.recommendedOpenTerritories and render.spatial.authoredSurface.placementOccupants; never force a full-canvas strip through occupied space, overlap canonical evidence, or cover a collaborator-owned object. Leave at least ${CANVAS_V2_WORKSPACE.documentMargin}px of deliberate margin before the grounded-evidence island; do not declare evidence interleave on it. No later non-title island may occupy or cover that narrative beginning. Fully execute the target island's intended visible state: if resultingMaturity is resolved, the island must visibly contain its complete intended message, every selected evidence item, all necessary labels and explanatory information, coherent hierarchy, and finished styling; if developing, execute this turn's material move while leaving the listed openRequirements honestly visible in lifecycle memory for a later turn. Explicit prompt coverage belongs in non-title analytical work: never treat a title, subtitle, orientation paragraph, or future-chapter promise as proof that a named category, horizon, comparison side, stage, relationship, or output exists. Do not abandon a developing island to open unrelated territory: finish its declared missing information, screenshots, hierarchy, or styling through its stable identity first. Recompose may coordinate several existing islands but must retain their stable identities and cannot silently resolve them. Each inserted or replaced top-level analytical territory requires a unique data-canvas-v2-node-id and data-canvas-v2-design-region; the compiler binds data-canvas-v2-island-id to the same stable ID. Materialize at least one supplied authoredVisualRole exactly as data-canvas-v2-visual-role. The compiler owns the target island's durable evidence ledger, exact provenance, stable identity, relation, placement mode, and target zone. Compose the already-bound evidence nodes from focusedIslandSource and preserve them in place. Never write evidence URLs or evidence handles. Preserve canonical evidence lanes and existing evidence copies.
+Make one private adaptive-depth judgment after authoring the patch. Use emergentDepth.recommendation=stay-direct with evidenceNeed=irrelevant for straightforward work that can be completed responsibly from the supplied canvas and request. Use deepen only when this composition exposes one precise unanswered question whose answer could materially change the requested outcome; include that question, the smallest honest evidence need, and only relevant source categories. Optional specificity, decorative possibilities, and generic opportunities to do more are not reasons to deepen. During a hidden render repair always stay-direct. This judgment is runtime control and must never become visible canvas copy.
+
+The supplied discoveryState, discoveryMove, userFacingSensemaking, completion fields, evidence classifications, retries, and execution contract are private reasoning context. Translate their domain meaning into natural editorial communication. Never display field names or phrases such as discovery state, discovery move, material unknown, expected information gain, source category, completion readiness, epistemic classification, provider attempt, repair pass, compiler, validator, or schema unless the person's own instruction explicitly asks to explain that technical concept.
+
+For a human-guided learning chapter, write in the language of the user's problem: what we need to learn, questions worth asking, a lightweight way to test it, signals to watch, what would change the recommendation, and when to decide. Never display terms such as validation backlog, validation status, uncertainty ID, candidate ID, information gain, result effect, or human-input node. A returned human result should read as what was learned and what it changes—not as evidence ingestion or state transition.
+
+Use only exact target node IDs from source.htmlOutline and executionContract.editableNodeIds. That editable-node directory is the authoritative target shortlist. If a semantic child you want is absent, append a new uniquely identified child inside an exact existing parent; never invent a target ID and assume it exists. Obey executionContract.targetIsland exactly. A create action must materialize one new top-level analytical territory whose data-canvas-v2-node-id is the supplied islandId and whose data-canvas-v2-story-role exactly matches storyRole. Develop, enrich, and repair must update that exact existing island without renaming, duplicating, or changing its story role. When the target is the board's single title island, use a real h1/h2 plus a descriptive paragraph and place its bounded outer region in verified free territory near the beginning of the reading order. Its exact width, wrapping, and origin must respond to workspace.recommendedOpenTerritories and render.spatial.authoredSurface.placementOccupants; never force a full-canvas strip through occupied space, overlap canonical evidence, or cover a collaborator-owned object. Fully execute the target island's intended visible state: if resultingMaturity is resolved, the island must visibly contain its complete intended message, every selected evidence item, all necessary labels and explanatory information, coherent hierarchy, and finished styling; if developing, execute this turn's material move while leaving the listed openRequirements honestly visible in lifecycle memory for a later turn. Explicit prompt coverage belongs in non-title analytical work: never treat a title, subtitle, orientation paragraph, or future-chapter promise as proof that a named category, horizon, comparison side, stage, relationship, or output exists. Do not abandon a developing island to open unrelated territory: finish its declared missing information, screenshots, hierarchy, or styling through its stable identity first. Recompose may coordinate several existing islands but must retain their stable identities and cannot silently resolve them. Each inserted or replaced top-level analytical territory requires a unique data-canvas-v2-node-id and data-canvas-v2-design-region; the compiler binds data-canvas-v2-island-id to the same stable ID. Materialize at least one supplied authoredVisualRole exactly as data-canvas-v2-visual-role. The compiler owns the target island's durable evidence ledger, exact provenance, stable identity, relation, placement mode, and target zone. Compose the already-bound evidence nodes from focusedIslandSource and preserve them in place. Never write evidence URLs or evidence handles. Preserve canonical evidence lanes and existing evidence copies.
+
+Obey independentTerritoryContract when supplied. Author only visualDirectorBrief.currentSemanticJob. Treat every visualDirectorBrief.deferredSemanticJobs entry as excluded visible content for this patch: do not nest it, summarize it, promise it inside the current island, or precompose any of its steps. If requiredCount is greater than projectedCountAfterThisTurn, the deferred jobs will receive later observed source-author transactions. If this turn reaches requiredCount, author the exact missing independent job rather than a duplicate summary of an established island.
 
 During executionContract.repairMode=repair-existing-uncommitted-candidate, the supplied source is the exact rejected candidate and already contains the create transaction's target island. Correct that same node and its CSS in place. Do not append a duplicate island, change its identity, revisit art direction, or treat its presence as committed lifecycle state. During executionContract.repairMode=retry-whole-board-from-committed-source, the rejected recompose contained no new story object, so the supplied source is deliberately reset to public committed truth. Execute one clean replacement recompose against the exact body-level island IDs; never copy or append rejected CSS.
 
@@ -281,7 +419,7 @@ For develop, enrich, and repair, the committed target island is durable compiler
 
 Realize targetTerritory, including its relation, placementMode, and targetZoneId, in actual source geometry. The supplied workspace.aiAuthoringBounds and render.spatial.authoredSurface.placementOccupants are binding geometry: the resulting top-level territory must fit inside that honest world-space band and must not intersect any existing user, research, or unchanged Northstar occupant. Mark the responsible top-level design region with data-canvas-v2-territory-relation, data-canvas-v2-placement-mode, and data-canvas-v2-target-zone using those exact brief values. An evidence-relative island must occupy a distinct, purposeful two-dimensional territory around the evidence—not become another section in the same vertical stack. Author only the intrinsic composition: the source compiler owns its ${CANVAS_V2_WORKSPACE.documentMargin}px local safe perimeter and translates the accepted native object scene to the permanent world-space origin x=${CANVAS_V2_WORKSPACE.aiAuthoringOriginX}px, never a camera-only offset. The node canvas-root is an inert metadata template, not the parent of visible islands: it can receive a first body-level append but must never appear in CSS. Never style body, html, the finite workspace, workspace metadata, or a root canvas size/padding to simulate placement. Use intrinsic, content-driven grid/flex placement for region internals and exact body-level island selectors, normal-flow order, alignment, and margins for whole-composition territory; the compiler neutralizes absolute top-level island offsets because they create overlaps and edge escapes. Never create arbitrary empty canvas dimensions. Interleave only when explicitly requested and mark it with data-canvas-v2-evidence-interleave. Recompose all affected regions together when placementMode is recompose.
 
-The world size does not set the authored composition scale. Unless the brief explicitly requests an expansive or panoramic canvas, keep the complete body-level publication within an approximately 3,600–5,600px by 2,000–3,600px intrinsic footprint and every consecutive chapter within 1,200px of its preceding narrative neighbor. Prefer a compact two-dimensional grid or editorial constellation around the title, with ordinary gutters of roughly 192–480px, over one long horizontal or vertical chain. The user should understand a normal composition at a 15–25% working zoom without hunting for later turns. A recompose must change the measured relative positions of its AI-owned islands, not merely enlarge their widths or add margins while leaving every island on the same vertical rail.
+The world size does not set the authored composition scale. Unless the brief explicitly requests an expansive or panoramic canvas, keep the complete body-level publication within an approximately 3,600–5,600px by 2,000–3,600px intrinsic footprint and the meaningful visible content of every genuinely consecutive authored chapter within 960px of its preceding narrative neighbor. The complete grounded-evidence atlas is an intervening chapter, not empty margin: when it occupies the story between a title above and synthesis below, do not force those two authored islands to become directly adjacent or move the synthesis above the evidence. Prefer a compact two-dimensional editorial constellation, with ordinary direct gutters of roughly 192–480px, over one long chain of empty space. Fit every top-level island to its actual communication: never use oversized min-height, padding, empty grid tracks, or spacer margins to make technically adjacent roots render like separate pages. The user should understand a normal composition at a 15–25% working zoom without hunting for later turns. A recompose must change the measured relative positions of its AI-owned islands, not merely enlarge their widths or add margins while leaving every island on the same vertical rail.
 
 Keep all narrative copy readable at normal whole-board distance. Headings must render at least 40 canvas pixels, paragraphs and list copy at least 28px, and short labels or metadata at least 24px. Those are floors, not a prescribed type scale. Carry the established editorial font pairing, hierarchy ratios, restrained accent logic, line weights, and spacing rhythm through every island. Multi-line type needs honest leading: never use compressed line-height, negative margins, transforms, or an overlapping badge to manufacture density. A rotated label is acceptable only in a genuinely empty corridor and must never cross a heading or reading unit. When developing an existing island, update its intrinsic grid or flex tracks as one bounded composition. Never turn its root into width:max-content and append fixed-width chapters with thousand-pixel spacer margins; that produces a hidden horizontal artboard and collapses earlier content into sliver columns. Give every prose block a useful reading measure and set flex-shrink:0 only where the complete parent width honestly contains all siblings. If the composition does not fit, simplify the structure, shorten nonessential copy, widen an honest region, or use available two-dimensional territory; never shrink useful copy into microtext.
 
@@ -290,6 +428,7 @@ If the target zone currently contains a canonical lane, first change normal-flow
 Preserve screenshot aspect ratios and the supplied scale intent. Do not author page-dominating screenshots. Ground every product-specific analytical claim in a visible screen from canonical evidence or an exact evidence copy; label interpretation and estimates honestly. Do not introduce endpoint-dependent SVG relationships until the brief asks for them. When existing relationship endpoints move, replace or update all affected geometry in the same patch. Relationship geometry must carry exact data-canvas-v2-relationship-source and data-canvas-v2-relationship-target anchors; annotations must carry data-canvas-v2-annotation-for. Do not emit scripts, iframes, forms, event handlers, external imports, or JavaScript.
 
 Canonical flow screen totals and authored comparison stages are different facts. Never describe a selected subset, three-stage axis, or representative sequence as “N screens” for an app. Use “stages”, “phases”, “moments”, or “selected examples” for authored compression; reserve “N screens” only for the exact authoritative complete-flow totals supplied in authoritativeCanonicalFacts.
+When the brief calls for a comparison or stage axis, the labels and their evidence must share one real layout structure. Put each screenshot witness inside the stage or comparison cell it supports; never author a full-width row of headings and then place every screenshot in an unrelated left-packed lane beneath it. Every comparison checkpoint or stage must declare evidence ownership on its exact identified container: data-canvas-v2-stage-evidence="sourced" for an observed stage, or data-canvas-v2-stage-evidence="interpretation" for reasoning. A sourced stage must contain at least one exact grounded analysis-copy screenshot inside that same container; screenshots elsewhere on the axis do not support it. An interpretation stage must visibly say Interpretation and must not claim observed interface behavior or reserve an empty screenshot footprint. When the director explicitly asks for an N-stage grounded screenshot comparison, all N stages are sourced; place any purely interpretive implication in its later implication chapter instead of using it as a screenshot-free stage.
 
 Make the smallest source change that visibly executes the brief. A successful turn changes the rendered board; no-op CSS and metadata-only changes are invalid.
 
@@ -350,6 +489,27 @@ const SOURCE_AUTHOR_SCHEMA = {
     },
   },
   required: ["decision", "moveKind", "summary", "expectedVisualResult", "patch"],
+} as const;
+
+const ADAPTIVE_SOURCE_AUTHOR_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    ...SOURCE_AUTHOR_SCHEMA.properties,
+    emergentDepth: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        recommendation: { type: "string", enum: ["stay-direct", "deepen"] },
+        rationale: { type: "string" },
+        materialQuestion: { type: ["string", "null"] },
+        evidenceNeed: { type: "string", enum: ["required", "useful", "optional", "irrelevant"] },
+        sourceCategories: { type: "array", items: { type: "string", enum: ["product", "marketing", "business", "external", "canvas"] }, maxItems: 5 },
+      },
+      required: ["recommendation", "rationale", "materialQuestion", "evidenceNeed", "sourceCategories"],
+    },
+  },
+  required: [...SOURCE_AUTHOR_SCHEMA.required, "emergentDepth"],
 } as const;
 
 const TARGETED_SELECTION_AUTHOR_SYSTEM = `You are North Star's precision selection editor. Apply the user's requested change to the exact stable objects in collaboration.editableNodeIds.
@@ -619,20 +779,47 @@ function canvasV2RenderRepairInstruction(repair: ReturnType<typeof compactCanvas
   return `RENDER REPAIR PASS ${repair.attempt} OF ${repair.maxAttempts}. ${posture} Exact failures: ${repair.failures.join(" ")} ${repair.failedMove ? `Rejected move: ${repair.failedMove}` : ""} `;
 }
 
+function compactCanvasV2PrivateRecovery(value: unknown): {
+  kind: "phase-contract" | "render-integrity" | "capture";
+  fingerprint: string;
+  occurrence: number;
+  failures: string[];
+  rejectedMove?: string;
+} | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind === "render-integrity" || record.kind === "capture" || record.kind === "phase-contract"
+    ? record.kind
+    : undefined;
+  if (!kind || typeof record.fingerprint !== "string") return undefined;
+  return {
+    kind,
+    fingerprint: record.fingerprint.slice(0, 160),
+    occurrence: Math.max(1, Math.floor(Number(record.occurrence) || 1)),
+    failures: (Array.isArray(record.failures) ? record.failures : [])
+      .filter((failure): failure is string => typeof failure === "string")
+      .slice(-8)
+      .map((failure) => failure.slice(0, 800)),
+    ...(typeof record.rejectedMove === "string" ? { rejectedMove: record.rejectedMove.slice(0, 1_200) } : {}),
+  };
+}
+
+function canvasV2PrivateRecoveryInstruction(recovery: ReturnType<typeof compactCanvasV2PrivateRecovery>): string {
+  if (!recovery) return "";
+  return [
+    "PRIVATE CONTRACT REPLAN: the preceding draft was never committed or shown.",
+    "Work only from the supplied committed render and choose a genuinely executable bounded move that still advances the original prompt.",
+    "Do not repeat the rejected structure, do not mention recovery or validation to the user, and do not weaken evidence, narrative, or completion standards.",
+    `Failure fingerprint ${recovery.fingerprint}; diagnostic recurrence ${recovery.occurrence}; exact failures: ${recovery.failures.join(" ")}`,
+    recovery.rejectedMove ? `Rejected private move: ${recovery.rejectedMove}` : "",
+  ].filter(Boolean).join(" ") + " ";
+}
+
 function validateCanvasV2CreativeArc(
   decision: ReturnType<typeof parseCanvasV2DesignDecision>,
   policy: ReturnType<typeof canvasV2ResearchDecisionPolicy>,
   allowCreativeRedirection = false,
 ): void {
-  if (decision.decision === "edit") {
-    const declaredMove = `${decision.summary} ${decision.expectedVisualResult} ${decision.creativeDirection.currentFocus}`;
-    if (/\b(?:no[ -]?op|continuity-only|continuity patch|remains unchanged|preserve(?:d)? (?:the )?(?:current|committed|existing) (?:canvas|composition|revision) exactly)\b/i.test(declaredMove)) {
-      throw new Error("A visible design turn must make one material rendered change. Return decision=complete when the observed composition is finished; never spend a turn on no-op CSS, a continuity-only patch, or an unchanged revision.");
-    }
-  }
-  if (decision.decision === "edit" && policy.requiresPlannedContinuation && decision.creativeDirection.nextMoves.length < 3) {
-    throw new Error("The first grounded synthesis edit must establish a model-authored creative arc with at least three distinct meaningful moves for observed subsequent turns. The model chooses those moves; this is not a fixed template or turn ceiling.");
-  }
   if (decision.decision === "edit" && policy.requiredNextMoves?.length) {
     const [requiredNextMove] = policy.requiredNextMoves;
     const evidence = `${decision.summary} ${decision.expectedVisualResult} ${decision.creativeDirection.currentFocus}`;
@@ -697,19 +884,35 @@ function directorCompletionDecision(input: {
   }, input.revision.evidence, input.revision.document);
 }
 
-async function loadNorthstarDesignReferenceParts(): Promise<Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>> {
-  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{
-    text: "North Star visual-language references follow. Use them only to calibrate editorial craft and visual intelligence; do not copy their layout, prose, claims, or data.",
-  }];
-  for (const relativePath of NORTHSTAR_DESIGN_REFERENCE_PATHS.slice(0, 1)) {
-    try {
-      const data = await readFile(path.join(process.cwd(), relativePath));
-      parts.push({ text: `Visual-language reference: ${path.basename(relativePath)}` }, { inlineData: { mimeType: "image/png", data: data.toString("base64") } });
-    } catch {
-      // The production design loop remains usable when optional taste references are absent.
-    }
+async function loadNorthstarDesignReferenceParts(): Promise<CanvasV2ModelInputPart[]> {
+  if (!northstarDesignReferencePartsPromise) {
+    northstarDesignReferencePartsPromise = (async () => {
+      const parts: CanvasV2ModelInputPart[] = [{
+        text: "North Star visual-language references follow. Use them only to calibrate editorial craft and visual intelligence; do not copy their layout, prose, claims, or data.",
+      }];
+      for (const relativePath of NORTHSTAR_DESIGN_REFERENCE_PATHS.slice(0, 1)) {
+        try {
+          const data = await readFile(path.join(process.cwd(), relativePath));
+          parts.push({ text: `Visual-language reference: ${path.basename(relativePath)}` }, { inlineData: {
+            mimeType: "image/png",
+            data: data.toString("base64"),
+            detail: "low",
+            purpose: "reference",
+          } });
+        } catch {
+          // The production design loop remains usable when optional taste references are absent.
+        }
+      }
+      return parts.length > 1 ? parts : [];
+    })();
   }
-  return parts.length > 1 ? parts : [];
+  try {
+    return await northstarDesignReferencePartsPromise;
+  } catch (error) {
+    // A transient local read cannot poison later model turns.
+    northstarDesignReferencePartsPromise = undefined;
+    throw error;
+  }
 }
 
 function firstRailDetailPerLane(details: NonNullable<CanvasV2RenderObservation["railDetails"]>) {
@@ -775,20 +978,32 @@ function parseDataUrl(value: string): { mimeType: string; data: string } {
   return { mimeType: match[1], data: match[2] };
 }
 
+function modelImage(
+  value: string,
+  detail: "low" | "high",
+  purpose: CanvasV2ModelInputImage["purpose"],
+): CanvasV2ModelInputImage {
+  return { ...parseDataUrl(value), detail, purpose };
+}
+
 function requiredCreativeBriefText(value: unknown, label: string, maxLength: number): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`The visual director brief requires ${label}.`);
   return value.trim().slice(0, maxLength);
 }
 
-const COMPLETION_SUMMARY_INTERNAL_JARGON = /\b(?:openRequirements|contentOverflowNodeIds|render-safe|compiler-owned|lifecycle|maturity state|provider attempts?|render repairs?|corrective attempts?|revision-[a-z0-9-]+|all islands? (?:is|are|remain|resolved)|unresolved islands?)\b/i;
+const COMPLETION_SUMMARY_INTERNAL_JARGON = /\b(?:render-safe|compiler-owned|lifecycle|maturity state|corrective attempts?|revision-[a-z0-9-]+|all islands? (?:is|are|remain|resolved)|unresolved islands?)\b/i;
+
+function completionSummaryContainsInternalLanguage(value: string): boolean {
+  return COMPLETION_SUMMARY_INTERNAL_JARGON.test(value) || findCanvasV2InternalLanguageLeaks(value).length > 0;
+}
 
 function userFacingCompletionSummary(value: Record<string, unknown>): string {
   const authored = typeof value.completionSummary === "string" ? value.completionSummary.trim().replace(/\s+/g, " ").slice(0, 1_200) : "";
-  if (authored && !COMPLETION_SUMMARY_INTERNAL_JARGON.test(authored)) return authored;
+  if (authored && !completionSummaryContainsInternalLanguage(authored)) return authored;
 
   const insight = [value.visualThesis, value.compositionStrategy, value.visualDiagnosis]
     .map((item) => typeof item === "string" ? item.trim().replace(/\s+/g, " ").slice(0, 420) : "")
-    .find((item) => item && !COMPLETION_SUMMARY_INTERNAL_JARGON.test(item));
+    .find((item) => item && !completionSummaryContainsInternalLanguage(item));
   if (!insight) {
     return "North Star completed the requested composition and organized it into a clear visual story. The canvas remains fully editable, so you can refine any element or ask for a focused variation.";
   }
@@ -805,6 +1020,17 @@ function parseCreativeDirectorBrief(
   for (const field of ["visualDiagnosis", "materialMove", "spatialDirection", "evidenceChoreography", "antiRepetition", "paletteDirection", "whyThisTurn", "regressionRisk", "completionRationale"] as const) {
     if (typeof value[field] !== "string" || !value[field].trim()) throw new Error(`The visual director brief requires ${field}.`);
   }
+  // Persisted repair checkpoints created before the atomic-job contract may
+  // not carry these fields. Their already-validated material move remains the
+  // current job; newly generated briefs are required by schema to be explicit.
+  const currentSemanticJob = requiredCreativeBriefText(
+    value.currentSemanticJob ?? value.materialMove,
+    "one current semantic job",
+    600,
+  );
+  const deferredSemanticJobs = Array.isArray(value.deferredSemanticJobs)
+    ? value.deferredSemanticJobs.slice(0, 6).map((item, index) => requiredCreativeBriefText(item, `deferred semantic job ${index + 1}`, 600))
+    : [];
   const targetIsland = value.targetIsland && typeof value.targetIsland === "object" && !Array.isArray(value.targetIsland)
     ? value.targetIsland as Record<string, unknown>
     : undefined;
@@ -830,7 +1056,7 @@ function parseCreativeDirectorBrief(
     if (resultingMaturity === "developing" && !openRequirements.length) throw new Error("A developing island must name at least one exact prompt-critical open requirement for a later turn.");
     if (resultingMaturity === "resolved" && openRequirements.length) throw new Error("A resolved island cannot retain open requirements.");
   }
-  if (!Array.isArray(value.evidenceSelections) || value.evidenceSelections.length > 8) throw new Error("The visual director brief requires a focused evidence selection list of no more than eight items.");
+  if (!Array.isArray(value.evidenceSelections) || value.evidenceSelections.length > CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS) throw new Error(`The visual director brief requires a focused evidence selection list of no more than ${CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS} items.`);
   const targetTerritory = value.targetTerritory && typeof value.targetTerritory === "object" && !Array.isArray(value.targetTerritory)
     ? value.targetTerritory as Record<string, unknown>
     : undefined;
@@ -858,6 +1084,15 @@ function parseCreativeDirectorBrief(
     if (!evidenceId) throw new Error(`Visual director selected an evidence handle that is not grounded in the current canvas: ${evidenceHandle}.`);
     return { evidenceHandle, evidenceId, roleInArgument: roleInArgument.slice(0, 600), intendedTreatment: intendedTreatment.slice(0, 600), scaleIntent };
   });
+  if (value.requestedDiscoveryNodeIds !== undefined && (!Array.isArray(value.requestedDiscoveryNodeIds) || value.requestedDiscoveryNodeIds.length > 12)) {
+    throw new Error("The visual director brief requires a focused discovery expansion list of no more than twelve exact node IDs.");
+  }
+  // Older persisted checkpoints predate on-demand discovery expansion. Treat
+  // the missing field as an empty request while requiring all newly generated
+  // briefs (via CREATIVE_BRIEF_SCHEMA) to state the decision explicitly.
+  const requestedDiscoveryNodeIds = Array.from(new Set((Array.isArray(value.requestedDiscoveryNodeIds) ? value.requestedDiscoveryNodeIds : []).map((nodeId, index) => (
+    requiredCreativeBriefText(nodeId, `requested discovery node ${index + 1}`, 240)
+  ))));
   if (!Array.isArray(value.authoredVisualRoles) || !value.authoredVisualRoles.length || value.authoredVisualRoles.length > 3) {
     throw new Error("The visual director brief requires authored visual roles.");
   }
@@ -876,8 +1111,19 @@ function parseCreativeDirectorBrief(
     throw new Error("The visual director brief requires an explicit preservation contract for the current render's strongest qualities.");
   }
   if (value.completionRecommendation !== "continue" && value.completionRecommendation !== "complete") throw new Error("The visual director brief requires a completion recommendation.");
-  const completionSummary = userFacingCompletionSummary(value);
-  if (value.completionRecommendation === "continue" && territoryRelation === "none") throw new Error("A continuing visual-director brief must name the exact territory for its next material move.");
+  if (canvasV2CompletionContradictsMaterialMove({
+    recommendation: value.completionRecommendation,
+    targetAction: String(islandAction) as "create" | "develop" | "enrich" | "repair" | "recompose" | "complete",
+    materialMove: String(value.materialMove),
+  })) {
+    throw new Error("A whole-board completion cannot prescribe an unexecuted visible mutation. Return recommendation=continue with the exact executable island action, or keep action=complete and describe verification only.");
+  }
+  const completionRecommendation = canvasV2EffectiveCompletionRecommendation({
+    recommendation: value.completionRecommendation,
+    targetAction: String(islandAction) as "create" | "develop" | "enrich" | "repair" | "recompose" | "complete",
+  });
+  const completionSummary = userFacingCompletionSummary({ ...value, completionRecommendation });
+  if (completionRecommendation === "continue" && territoryRelation === "none") throw new Error("A continuing visual-director brief must name the exact territory for its next material move.");
   const growthDirection = value.growthDirection;
   if (!["stable", "horizontal", "vertical", "both"].includes(String(growthDirection))) throw new Error("The visual director brief requires a valid canvas growth direction.");
   const remainingOpportunities = Array.isArray(value.remainingOpportunities)
@@ -891,12 +1137,12 @@ function parseCreativeDirectorBrief(
   // derive its one minimum lifecycle entry from the already-required diagnosis
   // and material move. Normalize here before semantic policy checks so a valid
   // visual judgment never burns an additional provider call on clerical JSON.
-  const normalizedRemainingOpportunities = value.completionRecommendation === "complete"
+  const normalizedRemainingOpportunities = completionRecommendation === "complete"
     ? []
     : remainingOpportunities.length
       ? remainingOpportunities
       : [String(value.whyThisTurn).slice(0, 600)];
-  const normalizedNextMoves = value.completionRecommendation === "complete"
+  const normalizedNextMoves = completionRecommendation === "complete"
     ? []
     : nextMoves.length
       ? nextMoves
@@ -904,31 +1150,34 @@ function parseCreativeDirectorBrief(
   return {
     visualDiagnosis: String(value.visualDiagnosis).slice(0, 1_200),
     materialMove: String(value.materialMove).slice(0, 1_200),
+    currentSemanticJob,
+    deferredSemanticJobs,
     spatialDirection: String(value.spatialDirection).slice(0, 1_200),
     targetIsland: {
-      action: (value.completionRecommendation === "complete" ? "complete" : String(islandAction)) as "create" | "develop" | "enrich" | "repair" | "recompose" | "complete",
-      islandId: value.completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete"
+      action: (completionRecommendation === "complete" ? "complete" : String(islandAction)) as "create" | "develop" | "enrich" | "repair" | "recompose" | "complete",
+      islandId: completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete"
         ? CANVAS_V2_WHOLE_BOARD_ISLAND_ID
         : targetIslandId,
-      storyRole: (value.completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete"
+      storyRole: (completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete"
         ? "whole-board"
         : String(storyRole)) as "title" | "orientation" | "evidence-reading" | "comparison" | "analysis" | "relationship" | "implication" | "synthesis" | "whole-board",
-      resultingMaturity: (value.completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete"
+      resultingMaturity: (completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete"
         ? "unchanged"
         : resultingMaturity) as "developing" | "resolved" | "unchanged",
       resolutionRationale,
-      openRequirements: value.completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete" ? [] : openRequirements,
+      openRequirements: completionRecommendation === "complete" || islandAction === "recompose" || islandAction === "complete" ? [] : openRequirements,
     },
     targetTerritory: {
-      relation: value.completionRecommendation === "complete" ? "none" : String(territoryRelation),
+      relation: completionRecommendation === "complete" ? "none" : String(territoryRelation),
       anchorNodeId: requiredCreativeBriefText(targetTerritory.anchorNodeId, "target territory anchor", 240),
       intendedFootprint: requiredCreativeBriefText(targetTerritory.intendedFootprint, "target territory footprint", 800),
       rationale: requiredCreativeBriefText(targetTerritory.rationale, "target territory rationale", 800),
-      placementMode: (value.completionRecommendation === "complete" ? "attached" : String(placementMode)) as "attached" | "evidence-relative-island" | "interleaved" | "recompose",
+      placementMode: (completionRecommendation === "complete" ? "attached" : String(placementMode)) as "attached" | "evidence-relative-island" | "interleaved" | "recompose",
       targetZoneId: String(targetZoneId),
     },
     evidenceChoreography: String(value.evidenceChoreography).slice(0, 1_200),
     evidenceSelections,
+    requestedDiscoveryNodeIds,
     authoredVisualRoles,
     antiRepetition: String(value.antiRepetition).slice(0, 1_000),
     visualVocabulary: value.visualVocabulary.slice(0, 6).map((item) => String(item).slice(0, 300)),
@@ -936,7 +1185,7 @@ function parseCreativeDirectorBrief(
     whyThisTurn: String(value.whyThisTurn).slice(0, 1_000),
     preservedStrengths: value.preservedStrengths.slice(0, 4).map((item) => String(item).slice(0, 500)),
     regressionRisk: String(value.regressionRisk).slice(0, 1_000),
-    completionRecommendation: value.completionRecommendation,
+    completionRecommendation,
     completionRationale: String(value.completionRationale).slice(0, 1_200),
     completionSummary,
     visualThesis: requiredCreativeBriefText(value.visualThesis, "visual thesis", 1_000),
@@ -967,6 +1216,7 @@ function normalizeCreativeDirectorExecutionContract(
     compactPlacementRequired?: boolean;
     localIntegrityRepairTarget?: CanvasV2LocalIntegrityRepairTarget;
     wholeBoardRecomposeRequested?: boolean;
+    firstSynthesisTurn?: boolean;
   },
 ): ReturnType<typeof parseCreativeDirectorBrief> {
   if (input.repairExecution) {
@@ -1016,7 +1266,6 @@ function normalizeCreativeDirectorExecutionContract(
     };
   }
   if (brief.completionRecommendation === "complete"
-    && input.islandRegistry.length > 0
     && input.promptCoverageFailures?.length) {
     const missingCoverage = input.promptCoverageFailures[0];
     const placement = input.compactPlacementRequired === false
@@ -1030,17 +1279,17 @@ function normalizeCreativeDirectorExecutionContract(
     return {
       ...brief,
       visualDiagnosis: missingCoverage,
-      materialMove: `Create one nearby, independently editable facilitation chapter that materially resolves this exact missing prompt coverage: ${missingCoverage}`,
-      whyThisTurn: "The visible board still lacks a user-requested working surface, so completion is converted into one concrete authorship turn rather than a provider retry.",
+      materialMove: `Create exactly one nearby, independently editable chapter for this semantic job: ${brief.currentSemanticJob}. Keep these later jobs out of the current source patch: ${brief.deferredSemanticJobs.join("; ") || "none declared"}.`,
+      whyThisTurn: "The visible board still lacks exact user-requested content, so completion is converted into one concrete authorship turn rather than a provider retry.",
       completionRecommendation: "continue",
-      completionRationale: "Completion remains pending until the requested surface is visibly usable.",
-      authoredVisualRoles: ["prompt-critical-facilitation-surface", ...brief.authoredVisualRoles].slice(0, 3),
+      completionRationale: "Completion remains pending until the requested content is visibly complete and usable.",
+      authoredVisualRoles: ["prompt-critical-content", ...brief.authoredVisualRoles].slice(0, 3),
       targetIsland: {
         action: "create",
         islandId: input.allocatedIslandId,
         storyRole: "analysis",
         resultingMaturity: "resolved",
-        resolutionRationale: "This chapter materially supplies the exact requested working surface that was absent from the verified board.",
+        resolutionRationale: "This chapter materially supplies the exact requested content that was absent from the verified board.",
         openRequirements: [],
       },
       targetTerritory: {
@@ -1050,6 +1299,35 @@ function normalizeCreativeDirectorExecutionContract(
         intendedFootprint: "A bounded prompt-critical chapter placed in the closest collision-free territory inside the compact narrative neighborhood.",
         placementMode: "evidence-relative-island",
         targetZoneId: placement?.targetZoneId ?? "bottom-center",
+      },
+      remainingOpportunities: brief.deferredSemanticJobs,
+      nextMoves: brief.deferredSemanticJobs.map((job) => `After observing this committed chapter, create a separate territory for ${job}.`).slice(0, 5),
+    };
+  }
+  if (brief.completionRecommendation === "complete" && input.firstSynthesisTurn) {
+    return {
+      ...brief,
+      visualDiagnosis: "The requested canvas is still empty, so the first prompt-critical composition must be made visible before completion can be judged.",
+      materialMove: `Create and resolve one bounded opening chapter for this exact semantic job: ${brief.currentSemanticJob}.`,
+      whyThisTurn: "A rendered composition must exist before the runtime can judge whether the requested visual answer is complete.",
+      completionRecommendation: "continue",
+      completionRationale: "Observe the first committed composition, then conclude if no prompt-critical or rendered-integrity gap remains.",
+      authoredVisualRoles: ["foundational-argument", ...brief.authoredVisualRoles.filter((role) => !/(?:title|orientation|thesis|framing|kicker)/i.test(role))].slice(0, 3),
+      targetIsland: {
+        action: "create",
+        islandId: input.allocatedIslandId,
+        storyRole: "analysis",
+        resultingMaturity: "resolved",
+        resolutionRationale: "The first bounded chapter directly communicates the requested outcome and is ready for rendered verification.",
+        openRequirements: [],
+      },
+      targetTerritory: {
+        ...brief.targetTerritory,
+        relation: "below",
+        anchorNodeId: brief.targetTerritory.anchorNodeId,
+        intendedFootprint: "One compact prompt-critical composition in the nearest collision-free opening territory.",
+        placementMode: "evidence-relative-island",
+        targetZoneId: "top-left",
       },
       remainingOpportunities: [],
       nextMoves: [],
@@ -1209,6 +1487,126 @@ function normalizeCreativeDirectorExecutionContract(
   };
 }
 
+function normalizeCanvasV2ExplicitSpatialRequest(
+  brief: ReturnType<typeof parseCreativeDirectorBrief>,
+  instruction: string,
+  input: {
+    allocatedIslandId: string;
+    designRegions: readonly CanvasV2DesignRegionObservation[];
+  },
+): ReturnType<typeof parseCreativeDirectorBrief> {
+  const authoritativeUserRequest = canvasV2AuthoritativeUserRequest(instruction);
+  const explicitlyRequestsNewChapter = /\b(?:add|append|create|build|compose|make|place)\b[^.!?\n]{0,120}\b(?:island|chapter|composition|section|conclusion)\b|\b(?:island|chapter|composition|section|conclusion)\b[^.!?\n]{0,120}\b(?:below|after|beneath|next)\b/i.test(authoritativeUserRequest);
+  if (brief.completionRecommendation === "complete" && explicitlyRequestsNewChapter) {
+    const anchor = input.designRegions.at(-1)?.nodeId ?? brief.targetTerritory.anchorNodeId;
+    const conclusionRequested = /\b(?:conclusion|conclude|final (?:read|judgment|recommendation|answer))\b/i.test(authoritativeUserRequest);
+    return {
+      ...brief,
+      visualDiagnosis: "The user explicitly requested one additional visible chapter, so the verified board cannot complete before that chapter is committed and observed.",
+      materialMove: `Create one bounded ${conclusionRequested ? "conclusion" : "prompt-critical"} island that directly executes this request: ${authoritativeUserRequest}`,
+      currentSemanticJob: authoritativeUserRequest,
+      deferredSemanticJobs: [],
+      evidenceChoreography: `${brief.evidenceChoreography} Keep the complete canonical evidence rails untouched and place exact representative visual witnesses inside this new analytical chapter whenever the request asks for grounded evidence.`,
+      authoredVisualRoles: [conclusionRequested ? "bounded-conclusion" : "prompt-critical-content", ...brief.authoredVisualRoles].slice(0, 3),
+      whyThisTurn: "An explicit canvas authorship request is execution authority; whole-board completion cannot substitute for the requested visible change.",
+      completionRecommendation: "continue",
+      completionRationale: "Completion remains pending until the requested new chapter has been rendered and verified.",
+      targetIsland: {
+        action: "create",
+        islandId: input.allocatedIslandId,
+        storyRole: conclusionRequested ? "implication" : "analysis",
+        resultingMaturity: "resolved",
+        resolutionRationale: "This single bounded island completes the explicitly requested semantic job without reopening established chapters.",
+        openRequirements: [],
+      },
+      targetTerritory: {
+        ...brief.targetTerritory,
+        relation: "below",
+        anchorNodeId: anchor,
+        intendedFootprint: "One bounded independently editable chapter directly below the existing authored story, with compact readable spacing and no overlap with canonical evidence.",
+        placementMode: "evidence-relative-island",
+        targetZoneId: "bottom-center",
+      },
+      remainingOpportunities: [],
+      nextMoves: [],
+    };
+  }
+  if (brief.completionRecommendation !== "continue" || brief.targetIsland.action !== "create") return brief;
+  const separateSurfaceBeside = /\b(?:islands?|compositions?|chapters?|surfaces?|territories?)\b[^.!?\n]{0,100}\b(?:beside|next to)\b|\b(?:beside|next to)\b[^.!?\n]{0,100}\b(?:islands?|compositions?|chapters?|surfaces?|territories?)\b/i.test(authoritativeUserRequest);
+  if (separateSurfaceBeside && brief.targetTerritory.relation !== "left" && brief.targetTerritory.relation !== "right") {
+    const row = brief.targetTerritory.targetZoneId.split("-")[0];
+    const relation = brief.targetTerritory.targetZoneId.endsWith("left") ? "left" : "right";
+    return {
+      ...brief,
+      spatialDirection: `${brief.spatialDirection} Place the same approved composition ${relation} of its anchor in the nearest collision-free open territory.`,
+      targetTerritory: {
+        ...brief.targetTerritory,
+        relation,
+        placementMode: "evidence-relative-island",
+        targetZoneId: `${row}-${relation}` as ReturnType<typeof parseCreativeDirectorBrief>["targetTerritory"]["targetZoneId"],
+        rationale: `${brief.targetTerritory.rationale} The runtime preserves the explicit beside relationship without changing the creative move.`,
+      },
+    };
+  }
+  return brief;
+}
+
+/**
+ * A deep evidence inquiry should become visible as several observed acts of
+ * judgment, not one monolithic source-author payload. The harness owns that
+ * cadence while the model still owns the visual language of each bounded
+ * island. This applies only after complexity has emerged from the grounded
+ * evidence; ordinary prompts retain their direct one-composition path.
+ */
+function normalizeCanvasV2ProgressiveComplexSynthesis(
+  brief: ReturnType<typeof parseCreativeDirectorBrief>,
+  input: {
+    enabled: boolean;
+    firstSynthesisTurn: boolean;
+    allocatedIslandId: string;
+    repairExecution?: CanvasV2IslandExecutionContract;
+  },
+): ReturnType<typeof parseCreativeDirectorBrief> {
+  if (!input.enabled || !input.firstSynthesisTurn || input.repairExecution) return brief;
+  const deferredSemanticJobs = Array.from(new Set([
+    "Compare the representative evidence across the decision-relevant stages",
+    "State the evidence-grounded executive implication and its honest boundary",
+    ...brief.deferredSemanticJobs,
+  ])).slice(0, 6);
+  return {
+    ...brief,
+    visualDiagnosis: "The grounded source record is substantial enough to warrant progressive sensemaking. Establish the governing read first; do not collapse framing, comparison, and implication into one source-author transaction.",
+    materialMove: "Create one compact governing thesis and scope island above or immediately adjacent to the grounded evidence. State what is being compared, the high-level distinction now visible, and the selection boundary in natural executive language. Do not author the stage comparison, screenshot matrix, detailed findings, implication, recommendation, or conclusion in this island.",
+    currentSemanticJob: "Establish the governing thesis and scope for the grounded comparison",
+    deferredSemanticJobs,
+    evidenceChoreography: "Keep the complete canonical evidence rails visible and untouched as the working record. This opening island may use the exact grounded identity marks, but screenshot witnesses belong to the later observed comparison chapter.",
+    evidenceSelections: brief.evidenceSelections.filter((selection) => selection.evidenceId.startsWith("icon:")).slice(0, 4),
+    authoredVisualRoles: ["thesis-anchor"],
+    whyThisTurn: "A concise framing judgment gives the user an immediate visible foothold while preserving the deeper evidence comparison and implication as later observed moves.",
+    regressionRisk: "Do not let the opening island become a miniature complete report or duplicate the canonical evidence rails.",
+    completionRecommendation: "continue",
+    completionRationale: "Observe the governing thesis on the canvas before choosing the exact comparison structure from the rendered result.",
+    completionSummary: "The grounded inquiry now has a clear governing thesis and scope; comparison and implication remain intentionally uncomposed until later observed turns.",
+    targetIsland: {
+      action: "create",
+      islandId: input.allocatedIslandId,
+      storyRole: "title",
+      resultingMaturity: "resolved",
+      resolutionRationale: "This bounded opening chapter resolves only the governing thesis and scope; analytical comparison and implication remain separate board-level jobs.",
+      openRequirements: [],
+    },
+    targetTerritory: {
+      ...brief.targetTerritory,
+      relation: "above",
+      intendedFootprint: "One compact 3,600 × 1,000px editorial opening with a deliberate headline, concise scope, and generous canvas-backed breathing room.",
+      placementMode: "evidence-relative-island",
+      targetZoneId: "top-center",
+    },
+    remainingOpportunities: deferredSemanticJobs,
+    nextMoves: deferredSemanticJobs.map((job) => `After observing the opening thesis, create a separate independently editable territory to ${job.toLowerCase()}.`).slice(0, 5),
+  };
+}
+
 type CanvasV2ConvergencePhase = "foundation" | "development" | "integration" | "convergence" | "final-review";
 
 /** Progressive judgment without a creative-turn ceiling. */
@@ -1294,6 +1692,7 @@ function bindCanvasV2SelectedEvidenceToExistingIsland(input: {
       operations,
       evidence: input.revision.evidence,
       scaleIntentByEvidenceId: input.scaleIntentByEvidenceId,
+      evidenceIdByHandle: new Map(Array.from(input.evidenceHandleById, ([evidenceId, handle]) => [handle, evidenceId] as const)),
     }),
   };
 }
@@ -1322,6 +1721,7 @@ function normalizeCanvasV2CompositionEvidenceLedger(
 function enforceCanvasV2TargetIslandMetadata(
   document: CanvasV2ArtifactDocument,
   brief: ReturnType<typeof parseCreativeDirectorBrief>,
+  validationPlanId?: string,
 ): CanvasV2ArtifactDocument {
   const range = findCanvasV2SourceNodeRange(document.html, brief.targetIsland.islandId);
   if (!range) return document;
@@ -1332,6 +1732,7 @@ function enforceCanvasV2TargetIslandMetadata(
     ["data-canvas-v2-territory-anchor", brief.targetTerritory.anchorNodeId],
     ["data-canvas-v2-placement-mode", brief.targetTerritory.placementMode],
     ["data-canvas-v2-target-zone", brief.targetTerritory.targetZoneId],
+    ...(validationPlanId ? [["data-canvas-v2-validation-id", validationPlanId] as const] : []),
   ] as const;
   const islandSource = document.html.slice(range.start, range.end);
   const materializesRequiredVisualRole = brief.authoredVisualRoles.some((role) => (
@@ -1342,8 +1743,9 @@ function enforceCanvasV2TargetIslandMetadata(
     : [...attributes, ["data-canvas-v2-visual-role", brief.authoredVisualRoles[0]] as const];
   let normalizedOpening = opening;
   for (const [name, value] of compilerAttributes) {
+    const escapedValue = value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     normalizedOpening = normalizedOpening.replace(new RegExp(`\\s*${name}\\s*=\\s*["'][^"']*["']`, "ig"), "");
-    normalizedOpening = normalizedOpening.replace(/>$/, ` ${name}="${value}">`);
+    normalizedOpening = normalizedOpening.replace(/>$/, ` ${name}="${escapedValue}">`);
   }
   return {
     ...document,
@@ -1363,14 +1765,25 @@ function compileSourceAuthorDecision(input: {
   existingIslandIds: ReadonlySet<string>;
   workingContext?: ReturnType<typeof parseCanvasV2WorkingContext>;
   preserveExistingCssLayers?: boolean;
+  validationPlanId?: string;
 }): CanvasV2EditDecision {
   if (!input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) throw new Error("The source author response must be an object.");
   const source = input.payload as Record<string, unknown>;
+  parseCanvasV2EmergentDepthSignal(source.emergentDepth);
   if (source.decision !== "edit") throw new Error("The bounded source author must return decision=edit; completion belongs to the visual director.");
   const moveKind = source.moveKind;
   if (!["framing", "composition", "relationship", "analysis", "refinement"].includes(String(moveKind))) throw new Error("The bounded source author requires a valid moveKind.");
+  // The compiler, not provider prose, owns the first visible lifecycle label.
+  // A newly created title is the frame even when the author calls its styling
+  // pass a refinement.
+  const compiledMoveKind = input.brief.targetIsland.storyRole === "title"
+    && input.brief.targetIsland.action === "create"
+    ? "framing"
+    : moveKind;
   const summary = requiredSourceAuthorText(source.summary, "a concise summary");
   const expectedVisualResult = requiredSourceAuthorText(source.expectedVisualResult, "an expected visual result");
+  assertCanvasV2UserFacingLanguage(summary, "The source-author summary", input.instruction);
+  assertCanvasV2UserFacingLanguage(expectedVisualResult, "The expected visual result", input.instruction);
   const existingTargetRegion = input.currentCompositionState?.regions.find((region) => (
     region.islandId === input.brief.targetIsland.islandId || region.nodeId === input.brief.targetIsland.islandId
   ));
@@ -1378,7 +1791,11 @@ function compileSourceAuthorDecision(input: {
     ...(existingTargetRegion?.requiredEvidenceIds ?? []),
     ...input.brief.evidenceSelections.map((selection) => selection.evidenceId),
   ]));
-  const operations = parseCanvasV2SourcePatch(source.patch);
+  const operations = normalizeCanvasV2SourcePatchHeadingHierarchy(
+    parseCanvasV2SourcePatch(source.patch),
+    input.brief.targetIsland.storyRole,
+  );
+  assertCanvasV2AuthoredPatchLanguage(operations, input.instruction);
   if (["develop", "enrich", "repair"].includes(input.brief.targetIsland.action)) {
     const targetId = input.brief.targetIsland.islandId;
     for (const operation of operations) {
@@ -1398,6 +1815,7 @@ function compileSourceAuthorDecision(input: {
     operations,
     evidence: input.revision.evidence,
     scaleIntentByEvidenceId: input.scaleIntentByEvidenceId,
+    evidenceIdByHandle: new Map(Array.from(input.evidenceHandleById, ([evidenceId, handle]) => [handle, evidenceId] as const)),
     workingContext: input.workingContext,
     mergeExistingCssLayers: input.preserveExistingCssLayers,
   });
@@ -1411,8 +1829,14 @@ function compileSourceAuthorDecision(input: {
     evidenceHandleById: input.evidenceHandleById,
     scaleIntentByEvidenceId: input.scaleIntentByEvidenceId,
   });
+  const stageReconciledDocument = reconcileCanvasV2AuthoredStageEvidence({
+    document: enforceCanvasV2TargetIslandMetadata(reconciledRevision.document, input.brief, input.validationPlanId),
+    targetIslandId: input.brief.targetIsland.islandId,
+    authoredVisualRoles: input.brief.authoredVisualRoles,
+    selectedEvidenceIds: cumulativeRequiredEvidenceIds,
+  });
   const resultingDocument = normalizeCanvasV2ClaimedCanonicalFlowCounts(reconcileCanvasV2EvidenceRelativeIslandOrder({
-    document: enforceCanvasV2TargetIslandMetadata(reconciledRevision.document, input.brief),
+    document: stageReconciledDocument,
     execution: {
       target: input.brief.targetIsland,
       territory: {
@@ -1449,10 +1873,10 @@ function compileSourceAuthorDecision(input: {
   const remainingOpportunity = input.brief.remainingOpportunities[0] ?? "none";
   const parsedDecision = parseCanvasV2DesignDecision({
     decision: "edit",
-    moveKind,
+    moveKind: compiledMoveKind,
     summary,
     expectedVisualResult,
-    patch: source.patch,
+    patch: { operations },
     creativeDirection: {
       designIntent: input.instruction,
       visualThesis: input.brief.visualThesis,
@@ -1503,7 +1927,16 @@ function compileSourceAuthorDecision(input: {
     existingIslandIds: input.existingIslandIds,
     requiredEvidenceIds: cumulativeRequiredEvidenceIds,
   });
-  if (islandFailures.length) throw new Error(islandFailures.join(" "));
+  const deferredJobFailures = input.brief.targetIsland.action === "create"
+    ? validateCanvasV2DeferredSemanticJobIsolation({
+        document: decision.document,
+        islandId: input.brief.targetIsland.islandId,
+        deferredSemanticJobs: input.brief.deferredSemanticJobs,
+      })
+    : [];
+  if (islandFailures.length || deferredJobFailures.length) {
+    throw new Error([...islandFailures, ...deferredJobFailures].join(" "));
+  }
   const islandExecution: CanvasV2IslandExecutionContract = {
       target: input.brief.targetIsland,
       territory: {
@@ -1554,6 +1987,13 @@ function validateCanvasV2CreativeBriefExecution(
     brief.evidenceSelections.map((selection) => selection.evidenceId),
   );
   if (selectedFailures.length) throw new Error(selectedFailures.join(" "));
+  const stageEvidenceFailures = validateCanvasV2AuthoredStageEvidenceContract({
+    document: decision.document,
+    authoredVisualRoles: brief.authoredVisualRoles,
+    stagePlan: `${brief.materialMove} ${brief.currentSemanticJob} ${brief.evidenceChoreography}`,
+    selectedScreenshotEvidenceCount: brief.evidenceSelections.filter((selection) => selection.scaleIntent !== "identity-mark").length,
+  });
+  if (stageEvidenceFailures.length) throw new Error(stageEvidenceFailures.join(" "));
   const authoredRoles = new Set(Array.from(decision.document.html.matchAll(/\bdata-canvas-v2-visual-role\s*=\s*["']([^"']+)["']/gi), (match) => match[1].trim().toLowerCase()));
   if (!brief.authoredVisualRoles.some((role) => authoredRoles.has(role))) {
     throw new Error(`The patch described the visual-director move without materializing a communication structure. Add at least one visible element carrying data-canvas-v2-visual-role from this focused set: ${brief.authoredVisualRoles.join(", ")}.`);
@@ -1576,6 +2016,13 @@ function validateCanvasV2DecisionComposition(
   currentDocument: CanvasV2ArtifactRevision["document"],
 ): void {
   if (decision.decision === "research") return;
+  if (
+    decision.decision === "edit"
+    && decision.document.html === currentDocument.html
+    && decision.document.css === currentDocument.css
+  ) {
+    throw new Error("A visible design turn must materially change the compiled canvas document. Return completion when the verified composition is finished; an unchanged source patch cannot create another model turn.");
+  }
   const failures = validateCanvasV2CompositionContinuity({
     previous,
     next: decision.compositionState,
@@ -1635,6 +2082,19 @@ function deterministicResearchDecision(input: {
   };
 }
 
+function canvasV2DesignEvidencePolicy(input: {
+  instruction: string;
+  researchMode?: CanvasV2ResearchMode;
+  workingContext?: ReturnType<typeof parseCanvasV2WorkingContext>;
+}): "available" | "required" | "exclude" {
+  if (input.researchMode) return "required";
+  if (/\b(without|no)\s+(?:account\s+)?(?:evidence|research|data)\b/i.test(input.instruction)) return "exclude";
+  const selectedIds = new Set(input.workingContext?.selectedNodeIds ?? []);
+  if (input.workingContext?.objects.some((object) => selectedIds.has(object.nodeId) && object.evidenceId)) return "available";
+  if (/\b(evidence|research|data|metric|marketing|business|source|screenshot|journey|flow)\b/i.test(input.instruction)) return "available";
+  return "exclude";
+}
+
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -1647,6 +2107,7 @@ export async function POST(request: NextRequest) {
       observation?: CanvasV2RenderObservation;
       run?: {
         turn?: unknown;
+        currentRunStepCount?: unknown;
         priorSteps?: unknown;
         creativeDirection?: unknown;
         spatialStrategy?: unknown;
@@ -1655,14 +2116,28 @@ export async function POST(request: NextRequest) {
         researchMode?: unknown;
         modelSelection?: unknown;
         renderRepair?: unknown;
-        structuralRecovery?: unknown;
+        privateRecovery?: unknown;
         workingContext?: unknown;
+        discoveryState?: unknown;
+        providerUsage?: unknown;
+        attachments?: unknown;
       };
     };
+    const attachments = parseCanvasV2ChatAttachments(body.run?.attachments);
+    const attachedImages = canvasV2ChatImageAttachments(attachments);
+    const attachedTexts = canvasV2ChatTextAttachments(attachments);
+    const attachmentEvidence = canvasV2ChatAttachmentEvidence(attachments);
     const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
-    if (!instruction || instruction.length > 8_000) throw new Error("A valid design instruction is required.");
-    if (!body.revision || !body.observation) throw new Error("The current revision and render observation are required.");
-    if (body.observation.revisionId !== body.revision.id) throw new Error("The render observation does not belong to the supplied revision.");
+    if (!instruction || instruction.length > 8_000) {
+      return NextResponse.json({ error: "A valid design instruction is required.", code: "invalid-request", retryable: false }, { status: 400 });
+    }
+    if (!body.revision || !body.observation || body.observation.revisionId !== body.revision.id) {
+      return NextResponse.json({
+        error: "The current canvas could not be read. Please refresh the workspace and try again.",
+        code: "server-unavailable",
+        retryable: true,
+      }, { status: 409 });
+    }
     const turn = Math.max(1, Number(body.run?.turn) || 1);
     const priorSteps = Array.isArray(body.run?.priorSteps)
       ? body.run.priorSteps.slice(-CANVAS_V2_MAX_CONTEXT_STEPS).map((step) => {
@@ -1681,34 +2156,384 @@ export async function POST(request: NextRequest) {
           };
         })
       : [];
-    const renderRepair = compactCanvasV2RenderRepair(body.run?.renderRepair);
-    const structuralRecoveryValue = typeof body.run?.structuralRecovery === "object" && body.run.structuralRecovery !== null
-      ? body.run.structuralRecovery as Record<string, unknown>
-      : undefined;
-    const structuralRecovery = structuralRecoveryValue ? {
-      attempt: Math.max(1, Math.min(24, Number(structuralRecoveryValue.attempt) || 1)),
-      failures: Array.isArray(structuralRecoveryValue.failures)
-        ? structuralRecoveryValue.failures.filter((failure): failure is string => typeof failure === "string").slice(-18).map((failure) => failure.slice(0, 1_200))
-        : [],
-      failedActions: Array.isArray(structuralRecoveryValue.failedActions)
-        ? structuralRecoveryValue.failedActions.filter((action): action is string => typeof action === "string").slice(-8)
-        : [],
-    } : undefined;
-    const workingContext = parseCanvasV2WorkingContext(body.run?.workingContext);
-    const renderRepairInstruction = canvasV2RenderRepairInstruction(renderRepair);
-    if (process.env.NODE_ENV !== "production" && renderRepair) console.info("[canvas-v2] render repair", {
-      attempt: renderRepair.attempt,
-      target: renderRepair.islandExecution?.target,
-      territory: renderRepair.islandExecution?.territory,
-      failures: renderRepair.failures,
-      rejectedCandidate: renderRepair.rejectedCandidate,
+    const currentRunStepCount = Math.max(0, Math.min(priorSteps.length, Math.floor(Number(body.run?.currentRunStepCount) || 0)));
+    const currentRunRawSteps = currentRunStepCount > 0 && Array.isArray(body.run?.priorSteps)
+      ? body.run.priorSteps.slice(-CANVAS_V2_MAX_CONTEXT_STEPS).slice(-currentRunStepCount)
+      : [];
+    const currentRunAcceptedMoves = currentRunRawSteps.flatMap((step) => {
+      if (typeof step !== "object" || step === null) return [];
+      const discoveryMove = (step as Record<string, unknown>).discoveryMove;
+      if (typeof discoveryMove !== "object" || discoveryMove === null) return [];
+      const rawCategories = (discoveryMove as Record<string, unknown>).sourceCategories;
+      if (!Array.isArray(rawCategories)) return [];
+      const sourceCategories = rawCategories.filter((entry): entry is CanvasV2DiscoverySourceCategory =>
+        entry === "product" || entry === "marketing" || entry === "business" || entry === "external" || entry === "canvas");
+      const move = discoveryMove as Partial<CanvasV2DiscoveryMove>;
+      return sourceCategories.length
+        && typeof move.id === "string"
+        && typeof move.kind === "string"
+        && typeof move.question === "string"
+        && Array.isArray(move.targetNames)
+        ? [{ ...move, sourceCategories } as CanvasV2DiscoveryMove]
+        : [];
     });
+    const renderRepair = compactCanvasV2RenderRepair(body.run?.renderRepair);
+    const privateRecovery = compactCanvasV2PrivateRecovery(body.run?.privateRecovery);
+    const workingContext = parseCanvasV2WorkingContext(body.run?.workingContext);
+    const researchMode: CanvasV2ResearchMode | undefined = body.run?.researchMode === "evidence" || body.run?.researchMode === "synthesis"
+      ? body.run.researchMode
+      : undefined;
+    const evidencePolicy = canvasV2DesignEvidencePolicy({ instruction, researchMode, workingContext });
+    const renderRepairInstruction = canvasV2RenderRepairInstruction(renderRepair);
+    const privateRecoveryInstruction = canvasV2PrivateRecoveryInstruction(privateRecovery);
 
+    const modelSelection = parseCanvasV2ModelSelection(body.run?.modelSelection);
+    const modelChain = canvasV2DesignModelChain(modelSelection);
+    const modelProvider = canvasV2ProviderForModel(modelSelection);
+    if (modelProvider === "openai" && !process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: "OPENAI_API_KEY is not configured for GPT-5.6 Luna.", code: "configuration", retryable: false }, { status: 500 });
+    }
+    if (modelProvider === "google" && !process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ error: "GEMINI_API_KEY is not configured for the selected Gemini model.", code: "configuration", retryable: false }, { status: 500 });
+    }
+    const modelContextPhase = renderRepair
+      ? "verification"
+      : workingContext?.scope === "selection"
+        ? "revision"
+        : researchMode
+          ? "sensemaking"
+          : "composition";
+    let researchTargets = Array.isArray(body.run?.researchTargets)
+      ? body.run.researchTargets.filter((target): target is string => typeof target === "string").slice(0, 12)
+      : [];
+    // Product research requirements and a discovery move's operational
+    // targets are different namespaces. Keep the former stable for the
+    // completion gate; a compose move may legitimately target an authored
+    // island ID, which must never become a fictitious missing app/flow.
+    let evidenceBridgeTargetNames = researchTargets;
+    const tenantId = user ? await resolveAppDataTenantId(supabase, user.id) : undefined;
+    const catalog = user && tenantId
+      ? await loadAppDataCatalog(supabase, tenantId)
+      : emptyCanvasV2LocalEvaluationCatalog();
+    const suppliedDiscoveryState = body.run?.discoveryState && typeof body.run.discoveryState === "object"
+      && (body.run.discoveryState as { schema?: unknown }).schema === CANVAS_V2_DISCOVERY_STATE_SCHEMA
+      ? body.run.discoveryState as CanvasV2DiscoveryState
+      : body.revision.discoveryState;
+    const fallbackInterpretation: CanvasV2InquiryInterpretation = {
+      relationship: suppliedDiscoveryState ? "continue" : "new",
+      objective: instruction,
+      desiredOutcome: instruction,
+      framing: suppliedDiscoveryState?.framing ?? instruction,
+      inquiryKind: researchMode ? "evidence-synthesis" : "direct-creation",
+      evidenceNeed: researchMode ? "required" : "irrelevant",
+      sourceCategories: researchMode
+        ? Array.from(new Set(["canvas" as const, ...canvasV2EvidenceDomainsForInstruction(instruction).flatMap((domain) => domain === "mixed" ? ["product" as const, "marketing" as const, "business" as const] : [domain])]))
+        : ["canvas"],
+      materialUnknowns: researchMode ? ["Which authorized evidence materially answers the requested outcome?"] : [],
+      completionCriteria: ["The accepted canvas directly addresses the user's requested outcome."],
+      rationale: researchMode ? "The requested outcome materially depends on authorized account evidence." : "The requested outcome can be created directly without account evidence.",
+    };
+    const initialDiscoveryState = reconcileCanvasV2PresentedValidations(suppliedDiscoveryState ?? createCanvasV2DiscoveryState({
+      interpretation: fallbackInterpretation,
+      revisionId: body.revision.id,
+      now: new Date().toISOString(),
+    }), body.revision.document);
+    const suppliedEvidencePackets = mergeCanvasV2EvidencePackets(
+      body.revision.evidencePackets,
+      attachmentEvidence.packets,
+    );
+    const uploadedEvidenceAssets = suppliedEvidencePackets
+      .filter((packet) => packet.source.sourceType === "uploaded")
+      .flatMap((packet) => packet.assets);
+    const uploadedImageEvidenceAssets = uploadedEvidenceAssets.filter((asset) => asset.kind === "image");
+    const humanImagePixelsMaterial = attachedImages.length > 0
+      || /\b(?:image|images|screenshot|screenshots|upload|uploaded|attached|attachment|visual evidence)\b/i.test(instruction);
+    const preDiscoveryGraph = syncCanvasV2DiscoveryGraph({
+      previous: body.revision.discoveryGraph,
+      revisionId: body.revision.id,
+      updatedAt: body.revision.createdAt,
+      document: body.revision.document,
+      evidencePackets: suppliedEvidencePackets,
+      humanInputs: initialDiscoveryState.humanInputs,
+      sceneTransaction: body.revision.sceneTransaction,
+    });
+    let discoveryState = synchronizeCanvasV2DiscoveryState({
+      state: initialDiscoveryState,
+      graph: preDiscoveryGraph,
+      workingContext,
+      now: new Date().toISOString(),
+    })!;
+    let discoveryTransition: CanvasV2DiscoveryStateTransition | undefined;
+    let discoveryDirectorAttempts: CanvasV2ProviderError["providerAttempts"] = [];
+    let discoveryDirectorFallbackUsed = false;
+    const deterministicProductResearch = researchMode
+      ? nextCanvasV2RequiredResearch(buildCanvasV2ResearchCatalogIndex(
+          catalog,
+          instruction,
+          { ...body.revision, discoveryGraph: preDiscoveryGraph, discoveryState },
+          researchTargets,
+          undefined,
+          { requireProductEvidence: canvasV2ProductEvidenceRequestedForInstruction(instruction) },
+        ))
+      : undefined;
+    const discoveryDirectorRequired = !renderRepair
+      && !(workingContext?.scope === "selection" && workingContext.selectionPolicy === "modify")
+      && discoveryState.evidenceNeed !== "irrelevant"
+      && !deterministicProductResearch;
+    if (deterministicProductResearch) {
+      discoveryTransition = deterministicCanvasV2ProductResearchTransition(discoveryState, deterministicProductResearch);
+      discoveryState = applyCanvasV2DiscoveryTransition({ state: discoveryState, transition: discoveryTransition, graph: preDiscoveryGraph, now: new Date().toISOString() });
+      researchTargets = [
+        `${deterministicProductResearch.appName} — ${deterministicProductResearch.flowName}`,
+        ...researchTargets,
+      ];
+      evidenceBridgeTargetNames = researchTargets;
+    } else if (!renderRepair && !discoveryDirectorRequired) {
+      discoveryTransition = directCanvasV2CreationTransition(discoveryState);
+      discoveryState = applyCanvasV2DiscoveryTransition({ state: discoveryState, transition: discoveryTransition, graph: preDiscoveryGraph, now: new Date().toISOString() });
+    } else if (discoveryDirectorRequired) {
+      const discoveryRevision = { ...body.revision, evidencePackets: suppliedEvidencePackets, discoveryGraph: preDiscoveryGraph, discoveryState };
+      const discoveryContext = buildCanvasV2BoundedModelContext(discoveryRevision, body.observation, workingContext, {
+        instruction,
+        phase: "sensemaking",
+        evidencePolicy,
+        contextProfile: "discovery-director:sensemaking:compact",
+        characterBudget: 18_000,
+      });
+      const discoveryReferenceCodec = buildCanvasV2DiscoveryModelReferenceCodec(preDiscoveryGraph, {
+        evidenceAliases: [
+          ...buildCanvasV2EvidenceCopyHandles(body.revision.document).map(({ handle, evidenceId }) => ({ alias: handle, evidenceId })),
+          ...uploadedImageEvidenceAssets.map((asset, index) => ({ alias: canvasV2ChatAttachmentHandle(asset.id, index), evidenceId: asset.id })),
+        ],
+        currentHumanInputId: discoveryState.humanInputs.at(-1)?.id,
+      });
+      const discoveryStateForModel = discoveryReferenceCodec.encode(compactCanvasV2DiscoveryStateForModel(discoveryState));
+      const discoveryModelContextForModel = discoveryReferenceCodec.encode(discoveryContext.discoveryModelContext);
+      const discoveryRequestContext = {
+        instruction,
+        discoveryState: discoveryStateForModel ? {
+          ...discoveryStateForModel,
+          contract: `${discoveryStateForModel.contract} Evidence lineage is represented by short ref-NNN handles in this request. Copy handles exactly; never reconstruct internal IDs.`,
+        } : discoveryStateForModel,
+        discoveryModelContext: {
+          ...discoveryModelContextForModel,
+          contract: `${discoveryModelContextForModel.contract} Every supplied node id is a short ref-NNN handle. Use only those exact handles in evidenceNodeIds.`,
+        },
+        collaboration: compactDiscoveryCollaboration(workingContext),
+        humanSuppliedTextEvidence: attachedTexts.map((attachment) => ({
+          name: attachment.name,
+          authority: "human-supplied",
+          exactText: attachment.text,
+        })),
+        availableInternalSources: {
+          product: compactDiscoveryProductAvailability(catalog, instruction, researchTargets),
+          marketing: user && tenantId ? "Authorized account snapshots may be queried; absence is unknown until bounded retrieval." : "Unavailable in this session.",
+          business: user && tenantId ? "Authorized account snapshots may be queried; absence is unknown until bounded retrieval." : "Unavailable in this session.",
+          external: modelProvider !== "openai"
+            ? "Unavailable for the selected model. Do not choose external."
+            : "OpenAI web search is available for a bounded external research request when a precise unresolved gap has material information value. Do not repeat an unchanged request; the runtime will redirect duplicate searches to synthesis.",
+          canvas: "The committed canvas, selected neighborhood, prior evidence, and human edits are available through the bounded context.",
+        },
+        recentAcceptedMoves: priorSteps.slice(-8),
+        contract: "Choose one smallest material next move. Do not prescribe visual styling; the visual director owns how an accepted understanding is communicated. Ask the human only when one material judgment blocks responsible progress.",
+      };
+      const discoveryProvider = await fetchCanvasV2ProviderJsonWithModelChain<unknown>({
+        models: modelChain,
+        maxInvalidResponsesPerModel: CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS,
+        requestSignal: request.signal,
+        attemptRole: "discovery-director",
+        validatePayload: (payload, model) => {
+          const response = extractCanvasV2StructuredText(payload, model);
+          if (!response) throw new Error("North Star's discovery director returned no next move.");
+          const transition = constrainCanvasV2DelegatedComparisonClarification({
+            transition: discoveryReferenceCodec.decodeTransition(parseCanvasV2DiscoveryTransition(JSON.parse(response), discoveryState)),
+            instruction,
+          });
+          applyCanvasV2DiscoveryTransition({ state: discoveryState, transition, graph: preDiscoveryGraph, now: new Date().toISOString() });
+        },
+        requestForModel: (model, correction) => {
+          const providerRequest = buildCanvasV2StructuredProviderRequest({
+            model,
+            system: CANVAS_V2_DISCOVERY_ORCHESTRATOR_SYSTEM,
+            // The router already performed the one multimodal read and placed
+            // its grounded meaning in the authoritative instruction. The
+            // discovery director operates on compact lineage and inquiry
+            // state, preventing a second paid image pass before composition.
+            parts: [{ text: JSON.stringify(discoveryRequestContext) }],
+            schemaName: "canvas_v2_discovery_transition",
+            schema: CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA,
+            // Real product taxonomy IDs can be hundreds of characters and
+            // appear in several lineage-bearing fields. Preserve the strict
+            // schema without truncating otherwise valid discovery JSON.
+            maxOutputTokens: 10_000,
+            maxInputImages: 0,
+            maxTextCharacters: 160_000,
+            reasoningEffort: "low",
+            temperature: 0.2,
+            correction,
+          });
+          return { url: providerRequest.url, init: providerRequest.init, audit: providerRequest.audit };
+        },
+      });
+      const response = extractCanvasV2StructuredText(discoveryProvider.payload, discoveryProvider.model);
+      if (!response) throw invalidCanvasV2ProviderResponse("North Star's discovery director returned no next move.", discoveryProvider.attempts);
+      discoveryTransition = constrainCanvasV2ExternalDiscoveryProgress({
+        transition: constrainCanvasV2DelegatedComparisonClarification({
+          transition: discoveryReferenceCodec.decodeTransition(parseCanvasV2DiscoveryTransition(JSON.parse(response), discoveryState)),
+          instruction,
+        }),
+        acceptedMoves: currentRunAcceptedMoves,
+      });
+      discoveryState = applyCanvasV2DiscoveryTransition({ state: discoveryState, transition: discoveryTransition, graph: preDiscoveryGraph, now: new Date().toISOString() });
+      discoveryDirectorAttempts = discoveryProvider.attempts;
+      discoveryDirectorFallbackUsed = discoveryProvider.fallbackUsed;
+      if (discoveryTransition.clarification) {
+        return NextResponse.json({
+          discoveryState,
+          discoveryProgress: discoveryTransition.progress,
+          discoveryQuestion: discoveryTransition.clarification,
+          model: discoveryProvider.model,
+          fallbackUsed: discoveryProvider.fallbackUsed,
+          providerAttempts: discoveryProvider.attempts,
+        });
+      }
+      if (discoveryTransition.move.targetNames.length) evidenceBridgeTargetNames = discoveryTransition.move.targetNames;
+    }
+    // Account retrieval belongs to the discovery turn, not every visual
+    // refinement inside that turn. Re-fetching the same snapshots before each
+    // model edit added latency without adding evidence. A later user turn has
+    // a fresh step ledger and can retrieve again to discover a newer snapshot.
+    const plannedAccountDomains = (discoveryTransition?.move.sourceCategories ?? [])
+      .filter((category) => category === "marketing" || category === "business") as CanvasV2EvidenceDomain[];
+    // Once the discovery director has chosen the next source categories, that
+    // choice is authoritative. Falling back to keyword inference for an
+    // external-only move could silently launch an unrelated account snapshot
+    // query (for example because the web question contains "market") and add
+    // latency without information value.
+    const accountEvidenceDomains = discoveryTransition
+      ? Array.from(new Set(plannedAccountDomains))
+      : canvasV2EvidenceDomainsForInstruction(instruction);
+    const plannedAccountEvidenceMissing = plannedAccountDomains.some((domain) => !body.revision!.evidencePackets?.some((packet) => (
+      domain === "marketing" ? packet.kind === "marketing-signal" : packet.kind === "business-record"
+    )));
+    const shouldRetrieveAccountEvidence = Boolean(
+      researchMode
+      && accountEvidenceDomains.some((domain) => domain === "marketing" || domain === "business" || domain === "mixed")
+      && !priorSteps.some((step) => step.kind === "research")
+      && (!discoveryTransition || canvasV2DiscoveryMoveNeedsRetrieval(discoveryTransition.move) || plannedAccountEvidenceMissing),
+    );
+    const externalResearchRequest = discoveryTransition?.move.sourceCategories.includes("external")
+      ? discoveryTransition.move.externalResearchRequest
+      : undefined;
+    if (externalResearchRequest && modelProvider !== "openai") {
+      return NextResponse.json({
+        error: "External discovery is currently available only with GPT-5.6 Luna. The committed canvas was preserved.",
+        code: "configuration",
+        retryable: false,
+      }, { status: 409 });
+    }
+    const accountEvidencePromise = user && tenantId && shouldRetrieveAccountEvidence
+      ? runCanvasV2EvidenceBridge({
+          providers: [createCanvasV2AccountEvidenceProvider({
+            supabase,
+            tenantId,
+            catalog,
+            // createClient() is request-scoped. Use the authorized backend
+            // identity so the short snapshot cache survives across requests
+            // without ever crossing tenant boundaries.
+            snapshotCacheScope: `supabase:${process.env.NEXT_PUBLIC_SUPABASE_URL ?? "default"}`,
+          })],
+          request: {
+            instruction,
+            targetNames: evidenceBridgeTargetNames,
+            domains: accountEvidenceDomains,
+            continuationKeys: body.revision.evidencePackets?.map((packet) => packet.continuationKey).filter((value): value is string => Boolean(value)),
+            limit: 24,
+          },
+        })
+      : Promise.resolve({ packets: [], sources: [], providers: [], issues: [], providerAttempts: [] });
+    const externalEvidencePromise = externalResearchRequest
+      ? runCanvasV2EvidenceBridge({
+          providers: [createCanvasV2OpenAIWebEvidenceProvider({
+            model: modelSelection,
+            requestSignal: request.signal,
+          })],
+          request: {
+            instruction,
+            targetNames: evidenceBridgeTargetNames,
+            domains: ["external"],
+            continuationKeys: body.revision.evidencePackets?.map((packet) => packet.continuationKey).filter((value): value is string => Boolean(value)),
+            limit: externalResearchRequest.maxSources,
+            externalResearchRequest,
+          },
+        })
+      : Promise.resolve({ packets: [], sources: [], providers: [], issues: [], providerAttempts: [] });
+    const [accountEvidenceBridge, externalEvidenceBridge] = await Promise.all([accountEvidencePromise, externalEvidencePromise]);
+    const retrievedEvidenceBridge = {
+      packets: mergeCanvasV2EvidencePackets(accountEvidenceBridge.packets, externalEvidenceBridge.packets),
+      sources: Array.from(new Map([...accountEvidenceBridge.sources, ...externalEvidenceBridge.sources]
+        .map((source) => [`${source.providerId}:${source.sourceId}`, source] as const)).values()),
+      providers: [...accountEvidenceBridge.providers, ...externalEvidenceBridge.providers],
+      issues: [...accountEvidenceBridge.issues, ...externalEvidenceBridge.issues],
+      providerAttempts: [...accountEvidenceBridge.providerAttempts, ...externalEvidenceBridge.providerAttempts],
+    };
+    // Retrieval happens once per user turn for latency, but the result is
+    // revision-owned discovery memory. Every later synthesis pass must retain
+    // the packets already committed with the canonical flow; otherwise the
+    // model sees product screenshots while silently losing the marketing and
+    // business records that gave those screens meaning.
+    const retrievedAndPersistedEvidencePackets = mergeCanvasV2EvidencePackets(
+      body.revision.evidencePackets,
+      retrievedEvidenceBridge.packets,
+    );
+    const persistedEvidencePackets = mergeCanvasV2EvidencePackets(
+      retrievedAndPersistedEvidencePackets,
+      attachmentEvidence.packets,
+    );
+    const evidenceBridge = {
+      ...retrievedEvidenceBridge,
+      packets: persistedEvidencePackets,
+      sources: Array.from(new Map([
+        ...persistedEvidencePackets.map((packet) => packet.source),
+        ...retrievedEvidenceBridge.sources,
+      ].map((source) => [`${source.providerId}:${source.sourceId}`, source] as const)).values()),
+    };
+    // The model context must be assembled after authorized account retrieval.
+    // Building it before this merge made freshly retrieved marketing/business
+    // evidence invisible until a later request and encouraged redundant title
+    // or boundary work instead of grounded sensemaking.
+    const mergedDiscoveryGraph = syncCanvasV2DiscoveryGraph({
+      previous: body.revision.discoveryGraph,
+      revisionId: body.revision.id,
+      updatedAt: body.revision.createdAt,
+      document: body.revision.document,
+      evidencePackets: persistedEvidencePackets,
+      humanInputs: discoveryState.humanInputs,
+      sceneTransaction: body.revision.sceneTransaction,
+    });
+    discoveryState = synchronizeCanvasV2DiscoveryState({
+      state: discoveryState,
+      graph: mergedDiscoveryGraph,
+      workingContext,
+      now: new Date().toISOString(),
+    })!;
+    const discoveryRevision: CanvasV2ArtifactRevision = {
+      ...body.revision,
+      evidence: Array.from(new Map([...body.revision.evidence, ...uploadedEvidenceAssets].map((asset) => [asset.id, asset] as const)).values()),
+      evidencePackets: persistedEvidencePackets,
+      discoveryGraph: mergedDiscoveryGraph,
+      discoveryState,
+    };
     const modelContext = {
       instruction,
       revisionId: body.revision.id,
       revisionState: body.revision.state,
-      ...buildCanvasV2BoundedModelContext(body.revision, body.observation, workingContext),
+      ...buildCanvasV2BoundedModelContext(discoveryRevision, body.observation, workingContext, {
+        instruction,
+        phase: modelContextPhase,
+        evidencePolicy,
+        contextProfile: `visual-director:${modelContextPhase}:balanced`,
+      }),
       run: {
         turn,
         priorSteps,
@@ -1717,19 +2542,13 @@ export async function POST(request: NextRequest) {
         compositionState: body.run?.compositionState,
         correction: previousFailure(request),
         renderRepair,
-        structuralRecovery,
       },
     };
-    const catalog = user
-      ? await loadAppDataCatalog(supabase, await resolveAppDataTenantId(supabase, user.id))
-      : emptyCanvasV2LocalEvaluationCatalog();
-    const researchTargets = Array.isArray(body.run?.researchTargets)
-      ? body.run.researchTargets.filter((target): target is string => typeof target === "string").slice(0, 12)
-      : [];
-    const researchMode: CanvasV2ResearchMode | undefined = body.run?.researchMode === "evidence" || body.run?.researchMode === "synthesis"
-      ? body.run.researchMode
-      : undefined;
-    const research = buildCanvasV2ResearchCatalogIndex(catalog, instruction, body.revision, researchTargets);
+    const research = buildCanvasV2ResearchCatalogIndex(catalog, instruction, discoveryRevision, researchTargets, evidenceBridge, {
+      requireProductEvidence: discoveryTransition
+        ? discoveryTransition.move.sourceCategories.includes("product")
+        : canvasV2ProductEvidenceRequestedForInstruction(instruction),
+    });
     const currentCreativeDirection = body.run?.creativeDirection && typeof body.run.creativeDirection === "object"
       ? body.run.creativeDirection as { nextMoves?: readonly string[]; unresolvedOpportunities?: readonly string[] }
       : undefined;
@@ -1745,50 +2564,59 @@ export async function POST(request: NextRequest) {
         : undefined,
       body.revision.evidence,
     );
-    const decisionPolicy = canvasV2ResearchDecisionPolicy(research, researchMode, priorSteps, currentCreativeDirection);
+    let decisionPolicy = canvasV2ResearchDecisionPolicy(research, researchMode, priorSteps, currentCreativeDirection);
     const requiredResearch = nextCanvasV2RequiredResearch(research);
+    if (decisionPolicy.phase === "ground-required-evidence" && !requiredResearch) {
+      decisionPolicy = {
+        phase: "open-design",
+        permittedDecisions: ["edit", "complete"],
+        reason: "The requested authorized evidence is unavailable. Create useful boundary and next-action work from the latest healthy canvas without fabricating a finding.",
+      };
+    }
     const groundingRequired = decisionPolicy.phase === "ground-required-evidence";
-    if (process.env.NODE_ENV !== "production") console.info("[canvas-v2] research phase", {
-      mode: researchMode,
-      phase: decisionPolicy.phase,
-      requirements: research.requirements.map((requirement) => ({
-        requestedName: requirement.requestedName,
-        appId: requirement.appId,
-        state: requirement.state,
-        adequateFlowIds: requirement.adequateFlowIds,
-      })),
-      requiredResearch,
-    });
     if (groundingRequired && requiredResearch) {
       const decision = deterministicResearchDecision({ ...requiredResearch, hasVisibleResearch: research.visibleFlowIds.length > 0 });
       const result = resolveCanvasV2ResearchDecision(catalog, decision, research.visibleFlowIds, research);
       return NextResponse.json({
         decision,
         research: result,
+        // A mixed discovery move may retrieve a product flow and external or
+        // account evidence in parallel. The flow is the visible transaction
+        // for this turn, but every other validated packet must travel with the
+        // candidate revision so the next observed turn can materialize a
+        // promoted witness instead of silently discarding research memory.
+        retrievedEvidencePackets: persistedEvidencePackets,
         researchStatus: canvasV2ResearchStatusForDecision(research, decision),
+        discoveryState,
+        discoveryProgress: discoveryTransition?.progress,
         model: "northstar-deterministic-research-director",
-        fallbackUsed: false,
-        providerAttempts: [],
+        fallbackUsed: discoveryDirectorFallbackUsed,
+        providerAttempts: [...discoveryDirectorAttempts, ...retrievedEvidenceBridge.providerAttempts],
       });
     }
-    if (groundingRequired) {
+    const snapshotEvidencePackets = canvasV2EvidencePacketsNeedingMaterialization(
+      body.revision.document,
+      persistedEvidencePackets,
+    ).filter((packet) => packet.source.sourceType !== "uploaded" || packet.presentation?.state === "candidate" || packet.presentation?.state === "promoted");
+    if (snapshotEvidencePackets.length) {
+      // Snapshot providers are already authoritative research. Commit their
+      // native source objects through render-before-commit before spending a
+      // model call on interpretation. The next observed turn receives the
+      // packets as revision-owned discovery memory and can synthesize from
+      // what is genuinely visible rather than context-only evidence.
       return NextResponse.json({
-        error: "North Star cannot begin synthesis because required canonical evidence is unresolved and no complete adequate journey is available. The design model was not called.",
-        code: "invalid-request",
-        retryable: false,
+        snapshotEvidencePackets,
         researchStatus: canvasV2ResearchStatusForDecision(research),
-      }, { status: 409 });
+        retrievedEvidencePackets: persistedEvidencePackets,
+        discoveryState,
+        discoveryProgress: discoveryTransition?.progress,
+        model: "northstar-account-evidence-materializer",
+        fallbackUsed: discoveryDirectorFallbackUsed,
+        providerAttempts: discoveryDirectorAttempts,
+        evidenceIssues: retrievedEvidenceBridge.issues,
+      });
     }
-    const modelSelection = parseCanvasV2ModelSelection(body.run?.modelSelection);
-    const modelChain = canvasV2DesignModelChain(modelSelection);
-    const modelProvider = canvasV2ProviderForModel(modelSelection);
-    if (modelProvider === "openai" && !process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: "OPENAI_API_KEY is not configured for GPT-5.6 Luna.", code: "configuration", retryable: false }, { status: 500 });
-    }
-    if (modelProvider === "google" && !process.env.GEMINI_API_KEY) {
-      return NextResponse.json({ error: "GEMINI_API_KEY is not configured for the selected Gemini model.", code: "configuration", retryable: false }, { status: 500 });
-    }
-    const image = parseDataUrl(body.observation.screenshotDataUrl);
+    const image = modelImage(body.observation.screenshotDataUrl, "low", "whole-board-overview");
     if (workingContext?.scope === "selection" && workingContext.selectionPolicy === "modify") {
       if (!workingContext.editableNodeIds.length) {
         return NextResponse.json({
@@ -1800,6 +2628,14 @@ export async function POST(request: NextRequest) {
       const creativeDirection = selectionCreativeDirection(instruction, currentCreativeDirectionState);
       const spatialStrategy = selectionSpatialStrategy(workingContext, currentSpatialStrategy);
       if (!renderRepair && priorSteps.some((step) => step.kind === "design")) {
+        const completedDiscoveryState = discoveryState.evidenceNeed !== "irrelevant" && discoveryState.completion.materialOpenRequirements.length
+          ? discoveryState
+          : completeCanvasV2DiscoveryState({
+              state: discoveryState,
+              summary: `Updated only the selected object${workingContext.editableNodeIds.length === 1 ? "" : "s"} and preserved the surrounding canvas.`,
+              graphRevisionId: discoveryRevision.discoveryGraph?.revisionId,
+              now: new Date().toISOString(),
+            });
         return NextResponse.json({
           decision: {
             schema: CANVAS_V2_DECISION_SCHEMA,
@@ -1822,9 +2658,11 @@ export async function POST(request: NextRequest) {
           },
           evidence: body.revision.evidence,
           researchStatus: canvasV2ResearchStatusForDecision(research),
+          discoveryState: completedDiscoveryState,
+          discoveryProgress: { stage: "concluding", label: "Revision complete", detail: "The requested selected-object change is committed and the surrounding canvas remains intact." },
           model: "northstar-selection-commit-verifier",
-          fallbackUsed: false,
-          providerAttempts: [],
+          fallbackUsed: discoveryDirectorFallbackUsed,
+          providerAttempts: discoveryDirectorAttempts,
         });
       }
       const selectedSource = workingContext.editableNodeIds.map((nodeId) => ({
@@ -1838,6 +2676,9 @@ export async function POST(request: NextRequest) {
         selectedSource,
         sourceOutline: modelContext.source.htmlOutline,
         render: modelContext.render,
+        discoveryModelContext: modelContext.discoveryModelContext,
+        discoveryContextReceipt: modelContext.discoveryContextReceipt,
+        discoveryContract: modelContext.discoveryContract,
         renderRepair,
       };
       const compileSelectionPayload = (payload: unknown) => compileTargetedSelectionDecision({
@@ -1852,7 +2693,7 @@ export async function POST(request: NextRequest) {
       const selectionProvider = await fetchCanvasV2ProviderJsonWithModelChain<unknown>({
         models: modelChain,
         requestSignal: request.signal,
-        maxInvalidResponsesPerModel: 4,
+        maxInvalidResponsesPerModel: CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS,
         attemptRole: "source-author",
         validatePayload: (candidatePayload, model) => {
           const text = extractCanvasV2StructuredText(candidatePayload, model);
@@ -1870,17 +2711,21 @@ export async function POST(request: NextRequest) {
             system: TARGETED_SELECTION_AUTHOR_SYSTEM,
             parts: [
               { text: JSON.stringify(selectionRequestContext) },
-              { text: "Current rendered canvas overview:" },
-              { inlineData: image },
+              ...(correction ? [] : [
+                { text: "Current rendered canvas overview:" } as CanvasV2ModelInputPart,
+                { inlineData: image } as CanvasV2ModelInputPart,
+              ]),
             ],
             schemaName: "canvas_v2_targeted_selection_patch",
             schema: SOURCE_AUTHOR_SCHEMA,
             maxOutputTokens: 8_000,
+            maxInputImages: 1,
+            maxTextCharacters: 160_000,
             reasoningEffort: "low",
             temperature: 0.2,
             correction,
           });
-          return { url: providerRequest.url, init: providerRequest.init };
+          return { url: providerRequest.url, init: providerRequest.init, audit: providerRequest.audit };
         },
       });
       try {
@@ -1891,9 +2736,11 @@ export async function POST(request: NextRequest) {
           decision,
           evidence: body.revision.evidence,
           researchStatus: canvasV2ResearchStatusForDecision(research),
+          discoveryState,
+          discoveryProgress: discoveryTransition?.progress,
           model: selectionProvider.model,
-          fallbackUsed: selectionProvider.fallbackUsed,
-          providerAttempts: selectionProvider.attempts,
+          fallbackUsed: discoveryDirectorFallbackUsed || selectionProvider.fallbackUsed,
+          providerAttempts: [...(discoveryDirectorAttempts ?? []), ...selectionProvider.attempts],
         });
       } catch (error) {
         throw invalidCanvasV2ProviderResponse(error instanceof Error ? error.message : "North Star returned an invalid selected-object revision.", selectionProvider.attempts);
@@ -1911,6 +2758,14 @@ export async function POST(request: NextRequest) {
         currentAdjustment: "The one derived result is committed beside the unchanged selected references.",
         intentionalOverlaps: currentSpatialStrategy?.intentionalOverlaps ?? [],
       };
+      const completedDiscoveryState = discoveryState.evidenceNeed !== "irrelevant" && discoveryState.completion.materialOpenRequirements.length
+        ? discoveryState
+        : completeCanvasV2DiscoveryState({
+            state: discoveryState,
+            summary: "Created one derived result beside the selected references and preserved the existing canvas.",
+            graphRevisionId: discoveryRevision.discoveryGraph?.revisionId,
+            now: new Date().toISOString(),
+          });
       return NextResponse.json({
         decision: {
           schema: CANVAS_V2_DECISION_SCHEMA,
@@ -1933,19 +2788,35 @@ export async function POST(request: NextRequest) {
         },
         evidence: body.revision.evidence,
         researchStatus: canvasV2ResearchStatusForDecision(research),
+        discoveryState: completedDiscoveryState,
+        discoveryProgress: { stage: "concluding", label: "Focused result complete", detail: "The selected references remain intact and the requested derived work is now visible beside them." },
         model: "northstar-reference-commit-verifier",
-        fallbackUsed: false,
-        providerAttempts: [],
+        fallbackUsed: discoveryDirectorFallbackUsed,
+        providerAttempts: discoveryDirectorAttempts,
       });
     }
-    const context = { ...modelContext, researchMode, research, decisionPolicy };
+    let context = {
+      ...modelContext,
+      researchMode,
+      research,
+      decisionPolicy,
+      discoveryMove: discoveryTransition?.move,
+      discoveryProgress: discoveryTransition?.progress,
+      userFacingSensemaking: buildCanvasV2SensemakingPresentationBrief(discoveryState),
+    };
     // Ordinary transform requests are authored compositions too. Previously
     // only research-design turns entered the visual-director phase, leaving a
     // direct empty-canvas prompt to invoke the source author without the
     // execution brief its validator requires.
-    const synthesisTurn = researchMode !== "evidence" && decisionPolicy.phase !== "ground-required-evidence";
+    // Once required evidence is visible, every design request is synthesis —
+    // including evidence-mode prompts that asked to inspect their sources.
+    // Keeping the original routing label here skipped the visual director and
+    // sent the source author into validation without an execution brief.
+    const synthesisTurn = decisionPolicy.phase !== "ground-required-evidence";
     const observedDesignTurns = priorSteps.filter((step) => step.kind === "design").length;
     const islandRegistry = buildCanvasV2IslandRegistry({ observation: body.observation, compositionState: currentCompositionState });
+    const explicitRequiredIndependentTerritoryCount = canvasV2RequiredIndependentTerritoryCount(instruction);
+    const authoredIndependentTerritoryCount = islandRegistry.filter((island) => island.storyRole !== "title").length;
     const unfinishedIslands = islandRegistry.filter((island) => island.maturity !== "resolved" || island.openRequirements.length > 0 || island.missingRequiredEvidenceIds.length > 0);
     const titleIslands = islandRegistry.filter((island) => island.storyRole === "title");
     const instructionRequestsTitleAuthorship = /\b(?:title|headline|heading|subtitle|subhead|description|framing|rename)\b/i.test(instruction);
@@ -1986,13 +2857,40 @@ export async function POST(request: NextRequest) {
     const allocatedIslandId = repairExecution?.target.action === "create"
       ? repairExecution.target.islandId
       : canvasV2AllocatedIslandId(body.revision.id, observedDesignTurns + 1);
-    const asksForEvidenceLedComparison = /\b(?:compare|comparison|comparative|versus|vs\.?|contrast)\b/i.test(instruction)
-      && /\b(?:representative|screenshot|screenshots|screen evidence|visual evidence|flow|flows)\b/i.test(instruction);
-    const canonicalScreenCount = context.canonicalEvidence.reduce((sum, flow) => sum + flow.screenCount, 0);
-    const complexEvidenceSynthesis = synthesisTurn
-      && asksForEvidenceLedComparison
-      && context.canonicalEvidence.length >= 2
-      && canonicalScreenCount >= 20;
+    // A resolved title remains visible context, but it is no longer a writable
+    // target for unrelated analytical work. Removing it from the provider enum
+    // prevents an expensive invalid response instead of rejecting it later.
+    const targetableExistingIslandIds = new Set(islandRegistry.filter((island) => (
+      island.storyRole !== "title"
+      || island.maturity !== "resolved"
+      || island.openRequirements.length > 0
+      || island.missingRequiredEvidenceIds.length > 0
+      || instructionRequestsTitleAuthorship
+      || repairExecution?.target.islandId === island.islandId
+    )).map((island) => island.islandId));
+    const asksForEvidenceLedComparison = canvasV2EvidenceLedComparisonRequested(instruction);
+    const explicitVisualEvidenceRequested = /\b(?:exact|actual|representative|source[- ]linked|grounded)\s+(?:app\s+)?(?:screenshot|screenshots|screen|screens|image|images|icon|icons|visual evidence)\b/i.test(instruction)
+      || /\b(?:screenshot|screenshots|screen evidence|visual evidence)\b[^.]{0,80}\b(?:provenance|source|evidence|inspect|show|use)\b/i.test(instruction);
+    // Complexity is a property of the authoritative board record, not of the
+    // bounded model projection. A relevance working set may intentionally omit
+    // stable screenshot metadata from this call; that must never collapse a
+    // substantial two-source comparison back into a monolithic direct turn.
+    const authoritativeCanonicalScale = canvasV2CanonicalEvidenceScale(body.revision.document);
+    const complexEvidenceSynthesis = canvasV2RequiresProgressiveEvidenceSynthesis({
+      synthesisTurn,
+      instruction,
+      canonicalFlowCount: authoritativeCanonicalScale.flowCount,
+      canonicalScreenCount: authoritativeCanonicalScale.screenCount,
+    });
+    // Complexity is discovered from the evidence actually available, not only
+    // from imperative wording in the prompt. A large multi-source comparison
+    // needs at least a comparison chapter and a separately observed
+    // implication/conclusion chapter; a shallow or direct request retains the
+    // one-composition path.
+    const requiredIndependentTerritoryCount = Math.max(
+      explicitRequiredIndependentTerritoryCount,
+      complexEvidenceSynthesis ? 2 : 0,
+    );
     // The rendered registry is the authority for whether analytical authorship
     // has started. Continuation policy can change after deterministic research,
     // but an empty island registry still means the first synthesis must allocate
@@ -2025,10 +2923,17 @@ export async function POST(request: NextRequest) {
       && explicitRelationshipGeometryRequested
       && /\b(?:refine|improve|smooth|polish|restyle|adjust|edit|change|premium|precise)\b/i.test(instruction);
     const acceptedWholeBoardRecompositions = priorSteps.filter((step) => step.islandExecution?.target.action === "recompose").length;
-    const resolvedStory = titleIslands.length === 1
-      && islandRegistry.some((island) => island.storyRole !== "title")
+    const resolvedStory = islandRegistry.length > 0
       && unfinishedIslands.length === 0
-      && promptCoverageFailures.length === 0;
+      && promptCoverageFailures.length === 0
+      && authoredIndependentTerritoryCount >= requiredIndependentTerritoryCount;
+    const requiredDiscoveryMove = discoveryTransition?.move;
+    // Discovery owns whether accepted human findings require a visible canvas
+    // mutation. A visual-director preference to finish or add optional polish
+    // cannot override that executable product requirement.
+    const requiresVisibleDiscoveryComposition = requiredDiscoveryMove?.visibleAction === "compose"
+      && currentRunStepCount === 0
+      && (requiredDiscoveryMove.kind === "design-validation" || requiredDiscoveryMove.kind === "integrate-validation");
     // Island lifecycle is a stronger convergence signal than elapsed turns.
     // Once the title and analytical story are resolved, immediately ask for a
     // whole-board final review instead of spending arbitrary development turns
@@ -2037,7 +2942,9 @@ export async function POST(request: NextRequest) {
     // local integration task, even when the broader board was already ready
     // to complete. Do not turn that instruction into a speculative whole-board
     // polish loop, but do not silently discard it as repeated local work.
-    const convergencePhase = explicitRelationshipRefinementRequested
+    const convergencePhase = requiresVisibleDiscoveryComposition
+      ? "integration"
+      : explicitRelationshipRefinementRequested
       ? "integration"
       : resolvedStory ? "final-review" : canvasV2ConvergencePhase(observedDesignTurns);
     const lateStageConvergence = synthesisTurn && (convergencePhase === "convergence" || convergencePhase === "final-review");
@@ -2088,6 +2995,7 @@ export async function POST(request: NextRequest) {
     );
     const renderedIntegrityInstruction = [
       renderRepairInstruction,
+      privateRecoveryInstruction,
       renderedIntegrityFailures.length
         ? `Resolve this exact rendered-integrity problem before adding new visual structure: ${renderedIntegrityFailures.join(" ")} `
         : "",
@@ -2105,6 +3013,11 @@ export async function POST(request: NextRequest) {
       unfinishedIslands.length
         ? `The island lifecycle ledger still contains unfinished authored work: ${unfinishedIslands.map((island) => `${island.islandId} [${island.maturity}; open=${island.openRequirements.join(" | ") || "none"}; missing-evidence=${island.missingRequiredEvidenceIds.join(",") || "none"}]`).join("; ")}. These identities remain open across turns and cannot be globally marked resolved. `
         : "",
+      requiredIndependentTerritoryCount > authoredIndependentTerritoryCount
+        ? `INDEPENDENT TERRITORY CONTRACT: ${complexEvidenceSynthesis && explicitRequiredIndependentTerritoryCount < 2
+            ? `the discovery harness found a substantial multi-source comparison that needs progressive materialization across at least ${requiredIndependentTerritoryCount} independently editable non-title territories`
+            : `the user explicitly requires at least ${requiredIndependentTerritoryCount} independently editable non-title territories`}, and the committed canvas currently contains ${authoredIndependentTerritoryCount}. ${complexEvidenceSynthesis && firstSynthesisTurn ? "Begin with one compact governing thesis/title island; it does not consume either analytical territory." : ""} Resolve exactly one bounded semantic job in this turn. Do not nest, summarize, or precompose another required territory inside the current island. Until the required count is reached, name the next distinct territory in remainingOpportunities and nextMoves and do not claim one island completes the whole prompt. `
+        : "",
       promptCoverageFailures.length && !firstSynthesisTurn
         ? `EXPLICIT PROMPT COVERAGE IS STILL ABSENT: ${promptCoverageFailures.join(" ")} A title, subtitle, orientation paragraph, or future-chapter promise cannot satisfy this requirement. Materialize the missing content as inspectable non-title analytical work before recommending completion. `
         : "",
@@ -2114,17 +3027,14 @@ export async function POST(request: NextRequest) {
       explicitRelationshipRefinementRequested
         ? "EXACT HUMAN RELATIONSHIP REFINEMENT: make one bounded edit to the existing relationship system and preserve every endpoint object, all copy, hierarchy, styling, and placement outside those relationships. Target the existing relationship island, keep it resolved with no new open requirements, and do not convert this request into a whole-board recompose or completion-only response. "
         : "",
-      resolvedStory && acceptedWholeBoardRecompositions > 0
+      resolvedStory && !requiresVisibleDiscoveryComposition && acceptedWholeBoardRecompositions > 0
         ? "A whole-board recompose has already been accepted and re-observed in this run. Do not open another subjective polish pass. Recommend completion now unless the supplied factual render contains one exact deterministic integrity failure. "
         : "",
-      resolvedStory && existingRelationshipCount === 0 && !explicitRelationshipGeometryRequested
+      resolvedStory && !requiresVisibleDiscoveryComposition && existingRelationshipCount === 0 && !explicitRelationshipGeometryRequested
         ? "The user did not request connector or endpoint-dependent relationship geometry. Its absence is not a defect and cannot keep this resolved board alive. Preserve the model's existing visual language and complete unless a different exact prompt-critical or deterministic render blocker is visible. "
         : "",
-      resolvedStory && !explicitWholeBoardRecompositionRequested && renderedIntegrityFailures.length === 0
+      resolvedStory && !requiresVisibleDiscoveryComposition && !explicitWholeBoardRecompositionRequested && renderedIntegrityFailures.length === 0
         ? "Every requested deliverable is present, every island is resolved, and the committed render has no deterministic integrity failure. Do not risk a speculative whole-board recompose merely to try an alternative reading path, denser footprint, or different arrangement; recommend completion from this verified canvas. "
-        : "",
-      structuralRecovery
-        ? `INTERNAL STRUCTURAL RECOVERY ${structuralRecovery.attempt}: the last private candidate was discarded after render validation and never changed the public canvas. Replan from the supplied verified committed render. Do not repeat these failed action modes: ${structuralRecovery.failedActions.join(", ") || "none named"}. Do not restyle or globally recompose merely to improve fit-view density. If the committed board is resolved and deterministic checks are clear, recommend completion now; otherwise choose one different bounded island move that addresses an exact prompt-critical gap. Prior private failures: ${structuralRecovery.failures.join(" ")} `
         : "",
       islandDevelopmentLedger.length
         ? `Island turn ledger: ${islandDevelopmentLedger.map((island) => `${island.islandId} [role=${island.storyRole}; turns=${island.committedTurns}; consecutive=${island.consecutiveRecentTurns}; maturity=${island.maturity}; open=${island.openRequirements.join(" | ") || "none"}]`).join("; ")}. A developing island's declared obligations may only shrink as they are satisfied; do not replace them with newly invented polish goals. A resolved island may receive a bounded enrichment, but repeated consecutive polishing is not a coherent story. `
@@ -2136,29 +3046,208 @@ export async function POST(request: NextRequest) {
         ? "The last two committed synthesis edits remained attached to the same lower-board stack while the factual zone map still exposes wider two-dimensional territory. The next material move must either establish one purposeful evidence-relative island in an available zone or recompose the existing analysis into genuinely distinct territories; another attached section is not valid development. "
         : "",
     ].join("");
-    const railDetailParts = selectedRailDetails.flatMap((detail) => [
+    // Visual context follows the same progressive semantic job as the canvas.
+    // The title needs board shape, the comparison needs one readable atlas per
+    // side, and later implication/review turns need one authored-island crop.
+    // Never send all of those pixels to every stage.
+    const railDetailsForDirector = complexEvidenceSynthesis
+      ? firstSynthesisTurn
+        ? []
+        : observedDesignTurns === 1
+          ? firstRailDetailPerLane(body.observation.railDetails ?? []).slice(0, 2)
+          : []
+      : selectedRailDetails.slice(0, 1);
+    const designDetailsForDirector = complexEvidenceSynthesis && (firstSynthesisTurn || observedDesignTurns === 1)
+      ? []
+      : selectedDesignDetails.slice(0, 1);
+    const railDetailParts: CanvasV2ModelInputPart[] = railDetailsForDirector.flatMap((detail) => [
       { text: `Labeled canonical evidence atlas: ${detail.label} (zero-based indices ${detail.startIndex}–${detail.endIndex}).` },
-      { inlineData: parseDataUrl(detail.screenshotDataUrl) },
+      { inlineData: modelImage(detail.screenshotDataUrl, "high", "canonical-evidence-detail") },
     ]);
-    const designDetailParts = selectedDesignDetails.flatMap((detail) => [
+    const designDetailParts: CanvasV2ModelInputPart[] = designDetailsForDirector.flatMap((detail) => [
       { text: `Readable authored design-region capture: ${detail.label} [node ${detail.nodeId}; ${detail.width}×${detail.height} canvas units; center ${detail.centerXShare},${detail.centerYShare}; area share ${detail.canvasAreaShare}; reading position ${detail.readingIndex}${detail.visualRole ? `; visual role ${detail.visualRole}` : ""}].` },
-      { inlineData: parseDataUrl(detail.screenshotDataUrl) },
+      { inlineData: modelImage(detail.screenshotDataUrl, "high", "focused-island") },
     ]);
-    const designReferenceParts = synthesisTurn && (firstSynthesisTurn || observedDesignTurns === 10 || observedDesignTurns === 15 || observedDesignTurns === 18)
+    const designReferenceParts = synthesisTurn && firstSynthesisTurn && railDetailsForDirector.length === 0
       ? await loadNorthstarDesignReferenceParts()
       : [];
-    const creativeEvidenceIdByHandle = new Map(context.canonicalEvidence.flatMap((flow) => [
-      ...flow.identityAssets.flatMap((asset) => asset.copyHandle ? [[asset.copyHandle, asset.evidenceId] as const] : []),
-      ...flow.screens.flatMap((screen) => screen.copyHandle ? [[screen.copyHandle, screen.evidenceId] as const] : []),
-    ]));
+    // The source document is authoritative for copy handles. Bounded model
+    // context intentionally omits or compacts optional fields, so deriving
+    // executable handles from that projection can leave a visually grounded
+    // turn with evidenceIds: [] even though the canonical rail is present.
+    const authoritativeEvidenceCopyHandles = [
+      ...buildCanvasV2EvidenceCopyHandles(body.revision.document),
+      ...uploadedImageEvidenceAssets.map((asset, index) => ({
+        handle: canvasV2ChatAttachmentHandle(asset.id, index),
+        evidenceId: asset.id,
+        nodeId: `human-supplied-image-${index + 1}`,
+        laneIndex: -1,
+        flowIndex: undefined as number | undefined,
+      })),
+    ];
+    const creativeEvidenceIdByHandle = new Map(authoritativeEvidenceCopyHandles.map(({ handle, evidenceId }) => [handle, evidenceId] as const));
     const creativeEvidenceHandleById = new Map(Array.from(creativeEvidenceIdByHandle, ([handle, evidenceId]) => [evidenceId, handle] as const));
     const creativeEvidenceDirectory = context.canonicalEvidence.map((flow) => ({
       flowId: flow.flowId,
       laneNodeId: flow.laneNodeId,
       screenCount: flow.screenCount,
-      identityAssets: flow.identityAssets.map(({ copyHandle, label, app, description }) => ({ evidenceHandle: copyHandle, label, app, description })),
-      screens: flow.screens.map(({ index, copyHandle, label, app, flow: screenFlow, screen }) => ({ index, evidenceHandle: copyHandle, label, app, flow: screenFlow, screen })),
+      identityAssets: flow.identityAssets.map(({ evidenceId, label, app, description }) => ({ evidenceHandle: creativeEvidenceHandleById.get(evidenceId), label, app, description })),
+      screens: flow.screens.map(({ index, evidenceId, label, app, flow: screenFlow, screen }) => ({ index, evidenceHandle: creativeEvidenceHandleById.get(evidenceId), label, app, flow: screenFlow, screen })),
     }));
+    const suppliedImageEvidenceDirectory = uploadedImageEvidenceAssets.map((asset, index) => ({
+      evidenceHandle: canvasV2ChatAttachmentHandle(asset.id, index),
+      label: asset.label,
+      description: asset.description,
+      mimeType: asset.mimeType,
+      authority: "human-supplied",
+      limitation: asset.limitations?.[0],
+    }));
+    const humanSuppliedVisualParts = firstSynthesisTurn && humanImagePixelsMaterial
+      ? (attachedImages.length
+          ? canvasV2ChatAttachmentModelParts(attachedImages, "low")
+          : canvasV2UploadedEvidenceModelParts(uploadedImageEvidenceAssets, "low"))
+        .slice(0, 2)
+      : [];
+    // The overview and selected detail crops are transported as image inputs
+    // below. The text envelope carries only factual geometry and integrity;
+    // serializing render pixels or the complete per-node inventory a second
+    // time wastes long-context cache writes and can turn a healthy later turn
+    // into a predictable preflight failure. This projection is deliberately
+    // stage-owned and quality preserving: the director keeps the full
+    // composition image, exact selected evidence crops, all authored-region
+    // geometry, collision truth, and canonical integrity.
+    const visualDirectorRender = {
+      viewport: context.render.viewport,
+      contentBounds: context.render.contentBounds,
+      runtimeErrors: context.render.runtimeErrors,
+      missingEvidenceIds: context.render.missingEvidenceIds,
+      overflow: context.render.overflow,
+      spatial: {
+        measuredNodeCount: context.render.spatial.measuredNodeCount,
+        notableIntersections: context.render.spatial.notableIntersections.slice(0, 24),
+        contentOverflowNodeIds: context.render.spatial.contentOverflowNodeIds.slice(0, 40),
+        analysisEvidenceGeometry: context.render.spatial.analysisEvidenceGeometry,
+        authoredRelationships: context.render.spatial.authoredRelationships,
+        authoredAnnotations: context.render.spatial.authoredAnnotations,
+        authoredSurface: context.render.spatial.authoredSurface,
+        canonicalEvidenceIntegrity: context.render.spatial.canonicalEvidenceIntegrity,
+      },
+    };
+    const requiredVisualEvidenceForBrief = (brief: ReturnType<typeof parseCreativeDirectorBrief>) => {
+      const groundedAnalyticalChapter = context.canonicalEvidence.some((flow) => flow.screens.some((screen) => creativeEvidenceHandleById.has(screen.evidenceId)))
+        && ["evidence-reading", "analysis", "comparison", "finding", "implication", "synthesis"].includes(brief.targetIsland.storyRole);
+      // A canonical screenshot rail is not merely prose context. Any authored
+      // chapter that interprets that rail must carry the exact visual witnesses
+      // it discusses, even when the person did not literally say "show the
+      // screenshots". The explicit phrase remains useful for other story roles,
+      // but evidence-reading may never degrade into SCREEN 3 / SCREEN 5 labels
+      // beside empty or text-only columns.
+      if ((!explicitVisualEvidenceRequested && !groundedAnalyticalChapter)
+        || brief.completionRecommendation === "complete"
+        || brief.targetIsland.storyRole === "title"
+        || !["create", "develop", "enrich", "repair"].includes(brief.targetIsland.action)) return;
+      const semanticTerms = new Set(normalizedMove([
+        instruction,
+        brief.materialMove,
+        brief.evidenceChoreography,
+      ].join(" ")).split(" ").filter((term) => term.length > 3));
+      // Identity is derived from the authoritative source manifest rather than
+      // the compact model context. The latter may omit identityAssets even
+      // while the exact icon is already present in the canonical rail, which
+      // previously forced a second visible repair just to replace an AWIN text
+      // tile with the real icon.
+      const identitySelections = Array.from(new Map(authoritativeEvidenceCopyHandles
+        .filter((binding) => binding.laneIndex >= 0 && binding.flowIndex === undefined)
+        .flatMap((binding) => {
+          const asset = body.revision!.evidence.find((candidate) => candidate.id === binding.evidenceId);
+          return asset ? [[binding.evidenceId, { asset, evidenceHandle: binding.handle }] as const] : [];
+        })).values())
+        .slice(0, Math.max(1, Math.min(3, context.canonicalEvidence.length)))
+        .map(({ asset, evidenceHandle }) => ({
+          evidenceHandle,
+          evidenceId: asset.id,
+          roleInArgument: `${asset.app ?? asset.label} grounded app identity`,
+          intendedTreatment: "Use the exact grounded app icon as a compact identity mark beside the analytical source label; never substitute a text tile, letter mark, or invented logo.",
+          scaleIntent: "identity-mark" as const,
+        }));
+      // The model owns the authored witness count. The compiler only guarantees
+      // one grounded visual witness per canonical lane when an analytical move
+      // omitted that lane entirely. The old global top-three fallback, combined
+      // with the eight-item ceiling and two app icons, repeatedly coerced a
+      // two-product comparison into exactly three screenshots per side.
+      const directorSelectedEvidenceIds = new Set(brief.evidenceSelections.map((selection) => selection.evidenceId));
+      const fallbackScreenSelections = context.canonicalEvidence.flatMap((flow) => {
+        // A fallback fills an omitted comparison side; it is not an automatic
+        // extra witness. Adding one screen to every already-covered lane made
+        // a four-checkpoint brief carry five images per app, and the source
+        // author correctly left the unsolicited fifth image outside its
+        // choreography where the compiler rendered it as an orphaned inbox.
+        if (flow.screens.some((screen) => directorSelectedEvidenceIds.has(screen.evidenceId))) return [];
+        const ranked = flow.screens
+          .flatMap((screen) => {
+            const evidenceHandle = creativeEvidenceHandleById.get(screen.evidenceId);
+            return evidenceHandle ? [{ screen, evidenceHandle }] : [];
+          })
+          .map(({ screen, evidenceHandle }) => {
+            const candidate = normalizedMove([screen.label, screen.flow, screen.screen].filter(Boolean).join(" "));
+            const score = Array.from(semanticTerms).reduce((total, term) => total + (candidate.includes(term) ? 1 : 0), 0);
+            return { screen, evidenceHandle, score };
+          })
+          .sort((left, right) => right.score - left.score
+            || (left.screen.index ?? Number.MAX_SAFE_INTEGER) - (right.screen.index ?? Number.MAX_SAFE_INTEGER));
+        return ranked.slice(0, 1);
+      });
+      const existingTargetEvidenceIds = new Set(authoritativeEvidenceCopyHandles
+        .map((binding) => binding.evidenceId)
+        .filter((evidenceId) => canvasV2IslandContainsEvidence(
+          body.revision!.document,
+          brief.targetIsland.islandId,
+          evidenceId,
+        )));
+      // A repair is a bounded correction, not another research-selection turn.
+      // Once an analytical island owns its screenshot witnesses, keep that
+      // exact set. Re-ranking on every private or visible repair used to append
+      // unrelated first/last screens, creating duplicate mini-flows and extra
+      // completion turns.
+      const existingScreenSelections = context.canonicalEvidence.flatMap((flow) => flow.screens)
+        .filter((screen) => existingTargetEvidenceIds.has(screen.evidenceId))
+        .flatMap((screen) => {
+          const evidenceHandle = creativeEvidenceHandleById.get(screen.evidenceId);
+          return evidenceHandle ? [{ screen, evidenceHandle }] : [];
+        });
+      const screenSelections = brief.targetIsland.action === "repair" && existingScreenSelections.length
+        ? existingScreenSelections
+        : fallbackScreenSelections;
+      const compiledScreenSelections = screenSelections
+        .map(({ screen, evidenceHandle }) => ({
+          evidenceHandle,
+          evidenceId: screen.evidenceId,
+          roleInArgument: `${screen.app ?? "Grounded"} screen ${screen.index}: ${screen.label}`,
+          intendedTreatment: "Show this exact canonical screenshot at inspectable peer scale inside the analytical argument, with its observed wording and exact provenance directly adjacent.",
+          scaleIntent: "peer" as const,
+        }));
+      brief.evidenceSelections = Array.from(new Map([
+        // Mandatory grounded identity and per-lane coverage are inserted first
+        // so a prolific model selection cannot crowd them out at the ceiling.
+        ...identitySelections,
+        ...compiledScreenSelections,
+        ...brief.evidenceSelections.filter((selection) => (
+          brief.targetIsland.action !== "repair"
+          || existingTargetEvidenceIds.has(selection.evidenceId)
+          || identitySelections.some((identity) => identity.evidenceId === selection.evidenceId)
+        )),
+      ].map((selection) => [selection.evidenceId, selection] as const)).values()).slice(0, CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS);
+      if (brief.evidenceSelections.length) {
+        const stripContradictoryCopyLanguage = (value: string) => value
+          .replace(/\b(?:rather than|instead of|without)\s+(?:reproducing|copying|duplicating|showing)\s+(?:the\s+)?screenshots?\b[,.]?/gi, "")
+          .replace(/\b(?:use|show)\s+(?:only\s+)?screen(?:-index)?\s+references?\s+(?:rather than|instead of)\s+(?:the\s+)?(?:actual\s+|exact\s+)?screenshots?\b[,.]?/gi, "")
+          .replace(/\s{2,}/g, " ")
+          .trim();
+        const executableEvidenceDirective = "Render every compiler-bound evidence selection as its exact app icon or screenshot inside this analytical island. A SCREEN N label or prose citation is not a visual substitute. Preserve the canonical source rail exactly once; these bounded analytical copies are evidence witnesses, not a duplicate flow.";
+        brief.materialMove = `${stripContradictoryCopyLanguage(brief.materialMove)} ${executableEvidenceDirective}`.trim();
+        brief.evidenceChoreography = `${stripContradictoryCopyLanguage(brief.evidenceChoreography)} ${executableEvidenceDirective}`.trim();
+      }
+    };
     const canonicalFactLedger = context.canonicalEvidence.map((flow) => ({
       app: flow.identityAssets.map((asset) => asset.app).find(Boolean)
         ?? flow.screens.map((screen) => screen.app).find(Boolean)
@@ -2174,14 +3263,20 @@ export async function POST(request: NextRequest) {
     const creativeSchema = creativeBriefSchemaForRevision(
       Array.from(creativeEvidenceIdByHandle.keys()),
       exactSourceTargetNodeIds,
-      [...existingIslandIds, allocatedIslandId, CANVAS_V2_WHOLE_BOARD_ISLAND_ID],
+      [...targetableExistingIslandIds, allocatedIslandId, CANVAS_V2_WHOLE_BOARD_ISLAND_ID],
     );
     const visualCadence = firstSynthesisTurn
-      ? {
+      ? complexEvidenceSynthesis
+        ? {
+          phase: "quick-visible-foundation",
+          instruction: `${renderedIntegrityInstruction}${convergenceInstruction}This is a substantial grounded comparison, so progressive materialization is binding. Author only a compact governing thesis and scope island in this first visible synthesis turn. Do not build the stage comparison, screenshot matrix, detailed findings, implication, recommendation, or conclusion yet. Keep those as explicit deferred semantic jobs for later independently editable territories after this render is observed. The opening should feel useful and finished at its own scale—not like loading furniture—and should trust the canvas surface rather than wrapping the thesis in a generic card.`,
+          suppliedContext: "The complete balanced canonical atlas is supplied for scope and thesis judgment. Detailed screenshot choreography belongs to the next observed comparison turn.",
+        }
+        : {
         phase: "quick-visible-foundation",
-        instruction: `${renderedIntegrityInstruction}${convergenceInstruction}Commit the narrative beginning quickly. Create exactly one resolved narrative-title island with a bounded collision-free footprint selected from the observed placement occupants and recommended open territories: a strong prompt-specific h1/h2, a useful descriptive paragraph, and a concise visual thesis. Place it near the beginning of the reading order without covering user objects or canonical evidence, and leave at least ${CANVAS_V2_WORKSPACE.documentMargin}px of deliberate negative space before the grounded-evidence island. Its width and wrapping must fit the real available territory; never simulate room with a camera offset or force a full-canvas strip. Give it storyRole=title and visual role narrative-title. Do not add comparison scaffolding or large evidence copies. Do not introduce SVG relationship geometry while the composition is still a scaffold. Declare at least three distinct deeper story moves for subsequent observed turns.`,
+        instruction: `${renderedIntegrityInstruction}${convergenceInstruction}Commit the first prompt-critical chapter quickly. Let discoveryMove determine whether that chapter is framing, evidence reading, comparison, analysis, a decision surface, or another model-authored form; never create a generic title merely because this is the first visible turn. Give the new island a bounded collision-free footprint selected from the observed placement occupants and recommended open territories. Make it complete enough to communicate one material idea, preserve the canvas surface as the default visual field, and do not introduce SVG relationship geometry while its endpoint composition is still a scaffold. Declare distinct deeper moves only when the inquiry actually warrants them.`,
         suppliedContext: "One balanced canonical atlas per visible lane is supplied. Other rail segments, readable authored-region captures, and visual-language calibration are progressively supplied on later observed turns.",
-      }
+        }
       : convergencePhase === "final-review"
         ? {
           phase: "final-review",
@@ -2205,18 +3300,30 @@ export async function POST(request: NextRequest) {
               instruction: `${renderedIntegrityInstruction}${convergenceInstruction}Deepen the prompt-specific visual thesis with one material visible move. Deliberately choose whether this belongs in an established region or a distinct evidence-relative island in an available zone. Preserve resolved strengths, exact evidence, and existing relationship geometry. Do not repeat the same container treatment under new wording.`,
               suppliedContext: "The whole-board overview is paired with bounded local captures and one rotating evidence atlas so each successful turn can remain prompt and visible quickly.",
             };
-    const closeOptionalResolvedRecompose = (brief: ReturnType<typeof parseCreativeDirectorBrief>) => {
-      if (
-        resolvedStory
-        && !explicitWholeBoardRecompositionRequested
-        && renderedIntegrityFailures.length === 0
-        && promptCoverageFailures.length === 0
-        && !renderRepair
-        && brief.completionRecommendation === "continue"
-        && brief.targetIsland.action === "recompose"
-      ) {
+    const closeOptionalResolvedContinuation = (brief: ReturnType<typeof parseCreativeDirectorBrief>) => {
+      if (requiresVisibleDiscoveryComposition) return brief;
+      if (shouldCompleteCanvasV2ResolvedOptionalContinuation({
+        resolvedStory,
+        explicitWholeBoardRecompositionRequested,
+        renderedIntegrityFailureCount: renderedIntegrityFailures.length,
+        promptCoverageFailureCount: promptCoverageFailures.length,
+        hasRenderRepair: Boolean(renderRepair),
+        completionRecommendation: brief.completionRecommendation,
+        targetAction: brief.targetIsland.action,
+        targetStoryRole: brief.targetIsland.storyRole,
+        instructionRequestsTitleAuthorship,
+        explicitRelationshipGeometryRequested,
+        prescribesOptionalRelationshipGeometry: canvasV2TextPrescribesRelationshipGeometry([
+          brief.materialMove,
+          brief.relationshipLogic,
+          brief.visualVocabulary,
+          ...brief.authoredVisualRoles,
+          ...brief.remainingOpportunities,
+          ...brief.nextMoves,
+        ].join(" ")),
+      })) {
         brief.completionRecommendation = "complete";
-        brief.completionRationale = "The verified committed canvas already contains every requested deliverable with resolved lifecycle and render integrity; an optional alternative layout is not a completion blocker.";
+        brief.completionRationale = "The verified committed canvas already contains every requested deliverable with resolved lifecycle and render integrity; optional publication framing is not a blocker, and an optional alternative layout is not a completion blocker.";
         brief.completionSummary = userFacingCompletionSummary({ ...brief, completionSummary: "" });
         brief.targetIsland = {
           action: "complete",
@@ -2236,6 +3343,58 @@ export async function POST(request: NextRequest) {
       }
       return brief;
     };
+    const requireVisibleDiscoveryComposition = (brief: ReturnType<typeof parseCreativeDirectorBrief>) => {
+      if (!requiresVisibleDiscoveryComposition || !requiredDiscoveryMove) return brief;
+      const existingTarget = requiredDiscoveryMove.kind === "integrate-validation"
+        ? islandRegistry.find((island) => island.storyRole !== "title") ?? islandRegistry[0]
+        : undefined;
+      const targetIslandId = existingTarget?.islandId ?? allocatedIslandId;
+      const targetStoryRole = existingTarget?.storyRole ?? "analysis";
+      brief.completionRecommendation = "continue";
+      brief.completionRationale = "Commit and observe the human-facing validation chapter required by the accepted discovery move before completing the inquiry.";
+      brief.completionSummary = "The validation decision will be complete after the required human-facing update is visibly committed and verified.";
+      brief.currentSemanticJob = requiredDiscoveryMove.kind === "integrate-validation"
+        ? "show the supplied findings, how they changed the view, and the resulting decision"
+        : "show the bounded human validation and its decision gate";
+      brief.deferredSemanticJobs = [];
+      brief.materialMove = requiredDiscoveryMove.kind === "integrate-validation"
+        ? "Update the existing validation chapter with the exact human-supplied findings, the strengthened or changed view, and the resulting decision gate outcome. This must be a visible canvas change, not a completion-only response."
+        : "Create the bounded human validation chapter selected by discovery, including its practical method, signals, and decision gate.";
+      brief.spatialDirection = existingTarget
+        ? "Preserve the chapter footprint and hierarchy while replacing its pending state with the supplied findings and decision outcome."
+        : "Place one collision-free validation chapter in the next narrative territory after the current understanding.";
+      brief.targetIsland = {
+        action: existingTarget ? "enrich" : "create",
+        islandId: targetIslandId,
+        storyRole: targetStoryRole,
+        resultingMaturity: "resolved",
+        resolutionRationale: "The chapter visibly communicates the human-owned validation result and its decision consequence.",
+        openRequirements: [],
+      };
+      brief.targetTerritory = {
+        ...brief.targetTerritory,
+        relation: existingTarget ? "within" : brief.targetTerritory.relation,
+        anchorNodeId: existingTarget?.nodeId ?? brief.targetTerritory.anchorNodeId,
+        placementMode: existingTarget?.placementMode ?? brief.targetTerritory.placementMode,
+        targetZoneId: existingTarget?.targetZoneId ?? brief.targetTerritory.targetZoneId,
+        rationale: existingTarget
+          ? "The returned findings belong inside the durable validation chapter they resolve."
+          : brief.targetTerritory.rationale,
+      };
+      brief.authoredVisualRoles = requiredDiscoveryMove.kind === "integrate-validation"
+        ? ["human-findings", "decision-outcome"]
+        : ["human-validation-plan", "decision-gate"];
+      brief.visualVocabulary = requiredDiscoveryMove.kind === "integrate-validation"
+        ? ["human-supplied findings", "threshold outcome emphasis", "editorial decision state"]
+        : ["human-owned validation", "observable signals", "decision gate"];
+      brief.compositionStrategy = existingTarget
+        ? "Enrich the existing validation chapter in place so the plan, returned findings, and decision form one continuous readable record."
+        : "Author one bounded validation chapter that reads from question to method to observable signals to decision gate.";
+      brief.relationshipLogic = "Keep the supplied findings, the existing threshold, and the selected outcome together inside the same durable chapter.";
+      brief.remainingOpportunities = [];
+      brief.nextMoves = [];
+      return brief;
+    };
     const preservedRepairBrief = repairExecution?.directorCheckpointJson
       ? normalizeCreativeDirectorExecutionContract(
           parseCreativeDirectorBrief(repairExecution.directorCheckpointJson, creativeEvidenceIdByHandle),
@@ -2246,6 +3405,7 @@ export async function POST(request: NextRequest) {
     let creativeBriefAttempts: CanvasV2ProviderError["providerAttempts"] = [];
     let creativeBriefFallbackUsed = false;
     let creativeBriefModel: string = modelSelection;
+    let targetedDiscoveryExpansionApplied = false;
     // Render repair is still the same uncommitted design transaction. Reuse
     // its validated visual-director checkpoint and ask only the bounded source
     // author to correct rejected geometry. Re-running creative direction here
@@ -2254,7 +3414,7 @@ export async function POST(request: NextRequest) {
     if (creativeDirectionTurn && !creativeCheckpointBrief) {
       const creativeBriefProvider = await fetchCanvasV2ProviderJsonWithModelChain<unknown>({
         models: modelChain,
-        maxInvalidResponsesPerModel: 4,
+        maxInvalidResponsesPerModel: CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS,
         requestSignal: request.signal,
         attemptRole: "visual-director",
         repairContextForAttempt: ({ repairAttempt }) => [
@@ -2267,10 +3427,10 @@ export async function POST(request: NextRequest) {
             : repairAttempt === 2
               ? "Rebuild the complete brief from the authoritative phase, render, and exact handles. Discard the rejected move and any contradictory remaining-opportunity or completion fields."
               : "Final repair: return the smallest internally coherent brief permitted by the current phase. Use one exact valid anchor, one deliberate target zone, a valid completion/continuation contract, and only evidence handles required by that move.",
-          `Authoritative islands: existing=${Array.from(existingIslandIds).join(", ") || "none"}; allocated-new=${allocatedIslandId}; whole-board=${CANVAS_V2_WHOLE_BOARD_ISLAND_ID}. Authoritative target zones: top-left, top-center, top-right, middle-left, middle-center, middle-right, bottom-left, bottom-center, bottom-right. Zones already carrying authored design regions: ${occupiedDesignZoneIds.join(", ") || "none"}. Zones currently crossed by canonical evidence: ${canonicalZoneIds.join(", ") || "none"}; choosing one requires real normal-flow reflow so the island is above/below/beside the complete evidence, never over it. Grounded evidence handles: ${Array.from(creativeEvidenceIdByHandle.keys()).slice(0, 80).join(", ")}. Exact existing anchor node IDs: ${exactSourceTargetNodeIds.slice(0, 80).join(", ")}.`,
+          `Authoritative writable islands: existing=${Array.from(targetableExistingIslandIds).join(", ") || "none"}; allocated-new=${allocatedIslandId}; whole-board=${CANVAS_V2_WHOLE_BOARD_ISLAND_ID}. Resolved title islands omitted from this writable list are read-only framing unless the user explicitly requested title work. Authoritative target zones: top-left, top-center, top-right, middle-left, middle-center, middle-right, bottom-left, bottom-center, bottom-right. Zones already carrying authored design regions: ${occupiedDesignZoneIds.join(", ") || "none"}. Zones currently crossed by canonical evidence: ${canonicalZoneIds.join(", ") || "none"}; choosing one requires real normal-flow reflow so the island is above/below/beside the complete evidence, never over it. Grounded evidence handles: ${Array.from(creativeEvidenceIdByHandle.keys()).slice(0, 80).join(", ")}. Exact existing anchor node IDs: ${exactSourceTargetNodeIds.slice(0, 80).join(", ")}.`,
         ].join("\n\n"),
         validatePayload: (payload, model) => {
-          const brief = closeOptionalResolvedRecompose(normalizeCreativeDirectorExecutionContract(
+          const brief = requireVisibleDiscoveryComposition(normalizeCanvasV2ExplicitSpatialRequest(normalizeCanvasV2ProgressiveComplexSynthesis(closeOptionalResolvedContinuation(normalizeCreativeDirectorExecutionContract(
             parseCreativeDirectorBrief(extractCanvasV2StructuredText(payload, model), creativeEvidenceIdByHandle),
             {
               islandRegistry,
@@ -2281,14 +3441,93 @@ export async function POST(request: NextRequest) {
               compactPlacementRequired: !/\b(?:expansive|panoramic|gallery[- ]scale|wall[- ]scale|large[- ]scale)\b|\bspread\b[^.]{0,48}\bacross\b[^.]{0,32}\bcanvas\b|\bwide\b[^.]{0,24}\bcanvas\b/i.test(instruction),
               localIntegrityRepairTarget,
               wholeBoardRecomposeRequested: explicitWholeBoardRecompositionRequested,
+              firstSynthesisTurn,
             },
-          ));
+          )), {
+            enabled: complexEvidenceSynthesis,
+            firstSynthesisTurn,
+            allocatedIslandId,
+            repairExecution,
+          }), instruction, {
+            allocatedIslandId,
+            designRegions: body.observation?.spatial.designRegions ?? [],
+          }));
+          if (brief.requestedDiscoveryNodeIds.length) {
+            const availableDiscoveryNodeIds = new Set([
+              ...context.discoveryModelContext.onDemand.availableNodeIds,
+              ...context.discoveryModelContext.stableReferences.map((reference) => reference.id),
+            ]);
+            const invalidNodeIds = brief.requestedDiscoveryNodeIds.filter((nodeId) => !availableDiscoveryNodeIds.has(nodeId));
+            if (invalidNodeIds.length) {
+              // An otherwise coherent visual decision must not be regenerated
+              // because the model echoed a graph identity that was not offered
+              // in the bounded expansion index. Drop only those clerical IDs;
+              // exact offered requests below retain their on-demand path.
+              brief.requestedDiscoveryNodeIds = brief.requestedDiscoveryNodeIds.filter((nodeId) => availableDiscoveryNodeIds.has(nodeId));
+            }
+            if (brief.requestedDiscoveryNodeIds.length && targetedDiscoveryExpansionApplied) {
+              throw new Error("The requested discovery detail is already supplied. Return requestedDiscoveryNodeIds=[] and make the visual decision from the expanded context.");
+            }
+            if (brief.requestedDiscoveryNodeIds.length) {
+              const expanded = buildCanvasV2BoundedModelContext(discoveryRevision, body.observation!, workingContext, {
+              instruction,
+              phase: modelContextPhase,
+              evidencePolicy,
+              contextProfile: `visual-director:${modelContextPhase}:expanded`,
+              previousDiscoveryWorkingSet: context.discoveryWorkingSet,
+              requestedDiscoveryNodeIds: brief.requestedDiscoveryNodeIds,
+              characterBudget: 8_000,
+              });
+              context = { ...context, ...expanded };
+              targetedDiscoveryExpansionApplied = true;
+              throw new Error(`Targeted discovery detail is now supplied for ${brief.requestedDiscoveryNodeIds.join(", ")}. Rebuild the brief from that evidence and return requestedDiscoveryNodeIds=[].`);
+            }
+          }
+          const projectedIndependentTerritoryCount = authoredIndependentTerritoryCount
+            + (brief.targetIsland.action === "create" && brief.targetIsland.storyRole !== "title" ? 1 : 0);
+          if (!renderRepair
+            && requiredIndependentTerritoryCount > projectedIndependentTerritoryCount
+            && !(complexEvidenceSynthesis && firstSynthesisTurn && brief.targetIsland.storyRole === "title")) {
+            // The model has already supplied the creative choice that matters:
+            // one current job and the later jobs it understood. If its prose
+            // still summarizes the whole arc, narrow those redundant planning
+            // fields deterministically instead of paying for a second visual-
+            // director call before the source author can execute the decision.
+            if (brief.targetIsland.action === "create"
+              && brief.targetIsland.storyRole !== "title"
+              && brief.deferredSemanticJobs.length >= requiredIndependentTerritoryCount - projectedIndependentTerritoryCount) {
+              brief.materialMove = `Create and resolve exactly one bounded ${brief.currentSemanticJob} chapter. Keep every deferred job outside this source patch.`;
+              brief.targetIsland.resolutionRationale = `This turn resolves only the ${brief.currentSemanticJob} job; every deferred job remains outside the island until a later observed transaction.`;
+              brief.completionRecommendation = "continue";
+              brief.completionRationale = `Observe the committed ${brief.currentSemanticJob} chapter before authoring the next independently editable job.`;
+              brief.remainingOpportunities = [...brief.deferredSemanticJobs];
+              brief.nextMoves = brief.deferredSemanticJobs.map((job) => `After observing this chapter, create a separate independently editable territory for ${job}.`).slice(0, 5);
+            }
+            const atomicPlanFailures = validateCanvasV2AtomicTerritoryPlan({
+              requiredCount: requiredIndependentTerritoryCount,
+              observedCount: authoredIndependentTerritoryCount,
+              createsNonTitleTerritory: brief.targetIsland.action === "create" && brief.targetIsland.storyRole !== "title",
+              action: brief.targetIsland.action,
+              storyRole: brief.targetIsland.storyRole,
+              currentSemanticJob: brief.currentSemanticJob,
+              deferredSemanticJobs: brief.deferredSemanticJobs,
+              materialMove: brief.materialMove,
+              completionRationale: brief.completionRationale,
+              resolutionRationale: brief.targetIsland.resolutionRationale,
+              remainingOpportunities: brief.remainingOpportunities,
+              nextMoves: brief.nextMoves,
+            });
+            if (atomicPlanFailures.length) {
+              throw new Error(`This discovery plan requires ${requiredIndependentTerritoryCount} independently editable non-title territories, but this brief would leave only ${projectedIndependentTerritoryCount}. ${atomicPlanFailures.join(" ")}`);
+            }
+          }
           if (explicitRelationshipRefinementRequested
             && ["develop", "enrich", "repair"].includes(brief.targetIsland.action)
             && brief.targetIsland.storyRole === "relationship") {
             brief.targetIsland.resultingMaturity = "resolved";
             brief.targetIsland.openRequirements = [];
           }
+          requiredVisualEvidenceForBrief(brief);
           if (repairExecution) {
             const expected = repairExecution.target;
             const actual = brief.targetIsland;
@@ -2312,12 +3551,6 @@ export async function POST(request: NextRequest) {
             if (brief.targetTerritory.placementMode !== "evidence-relative-island" && brief.targetTerritory.placementMode !== "interleaved") {
               throw new Error("A newly created island must occupy a purposeful evidence-relative or explicitly interleaved territory; attached is reserved for developing an existing island.");
             }
-            if (brief.targetIsland.storyRole !== "title" && brief.targetTerritory.targetZoneId === "top-left") {
-              throw new Error("The top-left story beginning is permanently reserved for the board's single title-and-description island. Place this non-title island in another purposeful zone.");
-            }
-            if (brief.targetIsland.storyRole === "title" && brief.targetTerritory.targetZoneId !== "top-left") {
-              throw new Error("The board's title-and-description island must occupy the reserved top-left story beginning.");
-            }
           } else if (targetsExistingIsland && !existingIslandIds.has(brief.targetIsland.islandId)) {
             throw new Error(`${islandAction} must target one exact existing island from the registry: ${Array.from(existingIslandIds).join(", ") || "none"}.`);
           } else if ((islandAction === "recompose" || islandAction === "complete") && brief.targetIsland.islandId !== CANVAS_V2_WHOLE_BOARD_ISLAND_ID) {
@@ -2336,17 +3569,14 @@ export async function POST(request: NextRequest) {
             if (inventedRequirements.length) {
               throw new Error(`Island ${existingTargetIsland.islandId} already has an authoritative finishing contract. Its remaining openRequirements may only retain or remove these exact obligations as they are satisfied: ${existingTargetIsland.openRequirements.join(" | ") || "none"}. Do not replace them with new polish goals: ${inventedRequirements.join(" | ")}.`);
             }
-            const targetTurns = islandCommitCountById.get(existingTargetIsland.islandId) ?? 0;
-            const reducedRequirements = brief.targetIsland.openRequirements.length < existingTargetIsland.openRequirements.length;
-            const selectedEvidenceIds = new Set(brief.evidenceSelections.map((selection) => selection.evidenceId));
-            const closesMissingEvidence = existingTargetIsland.missingRequiredEvidenceIds.some((evidenceId) => selectedEvidenceIds.has(evidenceId));
-            if (brief.targetIsland.resultingMaturity === "developing"
-              && targetTurns >= 3
-              && !reducedRequirements
-              && !closesMissingEvidence
-              && !renderRepair) {
-              throw new Error(`Island ${existingTargetIsland.islandId} has already received ${targetTurns} committed design turns without closing a declared obligation. This is a lifecycle convergence checkpoint, not a turn cap: visibly satisfy at least one exact open requirement now and remove it, or mark the fully composed island resolved with an empty openRequirements list.`);
-            }
+            // Committed-turn counts are observability, never execution
+            // authority. Earlier versions rejected an otherwise executable
+            // brief after three edits unless it closed a lifecycle item. That
+            // made long-form, high-quality composition brittle and converted
+            // an evaluation signal into another provider call. The exact open
+            // requirements still remain compiler-owned and completion stays
+            // blocked until they are satisfied; no arbitrary count may reject
+            // the next material move.
           }
           if (!explicitRelationshipGeometryRequested) {
             const optionalGeometryRequirements = brief.targetIsland.openRequirements.filter(canvasV2TextPrescribesRelationshipGeometry);
@@ -2370,21 +3600,21 @@ export async function POST(request: NextRequest) {
           // hierarchy or evidence problem. The convergence instruction carries
           // the full ledger; only provenance, lifecycle truth, and render
           // safety can reject the response.
-          if (existingTargetIsland?.storyRole === "title") {
-            if (brief.targetTerritory.targetZoneId !== "top-left" || brief.targetTerritory.placementMode === "interleaved" || brief.targetTerritory.placementMode === "recompose") {
-              throw new Error(`Title island ${existingTargetIsland.islandId} must remain in its reserved top-left story beginning and outside the canonical evidence.`);
+          if (brief.targetIsland.storyRole === "title") {
+            if (brief.targetTerritory.placementMode === "interleaved" || brief.targetTerritory.placementMode === "recompose") {
+              throw new Error(`Title island ${brief.targetIsland.islandId} must remain a bounded framing chapter outside canonical evidence.`);
             }
             if (brief.evidenceSelections.some((selection) => selection.scaleIntent !== "identity-mark")) {
-              throw new Error(`Title island ${existingTargetIsland.islandId} cannot absorb screenshot-led comparison or analysis. Put that evidence in a separate story island.`);
+              throw new Error(`Title island ${brief.targetIsland.islandId} cannot absorb screenshot-led comparison or analysis. Put that evidence in a separate story island.`);
             }
             if (brief.authoredVisualRoles.some((role) => !/(?:title|orientation|thesis|framing|kicker)/i.test(role))) {
-              throw new Error(`Title island ${existingTargetIsland.islandId} may only carry title, orientation, thesis, framing, or kicker visual roles; create a separate island for comparison or analysis.`);
+              throw new Error(`Title island ${brief.targetIsland.islandId} may only carry title, orientation, thesis, framing, or kicker visual roles; use another story role for comparison or analysis.`);
             }
-            const titleNeedsLifecycleWork = existingTargetIsland.maturity !== "resolved"
+            const titleNeedsLifecycleWork = existingTargetIsland && (existingTargetIsland.maturity !== "resolved"
               || existingTargetIsland.openRequirements.length > 0
-              || existingTargetIsland.missingRequiredEvidenceIds.length > 0;
-            if (!titleNeedsLifecycleWork && !renderRepair && !instructionRequestsTitleAuthorship) {
-              throw new Error(`Title island ${existingTargetIsland.islandId} is already resolved and permanently reserved as framing. Create or continue a separate story island for this non-title move.`);
+              || existingTargetIsland.missingRequiredEvidenceIds.length > 0);
+            if (existingTargetIsland && !titleNeedsLifecycleWork && !renderRepair && !instructionRequestsTitleAuthorship) {
+              throw new Error(`Title island ${existingTargetIsland.islandId} is already resolved as framing. Create or continue a separate story island for this non-title move.`);
             }
           }
           if ((islandAction === "recompose" || islandAction === "complete") && brief.targetIsland.storyRole !== "whole-board") {
@@ -2405,8 +3635,8 @@ export async function POST(request: NextRequest) {
           if (brief.completionRecommendation === "complete" && unfinishedIslands.length) {
             throw new Error(`Whole-board completion is blocked by unfinished island lifecycle state. Target and finish these exact islands before another completion review: ${unfinishedIslands.map((island) => `${island.islandId}${island.openRequirements.length ? ` [${island.openRequirements.join("; ")}]` : ""}${island.missingRequiredEvidenceIds.length ? ` [missing evidence: ${island.missingRequiredEvidenceIds.join(", ")}]` : ""}`).join(", ")}.`);
           }
-          if (brief.completionRecommendation === "complete" && titleIslands.length !== 1) {
-            throw new Error(`Whole-board completion requires exactly one resolved title-and-description island above the evidence; observed ${titleIslands.length}.`);
+          if (brief.completionRecommendation === "complete" && titleIslands.length > 1) {
+            throw new Error(`Whole-board completion permits at most one title-and-description island; observed ${titleIslands.length}.`);
           }
           if (brief.completionRecommendation === "complete" && titleIslands.some((island) => island.maturity !== "resolved" || island.openRequirements.length || island.missingRequiredEvidenceIds.length)) {
             throw new Error("Whole-board completion requires the title-and-description island itself to be fully resolved.");
@@ -2423,17 +3653,6 @@ export async function POST(request: NextRequest) {
           if (firstSynthesisTurn && islandAction !== "create") {
             throw new Error(`The first synthesis turn must create the first server-allocated analytical island: ${allocatedIslandId}.`);
           }
-          if (firstSynthesisTurn && (
-            brief.targetIsland.storyRole !== "title"
-            || brief.targetIsland.resultingMaturity !== "resolved"
-            || brief.targetIsland.openRequirements.length
-            || brief.targetTerritory.relation !== "above"
-            || brief.targetTerritory.placementMode !== "evidence-relative-island"
-            || brief.targetTerritory.targetZoneId !== "top-left"
-            || !brief.authoredVisualRoles.includes("narrative-title")
-          )) {
-            throw new Error("The first synthesis turn must completely compose the single narrative-title island above the canonical evidence in top-left territory: storyRole=title, resultingMaturity=resolved, no open requirements, relation=above, placementMode=evidence-relative-island, targetZoneId=top-left, authoredVisualRoles including narrative-title.");
-          }
           // Foundation breadth, repetition redirection, and final-review focus
           // are advisory design intelligence. They deliberately remain in the
           // phase prompt instead of triggering a second provider call after a
@@ -2443,6 +3662,7 @@ export async function POST(request: NextRequest) {
           }
           if (
             resolvedStory
+            && !requiresVisibleDiscoveryComposition
             && acceptedWholeBoardRecompositions > 0
             && renderedIntegrityFailures.length === 0
             && !renderRepair
@@ -2452,6 +3672,7 @@ export async function POST(request: NextRequest) {
           }
           if (
             resolvedStory
+            && !requiresVisibleDiscoveryComposition
             && existingRelationshipCount === 0
             && !explicitRelationshipGeometryRequested
             && renderedIntegrityFailures.length === 0
@@ -2470,6 +3691,7 @@ export async function POST(request: NextRequest) {
           }
           if (
             resolvedStory
+            && !requiresVisibleDiscoveryComposition
             && repeatedLocalWork
             && !explicitRelationshipRefinementRequested
             && renderedIntegrityFailures.length === 0
@@ -2480,6 +3702,7 @@ export async function POST(request: NextRequest) {
           }
           if (
             resolvedStory
+            && !requiresVisibleDiscoveryComposition
             && repeatedResolvedIslandRefinement
             && !explicitRelationshipRefinementRequested
             && renderedIntegrityFailures.length === 0
@@ -2522,13 +3745,27 @@ export async function POST(request: NextRequest) {
                   priorSteps: priorSteps.slice(-6),
                   recentDesignMoves: priorSteps.filter((step) => step.kind === "design").slice(-6).map((step) => ({ moveKind: step.moveKind, summary: step.summary, expectedVisualResult: step.expectedVisualResult })),
                   canonicalEvidence: creativeEvidenceDirectory,
+                  humanSuppliedImageEvidence: suppliedImageEvidenceDirectory,
+                  humanSuppliedTextEvidence: attachedTexts.map((attachment) => ({
+                    name: attachment.name,
+                    authority: "human-supplied",
+                    exactText: attachment.text,
+                  })),
                   islandRegistry,
+                  independentTerritoryContract: {
+                    requiredCount: requiredIndependentTerritoryCount,
+                    observedCount: authoredIndependentTerritoryCount,
+                    projectedCountAfterCreate: authoredIndependentTerritoryCount + 1,
+                  },
                   islandDevelopmentLedger,
                   canonicalEvidenceZoneIds: canonicalZoneIds,
                   allocatedNewIslandId: allocatedIslandId,
                   wholeBoardIslandId: CANVAS_V2_WHOLE_BOARD_ISLAND_ID,
                   authoritativeCanonicalFacts: canonicalFactLedger,
-                  render: context.render,
+                  discoveryModelContext: context.discoveryModelContext,
+                  discoveryContextReceipt: context.discoveryContextReceipt,
+                  discoveryContract: context.discoveryContract,
+                  render: visualDirectorRender,
                   visualCadence,
                   convergencePhase,
                   lateStageConvergence,
@@ -2536,20 +3773,32 @@ export async function POST(request: NextRequest) {
                   explicitRelationshipGeometryRequested,
                   acceptedWholeBoardRecompositions,
                   renderRepair,
+                  privateRecovery,
                   repairExecutionContract: repairExecution,
                   phaseAuthority: `The current ${convergencePhase} phase changes review emphasis, not completion eligibility. Completion remains model-decided after factual, lifecycle, evidence, geometry, and whole-board reconciliation.`,
                 }) },
                 { text: "Current rendered canvas overview:" },
                 { inlineData: image },
-                ...railDetailParts,
-                ...designDetailParts,
-                ...designReferenceParts,
+                ...(correction ? [] : humanSuppliedVisualParts.length ? [
+                  { text: "Human-supplied image evidence. Use the directory handles when—and only when—an exact supplied image materially strengthens this island. Never redraw, approximate, or automatically place every attachment." },
+                  ...humanSuppliedVisualParts,
+                ] : [
+                  ...railDetailParts,
+                  ...designDetailParts,
+                  ...designReferenceParts,
+                ]),
             ],
+            maxInputImages: 3,
+            // This is a hard provider-safety ceiling, not a target and never a
+            // user-facing workflow gate. The stage-owned projections above
+            // keep normal requests far below it while preserving enough
+            // headroom for unusually rich multi-source client canvases.
+            maxTextCharacters: 360_000,
           });
-          return { url: providerRequest.url, init: providerRequest.init };
+          return { url: providerRequest.url, init: providerRequest.init, audit: providerRequest.audit };
         },
       });
-      creativeCheckpointBrief = closeOptionalResolvedRecompose(normalizeCreativeDirectorExecutionContract(
+      creativeCheckpointBrief = requireVisibleDiscoveryComposition(normalizeCanvasV2ExplicitSpatialRequest(normalizeCanvasV2ProgressiveComplexSynthesis(closeOptionalResolvedContinuation(normalizeCreativeDirectorExecutionContract(
         parseCreativeDirectorBrief(
           extractCanvasV2StructuredText(creativeBriefProvider.payload, creativeBriefProvider.model),
           creativeEvidenceIdByHandle,
@@ -2568,24 +3817,32 @@ export async function POST(request: NextRequest) {
           compactPlacementRequired: !/\b(?:expansive|panoramic|gallery[- ]scale|wall[- ]scale|large[- ]scale)\b|\bspread\b[^.]{0,48}\bacross\b[^.]{0,32}\bcanvas\b|\bwide\b[^.]{0,24}\bcanvas\b/i.test(instruction),
           localIntegrityRepairTarget,
           wholeBoardRecomposeRequested: explicitWholeBoardRecompositionRequested,
+          firstSynthesisTurn,
         },
-      ));
+      )), {
+        enabled: complexEvidenceSynthesis,
+        firstSynthesisTurn,
+        allocatedIslandId,
+        repairExecution,
+      }), instruction, {
+        allocatedIslandId,
+        designRegions: body.observation?.spatial.designRegions ?? [],
+      }));
+      // validatePayload works on a parsed copy. Reapply deterministic compiler
+      // enrichments to the accepted execution object instead of throwing those
+      // selections away when the provider payload is parsed a second time.
+      // Without this, the director could correctly describe an exact icon and
+      // screenshot while the source-author contract still received zero handles.
+      if (explicitRelationshipRefinementRequested
+        && ["develop", "enrich", "repair"].includes(creativeCheckpointBrief.targetIsland.action)
+        && creativeCheckpointBrief.targetIsland.storyRole === "relationship") {
+        creativeCheckpointBrief.targetIsland.resultingMaturity = "resolved";
+        creativeCheckpointBrief.targetIsland.openRequirements = [];
+      }
+      requiredVisualEvidenceForBrief(creativeCheckpointBrief);
       creativeBriefAttempts = creativeBriefProvider.attempts;
       creativeBriefFallbackUsed = creativeBriefProvider.fallbackUsed;
       creativeBriefModel = creativeBriefProvider.model;
-      if (process.env.NODE_ENV !== "production") console.info("[canvas-v2] visual director brief", {
-        model: creativeBriefProvider.model,
-        recommendation: creativeCheckpointBrief.completionRecommendation,
-        targetIsland: creativeCheckpointBrief.targetIsland,
-        territory: {
-          placementMode: creativeCheckpointBrief.targetTerritory.placementMode,
-          targetZoneId: creativeCheckpointBrief.targetTerritory.targetZoneId,
-        },
-        materialMove: creativeCheckpointBrief.materialMove,
-        evidenceIds: creativeCheckpointBrief.evidenceSelections.map((selection) => selection.evidenceId),
-        visualRoles: creativeCheckpointBrief.authoredVisualRoles,
-        attempts: creativeBriefProvider.attempts,
-      });
     }
     if (
       creativeCheckpointBrief?.completionRecommendation === "complete"
@@ -2614,7 +3871,7 @@ export async function POST(request: NextRequest) {
         ...designRegionTerritoryFailures,
         ...islandNarrativeFailures,
         ...relationshipGeometryFailures,
-        ...validateCanvasV2RenderedComparisonCommunication(body.observation, instruction),
+        ...validateCanvasV2RenderedComparisonCommunication(body.observation, instruction, { finalWholeBoard: true }),
         ...validateCanvasV2ClaimedCanonicalFlowCounts(body.revision.document, body.revision.evidence),
         ...validateCanvasV2GroundedAppIdentityUsage(body.revision.document, body.revision.evidence),
         ...validateCanvasV2RequestedAnalysisEvidenceUsage(body.revision.document, body.revision.evidence, instruction),
@@ -2627,20 +3884,34 @@ export async function POST(request: NextRequest) {
         const completion = resolveCanvasV2ResearchCompletion(research, proposedCompletion.summary, body.revision.document.html);
         if (completion.unresolved.length) throw new Error(`The visible canvas is not ready to complete. Ground the available required app${completion.unresolved.length === 1 ? "" : "s"}: ${completion.unresolved.join(", ")}.`);
         if (completion.unacknowledgedUnavailable.length) throw new Error(`The visible canvas is not ready to complete. Make the unavailable research explicit on the canvas: ${completion.unacknowledgedUnavailable.join(", ")}.`);
+        const completedDiscoveryState = completeCanvasV2DiscoveryState({
+          state: discoveryState,
+          summary: completion.summary,
+          graphRevisionId: discoveryRevision.discoveryGraph?.revisionId,
+          now: new Date().toISOString(),
+          runtimeVerified: true,
+        });
         return NextResponse.json({
           decision: { ...proposedCompletion, summary: completion.summary },
           evidence: body.revision.evidence,
           researchStatus: canvasV2ResearchStatusForDecision(research),
+          discoveryState: completedDiscoveryState,
+          discoveryProgress: { stage: "concluding", label: "Understanding resolved", detail: completion.summary },
           model: creativeBriefModel,
-          fallbackUsed: creativeBriefFallbackUsed,
-          providerAttempts: creativeBriefAttempts,
+          fallbackUsed: discoveryDirectorFallbackUsed || creativeBriefFallbackUsed,
+          providerAttempts: [...(discoveryDirectorAttempts ?? []), ...(creativeBriefAttempts ?? [])],
         });
       }
       const missingIdentitySelections = context.canonicalEvidence.flatMap((flow) => flow.identityAssets)
-        .filter((asset): asset is typeof asset & { copyHandle: string } => Boolean(asset.copyHandle) && !body.revision!.document.html.includes(`data-canvas-v2-copy-evidence-id="${asset.evidenceId}"`))
+        .flatMap((asset) => {
+          const evidenceHandle = creativeEvidenceHandleById.get(asset.evidenceId);
+          return evidenceHandle && !body.revision!.document.html.includes(`data-canvas-v2-copy-evidence-id="${asset.evidenceId}"`)
+            ? [{ asset, evidenceHandle }]
+            : [];
+        })
         .slice(0, 8)
-        .map((asset) => ({
-          evidenceHandle: asset.copyHandle,
+        .map(({ asset, evidenceHandle }) => ({
+          evidenceHandle,
           evidenceId: asset.evidenceId,
           roleInArgument: `${asset.app} grounded app identity`,
           intendedTreatment: "Place the exact grounded icon beside the existing app label inside the established analytical composition.",
@@ -2653,16 +3924,19 @@ export async function POST(request: NextRequest) {
             ? flow.screens
             : [flow.screens[0], flow.screens[flow.screens.length - 1]];
           return representativeScreens
-            .filter((screen): screen is typeof screen & { copyHandle: string } => Boolean(screen.copyHandle))
-            .map((screen) => ({
-              evidenceHandle: screen.copyHandle,
+            .flatMap((screen) => {
+              const evidenceHandle = creativeEvidenceHandleById.get(screen.evidenceId);
+              return evidenceHandle ? [{ screen, evidenceHandle }] : [];
+            })
+            .map(({ screen, evidenceHandle }) => ({
+              evidenceHandle,
               evidenceId: screen.evidenceId,
               roleInArgument: `${screen.app ?? "Grounded"} representative onboarding evidence`,
               intendedTreatment: "Place this exact canonical screen at inspectable peer scale inside the analytical comparison and make its observed interface carry part of the argument.",
               scaleIntent: "peer" as const,
             }));
         }),
-      ].map((selection) => [selection.evidenceId, selection] as const)).values()).slice(0, 8);
+      ].map((selection) => [selection.evidenceId, selection] as const)).values()).slice(0, CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS);
       const titleOnlyFailure = completionFailures.every((failure) => /\btitle\b/i.test(failure));
       const completionRepairIsland = unfinishedIslands.find((island) => island.storyRole !== "title")
         ?? unfinishedIslands[0]
@@ -2735,15 +4009,8 @@ export async function POST(request: NextRequest) {
       : undefined;
     const focusedIslandDetailParts = focusedIslandDetail ? [
       { text: `Focused target-island capture: ${focusedIslandDetail.label} [island ${focusedIsland!.islandId}; node ${focusedIslandDetail.nodeId}; ${focusedIslandDetail.width}×${focusedIslandDetail.height} canvas units; center ${focusedIslandDetail.centerXShare},${focusedIslandDetail.centerYShare}; area share ${focusedIslandDetail.canvasAreaShare}; reading position ${focusedIslandDetail.readingIndex}${focusedIslandDetail.visualRole ? `; visual role ${focusedIslandDetail.visualRole}` : ""}]. This is the exact island selected by the programmatic execution contract.` },
-      { inlineData: parseDataUrl(focusedIslandDetail.screenshotDataUrl) },
+      { inlineData: modelImage(focusedIslandDetail.screenshotDataUrl, "high", "focused-island") },
     ] : [];
-    const supplementalDesignDetailParts = selectedDesignDetails
-      .filter((detail) => detail.nodeId !== focusedIslandDetail?.nodeId)
-      .slice(0, 3)
-      .flatMap((detail) => [
-        { text: `Surrounding authored-island capture: ${detail.label} [node ${detail.nodeId}; ${detail.width}×${detail.height} canvas units; center ${detail.centerXShare},${detail.centerYShare}; area share ${detail.canvasAreaShare}; reading position ${detail.readingIndex}${detail.visualRole ? `; visual role ${detail.visualRole}` : ""}].` },
-        { inlineData: parseDataUrl(detail.screenshotDataUrl) },
-      ]);
     const focusedCompositionRegion = creativeCheckpointBrief
       ? currentCompositionState?.regions.find((region) => (
         region.islandId === creativeCheckpointBrief!.targetIsland.islandId
@@ -2761,23 +4028,58 @@ export async function POST(request: NextRequest) {
     ));
     const sourceAuthorRevision = creativeCheckpointBrief && focusedIsland
       ? bindCanvasV2SelectedEvidenceToExistingIsland({
-          revision: body.revision,
+          revision: discoveryRevision,
           islandId: creativeCheckpointBrief.targetIsland.islandId,
           evidenceIds: newlyRequiredEvidenceIds,
           evidenceHandleById: creativeEvidenceHandleById,
           scaleIntentByEvidenceId,
         })
-      : body.revision;
+      : discoveryRevision;
     const sourceAuthorExistingIslandIds = canvasV2CommittedIslandIdsForSourceValidation(
       existingIslandIds,
       renderRepair ? repairExecution : undefined,
     );
-    const sourceAuthorModelContext = buildCanvasV2BoundedModelContext(sourceAuthorRevision, body.observation, workingContext);
+    const sourceAuthorModelContext = buildCanvasV2BoundedModelContext(sourceAuthorRevision, body.observation, workingContext, {
+      instruction,
+      phase: renderRepair ? "revision" : "composition",
+      evidencePolicy,
+      contextProfile: `source-author:${renderRepair ? "revision" : "composition"}:compact`,
+    });
     const focusedIslandSource = compactCanvasV2IslandSourceForModel(sourceAuthorRevision, focusedIsland?.nodeId);
     const sourceAuthorEditableNodeIds = Array.from(
       (focusedIslandSource ?? sourceAuthorModelContext.source.htmlOutline).matchAll(/\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/gi),
       (match) => match[1],
     ).filter((nodeId, index, all) => all.indexOf(nodeId) === index).slice(0, 180);
+    const sourceAuthorTargetIslandId = creativeCheckpointBrief?.targetIsland.islandId;
+    const sourceAuthorEvidenceIds = new Set(durableRequiredEvidenceIds);
+    const sourceAuthorRender = {
+      viewport: sourceAuthorModelContext.render.viewport,
+      contentBounds: sourceAuthorModelContext.render.contentBounds,
+      runtimeErrors: sourceAuthorModelContext.render.runtimeErrors,
+      missingEvidenceIds: sourceAuthorModelContext.render.missingEvidenceIds,
+      overflow: sourceAuthorModelContext.render.overflow,
+      spatial: {
+        measuredNodeCount: sourceAuthorModelContext.render.spatial.measuredNodeCount,
+        notableIntersections: sourceAuthorModelContext.render.spatial.notableIntersections.slice(0, 20),
+        contentOverflowNodeIds: sourceAuthorModelContext.render.spatial.contentOverflowNodeIds.slice(0, 30),
+        analysisEvidenceGeometry: sourceAuthorModelContext.render.spatial.analysisEvidenceGeometry.filter((item) => (
+          item.designRegionNodeId === sourceAuthorTargetIslandId
+          || sourceAuthorEvidenceIds.has(item.evidenceId)
+        )),
+        authoredRelationships: sourceAuthorModelContext.render.spatial.authoredRelationships.slice(0, 24),
+        authoredAnnotations: sourceAuthorModelContext.render.spatial.authoredAnnotations.slice(0, 24),
+        authoredSurface: sourceAuthorModelContext.render.spatial.authoredSurface,
+        canonicalEvidenceIntegrity: sourceAuthorModelContext.render.spatial.canonicalEvidenceIntegrity,
+      },
+    };
+    const sourceAuthorRenderRepair = renderRepair ? {
+      attempt: renderRepair.attempt,
+      maxAttempts: renderRepair.maxAttempts,
+      failures: renderRepair.failures.slice(-8),
+      ...(renderRepair.failedMove ? { failedMove: renderRepair.failedMove } : {}),
+      ...(renderRepair.islandExecution ? { islandExecution: renderRepair.islandExecution } : {}),
+      contract: "Repair the exact private candidate supplied as focusedIslandSource. The full rejected render remains browser-owned; these failures and the focused geometry are the complete corrective authority.",
+    } : undefined;
     const compilerBoundEvidenceHandles = newlyRequiredEvidenceIds.flatMap((evidenceId) => {
       const handle = creativeEvidenceHandleById.get(evidenceId);
       return focusedIsland && handle ? [handle] : [];
@@ -2790,15 +4092,45 @@ export async function POST(request: NextRequest) {
       instruction,
       revisionId: body.revision.id,
       collaboration: sourceAuthorModelContext.collaboration,
-      source: sourceAuthorModelContext.source,
-      render: context.render,
+      source: focusedIslandSource ? {
+        ...sourceAuthorModelContext.source,
+        // focusedIslandSource below is the lossless editable excerpt. Do not
+        // duplicate the complete 42K board outline in an existing-island turn;
+        // stable registry, render geometry, and editable IDs retain context.
+        htmlOutline: `<canvas-v2-focused-source island="${creativeCheckpointBrief?.targetIsland.islandId ?? "unknown"}" editable-node-count="${sourceAuthorEditableNodeIds.length}">Use focusedIslandSource for exact editable markup; every other board object is preserved server-side.</canvas-v2-focused-source>`,
+      } : sourceAuthorModelContext.source,
+      // The visual director has already converted discovery memory into the
+      // exact accepted execution brief below. Replaying the graph, state, and
+      // move to the source author is both wasteful and ambiguous: it invites
+      // a second planning pass instead of faithful visual execution. Preserve
+      // the natural-language meaning plus the complete grounded packets,
+      // canonical facts, render geometry, source, and exact evidence handles.
+      userFacingSensemaking: buildCanvasV2SensemakingPresentationBrief(discoveryState),
+      groundedEvidencePackets: sourceAuthorModelContext.groundedEvidencePackets,
+      humanSuppliedTextEvidence: attachedTexts.map((attachment) => ({
+        name: attachment.name,
+        authority: "human-supplied",
+        exactText: attachment.text,
+      })),
+      render: sourceAuthorRender,
       authoritativeCanonicalFacts: canonicalFactLedger,
       authoritativeFactInstruction: "These app-to-flow screen counts are exact and app-specific. Never copy one app's count into another app's label, prose, annotation, summary, or completion response.",
       visualCadence,
       convergencePhase,
-      renderRepair,
+      renderRepair: sourceAuthorRenderRepair,
+      privateRecovery,
       relationshipGeometryAllowed,
       islandRegistry,
+      independentTerritoryContract: {
+        requiredCount: requiredIndependentTerritoryCount,
+        observedCount: authoredIndependentTerritoryCount,
+        projectedCountAfterThisTurn: authoredIndependentTerritoryCount + (
+          creativeCheckpointBrief?.targetIsland.action === "create"
+          && creativeCheckpointBrief.targetIsland.storyRole !== "title"
+            ? 1
+            : 0
+        ),
+      },
       focusedIslandSource,
       ...(creativeCheckpointBrief ? {
         executionContract: {
@@ -2830,7 +4162,7 @@ export async function POST(request: NextRequest) {
     };
     const provider = await fetchCanvasV2ProviderJsonWithModelChain<unknown>({
       models: modelChain,
-      maxInvalidResponsesPerModel: 4,
+      maxInvalidResponsesPerModel: CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS,
       requestSignal: request.signal,
       attemptRole: "source-author",
       repairContextForAttempt: ({ repairAttempt }) => renderRepair
@@ -2839,7 +4171,7 @@ export async function POST(request: NextRequest) {
           : `This is hidden render repair pass ${renderRepair.attempt}, not a new design turn. Keep the preserved visual-director checkpoint unchanged and correct the exact rejected candidate island ${creativeCheckpointBrief?.targetIsland.islandId} in place. The create transaction already exists in focusedIslandSource; never append a duplicate. Exact rendered failures: ${renderRepair.failures.join(" ")}`
         : repairAttempt === 1
           ? `Keep the visual-director move unchanged. Correct the rejected patch for island action ${creativeCheckpointBrief?.targetIsland.action} on exact island ${creativeCheckpointBrief?.targetIsland.islandId}. Compiler-bound evidence handles: ${compilerBoundEvidenceHandles.join(", ") || "none"}. Create-only required evidence tags: ${requiredEvidenceTags.join(" ") || "none"}. For an existing island, compose the bound nodes, append or replace one evidence-free child, and never replace its root.`
-          : `Reconstruct the minimal five-field source response. Island action: ${creativeCheckpointBrief?.targetIsland.action}; exact island ID: ${creativeCheckpointBrief?.targetIsland.islandId}. Existing committed island IDs: ${Array.from(sourceAuthorExistingIslandIds).join(", ") || "none"}. The compiler owns relation, placement, zone, and stable identity. For an existing island, it also owns all selected evidence; never reproduce evidence tags or replace the island root. For create only, include these exact tags: ${requiredEvidenceTags.join(" ") || "none"}. Required visual roles: ${creativeCheckpointBrief?.authoredVisualRoles.join(", ") || "none"}.`,
+          : `Reconstruct the minimal six-field source response, including the private adaptive-depth judgment. Island action: ${creativeCheckpointBrief?.targetIsland.action}; exact island ID: ${creativeCheckpointBrief?.targetIsland.islandId}. Existing committed island IDs: ${Array.from(sourceAuthorExistingIslandIds).join(", ") || "none"}. The compiler owns relation, placement, zone, and stable identity. For an existing island, it also owns all selected evidence; never reproduce evidence tags or replace the island root. For create only, include these exact tags: ${requiredEvidenceTags.join(" ") || "none"}. Required visual roles: ${creativeCheckpointBrief?.authoredVisualRoles.join(", ") || "none"}.`,
       validatePayload: (candidatePayload, model) => {
         const text = extractCanvasV2StructuredText(candidatePayload, model);
         if (!text) throw new Error("Canvas V2 model returned no decision.");
@@ -2855,6 +4187,9 @@ export async function POST(request: NextRequest) {
           evidenceHandleById: creativeEvidenceHandleById,
           existingIslandIds: sourceAuthorExistingIslandIds,
           workingContext,
+          validationPlanId: discoveryTransition?.move.kind === "design-validation"
+            ? discoveryState.validationBacklog.at(-1)?.id
+            : undefined,
           // Every design turn is a delta over committed visual truth. Models
           // occasionally reuse an existing layer ID for one small override;
           // replacing that whole layer silently strips the rest of the
@@ -2893,32 +4228,35 @@ export async function POST(request: NextRequest) {
           model,
           system: SOURCE_AUTHOR_SYSTEM,
           schemaName: "canvas_v2_source_patch_decision",
-          schema: SOURCE_AUTHOR_SCHEMA,
+          schema: ADAPTIVE_SOURCE_AUTHOR_SCHEMA,
           maxOutputTokens: 12_000,
+          maxInputImages: 2,
+          maxTextCharacters: 180_000,
           reasoningEffort: "low",
           temperature: 0.44,
           correction,
           parts: [
             { text: JSON.stringify(requestContext) },
-            { text: "Current rendered canvas overview:" },
-            { inlineData: image },
-            ...railDetailParts.slice(0, 2),
-            ...focusedIslandDetailParts,
-            ...supplementalDesignDetailParts,
+            ...(correction ? [] : [
+              { text: "Current rendered canvas overview:" } as CanvasV2ModelInputPart,
+              { inlineData: image } as CanvasV2ModelInputPart,
+              ...focusedIslandDetailParts,
+            ]),
           ],
         });
-        return { url: providerRequest.url, init: providerRequest.init };
+        return { url: providerRequest.url, init: providerRequest.init, audit: providerRequest.audit };
       },
     });
-    const providerAttempts = [...(creativeBriefAttempts ?? []), ...provider.attempts];
-    const fallbackUsed = creativeBriefFallbackUsed || provider.fallbackUsed;
+    const providerAttempts = [...(discoveryDirectorAttempts ?? []), ...retrievedEvidenceBridge.providerAttempts, ...(creativeBriefAttempts ?? []), ...provider.attempts];
+    const fallbackUsed = discoveryDirectorFallbackUsed || creativeBriefFallbackUsed || provider.fallbackUsed;
     const payload = provider.payload;
     try {
       const text = extractCanvasV2StructuredText(payload, provider.model);
       if (!text) throw new Error("Canvas V2 model returned no decision.");
       if (!creativeCheckpointBrief) throw new Error("The source author cannot run without an observed visual-director brief.");
+      const sourcePayload = JSON.parse(text) as Record<string, unknown>;
       const decision = compileSourceAuthorDecision({
-        payload: JSON.parse(text),
+        payload: sourcePayload,
         brief: creativeCheckpointBrief,
         instruction,
         revision: sourceAuthorRevision,
@@ -2928,6 +4266,9 @@ export async function POST(request: NextRequest) {
         evidenceHandleById: creativeEvidenceHandleById,
         existingIslandIds: sourceAuthorExistingIslandIds,
         workingContext,
+        validationPlanId: discoveryTransition?.move.kind === "design-validation"
+          ? discoveryState.validationBacklog.at(-1)?.id
+          : undefined,
         preserveExistingCssLayers: true,
       });
       validateCanvasV2CreativeArc(decision, decisionPolicy, creativeDirectionTurn);
@@ -2946,7 +4287,28 @@ export async function POST(request: NextRequest) {
         ...validateCanvasV2QuantitativeClaimLabels(decision.document, body.revision.evidence, instruction),
       ];
       if (factualFailures.length) throw new Error(factualFailures.join(" "));
-      return NextResponse.json({ decision, evidence: body.revision.evidence, researchStatus: canvasV2ResearchStatusForDecision(research), model: provider.model, fallbackUsed, providerAttempts });
+      const adaptiveDiscoveryState = renderRepair
+        ? discoveryState
+        : applyCanvasV2EmergentDepthSignal({
+            state: discoveryState,
+            signal: parseCanvasV2EmergentDepthSignal(sourcePayload.emergentDepth),
+            now: new Date().toISOString(),
+          });
+      const visibleAttachmentAssets = uploadedEvidenceAssets.filter((asset) => (
+        decision.document.html.includes(`data-canvas-v2-evidence-id="${asset.id}"`)
+        || decision.document.html.includes(`data-canvas-v2-evidence-id='${asset.id}'`)
+      ));
+      return NextResponse.json({
+        decision,
+        evidence: Array.from(new Map([...body.revision.evidence, ...visibleAttachmentAssets].map((asset) => [asset.id, asset] as const)).values()),
+        evidencePackets: persistedEvidencePackets,
+        researchStatus: canvasV2ResearchStatusForDecision(research),
+        discoveryState: adaptiveDiscoveryState,
+        discoveryProgress: discoveryTransition?.progress,
+        model: provider.model,
+        fallbackUsed,
+        providerAttempts,
+      });
     } catch (error) {
       throw invalidCanvasV2ProviderResponse(error instanceof Error ? error.message : "Canvas V2 returned an invalid design decision.", provider.attempts);
     }
@@ -2955,6 +4317,13 @@ export async function POST(request: NextRequest) {
       const failure = canvasV2ProviderErrorResponse(error);
       return NextResponse.json(failure.body, { status: failure.status, headers: failure.headers });
     }
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Canvas V2 request failed.", code: "invalid-request", retryable: false }, { status: 400 });
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[canvas-v2] unexpected design route failure", error);
+    }
+    return NextResponse.json({
+      error: "North Star’s design service could not complete this request. Your latest canvas is unchanged.",
+      code: "server-unavailable",
+      retryable: true,
+    }, { status: 500 });
   }
 }

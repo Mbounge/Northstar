@@ -37,7 +37,7 @@ test("exhausted retries fail without publishing a candidate", async ({ page }) =
   const before = await canvasApp(page).getByTestId("canvas-v2-committed-revision").textContent();
   await page.getByLabel("Message North Star").fill("Fail design without mutation");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText(/The deterministic design provider is temporarily unavailable\. The request stopped after \d+ attempts\./)).toBeVisible();
+  await expect(page.getByText("North Star is temporarily unavailable. Your latest canvas is safe, and you can continue when it reconnects.")).toBeVisible();
   await expect(canvasApp(page).getByTestId("canvas-v2-committed-revision")).toHaveText(before ?? "");
   await expect(canvasFrame(page).locator("[data-e2e-retry-revision]")).toHaveCount(0);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("failed");

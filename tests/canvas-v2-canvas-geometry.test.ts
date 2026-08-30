@@ -39,6 +39,14 @@ test("the compiler exposes the finite scene bounds while the outer canvas owns n
   assert.doesNotMatch(runtime, /overflow:\s*hidden/);
   assert.match(preview, /measureCanvasV2CanvasGeometry/);
   assert.match(preview, /captureCanonicalRailDetails/);
+  assert.match(preview, /Promise\.allSettled\(\[/);
+  assert.match(preview, /optional authored-region detail capture skipped/);
+  assert.match(preview, /compactCanonicalImagesForPrivateCapture/);
+  assert.match(preview, /compactCanonicalImages: true/);
+  assert.match(preview, /\[data-canvas-v2-canonical-flow\] img\[data-canvas-v2-flow-index\]/);
+  assert.match(preview, /restoreCanonicalImages\?\.\(\)/);
+  assert.match(preview, /described !== "\[object Event\]"/);
+  assert.match(preview, /hiddenLocalRepair \|\| intermediateResearchCommit \? Promise\.resolve\(\[\]\) : captureCanonicalRailDetails/);
   assert.match(preview, /CANVAS_V2_RAIL_DETAIL_CHUNK_SIZE = 24/);
   assert.match(preview, /grid-template-columns:repeat\(12,128px\)/);
   assert.match(preview, /railDetails/);
@@ -76,6 +84,8 @@ test("V2 starts on the canonical clean surface without an inner starter card", (
   assert.doesNotMatch(loop, /northstar-canvas/);
   assert.doesNotMatch(loop, /Your living analysis canvas/);
   assert.match(grammar, /Cards, panels, pills/);
+  assert.match(grammar, /A card must earn its place through meaningful containment/);
+  assert.match(grammar, /Trust the canvas surface first/);
   assert.match(grammar, /width:max-content/);
 });
 
@@ -95,6 +105,9 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
     workspace.indexOf("const paintSnapGuides"),
   );
   assert.match(workspace, /const previewViewport = useCallback/);
+  assert.match(workspace, /AI commits never pan or zoom it/);
+  assert.doesNotMatch(workspace, /cameraClaimedByUserRef|researchAutoFitRevisionRef/);
+  assert.doesNotMatch(workspace, /\^research-\(\?:fast-\)\?revision-/);
   assert.match(workspace, /workspaceSurfaceRef\.current/);
   assert.match(viewportPreview, /surface\.style\.transform = `translate\(/);
   assert.match(viewportPreview, /workspaceSizeRef\.current/);
@@ -125,7 +138,10 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(nativeScene, /compiledRevisionId !== revision\.id && <iframe/);
   assert.match(nativeScene, /querySelectorAll<HTMLElement>\("\[data-canvas-v2-node-id\]"\)/);
   assert.match(nativeScene, /contentVisibility: "auto"/);
-  assert.match(nativeScene, /decoding: node\.attributes\.decoding \?\? "async"/);
+  assert.match(nativeScene, /node\.canonicalEvidence \|\| node\.attributes\["data-canvas-v2-evidence-role"\] === "canonical"/);
+  assert.match(nativeScene, /loading: eagerCanonicalEvidenceImage \? "eager"/);
+  assert.match(nativeScene, /decoding: eagerCanonicalEvidenceImage \? "sync"/);
+  assert.match(nativeScene, /fetchPriority: "high"/);
   assert.doesNotMatch(nativeScene, /transientGeometry=\{transientGeometry\}/);
   assert.doesNotMatch(workspace, /transientGeometry=\{transientGeometry\}/);
 });

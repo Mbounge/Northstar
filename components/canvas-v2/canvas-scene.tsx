@@ -87,6 +87,7 @@ export interface CanvasV2TransientGeometry {
   width?: number;
   height?: number;
   fontSize?: number;
+  lineHeight?: number;
   rotation?: number;
 }
 
@@ -110,6 +111,42 @@ function bounds(element: Element): CanvasV2ElementBounds {
 const CANVAS_V2_RAIL_DETAIL_CHUNK_SIZE = 24;
 const CANVAS_V2_MAX_RAIL_DETAIL_CHUNKS = 4;
 const CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS = 6;
+const CANVAS_V2_PRIVATE_CAPTURE_PLACEHOLDER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
+function canvasV2CaptureErrorMessage(value: unknown): string {
+  if (value instanceof Error && value.message.trim()) return value.message;
+  if (value && typeof value === "object" && "message" in value && typeof value.message === "string" && value.message.trim()) return value.message;
+  const described = String(value ?? "").trim();
+  return described && described !== "[object Object]" && described !== "[object Event]"
+    ? described
+    : "Private render capture could not be completed.";
+}
+
+async function compactCanonicalImagesForPrivateCapture(frameDocument: Document): Promise<() => Promise<void>> {
+  const images = Array.from(frameDocument.querySelectorAll<HTMLImageElement>("[data-canvas-v2-canonical-flow] img[data-canvas-v2-flow-index]"));
+  const snapshots = images.map((image) => ({
+    image,
+    src: image.getAttribute("src"),
+    srcset: image.getAttribute("srcset"),
+  }));
+  for (const { image } of snapshots) {
+    image.removeAttribute("srcset");
+    image.setAttribute("src", CANVAS_V2_PRIVATE_CAPTURE_PLACEHOLDER);
+  }
+  await Promise.all(images.map((image) => image.decode?.().catch(() => undefined)));
+  return async () => {
+    snapshots.forEach(({ image, src, srcset }) => {
+      if (src === null) image.removeAttribute("src");
+      else image.setAttribute("src", src);
+      if (srcset === null) image.removeAttribute("srcset");
+      else image.setAttribute("srcset", srcset);
+    });
+    // The exact pixels must be back before rail-detail observation and native
+    // compilation. Cached sources normally decode immediately; awaiting them
+    // makes that restoration an explicit transaction boundary.
+    await Promise.all(images.map((image) => image.decode?.().catch(() => undefined)));
+  };
+}
 
 async function captureCanonicalRailDetails(frameDocument: Document): Promise<NonNullable<CanvasV2RenderObservation["railDetails"]>> {
   const details: NonNullable<CanvasV2RenderObservation["railDetails"]> = [];
@@ -245,6 +282,9 @@ function CanvasV2ObservationScene({
   preferredPlacement,
 }: CanvasV2CanvasSceneProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const captureSequenceRef = useRef(0);
+  const activeRevisionIdRef = useRef(revision.id);
+  activeRevisionIdRef.current = revision.id;
   const themeStateRef = useRef(createCanvasV2ArtifactThemeState());
   const workspacePointerRef = useRef(onWorkspacePointer);
   const elementPointerRef = useRef(onElementPointer);
@@ -296,7 +336,7 @@ function CanvasV2ObservationScene({
       let snapshot = snapshots.get(nodeId);
       if (!snapshot || snapshot.element !== element) {
         if (snapshot) restore(nodeId);
-        const properties = Object.fromEntries(["translate", "width", "height", "font-size", "rotate"].map((property) => [property, {
+        const properties = Object.fromEntries(["translate", "width", "height", "font-size", "line-height", "rotate"].map((property) => [property, {
           value: element.style.getPropertyValue(property),
           priority: element.style.getPropertyPriority(property),
         }]));
@@ -308,6 +348,7 @@ function CanvasV2ObservationScene({
         if (geometry.width !== undefined) element.style.setProperty("width", `${geometry.width}px`, "important");
         if (geometry.height !== undefined) element.style.setProperty("height", `${geometry.height}px`, "important");
         if (geometry.fontSize !== undefined) element.style.setProperty("font-size", `${geometry.fontSize}px`, "important");
+        if (geometry.lineHeight !== undefined) element.style.setProperty("line-height", `${geometry.lineHeight}px`, "important");
       }
       if (geometry.kind === "rotate" && geometry.rotation !== undefined) {
         element.style.setProperty("rotate", `${geometry.rotation}deg`, "important");
@@ -656,20 +697,31 @@ function CanvasV2ObservationScene({
   }, [frameLoad, inspectionEnabled, onElementDoubleClick, onElementHover, onElementSelect, onSceneSnapshot, onSelectionRefresh, revision.id, selectedNodeId, selectedNodeIds]);
 
   const capture = async () => {
+    const captureSequence = ++captureSequenceRef.current;
     const frame = frameRef.current;
     const frameDocument = frame?.contentDocument;
     if (!frame || !frameDocument?.documentElement || !frameDocument.body) {
       const message = "Candidate document was unavailable after iframe load.";
-      setError(message);
+      if (!onCaptureError) setError(message);
       onCaptureError?.(message);
       return;
     }
+    const captureIsCurrent = () => (
+      captureSequenceRef.current === captureSequence
+      && activeRevisionIdRef.current === revision.id
+      && frameRef.current === frame
+      && frame.isConnected
+      && frame.contentDocument === frameDocument
+      && frameDocument.defaultView !== null
+      && frameDocument.documentElement?.dataset.canvasV2RevisionId === revision.id
+    );
 
     try {
       frame.style.width = `${CANVAS_V2_MIN_CANVAS.width}px`;
       frame.style.height = `${CANVAS_V2_MIN_CANVAS.height}px`;
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
       await frameDocument.fonts.ready;
+      if (!captureIsCurrent()) return;
       const images = Array.from(frameDocument.images);
       await Promise.race([
         Promise.all(images.map((image) => image.complete
@@ -680,6 +732,7 @@ function CanvasV2ObservationScene({
             }))),
         new Promise<void>((resolve) => window.setTimeout(resolve, 8_000)),
       ]);
+      if (!captureIsCurrent()) return;
 
       let geometry = measureCanvasV2CanvasGeometry(frameDocument);
       // Resolve responsive reflow before observation. A model-authored grid can
@@ -690,6 +743,7 @@ function CanvasV2ObservationScene({
         frame.style.width = `${geometry.width}px`;
         frame.style.height = `${geometry.height}px`;
         await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+        if (!captureIsCurrent()) return;
         const grown = growCanvasV2CanvasGeometry(geometry, measureCanvasV2CanvasGeometry(frameDocument));
         if (grown.width === geometry.width && grown.height === geometry.height) break;
         geometry = grown;
@@ -698,22 +752,70 @@ function CanvasV2ObservationScene({
       frame.style.height = `${geometry.height}px`;
       onGeometry?.(geometry);
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+      if (!captureIsCurrent()) return;
       const captureGeometry = canvasV2CaptureGeometry(geometry);
-      const screenshotDataUrl = await toJpeg(frameDocument.documentElement, {
-        cacheBust: false,
-        pixelRatio: 1,
-        width: geometry.width,
-        height: geometry.height,
-        canvasWidth: captureGeometry.width,
-        canvasHeight: captureGeometry.height,
-        backgroundColor: theme === "dark" ? "#111117" : "#ffffff",
-        quality: 0.8,
-        skipFonts: true,
-      });
-      const [railDetails, designDetails] = await Promise.all([
-        captureCanonicalRailDetails(frameDocument),
+      let screenshotDataUrl = "";
+      let wholeBoardCaptureError: unknown;
+      // A temporary image decode or browser-canvas allocation must not throw
+      // away a completed model composition. Retry the same private candidate
+      // locally at a slightly smaller capture size; this is a render retry,
+      // never another model generation.
+      const captureAttempts = [
+        { scale: 1, quality: 0.8, compactCanonicalImages: false },
+        { scale: 0.78, quality: 0.74, compactCanonicalImages: false },
+        // A comparison island can promote representative screenshots while
+        // the complete 64+ screen atlases remain mounted below it. Repeating
+        // every full-resolution rail image inside one SVG data URL can exceed
+        // the browser decoder even though the candidate itself is valid. The
+        // final local fallback therefore captures the authored comparison and
+        // the exact rail geometry with lightweight rail pixels; exact rail
+        // imagery is restored immediately and supplied separately in bounded
+        // rail-detail captures. This changes no committed document or proof.
+        { scale: 0.72, quality: 0.72, compactCanonicalImages: true },
+      ];
+      for (const attempt of captureAttempts) {
+        const restoreCanonicalImages = attempt.compactCanonicalImages
+          ? await compactCanonicalImagesForPrivateCapture(frameDocument)
+          : undefined;
+        try {
+          screenshotDataUrl = await toJpeg(frameDocument.documentElement, {
+            cacheBust: false,
+            pixelRatio: 1,
+            width: geometry.width,
+            height: geometry.height,
+            canvasWidth: Math.max(1, Math.round(captureGeometry.width * attempt.scale)),
+            canvasHeight: Math.max(1, Math.round(captureGeometry.height * attempt.scale)),
+            backgroundColor: theme === "dark" ? "#111117" : "#ffffff",
+            quality: attempt.quality,
+            skipFonts: true,
+          });
+          break;
+        } catch (captureError) {
+          wholeBoardCaptureError = captureError;
+          await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+          if (!captureIsCurrent()) return;
+        } finally {
+          await restoreCanonicalImages?.();
+        }
+      }
+      if (!screenshotDataUrl) throw wholeBoardCaptureError;
+      if (!captureIsCurrent()) return;
+      // Detail atlases improve the next model observation but are not the
+      // transaction's visual proof. A failed derivative must degrade to the
+      // accepted whole-board capture instead of rejecting the composition.
+      const hiddenLocalRepair = /^(?:type-floor-recovery|relationship-recovery)-revision-/.test(revision.id);
+      const intermediateResearchCommit = revision.id.startsWith("research-fast-revision-");
+      const [railDetailResult, designDetailResult] = await Promise.allSettled([
+        hiddenLocalRepair || intermediateResearchCommit ? Promise.resolve([]) : captureCanonicalRailDetails(frameDocument),
         captureAuthoredDesignDetails(frameDocument, theme === "dark" ? "#111117" : "#ffffff"),
       ]);
+      const railDetails = railDetailResult.status === "fulfilled" ? railDetailResult.value : [];
+      const designDetails = designDetailResult.status === "fulfilled" ? designDetailResult.value : [];
+      if (process.env.NODE_ENV !== "production") {
+        if (railDetailResult.status === "rejected") console.warn("[canvas-v2] optional canonical-rail detail capture skipped", canvasV2CaptureErrorMessage(railDetailResult.reason));
+        if (designDetailResult.status === "rejected") console.warn("[canvas-v2] optional authored-region detail capture skipped", canvasV2CaptureErrorMessage(designDetailResult.reason));
+      }
+      if (!captureIsCurrent()) return;
       const evidenceIds = new Set(revision.evidence.map((asset) => asset.id));
       frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-evidence-id]").forEach((element) => {
         const id = element.dataset.canvasV2EvidenceId;
@@ -761,14 +863,25 @@ function CanvasV2ObservationScene({
         relocatablePlacementNodeIds,
         preferredPlacement,
       });
+      if (!captureIsCurrent()) return;
       onNativeScene?.(candidateScene);
       onObservation(projectCanvasV2ObservationToNativeScene(compatibilityObservation, candidateScene));
     } catch (captureError) {
-      const message = captureError instanceof Error ? captureError.message : "Candidate capture failed.";
-      setError(message);
+      if (!captureIsCurrent()) return;
+      const message = canvasV2CaptureErrorMessage(captureError);
+      if (process.env.NODE_ENV !== "production") console.warn("[canvas-v2] private whole-board capture could not be observed after local retry", message);
+      if (!onCaptureError) setError(message);
       onCaptureError?.(message);
     }
   };
+
+  useEffect(() => {
+    if (captureEnabled && frameLoad > 0) void capture();
+    // The iframe load counter and revision identity are the capture clock.
+    // Calling through the current render's closure prevents an old onLoad
+    // handler from publishing the document that preceded a fast repair.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [captureEnabled, frameLoad, revision.id]);
 
   return (
     <div className={bare ? "relative" : "relative overflow-auto rounded-xl border border-zinc-300 bg-zinc-200 p-4"}>
@@ -783,7 +896,6 @@ function CanvasV2ObservationScene({
           themeStateRef.current = createCanvasV2ArtifactThemeState();
           applyArtifactTheme();
           setFrameLoad((current) => current + 1);
-          if (captureEnabled) void capture();
         }}
         className="block border-0 bg-transparent"
         // Keep the embedded compositor transparent in both workspace themes.

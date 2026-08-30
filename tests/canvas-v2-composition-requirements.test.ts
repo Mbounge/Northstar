@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canvasV2CompletionContradictsMaterialMove,
+  canvasV2EffectiveCompletionRecommendation,
+  canvasV2RequiresProgressiveEvidenceSynthesis,
   canvasV2NonTitleDesignText,
+  canvasV2RequiredIndependentTerritoryCount,
+  shouldCompleteCanvasV2ResolvedOptionalContinuation,
+  validateCanvasV2AtomicTerritoryPlan,
+  validateCanvasV2DeferredSemanticJobIsolation,
   validateCanvasV2RequestedCompositionCoverage,
 } from "../lib/canvas-v2/composition-requirements";
 import type { CanvasV2ArtifactDocument } from "../lib/canvas-v2/types";
@@ -19,6 +26,28 @@ function documentWith(analysis: string, title = "A decision map promising NEXT, 
 }
 
 const decisionInstruction = "Separate observed signals from assumptions, show where the entry wedge converges, and make the NEXT, LATER, and NOT-YET decisions easy to inspect.";
+
+test("deep grounded comparisons use progressive synthesis while ordinary prompts stay direct", () => {
+  const comparison = "Build a balanced executive comparison of Awin and Whop onboarding. Choose representative flows and screenshots.";
+  assert.equal(canvasV2RequiresProgressiveEvidenceSynthesis({
+    synthesisTurn: true,
+    instruction: comparison,
+    canonicalFlowCount: 2,
+    canonicalScreenCount: 64,
+  }), true);
+  assert.equal(canvasV2RequiresProgressiveEvidenceSynthesis({
+    synthesisTurn: true,
+    instruction: "Add a concise title to this canvas.",
+    canonicalFlowCount: 2,
+    canonicalScreenCount: 64,
+  }), false);
+  assert.equal(canvasV2RequiresProgressiveEvidenceSynthesis({
+    synthesisTurn: true,
+    instruction: comparison,
+    canonicalFlowCount: 1,
+    canonicalScreenCount: 8,
+  }), false);
+});
 
 test("title promises cannot satisfy explicit analytical coverage", () => {
   const document = documentWith("<p>Observed signals</p><p>Assumptions</p>");
@@ -54,6 +83,150 @@ test("paired categories are guarded without prescribing an aesthetic or layout",
   assert.equal(failures.length, 1);
   assert.match(failures[0], /risks and opportunities/);
   assert.deepEqual(validateCanvasV2RequestedCompositionCoverage(document, "Create a restrained market-entry landscape."), []);
+});
+
+test("explicitly separate editable outputs require distinct programmatic islands", () => {
+  const instruction = "Compare both launch paths and create a separate independently editable implementation path with an exit criterion.";
+  assert.equal(canvasV2RequiredIndependentTerritoryCount(instruction), 2);
+  assert.equal(canvasV2RequiredIndependentTerritoryCount("Create three distinct positioning territories."), 3);
+  assert.equal(canvasV2RequiredIndependentTerritoryCount("Create three genuinely different positioning territories for an AI customer-support product."), 3);
+  assert.equal(canvasV2RequiredIndependentTerritoryCount("Keep the original composition intact and create a visually different fourth positioning territory to its right."), 4);
+  assert.equal(canvasV2RequiredIndependentTerritoryCount("Create a fourth, materially contrarian positioning territory to the right."), 4);
+  assert.equal(canvasV2RequiredIndependentTerritoryCount("Generate multiple independently editable compositions in one run."), 2);
+  assert.equal(canvasV2RequiredIndependentTerritoryCount("Create one coherent decision map."), 0);
+
+  const packed = documentWith("<h2>Comparison</h2><h2>Implementation path</h2><p>Exit criterion</p>", "Launch decision");
+  assert.match(validateCanvasV2RequestedCompositionCoverage(packed, instruction).join(" "), /at least 2 independently editable non-title territories/);
+
+  const separate: CanvasV2ArtifactDocument = {
+    ...packed,
+    html: `${packed.html}<section data-canvas-v2-node-id="implementation" data-canvas-v2-island-id="implementation" data-canvas-v2-design-region="true" data-canvas-v2-story-role="implication"><h2>Implementation path</h2><p>Exit criterion</p></section>`,
+  };
+  assert.deepEqual(validateCanvasV2RequestedCompositionCoverage(separate, instruction), []);
+});
+
+test("a concrete visible move cannot be normalized away as completion", () => {
+  assert.equal(canvasV2EffectiveCompletionRecommendation({
+    recommendation: "complete",
+    targetAction: "create",
+  }), "continue");
+  assert.equal(canvasV2EffectiveCompletionRecommendation({
+    recommendation: "complete",
+    targetAction: "complete",
+  }), "complete");
+  assert.equal(canvasV2CompletionContradictsMaterialMove({
+    recommendation: "complete",
+    targetAction: "complete",
+    materialMove: "Create a fourth independent positioning territory to the right.",
+  }), true);
+  assert.equal(canvasV2CompletionContradictsMaterialMove({
+    recommendation: "complete",
+    targetAction: "complete",
+    materialMove: "Make no further visible change; verify the committed composition.",
+  }), false);
+});
+
+test("three positioning territories may use natural creative-direction labels", () => {
+  const document: CanvasV2ArtifactDocument = {
+    html: [
+      '<template data-canvas-v2-node-id="canvas-root" data-canvas-v2-workspace-root="true"></template>',
+      '<section data-canvas-v2-node-id="direction-one" data-canvas-v2-island-id="direction-one" data-canvas-v2-design-region="true" data-canvas-v2-story-role="analysis"><p>Creative strategic direction · 01</p><h2>Quiet Control</h2></section>',
+      '<section data-canvas-v2-node-id="direction-two" data-canvas-v2-island-id="direction-two" data-canvas-v2-design-region="true" data-canvas-v2-story-role="analysis"><p>Creative strategic direction · 02</p><h2>Fast-Moving Ally</h2></section>',
+      '<section data-canvas-v2-node-id="direction-three" data-canvas-v2-island-id="direction-three" data-canvas-v2-design-region="true" data-canvas-v2-story-role="analysis"><p>Creative strategic direction · 03</p><h2>Human Signal</h2></section>',
+    ].join(""),
+    css: "",
+  };
+  assert.deepEqual(validateCanvasV2RequestedCompositionCoverage(
+    document,
+    "Create three genuinely different positioning territories for an AI customer-support product.",
+  ), []);
+});
+
+test("resolved requested islands close optional title or recompose work but preserve explicit authorship", () => {
+  const resolved = {
+    resolvedStory: true,
+    explicitWholeBoardRecompositionRequested: false,
+    renderedIntegrityFailureCount: 0,
+    promptCoverageFailureCount: 0,
+    hasRenderRepair: false,
+    completionRecommendation: "continue" as const,
+    instructionRequestsTitleAuthorship: false,
+    explicitRelationshipGeometryRequested: false,
+    prescribesOptionalRelationshipGeometry: false,
+  };
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    ...resolved,
+    targetAction: "create",
+    targetStoryRole: "title",
+  }), true);
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    ...resolved,
+    targetAction: "recompose",
+    targetStoryRole: "whole-board",
+  }), true);
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    ...resolved,
+    targetAction: "create",
+    targetStoryRole: "title",
+    instructionRequestsTitleAuthorship: true,
+  }), false);
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    ...resolved,
+    targetAction: "create",
+    targetStoryRole: "title",
+    resolvedStory: false,
+  }), false);
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    ...resolved,
+    targetAction: "create",
+    targetStoryRole: "analysis",
+  }), false);
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    ...resolved,
+    targetAction: "enrich",
+    targetStoryRole: "analysis",
+    prescribesOptionalRelationshipGeometry: true,
+  }), true);
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    ...resolved,
+    targetAction: "enrich",
+    targetStoryRole: "relationship",
+    prescribesOptionalRelationshipGeometry: true,
+    explicitRelationshipGeometryRequested: true,
+  }), false);
+});
+
+test("one discovery turn cannot precompose a deferred semantic job inside its current island", () => {
+  const shared = {
+    requiredCount: 2,
+    observedCount: 0,
+    createsNonTitleTerritory: true,
+    action: "create" as const,
+    storyRole: "analysis",
+    currentSemanticJob: "launch decision system",
+    deferredSemanticJobs: ["implementation path"],
+    completionRationale: "Observe the committed decision before continuing.",
+    resolutionRationale: "The launch decision comparison is resolved.",
+    remainingOpportunities: ["Create the implementation path."],
+    nextMoves: ["Create a separate implementation path after observing this chapter."],
+  };
+  assert.deepEqual(validateCanvasV2AtomicTerritoryPlan({
+    ...shared,
+    materialMove: "Create the launch decision comparison and recommendation only.",
+  }), []);
+
+  const failures = validateCanvasV2AtomicTerritoryPlan({
+    ...shared,
+    materialMove: "This single bounded composition can fully communicate the launch decision and provide the complete implementation path.",
+  });
+  assert.match(failures.join(" "), /multi-territory arc|precomposes the deferred semantic job/);
+
+  const packed = documentWith("<h2>Launch decision</h2><p>Fast pilot or polished launch.</p><h3>Implementation path</h3><p>Scope, learn, decide.</p>");
+  assert.match(validateCanvasV2DeferredSemanticJobIsolation({
+    document: packed,
+    islandId: "analysis",
+    deferredSemanticJobs: ["implementation path"],
+  }).join(" "), /visibly precomposes/);
 });
 
 test("explicit campaign deliverables cannot disappear behind a completed narrative sequence", () => {

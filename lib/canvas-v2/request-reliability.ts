@@ -18,16 +18,133 @@ export interface CanvasV2FailurePayload {
   providerAttempts?: CanvasV2ProviderAttemptAudit[];
 }
 
+export interface CanvasV2ProviderUsage {
+  /** Every provider HTTP request counts, including a structurally invalid draft. */
+  requestCount: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
+export interface CanvasV2ProviderRequestAudit {
+  textCharacters: number;
+  imageCount: number;
+  encodedImageBytes: number;
+  imageDetails: {
+    low: number;
+    high: number;
+    auto: number;
+    original: number;
+  };
+  promptCacheMode: "explicit" | "implicit" | "none";
+  cacheNamespace?: string;
+}
+
 export interface CanvasV2ProviderAttemptAudit {
   model: string;
   provider?: "openai" | "google";
-  role?: "router" | "visual-director" | "source-author";
+  role?: "router" | "discovery-director" | "external-researcher" | "visual-director" | "source-author";
   attempt?: number;
   outcome: "completed" | "provider-unavailable" | "rate-limited" | "timeout" | "invalid-response" | "rejected" | "cancelled" | "transport";
   durationMs: number;
   code?: CanvasV2FailureCode;
   httpStatus?: number;
   detail?: string;
+  /** Exact provider-reported usage. It is diagnostic state, never canvas copy. */
+  usage?: CanvasV2ProviderUsage;
+  /** Preflight request shape, retained even when the provider rejects the call. */
+  request?: CanvasV2ProviderRequestAudit;
+}
+
+export const CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS = {
+  // These values produce diagnostic signals for evaluation and cost analysis.
+  // They never pause, fail, or complete a run: inquiry-specific readiness and
+  // actual infrastructure state remain the only execution authorities.
+  requestsWithoutCommit: 8,
+  uncachedInputTokensWithoutCommit: 500_000,
+  cacheWriteTokensWithoutCommit: 192_000,
+} as const;
+
+function finiteTokenCount(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+export function parseCanvasV2ProviderUsage(value: unknown): CanvasV2ProviderUsage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Partial<CanvasV2ProviderUsage>;
+  return {
+    requestCount: finiteTokenCount(usage.requestCount),
+    inputTokens: finiteTokenCount(usage.inputTokens),
+    cachedInputTokens: finiteTokenCount(usage.cachedInputTokens),
+    cacheWriteTokens: finiteTokenCount(usage.cacheWriteTokens),
+    outputTokens: finiteTokenCount(usage.outputTokens),
+    reasoningTokens: finiteTokenCount(usage.reasoningTokens),
+    totalTokens: finiteTokenCount(usage.totalTokens),
+  };
+}
+
+export function mergeCanvasV2ProviderUsage(
+  ...values: Array<CanvasV2ProviderUsage | undefined>
+): CanvasV2ProviderUsage {
+  return values.reduce<CanvasV2ProviderUsage>((total, value) => ({
+    requestCount: total.requestCount + (value?.requestCount ?? 0),
+    inputTokens: total.inputTokens + (value?.inputTokens ?? 0),
+    cachedInputTokens: total.cachedInputTokens + (value?.cachedInputTokens ?? 0),
+    cacheWriteTokens: total.cacheWriteTokens + (value?.cacheWriteTokens ?? 0),
+    outputTokens: total.outputTokens + (value?.outputTokens ?? 0),
+    reasoningTokens: total.reasoningTokens + (value?.reasoningTokens ?? 0),
+    totalTokens: total.totalTokens + (value?.totalTokens ?? 0),
+  }), {
+    requestCount: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+  });
+}
+
+export function canvasV2ProviderUsageFromAttempts(
+  attempts: readonly CanvasV2ProviderAttemptAudit[] | undefined,
+): CanvasV2ProviderUsage {
+  return mergeCanvasV2ProviderUsage(...(attempts ?? []).map((attempt) => (
+    attempt.usage ?? {
+      requestCount: 1,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
+    }
+  )));
+}
+
+export function canvasV2ProviderUsageSignals(
+  usage: CanvasV2ProviderUsage | undefined,
+  checkpoint?: CanvasV2ProviderUsage,
+): {
+  sinceCommit: Pick<CanvasV2ProviderUsage, "requestCount" | "inputTokens" | "cachedInputTokens" | "cacheWriteTokens">;
+  uncachedInputTokens: number;
+  signals: Array<"request-density" | "uncached-input-density" | "cache-write-density">;
+} {
+  const sinceCommit = {
+    requestCount: Math.max(0, (usage?.requestCount ?? 0) - (checkpoint?.requestCount ?? 0)),
+    inputTokens: Math.max(0, (usage?.inputTokens ?? 0) - (checkpoint?.inputTokens ?? 0)),
+    cachedInputTokens: Math.max(0, (usage?.cachedInputTokens ?? 0) - (checkpoint?.cachedInputTokens ?? 0)),
+    cacheWriteTokens: Math.max(0, (usage?.cacheWriteTokens ?? 0) - (checkpoint?.cacheWriteTokens ?? 0)),
+  };
+  const uncachedInputTokens = Math.max(0, sinceCommit.inputTokens - sinceCommit.cachedInputTokens);
+  const signals: Array<"request-density" | "uncached-input-density" | "cache-write-density"> = [];
+  if (sinceCommit.requestCount >= CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS.requestsWithoutCommit) signals.push("request-density");
+  if (uncachedInputTokens >= CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS.uncachedInputTokensWithoutCommit) signals.push("uncached-input-density");
+  if (sinceCommit.cacheWriteTokens >= CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS.cacheWriteTokensWithoutCommit) signals.push("cache-write-density");
+  return { sinceCommit, uncachedInputTokens, signals };
 }
 
 export interface CanvasV2RequestPolicy {
@@ -65,6 +182,31 @@ export function canvasV2RetryReason(code: CanvasV2FailureCode): string {
       return "Request needs revision";
     case "cancelled":
       return "Request stopped";
+  }
+}
+
+export function canvasV2PublicFailureMessage(error: unknown): string {
+  if (!(error instanceof CanvasV2RequestError)) {
+    return "North Star couldn’t finish that safely. Your latest canvas is unchanged.";
+  }
+  switch (error.code) {
+    case "configuration":
+      return "North Star isn’t available in this workspace yet. Your canvas is unchanged.";
+    case "invalid-request":
+      return "North Star needs a little more context before it can continue safely. Your canvas is unchanged.";
+    case "invalid-response":
+      return "North Star couldn’t form a reliable next step. Your latest canvas is unchanged, so you can try again.";
+    case "rate-limited":
+    case "provider-unavailable":
+    case "server-unavailable":
+      return "North Star is temporarily unavailable. Your latest canvas is safe, and you can continue when it reconnects.";
+    case "timeout":
+    case "transport":
+      return "The connection was interrupted. Your latest canvas is safe, and you can continue from it.";
+    case "provider-rejected":
+      return "North Star couldn’t complete that request safely. Your latest canvas is unchanged.";
+    case "cancelled":
+      return "Stopped. Your latest canvas remains visible.";
   }
 }
 

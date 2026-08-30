@@ -1,7 +1,6 @@
 import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import { assertCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from "@/lib/canvas-v2/artifact-safety";
-import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
-import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
+import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset, CanvasV2EvidencePacket } from "@/lib/canvas-v2/types";
 
 export interface CanvasV2FlowInsertion {
   document: CanvasV2ArtifactDocument;
@@ -11,19 +10,19 @@ export interface CanvasV2FlowInsertion {
 }
 
 const FLOW_CSS = `
-/* canvas-v2-flow-layout-v4: complete canonical journeys stay on one intrinsic horizontal rail */
+/* canvas-v2-flow-layout-v5: complete canonical journeys stay on one finite intrinsic horizontal rail */
 .northstar-canvas.canvas-v2-canvas--evidence-wide { box-sizing:border-box; width:100%; min-width:100%; min-height:100%; max-width:none; padding:0; overflow:visible; }
-.canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:100%; max-width:none; padding:0; background:transparent; color:var(--northstar-ink); font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
+.canvas-v2-grounded-evidence { box-sizing:border-box; width:max-content; min-width:0; max-width:none; padding:0; background:transparent; color:var(--northstar-ink); font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
 .canvas-v2-grounded-evidence--standalone { min-width:1680px; padding:52px 0 96px 96px; background:transparent; }
-.canvas-v2-grounded-title { margin:0 0 28px; color:var(--northstar-ink); font-size:9px; font-weight:850; letter-spacing:.18em; text-transform:uppercase; }
-.canvas-v2-flow-lane { display:grid; grid-template-columns:170px max-content; align-items:start; gap:24px; width:max-content; min-width:100%; max-width:none; min-height:270px; padding:16px 0; }
+.canvas-v2-grounded-title { margin:0 0 28px; color:var(--northstar-ink); font-size:11px; font-weight:850; letter-spacing:.18em; text-transform:uppercase; }
+.canvas-v2-flow-lane { display:grid; grid-template-columns:170px max-content; align-items:start; gap:24px; width:max-content; min-width:0; max-width:none; min-height:270px; padding:16px 0; }
 .canvas-v2-flow-identity { display:flex; align-items:center; gap:12px; align-self:start; padding-top:94px; }
 .canvas-v2-flow-icon { width:46px; height:46px; flex:none; border-radius:13px; object-fit:contain; box-shadow:0 10px 24px rgba(39,30,93,.10); }
 .canvas-v2-flow-app { margin:0; color:var(--northstar-ink); font-size:18px; font-weight:850; letter-spacing:-.02em; }
-.canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:var(--northstar-muted); font-size:11px; line-height:1.35; }
+.canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:var(--northstar-muted); font-size:12px; font-weight:580; line-height:1.35; }
 .canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; min-width:0; max-width:none; column-gap:10px; padding-right:0; overflow:visible; }
 .canvas-v2-flow-screen { display:block; width:auto; height:235px; max-width:none; flex:none; object-fit:contain; filter:drop-shadow(0 12px 20px rgba(32,24,80,.09)); }
-.canvas-v2-flow-segment { box-sizing:border-box; display:grid; grid-template-columns:1px minmax(0,1fr); column-gap:14px; width:132px; height:235px; flex:none; align-items:start; color:var(--northstar-muted); font-size:9px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
+.canvas-v2-flow-segment { box-sizing:border-box; display:grid; grid-template-columns:1px minmax(0,1fr); column-gap:14px; width:132px; height:235px; flex:none; align-items:start; color:var(--northstar-muted); font-size:10px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
 .canvas-v2-flow-segment-rule { width:1px; height:235px; background:var(--northstar-line); }
 .canvas-v2-flow-segment-label { display:-webkit-box; max-width:102px; margin-top:12px; overflow:hidden; overflow-wrap:normal; word-break:normal; -webkit-box-orient:vertical; -webkit-line-clamp:4; }
 .canvas-v2-flow-segment--branch { color:var(--northstar-violet); }
@@ -65,6 +64,7 @@ export function insertCanvasV2CanonicalFlow(input: {
   app: AppDataApp;
   flow: AppDataFlow;
   evidence: readonly CanvasV2EvidenceAsset[];
+  packet?: CanvasV2EvidencePacket;
 }): CanvasV2FlowInsertion {
   if (typeof DOMParser === "undefined") throw new Error("Flow insertion requires a browser document.");
   const screenEvidence = input.flow.screens.map((screen) => input.evidence.find((asset) => asset.id === `screen:${screen.id}`)).filter((asset): asset is CanvasV2EvidenceAsset => Boolean(asset));
@@ -87,7 +87,16 @@ export function insertCanvasV2CanonicalFlow(input: {
     region.append(title);
     host.append(region);
   }
-  region.dataset.canvasV2LayoutVersion = "4";
+  if (region.dataset.canvasV2SceneLayout === "absolute") {
+    // Undo/redo serializes accepted native geometry as an absolute compatibility
+    // surface. Its x/y/width remain the durable placement authority, but a
+    // compiler-owned fixed height would make a later research lane overflow
+    // the old rail and collide with downstream evidence islands. Release only
+    // that height: the next native compile remeasures the expanded rail, keeps
+    // its anchor, and reflows related followers by the measured growth.
+    region.style.removeProperty("--canvas-v2-scene-height");
+  }
+  region.dataset.canvasV2LayoutVersion = "5";
 
   const laneNodeId = `flow-${canvasV2StableNodeToken(input.app.name)}-${canvasV2StableNodeToken(input.flow.id)}`;
   const existing = Array.from(parsed.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]")).find((element) => element.dataset.canvasV2NodeId === laneNodeId);
@@ -96,6 +105,24 @@ export function insertCanvasV2CanonicalFlow(input: {
   lane.className = "canvas-v2-flow-lane";
   lane.dataset.canvasV2NodeId = laneNodeId;
   lane.dataset.canvasV2CanonicalFlow = input.flow.id;
+  const packet = input.packet;
+  const packetId = packet?.id ?? screenEvidence.map((asset) => asset.packetId).find((value): value is string => Boolean(value));
+  // Heal any pre-9.5 generic sequence packet that may already exist in a
+  // continued canvas. Once the canonical flow is inserted, its complete rail
+  // is the sole visible product witness; stale metadata furniture must not
+  // survive beside it.
+  if (packetId) {
+    Array.from(parsed.querySelectorAll<HTMLElement>("[data-canvas-v2-evidence-packet-id]"))
+      .filter((candidate) => candidate.dataset.canvasV2EvidencePacketId === packetId
+        || Boolean(packet?.continuationKey && candidate.dataset.canvasV2EvidenceContinuation === packet.continuationKey))
+      .forEach((candidate) => candidate.remove());
+    parsed.querySelectorAll<HTMLElement>("[data-canvas-v2-evidence-region=packets]").forEach((packetRegion) => {
+      if (!packetRegion.querySelector("[data-canvas-v2-evidence-packet-id]")) packetRegion.remove();
+    });
+  }
+  if (packetId) lane.dataset.canvasV2EvidencePacketId = packetId;
+  if (packet?.source.sourceId) lane.dataset.canvasV2EvidenceSourceId = packet.source.sourceId;
+  lane.dataset.canvasV2EvidenceAuthority = packet?.authority ?? "observed";
   lane.dataset.canvasV2FlowScope = input.flow.scope ?? "flow";
   if (input.flow.taxonomyPath?.length) lane.dataset.canvasV2TaxonomyPath = input.flow.taxonomyPath.join(" / ");
 

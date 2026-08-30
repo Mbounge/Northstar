@@ -5,7 +5,12 @@ import {
   type AppDataFlow,
   type AppDataScreen,
 } from "@/lib/app-data/canvas-v2-catalog";
-import type { CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
+import {
+  CANVAS_V2_EVIDENCE_PACKET_SCHEMA,
+  type CanvasV2EvidenceAsset,
+  type CanvasV2EvidencePacket,
+  type CanvasV2EvidenceSource,
+} from "@/lib/canvas-v2/types";
 
 export type CanvasV2ResearchOperation = "list-apps" | "list-flows" | "flow-screens" | "search";
 
@@ -25,7 +30,28 @@ export interface CanvasV2ResearchResult {
   flows: AppDataFlow[];
   screens: AppDataScreen[];
   evidence: CanvasV2EvidenceAsset[];
+  packets: CanvasV2EvidencePacket[];
+  sources: CanvasV2EvidenceSource[];
+  issues: Array<{ code: string; message: string; targetName?: string }>;
   detail: string;
+}
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+function sourceForApp(app: AppDataApp, sourceType: CanvasV2EvidenceSource["sourceType"], sourceId: string, label: string): CanvasV2EvidenceSource {
+  return {
+    providerId: "northstar-account-apps",
+    providerLabel: "North Star account data",
+    sourceId,
+    sourceType,
+    label,
+    retrievedAt: now(),
+    capturedAt: app.lastScan,
+    permission: "authorized",
+    freshness: app.lastScan ? "current-snapshot" : "unknown",
+  };
 }
 
 function limit(value: number | undefined, fallback: number, maximum: number): number {
@@ -38,7 +64,7 @@ function bestApp(catalog: AppDataCatalog, name?: string): AppDataApp | undefined
   return match && match.score > 0 ? match.app : undefined;
 }
 
-function evidenceForScreen(screen: AppDataScreen): CanvasV2EvidenceAsset | undefined {
+function evidenceForScreen(screen: AppDataScreen, packetId?: string, source?: CanvasV2EvidenceSource): CanvasV2EvidenceAsset | undefined {
   return screen.imageUrl ? {
     id: `screen:${screen.id}`,
     url: screen.imageUrl,
@@ -47,20 +73,79 @@ function evidenceForScreen(screen: AppDataScreen): CanvasV2EvidenceAsset | undef
     flow: screen.flowName,
     screen: screen.name,
     description: [screen.platform, screen.sessionType, `Step ${screen.index + 1}`].filter(Boolean).join(" · "),
+    kind: "screenshot",
+    authority: "observed",
+    packetId,
+    source,
+    sequenceIndex: screen.index,
+    tags: [screen.platform, screen.sessionType].filter((value): value is string => Boolean(value)),
   } : undefined;
 }
 
-function evidenceForIcon(app: AppDataApp): CanvasV2EvidenceAsset | undefined {
-  return app.iconUrl ? { id: `icon:${app.id}`, url: app.iconUrl, label: `${app.name} icon`, app: app.name, description: "App icon" } : undefined;
+function evidenceForIcon(app: AppDataApp, packetId?: string, source?: CanvasV2EvidenceSource): CanvasV2EvidenceAsset | undefined {
+  return app.iconUrl ? { id: `icon:${app.id}`, url: app.iconUrl, label: `${app.name} icon`, app: app.name, description: "App icon", kind: "app-identity", authority: "observed", packetId, source } : undefined;
 }
 
-function makeResult(operation: CanvasV2ResearchOperation, apps: AppDataApp[], flows: AppDataFlow[], screens: AppDataScreen[], detail: string): CanvasV2ResearchResult {
-  const evidence = [...apps.map(evidenceForIcon), ...screens.map(evidenceForScreen)].filter((asset): asset is CanvasV2EvidenceAsset => Boolean(asset));
-  return { operation, apps, flows, screens, evidence: Array.from(new Map(evidence.map((asset) => [asset.id, asset])).values()), detail };
+function packetsForResult(apps: readonly AppDataApp[], flows: readonly AppDataFlow[], screens: readonly AppDataScreen[]): CanvasV2EvidencePacket[] {
+  const packets: CanvasV2EvidencePacket[] = [];
+  for (const app of apps) {
+    const appFlows = flows.filter((flow) => flow.appName === app.name);
+    for (const flow of appFlows) {
+      const packetId = `packet:capture:${flow.id}`;
+      const source = sourceForApp(app, "capture", flow.id, `${app.name} · ${flow.name}`);
+      const assets = [evidenceForIcon(app, packetId, source), ...flow.screens.map((screen) => evidenceForScreen(screen, packetId, source))]
+        .filter((asset): asset is CanvasV2EvidenceAsset => Boolean(asset));
+      packets.push({
+        schema: CANVAS_V2_EVIDENCE_PACKET_SCHEMA,
+        id: packetId,
+        kind: "screenshot-sequence",
+        title: `${app.name} · ${flow.name}`,
+        summary: `${flow.screens.length} ordered, image-backed product screens captured from ${[flow.platform, flow.sessionType].filter(Boolean).join(" ") || "the connected application"}.`,
+        authority: "observed",
+        source,
+        assets,
+        facts: [
+          { id: `${packetId}:screen-count`, label: "Captured screens", value: String(flow.screens.length), authority: "calculated", description: "Count of ordered screenshots in this exact packet.", sourceAssetIds: assets.filter((asset) => asset.kind === "screenshot").map((asset) => asset.id) },
+          ...(flow.taxonomyPath?.length ? [{ id: `${packetId}:taxonomy`, label: "Journey scope", value: flow.taxonomyPath.join(" → "), authority: "observed" as const }] : []),
+        ],
+        metrics: [],
+        limitations: ["Captured screens describe visible product behavior and interface structure; they do not establish conversion, retention, causality, or user sentiment."],
+        tags: [app.name, flow.platform, flow.sessionType, "product-capture"].filter((value): value is string => Boolean(value)),
+        createdAt: source.retrievedAt,
+        appId: app.id,
+        appName: app.name,
+        continuationKey: `capture:${flow.id}`,
+      });
+    }
+    if (!appFlows.length && screens.some((screen) => screen.appName === app.name)) {
+      const packetId = `packet:search:${app.id}`;
+      const source = sourceForApp(app, "capture", packetId, `${app.name} screenshot matches`);
+      const appScreens = screens.filter((screen) => screen.appName === app.name);
+      const assets = appScreens.map((screen) => evidenceForScreen(screen, packetId, source)).filter((asset): asset is CanvasV2EvidenceAsset => Boolean(asset));
+      packets.push({ schema: CANVAS_V2_EVIDENCE_PACKET_SCHEMA, id: packetId, kind: "screenshot", title: `${app.name} screenshot matches`, summary: `${assets.length} matching captured screens.`, authority: "observed", source, assets, facts: [], metrics: [], limitations: ["Search matches are not a complete user journey unless an ordered flow is explicitly selected."], tags: [app.name, "screenshot-search"], createdAt: source.retrievedAt, appId: app.id, appName: app.name });
+    }
+  }
+  return packets;
 }
 
-export function canvasV2ResearchResultForFlow(app: AppDataApp, flow: AppDataFlow): CanvasV2ResearchResult {
-  return makeResult("flow-screens", [app], [flow], flow.screens, `Retrieved ${flow.screens.length} ordered screens from ${app.name} · ${flow.name}.`);
+function makeResult(operation: CanvasV2ResearchOperation, apps: AppDataApp[], flows: AppDataFlow[], screens: AppDataScreen[], detail: string, additionalPackets: readonly CanvasV2EvidencePacket[] = []): CanvasV2ResearchResult {
+  const packets = [...packetsForResult(apps, flows, screens), ...additionalPackets];
+  const evidence = [...packets.flatMap((packet) => packet.assets), ...apps.map((app) => evidenceForIcon(app)), ...screens.map((screen) => evidenceForScreen(screen))].filter((asset): asset is CanvasV2EvidenceAsset => Boolean(asset));
+  return {
+    operation,
+    apps,
+    flows,
+    screens,
+    evidence: Array.from(new Map(evidence.map((asset) => [asset.id, asset])).values()),
+    packets: Array.from(new Map(packets.map((packet) => [packet.id, packet])).values()),
+    sources: Array.from(new Map(packets.map((packet) => [`${packet.source.providerId}:${packet.source.sourceId}`, packet.source])).values()),
+    issues: [],
+    detail,
+  };
+}
+
+export function canvasV2ResearchResultForFlow(app: AppDataApp, flow: AppDataFlow, additionalPackets: readonly CanvasV2EvidencePacket[] = []): CanvasV2ResearchResult {
+  return makeResult("flow-screens", [app], [flow], flow.screens, `Retrieved ${flow.screens.length} ordered screens from ${app.name} · ${flow.name}.`, additionalPackets);
 }
 
 export function runCanvasV2Research(catalog: AppDataCatalog, query: CanvasV2ResearchQuery): CanvasV2ResearchResult {

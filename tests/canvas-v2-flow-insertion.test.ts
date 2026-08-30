@@ -21,6 +21,10 @@ test("canonical evidence stays on one intrinsic horizontal rail", () => {
   assert.match(source, /dataset\.canvasV2FlowIndex/);
   assert.match(source, /dataset\.canvasV2EvidenceRole = "canonical"/);
   assert.match(source, /validateCanvasV2EvidenceBindings/);
+  assert.match(source, /removeProperty\("--canvas-v2-scene-height"\)/);
+  assert.doesNotMatch(source, /removeProperty\("--canvas-v2-scene-(?:x|y|width)"\)/);
+  assert.match(source, /stale metadata furniture must not/);
+  assert.match(source, /candidate\.remove\(\)/);
 });
 
 test("long branching taxonomy remains available without becoming a wall inside the evidence rail", () => {

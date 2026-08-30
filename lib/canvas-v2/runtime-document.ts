@@ -69,9 +69,9 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
     :root {
       color-scheme:light;
       --northstar-ink:#151620;
-      --northstar-muted:#737686;
-      --northstar-violet:#6b4dff;
-      --northstar-line:rgba(78,67,135,.14);
+      --northstar-muted:#5d6070;
+      --northstar-violet:#5f49e8;
+      --northstar-line:rgba(66,54,123,.22);
       --northstar-surface:#ffffff;
       --northstar-surface-subtle:#f6f5fa;
     }
@@ -141,7 +141,7 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
       align-self:start!important;
       justify-self:start!important;
       min-width:0!important;
-      max-width:${compositionWidth}px!important;
+      max-width:${CANVAS_V2_WORKSPACE.titleMaxWidth}px!important;
       margin-top:0!important;
       margin-bottom:${CANVAS_V2_WORKSPACE.documentMargin}px!important;
     }

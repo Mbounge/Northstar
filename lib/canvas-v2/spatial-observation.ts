@@ -387,6 +387,14 @@ function observeDesignRegions(document: Document, view: Window): CanvasV2DesignR
       const heading = element.querySelector<HTMLElement>("h1,h2,h3")?.textContent?.replace(/\s+/g, " ").trim();
       const text = element.textContent?.replace(/\s+/g, " ").trim();
       const bounds = elementBounds(element);
+      const meaningfulContentBounds = unionElementBounds(Array.from(element.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
+        .filter((candidate) => visibleElement(candidate, view))
+        .filter((candidate) => {
+          const tagName = candidate.tagName;
+          if (["IMG", "SVG", "CANVAS", "VIDEO", "TABLE", "INPUT", "TEXTAREA"].includes(tagName)) return true;
+          return !hasIdentifiedDescendant(candidate) && Boolean(candidate.textContent?.trim());
+        })
+        .map((candidate) => elementBounds(candidate)));
       const regionArea = Math.max(1, bounds.width * bounds.height);
       const sourcedStages = Array.from(element.querySelectorAll<HTMLElement>("[data-canvas-v2-stage-evidence='sourced'][data-canvas-v2-node-id]"))
         .filter((stage) => visibleElement(stage, view));
@@ -424,6 +432,7 @@ function observeDesignRegions(document: Document, view: Window): CanvasV2DesignR
           : {}),
         ...(text ? { textPreview: text.slice(0, 220) } : {}),
         bounds,
+        ...(meaningfulContentBounds ? { contentBounds: meaningfulContentBounds } : {}),
         canvasWidthShare: ratioPrecision(rect.width / Math.max(1, canvasRect.width)),
         canvasHeightShare: ratioPrecision(rect.height / Math.max(1, canvasRect.height)),
         canvasAreaShare: ratioPrecision((rect.width * rect.height) / canvasArea),

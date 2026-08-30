@@ -14,6 +14,7 @@ import {
   canvasV2NativeSceneNodeOwnsVisibleSurface,
   canvasV2NativeSceneNodeUsesHostBackground,
   canvasV2NativeSceneSelectionContainsTarget,
+  canvasV2FollowerYAfterRootGrowth,
   canvasV2PreferredRootPlacement,
   materializeCanvasV2NativeScenePaintedEdges,
   normalizeCanvasV2ReactInlineStyle,
@@ -88,6 +89,22 @@ test("iterative top-level sections keep authored sibling reading order", () => {
       newlyPlaced: true,
     },
   }), { x: 5_016, y: 1_416 });
+});
+
+test("a progressively growing evidence root preserves the gap before later native islands", () => {
+  assert.equal(canvasV2FollowerYAfterRootGrowth({
+    leader: { x: 65_582, y: 65_524, width: 6_557, height: 730 },
+    leaderReference: { x: 65_582, y: 65_524, width: 6_557, height: 460 },
+    follower: { x: 65_582, y: 65_984, width: 2_480, height: 775 },
+    followerReference: { x: 65_582, y: 65_984, width: 2_480, height: 775 },
+  }), 66_254);
+
+  assert.equal(canvasV2FollowerYAfterRootGrowth({
+    leader: { x: 65_582, y: 65_524, width: 6_557, height: 730 },
+    leaderReference: { x: 65_582, y: 65_524, width: 6_557, height: 460 },
+    follower: { x: 73_000, y: 65_984, width: 900, height: 775 },
+    followerReference: { x: 73_000, y: 65_984, width: 900, height: 775 },
+  }), 65_984, "an unrelated horizontal territory must not move");
 });
 
 test("explicit narrative relations place a new island beside its declared anchor", () => {
@@ -171,6 +188,31 @@ test("compound copy with anonymous inline formatting edits as one text object", 
   assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(parent, byId), true);
   emphasis.sourceNodeId = "independent-heading";
   assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(parent, byId), false);
+});
+
+test("stable bold metric leaves enter the same precise inline editor as ordinary copy", () => {
+  const source = scene();
+  const metric = source.nodes[0];
+  metric.tagName = "strong";
+  metric.kind = "text";
+  metric.selectable = true;
+  metric.sourceNodeId = "activation-metric";
+  metric.attributes["data-canvas-v2-node-id"] = "activation-metric";
+  metric.content = [{ kind: "text", value: "5/6" }];
+  metric.childIds = [];
+  const byId = new Map([[metric.id, metric]]);
+
+  assert.equal(canvasV2NativeSceneLeafNeedsIdentity({
+    hasAuthoredAncestor: true,
+    hasText: true,
+    ownedByAuthoredTextObject: false,
+    tagName: "STRONG",
+    width: 180,
+    height: 80,
+    visible: true,
+    hasPaint: false,
+  }), true);
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(metric, byId), true);
 });
 
 test("declared and obvious legacy writing surfaces accept first text without making decoration editable", () => {
@@ -328,6 +370,13 @@ test("the public host, rather than a compatibility root, owns the canvas backgro
   assert.equal(canvasV2NativeSceneNodeUsesHostBackground(root), false);
   root.attributes.class = "northstar-canvas legacy-composition-wrapper";
   assert.equal(canvasV2NativeSceneNodeUsesHostBackground(root), true);
+
+  root.attributes.class = "";
+  root.parentId = undefined;
+  root.attributes["data-canvas-v2-design-region"] = "validation-chapter";
+  assert.equal(canvasV2NativeSceneNodeUsesHostBackground(root), true, "a body-level island composes directly on the host canvas");
+  root.attributes["data-canvas-v2-surface-treatment"] = "earned-card";
+  assert.equal(canvasV2NativeSceneNodeUsesHostBackground(root), false, "an explicitly earned card may own its bounded surface");
 });
 
 test("a visibly painted AI card remains its own selectable surface beside its stable children", () => {
@@ -357,12 +406,12 @@ test("AI relationship paths become directly selectable native connectors with du
   const first = source.nodes[0];
   first.id = "signal";
   first.sourceNodeId = "signal";
-  first.geometry = { x: 100, y: 100, width: 120, height: 80, rotation: 0, zIndex: 2 };
+  first.geometry = { x: 5_100, y: 5_100, width: 120, height: 80, rotation: 0, zIndex: 2 };
   first.attributes = { "data-canvas-v2-node-id": "signal" };
   const second = structuredClone(first);
   second.id = "decision";
   second.sourceNodeId = "decision";
-  second.geometry.x = 620;
+  second.geometry.x = 5_620;
   second.attributes = { "data-canvas-v2-node-id": "decision" };
   const relationship = structuredClone(first);
   relationship.id = "relationship-signal-decision";
@@ -370,7 +419,7 @@ test("AI relationship paths become directly selectable native connectors with du
   relationship.tagName = "path";
   relationship.namespace = "svg";
   relationship.kind = "shape";
-  relationship.geometry = { x: 220, y: 80, width: 400, height: 180, rotation: 0, zIndex: 1 };
+  relationship.geometry = { x: 5_220, y: 5_080, width: 400, height: 180, rotation: 0, zIndex: 1 };
   relationship.attributes = {
     "data-canvas-v2-node-id": "relationship-signal-decision",
     "data-canvas-v2-relationship-source": "signal",
@@ -387,6 +436,7 @@ test("AI relationship paths become directly selectable native connectors with du
     nodeId: relationship.sourceNodeId,
     sourceNodeId: first.sourceNodeId,
     targetNodeId: second.sourceNodeId,
+    originInParent: { x: 220, y: 80 },
     startInParent: { x: 220, y: 140 },
     endInParent: { x: 620, y: 140 },
     controlInParent: { x: 420, y: 20 },
@@ -406,6 +456,9 @@ test("AI relationship paths become directly selectable native connectors with du
   assert.equal(connector.attributes["data-canvas-v2-connector-to"], "decision");
   assert.equal(connector.attributes["data-canvas-v2-connector-variant"], "curve");
   assert.equal(connector.attributes["data-canvas-v2-connector-arrow"], "true");
+  assert.ok(connector.geometry.x > 5_000);
+  assert.ok(connector.geometry.width < 800);
+  assert.ok(Number(connector.attributes["data-canvas-v2-connector-control-x"]) > 5_000);
   const path = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "path")!;
   const hit = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "hit")!;
   const arrow = source.nodes.find((node) => node.parentId === connector.id && node.attributes["data-canvas-v2-connector-part"] === "end")!;
@@ -707,6 +760,97 @@ test("candidate observations are projected onto the exact public native world be
     height: projected.spatial.authoredSurface?.placementOccupants?.[0]?.bounds.height,
   }, { x: 2_500, y: 1_200, width: 1_600, height: 360 });
   assert.equal(projected.spatial.authoredSurface?.zones.length, 9);
+});
+
+test("native projection detects readable text collisions introduced by final public geometry", () => {
+  const source = scene();
+  const template = source.nodes[0];
+  const region = structuredClone(template);
+  const orientation = structuredClone(template);
+  const thesis = structuredClone(template);
+  const orientationText = "Using only authorized evidence, separate observation from interpretation.";
+  const thesisText = "WORKING THESIS";
+  region.id = "region";
+  region.sourceNodeId = "region";
+  region.tagName = "section";
+  region.kind = "island";
+  region.geometry = { x: 1_000, y: 1_000, width: 900, height: 500, rotation: 0, zIndex: 0 };
+  region.childIds = ["orientation", "thesis"];
+  region.content = [{ kind: "node", id: "orientation" }, { kind: "node", id: "thesis" }];
+  region.attributes = { "data-canvas-v2-node-id": "region", "data-canvas-v2-design-region": "" };
+  orientation.id = "orientation";
+  orientation.sourceNodeId = "orientation";
+  orientation.parentId = "region";
+  orientation.geometry = { x: 40, y: 40, width: 420, height: 80, rotation: 0, zIndex: 0 };
+  orientation.directText = orientationText;
+  orientation.content = [{ kind: "text", value: orientationText }];
+  orientation.attributes = { "data-canvas-v2-node-id": "orientation" };
+  thesis.id = "thesis";
+  thesis.sourceNodeId = "thesis";
+  thesis.parentId = "region";
+  thesis.tagName = "span";
+  thesis.geometry = { x: 40, y: 110, width: 420, height: 32, rotation: 0, zIndex: 0 };
+  thesis.directText = thesisText;
+  thesis.content = [{ kind: "text", value: thesisText }];
+  thesis.attributes = { "data-canvas-v2-node-id": "thesis" };
+  source.rootIds = ["region"];
+  source.nodes = [region, orientation, thesis];
+
+  const observedNode = (nodeId: string, parentNodeId: string | undefined, textPreview: string | undefined, bounds: { x: number; y: number; width: number; height: number }) => ({
+    nodeId,
+    ...(parentNodeId ? { parentNodeId } : {}),
+    tagName: nodeId === "region" ? "section" : nodeId === "thesis" ? "span" : "p",
+    ...(textPreview ? { textPreview } : {}),
+    bounds,
+    contentBox: { clientWidth: bounds.width, clientHeight: bounds.height, scrollWidth: bounds.width, scrollHeight: bounds.height },
+    layout: { display: "block", position: "static", zIndex: "auto", overflowX: "visible", overflowY: "visible" },
+  });
+  const observation: CanvasV2RenderObservation = {
+    schema: "canvas-v2.observation.v1",
+    revisionId: source.revisionId,
+    screenshotDataUrl: "data:image/png;base64,AA==",
+    viewport: { width: 1_680, height: 945, deviceScaleFactor: 1 },
+    contentBounds: { x: 0, y: 0, width: 1_680, height: 945 },
+    runtimeErrors: [],
+    missingEvidenceIds: [],
+    spatial: {
+      measuredNodeCount: 3,
+      reportedNodeCount: 3,
+      nodes: [
+        observedNode("region", undefined, undefined, { x: 100, y: 100, width: 900, height: 500 }),
+        observedNode("orientation", "region", orientationText, { x: 140, y: 140, width: 420, height: 80 }),
+        observedNode("thesis", "region", thesisText, { x: 140, y: 300, width: 420, height: 32 }),
+      ],
+      notableIntersections: [],
+      textCollisions: [],
+      contentOverflowNodeIds: [],
+      evidence: [],
+      designRegions: [{
+        nodeId: "region",
+        bounds: { x: 100, y: 100, width: 900, height: 500 },
+        canvasWidthShare: 900 / 1_680,
+        canvasHeightShare: 500 / 945,
+        canvasAreaShare: (900 * 500) / (1_680 * 945),
+        centerXShare: 550 / 1_680,
+        centerYShare: 350 / 945,
+        edgeSpace: { left: 100, top: 100, right: 680, bottom: 345 },
+        contentOverflowX: 0,
+        contentOverflowY: 0,
+        clipsOverflow: false,
+      }],
+    },
+    capturedAt: "2026-08-26T12:00:00.000Z",
+  };
+
+  const projected = projectCanvasV2ObservationToNativeScene(observation, source);
+  assert.equal(projected.spatial.textCollisions?.length, 1);
+  assert.deepEqual(projected.spatial.textCollisions?.[0], {
+    firstNodeId: "orientation",
+    secondNodeId: "thesis",
+    intersection: { x: 1_040, y: 1_110, width: 420, height: 10 },
+    firstCoverage: 0.13,
+    secondCoverage: 0.31,
+  });
 });
 
 test("native projection removes detached cards from their former region's overflow and collision facts", () => {

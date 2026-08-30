@@ -8,6 +8,80 @@ export interface CanvasV2ArtifactDocument {
   javascript?: string;
 }
 
+export const CANVAS_V2_EVIDENCE_PACKET_SCHEMA = "canvas-v2.evidence-packet.v1" as const;
+
+export type CanvasV2EvidenceAuthority = "observed" | "supplied" | "calculated" | "inferred";
+export type CanvasV2EvidenceKind =
+  | "app-identity"
+  | "screenshot"
+  | "screenshot-sequence"
+  | "marketing-signal"
+  | "business-record"
+  | "metric"
+  | "time-series"
+  | "document"
+  | "statement"
+  | "image";
+
+export interface CanvasV2EvidenceTimeRange {
+  start?: string;
+  end?: string;
+  label?: string;
+  timezone?: string;
+}
+
+/**
+ * Provider-owned provenance. The canvas may present this record, but neither
+ * the renderer nor the model may rewrite it into a stronger claim.
+ */
+export interface CanvasV2EvidenceSource {
+  providerId: string;
+  providerLabel: string;
+  sourceId: string;
+  sourceType: "account-app" | "capture" | "marketing-feed" | "business-manifest" | "web-page" | "web-image" | "pdf" | "report" | "uploaded" | "fixture" | "other";
+  label: string;
+  tenantId?: string;
+  workspaceId?: string;
+  sourceUrl?: string;
+  /** Tracking-free identity used for deduplication and durable citations. */
+  canonicalUrl?: string;
+  publisher?: string;
+  author?: string;
+  publishedAt?: string;
+  eventAt?: string;
+  sourceClass?: "primary" | "official" | "dataset" | "report" | "news" | "analysis" | "community" | "unknown";
+  access?: "open" | "partial" | "paywalled" | "inaccessible" | "unknown";
+  retrievedAt: string;
+  capturedAt?: string;
+  timeRange?: CanvasV2EvidenceTimeRange;
+  query?: string;
+  filters?: Record<string, string | number | boolean>;
+  permission?: "authorized" | "limited" | "unavailable";
+  freshness?: "live" | "current-snapshot" | "historical" | "unknown";
+}
+
+export interface CanvasV2EvidenceFact {
+  id: string;
+  label: string;
+  value: string;
+  authority: CanvasV2EvidenceAuthority;
+  description?: string;
+  sourceAssetIds?: string[];
+}
+
+export interface CanvasV2EvidenceMetric {
+  id: string;
+  label: string;
+  value: number | string;
+  unit?: string;
+  format?: "number" | "currency" | "percent" | "duration" | "text";
+  definition: string;
+  authority: Exclude<CanvasV2EvidenceAuthority, "inferred">;
+  timeRange?: CanvasV2EvidenceTimeRange;
+  filters?: Record<string, string | number | boolean>;
+  sourceAssetIds?: string[];
+}
+
 export interface CanvasV2EvidenceAsset {
   id: string;
   url: string;
@@ -16,6 +90,50 @@ export interface CanvasV2EvidenceAsset {
   flow?: string;
   screen?: string;
   description?: string;
+  kind?: CanvasV2EvidenceKind;
+  authority?: CanvasV2EvidenceAuthority;
+  packetId?: string;
+  source?: CanvasV2EvidenceSource;
+  capturedAt?: string;
+  sequenceIndex?: number;
+  mimeType?: string;
+  tags?: string[];
+  limitations?: string[];
+}
+
+/**
+ * One inspectable unit returned by any authorized evidence provider. Packets
+ * retain semantics and provenance separately from their visual rendering so
+ * a later model turn can extend the evidence without flattening its lineage.
+ */
+export interface CanvasV2EvidencePacket {
+  schema: typeof CANVAS_V2_EVIDENCE_PACKET_SCHEMA;
+  id: string;
+  kind: CanvasV2EvidenceKind;
+  title: string;
+  summary: string;
+  authority: CanvasV2EvidenceAuthority;
+  source: CanvasV2EvidenceSource;
+  assets: CanvasV2EvidenceAsset[];
+  facts: CanvasV2EvidenceFact[];
+  metrics: CanvasV2EvidenceMetric[];
+  limitations: string[];
+  tags: string[];
+  createdAt: string;
+  appId?: string;
+  appName?: string;
+  continuationKey?: string;
+  parentPacketIds?: string[];
+  /**
+   * Research memory and canvas presentation are deliberately separate. Most
+   * external sources remain graph-only; only a bounded material witness earns
+   * visible canvas space.
+   */
+  presentation?: {
+    state: "graph-only" | "candidate" | "promoted";
+    materiality: number;
+    reason: string;
+  };
 }
 
 export type CanvasV2RevisionState = "candidate" | "committed";
@@ -27,6 +145,21 @@ export interface CanvasV2ArtifactRevision {
   state: CanvasV2RevisionState;
   document: CanvasV2ArtifactDocument;
   evidence: CanvasV2EvidenceAsset[];
+  /** Durable provider packets that ground the visible evidence objects. */
+  evidencePackets?: CanvasV2EvidencePacket[];
+  /**
+   * Revision-owned discovery memory. Keeping it beside the document makes
+   * evidence lineage, contradictions, and human corrections travel through
+   * the same atomic undo/redo history as the visible canvas.
+   */
+  discoveryGraph?: import("@/lib/canvas-v2/discovery-graph").CanvasV2DiscoveryGraph;
+  /**
+   * Inquiry-level understanding and next-move memory. This is deliberately
+   * distinct from the evidence graph: the graph remembers source truth while
+   * the discovery state remembers what North Star currently believes the
+   * inquiry is trying to accomplish and how that understanding evolved.
+   */
+  discoveryState?: import("@/lib/canvas-v2/discovery-state").CanvasV2DiscoveryState;
   createdAt: string;
   /** The atomic object delta that produced this revision, when applicable. */
   sceneTransaction?: import("@/lib/canvas-v2/scene-transaction").CanvasV2SceneTransaction;
@@ -189,6 +322,8 @@ export interface CanvasV2DesignRegionObservation {
   targetZoneId?: CanvasV2SurfaceZoneId;
   textPreview?: string;
   bounds: CanvasV2ElementBounds;
+  /** Union of rendered, meaningful leaf content inside the island. This excludes layout wrappers whose empty height can conceal a visual gulf between chapters. */
+  contentBounds?: CanvasV2ElementBounds;
   canvasWidthShare: number;
   canvasHeightShare: number;
   canvasAreaShare: number;

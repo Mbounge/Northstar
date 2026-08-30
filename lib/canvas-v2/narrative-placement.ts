@@ -118,8 +118,7 @@ export function compactCanvasV2NewIslandPlacement(
         ? "horizontal"
         : undefined
     : undefined;
-  const titleOrigin = regions.find((region) => region.storyRole === "title");
-
+  const titleRegion = regions.find((region) => region.storyRole === "title");
   const candidates: CanvasV2NarrativePlacementCandidate[] = regions.flatMap((anchor, anchorIndex) => (
     NARRATIVE_RELATIONS.map((relation) => ({
       anchorNodeId: anchor.nodeId,
@@ -130,15 +129,12 @@ export function compactCanvasV2NewIslandPlacement(
     }))
   )).filter((candidate) => {
     if (regions.some((region) => placementIntersects(candidate.bounds, region.bounds, collisionClearance))) return false;
-    // The title is the model-authored story origin. Later islands may turn,
-    // wrap, or branch in any direction around their narrative neighbors, but
-    // none may silently become the new upper-left origin. Allowing that move
-    // produced an impossible retry loop: the source compiler kept placing a
-    // chapter before the title while CSS-only render repair tried to undo it.
-    if (titleOrigin && (
-      candidate.bounds.x < titleOrigin.bounds.x - 4
-      || candidate.bounds.y < titleOrigin.bounds.y - 4
-    )) return false;
+    if (titleRegion) {
+      const precedesTitleVertically = candidate.bounds.y < titleRegion.bounds.y - 4;
+      const precedesTitleOnOpeningRow = Math.abs(candidate.bounds.y - titleRegion.bounds.y) <= 4
+        && candidate.bounds.x < titleRegion.bounds.x - 4;
+      if (precedesTitleVertically || precedesTitleOnOpeningRow) return false;
+    }
     return true;
   });
 

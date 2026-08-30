@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { CANVAS_V2_WORKSPACE } from "../lib/canvas-v2/workspace-coordinate-space";
+
 const STANDARD_PROMPT = "Build a balanced executive comparison of Awin and Whop onboarding. Choose representative flows and screenshots, keep the main board simple, and leave your working surface visible so I can inspect how the solution came together.";
 
 function canvasApp(page: Page) {
@@ -54,8 +56,8 @@ test("the standard Awin and Whop journey produces a complete growing evidence-le
 
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
   await expect(page.getByText("The visible canvas preserves both complete onboarding flows and resolves them into a distinctive, grounded executive comparison.")).toBeVisible();
-  await expect(page.getByText("Awin · visible")).toBeVisible();
-  await expect(page.getByText("Whop · visible")).toBeVisible();
+  await expect(page.getByText("Awin · visible")).toHaveCount(0);
+  await expect(page.getByText("Whop · visible")).toHaveCount(0);
 
   const frame = canvasFrame(page);
   await expect(frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"]')).toHaveCount(1);
@@ -102,9 +104,9 @@ test("the standard Awin and Whop journey produces a complete growing evidence-le
   expect(unreadableDarkCompositionText).toEqual([]);
 
   const geometry = await frame.evaluate((element) => ({ width: element.scrollWidth, height: element.scrollHeight }));
-  // Patch 8 owns one explicit finite canvas. Content may occupy only part of
-  // it, but the runtime coordinate plane is intentionally 12,000px wide.
-  expect(geometry.width).toBe(12_000);
+  // The canvas is one explicit, very large finite world. Its numeric safety
+  // rail is independent from the compact authoring scale used by Northstar.
+  expect(geometry.width).toBe(CANVAS_V2_WORKSPACE.width);
   expect(geometry.height).toBeGreaterThanOrEqual(945);
   const awinRows = await frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"] [data-canvas-v2-flow-index]').evaluateAll((screens) => new Set(screens.map((screen) => Math.round(screen.getBoundingClientRect().top))).size);
   const whopRows = await frame.locator('[data-canvas-v2-canonical-flow="flow:whop:onboarding"] [data-canvas-v2-flow-index]').evaluateAll((screens) => new Set(screens.map((screen) => Math.round(screen.getBoundingClientRect().top))).size);
@@ -128,9 +130,16 @@ test("the standard Awin and Whop journey produces a complete growing evidence-le
   // camera bursts still avoid one React render per input event.
   await expect(page.getByTestId("canvas-v2-native-compiler")).toHaveCount(0);
   const evidenceImages = frame.locator('img[data-canvas-v2-evidence-role="canonical"]');
-  await expect(evidenceImages.first()).toHaveAttribute("loading", "lazy");
-  await expect(evidenceImages.first()).toHaveAttribute("decoding", "async");
-  await expect(evidenceImages.first()).toHaveCSS("content-visibility", "auto");
+  // Canonical evidence is the visible source record, not a scroll-driven
+  // gallery. Every screen must be requested and decoded on first commit so a
+  // rail never appears truncated until the user moves or zooms the canvas.
+  await expect(evidenceImages.first()).toHaveAttribute("loading", "eager");
+  await expect(evidenceImages.first()).toHaveAttribute("decoding", "sync");
+  await expect(evidenceImages.first()).toHaveAttribute("fetchpriority", "high");
+  await expect(evidenceImages.first()).not.toHaveCSS("content-visibility", "auto");
+  expect(await evidenceImages.evaluateAll((images) => images.every((image) => (
+    image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0
+  )))).toBe(true);
   expect(await frame.locator('[data-canvas-v2-native-runtime-node="true"]').count()).toBeGreaterThan(100);
   const workspace = page.getByRole("region", { name: "Canvas workspace" });
   const populatedCameraBurst = await workspace.evaluate((element) => {
@@ -503,7 +512,7 @@ test("collapsing and reopening chat preserves the active run and its visible pro
   });
   const initialRevision = await committedRevision(page).textContent();
   await send(page, STANDARD_PROMPT);
-  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText(/thinking|researching|rendering/, { timeout: 15_000 });
+  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText(/working|thinking|researching|rendering/, { timeout: 15_000 });
   await page.getByRole("button", { name: "Collapse North Star panel" }).click();
   await expect(page.getByTestId("canvas-v2-floating-panel")).toHaveCount(0);
   await expect(page.getByTestId("canvas-v2-loop-status")).not.toContainText("ready");
@@ -511,7 +520,7 @@ test("collapsing and reopening chat preserves the active run and its visible pro
 
   await page.getByRole("button", { name: "Open North Star panel" }).first().click();
   await expect(page.getByText(STANDARD_PROMPT, { exact: true })).toBeVisible();
-  await expect(page.getByText(/Grounded research|Established the frame/).first()).toBeVisible();
+  await expect(page.getByText(/Retrieved the complete|Established a clear editorial premise/).first()).toBeVisible();
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
   await expect(page.getByText("The visible canvas preserves both complete onboarding flows and resolves them into a distinctive, grounded executive comparison.")).toBeVisible();
 });
@@ -831,12 +840,23 @@ test("terminal Awin and Whop screenshots remain independently movable and resiza
     revisionAfterWhopResize,
   ]).size).toBe(4);
 
+  const geometryDelta = async (expected: NonNullable<typeof lateWhopAfterMoves>) => {
+    const actual = await lateWhop.boundingBox();
+    if (!actual) return Number.POSITIVE_INFINITY;
+    return Math.max(
+      Math.abs(actual.x - expected.x),
+      Math.abs(actual.y - expected.y),
+      Math.abs(actual.width - expected.width),
+      Math.abs(actual.height - expected.height),
+    );
+  };
+
   // Cover the old delayed compiler callback window. Neither late screen may
   // return to its rail, duplicate, or exchange identity after the release.
   await page.waitForTimeout(1_800);
   await expect(committedRevision(page)).toHaveText(revisionAfterWhopResize ?? "");
   expect(await lateAwin.boundingBox()).toEqual(lateAwinAfterMoves);
-  expect(await lateWhop.boundingBox()).toEqual(lateWhopLiveResize);
+  await expect.poll(() => geometryDelta(lateWhopLiveResize!)).toBeLessThan(0.1);
   await expect(lateAwin).toHaveCount(1);
   await expect(lateWhop).toHaveCount(1);
   await expect(page.getByText(/Canonical flow evidence must remain complete/)).toHaveCount(0);
@@ -849,16 +869,6 @@ test("terminal Awin and Whop screenshots remain independently movable and resiza
     * Math.max(0, Math.min(toolbarBounds!.y + toolbarBounds!.height, selectionBounds!.y + selectionBounds!.height) - Math.max(toolbarBounds!.y, selectionBounds!.y));
   expect(chromeIntersection).toBe(0);
 
-  const geometryDelta = async (expected: NonNullable<typeof lateWhopAfterMoves>) => {
-    const actual = await lateWhop.boundingBox();
-    if (!actual) return Number.POSITIVE_INFINITY;
-    return Math.max(
-      Math.abs(actual.x - expected.x),
-      Math.abs(actual.y - expected.y),
-      Math.abs(actual.width - expected.width),
-      Math.abs(actual.height - expected.height),
-    );
-  };
   // History is the same authority as direct manipulation: undoing resize and
   // move restores the exact prior native geometry, then redo returns the same
   // stable screen identity to each accepted state without a compatibility
@@ -1109,7 +1119,7 @@ test("conversation, inspection, and a selected edit share one page-session artif
 test("an unrelated market problem routes to a distinct composition without fabricated app research", async ({ page }) => {
   await send(page, "Create a market-entry decision landscape for a vertical SaaS startup. Separate observable evidence from assumptions and show what to decide now, next, and later.");
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 30_000 });
-  await expect(page.getByText("Canvas design")).toBeVisible();
+  await expect(page.getByText("Canvas design")).toHaveCount(0);
   await expect(page.getByText("The market-entry landscape now separates evidence from assumptions and resolves the wedge across immediate, next, and later decisions.")).toBeVisible();
 
   const frame = canvasFrame(page);
@@ -1167,9 +1177,12 @@ test("a large two-dimensional discovery landscape grows, fits, remains selectabl
   await expect(frame.getByLabel("Large two-dimensional discovery landscape")).toBeVisible();
   await expect(frame.getByRole("heading", { name: /Act where the next signal/ })).toBeVisible();
   const geometry = await frame.evaluate((element) => ({ width: element.scrollWidth, height: element.scrollHeight }));
-  expect(geometry).toEqual({ width: 12_000, height: 8_000 });
+  expect(geometry).toEqual({ width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height });
 
-  await frame.locator('[data-canvas-v2-node-id="large-decision"]').click();
+  // The region wrapper is semantic layout, not an implicit group. Select an
+  // exact native copy leaf to prove the distant composition remains directly
+  // editable after a full-scene fit.
+  await frame.getByText("A useful decision creates evidence, not merely alignment.", { exact: true }).click();
   await expect(page.getByTestId("canvas-v2-context-toolbar")).toBeVisible();
 
   // A CSS-rotated multiline label must compile as a rotated native text
@@ -1219,13 +1232,13 @@ test("manual creation and history remain usable on the same source-authority pat
 });
 
 test("trackpad navigation previews continuously without rerendering the scene per wheel event", async ({ page }) => {
-  const workspace = page.getByRole("region", { name: "Canvas workspace" });
+  const workspace = canvasApp(page).getByRole("region", { name: "Canvas workspace" });
   const surface = workspace.getByTestId("canvas-v2-workspace-surface");
-  const controls = page.getByTestId("canvas-v2-navigation-controls");
+  const controls = canvasApp(page).getByTestId("canvas-v2-navigation-controls");
   const percentage = controls.locator('button[title*="Pinch to zoom"]');
   await expect(controls).toBeVisible();
   await expect(percentage).toContainText("24%");
-  await expect(page.getByTestId("canvas-v2-native-compiler")).toHaveCount(0);
+  await expect(canvasApp(page).getByTestId("canvas-v2-native-compiler")).toHaveCount(0);
 
   const controlsBounds = await controls.boundingBox();
   const viewportSize = page.viewportSize();
@@ -1294,20 +1307,20 @@ test("Patch 8A uses one finite workspace and preserves direct human manipulation
   const workspace = page.getByRole("region", { name: "Canvas workspace" });
   const surface = workspace.getByTestId("canvas-v2-workspace-surface");
   await expect(surface).toBeVisible();
-  await expect(surface).toHaveCSS("width", "12000px");
-  await expect(surface).toHaveCSS("height", "8000px");
+  await expect(surface).toHaveCSS("width", `${CANVAS_V2_WORKSPACE.width}px`);
+  await expect(surface).toHaveCSS("height", `${CANVAS_V2_WORKSPACE.height}px`);
   // The first rendered camera must already be legal and centered on the true
   // finite board. A fresh session cannot begin at a phantom positive offset
   // or silently privilege the canvas's upper-left corner.
-  await expect.poll(async () => surface.evaluate((element) => {
+  await expect.poll(async () => surface.evaluate((element, workspaceGeometry) => {
     const workspace = element.closest<HTMLElement>('[aria-label="Canvas workspace"]');
     if (!workspace) return false;
     const surfaceBounds = element.getBoundingClientRect();
     const workspaceBounds = workspace.getBoundingClientRect();
-    const scale = surfaceBounds.width / 12_000;
-    return Math.abs(surfaceBounds.left + 6_000 * scale - (workspaceBounds.left + workspaceBounds.width / 2)) < 0.1
-      && Math.abs(surfaceBounds.top + 4_000 * scale - (workspaceBounds.top + workspaceBounds.height / 2)) < 0.1;
-  })).toBe(true);
+    const scale = surfaceBounds.width / workspaceGeometry.width;
+    return Math.abs(surfaceBounds.left + (workspaceGeometry.width / 2) * scale - (workspaceBounds.left + workspaceBounds.width / 2)) < 0.1
+      && Math.abs(surfaceBounds.top + (workspaceGeometry.height / 2) * scale - (workspaceBounds.top + workspaceBounds.height / 2)) < 0.1;
+  }, { width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height })).toBe(true);
   await expect(workspace).toHaveCSS("background-color", "rgb(13, 14, 22)");
   const frame = canvasFrame(page);
   await expect(frame).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
@@ -1373,6 +1386,14 @@ test("Patch 8A uses one finite workspace and preserves direct human manipulation
   expect(handleBounds).not.toBeNull();
   await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
   await page.mouse.down();
+  // Selection and inspector work triggered by pointer-down may settle on a
+  // later development frame. Establish a quiet baseline so the assertion
+  // below measures the 24 resize-preview events themselves.
+  await expect.poll(async () => {
+    const before = Number(await workspace.getAttribute("data-canvas-v2-render-count"));
+    await page.waitForTimeout(50);
+    return Number(await workspace.getAttribute("data-canvas-v2-render-count")) === before;
+  }).toBe(true);
   const resizePreviewRenderCount = Number(await workspace.getAttribute("data-canvas-v2-render-count"));
   await page.mouse.move(handleBounds!.x + 48, handleBounds!.y + 36, { steps: 24 });
   // Pointer traffic never drives scene rendering. A bounded pair of unrelated
@@ -1651,16 +1672,33 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
     return { x: Math.round(bounds.x), y: Math.round(bounds.y) };
   })).toEqual({ x: Math.round(beforeNudge.x + nudgeScreenDelta), y: Math.round(beforeNudge.y) });
 
-  const fontSizeBeforeResize = await text.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+  const typographyBeforeResize = await text.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { fontSize: Number.parseFloat(style.fontSize), lineHeight: Number.parseFloat(style.lineHeight) };
+  });
   const textResizeHandle = page.getByRole("button", { name: /Resize manual-text-.+ from south-east/ });
   const textResizeHandleBounds = await textResizeHandle.boundingBox();
   expect(textResizeHandleBounds).not.toBeNull();
   await page.mouse.move(textResizeHandleBounds!.x + textResizeHandleBounds!.width / 2, textResizeHandleBounds!.y + textResizeHandleBounds!.height / 2);
   await page.mouse.down();
   await page.mouse.move(textResizeHandleBounds!.x + 88, textResizeHandleBounds!.y + 40, { steps: 5 });
-  await expect.poll(() => text.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThan(fontSizeBeforeResize + 1);
+  await expect.poll(() => text.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThan(typographyBeforeResize.fontSize + 1);
   await page.mouse.up();
-  await expect.poll(() => text.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThan(fontSizeBeforeResize + 1);
+  await expect.poll(() => text.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThan(typographyBeforeResize.fontSize + 1);
+  const typographyAfterResize = await text.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { fontSize: Number.parseFloat(style.fontSize), lineHeight: Number.parseFloat(style.lineHeight) };
+  });
+  expect(typographyAfterResize.lineHeight / typographyAfterResize.fontSize)
+    .toBeCloseTo(typographyBeforeResize.lineHeight / typographyBeforeResize.fontSize, 1);
+  const resizedTextBounds = await text.boundingBox();
+  const resizedTextSelection = await page.getByTestId("canvas-v2-element-selection").boundingBox();
+  expect(resizedTextBounds).not.toBeNull();
+  expect(resizedTextSelection).not.toBeNull();
+  expect(resizedTextSelection!.x).toBeCloseTo(resizedTextBounds!.x, 0);
+  expect(resizedTextSelection!.y).toBeCloseTo(resizedTextBounds!.y, 0);
+  expect(resizedTextSelection!.width).toBeCloseTo(resizedTextBounds!.width, 0);
+  expect(resizedTextSelection!.height).toBeCloseTo(resizedTextBounds!.height, 0);
 
   // Layers is an unobstructed alternate selection surface. Opening it hides
   // the contextual toolbar until a layer is chosen, then restores the toolbar

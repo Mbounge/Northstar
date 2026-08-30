@@ -23,6 +23,7 @@ import {
   type CanvasV2ArtifactTheme,
 } from "@/lib/canvas-v2/artifact-theme";
 import { buildCanvasV2RuntimeDocument } from "@/lib/canvas-v2/runtime-document";
+import { scopeCanvasV2ArtifactCss } from "@/lib/canvas-v2/style-isolation";
 import {
   canvasV2NativeSceneNodeMap,
   canvasV2NativeSceneNodeHasRenderableNamespace,
@@ -278,6 +279,16 @@ function inspectNativeNode(
   element?: Element | null,
 ): CanvasV2InspectableElement {
   const computed = element ? element.ownerDocument.defaultView?.getComputedStyle(element) : undefined;
+  const inheritedAttribute = (name: string): string | undefined => {
+    let current: CanvasV2NativeSceneNode | undefined = node;
+    while (current) {
+      const value = current.attributes[name];
+      if (value !== undefined) return value;
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    return undefined;
+  };
+  const evidenceAuthorityValue = inheritedAttribute("data-canvas-v2-evidence-authority");
   const connector = node.kind === "connector" ? (() => {
     const numberAttribute = (name: string, fallback: number) => {
       const value = Number(node.attributes[name]);
@@ -316,6 +327,12 @@ function inspectNativeNode(
     editVersion: node.editVersion,
     rotation: node.geometry.rotation,
     canonicalEvidence: node.canonicalEvidence,
+    evidenceId: node.attributes["data-canvas-v2-evidence-id"],
+    evidencePacketId: inheritedAttribute("data-canvas-v2-evidence-packet-id"),
+    evidenceSourceId: inheritedAttribute("data-canvas-v2-evidence-source-id"),
+    evidenceAuthority: evidenceAuthorityValue === "observed" || evidenceAuthorityValue === "supplied" || evidenceAuthorityValue === "calculated" || evidenceAuthorityValue === "inferred"
+      ? evidenceAuthorityValue
+      : undefined,
     altText: node.kind === "image" ? node.attributes.alt ?? "" : undefined,
     ...(connector ? { connector } : {}),
     visualStyle: {
@@ -325,6 +342,7 @@ function inspectNativeNode(
       borderRadius: computed?.borderRadius ?? "",
       fontFamily: computed?.fontFamily ?? "",
       fontSize: computed?.fontSize ?? "",
+      lineHeight: computed?.lineHeight ?? "",
       fontWeight: computed?.fontWeight ?? "",
       fontStyle: computed?.fontStyle ?? "",
       textAlign: computed?.textAlign ?? "",
@@ -349,6 +367,7 @@ const NATIVE_TRANSIENT_PROPERTIES = [
   "max-width",
   "max-height",
   "font-size",
+  "line-height",
 ] as const;
 
 interface NativeTransientStyleSnapshot {
@@ -382,6 +401,8 @@ const NativeNode = memo(function NativeNode({
   if (!canvasV2NativeSceneNodeHasRenderableNamespace(node, parent)) return null;
   const narrowSelectable = node.selectable && node.namespace === "html" && (node.geometry.width <= 6 || node.geometry.height <= 6);
   const hostOwnsBackground = canvasV2NativeSceneNodeUsesHostBackground(node);
+  const eagerCanonicalEvidenceImage = node.kind === "image"
+    && (node.canonicalEvidence || node.attributes["data-canvas-v2-evidence-role"] === "canonical");
   const safeInlineStyle = normalizeCanvasV2ReactInlineStyle(node.inlineStyle);
   const style = Object.fromEntries(Object.entries(safeInlineStyle).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
   const runtimeStyle = {
@@ -398,7 +419,7 @@ const NativeNode = memo(function NativeNode({
     "--canvas-v2-native-height": `${node.geometry.height}px`,
     "--canvas-v2-native-rotation": `${node.geometry.rotation}deg`,
     zIndex: CANVAS_V2_NATIVE_STACK_BASE + node.geometry.zIndex,
-    ...(node.kind === "image" ? {
+    ...(node.kind === "image" && !eagerCanonicalEvidenceImage ? {
       contentVisibility: "auto",
       containIntrinsicSize: `${Math.max(1, node.geometry.width)}px ${Math.max(1, node.geometry.height)}px`,
     } : {}),
@@ -419,8 +440,17 @@ const NativeNode = memo(function NativeNode({
     } : {}),
     ...(node.kind === "image" ? {
       draggable: false,
-      loading: node.attributes.loading ?? "lazy",
-      decoding: node.attributes.decoding ?? "async",
+      // Canonical rails are the visible source record, not scroll-driven
+      // gallery content. Request every grounded screen immediately so a rail
+      // never appears incomplete until the user pans the canvas. Other image
+      // objects retain lazy loading for normal workspace performance.
+      loading: eagerCanonicalEvidenceImage ? "eager" : node.attributes.loading ?? "lazy",
+      // The private render gate has already fetched these canonical assets.
+      // Decode them synchronously when the accepted public scene mounts so
+      // Chromium cannot present a partially rasterized rail until the next
+      // pan, zoom, or composition invalidates its tiles.
+      decoding: eagerCanonicalEvidenceImage ? "sync" : node.attributes.decoding ?? "async",
+      ...(eagerCanonicalEvidenceImage ? { fetchPriority: "high" } : {}),
     } : {}),
     suppressContentEditableWarning: true,
   };
@@ -463,7 +493,6 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const [compileError, setCompileError] = useState<string>();
   const [compiledRevisionId, setCompiledRevisionId] = useState<string>();
   const activePointerRef = useRef<{ pointerId: number; element?: CanvasV2InspectableElement } | undefined>(undefined);
-  const lastTextPointerDownRef = useRef<{ nodeId: string; timeStamp: number } | undefined>(undefined);
   const runtimeDocument = useMemo(() => buildCanvasV2RuntimeDocument(revision), [revision]);
   const renderedScene = sceneOverride ?? scene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
@@ -565,6 +594,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           }
         }
         if (geometry.fontSize !== undefined) element.style.setProperty("font-size", `${geometry.fontSize}px`, "important");
+        if (geometry.lineHeight !== undefined) element.style.setProperty("line-height", `${geometry.lineHeight}px`, "important");
       }
       if (geometry.kind === "rotate" && geometry.rotation !== undefined) {
         element.style.setProperty("--canvas-v2-native-rotation", `${geometry.rotation}deg`);
@@ -729,31 +759,12 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     if (event.button !== 0 && event.button !== 1) return;
     const targetResult = inspectionEnabled ? targetNode(event.target) : undefined;
     const inspected = targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined;
-    const previousTextPointer = lastTextPointerDownRef.current;
-    const repeatedTextPointer = Boolean(
-      event.button === 0
-      && inspected?.textEditable
-      && targetResult
-      && previousTextPointer?.nodeId === inspected.nodeId
-      && event.timeStamp - previousTextPointer.timeStamp <= 500,
-    );
-    lastTextPointerDownRef.current = inspected?.textEditable
-      ? { nodeId: inspected.nodeId, timeStamp: event.timeStamp }
-      : undefined;
-    if (repeatedTextPointer && inspected && targetResult) {
-      // Selecting a newly synthesized AI text leaf can replace its React DOM
-      // node between click one and click two. Browsers then suppress the
-      // native dblclick event even though the person performed a legitimate
-      // double-click. Recognize the second pointer-down ourselves and enter
-      // the same precise editor before object selection starts another drag.
-      activePointerRef.current = undefined;
-      event.preventDefault();
-      event.stopPropagation();
-      beginTextEditing(targetResult, inspected, event.clientX, event.clientY);
-      return;
-    }
     activePointerRef.current = { pointerId: event.pointerId, ...(inspected ? { element: inspected } : {}) };
-    if (inspected && event.button === 0) event.preventDefault();
+    // Text objects need the browser's compatibility click sequence so a
+    // physical double-click can produce click/dblclick after object selection.
+    // The scene already disables ordinary text selection until edit mode, so
+    // preserving the default here does not leak a browser-native selection.
+    if (inspected && event.button === 0 && !inspected.textEditable) event.preventDefault();
     // Do not capture the pointer on the scene root. Retargeting pointer-up to
     // the root also retargets the browser's click/double-click sequence, which
     // prevents the authored text leaf from entering inline edit mode. The
@@ -863,6 +874,39 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     beginTextEditing(targetResult, inspected, event.clientX, event.clientY);
   };
 
+  const repeatedClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!inspectionEnabled || event.button !== 0 || event.detail < 2) return;
+    const targetResult = targetNode(event.target);
+    let inspected = targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined;
+    let editableTarget = targetResult;
+
+    // Selection can reconcile a newly materialized text fragment between the
+    // first and second click. The browser still reports click detail 2, but
+    // its event target may now be the fragment's structural parent. Resolve
+    // the selected native identity at the same point so editing never depends
+    // on React retaining one particular DOM instance across the click pair.
+    if (!inspected?.textEditable) {
+      const selectedId = selectedNodeIds?.at(-1) ?? selectedNodeId;
+      const selectedNode = selectedId ? bySourceId.get(selectedId) : undefined;
+      const selector = selectedId
+        ? `[data-canvas-v2-node-id="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(selectedId) : selectedId.replaceAll('"', '\\"')}"]`
+        : undefined;
+      const selectedElement = selector ? publicSceneRef.current?.querySelector<HTMLElement>(selector) : undefined;
+      if (selectedNode?.selectable && selectedElement) {
+        const bounds = selectedElement.getBoundingClientRect();
+        if (event.clientX >= bounds.left && event.clientX <= bounds.right
+          && event.clientY >= bounds.top && event.clientY <= bounds.bottom) {
+          editableTarget = { node: selectedNode, element: selectedElement };
+          inspected = inspectNativeNode(selectedNode, byId, selectedElement);
+        }
+      }
+    }
+    if (!editableTarget || !inspected?.textEditable || inspected.locked) return;
+    event.preventDefault();
+    event.stopPropagation();
+    beginTextEditing(editableTarget, inspected, event.clientX, event.clientY);
+  };
+
   const wheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!onWorkspaceWheel) return;
     event.preventDefault();
@@ -872,6 +916,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const nativeLayoutGuard = `
     [data-canvas-v2-native-scene="true"] [data-canvas-v2-native-runtime-node="true"] {
       cursor:inherit!important;
+    }
+    [data-canvas-v2-native-scene="true"] > [data-canvas-v2-native-runtime-node="true"][data-canvas-v2-design-region]:not([data-canvas-v2-surface-treatment="earned-card"]) {
+      background:transparent!important;
+      box-shadow:none!important;
     }
     [data-canvas-v2-native-scene="true"] [data-canvas-v2-native-runtime-node="true"][data-canvas-v2-native-layout="absolute"] {
       box-sizing:border-box!important;
@@ -932,6 +980,11 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     [data-canvas-v2-native-scene="true"] [data-canvas-v2-narrow-hit-target="horizontal"]::after { inset:-9px -10px; }
   `;
 
+  const publicSceneCss = useMemo(
+    () => scopeCanvasV2ArtifactCss(renderedScene?.css ?? revision.document.css),
+    [renderedScene?.css, revision.document.css],
+  );
+
   return (
     <div className="relative" style={{ width, height, pointerEvents: framePointerEvents }}>
       {compiledRevisionId !== revision.id && <iframe
@@ -976,6 +1029,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
         onPointerUp={pointerUp}
         onPointerCancel={pointerUp}
         onPointerLeave={() => onElementHover?.(undefined)}
+        onClickCapture={repeatedClick}
         // Capture before an authored descendant, browser word-selection, or
         // freshly mounted selection chrome can consume the second click. The
         // public native scene—not arbitrary model HTML—owns entry into edit
@@ -988,7 +1042,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           onSelectionRefresh?.(allInspectable());
         }}
       >
-        <style>{renderedScene?.css ?? revision.document.css}</style>
+        <style data-canvas-v2-artifact-styles="scoped">{publicSceneCss}</style>
         <style>{nativeLayoutGuard}</style>
         {renderedScene?.rootIds.map((rootId) => {
           const node = byId.get(rootId);

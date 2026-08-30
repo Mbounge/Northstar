@@ -84,15 +84,60 @@ test("the provider-neutral request maps Luna to a private strict Responses API c
     const body = JSON.parse(String(request.init.body)) as Record<string, any>;
     assert.equal(body.model, "gpt-5.6-luna");
     assert.equal(body.store, false);
-    assert.deepEqual(body.reasoning, { effort: "low" });
+    assert.deepEqual(body.reasoning, { effort: "low", context: "current_turn" });
+    assert.equal(body.prompt_cache_options.mode, "explicit");
+    assert.equal(body.prompt_cache_options.ttl, "30m");
+    assert.match(body.prompt_cache_key, /^northstar-v2-/);
     assert.equal(body.text.format.type, "json_schema");
     assert.equal(body.text.format.strict, true);
     assert.deepEqual(body.text.format.schema.required, ["decision", "patches"]);
     assert.deepEqual(body.text.format.schema.properties.patches.items.required, ["op", "targetNodeId"]);
     assert.equal(body.text.format.schema.additionalProperties, false);
-    assert.match(body.input[0].content[1].image_url, /^data:image\/png;base64,cG5n$/);
-    assert.match(body.input[0].content[2].text, /targetNodeId is missing/);
-    assert.match(body.input[0].content[2].text, /If it rejects the intended move, target territory, completion choice, or patch content, replace that rejected part rather than repeating it/);
+    assert.deepEqual(body.input[0].content[0].prompt_cache_breakpoint, { mode: "explicit" });
+    assert.equal(body.input[0].content[1].text, "Current revision");
+    assert.match(body.input[0].content[2].image_url, /^data:image\/png;base64,cG5n$/);
+    assert.equal(body.input[0].content[2].detail, "low");
+    assert.match(body.input[0].content[3].text, /targetNodeId is missing/);
+    assert.match(body.input[0].content[3].text, /If it rejects the intended move, target territory, completion choice, or patch content, replace that rejected part rather than repeating it/);
+    assert.equal(request.audit.imageCount, 1);
+    assert.deepEqual(request.audit.imageDetails, { low: 1, high: 0, auto: 0, original: 0 });
+    assert.equal(request.audit.encodedImageBytes, 3);
+    assert.equal(request.audit.promptCacheMode, "explicit");
+  } finally {
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousKey;
+  }
+});
+
+test("the provider preflight rejects unbounded or original-resolution visual context before network I/O", () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  const base = {
+    model: "gpt-5.6-luna",
+    system: "Inspect only the supplied evidence.",
+    schemaName: "bounded_visual_context",
+    schema: { type: "object", properties: { ok: { type: "boolean" } } },
+    maxOutputTokens: 200,
+  } as const;
+  try {
+    assert.throws(() => buildCanvasV2StructuredProviderRequest({
+      ...base,
+      parts: [{ inlineData: { mimeType: "image/png", data: "cG5n", detail: "auto" } }],
+    }), /forbids auto\/original image detail/);
+    assert.throws(() => buildCanvasV2StructuredProviderRequest({
+      ...base,
+      maxInputImages: 3,
+      parts: Array.from({ length: 4 }, () => ({ inlineData: { mimeType: "image/png", data: "cG5n", detail: "low" as const } })),
+    }), /permits at most 3/);
+    const request = buildCanvasV2StructuredProviderRequest({
+      ...base,
+      maxInputImages: 2,
+      parts: [
+        { inlineData: { mimeType: "image/png", data: "cG5n", detail: "low" } },
+        { inlineData: { mimeType: "image/png", data: "cG5n", detail: "high" } },
+      ],
+    });
+    assert.deepEqual(request.audit.imageDetails, { low: 1, high: 1, auto: 0, original: 0 });
   } finally {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange, repairCanvasV2RenderedRelationshipGeometry, retireCanvasV2BrokenAuthoredRelationships, retireCanvasV2CollidingRelationshipLabels } from "../lib/canvas-v2/source-patch";
+import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange, normalizeCanvasV2SourcePatchHeadingHierarchy, repairCanvasV2RenderedRelationshipGeometry, retireCanvasV2BrokenAuthoredRelationships, retireCanvasV2CollidingRelationshipLabels } from "../lib/canvas-v2/source-patch";
 import { validateCanvasV2EvidenceContinuity } from "../lib/canvas-v2/artifact-safety";
 import { compactCanvasV2IslandSourceForModel } from "../lib/canvas-v2/model-context";
 import type { CanvasV2WorkingContext } from "../lib/canvas-v2/working-context";
@@ -35,6 +35,20 @@ test("source node ranges survive nested elements with the same tag", () => {
   const range = findCanvasV2SourceNodeRange(html, "a");
   assert.equal(range?.start, 0);
   assert.equal(range?.end, html.length);
+});
+
+test("analytical h1 output is demoted with its current CSS selectors without touching title work", () => {
+  const operations = normalizeCanvasV2SourcePatchHeadingHierarchy([
+    { op: "append-html", targetNodeId: "canvas", html: '<section data-canvas-v2-node-id="analysis"><h1 class="thesis">Trust is the constraint.</h1></section>' },
+    { op: "upsert-css", layerId: "analysis", css: '[data-canvas-v2-node-id="analysis"] h1, h1.thesis{font-size:72px}.h1-token{color:red}' },
+  ], "analysis");
+  assert.match(operations[0].op === "append-html" ? operations[0].html : "", /<h2 class="thesis">/);
+  assert.doesNotMatch(operations[0].op === "append-html" ? operations[0].html : "", /<h1\b/);
+  assert.match(operations[1].op === "upsert-css" ? operations[1].css : "", /\] h2, h2\.thesis/);
+  assert.match(operations[1].op === "upsert-css" ? operations[1].css : "", /\.h1-token/);
+
+  const titleOperations = normalizeCanvasV2SourcePatchHeadingHierarchy(operations, "title");
+  assert.deepEqual(titleOperations, operations);
 });
 
 test("exhausted relationship repair retires only exact broken relationship marks", () => {
@@ -131,6 +145,25 @@ test("model CSS cannot use inert workspace metadata as a layout parent", () => {
   }));
 });
 
+test("evidence-wide compatibility roots hug composition content instead of the navigation world", () => {
+  const next = applyCanvasV2SourcePatch({
+    previous: {
+      ...previous,
+      css: '.northstar-canvas{display:grid;align-content:space-between;height:100%;min-height:100%}',
+    },
+    evidence,
+    operations: [{
+      op: "upsert-css",
+      layerId: "comparison",
+      css: '[data-canvas-v2-node-id="lane"]{width:1600px}',
+    }],
+  });
+  assert.match(next.css, /height:auto!important/);
+  assert.match(next.css, /min-height:0!important/);
+  assert.match(next.css, /align-content:start!important/);
+  assert.doesNotMatch(next.css, /canvas-v2-canvas--evidence-wide[^}]*min-height:100%!important/);
+});
+
 test("render repair keeps the original visual layer while appending a bounded correction", () => {
   const workspace = {
     html: '<template data-canvas-v2-node-id="canvas-root" data-canvas-v2-workspace-root="true"></template><section data-canvas-v2-node-id="title" data-canvas-v2-design-region><h1 data-canvas-v2-node-id="heading">Title</h1><p data-canvas-v2-node-id="eyebrow">Context</p></section>',
@@ -197,6 +230,8 @@ test("bounded patches preserve canonical rails and bind evidence copies server-s
   });
   assert.match(next.html, /data-canvas-v2-source-node-id="canonical-1"/);
   assert.match(next.html, /data-canvas-v2-scale-intent="peer"/);
+  assert.match(next.html, /alt="Screen 1"/);
+  assert.doesNotMatch(next.html, /alt="Evidence detail"/);
   assert.match(next.html, /max-height:376px!important/);
   assert.match(next.html, /src="https:\/\/evidence\.test\/screen-1\.png"/);
   assert.match(next.css, /canvas-v2-model-layer:analysis/);
@@ -205,12 +240,17 @@ test("bounded patches preserve canonical rails and bind evidence copies server-s
   assert.match(next.css, /width:max-content!important/);
   assert.match(next.css, /canvas-v2-canvas--evidence-wide\{[^}]*padding:0!important/);
   assert.match(next.css, /canvas-v2-canvas--evidence-wide>\[data-canvas-v2-design-region\]\{[^}]*position:relative!important[^}]*inset:auto!important[^}]*max-width:8880px!important/);
-  assert.match(next.css, /data-canvas-v2-story-role="title"[^}]*grid-column:1\/-1!important[^}]*max-width:8880px!important[^}]*margin-bottom:192px!important/);
-  assert.doesNotMatch(next.css, /data-canvas-v2-story-role="title"[^}]*(?:^|[;{])width:8880px!important/);
+  assert.match(next.css, /data-canvas-v2-story-role="title"[^}]*grid-column:1\/-1!important[^}]*max-width:4200px!important[^}]*margin-bottom:192px!important/);
+  assert.doesNotMatch(next.css, /data-canvas-v2-story-role="title"[^}]*(?:^|[;{])width:4200px!important/);
   assert.match(next.css, /\.canvas-v2-flow-lane\{[^}]*transform:none!important[^}]*grid-template-columns:170px max-content!important/);
+  assert.match(next.css, /\.canvas-v2-grounded-evidence\{[^}]*width:max-content!important[^}]*min-width:0!important/);
+  assert.match(next.css, /\.canvas-v2-flow-lane\{[^}]*width:max-content!important[^}]*min-width:0!important/);
+  assert.doesNotMatch(next.css, /\.canvas-v2-(?:grounded-evidence|flow-lane)\{[^}]*min-width:100%!important/);
   assert.match(next.css, /\.canvas-v2-flow-screen\{[^}]*transform:none!important[^}]*height:235px!important/);
   assert.match(next.css, /data-canvas-v2-scale-intent="peer"[^}]*max-height:376px!important/);
   assert.match(next.css, /data-canvas-v2-scale-intent="bounded-emphasis"[^}]*max-height:646px!important/);
+  assert.match(next.css, /canvas-v2-evidence-inbox\{[^}]*display:grid!important[^}]*gap:20px!important/);
+  assert.match(next.css, /canvas-v2-evidence-inbox>img\[data-canvas-v2-scale-intent="identity-mark"\]\{[^}]*max-width:96px!important/);
   assert.deepEqual(validateCanvasV2EvidenceContinuity(previous, next, evidence), []);
   assert.throws(() => applyCanvasV2SourcePatch({
     previous,

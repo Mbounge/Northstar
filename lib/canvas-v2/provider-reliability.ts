@@ -2,8 +2,24 @@ import type {
   CanvasV2FailureCode,
   CanvasV2FailurePayload,
   CanvasV2ProviderAttemptAudit,
+  CanvasV2ProviderRequestAudit,
+  CanvasV2ProviderUsage,
 } from "@/lib/canvas-v2/request-reliability";
 import { canvasV2ProviderForModelIfKnown } from "@/lib/canvas-v2/model-catalog";
+
+/**
+ * Product orchestration is first-pass by contract. Structured-output or
+ * semantic validation failures must be prevented by server-owned schemas,
+ * handles, canonicalization, and compilers. One correction is retained only
+ * as a rare provider-variance seatbelt so an internal private draft never
+ * becomes a user-visible dead end. Exercising attempt two is unhealthy in the
+ * release proof even when the run ultimately succeeds.
+ *
+ * The generic provider harness still supports higher values in isolated
+ * reliability tests and non-product callers. Every North Star product phase
+ * must opt into this constant explicitly.
+ */
+export const CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS = 2;
 
 export class CanvasV2ProviderError extends Error {
   readonly code: CanvasV2FailureCode;
@@ -62,6 +78,25 @@ function providerFailure(status: number, retryAfterMs?: number): CanvasV2Provide
   });
 }
 
+function providerRejectionDiagnostic(raw: string): Record<string, string | number> {
+  const fallback = raw.replace(/\s+/g, " ").trim().slice(0, 1_200);
+  try {
+    const payload = JSON.parse(raw) as Record<string, unknown>;
+    const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
+      ? payload.error as Record<string, unknown>
+      : {};
+    const text = (value: unknown, limit: number) => typeof value === "string" ? value.slice(0, limit) : "";
+    return {
+      message: text(error.message, 1_200) || fallback,
+      type: text(error.type, 160),
+      param: text(error.param, 240),
+      code: text(error.code, 160),
+    };
+  } catch {
+    return { message: fallback };
+  }
+}
+
 export function invalidCanvasV2ProviderResponse(message: string, providerAttempts?: CanvasV2ProviderAttemptAudit[], repairContext?: string): CanvasV2ProviderError {
   return new CanvasV2ProviderError({
     error: message,
@@ -96,7 +131,13 @@ export async function fetchCanvasV2ProviderJson<T>(input: {
   try {
     const response = await (input.fetcher ?? fetch)(input.url, { ...input.init, signal: controller.signal });
     if (!response.ok) {
-      await response.text().catch(() => "");
+      const raw = await response.text().catch(() => "");
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[canvas-v2] provider rejected request", {
+          status: response.status,
+          ...providerRejectionDiagnostic(raw),
+        });
+      }
       throw providerFailure(response.status, parseRetryAfterMs(response.headers.get("retry-after")));
     }
     try {
@@ -146,7 +187,7 @@ export interface CanvasV2ProviderModelChainInput<T> {
   /** Optional only for callers that explicitly own a deadline. Design calls omit it. */
   timeoutMs?: number;
   primaryTimeoutMs?: number;
-  requestForModel: (model: string, correction?: string) => { url: string; init: RequestInit };
+  requestForModel: (model: string, correction?: string) => { url: string; init: RequestInit; audit?: CanvasV2ProviderRequestAudit };
   attemptRole?: CanvasV2ProviderAttemptAudit["role"];
   validatePayload?: (payload: T, model: string) => void;
   /** Caller-owned authoritative context revealed progressively across repairs. */
@@ -157,6 +198,49 @@ export interface CanvasV2ProviderModelChainInput<T> {
     failureHistory: readonly string[];
   }) => string | undefined;
   fetcher?: typeof fetch;
+}
+
+function tokenCount(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+function providerUsage(payload: unknown, model: string): CanvasV2ProviderUsage | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  const provider = canvasV2ProviderForModelIfKnown(model);
+  if (provider === "openai") {
+    if (!record.usage || typeof record.usage !== "object" || Array.isArray(record.usage)) return undefined;
+    const usage = record.usage as Record<string, unknown>;
+    const inputDetails = usage.input_tokens_details && typeof usage.input_tokens_details === "object"
+      ? usage.input_tokens_details as Record<string, unknown>
+      : {};
+    const outputDetails = usage.output_tokens_details && typeof usage.output_tokens_details === "object"
+      ? usage.output_tokens_details as Record<string, unknown>
+      : {};
+    return {
+      requestCount: 1,
+      inputTokens: tokenCount(usage.input_tokens),
+      cachedInputTokens: tokenCount(inputDetails.cached_tokens),
+      cacheWriteTokens: tokenCount(inputDetails.cache_write_tokens),
+      outputTokens: tokenCount(usage.output_tokens),
+      reasoningTokens: tokenCount(outputDetails.reasoning_tokens),
+      totalTokens: tokenCount(usage.total_tokens),
+    };
+  }
+  if (provider === "google" && record.usageMetadata && typeof record.usageMetadata === "object" && !Array.isArray(record.usageMetadata)) {
+    const usage = record.usageMetadata as Record<string, unknown>;
+    return {
+      requestCount: 1,
+      inputTokens: tokenCount(usage.promptTokenCount),
+      cachedInputTokens: tokenCount(usage.cachedContentTokenCount),
+      cacheWriteTokens: 0,
+      outputTokens: tokenCount(usage.candidatesTokenCount),
+      reasoningTokens: tokenCount(usage.thoughtsTokenCount),
+      totalTokens: tokenCount(usage.totalTokenCount),
+    };
+  }
+  return undefined;
 }
 
 function providerAttemptOutcome(error: CanvasV2ProviderError): CanvasV2ProviderAttemptAudit["outcome"] {
@@ -194,6 +278,7 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
     const request = input.requestForModel(model, correction);
     const attemptStartedAt = Date.now();
     const modelAttempt = attempts.filter((attempt) => attempt.model === model).length + 1;
+    let observedUsage: CanvasV2ProviderUsage | undefined;
     try {
       const payload = await fetchCanvasV2ProviderJson<T>({
         ...request,
@@ -201,6 +286,7 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
         timeoutMs,
         fetcher: input.fetcher,
       });
+      observedUsage = providerUsage(payload, model);
       try {
         input.validatePayload?.(payload, model);
       } catch (error) {
@@ -217,6 +303,8 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
         attempt: modelAttempt,
         outcome: "completed",
         durationMs: Date.now() - attemptStartedAt,
+        ...(observedUsage ? { usage: observedUsage } : {}),
+        ...(request.audit ? { request: request.audit } : {}),
       });
       return payload;
       } catch (error) {
@@ -229,7 +317,9 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
         code: error.code,
         durationMs: Date.now() - attemptStartedAt,
         httpStatus: error.providerHttpStatus,
-          detail: error.message.slice(0, 500),
+        detail: error.message.slice(0, 500),
+        ...(observedUsage ? { usage: observedUsage } : {}),
+        ...(request.audit ? { request: request.audit } : {}),
         });
         if (process.env.NODE_ENV !== "production" && error instanceof CanvasV2ProviderError && error.code === "invalid-response") {
           console.warn("[canvas-v2] model output failed deterministic validation", {
@@ -291,15 +381,23 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
   }
   if (!lastFailure) throw new Error("Canvas V2 provider chain ended without an outcome.");
   const onlyInvalidResponses = attempts.every((attempt) => attempt.outcome === "invalid-response");
+  // A pinned OpenAI experience deliberately has no cross-provider fallback.
+  // Preserve a real 429 as retryable so the existing client request envelope
+  // can honor Retry-After once without exposing a transient capacity failure as
+  // a finished chat error. Exhausted multi-model chains and structural drafts
+  // still pause rather than replaying the complete endpoint.
+  const pinnedModelRateLimit = models.length === 1 && lastFailure.code === "rate-limited";
   throw new CanvasV2ProviderError({
     error: onlyInvalidResponses
-      ? "North Star could not safely complete this composition after three automatic corrections. The verified canvas is preserved so the same turn can continue without exposing internal source identities."
+      ? "North Star did not accept the private model draft because it failed the phase's deterministic contract. The verified canvas is preserved."
       : `North Star’s model chain could not complete this design turn (${attempts.map((attempt) => `${attempt.model}: ${attempt.outcome}`).join("; ")}). The verified canvas is preserved and this run can continue from it.`,
     code: lastFailure.code,
-    status: lastFailure.code === "provider-rejected" || lastFailure.code === "invalid-response" ? 502 : 503,
+    status: pinnedModelRateLimit
+      ? 429
+      : lastFailure.code === "provider-rejected" || lastFailure.code === "invalid-response" ? 502 : 503,
     // Every invalid draft has already received the caller-owned corrective
     // attempts. Do not make the client repeat the entire logical turn.
-    retryable: false,
+    retryable: pinnedModelRateLimit,
     retryAfterMs,
     providerAttempts: attempts,
     providerHttpStatus: lastFailure.providerHttpStatus,

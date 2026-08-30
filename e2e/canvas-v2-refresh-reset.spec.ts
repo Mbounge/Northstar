@@ -49,7 +49,7 @@ test("refresh discards committed canvas, chat, and undo history", async ({ page 
 test("refresh during active work cancels it and opens a completely clean session", async ({ page }) => {
   await page.getByLabel("Message North Star").fill("Keep designing until I stop");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText("Reviewing the visible canvas…")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop current response" })).toBeVisible();
 
   await page.reload();
   const frame = canvasFrame(page);

@@ -25,7 +25,8 @@ test("Patch 8B exposes a first-class multi-object interaction model", () => {
   assert.match(preview, /onSceneSnapshot/);
   assert.match(preview, /forwardingMoved/);
   assert.match(preview, /Math\.hypot/);
-  assert.match(preview, /if \(captureEnabled\) void capture\(\)/);
+  assert.match(preview, /if \(captureEnabled && frameLoad > 0\) void capture\(\)/);
+  assert.match(preview, /captureIsCurrent/);
 });
 
 test("multi-object gestures compile as one transactional source candidate", () => {

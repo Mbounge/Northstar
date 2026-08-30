@@ -13,11 +13,13 @@ import {
   validateCanvasV2SelectedAnalysisEvidence,
 } from "../lib/canvas-v2/artifact-safety";
 import {
+  canvasV2CanonicalEvidenceScale,
   readCanvasV2CanonicalFlowManifests,
   resolveCanvasV2EvidenceRole,
   validateCanvasV2RenderedAnalysisEvidenceScale,
   validateCanvasV2RenderedDesignRegionContentIntegrity,
   validateCanvasV2RenderedDesignRegionLegibility,
+  repairCanvasV2RenderedDesignRegionTypeFloors,
   validateCanvasV2RenderedDesignRegionTerritoryIntegrity,
   validateCanvasV2RenderedComparisonCommunication,
   validateCanvasV2RenderedEvidenceIntegrity,
@@ -60,6 +62,17 @@ test("canonical flow manifests preserve the complete ordered source record", () 
       { evidenceId: "screen:awin-2", nodeId: "flow-awin-screen-2", url: "https://evidence.test/awin/2.png", flowIndex: 1 },
     ],
   }]);
+});
+
+test("canonical evidence scale is derived from the complete committed atlas", () => {
+  const screens = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => (
+    `<img data-canvas-v2-node-id="${prefix}-${index}" data-canvas-v2-evidence-id="${prefix}:screen:${index}" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="${index}" src="https://evidence.test/${prefix}/${index}.png">`
+  )).join("");
+  const atlas = {
+    html: `<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-node-id="awin" data-canvas-v2-canonical-flow="flow:awin">${screens("awin", 47)}</article><article data-canvas-v2-node-id="whop" data-canvas-v2-canonical-flow="flow:whop">${screens("whop", 17)}</article></main>`,
+    css: "",
+  };
+  assert.deepEqual(canvasV2CanonicalEvidenceScale(atlas), { flowCount: 2, screenCount: 64 });
 });
 
 test("model context separates grounded identity assets from exact sequential screen counts", () => {
@@ -418,6 +431,11 @@ test("authored island copy remains readable at whole-board canvas scale", () => 
     spatialNode({ nodeId: "analysis-default-copy", parentNodeId: "analysis", tagName: "span", textPreview: "Awaiting evidence" }),
   ];
   assert.match(validateCanvasV2RenderedDesignRegionLegibility(rendered).join(" "), /Sample only: analysis-heading=34px.*analysis-copy=20px.*analysis-status=18px.*analysis-default-copy=16px.*Repair all 4 undersized leaves in one scoped pass/);
+  const typeFloorRepair = repairCanvasV2RenderedDesignRegionTypeFloors({ html: '<section data-canvas-v2-node-id="analysis"></section>', css: ".analysis { color: white; }" }, rendered);
+  assert.match(typeFloorRepair.css, /canvas-v2-type-floor:analysis-heading:40[\s\S]*font-size: 40px !important/);
+  assert.match(typeFloorRepair.css, /canvas-v2-type-floor:analysis-copy:28[\s\S]*font-size: 28px !important/);
+  assert.match(typeFloorRepair.css, /canvas-v2-type-floor:analysis-status:24[\s\S]*font-size: 24px !important/);
+  assert.equal(repairCanvasV2RenderedDesignRegionTypeFloors(typeFloorRepair, rendered), typeFloorRepair);
   rendered.spatial.nodes = rendered.spatial.nodes.map((node) => ({
     ...node,
     layout: {
@@ -622,7 +640,13 @@ test("a planning zone never overrides evidence-relative rendered truth", () => {
 test("a screenshot-led comparison keeps multiple inspectable screens without forcing relationship geometry", () => {
   const instruction = "Build a comparison and choose representative screenshots";
   const rendered = observation();
-  assert.match(validateCanvasV2RenderedComparisonCommunication(rendered, instruction).join(" "), /at least two visible canonical screen copies/);
+  // An intermediate stage with no explicit story-role ownership must not be
+  // mistaken for the final comparison. The whole-board completion gate below
+  // still proves that the finished composition contains its witnesses.
+  assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(rendered, instruction), []);
+  assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(rendered, instruction, { storyRole: "title" }), []);
+  assert.match(validateCanvasV2RenderedComparisonCommunication(rendered, instruction, { storyRole: "comparison" }).join(" "), /at least two visible canonical screen copies/);
+  assert.match(validateCanvasV2RenderedComparisonCommunication(rendered, instruction, { finalWholeBoard: true }).join(" "), /at least two visible canonical screen copies/);
 
   const analysisScreen = (nodeId: string, sourceNodeId: string, annotationNodeIds: string[] = []) => ({
     ...rendered.spatial.evidence.find((item) => item.nodeId === sourceNodeId)!,
@@ -654,6 +678,52 @@ test("a screenshot-led comparison keeps multiple inspectable screens without for
   }];
   assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(rendered, instruction), []);
   assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(observation(), "Show the complete onboarding evidence"), []);
+  assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(
+    observation(),
+    "Compare a fast pilot with a polished launch and create a separate independently editable implementation path.",
+  ), []);
+  assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(
+    observation(),
+    "Build the comparison without screenshots or account research.",
+  ), []);
+  assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(
+    observation(),
+    "Use representative screenshots in the routing interpretation.\n\nAuthoritative user request (preserve exact product and journey scope): Compare a fast pilot with a polished launch.",
+  ), []);
+});
+
+test("a declared comparison axis cannot collapse every screenshot into one leading lane", () => {
+  const rendered = observation();
+  rendered.spatial.designRegions = [{
+    nodeId: "comparison",
+    visualRole: "comparison-axis",
+    bounds: { x: 100, y: 100, width: 2_400, height: 900 },
+    canvasWidthShare: 0.8,
+    canvasHeightShare: 0.5,
+    canvasAreaShare: 0.4,
+    centerXShare: 0.5,
+    centerYShare: 0.3,
+    edgeSpace: { left: 100, top: 100, right: 100, bottom: 500 },
+    contentOverflowX: 0,
+    contentOverflowY: 0,
+    clipsOverflow: false,
+  }];
+  const canonicalScreen = rendered.spatial.evidence.find((item) => item.nodeId === "flow-awin-screen-1")!;
+  const witnesses = Array.from({ length: 6 }, (_, index) => ({
+    ...canonicalScreen,
+    evidenceId: `screen:witness-${index}`,
+    nodeId: `axis-witness-${index}`,
+    role: "analysis-copy" as const,
+    sourceNodeId: "flow-awin-screen-1",
+    sourceIsCanonicalScreen: true,
+    bounds: { x: 140 + index * 100, y: 360, width: 80, height: 160 },
+    designRegionNodeId: "comparison",
+    visualRole: "comparison-axis",
+  }));
+  rendered.spatial.evidence.push(...witnesses);
+  assert.match(validateCanvasV2RenderedComparisonCommunication(rendered, "Compare the journeys with representative screenshots").join(" "), /collapse into only.*Bind each witness/);
+  for (let index = 0; index < witnesses.length; index += 1) witnesses[index].bounds.x = 140 + index * 390;
+  assert.deepEqual(validateCanvasV2RenderedComparisonCommunication(rendered, "Compare the journeys with representative screenshots"), []);
 });
 
 test("chosen relationship geometry must remain attached after later recomposition", () => {
@@ -737,7 +807,7 @@ test("bounded model context judges visual occupancy against the local authoring 
   assert.match(context.workspace.contract, /normalized to aiAuthoringBounds/);
 });
 
-test("islands preserve one upper-left story origin and distinct readable territories", () => {
+test("islands preserve distinct readable territories and optional title integrity", () => {
   const rendered = observation();
   const region = (nodeId: string, storyRole: "title" | "comparison", x: number, y: number, width: number, height: number) => ({
     nodeId,
@@ -791,10 +861,16 @@ test("islands preserve one upper-left story origin and distinct readable territo
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /too narrow to establish a readable narrative opening/);
 
   rendered.spatial.designRegions = [region("comparison-island", "comparison", 920, 360, 560, 360)];
-  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /exactly one title-and-description island/);
+  assert.deepEqual(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered), []);
+
+  rendered.spatial.designRegions = [
+    region("title-one", "title", 192, 192, 800, 180),
+    region("title-two", "title", 1_280, 192, 800, 180),
+  ];
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /at most one title-and-description island/);
 });
 
-test("native world-space titles begin at the honest authoring origin and may move right around occupied territory", () => {
+test("native world-space titles remain readable and begin the authored story", () => {
   const rendered = observation();
   const worldWidth = CANVAS_V2_WORKSPACE.width;
   const worldHeight = CANVAS_V2_WORKSPACE.height;
@@ -857,13 +933,12 @@ test("native world-space titles begin at the honest authoring origin and may mov
   ];
   rendered.spatial.authoredSurface.readingOrder = ["comparison-island", "title-island"];
   const originFailures = validateCanvasV2RenderedIslandNarrativeIntegrity(rendered);
-  assert.match(originFailures.join(" "), /Narrative island comparison-island appears before the established title origin/);
-  assert.deepEqual(canvasV2LocalIntegrityRepairTarget(rendered.spatial.designRegions, originFailures), {
-    islandId: "comparison-island",
-    nodeId: "comparison-island",
-    storyRole: "comparison",
-    targetZoneId: undefined,
-  });
+  assert.match(originFailures.join(" "), /must begin the authored reading order/);
+  assert.equal(canvasV2LocalIntegrityRepairTarget(rendered.spatial.designRegions, originFailures), undefined);
+
+  rendered.spatial.authoredSurface.readingOrder = ["title-island", "comparison-island"];
+  rendered.spatial.designRegions[1] = region("comparison-island", "comparison", originX + 2_580, originY - 480, 1_500, 920);
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(" "), /must remain the first spatial chapter/);
 });
 
 test("ordinary authored chapters stay in one close narrative footprint", () => {
@@ -911,6 +986,56 @@ test("ordinary authored chapters stay in one close narrative footprint", () => {
     /compact narrative envelope/,
     "a close three-island narrative must not fail because fractional layout lands a few pixels beyond an old fixed-height cliff",
   );
+
+  rendered.spatial.designRegions = [
+    {
+      ...region("title-island", "title", originX, originY, 2_200, 1_800),
+      contentBounds: { x: originX, y: originY, width: 2_200, height: 520 },
+    },
+    {
+      ...region("challenge-island", "comparison", originX, originY + 2_080, 2_200, 1_100),
+      contentBounds: { x: originX, y: originY + 2_080, width: 2_200, height: 760 },
+    },
+  ];
+  rendered.spatial.authoredSurface.readingOrder = ["title-island", "challenge-island"];
+  assert.match(
+    validateCanvasV2RenderedIslandNarrativeIntegrity(rendered, "Design a launch decision canvas.").join(" "),
+    /meaningful content.*premium visible proximity/,
+    "adjacent root boxes cannot conceal a page-sized visual gulf between their actual reading units",
+  );
+
+  rendered.spatial.authoredSurface.canonicalLaneBounds = {
+    x: originX,
+    y: originY + 720,
+    width: 2_200,
+    height: 900,
+  };
+  assert.doesNotMatch(
+    validateCanvasV2RenderedIslandNarrativeIntegrity(rendered, "Compare the captured journeys.").join(" "),
+    /meaningful content.*premium visible proximity/,
+    "a canonical evidence chapter occupying the space between authored islands is story, not dead space",
+  );
+  rendered.spatial.designRegions[1] = {
+    ...region("challenge-island", "comparison", originX, originY + 3_200, 2_200, 1_100),
+    contentBounds: { x: originX, y: originY + 3_200, width: 2_200, height: 760 },
+  };
+  assert.doesNotMatch(
+    validateCanvasV2RenderedIslandNarrativeIntegrity(rendered, "Compare the captured journeys.").join(" "),
+    /meaningful content.*premium visible proximity/,
+    "an analytical island below the complete evidence atlas follows the title through that intervening source chapter rather than owing the title a direct gutter",
+  );
+  rendered.spatial.designRegions[1] = {
+    ...region("challenge-island", "comparison", originX + 4_600, originY + 1_940, 2_200, 1_100),
+    territoryRelation: "below",
+    placementMode: "evidence-relative-island",
+    contentBounds: { x: originX + 4_600, y: originY + 1_940, width: 2_200, height: 760 },
+  };
+  assert.doesNotMatch(
+    validateCanvasV2RenderedIslandNarrativeIntegrity(rendered, "Compare the captured journeys.").join(" "),
+    /meaningful content.*premium visible proximity/,
+    "an explicitly below-evidence chapter is adjacent to the atlas even when its two-dimensional placement is not directly aligned with the title",
+  );
+  delete rendered.spatial.authoredSurface.canonicalLaneBounds;
 
   rendered.spatial.designRegions = [
     region("title-island", "title", originX, originY, 1_600, 420),
@@ -1068,6 +1193,22 @@ test("invented quantitative precision must remain visibly hypothetical", () => {
   assert.match(validateCanvasV2QuantitativeClaimLabels(unsupportedFraction, evidence, "Compare onboarding").join(" "), /Unsupported quantitative precision 35\/47/);
   const labeledFraction = { ...canonical, html: canonical.html.replace("</main>", '<p data-canvas-v2-node-id="axis">Illustrative estimate · Awin friction allocation: 35 / 47</p></main>') };
   assert.deepEqual(validateCanvasV2QuantitativeClaimLabels(labeledFraction, evidence, "Compare onboarding"), []);
+  const labeledSiblingFraction = { ...canonical, html: canonical.html.replace("</main>", `<section data-canvas-v2-node-id="rail"><p data-canvas-v2-node-id="qualifier">Illustrative position</p><p data-canvas-v2-node-id="witness">${"Observed witness context ".repeat(6)}3/47</p></section></main>`) };
+  assert.deepEqual(validateCanvasV2QuantitativeClaimLabels(labeledSiblingFraction, evidence, "Compare onboarding"), []);
   const editorialCounter = { ...canonical, html: canonical.html.replace("</main>", '<p data-canvas-v2-node-id="counter">01/04 · observed stage</p></main>') };
   assert.deepEqual(validateCanvasV2QuantitativeClaimLabels(editorialCounter, evidence, "Compare onboarding"), []);
+
+  const suppliedNaturalLanguage = { ...canonical, html: canonical.html.replace("</main>", '<p data-canvas-v2-node-id="pilot">Observed pilot activation: 5/6 versus 3/6.</p></main>') };
+  assert.deepEqual(
+    validateCanvasV2QuantitativeClaimLabels(suppliedNaturalLanguage, evidence, "The human supplied activation of 5 of 6 versus 3 of 6."),
+    [],
+    "natural-language counts and typeset fractions are the same supplied fact",
+  );
+
+  const decisionThreshold = { ...canonical, html: canonical.html.replace("</main>", '<p data-canvas-v2-node-id="gate">Decision gate · PASS if at least 3/3 teams accept the paid offer; FAIL at 2/3 or fewer.</p></main>') };
+  assert.deepEqual(
+    validateCanvasV2QuantitativeClaimLabels(decisionThreshold, evidence, "Design a clear pass/fail decision gate."),
+    [],
+    "a visibly proposed threshold is a decision rule, not a fabricated observation",
+  );
 });

@@ -82,6 +82,41 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     expect(caretOffset).toBeLessThan((await authoredCopy.textContent() ?? "").length);
     await authoredCopy.press("Escape");
 
+    const mixedLabel = scene(page).locator('[data-canvas-v2-node-id="editable-mixed-label"]');
+    const directFragment = mixedLabel.locator('[data-canvas-v2-direct-text-fragment="true"]');
+    await expect(directFragment).toHaveText(/01 \/ EVIDENCE/);
+    await expect(directFragment).toHaveAttribute("data-canvas-v2-node-id", /^editable-mixed-label-text-/);
+    const fragmentBounds = await directFragment.boundingBox();
+    expect(fragmentBounds).not.toBeNull();
+    await page.mouse.dblclick(
+      fragmentBounds!.x + fragmentBounds!.width / 2,
+      fragmentBounds!.y + fragmentBounds!.height / 2,
+      { delay: 70 },
+    );
+    await expect(directFragment).toHaveAttribute("contenteditable", "plaintext-only");
+    await directFragment.press("Escape");
+
+    const boldMetric = mixedLabel.locator("b");
+    await expect(boldMetric).toHaveAttribute("data-canvas-v2-node-id", /^primitive-/);
+    const metricBounds = await boldMetric.boundingBox();
+    expect(metricBounds).not.toBeNull();
+    await page.mouse.dblclick(
+      metricBounds!.x + metricBounds!.width / 2,
+      metricBounds!.y + metricBounds!.height / 2,
+      { delay: 70 },
+    );
+    await expect(boldMetric).toHaveAttribute("contenteditable", "plaintext-only");
+    await boldMetric.press("Escape");
+
+    // Compact text must keep its glyph hit target clear even though resize
+    // handles are counter-scaled to remain usable at fit-to-canvas zoom.
+    await boldMetric.click();
+    expect(await boldMetric.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+        ?.getAttribute("data-canvas-v2-node-id");
+    })).toBe(await boldMetric.getAttribute("data-canvas-v2-node-id"));
+
     const layoutCard = scene(page).locator('[data-canvas-v2-node-id="editable-layout-surface"]');
     const layoutRail = layoutCard.locator(".e2e-layout-rail");
     const layoutBefore = await layoutRail.evaluate((element) => {

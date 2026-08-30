@@ -18,9 +18,11 @@ function string(value: unknown, maximum = 240): string | undefined {
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
   const localEvaluation = canvasV2LocalEvaluationEnabled();
+  const supabase = localEvaluation ? undefined : await createClient();
+  const { data: { user } } = supabase
+    ? await supabase.auth.getUser()
+    : { data: { user: null } };
   if (!user && !localEvaluation) return NextResponse.json({ error: "You must be signed in to research account evidence." }, { status: 401 });
   try {
     const body = await request.json() as Record<string, unknown>;
@@ -35,7 +37,7 @@ export async function POST(request: NextRequest) {
       sessionType: body.sessionType === "onboarding" || body.sessionType === "browsing" ? body.sessionType : undefined,
       limit: typeof body.limit === "number" ? body.limit : undefined,
     };
-    const catalog = user
+    const catalog = user && supabase
       ? await loadAppDataCatalog(supabase, await resolveAppDataTenantId(supabase, user.id))
       : emptyCanvasV2LocalEvaluationCatalog();
     return NextResponse.json({ result: runCanvasV2Research(catalog, query) });

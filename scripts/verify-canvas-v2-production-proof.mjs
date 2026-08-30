@@ -60,7 +60,10 @@ const chatHook = source("components/canvas-v2/use-canvas-v2-chat.ts");
 const proxy = source("proxy.ts");
 
 if (!router.includes('researchMode: { type: "string", enum: ["none", "evidence", "synthesis"] }')) fail("The production router does not declare evidence versus synthesis intent.");
-if (!design.includes("canvasV2ResearchDecisionPolicy") || !design.includes('decisionPolicy.phase === "ground-required-evidence"') || design.indexOf("const requiredResearch =") > design.indexOf("fetchCanvasV2ProviderJsonWithModelChain<unknown>")) fail("The production design route does not enforce deterministic evidence-first authority before model synthesis.");
+if (!design.includes("canvasV2ResearchDecisionPolicy")
+  || !design.includes('decisionPolicy.phase === "ground-required-evidence"')
+  || !design.includes("const discoveryDirectorRequired")
+  || design.indexOf("const requiredResearch =") > design.indexOf("const creativeBriefProvider = await")) fail("The production design route does not preserve adaptive discovery direction followed by deterministic evidence-first authority before visual synthesis.");
 if (!design.includes("Ground every product-specific analytical claim in a visible screen")) fail("The production designer does not require claim-level evidence grounding.");
 if (!design.includes("fetchCanvasV2ProviderJsonWithModelChain") || !router.includes("fetchCanvasV2ProviderJsonWithModelChain")) fail("The production model boundaries do not share audited provider continuity.");
 if (!design.includes("buildCanvasV2StructuredProviderRequest") || !router.includes("buildCanvasV2StructuredProviderRequest")) fail("The production model boundaries do not share the provider-neutral structured request runtime.");

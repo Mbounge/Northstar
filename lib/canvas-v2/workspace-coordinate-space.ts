@@ -55,6 +55,10 @@ export const CANVAS_V2_WORKSPACE = Object.freeze({
   aiAuthoringOriginY: CANVAS_V2_AI_AUTHORING_ORIGIN_Y,
   aiAuthoringWidth: CANVAS_V2_AI_AUTHORING_WIDTH,
   aiAuthoringHeight: CANVAS_V2_AI_AUTHORING_HEIGHT,
+  // A publication title is an opening reading unit, not a banner stretched
+  // across the evidence atlas. This is a maximum only; intrinsically smaller
+  // title treatments keep their authored width.
+  titleMaxWidth: 4_200,
   // Islands retain a compact internal editorial margin inside the authored
   // document. This is intentionally distinct from the canvas perimeter.
   documentMargin: 192,

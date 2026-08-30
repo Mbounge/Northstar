@@ -1,7 +1,7 @@
 import type { AppDataApp, AppDataCatalog, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import { canvasV2ResearchResultForFlow, type CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
 import type { CanvasV2ResearchMode } from "@/lib/canvas-v2/interaction-router";
-import type { CanvasV2ArtifactRevision, CanvasV2ResearchDecision } from "@/lib/canvas-v2/types";
+import type { CanvasV2ArtifactRevision, CanvasV2EvidencePacket, CanvasV2EvidenceSource, CanvasV2ResearchDecision } from "@/lib/canvas-v2/types";
 
 export interface CanvasV2ResearchCatalogIndex {
   catalogScope: {
@@ -41,6 +41,9 @@ export interface CanvasV2ResearchCatalogIndex {
   explicitlyNamedAppIds: string[];
   visibleFlowIds: string[];
   visibleApps: string[];
+  evidencePackets: CanvasV2EvidencePacket[];
+  evidenceSources: CanvasV2EvidenceSource[];
+  evidenceIssues: Array<{ code: string; message: string; targetName?: string }>;
   requirements: CanvasV2ResearchRequirement[];
 }
 
@@ -75,7 +78,6 @@ export interface CanvasV2ResearchDecisionPolicy {
   phase: "ground-required-evidence" | "resolve-grounded-synthesis" | "open-design";
   permittedDecisions: CanvasV2ResearchDecisionKind[];
   reason: string;
-  requiresPlannedContinuation?: boolean;
   requiredNextMoves?: string[];
 }
 
@@ -283,6 +285,51 @@ function matchingApp(catalog: AppDataCatalog, requestedName: string): AppDataApp
     ?? catalog.apps.find((app) => requested.includes(normalize(app.name)) || normalize(app.name).includes(requested));
 }
 
+function matchingFlowTarget(
+  catalog: AppDataCatalog,
+  requestedName: string,
+  instruction: string,
+): { app: AppDataApp; flows: AppDataFlow[] } | undefined {
+  const requested = normalize(requestedName).trim();
+  if (!requested) return undefined;
+  const prompt = normalize(instruction);
+  const sessions = requestedSessionTypes(instruction);
+  const platforms = requestedPlatforms(instruction);
+  const candidates = catalog.apps.flatMap((app) => app.flows.flatMap((flow, sourceIndex) => {
+    // A router-generated catalog hint is subordinate to the person's exact
+    // journey scope. Reject a mismatched sibling (for example Awin Explore for
+    // an onboarding request) unless the person actually named that flow in
+    // their own instruction.
+    if (flowScopeMatch(flow, sessions, platforms) === "mismatch" && !explicitlyNamesFlow(instruction, flow)) return [];
+    const flowName = normalize(flow.name).trim();
+    const appTerms = new Set(normalize(app.name).trim().split(" "));
+    const requestedFlowName = requested.split(" ").filter((term) => term && !appTerms.has(term)).join(" ");
+    const requestedFlowTerms = requested.split(" ").filter((term) => (
+      term.length > 2
+      && !GENERIC_FLOW_TERMS.has(term)
+      && !appTerms.has(term)
+    ));
+    const flowSurface = normalize([flow.name, ...(flow.taxonomyPath ?? [])].join(" "));
+    const semanticMatch = requestedFlowTerms.length > 0
+      && requestedFlowTerms.every((term) => flowSurface.includes(` ${term} `));
+    const matches = flowName === requested || flowName.includes(requested) || requested.includes(flowName) || semanticMatch;
+    if (!matches) return [];
+    // Router targets commonly carry the app prefix ("Whop — User
+    // Onboarding"). Treat the remaining flow title as an exact match so a
+    // much larger journey that merely contains one semantic term cannot
+    // outrank the named canonical flow by screen count.
+    const exact = flowName === requested || flowName === requestedFlowName;
+    const namedApp = prompt.includes(normalize(app.name));
+    const scopeScore = flow.scope === "path" || flow.scope === "journey" ? 30 : flow.scope === "flow" ? 20 : 0;
+    const completeJourneyScore = flow.completeJourney ? 180 : 0;
+    return [{ app, flow, sourceIndex, score: (exact ? 1_000 : semanticMatch ? 620 : 500) + (namedApp ? 250 : 0) + completeJourneyScore + scopeScore + Math.min(80, flow.screens.length) }];
+  }));
+  candidates.sort((left, right) => right.score - left.score || left.sourceIndex - right.sourceIndex);
+  const app = candidates[0]?.app;
+  if (!app) return undefined;
+  return { app, flows: candidates.filter((candidate) => candidate.app.id === app.id).map((candidate) => candidate.flow) };
+}
+
 function uniqueTargets(targets: readonly string[]): string[] {
   const values = new Map<string, string>();
   for (const target of targets) {
@@ -295,15 +342,37 @@ function uniqueTargets(targets: readonly string[]): string[] {
 
 function requirementForTarget(catalog: AppDataCatalog, requestedName: string, visibleFlowIds: readonly string[], instruction: string): CanvasV2ResearchRequirement {
   const app = matchingApp(catalog, requestedName);
-  if (!app) return {
+  const exactAppTarget = app && normalize(requestedName) === normalize(app.name);
+  const flowTarget = exactAppTarget ? undefined : matchingFlowTarget(catalog, requestedName, instruction);
+  if (flowTarget) {
+      const usable = flowTarget.flows.filter((flow) => flow.screens.length > 0 && flow.screens.every((screen) => Boolean(screen.imageUrl)));
+      const adequate = usable.map((flow) => flow.id);
+      const visible = adequate.filter((flowId) => visibleFlowIds.includes(flowId));
+      const preferred = usable[0];
+      return {
+        requestedName,
+        appId: flowTarget.app.id,
+        appName: flowTarget.app.name,
+        state: visible.length ? "visible" : usable.length ? "unresolved" : "unavailable",
+        reason: usable.length ? undefined : `${flowTarget.app.name} has no complete captured ${requestedName} flow with renderable screenshots.`,
+        usableFlowIds: adequate,
+        adequateFlowIds: adequate,
+        visibleFlowIds: visible,
+        visibleAdequateFlowIds: visible,
+        preferredFlow: preferred ? { id: preferred.id, name: preferred.name, screenCount: preferred.screens.length } : undefined,
+      };
+  }
+  if (!app) {
+    return {
     requestedName,
     state: "unavailable",
-    reason: `No connected app named ${requestedName} is available in this account.`,
+    reason: `No connected app named ${requestedName} or captured flow with that name is available in this account.`,
     usableFlowIds: [],
     adequateFlowIds: [],
     visibleFlowIds: [],
     visibleAdequateFlowIds: [],
-  };
+    };
+  }
   const usable = usableFlowIds(app);
   const visible = usable.filter((flowId) => visibleFlowIds.includes(flowId));
   const adequateAssessments = assessedFlows(app, instruction, catalog).filter((assessment) => assessment.selection !== "supporting");
@@ -346,12 +415,100 @@ export function buildCanvasV2ResearchCatalogIndex(
   instruction: string,
   revision: CanvasV2ArtifactRevision,
   researchTargets: readonly string[] = [],
+  evidenceBridge?: {
+    packets?: readonly CanvasV2EvidencePacket[];
+    sources?: readonly CanvasV2EvidenceSource[];
+    issues?: readonly { code: string; message: string; targetName?: string }[];
+  },
+  options?: { requireProductEvidence?: boolean },
 ): CanvasV2ResearchCatalogIndex {
   const prompt = normalize(instruction);
   const visibleFlowIds = canvasV2VisibleFlowIds(revision.document.html);
-  const catalogNamedApps = catalog.apps.filter((app) => prompt.includes(normalize(app.name)));
-  const targets = uniqueTargets([...researchTargets, ...catalogNamedApps.map((app) => app.name)]);
-  const requirements = targets.map((target) => requirementForTarget(catalog, target, visibleFlowIds, instruction));
+  // Marketing and business sources are point-in-time account snapshots. A
+  // named company in one of those requests does not silently imply that its
+  // product journey must also be retrieved. Mixed/product requests retain the
+  // complete canonical-flow gate; snapshot-only requests can materialize the
+  // exact authorized packets without unrelated product furniture.
+  const requireProductEvidence = options?.requireProductEvidence !== false;
+  const catalogNamedApps = requireProductEvidence
+    ? catalog.apps.filter((app) => prompt.includes(normalize(app.name)))
+    : [];
+  const targets = requireProductEvidence
+    ? uniqueTargets([...researchTargets, ...catalogNamedApps.map((app) => app.name)])
+    : [];
+  const initialRequirements = targets
+    .map((target, targetIndex) => ({
+      requirement: requirementForTarget(catalog, target, visibleFlowIds, instruction),
+      targetIndex,
+    }))
+    // A precise router target is the user's requested research object. Ground
+    // it before the parent app alias, whose broad ranker may prefer a sibling
+    // journey. Stable target order is retained within each specificity tier.
+    .sort((left, right) => {
+      const leftIsUnresolvedSpecific = Boolean(left.requirement.state === "unresolved"
+        && left.requirement.appId
+        && left.requirement.appName
+        && normalize(left.requirement.requestedName) !== normalize(left.requirement.appName));
+      const rightIsUnresolvedSpecific = Boolean(right.requirement.state === "unresolved"
+        && right.requirement.appId
+        && right.requirement.appName
+        && normalize(right.requirement.requestedName) !== normalize(right.requirement.appName));
+      return Number(rightIsUnresolvedSpecific) - Number(leftIsUnresolvedSpecific) || left.targetIndex - right.targetIndex;
+    })
+    .map(({ requirement }) => requirement);
+  // Routers commonly emit both the connected app and the exact flow named by
+  // the person. Once that flow is visibly grounded, the parent app target is
+  // satisfied by the same evidence; it must not trigger a redundant second
+  // retrieval merely because the app-wide ranker preferred another sibling.
+  const visibleSpecificFlowsByApp = new Map<string, string[]>();
+  for (const requirement of initialRequirements) {
+    if (!requirement.appId || requirement.state !== "visible" || !requirement.appName || normalize(requirement.requestedName) === normalize(requirement.appName)) continue;
+    visibleSpecificFlowsByApp.set(requirement.appId, Array.from(new Set([...(visibleSpecificFlowsByApp.get(requirement.appId) ?? []), ...requirement.visibleAdequateFlowIds])));
+  }
+  const settledRequirements = initialRequirements.map((requirement) => {
+    const visibleSpecificFlows = requirement.appId ? visibleSpecificFlowsByApp.get(requirement.appId) : undefined;
+    if (!visibleSpecificFlows?.length || !requirement.appName || normalize(requirement.requestedName) !== normalize(requirement.appName)) return requirement;
+    return {
+      ...requirement,
+      state: "visible" as const,
+      reason: undefined,
+      adequateFlowIds: Array.from(new Set([...requirement.adequateFlowIds, ...visibleSpecificFlows])),
+      visibleFlowIds: Array.from(new Set([...requirement.visibleFlowIds, ...visibleSpecificFlows])),
+      visibleAdequateFlowIds: Array.from(new Set([...requirement.visibleAdequateFlowIds, ...visibleSpecificFlows])),
+    };
+  });
+  // Collapse generic router aliases ("Awin app", "Awin") into one connected
+  // app requirement. Flow/taxonomy names remain independent because they can
+  // require a specific journey. Without this normalization the chat showed
+  // duplicate coverage rows and the loop could attempt redundant retrievals.
+  const requirementsByIdentity = new Map<string, CanvasV2ResearchRequirement>();
+  for (const requirement of settledRequirements) {
+    const connectedAppName = requirement.appName;
+    const normalizedRequestedName = normalize(requirement.requestedName).trim();
+    const normalizedConnectedAppName = normalize(connectedAppName ?? "").trim();
+    const genericAppAlias = Boolean(requirement.appId && connectedAppName
+      && [normalizedConnectedAppName, `${normalizedConnectedAppName} app`].includes(normalizedRequestedName));
+    const key = genericAppAlias ? `app:${requirement.appId}` : `target:${normalizedRequestedName}`;
+    const current = requirementsByIdentity.get(key);
+    if (!current) {
+      requirementsByIdentity.set(key, genericAppAlias && connectedAppName && normalizedRequestedName !== normalizedConnectedAppName
+        ? { ...requirement, requestedName: connectedAppName }
+        : requirement);
+      continue;
+    }
+    const stateRank = { unavailable: 0, unresolved: 1, pending: 2, visible: 3 } as const;
+    const strongest = stateRank[requirement.state] > stateRank[current.state] ? requirement : current;
+    requirementsByIdentity.set(key, {
+      ...strongest,
+      requestedName: requirement.appName ?? current.appName ?? current.requestedName,
+      reason: strongest.state === "visible" ? undefined : strongest.reason,
+      usableFlowIds: Array.from(new Set([...current.usableFlowIds, ...requirement.usableFlowIds])),
+      adequateFlowIds: Array.from(new Set([...current.adequateFlowIds, ...requirement.adequateFlowIds])),
+      visibleFlowIds: Array.from(new Set([...current.visibleFlowIds, ...requirement.visibleFlowIds])),
+      visibleAdequateFlowIds: Array.from(new Set([...current.visibleAdequateFlowIds, ...requirement.visibleAdequateFlowIds])),
+    });
+  }
+  const requirements = Array.from(requirementsByIdentity.values());
   const visibleApps = Array.from(new Set(requirements.filter((requirement) => requirement.state === "visible").map((requirement) => requirement.appName).filter((app): app is string => Boolean(app))));
   const requiredAppIds = new Set(requirements.map((requirement) => requirement.appId).filter((appId): appId is string => Boolean(appId)));
   const scopedApps = (requiredAppIds.size ? catalog.apps.filter((app) => requiredAppIds.has(app.id)) : catalog.apps)
@@ -398,6 +555,9 @@ export function buildCanvasV2ResearchCatalogIndex(
     explicitlyNamedAppIds: Array.from(new Set(requirements.map((requirement) => requirement.appId).filter((appId): appId is string => Boolean(appId)))),
     visibleFlowIds,
     visibleApps,
+    evidencePackets: [...(evidenceBridge?.packets ?? [])],
+    evidenceSources: [...(evidenceBridge?.sources ?? [])],
+    evidenceIssues: [...(evidenceBridge?.issues ?? [])],
     requirements,
   };
 }
@@ -442,7 +602,8 @@ export function resolveCanvasV2ResearchDecision(catalog: AppDataCatalog, decisio
   if (unresolvedRequirement && !unresolvedRequirement.adequateFlowIds.includes(decision.flowId)) {
     throw new Error(`${match.app.name} · ${match.flow.name} is supporting evidence, but it does not adequately cover the requested journey. Choose a preferred or adequate catalog candidate.`);
   }
-  const result = canvasV2ResearchResultForFlow(match.app, match.flow);
+  const result = canvasV2ResearchResultForFlow(match.app, match.flow, index?.evidencePackets.filter((packet) => packet.appId === match.app.id || packet.appName === match.app.name));
+  if (index?.evidenceIssues.length) result.issues = [...index.evidenceIssues];
   if (!result.screens.length || result.screens.some((screen) => !screen.imageUrl)) throw new Error(`${match.app.name} · ${match.flow.name} is not a complete captured flow with renderable screenshots.`);
   return result;
 }
@@ -475,10 +636,9 @@ export function canvasV2ResearchDecisionPolicy(
   if (researchMode === "synthesis" && lastResearchStep >= 0 && !modelHasNoPlannedCreativeMoves) return {
     phase: "resolve-grounded-synthesis",
     permittedDecisions: ["edit"],
-    ...(postResearchDesignSteps.length === 0 ? { requiresPlannedContinuation: true } : {}),
     ...(postResearchDesignSteps.length > 0 && requiredNextMoves?.length ? { requiredNextMoves } : {}),
     reason: postResearchDesignSteps.length === 0
-      ? "The final required flow is visible. Establish a specific evidence-grounded visual argument and declare at least three distinct meaningful creative moves of your own choosing for subsequent observed turns. This is an initial authorship commitment, not a maximum or a prescribed move taxonomy."
+      ? "The final required flow is visible. Establish one specific evidence-grounded visual argument now. Declare only the continuation moves genuinely warranted by this inquiry; after the committed render is observed, re-evaluate whether to continue, redirect, research, ask, or conclude."
       : `Continue the model-authored creative arc from the exact rendered result. Execute the first previously committed move now: ${requiredNextMoves?.[0] || "the next meaningful unresolved visual move"}. After executing it, replan the remaining queue from the new visible result: preserve still-material work, revise or replace work invalidated by the render, and add newly discovered opportunities. Do not use an empty queue as a shortcut while the latest reflection still exposes material work.`,
   };
   return {
@@ -492,9 +652,54 @@ export function canvasV2UnavailableRequiredApps(index: CanvasV2ResearchCatalogIn
   return index.requirements.filter((requirement) => requirement.state === "unavailable");
 }
 
+function normalizedVisibleResearchText(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?\s*>|<\/(?:p|li|h[1-6]|section|article|div|aside|footer)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&(?:nbsp|ensp|emsp);/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&(?:quot|ldquo|rdquo);/gi, '"')
+    .replace(/&(?:apos|lsquo|rsquo);|&#39;/gi, "'");
+}
+
+function visibleResearchLimitationSegments(html: string): string[] {
+  const segments = normalizedVisibleResearchText(html)
+    .split(/[\n.!?;]+/)
+    .map((segment) => normalize(segment).trim())
+    .filter(Boolean);
+  const regionMarkers = Array.from(html.matchAll(/\bdata-canvas-v2-design-region(?:\s*=\s*["'][^"']*["'])?/gi));
+  const regionScopes = regionMarkers.flatMap((marker, index) => {
+    if (marker.index === undefined) return [];
+    const start = html.lastIndexOf("<", marker.index);
+    if (start < 0) return [];
+    const nextMarkerIndex = regionMarkers[index + 1]?.index;
+    const nextStart = nextMarkerIndex === undefined ? html.length : html.lastIndexOf("<", nextMarkerIndex);
+    const scope = normalize(normalizedVisibleResearchText(html.slice(start, nextStart < 0 ? html.length : nextStart))).trim();
+    return scope ? [scope] : [];
+  });
+  return [...segments, ...regionScopes];
+}
+
+function visiblyAcknowledgesUnavailableResearch(requirement: CanvasV2ResearchRequirement, segments: readonly string[]): boolean {
+  const requestedName = normalize(requirement.requestedName).trim();
+  if (!requestedName) return false;
+  return segments.some((segment) => segment.includes(requestedName) && (
+    /\b(?:unavailable|not available|not supplied|not provided|not connected)\b/.test(segment)
+    || /\b(?:cannot|could not|unable to|without) (?:access|retrieve|inspect|use)\b/.test(segment)
+    || /\bno (?:authorized|connected|available|supplied|provided)\b/.test(segment)
+    || /\bwithheld until authorized\b/.test(segment)
+  ));
+}
+
 export function canvasV2UnacknowledgedUnavailableApps(index: CanvasV2ResearchCatalogIndex, html: string): CanvasV2ResearchRequirement[] {
   const acknowledged = new Set(Array.from(html.matchAll(/\bdata-canvas-v2-research-unavailable\s*=\s*["']([^"']+)["']/gi), (match) => normalize(match[1])));
-  return canvasV2UnavailableRequiredApps(index).filter((requirement) => !acknowledged.has(normalize(requirement.requestedName)));
+  const visibleLimitationSegments = visibleResearchLimitationSegments(html);
+  return canvasV2UnavailableRequiredApps(index).filter((requirement) => (
+    !acknowledged.has(normalize(requirement.requestedName))
+    && !visiblyAcknowledgesUnavailableResearch(requirement, visibleLimitationSegments)
+  ));
 }
 
 export function resolveCanvasV2ResearchCompletion(index: CanvasV2ResearchCatalogIndex, modelSummary: string, html: string): {

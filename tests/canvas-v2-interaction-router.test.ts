@@ -4,9 +4,25 @@ import test from "node:test";
 
 import {
   canvasV2AuthoritativeCanvasInstruction,
+  canvasV2AuthoritativeUserRequest,
+  canvasV2ExplicitExternalResearchRequested,
+  canvasV2ResearchTargetSupportedByUserMessage,
   canvasV2RouteMutatesCanvas,
   parseCanvasV2InteractionDecision,
 } from "../lib/canvas-v2/interaction-router";
+
+const inquiry = {
+  relationship: "new",
+  objective: "Resolve the requested question",
+  desiredOutcome: "A grounded answer",
+  framing: "What should the evidence change?",
+  inquiryKind: "evidence-synthesis",
+  evidenceNeed: "useful",
+  sourceCategories: ["canvas"],
+  materialUnknowns: ["The requested fact is not on the canvas."],
+  completionCriteria: ["The material fact is grounded."],
+  rationale: "Evidence can improve the answer.",
+};
 
 const selection = { nodeId: "finding-title", tagName: "h2", textPreview: "Finding", textEditable: true, locked: false, hidden: false, bounds: { x: 40, y: 60, width: 280, height: 44 } };
 
@@ -51,6 +67,55 @@ test("routing paraphrases cannot erase the user's journey scope", () => {
   );
 });
 
+test("router prose cannot manufacture binding spatial authority", () => {
+  const routed = canvasV2AuthoritativeCanvasInstruction(
+    "Compare Awin and Whop onboarding and keep the working surface visible.",
+    "Create a comparison island beside the grounded evidence.",
+  );
+  assert.equal(
+    canvasV2AuthoritativeUserRequest(routed),
+    "Compare Awin and Whop onboarding and keep the working surface visible.",
+  );
+  assert.doesNotMatch(canvasV2AuthoritativeUserRequest(routed), /\bbeside\b/i);
+  assert.match(
+    canvasV2AuthoritativeUserRequest("Place a separate composition beside the evidence."),
+    /\bbeside\b/i,
+  );
+});
+
+test("router research targets cannot invent a more specific product flow than the person named", () => {
+  const message = "Build a balanced executive comparison of Awin and Whop onboarding.";
+  assert.equal(canvasV2ResearchTargetSupportedByUserMessage("Awin", message), true);
+  assert.equal(canvasV2ResearchTargetSupportedByUserMessage("Whop — User Onboarding", message), true);
+  assert.equal(canvasV2ResearchTargetSupportedByUserMessage("Awin — Links", message), false);
+  assert.equal(canvasV2ResearchTargetSupportedByUserMessage("Awin Creator & Influencer Onboarding", message), false);
+  const decision = parseCanvasV2InteractionDecision({
+    route: "research-design",
+    summary: "Ground both products.",
+    canvasInstruction: message,
+    researchTargets: ["Awin — Links", "Awin", "Whop"],
+    researchMode: "synthesis",
+    inquiry,
+  }, message);
+  assert.deepEqual(decision.researchTargets, ["Awin", "Whop"]);
+});
+
+test("an explicit public-web request cannot be routed into research-design without external evidence", () => {
+  const message = "Research the current official OpenAI web-search capability using official sources.";
+  const decision = parseCanvasV2InteractionDecision({
+    route: "research-design",
+    summary: "Verify the capability.",
+    canvasInstruction: message,
+    researchTargets: [],
+    researchMode: "synthesis",
+    inquiry,
+  }, message);
+  assert.equal(canvasV2ExplicitExternalResearchRequested(message), true);
+  assert.equal(decision.inquiry?.evidenceNeed, "required");
+  assert.equal(decision.inquiry?.sourceCategories.includes("external"), true);
+  assert.equal(canvasV2ExplicitExternalResearchRequested("Create a timeless market-entry decision canvas from the facts I supplied."), false);
+});
+
 test("selection transformation requires and preserves the exact stable target", () => {
   assert.throws(() => parseCanvasV2InteractionDecision({ route: "selection-transform", summary: "Edit it.", canvasInstruction: "Make it concise." }, "Make it concise"), /Select an canvas element/);
   const decision = parseCanvasV2InteractionDecision({ route: "selection-transform", summary: "Edit it.", canvasInstruction: "Make it concise." }, "Make it concise", selection);
@@ -76,6 +141,9 @@ test("the chat controller delegates only mutating routes to the observed design 
   assert.match(route, /creative construction, planning, facilitation, organization, speculative exploration/);
   assert.match(route, /A prompt can produce a complete premium canvas without research/);
   assert.match(route, /journey\/session type/);
+  assert.match(route, /discoveryModelContext: modelContext\.discoveryModelContext/);
+  assert.doesNotMatch(route, /discoveryWorkingSet: modelContext\.discoveryWorkingSet/);
+  assert.match(route, /evidenceSummary:/);
   for (const interaction of ["conversation", "inspect", "transform", "research-design", "selection-transform"]) assert.match(route, new RegExp(interaction));
   assert.match(workspace, /routerEndpoint="\/api\/canvas-v2\/route"|routerEndpoint = "\/api\/canvas-v2\/route"/);
   assert.doesNotMatch(`${hook}\n${route}\n${workspace}`, /@\/lib\/canvas-ai\//);

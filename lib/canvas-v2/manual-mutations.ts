@@ -13,8 +13,8 @@ export interface CanvasV2ManualPoint { x: number; y: number }
 
 export type CanvasV2AtomicManualMutation =
   | { kind: "move"; nodeId: string; deltaX: number; deltaY: number }
-  | { kind: "resize"; nodeId: string; width: number; height: number; fontSize?: number }
-  | { kind: "transform"; nodeId: string; deltaX: number; deltaY: number; width: number; height: number; fontSize?: number }
+  | { kind: "resize"; nodeId: string; width: number; height: number; fontSize?: number; lineHeight?: number }
+  | { kind: "transform"; nodeId: string; deltaX: number; deltaY: number; width: number; height: number; fontSize?: number; lineHeight?: number }
   | { kind: "text"; nodeId: string; text: string; nativeContent?: CanvasV2NativeTextContentUpdate[]; layout?: { width?: number; height?: number } }
   | { kind: "style"; nodeId: string; property: CanvasV2EditableStyleProperty; value: string }
   | { kind: "attribute"; nodeId: string; name: "alt"; value: string }
@@ -314,6 +314,7 @@ export function applyCanvasV2ManualMutation(
     setGeometryStyle(element, "height", `${height}px`);
     setGeometryStyle(element, "max-width", "none");
     if (mutation.fontSize !== undefined) element.style.setProperty("font-size", `${Math.max(6, finite(mutation.fontSize, "Font size"))}px`, "important");
+    if (mutation.lineHeight !== undefined) element.style.setProperty("line-height", `${Math.max(1, finite(mutation.lineHeight, "Line height"))}px`, "important");
     markUserEdit(element, mutation.kind);
   } else if (mutation.kind === "transform") {
     const x = storedNumber(element, "canvasV2ManualX") + finite(mutation.deltaX, "Horizontal movement");
@@ -331,6 +332,7 @@ export function applyCanvasV2ManualMutation(
     setGeometryStyle(element, "height", `${height}px`);
     setGeometryStyle(element, "max-width", "none");
     if (mutation.fontSize !== undefined) element.style.setProperty("font-size", `${Math.max(6, finite(mutation.fontSize, "Font size"))}px`, "important");
+    if (mutation.lineHeight !== undefined) element.style.setProperty("line-height", `${Math.max(1, finite(mutation.lineHeight, "Line height"))}px`, "important");
     markUserEdit(element, mutation.kind);
   } else if (mutation.kind === "text") {
     if (element.childElementCount) throw new Error("Text editing is available only for a leaf node. Select a text node with its own stable identity.");

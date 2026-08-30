@@ -2,6 +2,7 @@ import type {
   CanvasV2ArtifactDocument,
   CanvasV2EvidenceAsset,
   CanvasV2EvidenceRole,
+  CanvasV2IslandStoryRole,
   CanvasV2RenderObservation,
 } from "@/lib/canvas-v2/types";
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
@@ -72,6 +73,24 @@ export function readCanvasV2CanonicalFlowManifests(document: CanvasV2ArtifactDoc
     });
   }
   return manifests;
+}
+
+/**
+ * Complexity and cadence must be derived from the complete committed atlas,
+ * never from a bounded provider projection that may omit stable records.
+ */
+export function canvasV2CanonicalEvidenceScale(document: CanvasV2ArtifactDocument): {
+  flowCount: number;
+  screenCount: number;
+} {
+  const flows = readCanvasV2CanonicalFlowManifests(document);
+  return {
+    flowCount: flows.length,
+    screenCount: flows.reduce(
+      (sum, flow) => sum + flow.items.filter((item) => item.flowIndex !== undefined).length,
+      0,
+    ),
+  };
 }
 
 function duplicates(values: readonly string[]): string[] {
@@ -414,6 +433,60 @@ export function validateCanvasV2RenderedDesignRegionLegibility(
   return [...undersized, ...oversized, ...wrappedLabels, ...compressedMultiline, ...collapsedProse, ...textCollisions];
 }
 
+function cssAttributeString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n|\r/g, " ");
+}
+
+/**
+ * Minimum type floors are compiler policy, not creative judgment. When the
+ * browser reports only undersized readable leaves, append exact node-scoped
+ * corrections and re-observe the private candidate instead of spending a
+ * provider turn asking the model to restate deterministic pixel values.
+ */
+export function repairCanvasV2RenderedDesignRegionTypeFloors(
+  document: CanvasV2ArtifactDocument,
+  observation: CanvasV2RenderObservation,
+): CanvasV2ArtifactDocument {
+  const nodes = observation.spatial.nodes ?? [];
+  const regionIds = new Set((observation.spatial.designRegions ?? []).map((region) => region.nodeId));
+  if (!nodes.length || !regionIds.size) return document;
+  const nodeById = new Map(nodes.map((node) => [node.nodeId, node]));
+  const childrenByParent = new Map<string, string[]>();
+  for (const node of nodes) {
+    if (!node.parentNodeId) continue;
+    childrenByParent.set(node.parentNodeId, [...(childrenByParent.get(node.parentNodeId) ?? []), node.nodeId]);
+  }
+  const belongsToDesignRegion = (nodeId: string): boolean => {
+    let current = nodeById.get(nodeId);
+    const visited = new Set<string>();
+    while (current && !visited.has(current.nodeId)) {
+      visited.add(current.nodeId);
+      if (regionIds.has(current.nodeId)) return true;
+      current = current.parentNodeId ? nodeById.get(current.parentNodeId) : undefined;
+    }
+    return false;
+  };
+  const rules = nodes.flatMap((node) => {
+    const text = node.textPreview?.trim() ?? "";
+    if (!/[a-z0-9]{2}/i.test(text)
+      || (childrenByParent.get(node.nodeId)?.length ?? 0) > 0
+      || !belongsToDesignRegion(node.nodeId)) return [];
+    const size = canvasPixels(node.layout.fontSize) ?? 16;
+    const minimum = /^h[1-6]$/.test(node.tagName) ? 40
+      : ["p", "li", "blockquote"].includes(node.tagName) ? 28
+        : 24;
+    if (size >= minimum - 0.5) return [];
+    const marker = `canvas-v2-type-floor:${node.nodeId}:${minimum}`;
+    if (document.css.includes(marker)) return [];
+    return [`/* ${marker} */\n[data-canvas-v2-node-id="${cssAttributeString(node.nodeId)}"] { font-size: ${minimum}px !important; }`];
+  });
+  if (!rules.length) return document;
+  return {
+    ...document,
+    css: `${document.css.trimEnd()}\n\n/* canvas-v2-compiler-type-floor-recovery */\n${rules.join("\n")}`,
+  };
+}
+
 /**
  * Transition verbs are optional annotation, never permission to cover a
  * stage's readable content. Return only exact SVG text objects that can be
@@ -506,9 +579,9 @@ function renderedIntersectionArea(
 
 /**
  * Islands are narrative territories, not arbitrary layers. The model chooses
- * their form and location, while rendered truth guarantees that the permanent
- * title origin remains the story beginning and independently authored islands
- * do not silently occupy the same physical space.
+ * their form, order, and location; rendered truth guarantees that an optional
+ * title remains singular and readable while independently authored islands do
+ * not silently occupy the same physical space.
  */
 export function validateCanvasV2RenderedIslandNarrativeIntegrity(
   observation: CanvasV2RenderObservation,
@@ -518,10 +591,28 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
   if (!regions.length) return [];
   const failures: string[] = [];
   const titles = regions.filter((region) => region.storyRole === "title");
-  if (titles.length !== 1) {
-    failures.push(`An authored North Star board requires exactly one title-and-description island as its narrative origin; rendered ${titles.length}.`);
+  if (titles.length > 1) {
+    failures.push(`An authored North Star board permits at most one title-and-description island; rendered ${titles.length}.`);
   }
   const title = titles[0];
+  if (title) {
+    const titleOpeningBounds = title.contentBounds ?? title.bounds;
+    const spatialPredecessors = regions.filter((region) => {
+      if (region.nodeId === title.nodeId) return false;
+      const regionOpeningBounds = region.contentBounds ?? region.bounds;
+      return regionOpeningBounds.y < titleOpeningBounds.y - 4
+        || (Math.abs(regionOpeningBounds.y - titleOpeningBounds.y) <= 4
+          && regionOpeningBounds.x < titleOpeningBounds.x - 4);
+    });
+    if (spatialPredecessors.length) {
+      failures.push(`Title island ${title.nodeId} must remain the first spatial chapter. These authored islands currently begin above it or before it on the opening row: ${spatialPredecessors.map((region) => region.nodeId).join(", ")}. Keep the publication title topmost; later chapters may continue beside the opening or after the complete grounded-evidence chapter, but never before it.`);
+    }
+    const readingOrder = observation.spatial.authoredSurface?.readingOrder ?? [];
+    const firstAuthoredRegionId = readingOrder.find((nodeId) => regions.some((region) => region.nodeId === nodeId));
+    if (firstAuthoredRegionId && firstAuthoredRegionId !== title.nodeId) {
+      failures.push(`Title island ${title.nodeId} must begin the authored reading order, but ${firstAuthoredRegionId} currently precedes it. Preserve the title as the narrative entry point and sequence later islands after it.`);
+    }
+  }
   const canvas = observation.spatial.authoredSurface?.canvasBounds ?? observation.contentBounds;
   const explicitlyExpansiveComposition = /\b(?:expansive|panoramic|gallery[- ]scale|wall[- ]scale|large[- ]scale)\b|\bspread\b[^.]{0,48}\bacross\b[^.]{0,32}\bcanvas\b|\bwide\b[^.]{0,24}\bcanvas\b/i.test(instruction);
   if (!explicitlyExpansiveComposition) {
@@ -561,19 +652,108 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
     for (let index = 1; index < orderedRegions.length; index += 1) {
       const previous = orderedRegions[index - 1];
       const current = orderedRegions[index];
-      const horizontalGap = Math.max(
+      // Root boxes can be adjacent while oversized min-height, padding, or
+      // spacer tracks leave their actual communication thousands of pixels
+      // apart. Judge the visible reading units when the browser supplied that
+      // more honest footprint; fall back to the island boxes for older state.
+      const previousNarrativeBounds = previous.contentBounds ?? previous.bounds;
+      const currentNarrativeBounds = current.contentBounds ?? current.bounds;
+      const canonicalLane = observation.spatial.authoredSurface?.canonicalLaneBounds;
+      if (canonicalLane) {
+        const previousRight = previousNarrativeBounds.x + previousNarrativeBounds.width;
+        const previousBottom = previousNarrativeBounds.y + previousNarrativeBounds.height;
+        const currentRight = currentNarrativeBounds.x + currentNarrativeBounds.width;
+        const currentBottom = currentNarrativeBounds.y + currentNarrativeBounds.height;
+        const laneRight = canonicalLane.x + canonicalLane.width;
+        const laneBottom = canonicalLane.y + canonicalLane.height;
+        // The compiler-owned evidence-relative relation is the story
+        // contract. When the current island is explicitly after the complete
+        // atlas, judge its proximity to that atlas—not directly to the title
+        // or an earlier authored island on the other side. Territory
+        // integrity separately rejects a falsely declared relation whose
+        // rendered boundary still enters the evidence band.
+        const followsEvidenceVertically = current.territoryRelation === "below"
+          && current.bounds.y >= laneBottom - 4
+          && current.bounds.y - laneBottom <= 960;
+        const followsEvidenceHorizontally = current.territoryRelation === "right"
+          && current.bounds.x >= laneRight - 4
+          && current.bounds.x - laneRight <= 960;
+        if (followsEvidenceVertically || followsEvidenceHorizontally) continue;
+        const evidenceSeparatesVertically = (
+          previousBottom <= canonicalLane.y + 4 && currentNarrativeBounds.y >= laneBottom - 4
+        ) || (
+          currentBottom <= canonicalLane.y + 4 && previousNarrativeBounds.y >= laneBottom - 4
+        );
+        const evidenceSeparatesHorizontally = (
+          previousRight <= canonicalLane.x + 4 && currentNarrativeBounds.x >= laneRight - 4
+        ) || (
+          currentRight <= canonicalLane.x + 4 && previousNarrativeBounds.x >= laneRight - 4
+        );
+        // Grounded evidence is a real chapter in the board's story. When the
+        // complete atlas sits between two authored islands, those islands are
+        // not consecutive reading units and must not be rejected for failing
+        // a direct-island gutter rule. Territory and evidence-integrity gates
+        // separately guarantee that neither island covers the source record.
+        if (evidenceSeparatesVertically || evidenceSeparatesHorizontally) continue;
+      }
+      let horizontalGap = Math.max(
         0,
-        current.bounds.x - (previous.bounds.x + previous.bounds.width),
-        previous.bounds.x - (current.bounds.x + current.bounds.width),
+        currentNarrativeBounds.x - (previousNarrativeBounds.x + previousNarrativeBounds.width),
+        previousNarrativeBounds.x - (currentNarrativeBounds.x + currentNarrativeBounds.width),
       );
-      const verticalGap = Math.max(
+      let verticalGap = Math.max(
         0,
-        current.bounds.y - (previous.bounds.y + previous.bounds.height),
-        previous.bounds.y - (current.bounds.y + current.bounds.height),
+        currentNarrativeBounds.y - (previousNarrativeBounds.y + previousNarrativeBounds.height),
+        previousNarrativeBounds.y - (currentNarrativeBounds.y + currentNarrativeBounds.height),
       );
+      if (canonicalLane) {
+        const intervalOverlap = (firstStart: number, firstEnd: number, secondStart: number, secondEnd: number) => (
+          Math.max(0, Math.min(firstEnd, secondEnd) - Math.max(firstStart, secondStart))
+        );
+        const horizontalOverlapWithBoth = intervalOverlap(
+          canonicalLane.x,
+          canonicalLane.x + canonicalLane.width,
+          previousNarrativeBounds.x,
+          previousNarrativeBounds.x + previousNarrativeBounds.width,
+        ) > 0 && intervalOverlap(
+          canonicalLane.x,
+          canonicalLane.x + canonicalLane.width,
+          currentNarrativeBounds.x,
+          currentNarrativeBounds.x + currentNarrativeBounds.width,
+        ) > 0;
+        const verticalOverlapWithBoth = intervalOverlap(
+          canonicalLane.y,
+          canonicalLane.y + canonicalLane.height,
+          previousNarrativeBounds.y,
+          previousNarrativeBounds.y + previousNarrativeBounds.height,
+        ) > 0 && intervalOverlap(
+          canonicalLane.y,
+          canonicalLane.y + canonicalLane.height,
+          currentNarrativeBounds.y,
+          currentNarrativeBounds.y + currentNarrativeBounds.height,
+        ) > 0;
+        if (verticalGap > 0 && horizontalOverlapWithBoth) {
+          const previousComesFirst = previousNarrativeBounds.y <= currentNarrativeBounds.y;
+          const gapStart = previousComesFirst
+            ? previousNarrativeBounds.y + previousNarrativeBounds.height
+            : currentNarrativeBounds.y + currentNarrativeBounds.height;
+          const gapEnd = previousComesFirst ? currentNarrativeBounds.y : previousNarrativeBounds.y;
+          const occupiedSpan = intervalOverlap(gapStart, gapEnd, canonicalLane.y, canonicalLane.y + canonicalLane.height);
+          verticalGap = Math.max(0, verticalGap - occupiedSpan);
+        }
+        if (horizontalGap > 0 && verticalOverlapWithBoth) {
+          const previousComesFirst = previousNarrativeBounds.x <= currentNarrativeBounds.x;
+          const gapStart = previousComesFirst
+            ? previousNarrativeBounds.x + previousNarrativeBounds.width
+            : currentNarrativeBounds.x + currentNarrativeBounds.width;
+          const gapEnd = previousComesFirst ? currentNarrativeBounds.x : previousNarrativeBounds.x;
+          const occupiedSpan = intervalOverlap(gapStart, gapEnd, canonicalLane.x, canonicalLane.x + canonicalLane.width);
+          horizontalGap = Math.max(0, horizontalGap - occupiedSpan);
+        }
+      }
       const narrativeGap = Math.hypot(horizontalGap, verticalGap);
-      if (narrativeGap > 1_200) {
-        failures.push(`Narrative island ${current.nodeId} begins ${Math.round(narrativeGap)}px away from preceding chapter ${previous.nodeId}. Bring consecutive chapters into visible proximity (normally 192–480px, never more than 1200px without an explicitly expansive brief) so the composition reads as one easy-to-follow story.`);
+      if (narrativeGap > 960) {
+        failures.push(`Narrative island ${current.nodeId} places its meaningful content ${Math.round(narrativeGap)}px away from preceding chapter ${previous.nodeId}. Bring the reading units into premium visible proximity (normally 192–480px, never more than 960px without an explicitly expansive brief) by removing empty min-height, padding, spacer tracks, or remote placement so the composition reads as one easy-to-follow story.`);
       }
     }
   }
@@ -596,26 +776,8 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
     }
   }
   if (title) {
-    const titleCenterY = title.bounds.y + title.bounds.height / 2;
-    const nativeWorldSpace = canvas.width >= CANVAS_V2_WORKSPACE.width - 4
-      && canvas.height >= CANVAS_V2_WORKSPACE.height - 4;
-    const titleLeftInset = Math.abs(title.bounds.x - canvas.x - CANVAS_V2_WORKSPACE.documentMargin);
     const titleRight = title.bounds.x + title.bounds.width;
     const titleBottom = title.bounds.y + title.bounds.height;
-    const titleBeginsReadingOrder = !observation.spatial.authoredSurface?.readingOrder?.length
-      || observation.spatial.authoredSurface.readingOrder[0] === title.nodeId;
-    // The compatibility renderer has a temporary local 192px origin. Native
-    // public truth begins at the permanent AI authoring territory to the right
-    // of Chat and may shift farther into verified free space when another
-    // participant already occupies its preferred anchor. Conflating those two
-    // coordinate systems caused successful titles to enter endless repair.
-    if (nativeWorldSpace && !titleBeginsReadingOrder) {
-      const precedingIslandId = observation.spatial.authoredSurface?.readingOrder
-        ?.find((nodeId) => nodeId !== title.nodeId);
-      failures.push(`Narrative island ${precedingIslandId ?? "preceding-island"} appears before the established title origin. Move this exact island into a later nearby territory; a later chapter may never replace the title as the upper-left beginning of the story.`);
-    } else if (!nativeWorldSpace && (titleLeftInset > 8 || titleCenterY > canvas.y + canvas.height * 0.38)) {
-      failures.push(`Title island ${title.nodeId} must begin at the upper-left narrative origin, above the evidence and outside later analytical territories.`);
-    }
     if (title.bounds.width < Math.min(720, canvas.width * 0.45)) {
       failures.push(`Title island ${title.nodeId} is too narrow to establish a readable narrative opening. Give the title a deliberate editorial footprint while leaving genuinely occupied multiplayer territory untouched.`);
     }
@@ -626,8 +788,6 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
       && title.bounds.x < laneBounds.x + laneBounds.width - 4);
     if (laneBounds && titleLaneIntersection >= 576) {
       failures.push(`Title island ${title.nodeId} overlaps grounded evidence. Move the complete title territory into verified free world-space instead of covering source screenshots.`);
-    } else if (laneBounds && horizontallySharesLane && title.bounds.y >= laneBounds.y + laneBounds.height - 4) {
-      failures.push(`Title island ${title.nodeId} begins after grounded evidence despite owning the narrative origin. Place it before the evidence in reading order or beside the atlas in earlier open territory.`);
     } else if (laneBounds && horizontallySharesLane && titleBottom <= laneBounds.y + 4) {
       const narrativeGap = laneBounds.y - titleBottom;
       if (narrativeGap < CANVAS_V2_WORKSPACE.documentMargin) {
@@ -659,9 +819,17 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
 export function validateCanvasV2RenderedComparisonCommunication(
   observation: CanvasV2RenderObservation,
   instruction: string,
+  scope: {
+    storyRole?: CanvasV2IslandStoryRole;
+    finalWholeBoard?: boolean;
+  } = {},
 ): string[] {
-  const asksForComparison = /\b(?:compare|comparison|comparative|versus|vs\.?|contrast)\b/i.test(instruction);
-  const asksForScreens = /\b(?:representative|screenshot|screenshots|screen evidence|visual evidence)\b/i.test(instruction);
+  const authoritativeUserRequest = instruction.match(/Authoritative user request \(preserve exact product and journey scope\):\s*([\s\S]+)$/i)?.[1]?.trim()
+    ?? instruction;
+  const asksForComparison = /\b(?:compare|comparison|comparative|versus|vs\.?|contrast)\b/i.test(authoritativeUserRequest);
+  const explicitScreenLanguage = /\b(?:screenshots?|screen (?:evidence|copies|captures?|examples?|flows?)|representative screens?)\b/i;
+  const rejectsScreens = /\b(?:without|no|do not|don't|not using|avoid)\b[^.]{0,48}\b(?:screenshots?|screen (?:evidence|copies|captures?|examples?|flows?))\b/i.test(authoritativeUserRequest);
+  const asksForScreens = explicitScreenLanguage.test(authoritativeUserRequest) && !rejectsScreens;
   if (!asksForComparison || !asksForScreens) return [];
 
   const analysisScreens = observation.spatial.evidence.filter((item) => (
@@ -672,8 +840,36 @@ export function validateCanvasV2RenderedComparisonCommunication(
     && item.bounds.height > 0
   ));
   const failures: string[] = [];
-  if (analysisScreens.length < 2) {
+  const stageOwnsComparisonEvidence = scope.finalWholeBoard === true
+    || (scope.storyRole !== undefined
+      && ["evidence-reading", "comparison", "analysis", "synthesis", "whole-board"].includes(scope.storyRole));
+  if (stageOwnsComparisonEvidence && analysisScreens.length < 2) {
     failures.push("The screenshot-led comparison needs at least two visible canonical screen copies in its analytical composition so the contrast can be inspected rather than described only in prose.");
+  }
+
+  // A comparison axis is not realized when its labels span the composition
+  // while every witness collapses into one narrow lane at the leading edge.
+  // Preserve creative freedom for constellations, sequences, annotations, and
+  // compact comparisons; this guard applies only when the authored structure
+  // explicitly declares itself a comparison axis and carries enough screens
+  // for the rendered distribution to be meaningful.
+  const regionsById = new Map((observation.spatial.designRegions ?? []).map((region) => [region.nodeId, region]));
+  const axisScreensByRegion = new Map<string, typeof analysisScreens>();
+  for (const screen of analysisScreens) {
+    if (!screen.designRegionNodeId) continue;
+    const region = regionsById.get(screen.designRegionNodeId);
+    if (screen.visualRole !== "comparison-axis" && region?.visualRole !== "comparison-axis") continue;
+    axisScreensByRegion.set(screen.designRegionNodeId, [...(axisScreensByRegion.get(screen.designRegionNodeId) ?? []), screen]);
+  }
+  for (const [regionNodeId, screens] of axisScreensByRegion) {
+    const region = regionsById.get(regionNodeId);
+    if (!region || screens.length < 4 || region.bounds.width < 1_200) continue;
+    const witnessLeft = Math.min(...screens.map((screen) => screen.bounds.x));
+    const witnessRight = Math.max(...screens.map((screen) => screen.bounds.x + screen.bounds.width));
+    const horizontalShare = (witnessRight - witnessLeft) / Math.max(1, region.bounds.width);
+    if (horizontalShare < 0.36) {
+      failures.push(`Comparison axis ${regionNodeId} spans ${Math.round(region.bounds.width)} canvas units, but all ${screens.length} screenshot witnesses collapse into only ${Math.round(horizontalShare * 100)}% of that width. Bind each witness to the stage or comparison cell it supports so the declared axis is visibly populated instead of leaving empty headings and one left-packed evidence lane.`);
+    }
   }
 
   return Array.from(new Set(failures));

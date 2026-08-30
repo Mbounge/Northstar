@@ -2,10 +2,19 @@ import {
   canvasV2ProviderForModel,
   type CanvasV2ModelProvider,
 } from "@/lib/canvas-v2/model-catalog";
+import type { CanvasV2ProviderRequestAudit } from "@/lib/canvas-v2/request-reliability";
+
+export interface CanvasV2ModelInputImage {
+  mimeType: string;
+  data: string;
+  /** `auto` is intentionally representable so the cost guard can reject it. */
+  detail?: "low" | "high" | "auto" | "original";
+  purpose?: "whole-board-overview" | "canonical-evidence-detail" | "focused-island" | "surrounding-island" | "reference";
+}
 
 export type CanvasV2ModelInputPart =
   | { text: string }
-  | { inlineData: { mimeType: string; data: string } };
+  | { inlineData: CanvasV2ModelInputImage };
 
 export interface CanvasV2StructuredModelRequest {
   model: string;
@@ -18,6 +27,16 @@ export interface CanvasV2StructuredModelRequest {
   reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
   temperature?: number;
   correction?: string;
+  /** OpenAI Responses tools. Tool-bearing research calls are OpenAI-only. */
+  tools?: ReadonlyArray<Record<string, unknown>>;
+  toolChoice?: "auto" | "required";
+  include?: readonly string[];
+  /** Per-call visual budget. Canvas V2 never needs an unbounded image bundle. */
+  maxInputImages?: number;
+  /** Includes system instructions and the strict JSON schema before image tokens. */
+  maxTextCharacters?: number;
+  /** Stable role/schema namespace; dynamic revision IDs must never enter this key. */
+  cacheNamespace?: string;
 }
 
 function strictOpenAIJsonSchema(value: unknown): unknown {
@@ -39,7 +58,10 @@ function openAIContent(parts: readonly CanvasV2ModelInputPart[], correction?: st
     else content.push({
       type: "input_image",
       image_url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-      detail: "auto",
+      // GPT-5.6 preserves original dimensions for auto detail. A low-detail
+      // overview plus one or two deliberate high-detail crops retains visual
+      // judgment without turning a canvas observation into long context.
+      detail: part.inlineData.detail ?? "low",
     });
   }
   if (correction) content.push({
@@ -49,18 +71,68 @@ function openAIContent(parts: readonly CanvasV2ModelInputPart[], correction?: st
   return content;
 }
 
+function encodedBytes(data: string): number {
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor(data.length * 3 / 4) - padding);
+}
+
+function cacheNamespace(value: string): string {
+  return `northstar-v2-${value.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 44)}`.slice(0, 64);
+}
+
+function requestAudit(input: CanvasV2StructuredModelRequest): CanvasV2ProviderRequestAudit {
+  const images = input.parts.filter((part): part is { inlineData: CanvasV2ModelInputImage } => "inlineData" in part);
+  const details = images.map((part) => part.inlineData.detail ?? "low");
+  const correctionCharacters = input.correction?.length ?? 0;
+  const textCharacters = input.system.length
+    + JSON.stringify(input.schema).length
+    + input.parts.reduce((sum, part) => sum + ("text" in part ? part.text.length : 0), 0)
+    + correctionCharacters;
+  return {
+    textCharacters,
+    imageCount: images.length,
+    encodedImageBytes: images.reduce((sum, part) => sum + encodedBytes(part.inlineData.data), 0),
+    imageDetails: {
+      low: details.filter((detail) => detail === "low").length,
+      high: details.filter((detail) => detail === "high").length,
+      auto: details.filter((detail) => detail === "auto").length,
+      original: details.filter((detail) => detail === "original").length,
+    },
+    promptCacheMode: "explicit",
+    cacheNamespace: cacheNamespace(input.cacheNamespace ?? input.schemaName),
+  };
+}
+
+function assertRequestBudget(input: CanvasV2StructuredModelRequest, audit: CanvasV2ProviderRequestAudit): void {
+  const maxInputImages = Math.max(0, input.maxInputImages ?? 3);
+  const maxTextCharacters = Math.max(24_000, input.maxTextCharacters ?? 240_000);
+  if (audit.imageCount > maxInputImages) {
+    throw new Error(`Canvas V2 provider preflight rejected ${audit.imageCount} images; this ${input.schemaName} call permits at most ${maxInputImages}.`);
+  }
+  if (audit.textCharacters > maxTextCharacters) {
+    throw new Error(`Canvas V2 provider preflight rejected ${audit.textCharacters} text characters; compact ${input.schemaName} below ${maxTextCharacters} before calling the model.`);
+  }
+  if (audit.imageDetails.auto || audit.imageDetails.original) {
+    throw new Error("Canvas V2 provider preflight forbids auto/original image detail. Use one low-detail overview and only decision-relevant high-detail crops.");
+  }
+}
+
 export function buildCanvasV2StructuredProviderRequest(input: CanvasV2StructuredModelRequest): {
   provider: CanvasV2ModelProvider;
   url: string;
   init: RequestInit;
+  audit: CanvasV2ProviderRequestAudit;
 } {
   const provider = canvasV2ProviderForModel(input.model);
+  const audit = requestAudit(input);
+  assertRequestBudget(input, audit);
   if (provider === "openai") {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
     return {
       provider,
       url: "https://api.openai.com/v1/responses",
+      audit,
       init: {
         method: "POST",
         headers: {
@@ -71,9 +143,21 @@ export function buildCanvasV2StructuredProviderRequest(input: CanvasV2Structured
         body: JSON.stringify({
           model: input.model,
           instructions: input.system,
-          input: [{ role: "user", content: openAIContent(input.parts, input.correction) }],
+          input: [{ role: "user", content: [
+            {
+              type: "input_text",
+              text: `North Star Canvas V2 stable ${input.schemaName} request contract.`,
+              prompt_cache_breakpoint: { mode: "explicit" },
+            },
+            ...openAIContent(input.parts, input.correction),
+          ] }],
+          prompt_cache_key: audit.cacheNamespace,
+          prompt_cache_options: { mode: "explicit", ttl: "30m" },
           max_output_tokens: input.maxOutputTokens,
-          ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
+          ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort, context: "current_turn" } } : {}),
+          ...(input.tools?.length ? { tools: input.tools } : {}),
+          ...(input.toolChoice ? { tool_choice: input.toolChoice } : {}),
+          ...(input.include?.length ? { include: input.include } : {}),
           store: false,
           text: {
             format: {
@@ -88,11 +172,16 @@ export function buildCanvasV2StructuredProviderRequest(input: CanvasV2Structured
     };
   }
 
+  if (input.tools?.length || input.toolChoice || input.include?.length) {
+    throw new Error("Canvas V2 tool-bearing research is currently supported only by OpenAI models.");
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured.");
   return {
     provider,
     url: `https://generativelanguage.googleapis.com/v1beta/models/${input.model}:generateContent`,
+    audit: { ...audit, promptCacheMode: "none", cacheNamespace: undefined },
     init: {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -100,7 +189,9 @@ export function buildCanvasV2StructuredProviderRequest(input: CanvasV2Structured
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: input.system }] },
         contents: [{ role: "user", parts: [
-          ...input.parts,
+          ...input.parts.map((part) => "text" in part
+            ? part
+            : { inlineData: { mimeType: part.inlineData.mimeType, data: part.inlineData.data } }),
           ...(input.correction ? [{ text: `STRUCTURAL REPAIR REQUIRED. Your preceding draft was not committed. The exact validator failure was:\n${input.correction}\nTreat the validator failure as authoritative. Preserve only fields and authored decisions it did not reject. Replace any intended move, target territory, completion choice, or patch content it explicitly rejects instead of repeating it. Return a corrected response only.` }] : []),
         ] }],
         generationConfig: {

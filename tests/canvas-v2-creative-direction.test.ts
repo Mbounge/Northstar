@@ -23,6 +23,10 @@ test("the model owns an evolving creative direction rather than a runtime aesthe
 test("creative moves are purposeful and remain open to divergent visual forms", () => {
   const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
   const grammar = readFileSync("lib/canvas-v2/northstar-canvas-grammar.ts", "utf8");
+  const sourceRequestContext = route.slice(
+    route.indexOf("const requestContext ="),
+    route.indexOf("const provider = await fetchCanvasV2ProviderJsonWithModelChain", route.indexOf("const requestContext =")),
+  );
 
   for (const move of ["framing", "composition", "relationship", "analysis", "refinement"]) {
     assert.match(route, new RegExp(`\\"${move}\\"`));
@@ -37,6 +41,10 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(grammar, /violet\/blue is iconic and available, not a mandatory default/i);
   assert.match(grammar, /one accent, a tonal family, or several contrasting colors/i);
   assert.match(grammar, /Do not repeatedly color titles pale blue or violet/i);
+  assert.match(grammar, /Do not spend visible title, kicker, legend, or footer copy naming the artifact type/i);
+  assert.match(grammar, /asking to build a discovery canvas describes the requested medium/i);
+  assert.match(grammar, /Inline label-and-copy rows must have an explicit visible gap/i);
+  assert.match(grammar, /Zero geometric intersection is not enough/i);
   assert.match(route, /Progressive judgment without a creative-turn ceiling/);
   assert.match(route, /North Star visual-language references/);
   assert.match(route, /strategic-storyline-atlas\.png/);
@@ -49,6 +57,13 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /observedDesignTurns < 15/);
   assert.match(route, /observedDesignTurns < 18/);
   assert.match(route, /Every visible synthesis turn starts with a compact whole-board judgment/);
+  assert.match(route, /const visualDirectorRender =/);
+  assert.match(route, /render: visualDirectorRender/);
+  assert.doesNotMatch(
+    route.slice(route.indexOf("const visualDirectorRender ="), route.indexOf("const requiredVisualEvidenceForBrief")),
+    /screenshotDataUrl/,
+  );
+  assert.match(route, /maxTextCharacters: 360_000/);
   assert.match(route, /repeatedLocalWork/);
   assert.match(route, /REPETITION_GENERIC_MOVE_TERMS/);
   assert.match(route, /sharedDistinctiveMoveTerms/);
@@ -57,9 +72,36 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /PHASE AUTHORITY/);
   assert.match(route, /Do not recommend completion/);
   assert.match(route, /Zones already carrying authored design regions/);
-  assert.match(route, /maxInvalidResponsesPerModel: 4/);
+  assert.match(route, /Explicit human spatial language is binding/);
+  assert.match(route, /normalizeCanvasV2ExplicitSpatialRequest/);
+  assert.match(route, /normalizeCanvasV2ProgressiveComplexSynthesis/);
+  assert.match(route, /complexEvidenceSynthesis \? 2 : 0/);
+  assert.match(route, /progressive materialization is binding/);
+  assert.match(route, /Establish the governing thesis and scope for the grounded comparison/);
+  assert.match(route, /State the evidence-grounded executive implication and its honest boundary/);
+  assert.match(route, /storyRole: "title"/);
+  assert.match(route, /let evidenceBridgeTargetNames = researchTargets/);
+  assert.match(route, /evidenceBridgeTargetNames = discoveryTransition\.move\.targetNames/);
+  assert.doesNotMatch(route, /researchTargets = discoveryTransition\.move\.targetNames/);
+  assert.doesNotMatch(route, /The user explicitly requested a separate surface beside another\. Use relation/);
+  assert.match(route, /relation=left or relation=right/);
+  assert.match(route, /CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS/);
+  assert.doesNotMatch(route, /maxInvalidResponsesPerModel:\s*[3-9]/);
+  assert.match(route, /targetableExistingIslandIds/);
+  assert.doesNotMatch(sourceRequestContext, /discoveryModelContext: sourceAuthorModelContext\.discoveryModelContext/);
+  assert.doesNotMatch(sourceRequestContext, /discoveryState: sourceAuthorModelContext\.discoveryState/);
+  assert.doesNotMatch(sourceRequestContext, /discoveryMove: discoveryTransition\?\.move/);
+  assert.match(sourceRequestContext, /visualDirectorBrief/);
+  assert.match(sourceRequestContext, /groundedEvidencePackets: sourceAuthorModelContext\.groundedEvidencePackets/);
+  assert.match(sourceRequestContext, /render: sourceAuthorRender/);
+  assert.match(sourceRequestContext, /renderRepair: sourceAuthorRenderRepair/);
+  assert.doesNotMatch(sourceRequestContext, /rejectedCandidate/);
+  assert.match(route, /compiledMoveKind/);
   assert.match(route, /do not emit a no-op CSS patch, continuity edit, or speculative polish turn/);
-  assert.match(route, /A visible design turn must make one material rendered change/);
+  assert.doesNotMatch(route, /const declaredMove = `\$\{decision\.summary\}/);
+  assert.match(route, /decision\.document\.html === currentDocument\.html/);
+  assert.match(route, /decision\.document\.css === currentDocument\.css/);
+  assert.match(route, /A visible design turn must materially change the compiled canvas document/);
   assert.match(route, /directorCompletionDecision/);
   assert.match(route, /creativeCheckpointBrief\?\.completionRecommendation === "complete"/);
   assert.match(route, /deterministic completion checks found a concrete visible omission/);
@@ -100,7 +142,7 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /use its exact grounded identity handle as an identity-mark analysis copy at least once/);
   assert.match(route, /SOURCE_AUTHOR_SCHEMA/);
   assert.match(route, /SOURCE_AUTHOR_SYSTEM/);
-  assert.match(route, /Return only decision, moveKind, summary, expectedVisualResult, and patch/);
+  assert.match(route, /Return only decision, moveKind, summary, expectedVisualResult, emergentDepth, and patch/);
   assert.match(route, /anyOf:/);
   assert.match(route, /maxOutputTokens: 12_000/);
   assert.match(route, /temperature: 0\.44/);
@@ -133,18 +175,27 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /explicitRelationshipRefinementRequested/);
   assert.match(route, /explicitRelationshipRefinementRequested = turn === 1/);
   assert.match(route, /do not replace the requested edit with a completion-only response/);
-  assert.match(route, /resolvedStory\s*&& repeatedLocalWork/);
+  assert.match(route, /resolvedStory\s*&& !requiresVisibleDiscoveryComposition\s*&& repeatedLocalWork/);
+  assert.match(route, /Discovery owns whether accepted human findings require a visible canvas/);
   assert.match(route, /Recommend completion now instead of reopening that visual detail under new wording/);
   assert.match(route, /explicitWholeBoardRecompositionRequested/);
   assert.match(route, /Do not risk a speculative whole-board recompose/);
   assert.match(route, /an optional alternative layout is not a completion blocker/);
+  assert.match(route, /The requested canvas is still empty, so the first prompt-critical composition must be made visible before completion can be judged/);
   assert.match(route, /Inspect the actual pixels, not merely the ledger/);
   assert.match(route, /Repetition must earn its place/);
   assert.match(route, /Multi-line type needs honest leading/);
   assert.match(route, /hidden horizontal artboard and collapses earlier content into sliver columns/);
   assert.match(route, /repeatedResolvedIslandRefinement/);
   assert.match(route, /two consecutive bounded refinements and no objective blocker remains/);
-  assert.match(route, /const resolvedStory = titleIslands\.length === 1/);
+  assert.match(route, /const resolvedStory = islandRegistry\.length > 0/);
+  assert.match(route, /discoveryMove determine whether that chapter is framing, evidence reading, comparison, analysis, a decision surface/);
+  assert.doesNotMatch(route, /first synthesis turn must create a narrative-title/i);
+  assert.doesNotMatch(route, /first analytical island is always a narrative title/i);
+  assert.match(route, /A title-and-description island is optional/);
+  assert.match(route, /One island owns one primary semantic job/);
+  assert.match(route, /INDEPENDENT TERRITORY CONTRACT/);
+  assert.match(route, /independentTerritoryContract/);
   assert.match(route, /promptCoverageFailures\.length === 0/);
   assert.match(route, /validateCanvasV2RequestedCompositionCoverage/);
   assert.match(route, /A title, subtitle, orientation paragraph, or roadmap promise/);
@@ -160,18 +211,30 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /models: modelChain/);
   assert.match(route, /buildCanvasV2StructuredProviderRequest/);
   assert.doesNotMatch(route, /FOUNDATION_MODEL|CREATIVE_TERTIARY_MODEL|TERTIARY_MODEL/);
-  assert.match(route, /const synthesisTurn = researchMode !== "evidence"/);
+  assert.match(route, /const synthesisTurn = decisionPolicy\.phase !== "ground-required-evidence"/);
+  assert.doesNotMatch(route, /const synthesisTurn = researchMode !== "evidence"/);
   assert.match(route, /const creativeDirectionTurn = synthesisTurn/);
   assert.match(route, /evidenceSelections/);
   assert.match(route, /scaleIntent/);
+  assert.match(route, /explicitVisualEvidenceRequested/);
+  assert.match(route, /requiredVisualEvidenceForBrief/);
+  assert.match(route, /Reapply deterministic compiler/);
+  assert.match(route, /requiredVisualEvidenceForBrief\(creativeCheckpointBrief\)/);
+  assert.match(route, /groundedAnalyticalChapter/);
+  assert.match(route, /\["evidence-reading", "analysis", "comparison", "finding", "implication", "synthesis"\]/);
+  assert.match(route, /SCREEN 3 \/ SCREEN 5 labels/);
+  assert.match(route, /Use the exact grounded app icon as a compact identity mark/);
+  assert.match(route, /Show this exact canonical screenshot at inspectable peer scale/);
+  assert.match(route, /never substitute a text tile, letter mark, or invented logo/);
   assert.match(route, /Do not author page-dominating screenshots/);
   assert.match(route, /preservedStrengths/);
   assert.match(route, /regressionRisk/);
   assert.match(route, /preservation contract/);
   assert.match(route, /whole-board placement/);
-  assert.match(route, /Ordinary consecutive chapters must remain in close visual proximity/);
+  assert.match(route, /Ordinary genuinely consecutive chapters must remain in close visual proximity/);
   assert.match(route, /15–25% working zoom/);
-  assert.match(route, /within 1,200px of its preceding narrative neighbor/);
+  assert.match(route, /within 960px of its preceding narrative neighbor/);
+  assert.match(route, /grounded-evidence atlas is an intervening chapter/);
   assert.match(route, /evidence-relative-island/);
   assert.match(route, /data-canvas-v2-placement-mode/);
   assert.match(route, /data-canvas-v2-target-zone/);
@@ -191,13 +254,15 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /data-canvas-v2-relationship-source/);
   assert.match(route, /validateCanvasV2RenderedAnalysisEvidenceScale/);
   assert.match(route, /validateCanvasV2RenderedComparisonCommunication/);
+  assert.match(route, /validateCanvasV2AuthoredStageEvidenceContract/);
+  assert.match(route, /Every comparison checkpoint or stage must declare evidence ownership/);
   assert.match(route, /validateCanvasV2RenderedRelationshipGeometry/);
   assert.match(grammar, /Inline SVG is available for model-authored relationship geometry/);
   assert.match(grammar, /Never let two unannotated phone screens swallow the synthesis/);
   assert.match(grammar, /Side-by-side prose with decorative thumbnails is scaffolding/);
   assert.match(route, /Treat connectors and other endpoint-dependent geometry as an integration layer, not an early scaffold/);
-  assert.match(route, /Do not introduce SVG relationship geometry while the composition is still a scaffold/);
-  assert.match(route, /permanently reserved as framing/);
+  assert.match(route, /do not introduce SVG relationship geometry while its endpoint composition is still a scaffold/i);
+  assert.match(route, /already resolved as framing/);
   assert.match(route, /cannot absorb screenshot-led comparison or analysis/);
   assert.match(route, /Do not open another island while authored work remains unfinished/);
   assert.match(route, /replace or update all affected geometry in the same patch/);
@@ -205,7 +270,11 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(grammar, /rebuild every affected path in that same edit/);
   assert.match(route, /validateCanvasV2CreativeBriefExecution/);
   assert.match(route, /validateCanvasV2AnalysisEvidenceContinuity/);
-  assert.match(route, /focused evidence selection list of no more than eight items/);
+  assert.match(route, /CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS = 16/);
+  assert.match(route, /Never default to three screenshots per app/);
+  assert.match(route, /one grounded visual witness per canonical lane/);
+  assert.match(route, /if \(flow\.screens\.some\(\(screen\) => directorSelectedEvidenceIds\.has\(screen\.evidenceId\)\)\) return \[\]/);
+  assert.doesNotMatch(route, /rankedScreenSelections[\s\S]{0,1200}slice\(0, 3\)/);
   assert.match(route, /authoredVisualRoles\.some/);
   assert.doesNotMatch(route, /slice\(0, 4\)\.flatMap/);
 });
@@ -219,4 +288,24 @@ test("the visible proof develops a composition across research, framing, analysi
   assert.match(fixture, /moveKind: "refinement"/);
   assert.match(fixture, /Executive implication/);
   assert.doesNotMatch(fixture, /class="[^"]*card/);
+});
+
+test("visual reasoning is stage-local, explicitly cached, and bounded before provider I/O", () => {
+  const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
+  const provider = readFileSync("lib/canvas-v2/structured-provider.ts", "utf8");
+  const client = readFileSync("components/canvas-v2/use-canvas-v2-design-loop.ts", "utf8");
+  assert.doesNotMatch(provider, /detail: part\.inlineData\.detail \?\? "auto"/);
+  assert.match(provider, /detail: part\.inlineData\.detail \?\? "low"/);
+  assert.match(provider, /prompt_cache_breakpoint/);
+  assert.match(provider, /prompt_cache_options: \{ mode: "explicit", ttl: "30m" \}/);
+  assert.match(provider, /maxInputImages \?\? 3/);
+  assert.match(provider, /forbids auto\/original image detail/);
+  assert.match(route, /maxInputImages: 0/);
+  assert.match(route, /maxInputImages: 3/);
+  assert.match(route, /maxInputImages: 2/);
+  assert.doesNotMatch(route, /railDetailParts\.slice\(0, 2\)/);
+  assert.match(route, /focusedIslandDetailParts/);
+  assert.match(client, /providerUsage: activeLoop\.providerUsage/);
+  assert.match(client, /providerUsageCheckpoint: activeLoop\.providerUsageCheckpoint/);
+  assert.doesNotMatch(client, /canvasV2ProviderRunBudgetStatus|PROTECTED_WORK_BUDGET_MESSAGE|budgetPause/);
 });

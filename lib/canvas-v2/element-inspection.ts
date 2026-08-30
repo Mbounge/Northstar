@@ -18,6 +18,10 @@ export interface CanvasV2InspectableElement {
   editVersion?: number;
   rotation?: number;
   canonicalEvidence?: boolean;
+  evidenceId?: string;
+  evidencePacketId?: string;
+  evidenceSourceId?: string;
+  evidenceAuthority?: "observed" | "supplied" | "calculated" | "inferred";
   altText?: string;
   connector?: {
     variant: CanvasV2ConnectorVariant;
@@ -33,6 +37,7 @@ export interface CanvasV2InspectableElement {
     borderRadius: string;
     fontFamily: string;
     fontSize: string;
+    lineHeight: string;
     fontWeight: string;
     fontStyle: string;
     textAlign: string;
@@ -99,6 +104,10 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
                   ? "shape"
                   : "object";
   const permanentRoot = kind === "root";
+  const evidencePacket = element.closest("[data-canvas-v2-evidence-packet-id]");
+  const evidenceSource = element.closest("[data-canvas-v2-evidence-source-id]");
+  const evidenceAuthorityValue = element.getAttribute("data-canvas-v2-evidence-authority")
+    ?? evidencePacket?.getAttribute("data-canvas-v2-evidence-authority");
   const connector = kind === "connector" ? (() => {
     const numberAttribute = (name: string, fallback: number) => {
       const value = Number(element.getAttribute(name));
@@ -142,6 +151,12 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
     editVersion: Number(element.getAttribute("data-canvas-v2-edit-version")) || 0,
     rotation: Number(element.getAttribute("data-canvas-v2-rotation")) || 0,
     canonicalEvidence: Boolean(element.closest("[data-canvas-v2-canonical-flow]")),
+    evidenceId: element.getAttribute("data-canvas-v2-evidence-id") ?? undefined,
+    evidencePacketId: evidencePacket?.getAttribute("data-canvas-v2-evidence-packet-id") ?? undefined,
+    evidenceSourceId: evidenceSource?.getAttribute("data-canvas-v2-evidence-source-id") ?? undefined,
+    evidenceAuthority: evidenceAuthorityValue === "observed" || evidenceAuthorityValue === "supplied" || evidenceAuthorityValue === "calculated" || evidenceAuthorityValue === "inferred"
+      ? evidenceAuthorityValue
+      : undefined,
     altText: element.tagName === "IMG" ? element.getAttribute("alt") ?? "" : undefined,
     ...(connector ? { connector } : {}),
     visualStyle: {
@@ -151,6 +166,7 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
       borderRadius: computed?.borderRadius ?? "",
       fontFamily: computed?.fontFamily ?? "",
       fontSize: computed?.fontSize ?? "",
+      lineHeight: computed?.lineHeight ?? "",
       fontWeight: computed?.fontWeight ?? "",
       fontStyle: computed?.fontStyle ?? "",
       textAlign: computed?.textAlign ?? "",

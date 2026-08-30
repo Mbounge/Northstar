@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS,
   CanvasV2RequestError,
+  canvasV2ProviderUsageSignals,
+  canvasV2ProviderUsageFromAttempts,
   canvasV2RetryReason,
+  mergeCanvasV2ProviderUsage,
   requestCanvasV2Json,
   type CanvasV2RetryState,
 } from "../lib/canvas-v2/request-reliability";
@@ -193,6 +197,77 @@ test("provider rate limits retain retry metadata", async () => {
   );
 });
 
+test("provider attempts retain exact billed usage and bounded request shape", async () => {
+  const requestAudit = {
+    textCharacters: 42_000,
+    imageCount: 2,
+    encodedImageBytes: 180_000,
+    imageDetails: { low: 1, high: 1, auto: 0, original: 0 },
+    promptCacheMode: "explicit" as const,
+    cacheNamespace: "northstar-v2-test",
+  };
+  const result = await fetchCanvasV2ProviderJsonWithModelChain<{ ok: boolean; usage: Record<string, unknown> }>({
+    models: ["gpt-5.6-luna"],
+    requestSignal: new AbortController().signal,
+    requestForModel: () => ({ url: "https://provider.test/gpt-5.6-luna", init: {}, audit: requestAudit }),
+    fetcher: async () => new Response(JSON.stringify({
+      ok: true,
+      usage: {
+        input_tokens: 52_000,
+        input_tokens_details: { cached_tokens: 31_000, cache_write_tokens: 7_000 },
+        output_tokens: 2_400,
+        output_tokens_details: { reasoning_tokens: 900 },
+        total_tokens: 54_400,
+      },
+    }), { status: 200 }),
+  });
+  assert.deepEqual(result.attempts[0].request, requestAudit);
+  assert.deepEqual(result.attempts[0].usage, {
+    requestCount: 1,
+    inputTokens: 52_000,
+    cachedInputTokens: 31_000,
+    cacheWriteTokens: 7_000,
+    outputTokens: 2_400,
+    reasoningTokens: 900,
+    totalTokens: 54_400,
+  });
+  assert.deepEqual(canvasV2ProviderUsageFromAttempts(result.attempts), result.attempts[0].usage);
+});
+
+test("provider usage is observable without becoming an execution guard", () => {
+  const first = {
+    requestCount: 7,
+    inputTokens: 320_000,
+    cachedInputTokens: 180_000,
+    cacheWriteTokens: 70_000,
+    outputTokens: 20_000,
+    reasoningTokens: 8_000,
+    totalTokens: 780_000,
+  };
+  const second = {
+    requestCount: 5,
+    inputTokens: 10_000,
+    cachedInputTokens: 4_000,
+    cacheWriteTokens: 2_000,
+    outputTokens: 500,
+    reasoningTokens: 100,
+    totalTokens: 10_500,
+  };
+  assert.deepEqual(canvasV2ProviderUsageSignals(mergeCanvasV2ProviderUsage(first, second), first), {
+    sinceCommit: { requestCount: 5, inputTokens: 10_000, cachedInputTokens: 4_000, cacheWriteTokens: 2_000 },
+    uncachedInputTokens: 6_000,
+    signals: [],
+  });
+  const dense = canvasV2ProviderUsageSignals(mergeCanvasV2ProviderUsage(first, {
+    ...second,
+    requestCount: CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS.requestsWithoutCommit,
+    inputTokens: CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS.uncachedInputTokensWithoutCommit + second.cachedInputTokens,
+    cacheWriteTokens: CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS.cacheWriteTokensWithoutCommit,
+  }), first);
+  assert.deepEqual(dense.signals, ["request-density", "uncached-input-density", "cache-write-density"]);
+  assert.equal("exhausted" in dense, false);
+});
+
 test("the provider deadline reports a retryable timeout", async () => {
   await assert.rejects(
     fetchCanvasV2ProviderJson({
@@ -273,7 +348,7 @@ test("two invalid design outputs remain corrective instead of masquerading as pr
     assert.ok(error instanceof CanvasV2ProviderError);
     assert.equal(error.code, "invalid-response");
     assert.equal(error.retryable, false);
-    assert.match(error.message, /three automatic corrections/);
+    assert.match(error.message, /did not accept the private model draft/);
     assert.doesNotMatch(error.message, /resolve the visible relationship/);
     return true;
   });
@@ -417,6 +492,23 @@ test("two unavailable models pause without repeating the whole endpoint three ti
     return true;
   });
   assert.equal(calls, 2);
+});
+
+test("a pinned OpenAI rate limit remains retryable by the bounded client envelope", async () => {
+  await assert.rejects(fetchCanvasV2ProviderJsonWithModelChain({
+    models: ["gpt-5.6-luna"],
+    requestSignal: new AbortController().signal,
+    requestForModel: () => ({ url: "https://provider.test/gpt-5.6-luna", init: {} }),
+    fetcher: async () => new Response("busy", { status: 429, headers: { "Retry-After": "1" } }),
+  }), (error) => {
+    assert.ok(error instanceof CanvasV2ProviderError);
+    assert.equal(error.code, "rate-limited");
+    assert.equal(error.status, 429);
+    assert.equal(error.retryable, true);
+    assert.equal(error.retryAfterMs, 1_000);
+    assert.equal(error.providerAttempts?.length, 1);
+    return true;
+  });
 });
 
 test("a rejected primary request never escapes policy through fallback", async () => {

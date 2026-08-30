@@ -10,6 +10,7 @@ export type CanvasV2ChatStatus =
   | "failed";
 
 export function canvasV2ChatStatusForLoop(loop: CanvasV2LoopState): CanvasV2ChatStatus {
+  if (loop.status === "awaiting-user") return "responded";
   if (loop.status === "completed") return "completed";
   if (loop.status === "paused") return "incomplete";
   if (loop.status === "stopped") return "stopped";

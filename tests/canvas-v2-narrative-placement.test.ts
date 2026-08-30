@@ -101,16 +101,20 @@ test("model placement intent remains preferred while the board is not becoming a
   assert.equal(placement.relation, "right");
 });
 
-test("a later island can never replace the title as the upper-left story origin", () => {
+test("a later island can never precede the publication title", () => {
   const placement = compactCanvasV2NewIslandPlacement([
     region(1, 62_000, 64_000, "above"),
     region(2, 62_000, 65_480, "below"),
   ], "2200 × 1200px", "above", "region-1");
 
   assert.ok(placement);
-  assert.ok(
-    placement.anchorNodeId !== "region-1" || (placement.relation !== "above" && placement.relation !== "left"),
-    "the compiler must reject a model preference that moves a later chapter before the title",
+  assert.notDeepEqual(
+    { anchorNodeId: placement.anchorNodeId, relation: placement.relation },
+    { anchorNodeId: "region-1", relation: "above" },
+  );
+  assert.notDeepEqual(
+    { anchorNodeId: placement.anchorNodeId, relation: placement.relation },
+    { anchorNodeId: "region-1", relation: "left" },
   );
 });
 

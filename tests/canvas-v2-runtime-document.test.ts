@@ -21,11 +21,13 @@ test("runtime source is revision-bound and contains no executable bridge", () =>
   assert.match(runtime, /\[data-canvas-v2-node-id="canvas"\]/);
   assert.match(runtime, /body \{[\s\S]*padding:192px!important/);
   assert.match(runtime, /html > body \{[\s\S]*padding:192px!important/);
-  assert.match(runtime, /body > \[data-canvas-v2-design-region\]\[data-canvas-v2-story-role="title"\][\s\S]*max-width:8880px!important/);
-  assert.doesNotMatch(runtime, /data-canvas-v2-story-role="title"\][^{]*\{[^}]*(?:^|[;{])width:8880px!important/);
+  assert.match(runtime, /body > \[data-canvas-v2-design-region\]\[data-canvas-v2-story-role="title"\][\s\S]*max-width:4200px!important/);
+  assert.doesNotMatch(runtime, /data-canvas-v2-story-role="title"\][^{]*\{[^}]*(?:^|[;{])width:4200px!important/);
   assert.match(runtime, /body > \[data-canvas-v2-node-id="canvas"\][\s\S]*padding:0!important/);
   assert.match(runtime, /data-canvas-v2-theme="light"/);
   assert.match(runtime, /--northstar-surface:#ffffff/);
+  assert.match(runtime, /--northstar-muted:#5d6070/);
+  assert.match(runtime, /--northstar-line:rgba\(66,54,123,.22\)/);
   assert.match(runtime, /:root\[data-canvas-v2-theme="dark"\]/);
   assert.match(runtime, /--northstar-ink:#f4f3f8/);
   assert.match(runtime, /--northstar-muted:#c7c3cf/);

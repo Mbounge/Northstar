@@ -46,7 +46,6 @@ function themeElements(
   state: CanvasV2ArtifactThemeState,
 ): void {
   restoreTheme(state);
-  if (theme === "light") return;
 
   elements.forEach((element) => {
     if (MEDIA_TAGS.has(element.tagName) || element.getAttribute("data-canvas-v2-theme-preserve") === "true") return;
@@ -54,7 +53,7 @@ function themeElements(
     const original = new Map<string, StoredStyle>();
     const style = (element as HTMLElement | SVGElement).style;
     THEMED_PROPERTIES.forEach((property) => {
-      const next = themedValue(element, property, computed);
+      const next = themedValue(element, property, computed, theme);
       if (!next) return;
       original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property) });
       // Authored compositions may contain stylesheet declarations marked
@@ -121,12 +120,53 @@ function darkVector(value: string): string | undefined {
   return color.brightness < 120 ? "#f0eef5" : "#aaa6b4";
 }
 
+function lightText(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || !color.neutral || color.brightness <= 155) return undefined;
+  if (color.brightness > 226) return "#151620";
+  if (color.brightness > 195) return "#555968";
+  return "#737686";
+}
+
+function lightSurface(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || color.brightness > 115) return undefined;
+  if (color.neutral) {
+    if (color.brightness < 35) return "#ffffff";
+    if (color.brightness < 72) return "#f7f6fa";
+    return "#efedf4";
+  }
+  const base = { red: 250, green: 250, blue: 253 };
+  const tint = 0.12;
+  return `rgb(${Math.round(base.red * (1 - tint) + color.red * tint)} ${Math.round(base.green * (1 - tint) + color.green * tint)} ${Math.round(base.blue * (1 - tint) + color.blue * tint)})`;
+}
+
+function lightRule(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || color.brightness > 155) return undefined;
+  return color.neutral ? "rgba(21,22,32,.16)" : lightSurface(value);
+}
+
+function lightVector(value: string): string | undefined {
+  const color = colorFacts(value);
+  if (!color || !color.neutral || color.brightness <= 155) return undefined;
+  return color.brightness > 215 ? "#151620" : "#555968";
+}
+
 export function canvasV2ReadableDarkTextOpacity(value: string, hasText: boolean): string | undefined {
   const opacity = Number(value);
   return hasText && Number.isFinite(opacity) && opacity < 0.72 ? "0.72" : undefined;
 }
 
-function themedValue(element: Element, property: string, computed: CSSStyleDeclaration): string | undefined {
+export function canvasV2ReadableThemeTextOpacity(value: string, hasText: boolean): string | undefined {
+  return canvasV2ReadableDarkTextOpacity(value, hasText);
+}
+
+export function canvasV2ThemeTextColor(value: string, theme: CanvasV2ArtifactTheme): string | undefined {
+  return theme === "dark" ? darkText(value) : lightText(value);
+}
+
+function themedValue(element: Element, property: string, computed: CSSStyleDeclaration, theme: CanvasV2ArtifactTheme): string | undefined {
   const value = computed.getPropertyValue(property).trim();
   if (!value || value === "none" || value === "currentcolor") return undefined;
   if (property === "opacity") {
@@ -134,26 +174,33 @@ function themedValue(element: Element, property: string, computed: CSSStyleDecla
     // white. The same value compounds with muted ink on the dark workspace and
     // can make captions effectively disappear. Preserve hierarchy, but enforce
     // a readable floor for any authored region that carries text.
-    return canvasV2ReadableDarkTextOpacity(value, Boolean(element.textContent?.trim()));
+    return canvasV2ReadableThemeTextOpacity(value, Boolean(element.textContent?.trim()));
   }
-  if (property === "color") return darkText(value);
+  if (property === "color") return canvasV2ThemeTextColor(value, theme);
   if (property === "background-color") {
     const color = colorFacts(value);
     const directSurfaceRegion = element.hasAttribute("data-canvas-v2-design-region")
       || element.getAttribute("data-canvas-v2-evidence-region") === "canonical"
-      || element.getAttribute("data-canvas-v2-node-id") === "canvas";
-    if (directSurfaceRegion && color?.neutral && color.brightness >= 226) return "transparent";
-    return darkSurface(value);
+      || element.getAttribute("data-canvas-v2-node-id") === "canvas"
+      || element.tagName === "HTML"
+      || element.tagName === "BODY";
+    if (theme === "dark") {
+      if (directSurfaceRegion && color?.neutral && color.brightness >= 226) return "transparent";
+      return darkSurface(value);
+    }
+    if (directSurfaceRegion && color?.neutral && color.brightness <= 115) return "transparent";
+    return lightSurface(value);
   }
-  if (property === "fill" || property === "stroke") return darkVector(value);
-  return darkRule(value);
+  if (property === "fill" || property === "stroke") return theme === "dark" ? darkVector(value) : lightVector(value);
+  return theme === "dark" ? darkRule(value) : lightRule(value);
 }
 
 /**
  * Applies the host theme to an authored artifact without rewriting its source.
  * Saturated product and accent colors remain intact; only neutral ink, surfaces,
- * rules, and vector marks receive an accessible dark counterpart. The original
- * inline cascade is restored exactly when light mode returns.
+ * rules, and vector marks receive an accessible counterpart for the active host
+ * theme. This is bidirectional because a composition may have been authored
+ * while either theme was active and must remain readable after switching.
  */
 export function applyCanvasV2ArtifactTheme(
   frameDocument: Document,
@@ -168,8 +215,6 @@ export function applyCanvasV2ArtifactTheme(
   // iframe itself to a dark color-scheme gives transparent pixels an opaque
   // black backing in WebKit and Chromium.
   frameDocument.documentElement.style.colorScheme = "light";
-  if (theme === "light") return;
-
   const view = frameDocument.defaultView;
   if (!view) return;
   const elements = [frameDocument.documentElement, frameDocument.body, ...Array.from(frameDocument.body.querySelectorAll<Element>("*"))];

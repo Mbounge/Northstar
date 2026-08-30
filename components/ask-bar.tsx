@@ -1,202 +1,126 @@
-// components/ask-bar.tsx
 "use client";
 
-import { useState, useRef, ChangeEvent, useEffect } from "react";
-import { Paperclip, X, Loader2, Check, AlertCircle } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { ArrowUp, Layers3 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
-interface AttachedImage {
-  id: string;
-  url: string;
-  file: File;
-}
+import {
+  createCanvasV2GatewayHandoff,
+  storeCanvasV2GatewayHandoff,
+} from "@/lib/canvas-v2/gateway-handoff";
+
+const STANDARD_TRANSITION_MS = 560;
+const REDUCED_TRANSITION_MS = 70;
 
 export function AskBar() {
+  const router = useRouter();
   const [text, setText] = useState("");
-  const [images, setImages] = useState<AttachedImage[]>([]);
-  // Added "error" state
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  
+  const [transitioning, setTransitioning] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const supabase = createClient();
+  const transitionTimerRef = useRef<number | undefined>(undefined);
+  const launchStartedRef = useRef(false);
 
   useEffect(() => {
+    router.prefetch("/canvas");
     return () => {
-      images.forEach((img) => URL.revokeObjectURL(img.url));
+      if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
+      delete document.documentElement.dataset.northstarCanvasTransition;
     };
-  }, [images]);
+  }, [router]);
 
-  const handleInput = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+  const resizeTextarea = () => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 44), 136)}px`;
+  };
+
+  const handleInput = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setText(event.target.value);
+    resizeTextarea();
+  };
+
+  const openCanvas = () => {
+    if (launchStartedRef.current) return;
+    launchStartedRef.current = true;
+    const handoff = createCanvasV2GatewayHandoff(text);
+    storeCanvasV2GatewayHandoff(window.sessionStorage, handoff);
+    setTransitioning(true);
+    document.documentElement.dataset.northstarCanvasTransition = "leaving";
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    transitionTimerRef.current = window.setTimeout(() => {
+      router.push("/canvas");
+    }, reducedMotion ? REDUCED_TRANSITION_MS : STANDARD_TRANSITION_MS);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      openCanvas();
     }
   };
 
-  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const newFiles = Array.from(e.target.files);
-      const newImages = newFiles.map((file) => ({
-        id: Math.random().toString(36).substring(7),
-        url: URL.createObjectURL(file),
-        file,
-      }));
-
-      setImages((prev) => [...prev, ...newImages]);
-      
-      if (textareaRef.current && text === "") {
-        textareaRef.current.style.height = "40px";
-      }
-    }
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const removeImage = (idToRemove: string) => {
-    setImages((prev) => {
-      const imageToRemove = prev.find(img => img.id === idToRemove);
-      if (imageToRemove) URL.revokeObjectURL(imageToRemove.url);
-      return prev.filter(img => img.id !== idToRemove);
-    });
-  };
-
-  const handleSubmit = async () => {
-    if (!text.trim() && images.length === 0) return;
-    setStatus("loading");
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { 
-      setStatus("error"); 
-      setTimeout(() => setStatus("idle"), 2500);
-      return; 
-    }
-
-    const uploadedPaths: string[] = [];
-
-    // 1. Upload images if they exist
-    if (images.length > 0) {
-      for (const img of images) {
-        const fileExt = img.file.name.split('.').pop();
-        const filePath = `${user.id}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-        
-        const { error } = await supabase.storage
-          .from('user_uploads')
-          .upload(filePath, img.file);
-
-        if (!error) uploadedPaths.push(filePath);
-      }
-    }
-
-    // 2. Save query to database
-    const { error } = await supabase
-      .from('user_queries')
-      .insert({
-        user_id: user.id,
-        query_text: text.trim() || null,
-        image_paths: uploadedPaths.length > 0 ? uploadedPaths : null
-      });
-
-    // Graceful Error Handling
-    if (error) {
-      setStatus("error");
-      setTimeout(() => setStatus("idle"), 2500); // Reset after 2.5 seconds
-      return;
-    }
-
-    // 3. Success Reset Animation
-    setStatus("success");
-    setText("");
-    setImages([]);
-    if (textareaRef.current) textareaRef.current.style.height = "40px";
-
-    setTimeout(() => {
-      setStatus("idle");
-    }, 2000);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
-
-  const isExpanded = images.length > 0 || text.split('\n').length > 1 || text.length > 50;
+  const hasPrompt = text.trim().length > 0;
+  const expanded = text.includes("\n") || text.length > 72;
 
   return (
-    <div
-      className={`absolute left-1/2 -translate-x-1/2 flex flex-col bg-white/50 dark:bg-zinc-900/60 backdrop-blur-xl border border-white/40 dark:border-white/10 w-[540px] transition-colors duration-300 ${
-        isExpanded ? "rounded-[24px]" : "rounded-full"
-      }`}
-      style={{ boxShadow: "0 8px 30px rgba(0,0,0,0.06)" }}
-    >
-      <input type="file" multiple accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileSelect} />
+    <>
+      <div
+        data-northstar-gateway
+        data-transitioning={transitioning ? "true" : "false"}
+        className={`group absolute left-1/2 w-[min(590px,calc(100vw-48px))] -translate-x-1/2 border border-white/60 bg-white/58 shadow-[0_12px_44px_rgba(53,58,108,.12),inset_0_1px_0_rgba(255,255,255,.8)] backdrop-blur-2xl transition-[transform,border-radius,box-shadow,background-color] duration-500 ease-[cubic-bezier(.22,1,.36,1)] dark:border-white/[.12] dark:bg-[#17171f]/68 dark:shadow-[0_16px_48px_rgba(0,0,0,.28),inset_0_1px_0_rgba(255,255,255,.06)] ${expanded ? "rounded-[25px]" : "rounded-full"} ${transitioning ? "-translate-y-6 scale-[1.018] shadow-[0_26px_80px_rgba(76,67,180,.24)]" : "hover:shadow-[0_16px_52px_rgba(53,58,108,.16)]"}`}
+      >
+        <div className="flex w-full items-end gap-2 p-2">
+          <button
+            type="button"
+            onClick={openCanvas}
+            disabled={transitioning}
+            aria-label="Open a blank North Star canvas"
+            title="Open Canvas"
+            className="mb-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-full text-[#66677a] transition duration-300 hover:bg-white/65 hover:text-[#604ee0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7967ee]/60 disabled:opacity-50 dark:text-[#aaa7b5] dark:hover:bg-white/[.08] dark:hover:text-[#c0b7ff]"
+          >
+            <Layers3 className="h-[18px] w-[18px]" strokeWidth={1.7} />
+          </button>
 
-      {images.length > 0 && (
-        <div className="flex flex-row gap-3 px-4 pt-4 pb-1 overflow-x-auto w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-          {images.map((img) => (
-            <div key={img.id} className="relative group shrink-0 animate-in fade-in zoom-in-95 duration-150">
-              <div className="w-16 h-16 relative rounded-xl overflow-hidden border border-white/20 shadow-sm bg-black/5">
-                <img src={img.url} alt="Attached preview" className="w-full h-full object-cover" />
-              </div>
-              <button
-                onClick={() => removeImage(img.id)}
-                className="absolute -top-2 -right-2 bg-zinc-800 dark:bg-zinc-700 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-md border border-white/10 cursor-pointer hover:bg-black"
-                aria-label="Remove image"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
+          <label htmlFor="northstar-home-prompt" className="sr-only">Ask North Star anything</label>
+          <textarea
+            ref={textareaRef}
+            id="northstar-home-prompt"
+            value={text}
+            onChange={handleInput}
+            onKeyDown={handleKeyDown}
+            disabled={transitioning}
+            placeholder="Ask North Star anything…"
+            rows={1}
+            className="min-h-11 flex-1 resize-none overflow-y-auto border-none bg-transparent px-1 py-3 text-[14px] leading-5 text-[#171720] outline-none placeholder:text-[#737587] disabled:opacity-70 dark:text-white dark:placeholder:text-[#8f8c9c] [&::-webkit-scrollbar]:hidden"
+          />
+
+          <div className="relative mb-0.5 shrink-0">
+            <span className="pointer-events-none absolute bottom-[calc(100%+10px)] right-0 translate-y-1 whitespace-nowrap rounded-full border border-white/70 bg-white/88 px-3 py-1.5 text-[10px] font-semibold tracking-[.01em] text-[#5e5d6d] opacity-0 shadow-[0_8px_28px_rgba(50,46,92,.12)] backdrop-blur-xl transition duration-200 group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 dark:border-white/[.1] dark:bg-[#23222c]/92 dark:text-[#d4d0dd]">
+              {hasPrompt ? "Continue in Canvas" : "Open Canvas"}
+            </span>
+            <button
+              type="button"
+              onClick={openCanvas}
+              disabled={transitioning}
+              aria-label={hasPrompt ? "Continue in Canvas with this prompt" : "Open a blank North Star canvas"}
+              className="relative grid h-10 w-10 place-items-center overflow-hidden rounded-full border border-white/35 bg-[linear-gradient(145deg,#7187ed_0%,#586bd5_44%,#484994_100%)] text-white shadow-[0_6px_17px_rgba(67,79,176,.28),inset_0_1px_0_rgba(255,255,255,.34),inset_0_-1px_0_rgba(35,38,104,.2)] transition duration-300 hover:-translate-y-0.5 hover:saturate-[1.08] hover:brightness-[1.04] hover:shadow-[0_9px_23px_rgba(67,79,176,.34),inset_0_1px_0_rgba(255,255,255,.38)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7083e8]/70 focus-visible:ring-offset-2 active:translate-y-0 active:scale-95 disabled:opacity-60 dark:border-white/[.18] dark:bg-[linear-gradient(145deg,#7d8ff0_0%,#6173da_45%,#4b4c99_100%)] dark:shadow-[0_7px_20px_rgba(20,25,80,.38),inset_0_1px_0_rgba(255,255,255,.3)] dark:focus-visible:ring-offset-[#17171f]"
+            >
+              <ArrowUp className={`relative h-[17px] w-[17px] transition duration-300 ${transitioning ? "-translate-y-0.5" : ""}`} strokeWidth={2.15} />
+            </button>
+          </div>
         </div>
-      )}
-
-      <div className="flex items-end gap-2 p-2 w-full">
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="p-2.5 text-zinc-500 dark:text-zinc-400 hover:text-black dark:hover:text-white hover:bg-white/40 dark:hover:bg-zinc-800/50 rounded-full transition-colors flex-shrink-0 mb-[2px] cursor-pointer"
-          aria-label="Attach file"
-        >
-          <Paperclip className="w-5 h-5" />
-        </button>
-
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={handleInput}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask your market anything"
-          rows={1}
-          className="flex-1 bg-transparent border-none outline-none text-sm text-[#0A0A0A] dark:text-white placeholder:text-zinc-500 py-3 resize-none max-h-[200px] overflow-y-auto leading-relaxed [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
-          style={{ minHeight: "40px" }}
-        />
-
-        <button
-          onClick={handleSubmit}
-          disabled={status === "loading" || status === "success" || status === "error" || (!text.trim() && images.length === 0)}
-          className={`px-6 py-2.5 rounded-full text-[13px] font-medium border-none cursor-pointer whitespace-nowrap flex-shrink-0 transition-all duration-200 active:scale-95 mb-[2px] text-white flex items-center justify-center gap-2 ${
-            status === "success" ? "bg-emerald-500" 
-            : status === "error" ? "bg-rose-500"
-            : "bg-[#1C4ED8] disabled:opacity-50 disabled:cursor-not-allowed"
-          }`}
-          style={{ 
-            boxShadow: status === "success" ? "0 2px 8px rgba(16,185,129,0.25)" 
-                     : status === "error" ? "0 2px 8px rgba(244,63,94,0.25)"
-                     : "0 2px 8px rgba(28,78,216,0.25)" 
-          }}
-        >
-          {status === "loading" ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</>
-          ) : status === "success" ? (
-            <><Check className="w-4 h-4" /> Sent!</>
-          ) : status === "error" ? (
-            <><AlertCircle className="w-4 h-4" /> Failed to send</>
-          ) : (
-            "Request answer"
-          )}
-        </button>
+        <p className="sr-only" role="status" aria-live="polite">{transitioning ? "Opening North Star Canvas" : ""}</p>
       </div>
-    </div>
+
+      {transitioning && (
+        <div
+          data-testid="northstar-gateway-transition"
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-[90] animate-[northstarGatewayVeil_620ms_cubic-bezier(.22,1,.36,1)_forwards] bg-[radial-gradient(ellipse_70%_52%_at_50%_100%,rgba(119,98,245,.24),rgba(102,135,225,.09)_45%,transparent_76%)] dark:bg-[radial-gradient(ellipse_70%_52%_at_50%_100%,rgba(116,91,255,.24),rgba(53,63,145,.12)_45%,transparent_76%)]"
+        />
+      )}
+    </>
   );
 }

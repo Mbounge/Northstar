@@ -20,13 +20,23 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next({ request })
   }
 
+  const isApiPath = request.nextUrl.pathname.startsWith('/api/')
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
+  if (!supabaseUrl || !supabaseAnonKey) {
+    const message = 'Northstar account services are not configured for this server.'
+    return isApiPath
+      ? NextResponse.json({ error: message }, { status: 503 })
+      : new NextResponse(message, { status: 503 })
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   })
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {
@@ -55,6 +65,9 @@ export async function proxy(request: NextRequest) {
 
   // RULE 1: Unauthenticated users
   if (!user) {
+    if (isApiPath) {
+      return NextResponse.json({ error: 'Sign in to access Northstar account data.' }, { status: 401 })
+    }
     if (!isLoginPath && !isAuthCallback) {
       url.pathname = '/login'
       return NextResponse.redirect(url)

@@ -11,6 +11,28 @@ interface CanvasV2NamedCoverageRequirement {
   failure: string;
 }
 
+/**
+ * Route deep screenshot comparisons through observed, progressive synthesis.
+ * The caller supplies scale from the complete committed atlas so provider-side
+ * context compaction can never make a substantial inquiry appear shallow.
+ */
+export function canvasV2EvidenceLedComparisonRequested(instruction: string): boolean {
+  return /\b(?:compare|comparison|comparative|versus|vs\.?|contrast)\b/i.test(instruction)
+    && /\b(?:representative|screenshot|screenshots|screen evidence|visual evidence|flow|flows)\b/i.test(instruction);
+}
+
+export function canvasV2RequiresProgressiveEvidenceSynthesis(input: {
+  synthesisTurn: boolean;
+  instruction: string;
+  canonicalFlowCount: number;
+  canonicalScreenCount: number;
+}): boolean {
+  return input.synthesisTurn
+    && canvasV2EvidenceLedComparisonRequested(input.instruction)
+    && input.canonicalFlowCount >= 2
+    && input.canonicalScreenCount >= 20;
+}
+
 const NAMED_COVERAGE_REQUIREMENTS: readonly CanvasV2NamedCoverageRequirement[] = [
   {
     id: "observed-signals-and-assumptions",
@@ -46,7 +68,10 @@ const NAMED_COVERAGE_REQUIREMENTS: readonly CanvasV2NamedCoverageRequirement[] =
     id: "three-positioning-territories",
     instructionMatches: (instruction) => /\bthree\b[^.]{0,80}\bpositioning\s+territor(?:y|ies)\b/i.test(instruction),
     visibleGroups: [],
-    minimumOccurrences: [{ term: "territor", count: 3 }],
+    // Structural coverage is verified below from stable top-level island
+    // identities. Natural labels such as "creative strategic direction" are
+    // valid and must not keep a resolved board alive just to repeat the
+    // planner's internal word "territory" in visible copy.
     failure: "The prompt explicitly asks for three positioning territories, but three independently discussable territories are not visibly materialized in the non-title work.",
   },
   {
@@ -188,6 +213,213 @@ function normalizeVisibleText(value: string): string {
     .toLowerCase();
 }
 
+const INDEPENDENT_TERRITORY_COUNTS = new Map([
+  ["two", 2],
+  ["second", 2],
+  ["three", 3],
+  ["third", 3],
+  ["four", 4],
+  ["fourth", 4],
+  ["five", 5],
+  ["fifth", 5],
+  ["six", 6],
+  ["sixth", 6],
+  ["seven", 7],
+  ["seventh", 7],
+  ["eight", 8],
+  ["eighth", 8],
+]);
+
+/**
+ * Explicit separation is a structural requirement, not an aesthetic hint. The
+ * user may ask for several independently editable outputs without using the
+ * internal word "island"; paths, maps, chapters, and working surfaces all
+ * count when the wording clearly makes them an additional territory.
+ */
+export function canvasV2RequiredIndependentTerritoryCount(instruction: string): number {
+  const normalized = normalizeVisibleText(instruction);
+  let required = 0;
+  const counted = /\b(two|second|three|third|four|fourth|five|fifth|six|sixth|seven|seventh|eight|eighth|[2-8])\s+(?:(?:separate|distinct|independent|independently editable|genuinely|different|alternative|contrasting|divergent)\s+){0,4}(?:(?:positioning|strategic|creative|decision|implementation|execution|evidence|analytical|analysis|working)\s+){0,4}(?:islands?|territor(?:y|ies)|compositions?|chapters?|surfaces?|maps?|paths?|outputs?)\b/g;
+  for (const match of normalized.matchAll(counted)) {
+    required = Math.max(required, INDEPENDENT_TERRITORY_COUNTS.get(match[1]) ?? Number(match[1]));
+  }
+  // Routers may preserve the ordinal while adding natural descriptors such as
+  // "fourth, materially contrarian positioning territory". The ordinal is an
+  // unambiguous absolute count, so tolerate a short descriptive phrase before
+  // the output noun instead of depending on a closed adjective vocabulary.
+  const ordinalCounted = /\b(second|third|fourth|fifth|sixth|seventh|eighth)\b(?:\s+[\p{L}\p{N}]+){0,6}\s+(?:island|territor(?:y|ies)|composition|chapter|surface|map|path|output)\b/gu;
+  for (const match of normalized.matchAll(ordinalCounted)) {
+    required = Math.max(required, INDEPENDENT_TERRITORY_COUNTS.get(match[1]) ?? 0);
+  }
+  const explicitlyMultiple = /\b(?:multiple|several|more than one)\s+(?:(?:separate|distinct|independent|independently editable)\s+){0,3}(?:(?:positioning|strategic|creative|decision|implementation|execution|evidence|analytical|analysis|working)\s+){0,4}(?:islands?|territories|compositions?|chapters?|surfaces?|maps?|paths?|outputs?)\b/.test(normalized);
+  const explicitlyAdditional = /\b(?:another|(?:and|plus|alongside|beside)\s+(?:(?:create|add|show|include|build|compose|place)\s+)?(?:an?\s+)?(?:separate|distinct|independently editable|separately editable))\s+(?:(?:independently|independent|editable|nearby|implementation|decision|evidence|analytical|analysis|execution|working)\s+){0,4}(?:island|territory|composition|chapter|surface|map|path|output)\b/.test(normalized);
+  return Math.max(required, explicitlyMultiple || explicitlyAdditional ? 2 : 0);
+}
+
+/**
+ * A visible move and a whole-board completion cannot be the same transaction.
+ * When the director has authored an exact create/develop/repair/recompose
+ * target but accidentally marks its recommendation complete, execute the
+ * concrete move and judge completion from the next committed render.
+ */
+export function canvasV2EffectiveCompletionRecommendation(input: {
+  recommendation: "continue" | "complete";
+  targetAction: "create" | "develop" | "enrich" | "repair" | "recompose" | "complete";
+}): "continue" | "complete" {
+  return input.recommendation === "complete" && input.targetAction !== "complete"
+    ? "continue"
+    : input.recommendation;
+}
+
+export function canvasV2CompletionContradictsMaterialMove(input: {
+  recommendation: "continue" | "complete";
+  targetAction: "create" | "develop" | "enrich" | "repair" | "recompose" | "complete";
+  materialMove: string;
+}): boolean {
+  return input.recommendation === "complete"
+    && input.targetAction === "complete"
+    && /^\s*(?:create|add|build|compose|insert|append|place|develop|enrich|repair|recompose|move|restyle|rewrite|replace|remove)\b/i.test(input.materialMove);
+}
+
+/**
+ * A resolved board must not stay alive for optional publication furniture.
+ * This is deliberately narrower than a general turn limit: prompt coverage,
+ * lifecycle, discovery readiness, and rendered integrity still decide whether
+ * the story is resolved. It only closes the two speculative moves observed in
+ * production after that objective work was already complete.
+ */
+export function shouldCompleteCanvasV2ResolvedOptionalContinuation(input: {
+  resolvedStory: boolean;
+  explicitWholeBoardRecompositionRequested: boolean;
+  renderedIntegrityFailureCount: number;
+  promptCoverageFailureCount: number;
+  hasRenderRepair: boolean;
+  completionRecommendation: string;
+  targetAction: "create" | "develop" | "enrich" | "repair" | "recompose" | "complete";
+  targetStoryRole: string;
+  instructionRequestsTitleAuthorship: boolean;
+  explicitRelationshipGeometryRequested: boolean;
+  prescribesOptionalRelationshipGeometry: boolean;
+}): boolean {
+  if (!input.resolvedStory
+    || input.explicitWholeBoardRecompositionRequested
+    || input.renderedIntegrityFailureCount > 0
+    || input.promptCoverageFailureCount > 0
+    || input.hasRenderRepair
+    || input.completionRecommendation !== "continue") return false;
+  if (input.targetAction === "recompose") return true;
+  if (input.prescribesOptionalRelationshipGeometry && !input.explicitRelationshipGeometryRequested) return true;
+  return input.targetAction === "create"
+    && input.targetStoryRole === "title"
+    && !input.instructionRequestsTitleAuthorship;
+}
+
+const SEMANTIC_JOB_STOP_WORDS = new Set([
+  "a", "an", "and", "the", "to", "of", "for", "from", "in", "on", "with", "that", "this",
+  "create", "build", "compose", "show", "make", "give", "complete", "bounded", "editable",
+  "independent", "independently", "separate", "distinct", "current", "next", "later", "visible",
+]);
+
+function semanticJobTerms(value: string): string[] {
+  return Array.from(new Set(normalizeVisibleText(value).split(" ")
+    .filter((term) => term.length > 2 && !SEMANTIC_JOB_STOP_WORDS.has(term))));
+}
+
+function containsSemanticJob(value: string, job: string): boolean {
+  const source = new Set(semanticJobTerms(value));
+  const jobTerms = semanticJobTerms(job);
+  return jobTerms.length >= 2 && jobTerms.every((term) => source.has(term));
+}
+
+/**
+ * Discovery may plan the complete inquiry, but one source-author transaction
+ * may materialize only one independently editable semantic job. This guard is
+ * intentionally form-agnostic: the director names the current and deferred
+ * jobs, while the compiler verifies that they remain genuinely distinct.
+ */
+export function validateCanvasV2AtomicTerritoryPlan(input: {
+  requiredCount: number;
+  observedCount: number;
+  createsNonTitleTerritory: boolean;
+  action: "create" | "develop" | "enrich" | "repair" | "recompose" | "complete";
+  storyRole: string;
+  currentSemanticJob: string;
+  deferredSemanticJobs: readonly string[];
+  materialMove: string;
+  completionRationale: string;
+  resolutionRationale: string;
+  remainingOpportunities: readonly string[];
+  nextMoves: readonly string[];
+}): string[] {
+  const projectedCount = input.observedCount + (input.createsNonTitleTerritory ? 1 : 0);
+  if (input.requiredCount <= projectedCount) return [];
+  const failures: string[] = [];
+  const missingAfterThisTurn = input.requiredCount - projectedCount;
+  if (input.action !== "create" || input.storyRole === "title") {
+    failures.push(`This turn must create one non-title territory because ${missingAfterThisTurn} independently editable semantic job${missingAfterThisTurn === 1 ? " remains" : "s remain"} after it.`);
+  }
+  if (!semanticJobTerms(input.currentSemanticJob).length) {
+    failures.push("The current source-author transaction must name one exact semantic job.");
+  }
+  if (input.deferredSemanticJobs.length < missingAfterThisTurn) {
+    failures.push(`The plan must name at least ${missingAfterThisTurn} deferred semantic job${missingAfterThisTurn === 1 ? "" : "s"} that will receive later independently editable territory.`);
+  }
+  const planLanguage = [
+    input.materialMove,
+    input.completionRationale,
+    input.resolutionRationale,
+  ].join(" ");
+  const claimsOneIslandCompletesTheArc = /\b(?:single|one)\b[^.]{0,90}\b(?:composition|island|territory|chapter|surface)\b[^.]{0,140}\b(?:fully|complete(?:ly)?|entire(?:ly)?|all)\b|\b(?:all|entire|complete|full|whole)\b[^.]{0,100}\b(?:request|prompt|system|deliverables?|requirements?)\b|\bsingle\b[^.]{0,100}\b(?:contain|cover|complete|communicate|provide|deliver|resolve)\b/i.test(planLanguage);
+  if (claimsOneIslandCompletesTheArc) {
+    failures.push("The current island claims to communicate the multi-territory arc instead of resolving one bounded semantic job.");
+  }
+  for (const deferredJob of input.deferredSemanticJobs) {
+    if (containsSemanticJob(input.currentSemanticJob, deferredJob)) {
+      failures.push(`The current semantic job already contains its deferred job: ${deferredJob}.`);
+    }
+    if (containsSemanticJob(input.materialMove, deferredJob)) {
+      failures.push(`The material move precomposes the deferred semantic job "${deferredJob}" inside the current island.`);
+    }
+  }
+  const queuedLanguage = [...input.remainingOpportunities, ...input.nextMoves].join(" ");
+  if (input.deferredSemanticJobs.some((job) => !containsSemanticJob(queuedLanguage, job))) {
+    failures.push("Every deferred semantic job must remain explicit in the board-level remaining-opportunity and next-move queues.");
+  }
+  return Array.from(new Set(failures));
+}
+
+/**
+ * The director's deferred-job ledger is binding on the source author. A later
+ * chapter may be named in planning metadata, but it cannot appear inside the
+ * current island's visible source before its own observed turn.
+ */
+export function validateCanvasV2DeferredSemanticJobIsolation(input: {
+  document: CanvasV2ArtifactDocument;
+  islandId: string;
+  deferredSemanticJobs: readonly string[];
+}): string[] {
+  const range = findCanvasV2SourceNodeRange(input.document.html, input.islandId);
+  if (!range) return [];
+  const visibleIslandText = normalizeVisibleText(input.document.html.slice(range.start, range.end));
+  return input.deferredSemanticJobs
+    .filter((job) => containsSemanticJob(visibleIslandText, job))
+    .map((job) => `Target island ${input.islandId} visibly precomposes the deferred semantic job "${job}". Keep that job out of this transaction so it can receive its own independently editable territory after the current render is observed.`);
+}
+
+function nonTitleDesignIslandIds(document: CanvasV2ArtifactDocument): Set<string> {
+  const ids = new Set<string>();
+  const regionTags = /<([a-z][\w:-]*)\b([^>]*\bdata-canvas-v2-design-region(?:\s*=\s*["'][^"']*["'])?[^>]*)>/gi;
+  let opening: RegExpExecArray | null;
+  while ((opening = regionTags.exec(document.html))) {
+    const attributes = opening[2];
+    if (sourceAttribute(attributes, "data-canvas-v2-story-role")?.toLowerCase() === "title") continue;
+    const id = sourceAttribute(attributes, "data-canvas-v2-island-id")
+      ?? sourceAttribute(attributes, "data-canvas-v2-node-id");
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
 /**
  * Read only rendered analytical islands. A narrative title may frame what the
  * board will contain, but its roadmap copy cannot prove that the requested
@@ -240,6 +472,12 @@ export function validateCanvasV2RequestedCompositionCoverage(
 
   if (/\bconverg(?:e|es|ed|ence|ent|ing)\b/i.test(normalizedInstruction) && !analyticalText.includes("converg")) {
     failures.push("The prompt explicitly asks to show convergence, but convergence is not visibly materialized in the non-title analytical work.");
+  }
+
+  const requiredTerritories = canvasV2RequiredIndependentTerritoryCount(instruction);
+  const authoredTerritories = nonTitleDesignIslandIds(document).size;
+  if (requiredTerritories > authoredTerritories) {
+    failures.push(`The prompt explicitly requires at least ${requiredTerritories} independently editable non-title territories, but only ${authoredTerritories} programmatic island${authoredTerritories === 1 ? " is" : "s are"} visibly materialized. Preserve the resolved island${authoredTerritories === 1 ? "" : "s"} and create the next prompt-critical territory as a separate top-level island.`);
   }
 
   return failures;

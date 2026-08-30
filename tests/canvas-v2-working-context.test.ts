@@ -5,6 +5,7 @@ import type { CanvasV2NativeSceneDocument, CanvasV2NativeSceneNode } from "../li
 import {
   CANVAS_V2_WORKING_CONTEXT_SCHEMA,
   buildCanvasV2WorkingContext,
+  compactCanvasV2WorkingContextForModel,
   parseCanvasV2WorkingContext,
 } from "../lib/canvas-v2/working-context";
 
@@ -157,4 +158,42 @@ test("reference selections remain protected and parser cannot expand edit author
   });
   assert.ok(parsed);
   assert.deepEqual(parsed.editableNodeIds, []);
+});
+
+test("model collaboration keeps authority while canonical atlases remain server-owned", () => {
+  const base = scene();
+  const atlasNodes = Array.from({ length: 180 }, (_, index) => node({
+    id: `atlas-${index}`,
+    sourceNodeId: `atlas-${index}`,
+    kind: "evidence",
+    canonicalEvidence: true,
+    locked: true,
+    geometry: { x: 4_000 + index * 190, y: 2_000, width: 170, height: 300, rotation: 0, zIndex: 1 },
+    attributes: {
+      "data-canvas-v2-node-id": `atlas-${index}`,
+      "data-canvas-v2-origin": "research",
+      "data-canvas-v2-locked": "true",
+      "data-canvas-v2-evidence-id": `evidence:atlas-${index}`,
+    },
+    evidence: { id: `evidence:atlas-${index}`, role: "canonical" },
+  }));
+  const atlasScene: CanvasV2NativeSceneDocument = {
+    ...base,
+    rootIds: [...base.rootIds, ...atlasNodes.map((item) => item.id)],
+    nodes: [...base.nodes, ...atlasNodes],
+  };
+  const context = buildCanvasV2WorkingContext({
+    scene: atlasScene,
+    selections: [selection],
+    visibleBounds: { x: 0, y: 0, width: 40_000, height: 8_000 },
+    viewport: { x: 0, y: 0, scale: 0.24 },
+    selectionPolicy: "modify",
+  })!;
+  const compact = compactCanvasV2WorkingContextForModel(context)!;
+
+  assert.deepEqual(compact.selectedNodeIds, ["title"]);
+  assert.deepEqual(compact.editableNodeIds, ["title"]);
+  assert.equal(compact.objectSummary.canonicalEvidence, 180 + 1);
+  assert.equal(compact.focusObjects.some((object) => object.canonicalEvidence), false);
+  assert.ok(JSON.stringify(compact).length < 20_000);
 });

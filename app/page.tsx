@@ -57,7 +57,7 @@ export default async function PortfolioPage() {
   const userName = userEmail.split("@")[0];
 
   return (
-    <div className="relative min-h-screen bg-[#EEF0F8] dark:bg-[#09090b] flex flex-col overflow-hidden font-sans">
+    <div data-northstar-home-shell className="relative min-h-screen bg-[#EEF0F8] dark:bg-[#09090b] flex flex-col overflow-hidden font-sans">
       <AuthUrlCleaner />
 
       <style
@@ -70,11 +70,44 @@ export default async function PortfolioPage() {
               -ms-overflow-style: none !important;
               scrollbar-width: none !important;
             }
+            [data-northstar-home-atmosphere],
+            [data-northstar-home-header],
+            [data-northstar-home-content],
+            [data-northstar-home-account] {
+              transition: transform 560ms cubic-bezier(.22,1,.36,1), opacity 420ms ease, filter 520ms ease;
+              transform-origin: center;
+            }
+            html[data-northstar-canvas-transition="leaving"] [data-northstar-home-atmosphere] {
+              opacity: .46;
+              transform: scale(1.035);
+              filter: saturate(.82);
+            }
+            html[data-northstar-canvas-transition="leaving"] [data-northstar-home-header],
+            html[data-northstar-canvas-transition="leaving"] [data-northstar-home-content],
+            html[data-northstar-canvas-transition="leaving"] [data-northstar-home-account] {
+              opacity: .26;
+              transform: translateY(-9px) scale(.987);
+              filter: blur(1.5px);
+            }
+            @keyframes northstarGatewayVeil {
+              0% { opacity: 0; transform: scale(.98); }
+              58% { opacity: 1; }
+              100% { opacity: 1; transform: scale(1); }
+            }
+            @media (prefers-reduced-motion: reduce) {
+              [data-northstar-home-atmosphere],
+              [data-northstar-home-header],
+              [data-northstar-home-content],
+              [data-northstar-home-account] {
+                transition-duration: 60ms;
+              }
+              [data-testid="northstar-gateway-transition"] { animation-duration: 80ms !important; }
+            }
           `,
         }}
       />
 
-      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
+      <div data-northstar-home-atmosphere className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
         <div
           className="relative flex-shrink-0"
           style={{
@@ -97,7 +130,7 @@ export default async function PortfolioPage() {
         </div>
       </div>
 
-      <header className="relative z-10 w-full px-8 pt-9 pb-0 flex items-start justify-between box-border">
+      <header data-northstar-home-header className="relative z-10 w-full px-8 pt-9 pb-0 flex items-start justify-between box-border">
         <h1
           className={`${unbounded.className} text-[30px] font-semibold tracking-tight text-[#0A0A0A] dark:text-white mb-5`}
         >
@@ -107,7 +140,7 @@ export default async function PortfolioPage() {
         <ThemeToggle />
       </header>
 
-      <div className="w-full pl-[200px] pr-16 box-border relative z-10 flex-1 flex flex-col">
+      <div data-northstar-home-content className="w-full pl-[200px] pr-16 box-border relative z-10 flex-1 flex flex-col">
         <div className="flex justify-between items-center mb-6">
           <div className="flex flex-row items-center gap-8">
             <button className="h-[49px] px-4 flex items-center justify-center bg-white/50 hover:bg-white/70 transition-colors duration-200 ease-in-out border-none text-[16px] font-bold text-black dark:text-white cursor-pointer whitespace-nowrap rounded-none">
@@ -412,7 +445,7 @@ export default async function PortfolioPage() {
         className="fixed bottom-8 left-0 right-0 z-20 pointer-events-none transition-all duration-300 ease-in-out"
       >
         <div className="w-full px-8 box-border flex justify-between items-end pointer-events-auto relative">
-          <div className="flex flex-row items-center gap-2.5">
+          <div data-northstar-home-account className="flex flex-row items-center gap-2.5">
             <div className="w-10 h-10 bg-[rgba(215,213,207,0.85)] dark:bg-zinc-700 rounded-none flex items-center justify-center font-bold text-[15px] text-[#0A0A0A] dark:text-white shrink-0">
               {userInitial}
             </div>

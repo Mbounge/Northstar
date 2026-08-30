@@ -25,9 +25,9 @@ function requirementTerms(value: string): Set<string> {
 /**
  * Lifecycle requirements are compiler-owned obligations, but a director may
  * naturally paraphrase one while retaining it. Map a high-overlap paraphrase
- * back to the exact committed wording so harmless prose drift cannot exhaust
- * the provider retry budget; genuinely new obligations remain untouched and
- * are rejected by the existing finishing-contract validator.
+ * back to the exact committed wording so harmless prose drift cannot create a
+ * private contract correction; genuinely new obligations remain untouched
+ * and are handled by the existing finishing-contract authority.
  */
 export function reconcileCanvasV2OpenRequirements(
   existing: readonly string[],
@@ -209,6 +209,9 @@ function validateTargetIslandSource(input: {
   if (input.target.storyRole === "title" && (!/<h[12]\b/i.test(source) || !/<p\b/i.test(source))) {
     failures.push(`The title island ${input.target.islandId} must contain a real h1/h2 title and a descriptive paragraph so the canvas story has an explicit beginning.`);
   }
+  if (input.target.storyRole !== "title" && /<h1\b/i.test(source)) {
+    failures.push(`Target island ${input.target.islandId} is a ${input.target.storyRole} chapter but contains the publication-level h1. Keep analytical chapter headings at h2-h6; if the visual story needs a governing title or thesis, author it as the board's separate title island on its own observed turn.`);
+  }
   if (input.territoryRelation
     && !source.includes(`data-canvas-v2-territory-relation="${input.territoryRelation}"`)
     && !source.includes(`data-canvas-v2-territory-relation='${input.territoryRelation}'`)) {
@@ -238,6 +241,12 @@ export function validateCanvasV2IslandExecution(input: {
     if (input.existingIslandIds.has(input.target.islandId)) return [`Create must target the server-allocated new island identity, not existing island ${input.target.islandId}.`];
     if (!nextIds.has(input.target.islandId)) return [`The create turn must materialize the allocated design island as data-canvas-v2-node-id and compiler-owned data-canvas-v2-island-id: ${input.target.islandId}.`];
     const failures = validateTargetIslandSource({ document: input.next, target: input.target, requiredEvidenceIds: input.requiredEvidenceIds ?? [], territoryRelation: input.territoryRelation });
+    const unexpectedNewIslandIds = Array.from(nextIds).filter((islandId) => (
+      islandId !== input.target.islandId && !input.existingIslandIds.has(islandId)
+    ));
+    if (unexpectedNewIslandIds.length) {
+      failures.push(`One create transaction may materialize only its allocated island ${input.target.islandId}. Defer these additional islands until the committed canvas is observed: ${unexpectedNewIslandIds.join(", ")}.`);
+    }
     const range = findCanvasV2SourceNodeRange(input.next.html, input.target.islandId);
     const source = range ? input.next.html.slice(range.start, range.end) : "";
     if (input.placementMode === "evidence-relative-island" && /\bdata-canvas-v2-evidence-interleave\b/i.test(source)) {

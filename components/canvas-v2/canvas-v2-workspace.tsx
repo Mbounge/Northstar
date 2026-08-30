@@ -50,6 +50,10 @@ import {
   type CanvasV2TransientGeometry,
 } from "@/components/canvas-v2/canvas-scene";
 import { CanvasV2ChatPanel } from "@/components/canvas-v2/canvas-v2-chat-panel";
+import {
+  takeCanvasV2GatewayHandoff,
+  type CanvasV2GatewayHandoff,
+} from "@/lib/canvas-v2/gateway-handoff";
 import { CanvasV2ResearchPanel } from "@/components/canvas-v2/canvas-v2-research-panel";
 import { useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
 import { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
@@ -187,14 +191,24 @@ function transientGeometryForDirectGesture(
     const next = preview.elementBounds[item.nodeId];
     const rotation = preview.rotations?.[item.nodeId];
     if (!next && rotation === undefined) return [];
+    const originalFontSize = Number.parseFloat(item.visualStyle?.fontSize ?? "");
+    const nextFontSize = gesture.kind === "resize" && next && item.textEditable
+      ? scaleCanvasV2FontSize(originalFontSize, gesture.original, gesture.draftBounds)
+      : undefined;
+    const originalLineHeight = Number.parseFloat(item.visualStyle?.lineHeight ?? "");
+    const nextLineHeight = nextFontSize !== undefined
+      && Number.isFinite(originalLineHeight)
+      && Number.isFinite(originalFontSize)
+      && originalFontSize > 0
+      ? originalLineHeight * (nextFontSize / originalFontSize)
+      : undefined;
     return [[item.nodeId, {
       kind: gesture.kind,
       deltaX: next ? next.x - item.bounds.x : 0,
       deltaY: next ? next.y - item.bounds.y : 0,
       ...(gesture.kind === "resize" && next ? { width: next.width, height: next.height } : {}),
-      ...(gesture.kind === "resize" && next && item.textEditable && item.visualStyle?.fontSize
-        ? { fontSize: scaleCanvasV2FontSize(Number.parseFloat(item.visualStyle.fontSize), gesture.original, gesture.draftBounds) }
-        : {}),
+      ...(nextFontSize !== undefined ? { fontSize: nextFontSize } : {}),
+      ...(nextLineHeight !== undefined ? { lineHeight: nextLineHeight } : {}),
       ...(rotation !== undefined ? { rotation } : {}),
     } satisfies CanvasV2TransientGeometry]];
   }));
@@ -227,6 +241,7 @@ function sameInspectableElements(
       && candidate.visualStyle?.borderColor === item.visualStyle?.borderColor
       && candidate.visualStyle?.fontFamily === item.visualStyle?.fontFamily
       && candidate.visualStyle?.fontSize === item.visualStyle?.fontSize
+      && candidate.visualStyle?.lineHeight === item.visualStyle?.lineHeight
       && candidate.visualStyle?.fontWeight === item.visualStyle?.fontWeight
       && candidate.visualStyle?.fontStyle === item.visualStyle?.fontStyle
       && candidate.visualStyle?.textAlign === item.visualStyle?.textAlign
@@ -545,12 +560,34 @@ export function CanvasV2Workspace({
   researchEndpoint?: string;
   routerEndpoint?: string;
 } = {}) {
+  const [gatewayHandoff, setGatewayHandoff] = useState<CanvasV2GatewayHandoff>();
+  const [gatewayEntry, setGatewayEntry] = useState(false);
+  const gatewayConsumedRef = useRef(false);
+
   useEffect(() => {
     try {
       discardObsoleteCanvasV2LocalState(window.localStorage);
     } catch {
       // The clean in-memory session must not depend on browser storage access.
     }
+  }, []);
+
+  useEffect(() => {
+    if (gatewayConsumedRef.current) return;
+    gatewayConsumedRef.current = true;
+    const handoff = takeCanvasV2GatewayHandoff(window.sessionStorage);
+    if (!handoff) return;
+    setGatewayHandoff(handoff);
+    setGatewayEntry(true);
+    document.documentElement.dataset.northstarCanvasTransition = "entering";
+    const timer = window.setTimeout(() => {
+      setGatewayEntry(false);
+      delete document.documentElement.dataset.northstarCanvasTransition;
+    }, 900);
+    return () => {
+      window.clearTimeout(timer);
+      delete document.documentElement.dataset.northstarCanvasTransition;
+    };
   }, []);
 
   const engine = useCanvasV2DesignLoop(designEndpoint);
@@ -711,7 +748,7 @@ export function CanvasV2Workspace({
     renderedViewportRef.current = viewport;
     if (contextualToolbarRef.current) contextualToolbarRef.current.style.transform = "";
   }, [viewport]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const update = () => {
@@ -841,6 +878,7 @@ export function CanvasV2Workspace({
     engine,
     selection: selectedElement,
     selections: selectedElements,
+    gatewayHandoff,
     getWorkingContext: (selectionPolicy) => buildCanvasV2WorkingContext({
       scene: engine.readNativeScene(),
       selections: selectedElements,
@@ -849,6 +887,14 @@ export function CanvasV2Workspace({
       selectionPolicy,
     }),
   });
+
+  useEffect(() => {
+    if (!gatewayHandoff || gatewayHandoff.autoSubmit || !engine.ready) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("canvas-v2-message")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [engine.ready, gatewayHandoff]);
 
   const applyViewportVisual = useCallback((next: CanvasV2WorkspaceViewport) => {
     const surface = workspaceSurfaceRef.current;
@@ -958,12 +1004,6 @@ export function CanvasV2Workspace({
     if (wheelCommitTimerRef.current !== undefined) clearTimeout(wheelCommitTimerRef.current);
   }, []);
 
-  // The camera belongs exclusively to the person using the board. North Star
-  // publishes honest world-space geometry to the right of the floating panel;
-  // accepting a revision never pans or zooms the viewport. Explicit Fit,
-  // wheel, pan, and zoom controls are the only camera writers.
-  const claimCameraForUser = useCallback(() => {}, []);
-
   const receiveScene = useCallback((elements: CanvasV2InspectableElement[]) => {
     sceneElementsRef.current = elements;
     setSceneElements((current) => sameInspectableElements(current, elements) ? current : elements);
@@ -1007,7 +1047,6 @@ export function CanvasV2Workspace({
   }, [constrainViewport]);
 
   const fitContent = useCallback((geometry = geometryRef.current) => {
-    claimCameraForUser();
     const authoredBounds = canvasV2FrameableSceneBounds(sceneElementsRef.current);
     commitViewport(fitCanvasV2WorkspaceBounds(
       authoredBounds ?? { x: 0, y: 0, width: geometry.width, height: geometry.height },
@@ -1015,7 +1054,7 @@ export function CanvasV2Workspace({
       contentInsets(),
       authoredBounds ? 96 : 48,
     ));
-  }, [cameraSize, claimCameraForUser, commitViewport, contentInsets]);
+  }, [cameraSize, commitViewport, contentInsets]);
 
   const receiveGeometry = useCallback((geometry: CanvasV2CanvasGeometry) => {
     geometryRef.current = geometry;
@@ -1040,7 +1079,6 @@ export function CanvasV2Workspace({
   ), [contentInsets, viewport, workspaceSize]);
 
   const zoomAtCenter = (factor: number) => {
-    claimCameraForUser();
     const camera = workspaceSizeRef.current;
     const insets = contentInsets();
     const anchor = {
@@ -1051,7 +1089,6 @@ export function CanvasV2Workspace({
   };
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    claimCameraForUser();
     if (tool === "draw" && !spacePan && event.button === 0) {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1080,7 +1117,6 @@ export function CanvasV2Workspace({
   };
 
   const forwardedWorkspacePointer = useCallback((event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => {
-    if (event.phase === "down") claimCameraForUser();
     const activeDrawing = drawingGestureRef.current?.pointerId === event.pointerId;
     if (tool === "draw" && !spacePan && (event.button === 0 || activeDrawing)) {
       if (event.phase === "down") startDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
@@ -1123,7 +1159,7 @@ export function CanvasV2Workspace({
       return;
     }
     previewViewport((current) => constrainViewport({ ...current, x: pan.originX + event.clientX - pan.x, y: pan.originY + event.clientY - pan.y }));
-  }, [beginCameraPreview, claimCameraForUser, constrainViewport, finishCameraPreview, previewViewport, selectElement, spacePan, tool, workspacePoint]);
+  }, [beginCameraPreview, constrainViewport, finishCameraPreview, previewViewport, selectElement, spacePan, tool, workspacePoint]);
 
   const finishMarquee = (gesture: MarqueeGesture) => {
     if (marqueePreviewFrameRef.current !== undefined) cancelAnimationFrame(marqueePreviewFrameRef.current);
@@ -1423,18 +1459,29 @@ export function CanvasV2Workspace({
     }
     const mutations = directGesture.originals.map((item) => {
       const next = directGesture.draftElementBounds[item.nodeId] ?? item.bounds;
-      return directGesture.kind === "move"
-        ? { kind: "move" as const, nodeId: item.nodeId, deltaX: next.x - item.bounds.x, deltaY: next.y - item.bounds.y }
-        : {
+      if (directGesture.kind === "move") {
+        return { kind: "move" as const, nodeId: item.nodeId, deltaX: next.x - item.bounds.x, deltaY: next.y - item.bounds.y };
+      }
+      const originalFontSize = Number.parseFloat(item.visualStyle?.fontSize ?? "");
+      const fontSize = item.textEditable
+        ? scaleCanvasV2FontSize(originalFontSize, directGesture.original, directGesture.draftBounds)
+        : undefined;
+      const originalLineHeight = Number.parseFloat(item.visualStyle?.lineHeight ?? "");
+      const lineHeight = fontSize !== undefined
+        && Number.isFinite(originalLineHeight)
+        && Number.isFinite(originalFontSize)
+        && originalFontSize > 0
+        ? originalLineHeight * (fontSize / originalFontSize)
+        : undefined;
+      return {
             kind: "transform" as const,
             nodeId: item.nodeId,
             deltaX: next.x - item.bounds.x,
             deltaY: next.y - item.bounds.y,
             width: next.width,
             height: next.height,
-            ...(item.textEditable && item.visualStyle?.fontSize
-              ? { fontSize: scaleCanvasV2FontSize(Number.parseFloat(item.visualStyle.fontSize), directGesture.original, directGesture.draftBounds) }
-              : {}),
+            ...(fontSize !== undefined ? { fontSize } : {}),
+            ...(lineHeight !== undefined ? { lineHeight } : {}),
           };
     });
     if (!submitMutation({ kind: "batch", label: `${directGesture.kind === "move" ? "Moved" : "Resized"} ${mutations.length} selected object${mutations.length === 1 ? "" : "s"}.`, mutations })) {
@@ -1529,7 +1576,6 @@ export function CanvasV2Workspace({
   };
 
   const beginDirectGesture = (kind: DirectGesture["kind"], event: ReactPointerEvent<HTMLElement>, handle?: CanvasV2ResizeHandle) => {
-    claimCameraForUser();
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -1556,7 +1602,6 @@ export function CanvasV2Workspace({
       workspaceRef.current?.focus({ preventScroll: true });
       return;
     }
-    claimCameraForUser();
     if (tool !== "select" || event.button !== 0) return;
     setLayersOpen(false);
     const additive = Boolean(event.shiftKey || event.metaKey);
@@ -1693,7 +1738,6 @@ export function CanvasV2Workspace({
 
   const startDrawingGesture = (pointerId: number, clientX: number, clientY: number) => {
     if (drawingGestureRef.current || !engine.ready || engine.running || engine.applyingManualEdit) return false;
-    claimCameraForUser();
     selectElement(undefined);
     const gesture = { pointerId, points: [drawingPoint(clientX, clientY)] };
     drawingGestureRef.current = gesture;
@@ -1868,7 +1912,6 @@ export function CanvasV2Workspace({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    claimCameraForUser();
     // Endpoint and curve controls own their pointer sequence exclusively. A
     // connector was initially selected through the scene's forwarded pointer
     // channel, whose terminal event can race the parent overlay becoming
@@ -2188,8 +2231,10 @@ export function CanvasV2Workspace({
 
   const insertResearchFlow = (app: AppDataApp, flow: AppDataFlow, result: CanvasV2ResearchResult) => {
     try {
-      const insertion = insertCanvasV2CanonicalFlow({ document: engine.committed.document, currentEvidence: engine.committed.evidence, app, flow, evidence: result.evidence });
-      if (!engine.applyManualDocument(insertion.document, `Inserted the complete ordered ${app.name} ${flow.name} evidence flow.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId] })) throw new Error("Wait for the current revision to finish rendering.");
+      const packet = result.packets.find((candidate) => candidate.kind === "screenshot-sequence" && candidate.appId === app.id);
+      const insertion = insertCanvasV2CanonicalFlow({ document: engine.committed.document, currentEvidence: engine.committed.evidence, app, flow, evidence: result.evidence, packet });
+      const evidencePackets = [...(engine.committed.evidencePackets ?? []), ...(packet && !engine.committed.evidencePackets?.some((candidate) => candidate.id === packet.id) ? [packet] : [])];
+      if (!engine.applyManualDocument(insertion.document, `Inserted the complete ordered ${app.name} ${flow.name} evidence flow.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error("Wait for the current revision to finish rendering.");
       setPanel("chat");
       setSelectionTarget(insertion.laneNodeId);
     } catch (error) {
@@ -2305,7 +2350,6 @@ export function CanvasV2Workspace({
   }, []);
 
   const navigateWorkspaceWheel = useCallback((event: { clientX: number; clientY: number; deltaX: number; deltaY: number; deltaMode?: number; ctrlKey: boolean; metaKey: boolean; shiftKey?: boolean }) => {
-    claimCameraForUser();
     beginCameraPreview();
     const camera = workspaceSizeRef.current;
     const deltaX = canvasV2NormalizedWheelDelta(event.deltaX, event.deltaMode, camera.width);
@@ -2327,7 +2371,7 @@ export function CanvasV2Workspace({
       previewViewport((current) => constrainViewport({ ...current, x: current.x - horizontalDelta, y: current.y - verticalDelta }));
     }
     scheduleWheelCommit();
-  }, [beginCameraPreview, claimCameraForUser, constrainViewport, previewViewport, scheduleWheelCommit, zoomViewportAtPoint]);
+  }, [beginCameraPreview, constrainViewport, previewViewport, scheduleWheelCommit, zoomViewportAtPoint]);
 
   workspaceWheelHandlerRef.current = (event: globalThis.WheelEvent) => {
     event.preventDefault();
@@ -2361,12 +2405,19 @@ export function CanvasV2Workspace({
     ? historySelectionRestore.nodeIds
     : selectionNodeIds;
   const activeSelectionBounds = unionCanvasV2ObjectBounds(selectedElements.map((item) => item.bounds));
+  const compactResizeHandles = Boolean(activeSelectionBounds && (
+    activeSelectionBounds.width * viewport.scale < 18
+    || activeSelectionBounds.height * viewport.scale < 18
+  ));
   const visibleResizeHandles = activeSelectionBounds ? RESIZE_HANDLES.filter(({ handle }) => {
     const screenWidth = activeSelectionBounds.width * viewport.scale;
     const screenHeight = activeSelectionBounds.height * viewport.scale;
-    if (screenWidth < 18 && screenHeight < 18) return handle === "south-east";
-    if (screenWidth < 18) return handle === "north" || handle === "east" || handle === "south" || handle === "south-east";
-    if (screenHeight < 18) return handle === "west" || handle === "south" || handle === "east" || handle === "south-east";
+    // Counter-scaled handles stay about 10 screen pixels at every zoom. On a
+    // short label, cardinal handles therefore covered the glyph itself and
+    // consumed the second click before the text editor could open. A single
+    // south-east handle remains discoverable without occupying the label's
+    // readable centre; zooming in restores the complete transform set.
+    if (screenWidth < 18 || screenHeight < 18) return handle === "south-east";
     return true;
   }) : RESIZE_HANDLES;
   const selectionPermanent = selectedElements.some((item) => item.nodeId === "canvas");
@@ -2484,7 +2535,33 @@ export function CanvasV2Workspace({
   }, [selectedElement, selectedElements.length, toolbarMenu]);
 
   return (
-    <main className="relative h-screen min-h-[680px] overflow-hidden bg-[#fafbff] text-[#181824] transition-colors duration-300 dark:bg-[#0d0e16] dark:text-[#f4f3f8]">
+    <main data-northstar-canvas-entry={gatewayEntry ? "true" : undefined} className="relative h-screen min-h-[680px] overflow-hidden bg-[#fafbff] text-[#181824] transition-colors duration-300 dark:bg-[#0d0e16] dark:text-[#f4f3f8]">
+      <style>{`
+        @keyframes northstarCanvasReveal {
+          0% { opacity: 1; transform: scale(1.018); }
+          35% { opacity: .94; }
+          100% { opacity: 0; transform: scale(1); }
+        }
+        @keyframes northstarCanvasChromeArrive {
+          0% { opacity: 0; transform: translateY(14px) scale(.988); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        [data-northstar-canvas-entry="true"] [data-testid="canvas-v2-floating-panel"] {
+          animation: northstarCanvasChromeArrive 720ms cubic-bezier(.22,1,.36,1) both;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          [data-testid="northstar-canvas-entry-veil"],
+          [data-northstar-canvas-entry="true"] [data-testid="canvas-v2-floating-panel"] {
+            animation-duration: 80ms !important;
+          }
+        }
+      `}</style>
+      {gatewayEntry && <div
+        data-testid="northstar-canvas-entry-veil"
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 z-[100] bg-[radial-gradient(ellipse_74%_58%_at_50%_100%,rgba(115,92,246,.24),rgba(92,118,218,.08)_46%,transparent_76%),linear-gradient(180deg,rgba(250,251,255,.9),rgba(247,249,255,.74))] dark:bg-[radial-gradient(ellipse_74%_58%_at_50%_100%,rgba(111,86,255,.25),rgba(49,58,132,.11)_46%,transparent_76%),linear-gradient(180deg,rgba(13,14,22,.92),rgba(13,14,22,.76))]"
+        style={{ animation: "northstarCanvasReveal 880ms cubic-bezier(.22,1,.36,1) both" }}
+      />}
       <p id="canvas-v2-keyboard-help" className="sr-only">Canvas workspace. Use Command or Control plus A to select objects, arrow keys to nudge, Shift plus arrow keys for larger nudges, and Delete to remove unlocked objects.</p>
       <input ref={localImageInputRef} type="file" accept="image/*" onChange={receiveLocalImage} className="sr-only" aria-label="Choose an image for the canvas" />
       {primitiveDrag && (() => {
@@ -2540,7 +2617,7 @@ export function CanvasV2Workspace({
 
       <div ref={statusPillRef} className="absolute right-5 top-5 z-50 flex h-14 items-center gap-3 rounded-2xl border border-[#dedfea] bg-white px-2.5 shadow-[0_10px_32px_rgba(51,45,95,.13)] dark:border-white/[.1] dark:bg-[#1d1c24] dark:shadow-[0_14px_40px_rgba(0,0,0,.32)]">
         <span className={`h-2 w-2 rounded-full ${chat.busy ? "animate-pulse bg-[#735dff]" : "bg-emerald-400"}`} />
-        <span data-testid="canvas-v2-loop-status" className="text-xs font-black capitalize text-[#343442] dark:text-[#f1eff6]">{chat.routing ? "understanding request" : engine.loop?.status.replaceAll("-", " ") ?? (chat.busy ? "working" : "ready")}</span>
+        <span data-testid="canvas-v2-loop-status" className="text-xs font-black capitalize text-[#343442] dark:text-[#f1eff6]">{chat.routing ? "understanding request" : engine.running ? "working" : engine.loop?.status.replaceAll("-", " ") ?? (chat.busy ? "working" : "ready")}</span>
         <span className="h-6 w-px bg-[#e5e5ed] dark:bg-white/[.09]" />
         <span data-testid="canvas-v2-committed-revision" className="max-w-[150px] truncate font-mono text-[10px] text-[#8b8b99]">{engine.committed.id}</span>
         <button type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title="Toggle theme" className="grid h-9 w-9 place-items-center rounded-[11px] text-[#676573] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#aaa6b4] dark:hover:bg-white/[.07] dark:hover:text-[#c1b8ff]">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
@@ -2705,7 +2782,20 @@ export function CanvasV2Workspace({
                 onPointerDown={(event) => beginDirectGesture("move", event)}
                 className="pointer-events-auto absolute inset-0 z-[5] cursor-move bg-transparent"
               />}
-              {!selectionPermanent && selectedElement.kind !== "connector" && visibleResizeHandles.map(({ handle, className, cursor }) => <button key={handle} aria-label={`Resize ${selectedElement.nodeId} from ${handle}`} onPointerDown={(event) => beginDirectGesture("resize", event, handle)} style={{ scale: `${0.625 / viewport.scale}` }} className={`pointer-events-auto absolute z-10 h-4 w-4 rounded-sm border-2 border-[#6d5df5] bg-white dark:bg-[#1f1d27] ${className} ${cursor}`} />)}
+              {!selectionPermanent && selectedElement.kind !== "connector" && visibleResizeHandles.map(({ handle, className, cursor }) => {
+                const compactSouthEast = compactResizeHandles && handle === "south-east";
+                const compactOffset = 8 + 7 / viewport.scale;
+                return <button
+                  key={handle}
+                  aria-label={`Resize ${selectedElement.nodeId} from ${handle}`}
+                  onPointerDown={(event) => beginDirectGesture("resize", event, handle)}
+                  style={{
+                    scale: `${0.625 / viewport.scale}`,
+                    ...(compactSouthEast ? { right: -compactOffset, bottom: -compactOffset } : {}),
+                  }}
+                  className={`pointer-events-auto absolute z-10 h-4 w-4 rounded-sm border-2 border-[#6d5df5] bg-white dark:bg-[#1f1d27] ${className} ${cursor}`}
+                />;
+              })}
               {!selectionPermanent && selectedElement.kind !== "connector" && ROTATE_CORNERS.map(({ corner, className, iconClassName }) => {
                 // Keep the invisible rotation hit target compact and entirely
                 // outside the selected corner. Oversized 28px targets around
@@ -2754,7 +2844,7 @@ export function CanvasV2Workspace({
               data-canvas-v2-snap-guide={index}
               className="pointer-events-none absolute z-30 hidden bg-[#ef4fb8]"
             />)}
-            {engine.running && <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-[#ddd9ff] bg-white/90 px-4 py-2 text-xs font-bold text-[#6652e9] shadow-lg backdrop-blur dark:border-[#5b4f91] dark:bg-[#24212e]/92 dark:text-[#b8adff]">{engine.loop?.status === "thinking" ? "North Star is reviewing" : "Rendering revision"}</div>}
+            {engine.running && <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-[#ddd9ff] bg-white/90 px-4 py-2 text-xs font-bold text-[#6652e9] shadow-lg backdrop-blur dark:border-[#5b4f91] dark:bg-[#24212e]/92 dark:text-[#b8adff]">North Star is working</div>}
           </div>
         </div>
         {marquee && (
