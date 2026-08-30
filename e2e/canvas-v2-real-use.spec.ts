@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { CANVAS_V2_WORKSPACE } from "../lib/canvas-v2/workspace-coordinate-space";
 
@@ -14,6 +14,106 @@ function canvasFrame(page: Page) {
 
 function committedRevision(page: Page) {
   return canvasApp(page).getByTestId("canvas-v2-committed-revision");
+}
+
+async function canvasThemeViolations(scene: Locator, theme: "light" | "dark") {
+  return scene.evaluate((root, activeTheme) => {
+    type Color = { red: number; green: number; blue: number; alpha: number };
+    type Violation = { kind: string; node: string; value: string; background: string; ratio: number };
+    const host: Color = activeTheme === "dark"
+      ? { red: 13, green: 14, blue: 22, alpha: 1 }
+      : { red: 250, green: 251, blue: 255, alpha: 1 };
+    const parse = (value: string): Color | undefined => {
+      const match = value.match(/rgba?\(\s*([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?/i);
+      if (!match) return undefined;
+      return { red: Number(match[1]), green: Number(match[2]), blue: Number(match[3]), alpha: match[4] === undefined ? 1 : Number(match[4]) };
+    };
+    const composite = (front: Color, back: Color): Color => {
+      const alpha = front.alpha + back.alpha * (1 - front.alpha);
+      return {
+        red: (front.red * front.alpha + back.red * back.alpha * (1 - front.alpha)) / alpha,
+        green: (front.green * front.alpha + back.green * back.alpha * (1 - front.alpha)) / alpha,
+        blue: (front.blue * front.alpha + back.blue * back.alpha * (1 - front.alpha)) / alpha,
+        alpha,
+      };
+    };
+    const luminance = (color: Color) => {
+      const channel = (value: number) => {
+        const normalized = value / 255;
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      };
+      return channel(color.red) * 0.2126 + channel(color.green) * 0.7152 + channel(color.blue) * 0.0722;
+    };
+    const ratio = (front: Color, back: Color) => {
+      const visibleFront = composite(front, { ...back, alpha: 1 });
+      const foregroundLuminance = luminance(visibleFront);
+      const backgroundLuminance = luminance(back);
+      return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+    };
+    const backgroundAt = (element: Element, includeSelf: boolean): Color => {
+      const ancestry: Element[] = [];
+      let current: Element | null = includeSelf ? element : element.parentElement;
+      while (current && root.contains(current)) {
+        ancestry.push(current);
+        if (current === root) break;
+        current = current.parentElement;
+      }
+      return ancestry.reverse().reduce((visible, ancestor) => {
+        const background = parse(getComputedStyle(ancestor).backgroundColor);
+        return background && background.alpha > 0 ? composite(background, visible) : visible;
+      }, host);
+    };
+    const label = (element: Element) => element.getAttribute("data-canvas-v2-node-id")
+      ?? element.getAttribute("data-canvas-v2-native-scene-id")
+      ?? element.tagName.toLowerCase();
+    const shown = (element: Element) => {
+      const style = getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
+    };
+    const violations: Violation[] = [];
+    const elements = [root, ...Array.from(root.querySelectorAll<Element>("*"))]
+      .filter((element) => shown(element) && element.getAttribute("data-canvas-v2-theme-preserve") !== "true");
+
+    elements.forEach((element) => {
+      const style = getComputedStyle(element);
+      const ownBackground = parse(style.backgroundColor);
+      const parentBackground = backgroundAt(element, false);
+      if (ownBackground && ownBackground.alpha >= 0.72 && ratio(ownBackground, parentBackground) < 1.12) {
+        violations.push({ kind: "surface", node: label(element), value: style.backgroundColor, background: JSON.stringify(parentBackground), ratio: ratio(ownBackground, parentBackground) });
+      }
+
+      const hasDirectText = Array.from(element.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()));
+      if (hasDirectText) {
+        const color = parse(style.color);
+        const background = backgroundAt(element, true);
+        if (color && ratio(color, background) < 4.45) {
+          violations.push({ kind: "text", node: label(element), value: style.color, background: JSON.stringify(background), ratio: ratio(color, background) });
+        }
+      }
+
+      (["Top", "Right", "Bottom", "Left"] as const).forEach((side) => {
+        const width = Number.parseFloat(style[`border${side}Width`]);
+        const color = parse(style[`border${side}Color`]);
+        if (width > 0 && style[`border${side}Style`] !== "none" && color && color.alpha > 0 && ratio(color, backgroundAt(element, true)) < 1.45) {
+          violations.push({ kind: `border-${side.toLowerCase()}`, node: label(element), value: style[`border${side}Color`], background: JSON.stringify(backgroundAt(element, true)), ratio: ratio(color, backgroundAt(element, true)) });
+        }
+      });
+
+      if (["path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "tspan"].includes(element.tagName.toLowerCase())) {
+        const background = backgroundAt(element, false);
+        (["fill", "stroke"] as const).forEach((property) => {
+          const value = style.getPropertyValue(property);
+          const color = parse(value);
+          const minimum = ["text", "tspan"].includes(element.tagName.toLowerCase()) ? 4.45 : 1.75;
+          if (color && color.alpha > 0 && ratio(color, background) < minimum) {
+            violations.push({ kind: `svg-${property}`, node: label(element), value, background: JSON.stringify(background), ratio: ratio(color, background) });
+          }
+        });
+      }
+    });
+    return violations.slice(0, 30).map((violation) => ({ ...violation, ratio: Number(violation.ratio.toFixed(2)) }));
+  }, theme);
 }
 
 async function openCleanCanvas(page: Page) {
@@ -87,21 +187,14 @@ test("the standard Awin and Whop journey produces a complete growing evidence-le
   await expect(committedRevision(page)).toHaveText(completedTurnRevision ?? "");
   await expect(frame.locator('[data-e2e-stage="refinement"]')).toHaveCount(1);
 
-  const switchToDark = page.getByRole("button", { name: "Switch to dark mode" });
-  if (await switchToDark.count()) await switchToDark.click();
+  const switchToLight = page.getByRole("button", { name: "Switch to light mode" });
+  if (await switchToLight.count()) await switchToLight.click();
+  await expect(page.getByRole("button", { name: "Switch to dark mode" })).toBeVisible();
+  expect(await canvasThemeViolations(frame, "light")).toEqual([]);
+
+  await page.getByRole("button", { name: "Switch to dark mode" }).click();
   await expect(page.getByRole("button", { name: "Switch to light mode" })).toBeVisible();
-  const unreadableDarkCompositionText = await frame.locator('[data-e2e-stage] *').evaluateAll((elements) => elements.flatMap((element) => {
-    if (!(element instanceof HTMLElement) || !element.textContent?.trim() || element.children.length) return [];
-    const match = getComputedStyle(element).color.match(/rgba?\((\d+)[, ]+(\d+)[, ]+(\d+)/);
-    if (!match) return [];
-    const channels = match.slice(1, 4).map(Number);
-    const neutral = Math.max(...channels) - Math.min(...channels) <= 28;
-    const brightness = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
-    return neutral && brightness < 180
-      ? [{ text: element.textContent.trim().slice(0, 80), color: getComputedStyle(element).color }]
-      : [];
-  }));
-  expect(unreadableDarkCompositionText).toEqual([]);
+  expect(await canvasThemeViolations(frame, "dark")).toEqual([]);
 
   const geometry = await frame.evaluate((element) => ({ width: element.scrollWidth, height: element.scrollHeight }));
   // The canvas is one explicit, very large finite world. Its numeric safety

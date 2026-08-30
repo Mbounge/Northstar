@@ -1023,6 +1023,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           "--northstar-line": theme === "dark" ? "rgba(255,255,255,.12)" : "rgba(78,67,135,.14)",
           "--northstar-surface": theme === "dark" ? "#1b1a22" : "#ffffff",
           "--northstar-surface-subtle": theme === "dark" ? "#23212b" : "#f6f5fa",
+          "--northstar-note-surface": theme === "dark" ? "#3a3218" : "#fff2a8",
+          "--northstar-note-ink": theme === "dark" ? "#fff0b8" : "#332e1e",
+          "--northstar-note-line": theme === "dark" ? "#8f7a31" : "#d8bd51",
+          "--northstar-note-shadow": theme === "dark" ? "rgba(0,0,0,.28)" : "rgba(71,59,10,.12)",
         } as CSSProperties}
         onPointerDown={pointerDown}
         onPointerMove={pointerMove}

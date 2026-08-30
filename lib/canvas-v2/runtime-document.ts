@@ -74,6 +74,10 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
       --northstar-line:rgba(66,54,123,.22);
       --northstar-surface:#ffffff;
       --northstar-surface-subtle:#f6f5fa;
+      --northstar-note-surface:#fff2a8;
+      --northstar-note-ink:#332e1e;
+      --northstar-note-line:#d8bd51;
+      --northstar-note-shadow:rgba(71,59,10,.12);
     }
     :root[data-canvas-v2-theme="dark"] {
       --northstar-ink:#f4f3f8;
@@ -82,6 +86,10 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
       --northstar-line:rgba(255,255,255,.12);
       --northstar-surface:#1b1a22;
       --northstar-surface-subtle:#23212b;
+      --northstar-note-surface:#3a3218;
+      --northstar-note-ink:#fff0b8;
+      --northstar-note-line:#8f7a31;
+      --northstar-note-shadow:rgba(0,0,0,.28);
     }
     html, body { margin:0; width:${CANVAS_V2_WORKSPACE.width}px; height:${CANVAS_V2_WORKSPACE.height}px; min-width:0; min-height:0; background-color:transparent!important; background-image:none!important; overflow:visible; }
     html { position:relative; }

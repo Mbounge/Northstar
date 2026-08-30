@@ -45,6 +45,12 @@ test("the native authoring vocabulary creates every object as an independent use
   const drawingStroke = scene.nodes.find((node) => node.id === "drawing-stroke");
   assert.equal(drawingStroke?.attributes.points, "8,30 54,8 120,58 172,20");
   assert.equal(drawingStroke?.attributes["stroke-width"], "10");
+  assert.equal(drawingStroke?.attributes.stroke, "var(--northstar-violet)");
+  assert.equal(scene.nodes.find((node) => node.sourceNodeId === "note")?.inlineStyle.background, "var(--northstar-note-surface)");
+  assert.equal(scene.nodes.find((node) => node.sourceNodeId === "note")?.inlineStyle.color, "var(--northstar-note-ink)");
+  assert.equal(scene.nodes.find((node) => node.sourceNodeId === "ellipse")?.inlineStyle.background, "var(--northstar-violet)");
+  assert.equal(scene.nodes.find((node) => node.sourceNodeId === "line")?.inlineStyle.background, "var(--northstar-violet)");
+  assert.equal(scene.nodes.find((node) => node.sourceNodeId === "image")?.inlineStyle.background, "var(--northstar-surface-subtle)");
 
   const document = serializeCanvasV2NativeScene(scene);
   assert.match(document.html, /<polyline[^>]*points=/);

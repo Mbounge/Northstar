@@ -28,9 +28,13 @@ test("runtime source is revision-bound and contains no executable bridge", () =>
   assert.match(runtime, /--northstar-surface:#ffffff/);
   assert.match(runtime, /--northstar-muted:#5d6070/);
   assert.match(runtime, /--northstar-line:rgba\(66,54,123,.22\)/);
+  assert.match(runtime, /--northstar-note-surface:#fff2a8/);
+  assert.match(runtime, /--northstar-note-ink:#332e1e/);
   assert.match(runtime, /:root\[data-canvas-v2-theme="dark"\]/);
   assert.match(runtime, /--northstar-ink:#f4f3f8/);
   assert.match(runtime, /--northstar-muted:#c7c3cf/);
+  assert.match(runtime, /--northstar-note-surface:#3a3218/);
+  assert.match(runtime, /--northstar-note-ink:#fff0b8/);
   assert.doesNotMatch(runtime, /color-scheme:dark/);
   assert.doesNotMatch(runtime, /postMessage|<script/);
 });

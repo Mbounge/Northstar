@@ -724,7 +724,7 @@ function measureCanvasV2AuthoredRelationship(
       controlInParent: { x: round(control.x - parentOrigin.x), y: round(control.y - parentOrigin.y) },
       curved,
       arrow: Boolean((markerEnd && markerEnd !== "none") || element.querySelector("marker,[data-canvas-v2-connector-part='end']")),
-      stroke: authoredStroke && authoredStroke !== "none" && authoredStroke !== "rgba(0, 0, 0, 0)" ? authoredStroke : "#6754de",
+      stroke: authoredStroke && authoredStroke !== "none" && authoredStroke !== "rgba(0, 0, 0, 0)" ? authoredStroke : "var(--northstar-violet)",
       strokeWidth: round(Math.max(2.5, Math.min(5.5, Number.isFinite(authoredStrokeWidth) ? authoredStrokeWidth : 4))),
       ...(authoredDash && authoredDash !== "none" ? { strokeDasharray: authoredDash } : {}),
       ...(authoredOpacity && authoredOpacity !== "1" ? { opacity: authoredOpacity } : {}),
@@ -2030,11 +2030,11 @@ function nativePrimitiveNodes(
     attributes: { ...base.attributes, "aria-label": "Note" },
     inlineStyle: {
       padding: "20px",
-      border: "1px solid #e8d37a",
+      border: "1px solid var(--northstar-note-line)",
       "border-radius": "8px",
-      background: "#fff2a8",
-      color: "#332e1e",
-      "box-shadow": "0 8px 22px rgba(71,59,10,.12)",
+      background: "var(--northstar-note-surface)",
+      color: "var(--northstar-note-ink)",
+      "box-shadow": "0 8px 22px var(--northstar-note-shadow)",
       font: "600 18px/1.45 Inter,system-ui,sans-serif",
     },
     directText: "Add a note",
@@ -2064,7 +2064,7 @@ function nativePrimitiveNodes(
       kind: "shape",
       geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
       attributes: { ...base.attributes, "data-canvas-v2-shape": variant, "aria-label": `${variant} shape` },
-      inlineStyle: { ...variantStyle, background: "#7661f3" },
+      inlineStyle: { ...variantStyle, background: "var(--northstar-violet)" },
       content: [],
     }];
   }
@@ -2134,12 +2134,12 @@ function nativePrimitiveNodes(
     });
     return [
       root,
-      connectorChild(pathId, "path", { "data-canvas-v2-connector-part": "path", d: geometry.path, fill: "none", stroke: "#6754de", "stroke-width": "4", "stroke-linecap": "round" }),
+      connectorChild(pathId, "path", { "data-canvas-v2-connector-part": "path", d: geometry.path, fill: "none", stroke: "var(--northstar-violet)", "stroke-width": "4", "stroke-linecap": "round" }),
       connectorChild(hitId, "path", { "data-canvas-v2-connector-part": "hit", d: geometry.path, fill: "none", stroke: "transparent", "stroke-width": "20", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke", "pointer-events": "stroke" }),
-      connectorChild(startId, "circle", { "data-canvas-v2-connector-part": "start", cx: String(geometry.localStart.x), cy: String(geometry.localStart.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "#6754de", "stroke-width": "2.5" }),
+      connectorChild(startId, "circle", { "data-canvas-v2-connector-part": "start", cx: String(geometry.localStart.x), cy: String(geometry.localStart.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "var(--northstar-violet)", "stroke-width": "2.5" }),
       connectorChild(endId, variant === "arrow" ? "polyline" : "circle", variant === "arrow"
-        ? { "data-canvas-v2-connector-part": "end", points: geometry.arrowPoints, fill: "none", stroke: "#6754de", "stroke-width": "3.5", "stroke-linecap": "round", "stroke-linejoin": "round" }
-        : { "data-canvas-v2-connector-part": "end", cx: String(geometry.localEnd.x), cy: String(geometry.localEnd.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "#6754de", "stroke-width": "2.5" }),
+        ? { "data-canvas-v2-connector-part": "end", points: geometry.arrowPoints, fill: "none", stroke: "var(--northstar-violet)", "stroke-width": "3.5", "stroke-linecap": "round", "stroke-linejoin": "round" }
+        : { "data-canvas-v2-connector-part": "end", cx: String(geometry.localEnd.x), cy: String(geometry.localEnd.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "var(--northstar-violet)", "stroke-width": "2.5" }),
     ];
   }
   if (mutation.primitive === "line") {
@@ -2153,7 +2153,7 @@ function nativePrimitiveNodes(
       kind: "line",
       geometry: { x: round(mutation.x + (endX - mutation.x) / 2 - lineWidth / 2), y: round(mutation.y + (endY - mutation.y) / 2 - 2), width: lineWidth, height: 4, rotation, zIndex: 0 },
       attributes: { ...base.attributes, "aria-label": "Line" },
-      inlineStyle: { background: "#6754de", "border-radius": "999px" },
+      inlineStyle: { background: "var(--northstar-violet)", "border-radius": "999px" },
       content: [],
     }];
   }
@@ -2170,7 +2170,7 @@ function nativePrimitiveNodes(
       loading: "lazy",
       decoding: "async",
     },
-    inlineStyle: { "border-radius": "16px", "object-fit": "cover", background: "#edeaf8" },
+    inlineStyle: { "border-radius": "16px", "object-fit": "cover", background: "var(--northstar-surface-subtle)" },
     content: [],
   }];
   if (mutation.primitive === "drawing") {
@@ -2205,7 +2205,7 @@ function nativePrimitiveNodes(
       lastAuthor: "user",
       editVersion: 1,
       geometry: { x: 0, y: 0, width, height, rotation: 0, zIndex: 0 },
-      attributes: { points, fill: "none", stroke: "#6754de", "stroke-width": "10", "stroke-linecap": "round", "stroke-linejoin": "round" },
+      attributes: { points, fill: "none", stroke: "var(--northstar-violet)", "stroke-width": "10", "stroke-linecap": "round", "stroke-linejoin": "round" },
       inlineStyle: {},
       content: [],
     };
