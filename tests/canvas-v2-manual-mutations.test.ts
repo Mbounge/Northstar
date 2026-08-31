@@ -48,3 +48,20 @@ test("selection clicks cannot masquerade as human geometry edits", () => {
   assert.match(workspace, /if \(!moved && !resized\)/);
   assert.match(workspace, /pointer down\/up with no geometric change is selection, not authorship/);
 });
+
+test("direct canvas image ingestion accepts clipboard and multi-file drops as durable native objects", () => {
+  const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
+  const preparation = readFileSync("components/canvas-v2/chat-image-attachments.ts", "utf8");
+  const canvasPreparation = preparation.slice(preparation.indexOf("export async function prepareCanvasV2CanvasImages"));
+
+  assert.match(workspace, /window\.addEventListener\("paste", paste\)/);
+  assert.match(workspace, /event\.clipboardData\?\.files/);
+  assert.match(workspace, /event\.clipboardData\?\.items/);
+  assert.match(workspace, /Array\.from\(event\.dataTransfer\.files\)\.filter/);
+  assert.match(workspace, /type="file" multiple accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(workspace, /src: image\.dataUrl/);
+  assert.match(workspace, /kind: "batch", label: `Added \$\{images\.length\} image/);
+  assert.doesNotMatch(workspace, /URL\.createObjectURL/);
+  assert.match(canvasPreparation, /Promise\.all\(\[\.\.\.files\]\.map\(prepareCanvasV2ImageFile\)\)/);
+  assert.doesNotMatch(canvasPreparation.split("export function prepareCanvasV2PastedText")[0], /slice\(/);
+});

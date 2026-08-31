@@ -33,7 +33,7 @@ function canvasBlob(canvas: HTMLCanvasElement, mimeType: string, quality?: numbe
   ));
 }
 
-async function normalizeFile(file: File): Promise<CanvasV2ChatImageAttachment> {
+export async function prepareCanvasV2ImageFile(file: File): Promise<CanvasV2ChatImageAttachment> {
   if (!ACCEPTED_TYPES.has(file.type)) throw new Error(`${file.name} is not a supported PNG, JPEG, or WebP image.`);
   if (file.size < 1 || file.size > MAX_SOURCE_BYTES) throw new Error(`${file.name} is too large.`);
   const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
@@ -81,7 +81,18 @@ export async function prepareCanvasV2ChatImages(
   availableSlots: number,
 ): Promise<CanvasV2ChatImageAttachment[]> {
   const selected = [...files].slice(0, Math.max(0, Math.min(availableSlots, CANVAS_V2_MAX_CHAT_ATTACHMENTS)));
-  return Promise.all(selected.map(normalizeFile));
+  return Promise.all(selected.map(prepareCanvasV2ImageFile));
+}
+
+/**
+ * Canvas authoring is not a chat message and therefore must not inherit the
+ * eight-attachment composer quota. Every supplied image is normalized into a
+ * durable data URL before it becomes a native canvas element.
+ */
+export async function prepareCanvasV2CanvasImages(
+  files: readonly File[],
+): Promise<CanvasV2ChatImageAttachment[]> {
+  return Promise.all([...files].map(prepareCanvasV2ImageFile));
 }
 
 export function prepareCanvasV2PastedText(text: string, ordinal: number): CanvasV2ChatTextAttachment {

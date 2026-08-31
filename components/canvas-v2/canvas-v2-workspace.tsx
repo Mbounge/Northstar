@@ -50,6 +50,7 @@ import {
   type CanvasV2TransientGeometry,
 } from "@/components/canvas-v2/canvas-scene";
 import { CanvasV2ChatPanel } from "@/components/canvas-v2/canvas-v2-chat-panel";
+import { prepareCanvasV2CanvasImages } from "@/components/canvas-v2/chat-image-attachments";
 import {
   takeCanvasV2GatewayHandoff,
   type CanvasV2GatewayHandoff,
@@ -62,6 +63,7 @@ import { insertCanvasV2EvidenceAsset } from "@/lib/canvas-v2/evidence-insertion"
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
 import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
+import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachments";
 import { CANVAS_V2_MIN_CANVAS, type CanvasV2CanvasGeometry } from "@/lib/canvas-v2/canvas-geometry";
 import type { CanvasV2InspectableElement, CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
 import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
@@ -70,6 +72,7 @@ import { resolveCanvasV2ContextToolbarPosition } from "@/lib/canvas-v2/context-t
 import {
   applyCanvasV2ManualMutation,
   describeCanvasV2ManualMutation,
+  type CanvasV2AtomicManualMutation,
   type CanvasV2ManualMutation,
   type CanvasV2ManualPoint,
   type CanvasV2EditableStyleProperty,
@@ -648,7 +651,7 @@ export function CanvasV2Workspace({
   const objectMenuRef = useRef<HTMLDivElement>(null);
   const localImageInputRef = useRef<HTMLInputElement>(null);
   const imageReplaceTargetRef = useRef<string | undefined>(undefined);
-  const localImageUrlsRef = useRef(new Set<string>());
+  const lastCanvasPointerRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const dragSilhouetteRef = useRef<HTMLDivElement>(null);
   const primitiveDragRef = useRef<CanvasV2PrimitiveDrag | undefined>(undefined);
   const [primitiveDrag, setPrimitiveDrag] = useState<CanvasV2PrimitiveDrag>();
@@ -680,6 +683,7 @@ export function CanvasV2Workspace({
   const finishDrawingGestureHandlerRef = useRef<(pointerId: number, clientX?: number, clientY?: number) => boolean>(() => false);
   const workspaceKeydownHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   const workspaceKeyupHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  const workspacePasteHandlerRef = useRef<(event: ClipboardEvent) => void>(() => undefined);
   const workspaceWheelHandlerRef = useRef<(event: globalThis.WheelEvent) => void>(() => undefined);
   const sceneElementsRef = useRef<CanvasV2InspectableElement[]>([]);
   const internalClipboardRef = useRef<{ nodeIds: string[]; cut: boolean }>({ nodeIds: [], cut: false });
@@ -729,11 +733,6 @@ export function CanvasV2Workspace({
       window.removeEventListener("keydown", escape);
     };
   }, [objectMenu]);
-
-  useEffect(() => () => {
-    for (const url of localImageUrlsRef.current) URL.revokeObjectURL(url);
-    localImageUrlsRef.current.clear();
-  }, []);
 
   const setCanvasGridVisible = useCallback((visible: boolean) => {
     setShowCanvasGrid(visible);
@@ -1089,6 +1088,7 @@ export function CanvasV2Workspace({
   };
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    lastCanvasPointerRef.current = workspacePoint(event.clientX, event.clientY);
     if (tool === "draw" && !spacePan && event.button === 0) {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1496,6 +1496,7 @@ export function CanvasV2Workspace({
   finishDirectGestureHandlerRef.current = finishDirectGesture;
 
   const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    lastCanvasPointerRef.current = workspacePoint(event.clientX, event.clientY);
     if (updateDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY)) return;
     if (updateConnectorGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY)) return;
     if (updateDirectGesture(event.pointerId, event.clientX, event.clientY, event.shiftKey)) return;
@@ -2079,12 +2080,12 @@ export function CanvasV2Workspace({
     setObjectMenu(undefined);
   };
 
-  const createPrimitive = (primitive: CanvasV2ManualPrimitive, options: { shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant; src?: string; alt?: string; origin?: { x: number; y: number } } = {}) => {
+  const createPrimitive = (primitive: CanvasV2ManualPrimitive, options: { shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant; src?: string; alt?: string; origin?: { x: number; y: number }; size?: { width: number; height: number } } = {}) => {
     cancelDrawingGesture();
     setTool("select");
     const suffix = options.shapeVariant ? `-${options.shapeVariant}` : options.connectorVariant ? `-${options.connectorVariant}` : "";
     const nodeId = `manual-${primitive}${suffix}-${Date.now().toString(36)}`;
-    const size = primitive === "frame" ? { width: 360, height: 240 }
+    const size = options.size ?? (primitive === "frame" ? { width: 360, height: 240 }
       : primitive === "note" ? { width: 220, height: 180 }
         : primitive === "shape" && options.shapeVariant === "pill" ? { width: 220, height: 88 }
           : primitive === "shape" ? { width: 160, height: 160 }
@@ -2092,7 +2093,7 @@ export function CanvasV2Workspace({
           : primitive === "image" ? { width: 320, height: 220 }
             : primitive === "drawing" ? { width: 180, height: 72 }
               : primitive === "line" || primitive === "connector" ? { width: 240, height: 4 }
-                : { width: 220, height: 48 };
+                : { width: 220, height: 48 });
     const centered = options.origin
       ? { x: options.origin.x - size.width / 2, y: options.origin.y - size.height / 2 }
       : centeredCanvasV2WorkspaceOrigin(size, viewport, cameraSize(), contentInsets());
@@ -2137,27 +2138,72 @@ export function CanvasV2Workspace({
     localImageInputRef.current?.click();
   };
 
-  const addLocalImage = (file: File, origin?: { x: number; y: number }, replaceNodeId?: string) => {
-    if (!file.type.startsWith("image/")) {
-      setMutationError("Choose an image file to add to the canvas.");
-      return false;
+  const canvasImageSize = (image: CanvasV2ChatImageAttachment) => {
+    const scale = Math.min(420 / image.width, 320 / image.height);
+    return {
+      width: Math.max(48, Math.round(image.width * scale)),
+      height: Math.max(48, Math.round(image.height * scale)),
+    };
+  };
+
+  const addPreparedCanvasImages = (images: readonly CanvasV2ChatImageAttachment[], origin?: { x: number; y: number }, replaceNodeId?: string) => {
+    if (!images.length) return false;
+    if (replaceNodeId) {
+      const image = images[0];
+      return submitMutation({ kind: "image-source", nodeId: replaceNodeId, src: image.dataUrl, alt: image.name.replace(/\.[^.]+$/, "") });
     }
-    const url = URL.createObjectURL(file);
-    const alt = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim();
-    const accepted = replaceNodeId
-      ? submitMutation({ kind: "image-source", nodeId: replaceNodeId, src: url, alt })
-      : createPrimitive("image", { src: url, alt, origin });
-    if (accepted) localImageUrlsRef.current.add(url);
-    else URL.revokeObjectURL(url);
+    const anchor = origin ?? centeredCanvasV2WorkspaceOrigin({ width: 420, height: 320 }, viewport, cameraSize(), contentInsets());
+    const columns = Math.max(1, Math.ceil(Math.sqrt(images.length)));
+    const rows = Math.ceil(images.length / columns);
+    const cell = { width: 448, height: 348 };
+    const stamp = `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+    const nodeIds = images.map((_, index) => `manual-image-${stamp}-${index}`);
+    const mutations: CanvasV2AtomicManualMutation[] = images.map((image, index) => {
+      const size = canvasImageSize(image);
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      return {
+        kind: "create",
+        primitive: "image",
+        nodeId: nodeIds[index],
+        x: anchor.x + column * cell.width - ((columns - 1) * cell.width) / 2 - size.width / 2,
+        y: anchor.y + row * cell.height - ((rows - 1) * cell.height) / 2 - size.height / 2,
+        width: size.width,
+        height: size.height,
+        src: image.dataUrl,
+        alt: image.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim(),
+      };
+    });
+    const accepted = submitMutation({ kind: "batch", label: `Added ${images.length} image${images.length === 1 ? "" : "s"} to the canvas.`, mutations });
+    if (accepted) {
+      setSelectedElements([]);
+      setSelectionTarget(nodeIds.at(-1));
+    }
     return accepted;
   };
 
+  const addLocalImages = async (files: readonly File[], origin?: { x: number; y: number }, replaceNodeId?: string) => {
+    const images = files.filter((file) => file.type === "image/png" || file.type === "image/jpeg" || file.type === "image/webp");
+    if (!images.length) {
+      setMutationError("Choose a PNG, JPEG, or WebP image to add to the canvas.");
+      return false;
+    }
+    try {
+      const prepared = await prepareCanvasV2CanvasImages(replaceNodeId ? images.slice(0, 1) : images);
+      if (!engine.ready || engine.running || engine.applyingManualEdit) return false;
+      return addPreparedCanvasImages(prepared, origin, replaceNodeId);
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : "The image could not be prepared.");
+      return false;
+    }
+  };
+
   const receiveLocalImage = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
     const target = imageReplaceTargetRef.current;
     imageReplaceTargetRef.current = undefined;
-    addLocalImage(file, undefined, target);
+    void addLocalImages(files, undefined, target);
   };
 
   const beginPrimitiveDrag = (event: ReactDragEvent<HTMLElement>, primitive: CanvasV2ManualPrimitive, shapeVariant?: CanvasV2ShapeVariant, connectorVariant?: CanvasV2ConnectorVariant) => {
@@ -2197,10 +2243,10 @@ export function CanvasV2Workspace({
     event.stopPropagation();
     if (!engine.ready || engine.running || engine.applyingManualEdit) return;
     const origin = workspacePoint(event.clientX, event.clientY);
-    const imageFile = Array.from(event.dataTransfer.files).find((file) => file.type.startsWith("image/"));
+    const imageFiles = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/"));
     clearPrimitiveDrag();
-    if (imageFile) {
-      addLocalImage(imageFile, origin);
+    if (imageFiles.length) {
+      void addLocalImages(imageFiles, origin);
       return;
     }
     const serialized = event.dataTransfer.getData("application/x-northstar-canvas-object");
@@ -2312,9 +2358,6 @@ export function CanvasV2Workspace({
       } else if (command && event.key.toLowerCase() === "x" && selectedElements.length) {
         event.preventDefault();
         cutSelection();
-      } else if (command && event.key.toLowerCase() === "v" && internalClipboardRef.current.nodeIds.length) {
-        event.preventDefault();
-        pasteClipboard();
       } else if (command && event.key.toLowerCase() === "d" && selectedElements.length) {
         event.preventDefault();
         duplicateSelection();
@@ -2334,6 +2377,26 @@ export function CanvasV2Workspace({
   workspaceKeyupHandlerRef.current = (event: KeyboardEvent) => {
     if (event.code === "Space") setSpacePan(false);
   };
+  workspacePasteHandlerRef.current = (event: ClipboardEvent) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+    if (!engine.ready || engine.running || engine.applyingManualEdit) return;
+    const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+    const itemFiles = directFiles.length ? [] : Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    const images = directFiles.length ? directFiles : itemFiles;
+    if (images.length) {
+      event.preventDefault();
+      void addLocalImages(images, lastCanvasPointerRef.current);
+      return;
+    }
+    if (internalClipboardRef.current.nodeIds.length) {
+      event.preventDefault();
+      pasteClipboard();
+    }
+  };
 
   useEffect(() => {
     // Gesture previews can legitimately render the workspace once per frame.
@@ -2341,11 +2404,14 @@ export function CanvasV2Workspace({
     // them during that work; refs always dispatch to the latest scene state.
     const keydown = (event: KeyboardEvent) => workspaceKeydownHandlerRef.current(event);
     const keyup = (event: KeyboardEvent) => workspaceKeyupHandlerRef.current(event);
+    const paste = (event: ClipboardEvent) => workspacePasteHandlerRef.current(event);
     window.addEventListener("keydown", keydown);
     window.addEventListener("keyup", keyup);
+    window.addEventListener("paste", paste);
     return () => {
       window.removeEventListener("keydown", keydown);
       window.removeEventListener("keyup", keyup);
+      window.removeEventListener("paste", paste);
     };
   }, []);
 
@@ -2563,7 +2629,7 @@ export function CanvasV2Workspace({
         style={{ animation: "northstarCanvasReveal 880ms cubic-bezier(.22,1,.36,1) both" }}
       />}
       <p id="canvas-v2-keyboard-help" className="sr-only">Canvas workspace. Use Command or Control plus A to select objects, arrow keys to nudge, Shift plus arrow keys for larger nudges, and Delete to remove unlocked objects.</p>
-      <input ref={localImageInputRef} type="file" accept="image/*" onChange={receiveLocalImage} className="sr-only" aria-label="Choose an image for the canvas" />
+      <input ref={localImageInputRef} type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={receiveLocalImage} className="sr-only" aria-label="Choose images for the canvas" />
       {primitiveDrag && (() => {
         const silhouette = primitiveSilhouette(primitiveDrag);
         return <div ref={dragSilhouetteRef} data-testid="canvas-v2-drop-silhouette" aria-hidden className="pointer-events-none fixed left-0 top-0 z-[90] grid place-items-center opacity-80 drop-shadow-[0_12px_18px_rgba(70,56,160,.22)]" style={{ width: silhouette.width, height: silhouette.height, transform: "translate3d(-1000px,-1000px,0)" }}><CanvasV2PrimitiveThumbnail input={primitiveDrag} drag /></div>;
