@@ -169,7 +169,9 @@ import { constrainCanvasV2ExternalDiscoveryProgress } from "@/lib/canvas-v2/disc
 import type { CanvasV2EvidenceDomain } from "@/lib/canvas-v2/evidence-bridge";
 import {
   reconcileCanvasV2AuthoredStageEvidence,
+  reconcileCanvasV2WitnessOwnership,
   validateCanvasV2AuthoredStageEvidenceContract,
+  validateCanvasV2WitnessOwnershipContract,
 } from "@/lib/canvas-v2/stage-evidence-contract";
 import {
   canvasV2ChatAttachmentEvidence,
@@ -189,7 +191,6 @@ const NORTHSTAR_DESIGN_REFERENCE_PATHS = [
   "public/northstar/design-references/evidence-constellation.png",
 ];
 let northstarDesignReferencePartsPromise: Promise<Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>> | undefined;
-const CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS = 16;
 
 function compactDiscoveryCollaboration(context: CanvasV2WorkingContext | undefined) {
   const compact = compactCanvasV2WorkingContextForModel(context, { includeFocusObjects: false });
@@ -235,7 +236,7 @@ Treat each island as one chapter in a spatial story, never as decoration placed 
 
 A later turn is not an improvement merely because it is different. Identify the strongest exact visible qualities of the current committed render—such as a legible stage axis, coherent evidence scale, effective asymmetry, complete labels, or a clear reading order—and preserve them as an explicit preservation contract. Name the concrete regression risk of the proposed move. If a mature region already communicates well, extend it or make a bounded correction instead of replacing it with a speculative structure that can collapse its geometry, erase information, or create inert territory. Treat all islands as one publication: inherit the strongest established font families, body-copy scale, heading ratios, palette, rule weights, and spacing cadence. A deliberate contrast may express meaning, but a later island may never look like compressed debug output or an unrelated miniature theme beside the narrative title.
 
-Select an argument-appropriate set of no more than ${CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS} exact short evidence handles from canonicalEvidence whenever the move depends on screenshots or app identity. This is a safety ceiling, never a target or a layout quota. Never default to three screenshots per app or force equal witness counts merely for symmetry: one decisive screen may prove a focused point, while a journey or transition claim may need several distinct moments from one side and fewer from another. Every selected screen must carry a different decision-relevant part of the argument; the complete canonical rails remain visible as the source record. Those selections become an executable contract; the server resolves them to the full tenant evidence IDs. Assign every selection an explicit scaleIntent: identity-mark for app icons, peer for screenshots that should stay roughly 0.75–1.6× their canonical peer height, or bounded-emphasis for a screenshot whose exact observed detail genuinely needs a larger but still integrated treatment no greater than 2.75× its canonical peer height. Never choose bounded-emphasis merely to fill a column, create symmetry, or make evidence feel important. When a stage map calls several blocks SOURCED or OBSERVED SCREEN, select one exact handle for every such block so the visual sequence is self-explanatory; otherwise explicitly treat the unsupported blocks as interpretation and do not leave empty screenshot footprints. Name a focused set of one to three short kebab-case authoredVisualRoles for the visible structures that could carry this turn (for example thesis-anchor, evidence-callout, comparison-axis, stage-transition, causal-connector, or an original role you devise). Do not use card, panel, column, grid, or dashboard as a visual role. The source author must materially realize at least one central role as data-canvas-v2-visual-role rather than spending the patch on metadata.
+Select the complete argument-appropriate set of exact short evidence handles from canonicalEvidence whenever the move depends on screenshots or app identity. There is no fixed authored screenshot quota: select however many distinct material witnesses the actual argument requires, never an arbitrary count, a symmetric count, or the whole atlas by default. One decisive screen may prove a focused point, while a journey, transition, comparison, or qualified assessment may need several distinct moments from one side and fewer from another. Every selected screen must carry a different decision-relevant part of the argument; the complete canonical rails remain visible as the source record. Those selections become an executable contract; the server resolves them to the full tenant evidence IDs. Assign every selection a short semantic witnessGroup in kebab-case naming the exact claim, stage, comparison cell, or conclusion it supports—for example entry-awin, verification-whop, or qualified-assessment. Never use generic groups such as evidence, screenshots, witnesses, inbox, or grounded-evidence-selection. A concluding or qualified assessment that says one product appears shorter, clearer, more efficient, or more demanding is evidence-bearing: give every distinct observed premise behind that assessment its material exact witness in the assessment's witness group rather than ending with prose plus one unrelated leftover image. Assign every selection an explicit scaleIntent: identity-mark for app icons, peer for screenshots that should stay roughly 0.75–1.6× their canonical peer height, or bounded-emphasis for a screenshot whose exact observed detail genuinely needs a larger but still integrated treatment no greater than 2.75× its canonical peer height. Never choose bounded-emphasis merely to fill a column, create symmetry, or make evidence feel important. When a stage map calls several blocks SOURCED or OBSERVED SCREEN, select one exact handle for every such block and use a distinct witnessGroup matching that exact stage so the visual sequence is self-explanatory; otherwise explicitly treat the unsupported blocks as interpretation and do not leave empty screenshot footprints. Name a focused set of one to three short kebab-case authoredVisualRoles for the visible structures that could carry this turn (for example thesis-anchor, evidence-callout, comparison-axis, stage-transition, causal-connector, or an original role you devise). Do not use card, panel, column, grid, or dashboard as a visual role. The source author must materially realize at least one central role as data-canvas-v2-visual-role rather than spending the patch on metadata.
 
 When a named app is visibly discussed in authored analysis, use its exact grounded identity handle as an identity-mark analysis copy at least once. Never substitute a generic letter tile, emoji, invented logo, or arbitrary black badge for available tenant identity evidence.
 
@@ -313,17 +314,17 @@ const CREATIVE_BRIEF_SCHEMA = {
     evidenceSelections: {
       type: "array",
       minItems: 0,
-      maxItems: CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS,
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
           evidenceHandle: { type: "string" },
+          witnessGroup: { type: "string" },
           roleInArgument: { type: "string" },
           intendedTreatment: { type: "string" },
           scaleIntent: { type: "string", enum: ["identity-mark", "peer", "bounded-emphasis"] },
         },
-        required: ["evidenceHandle", "roleInArgument", "intendedTreatment", "scaleIntent"],
+        required: ["evidenceHandle", "witnessGroup", "roleInArgument", "intendedTreatment", "scaleIntent"],
       },
     },
     requestedDiscoveryNodeIds: { type: "array", minItems: 0, maxItems: 12, items: { type: "string" } },
@@ -375,6 +376,9 @@ function creativeBriefSchemaForRevision(evidenceHandles: readonly string[], anch
       },
       evidenceSelections: {
         ...CREATIVE_BRIEF_SCHEMA.properties.evidenceSelections,
+        // This is an availability bound, not an authored composition quota.
+        // Every grounded handle in this exact revision remains selectable.
+        maxItems: evidenceHandles.length,
         items: {
           ...CREATIVE_BRIEF_SCHEMA.properties.evidenceSelections.items,
           properties: {
@@ -415,7 +419,7 @@ Obey independentTerritoryContract when supplied. Author only visualDirectorBrief
 
 During executionContract.repairMode=repair-existing-uncommitted-candidate, the supplied source is the exact rejected candidate and already contains the create transaction's target island. Correct that same node and its CSS in place. Do not append a duplicate island, change its identity, revisit art direction, or treat its presence as committed lifecycle state. During executionContract.repairMode=retry-whole-board-from-committed-source, the rejected recompose contained no new story object, so the supplied source is deliberately reset to public committed truth. Execute one clean replacement recompose against the exact body-level island IDs; never copy or append rejected CSS.
 
-For develop, enrich, and repair, the committed target island is durable compiler-owned state. Never remove or replace its top-level node, and never remove or replace a descendant containing grounded evidence. Append or insert the new chapter inside the exact island, or replace one exact evidence-free child. For these existing-island actions, the server preserves the prior evidence ledger and pre-binds every newly selected image in focusedIslandSource before this call. Compose those existing image nodes; never emit, invent, or repeat an evidence handle. For a create action only, paste each exact executionContract.requiredEvidenceTags entry once inside the new island.
+For develop, enrich, and repair, the committed target island is durable compiler-owned state. Never remove or replace its top-level node, and never remove or replace a descendant containing grounded evidence. Append or insert the new chapter inside the exact island, or replace one exact evidence-free child. For these existing-island actions, the server preserves the prior evidence ledger and pre-binds every newly selected image in focusedIslandSource before this call. Compose those existing image nodes; never emit, invent, or repeat an evidence handle. For a create action only, paste each exact executionContract.requiredEvidenceTags entry once inside the new island. Every selected image carries a compiler-owned data-canvas-v2-witness-group. Create one exact identified semantic container for every visualDirectorBrief.evidenceSelections witnessGroup and mark it data-canvas-v2-evidence-group="that-group"; place the corresponding images inside the claim, stage, comparison cell, or conclusion they materially support. The compiler may move a bound image into its matching container, but it cannot invent the missing semantic structure. A generic evidence inbox, a detached thumbnail lane, or an isolated screenshot beneath conclusion prose is unfinished work and cannot commit.
 
 Realize targetTerritory, including its relation, placementMode, and targetZoneId, in actual source geometry. The supplied workspace.aiAuthoringBounds and render.spatial.authoredSurface.placementOccupants are binding geometry: the resulting top-level territory must fit inside that honest world-space band and must not intersect any existing user, research, or unchanged Northstar occupant. Mark the responsible top-level design region with data-canvas-v2-territory-relation, data-canvas-v2-placement-mode, and data-canvas-v2-target-zone using those exact brief values. An evidence-relative island must occupy a distinct, purposeful two-dimensional territory around the evidence—not become another section in the same vertical stack. Author only the intrinsic composition: the source compiler owns its ${CANVAS_V2_WORKSPACE.documentMargin}px local safe perimeter and translates the accepted native object scene to the permanent world-space origin x=${CANVAS_V2_WORKSPACE.aiAuthoringOriginX}px, never a camera-only offset. The node canvas-root is an inert metadata template, not the parent of visible islands: it can receive a first body-level append but must never appear in CSS. Never style body, html, the finite workspace, workspace metadata, or a root canvas size/padding to simulate placement. Use intrinsic, content-driven grid/flex placement for region internals and exact body-level island selectors, normal-flow order, alignment, and margins for whole-composition territory; the compiler neutralizes absolute top-level island offsets because they create overlaps and edge escapes. Never create arbitrary empty canvas dimensions. Interleave only when explicitly requested and mark it with data-canvas-v2-evidence-interleave. Recompose all affected regions together when placementMode is recompose.
 
@@ -428,7 +432,7 @@ If the target zone currently contains a canonical lane, first change normal-flow
 Preserve screenshot aspect ratios and the supplied scale intent. Do not author page-dominating screenshots. Ground every product-specific analytical claim in a visible screen from canonical evidence or an exact evidence copy; label interpretation and estimates honestly. Do not introduce endpoint-dependent SVG relationships until the brief asks for them. When existing relationship endpoints move, replace or update all affected geometry in the same patch. Relationship geometry must carry exact data-canvas-v2-relationship-source and data-canvas-v2-relationship-target anchors; annotations must carry data-canvas-v2-annotation-for. Do not emit scripts, iframes, forms, event handlers, external imports, or JavaScript.
 
 Canonical flow screen totals and authored comparison stages are different facts. Never describe a selected subset, three-stage axis, or representative sequence as “N screens” for an app. Use “stages”, “phases”, “moments”, or “selected examples” for authored compression; reserve “N screens” only for the exact authoritative complete-flow totals supplied in authoritativeCanonicalFacts.
-When the brief calls for a comparison or stage axis, the labels and their evidence must share one real layout structure. Put each screenshot witness inside the stage or comparison cell it supports; never author a full-width row of headings and then place every screenshot in an unrelated left-packed lane beneath it. Every comparison checkpoint or stage must declare evidence ownership on its exact identified container: data-canvas-v2-stage-evidence="sourced" for an observed stage, or data-canvas-v2-stage-evidence="interpretation" for reasoning. A sourced stage must contain at least one exact grounded analysis-copy screenshot inside that same container; screenshots elsewhere on the axis do not support it. An interpretation stage must visibly say Interpretation and must not claim observed interface behavior or reserve an empty screenshot footprint. When the director explicitly asks for an N-stage grounded screenshot comparison, all N stages are sourced; place any purely interpretive implication in its later implication chapter instead of using it as a screenshot-free stage.
+When the brief calls for a comparison or stage axis, the labels and their evidence must share one real layout structure. Put each screenshot witness inside the stage or comparison cell it supports; never author a full-width row of headings and then place every screenshot in an unrelated left-packed lane beneath it. Every comparison checkpoint or stage must declare evidence ownership on its exact identified container: data-canvas-v2-stage-evidence="sourced" for an observed stage, or data-canvas-v2-stage-evidence="interpretation" for reasoning. A sourced stage must also carry the matching data-canvas-v2-evidence-group from its selected witness. A sourced stage must contain at least one exact grounded analysis-copy screenshot inside that same container; screenshots elsewhere on the axis do not support it. An interpretation stage must visibly say Interpretation and must not claim observed interface behavior or reserve an empty screenshot footprint. When the director explicitly asks for an N-stage grounded screenshot comparison, all N stages are sourced; place any purely interpretive implication in its later implication chapter instead of using it as a screenshot-free stage.
 
 Make the smallest source change that visibly executes the brief. A successful turn changes the rendered board; no-op CSS and metadata-only changes are invalid.
 
@@ -1056,7 +1060,7 @@ function parseCreativeDirectorBrief(
     if (resultingMaturity === "developing" && !openRequirements.length) throw new Error("A developing island must name at least one exact prompt-critical open requirement for a later turn.");
     if (resultingMaturity === "resolved" && openRequirements.length) throw new Error("A resolved island cannot retain open requirements.");
   }
-  if (!Array.isArray(value.evidenceSelections) || value.evidenceSelections.length > CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS) throw new Error(`The visual director brief requires a focused evidence selection list of no more than ${CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS} items.`);
+  if (!Array.isArray(value.evidenceSelections)) throw new Error("The visual director brief requires an explicit evidence selection list.");
   const targetTerritory = value.targetTerritory && typeof value.targetTerritory === "object" && !Array.isArray(value.targetTerritory)
     ? value.targetTerritory as Record<string, unknown>
     : undefined;
@@ -1078,12 +1082,30 @@ function parseCreativeDirectorBrief(
     const evidenceHandle = typeof record.evidenceHandle === "string" ? record.evidenceHandle.trim() : "";
     const evidenceId = evidenceIdByHandle.get(evidenceHandle);
     const roleInArgument = typeof record.roleInArgument === "string" ? record.roleInArgument.trim() : "";
+    // Persisted private repair checkpoints created before witness ownership
+    // existed remain resumable. Newly generated briefs must supply the field
+    // through the strict schema above; legacy checkpoints derive one stable
+    // semantic destination from their already-authored argument role.
+    const legacyWitnessGroup = roleInArgument.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
+    const proposedWitnessGroup = typeof record.witnessGroup === "string"
+      ? record.witnessGroup.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 96)
+      : legacyWitnessGroup || `material-witness-${index + 1}`;
+    const witnessGroup = /^(?:evidence|screens?|screenshots?|witnesses?|inbox|grounded-evidence-selection)$/.test(proposedWitnessGroup)
+      && record.witnessGroup === undefined
+      ? `material-witness-${index + 1}`
+      : proposedWitnessGroup;
     const intendedTreatment = typeof record.intendedTreatment === "string" ? record.intendedTreatment.trim() : "";
     const scaleIntent = record.scaleIntent;
-    if (!evidenceHandle || !roleInArgument || !intendedTreatment || (scaleIntent !== "identity-mark" && scaleIntent !== "peer" && scaleIntent !== "bounded-emphasis")) throw new Error(`Visual director evidence selection ${index + 1} is incomplete.`);
+    if (!evidenceHandle || !witnessGroup || !roleInArgument || !intendedTreatment || (scaleIntent !== "identity-mark" && scaleIntent !== "peer" && scaleIntent !== "bounded-emphasis")) throw new Error(`Visual director evidence selection ${index + 1} is incomplete.`);
+    if (/^(?:evidence|screens?|screenshots?|witnesses?|inbox|grounded-evidence-selection)$/.test(witnessGroup)) {
+      throw new Error(`Visual director evidence selection ${index + 1} requires a semantic witnessGroup naming the exact claim, stage, comparison cell, or conclusion it supports.`);
+    }
     if (!evidenceId) throw new Error(`Visual director selected an evidence handle that is not grounded in the current canvas: ${evidenceHandle}.`);
-    return { evidenceHandle, evidenceId, roleInArgument: roleInArgument.slice(0, 600), intendedTreatment: intendedTreatment.slice(0, 600), scaleIntent };
+    return { evidenceHandle, evidenceId, witnessGroup, roleInArgument: roleInArgument.slice(0, 600), intendedTreatment: intendedTreatment.slice(0, 600), scaleIntent };
   });
+  if (new Set(evidenceSelections.map((selection) => selection.evidenceId)).size !== evidenceSelections.length) {
+    throw new Error("The visual director must select each exact evidence item once and assign it to one material witness group; do not duplicate the same screenshot into several decorative locations.");
+  }
   if (value.requestedDiscoveryNodeIds !== undefined && (!Array.isArray(value.requestedDiscoveryNodeIds) || value.requestedDiscoveryNodeIds.length > 12)) {
     throw new Error("The visual director brief requires a focused discovery expansion list of no more than twelve exact node IDs.");
   }
@@ -1580,7 +1602,7 @@ function normalizeCanvasV2ProgressiveComplexSynthesis(
     currentSemanticJob: "Establish the governing thesis and scope for the grounded comparison",
     deferredSemanticJobs,
     evidenceChoreography: "Keep the complete canonical evidence rails visible and untouched as the working record. This opening island may use the exact grounded identity marks, but screenshot witnesses belong to the later observed comparison chapter.",
-    evidenceSelections: brief.evidenceSelections.filter((selection) => selection.evidenceId.startsWith("icon:")).slice(0, 4),
+    evidenceSelections: brief.evidenceSelections.filter((selection) => selection.evidenceId.startsWith("icon:")),
     authoredVisualRoles: ["thesis-anchor"],
     whyThisTurn: "A concise framing judgment gives the user an immediate visible foothold while preserving the deeper evidence comparison and implication as later observed moves.",
     regressionRisk: "Do not let the opening island become a miniature complete report or duplicate the canonical evidence rails.",
@@ -1640,9 +1662,10 @@ function canvasV2RenderRepairMustPreserveSemanticCopy(failures: readonly string[
   ));
 }
 
-function canvasV2EvidenceTagForIsland(islandId: string, handle: string): string {
+function canvasV2EvidenceTagForIsland(islandId: string, handle: string, witnessGroup?: string): string {
   const stableHandle = handle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "grounded";
-  return `<img data-canvas-v2-node-id="${islandId}-evidence-${stableHandle}" data-canvas-v2-copy-evidence-handle="${handle}">`;
+  const groupAttribute = witnessGroup ? ` data-canvas-v2-witness-group="${witnessGroup}"` : "";
+  return `<img data-canvas-v2-node-id="${islandId}-evidence-${stableHandle}" data-canvas-v2-copy-evidence-handle="${handle}"${groupAttribute}>`;
 }
 
 function canvasV2IslandContainsEvidence(
@@ -1660,6 +1683,48 @@ function canvasV2IslandContainsEvidence(
     || source.includes(`data-canvas-v2-copy-evidence-id='${evidenceId}'`);
 }
 
+function canvasV2DocumentContainsAnalysisEvidence(
+  document: CanvasV2ArtifactDocument,
+  evidenceId: string,
+): boolean {
+  return Array.from(document.html.matchAll(/<img\b([^>]*)>/gi)).some((match) => {
+    const attributes = match[1];
+    const role = /\bdata-canvas-v2-evidence-role\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    const id = /\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    return role === "analysis-copy" && id === evidenceId;
+  });
+}
+
+function canvasV2IslandEvidenceWitnessGroup(
+  document: CanvasV2ArtifactDocument,
+  islandId: string,
+  evidenceId: string,
+): string | undefined {
+  const islandRange = findCanvasV2SourceNodeRange(document.html, islandId);
+  if (!islandRange) return undefined;
+  const islandSource = document.html.slice(islandRange.start, islandRange.end);
+  const witness = Array.from(islandSource.matchAll(/<img\b([^>]*)>/gi)).flatMap((match) => {
+    const attributes = match[1];
+    const id = /\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    const role = /\bdata-canvas-v2-evidence-role\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    const nodeId = /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    if (id !== evidenceId || role !== "analysis-copy" || !nodeId) return [];
+    const directGroup = /\bdata-canvas-v2-witness-group\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    const range = findCanvasV2SourceNodeRange(document.html, nodeId);
+    return range ? [{ directGroup, range }] : [];
+  })[0];
+  if (!witness) return undefined;
+  if (witness.directGroup) return witness.directGroup;
+  return Array.from(islandSource.matchAll(/<([a-z][\w:-]*)\b([^>]*)>/gi)).flatMap((match) => {
+    const group = /\bdata-canvas-v2-evidence-group\s*=\s*["']([^"']+)["']/i.exec(match[2])?.[1];
+    const nodeId = /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(match[2])?.[1];
+    const range = group && nodeId ? findCanvasV2SourceNodeRange(document.html, nodeId) : undefined;
+    return group && range && witness.range.start >= range.openEnd && witness.range.end <= range.closeStart
+      ? [{ group, span: range.end - range.start }]
+      : [];
+  }).sort((left, right) => left.span - right.span)[0]?.group;
+}
+
 /**
  * Evidence selected by the visual director is bound before source authorship.
  * The model sees real, compiler-approved image nodes and only has to compose
@@ -1671,10 +1736,11 @@ function bindCanvasV2SelectedEvidenceToExistingIsland(input: {
   evidenceIds: readonly string[];
   evidenceHandleById: ReadonlyMap<string, string>;
   scaleIntentByEvidenceId: ReadonlyMap<string, CanvasV2EvidenceScaleIntent>;
+  witnessGroupByEvidenceId?: ReadonlyMap<string, string>;
 }): CanvasV2ArtifactRevision {
   const tags = input.evidenceIds.flatMap((evidenceId) => {
     const handle = input.evidenceHandleById.get(evidenceId);
-    return handle ? [canvasV2EvidenceTagForIsland(input.islandId, handle)] : [];
+    return handle ? [canvasV2EvidenceTagForIsland(input.islandId, handle, input.witnessGroupByEvidenceId?.get(evidenceId))] : [];
   });
   if (!tags.length || !findCanvasV2SourceNodeRange(input.revision.document.html, input.islandId)) return input.revision;
   const inboxId = `${input.islandId}-evidence-inbox`;
@@ -1791,6 +1857,9 @@ function compileSourceAuthorDecision(input: {
     ...(existingTargetRegion?.requiredEvidenceIds ?? []),
     ...input.brief.evidenceSelections.map((selection) => selection.evidenceId),
   ]));
+  const witnessGroupByEvidenceId = new Map(input.brief.evidenceSelections.map((selection) => (
+    [selection.evidenceId, selection.witnessGroup] as const
+  )));
   const operations = normalizeCanvasV2SourcePatchHeadingHierarchy(
     parseCanvasV2SourcePatch(source.patch),
     input.brief.targetIsland.storyRole,
@@ -1828,9 +1897,15 @@ function compileSourceAuthorDecision(input: {
     evidenceIds: missingAfterPatch,
     evidenceHandleById: input.evidenceHandleById,
     scaleIntentByEvidenceId: input.scaleIntentByEvidenceId,
+    witnessGroupByEvidenceId,
+  });
+  const witnessReconciledDocument = reconcileCanvasV2WitnessOwnership({
+    document: enforceCanvasV2TargetIslandMetadata(reconciledRevision.document, input.brief, input.validationPlanId),
+    targetIslandId: input.brief.targetIsland.islandId,
+    evidenceAssignments: input.brief.evidenceSelections.map(({ evidenceId, witnessGroup }) => ({ evidenceId, witnessGroup })),
   });
   const stageReconciledDocument = reconcileCanvasV2AuthoredStageEvidence({
-    document: enforceCanvasV2TargetIslandMetadata(reconciledRevision.document, input.brief, input.validationPlanId),
+    document: witnessReconciledDocument,
     targetIslandId: input.brief.targetIsland.islandId,
     authoredVisualRoles: input.brief.authoredVisualRoles,
     selectedEvidenceIds: cumulativeRequiredEvidenceIds,
@@ -1987,6 +2062,12 @@ function validateCanvasV2CreativeBriefExecution(
     brief.evidenceSelections.map((selection) => selection.evidenceId),
   );
   if (selectedFailures.length) throw new Error(selectedFailures.join(" "));
+  const witnessOwnershipFailures = validateCanvasV2WitnessOwnershipContract({
+    document: decision.document,
+    targetIslandId: brief.targetIsland.islandId,
+    evidenceAssignments: brief.evidenceSelections.map(({ evidenceId, witnessGroup }) => ({ evidenceId, witnessGroup })),
+  });
+  if (witnessOwnershipFailures.length) throw new Error(witnessOwnershipFailures.join(" "));
   const stageEvidenceFailures = validateCanvasV2AuthoredStageEvidenceContract({
     document: decision.document,
     authoredVisualRoles: brief.authoredVisualRoles,
@@ -3162,19 +3243,22 @@ export async function POST(request: NextRequest) {
           const asset = body.revision!.evidence.find((candidate) => candidate.id === binding.evidenceId);
           return asset ? [[binding.evidenceId, { asset, evidenceHandle: binding.handle }] as const] : [];
         })).values())
-        .slice(0, Math.max(1, Math.min(3, context.canonicalEvidence.length)))
         .map(({ asset, evidenceHandle }) => ({
           evidenceHandle,
           evidenceId: asset.id,
+          witnessGroup: canvasV2IslandEvidenceWitnessGroup(
+            body.revision!.document,
+            brief.targetIsland.islandId,
+            asset.id,
+          ) ?? "source-identities",
           roleInArgument: `${asset.app ?? asset.label} grounded app identity`,
           intendedTreatment: "Use the exact grounded app icon as a compact identity mark beside the analytical source label; never substitute a text tile, letter mark, or invented logo.",
           scaleIntent: "identity-mark" as const,
         }));
       // The model owns the authored witness count. The compiler only guarantees
       // one grounded visual witness per canonical lane when an analytical move
-      // omitted that lane entirely. The old global top-three fallback, combined
-      // with the eight-item ceiling and two app icons, repeatedly coerced a
-      // two-product comparison into exactly three screenshots per side.
+      // omitted that lane entirely. A fallback is a minimum completeness guard,
+      // never a maximum or a substitute for the director's material selection.
       const directorSelectedEvidenceIds = new Set(brief.evidenceSelections.map((selection) => selection.evidenceId));
       const fallbackScreenSelections = context.canonicalEvidence.flatMap((flow) => {
         // A fallback fills an omitted comparison side; it is not an automatic
@@ -3222,13 +3306,19 @@ export async function POST(request: NextRequest) {
         .map(({ screen, evidenceHandle }) => ({
           evidenceHandle,
           evidenceId: screen.evidenceId,
+          witnessGroup: canvasV2IslandEvidenceWitnessGroup(
+            body.revision!.document,
+            brief.targetIsland.islandId,
+            screen.evidenceId,
+          ) ?? `primary-${brief.targetIsland.storyRole}`,
           roleInArgument: `${screen.app ?? "Grounded"} screen ${screen.index}: ${screen.label}`,
           intendedTreatment: "Show this exact canonical screenshot at inspectable peer scale inside the analytical argument, with its observed wording and exact provenance directly adjacent.",
           scaleIntent: "peer" as const,
         }));
       brief.evidenceSelections = Array.from(new Map([
-        // Mandatory grounded identity and per-lane coverage are inserted first
-        // so a prolific model selection cannot crowd them out at the ceiling.
+        // Mandatory grounded identity and per-lane coverage supplement the
+        // director's complete material selection. The director's assignment is
+        // last so its precise semantic witness group wins on duplicate IDs.
         ...identitySelections,
         ...compiledScreenSelections,
         ...brief.evidenceSelections.filter((selection) => (
@@ -3236,14 +3326,14 @@ export async function POST(request: NextRequest) {
           || existingTargetEvidenceIds.has(selection.evidenceId)
           || identitySelections.some((identity) => identity.evidenceId === selection.evidenceId)
         )),
-      ].map((selection) => [selection.evidenceId, selection] as const)).values()).slice(0, CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS);
+      ].map((selection) => [selection.evidenceId, selection] as const)).values());
       if (brief.evidenceSelections.length) {
         const stripContradictoryCopyLanguage = (value: string) => value
           .replace(/\b(?:rather than|instead of|without)\s+(?:reproducing|copying|duplicating|showing)\s+(?:the\s+)?screenshots?\b[,.]?/gi, "")
           .replace(/\b(?:use|show)\s+(?:only\s+)?screen(?:-index)?\s+references?\s+(?:rather than|instead of)\s+(?:the\s+)?(?:actual\s+|exact\s+)?screenshots?\b[,.]?/gi, "")
           .replace(/\s{2,}/g, " ")
           .trim();
-        const executableEvidenceDirective = "Render every compiler-bound evidence selection as its exact app icon or screenshot inside this analytical island. A SCREEN N label or prose citation is not a visual substitute. Preserve the canonical source rail exactly once; these bounded analytical copies are evidence witnesses, not a duplicate flow.";
+        const executableEvidenceDirective = "Render every compiler-bound evidence selection as its exact app icon or screenshot inside the semantic data-canvas-v2-evidence-group named by its witnessGroup. A SCREEN N label, prose citation, generic inbox, or detached thumbnail lane is not a visual substitute. Preserve the canonical source rail exactly once; these bounded analytical copies are evidence witnesses, not a duplicate flow.";
         brief.materialMove = `${stripContradictoryCopyLanguage(brief.materialMove)} ${executableEvidenceDirective}`.trim();
         brief.evidenceChoreography = `${stripContradictoryCopyLanguage(brief.evidenceChoreography)} ${executableEvidenceDirective}`.trim();
       }
@@ -3905,38 +3995,42 @@ export async function POST(request: NextRequest) {
       const missingIdentitySelections = context.canonicalEvidence.flatMap((flow) => flow.identityAssets)
         .flatMap((asset) => {
           const evidenceHandle = creativeEvidenceHandleById.get(asset.evidenceId);
-          return evidenceHandle && !body.revision!.document.html.includes(`data-canvas-v2-copy-evidence-id="${asset.evidenceId}"`)
+          return evidenceHandle && !canvasV2DocumentContainsAnalysisEvidence(body.revision!.document, asset.evidenceId)
             ? [{ asset, evidenceHandle }]
             : [];
         })
-        .slice(0, 8)
         .map(({ asset, evidenceHandle }) => ({
           evidenceHandle,
           evidenceId: asset.evidenceId,
+          witnessGroup: "source-identities",
           roleInArgument: `${asset.app} grounded app identity`,
           intendedTreatment: "Place the exact grounded icon beside the existing app label inside the established analytical composition.",
           scaleIntent: "identity-mark" as const,
         }));
+      const checkpointScreenEvidenceIds = new Set(creativeCheckpointBrief.evidenceSelections
+        .filter((selection) => selection.scaleIntent !== "identity-mark")
+        .map((selection) => selection.evidenceId));
+      const missingLaneSelections = context.canonicalEvidence.flatMap((flow) => {
+        if (flow.screens.some((screen) => checkpointScreenEvidenceIds.has(screen.evidenceId))) return [];
+        const screen = flow.screens[0];
+        const evidenceHandle = screen ? creativeEvidenceHandleById.get(screen.evidenceId) : undefined;
+        return screen && evidenceHandle ? [{
+          evidenceHandle,
+          evidenceId: screen.evidenceId,
+          witnessGroup: "completion-evidence",
+          roleInArgument: `${screen.app ?? "Grounded"} minimum grounded comparison witness`,
+          intendedTreatment: "Place this exact canonical screen at inspectable peer scale inside the claim it supports; this minimum lane witness supplements, and never replaces, the visual director's complete material evidence set.",
+          scaleIntent: "peer" as const,
+        }] : [];
+      });
+      // Completion repair must retain the director's complete witness contract.
+      // The previous replacement branch discarded it whenever one identity or
+      // fallback screen was missing, which produced sparse closing chapters.
       const completionRepairEvidenceSelections = Array.from(new Map([
+        ...creativeCheckpointBrief.evidenceSelections,
         ...missingIdentitySelections,
-        ...context.canonicalEvidence.slice(0, 2).flatMap((flow) => {
-          const representativeScreens = flow.screens.length <= 2
-            ? flow.screens
-            : [flow.screens[0], flow.screens[flow.screens.length - 1]];
-          return representativeScreens
-            .flatMap((screen) => {
-              const evidenceHandle = creativeEvidenceHandleById.get(screen.evidenceId);
-              return evidenceHandle ? [{ screen, evidenceHandle }] : [];
-            })
-            .map(({ screen, evidenceHandle }) => ({
-              evidenceHandle,
-              evidenceId: screen.evidenceId,
-              roleInArgument: `${screen.app ?? "Grounded"} representative onboarding evidence`,
-              intendedTreatment: "Place this exact canonical screen at inspectable peer scale inside the analytical comparison and make its observed interface carry part of the argument.",
-              scaleIntent: "peer" as const,
-            }));
-        }),
-      ].map((selection) => [selection.evidenceId, selection] as const)).values()).slice(0, CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS);
+        ...missingLaneSelections,
+      ].map((selection) => [selection.evidenceId, selection] as const)).values());
       const titleOnlyFailure = completionFailures.every((failure) => /\btitle\b/i.test(failure));
       const completionRepairIsland = unfinishedIslands.find((island) => island.storyRole !== "title")
         ?? unfinishedIslands[0]
@@ -3984,7 +4078,7 @@ export async function POST(request: NextRequest) {
           targetZoneId: createMissingAnalyticalIsland ? "top-center" : completionRepairIsland?.targetZoneId ?? "middle-center",
         },
         evidenceChoreography: "Use the exact grounded evidence required by the completion failure and leave every already-valid witness in place.",
-        evidenceSelections: completionRepairEvidenceSelections.length ? completionRepairEvidenceSelections : creativeCheckpointBrief.evidenceSelections,
+        evidenceSelections: completionRepairEvidenceSelections,
         authoredVisualRoles: createMissingAnalyticalIsland
           ? ["evidence-led-comparison", "representative-screen-contrast"]
           : ["completion-integrity-repair"],
@@ -4026,6 +4120,9 @@ export async function POST(request: NextRequest) {
     const newlyRequiredEvidenceIds = durableRequiredEvidenceIds.filter((evidenceId) => (
       !canvasV2IslandContainsEvidence(body.revision!.document, focusedIsland?.nodeId, evidenceId)
     ));
+    const witnessGroupByEvidenceId = new Map(creativeCheckpointBrief?.evidenceSelections.map((selection) => (
+      [selection.evidenceId, selection.witnessGroup] as const
+    )) ?? []);
     const sourceAuthorRevision = creativeCheckpointBrief && focusedIsland
       ? bindCanvasV2SelectedEvidenceToExistingIsland({
           revision: discoveryRevision,
@@ -4033,6 +4130,7 @@ export async function POST(request: NextRequest) {
           evidenceIds: newlyRequiredEvidenceIds,
           evidenceHandleById: creativeEvidenceHandleById,
           scaleIntentByEvidenceId,
+          witnessGroupByEvidenceId,
         })
       : discoveryRevision;
     const sourceAuthorExistingIslandIds = canvasV2CommittedIslandIdsForSourceValidation(
@@ -4086,7 +4184,11 @@ export async function POST(request: NextRequest) {
     });
     const requiredEvidenceTags = focusedIsland ? [] : newlyRequiredEvidenceIds.flatMap((evidenceId) => {
       const handle = creativeEvidenceHandleById.get(evidenceId);
-      return handle ? [canvasV2EvidenceTagForIsland(creativeCheckpointBrief!.targetIsland.islandId, handle)] : [];
+      return handle ? [canvasV2EvidenceTagForIsland(
+        creativeCheckpointBrief!.targetIsland.islandId,
+        handle,
+        witnessGroupByEvidenceId.get(evidenceId),
+      )] : [];
     });
     const requestContext = {
       instruction,
@@ -4156,7 +4258,7 @@ export async function POST(request: NextRequest) {
         },
         visualDirectorBrief: {
           ...creativeCheckpointBrief,
-          evidenceSelections: creativeCheckpointBrief.evidenceSelections.map(({ evidenceHandle, roleInArgument, intendedTreatment, scaleIntent }) => ({ evidenceHandle, roleInArgument, intendedTreatment, scaleIntent })),
+          evidenceSelections: creativeCheckpointBrief.evidenceSelections.map(({ evidenceHandle, witnessGroup, roleInArgument, intendedTreatment, scaleIntent }) => ({ evidenceHandle, witnessGroup, roleInArgument, intendedTreatment, scaleIntent })),
         },
       } : {}),
     };

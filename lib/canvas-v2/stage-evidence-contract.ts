@@ -38,6 +38,126 @@ function exactScreenWitnessExists(source: string): boolean {
   });
 }
 
+export interface CanvasV2WitnessAssignment {
+  evidenceId: string;
+  witnessGroup: string;
+}
+
+function witnessGroupContainers(document: CanvasV2ArtifactDocument, islandId: string) {
+  const islandRange = findCanvasV2SourceNodeRange(document.html, islandId);
+  if (!islandRange) return [];
+  const islandSource = document.html.slice(islandRange.start, islandRange.end);
+  return Array.from(islandSource.matchAll(/<([a-z][\w:-]*)\b([^>]*)>/gi)).flatMap((match) => {
+    const witnessGroup = attribute(match[2], "data-canvas-v2-evidence-group");
+    const nodeId = attribute(match[2], "data-canvas-v2-node-id");
+    if (!witnessGroup || !nodeId) return [];
+    const range = findCanvasV2SourceNodeRange(document.html, nodeId);
+    return range ? [{ witnessGroup, nodeId, range }] : [];
+  });
+}
+
+function analysisCopyForEvidence(document: CanvasV2ArtifactDocument, islandId: string, evidenceId: string) {
+  const islandRange = findCanvasV2SourceNodeRange(document.html, islandId);
+  if (!islandRange) return undefined;
+  const islandSource = document.html.slice(islandRange.start, islandRange.end);
+  for (const match of islandSource.matchAll(/<img\b([^>]*)>/gi)) {
+    const attributes = match[1];
+    if (attribute(attributes, "data-canvas-v2-evidence-role") !== "analysis-copy") continue;
+    if (attribute(attributes, "data-canvas-v2-evidence-id") !== evidenceId) continue;
+    const nodeId = attribute(attributes, "data-canvas-v2-node-id");
+    const range = nodeId ? findCanvasV2SourceNodeRange(document.html, nodeId) : undefined;
+    if (nodeId && range) return { nodeId, range };
+  }
+}
+
+function withWitnessGroupAttribute(source: string, witnessGroup: string): string {
+  return source.replace(/^(<img\b)([^>]*)(>)/i, (_match, opening: string, attributes: string, close: string) => {
+    const retained = attributes.replace(/\s*data-canvas-v2-witness-group\s*=\s*["'][^"']*["']/ig, "");
+    return `${opening}${retained} data-canvas-v2-witness-group="${witnessGroup}"${close}`;
+  });
+}
+
+/**
+ * A selected witness belongs to an exact semantic claim, stage, cell, or
+ * conclusion. The source author creates that semantic structure; the compiler
+ * performs only the mechanical reparenting of the already-approved image.
+ * This prevents the durable evidence inbox from becoming visible final UI.
+ */
+export function reconcileCanvasV2WitnessOwnership(input: {
+  document: CanvasV2ArtifactDocument;
+  targetIslandId: string;
+  evidenceAssignments: readonly CanvasV2WitnessAssignment[];
+}): CanvasV2ArtifactDocument {
+  let document = input.document;
+  for (const assignment of input.evidenceAssignments) {
+    const groups = witnessGroupContainers(document, input.targetIslandId)
+      .filter((container) => container.witnessGroup === assignment.witnessGroup);
+    if (groups.length !== 1) continue;
+    const witness = analysisCopyForEvidence(document, input.targetIslandId, assignment.evidenceId);
+    if (!witness) continue;
+    const target = groups[0];
+    const source = withWitnessGroupAttribute(
+      document.html.slice(witness.range.start, witness.range.end),
+      assignment.witnessGroup,
+    );
+    const alreadyOwned = witness.range.start >= target.range.openEnd && witness.range.end <= target.range.closeStart;
+    if (alreadyOwned) {
+      document = assertCanvasV2ArtifactDocument({
+        ...document,
+        html: `${document.html.slice(0, witness.range.start)}${source}${document.html.slice(witness.range.end)}`,
+      });
+      continue;
+    }
+    const withoutWitness = `${document.html.slice(0, witness.range.start)}${document.html.slice(witness.range.end)}`;
+    const refreshedTarget = findCanvasV2SourceNodeRange(withoutWitness, target.nodeId);
+    if (!refreshedTarget) continue;
+    document = assertCanvasV2ArtifactDocument({
+      ...document,
+      html: `${withoutWitness.slice(0, refreshedTarget.closeStart)}${source}${withoutWitness.slice(refreshedTarget.closeStart)}`,
+    });
+  }
+  return document;
+}
+
+/**
+ * Presence somewhere in an island is not evidence ownership. Every selected
+ * item must be inside the one semantic container named by its director-owned
+ * witness group, so no detached screenshot can pass as a supported finding.
+ */
+export function validateCanvasV2WitnessOwnershipContract(input: {
+  document: CanvasV2ArtifactDocument;
+  targetIslandId: string;
+  evidenceAssignments: readonly CanvasV2WitnessAssignment[];
+}): string[] {
+  if (!input.evidenceAssignments.length) return [];
+  const islandRange = findCanvasV2SourceNodeRange(input.document.html, input.targetIslandId);
+  if (!islandRange) return [`Evidence-bearing island ${input.targetIslandId} is missing, so its selected witnesses cannot be tied to their claims.`];
+  const containers = witnessGroupContainers(input.document, input.targetIslandId);
+  const failures: string[] = [];
+  const assignments = Array.from(new Map(input.evidenceAssignments.map((assignment) => [assignment.evidenceId, assignment] as const)).values());
+  for (const witnessGroup of new Set(assignments.map((assignment) => assignment.witnessGroup))) {
+    const owners = containers.filter((container) => container.witnessGroup === witnessGroup);
+    if (!owners.length) {
+      failures.push(`Witness group ${witnessGroup} has no exact identified semantic container in island ${input.targetIslandId}. Create the claim, stage, comparison cell, or conclusion carrying data-canvas-v2-evidence-group="${witnessGroup}"; a generic evidence inbox is not finished composition.`);
+    } else if (owners.length > 1) {
+      failures.push(`Witness group ${witnessGroup} has ${owners.length} competing containers in island ${input.targetIslandId}. Give the selected evidence one unambiguous semantic owner.`);
+    }
+  }
+  for (const assignment of assignments) {
+    const owner = containers.find((container) => container.witnessGroup === assignment.witnessGroup);
+    const witness = analysisCopyForEvidence(input.document, input.targetIslandId, assignment.evidenceId);
+    if (!witness) {
+      failures.push(`Witness group ${assignment.witnessGroup} is missing its exact selected evidence ${assignment.evidenceId}.`);
+      continue;
+    }
+    if (!owner) continue;
+    if (witness.range.start < owner.range.openEnd || witness.range.end > owner.range.closeStart) {
+      failures.push(`Selected evidence ${assignment.evidenceId} is detached from witness group ${assignment.witnessGroup}. Place the exact image inside its supporting claim container rather than leaving it in a generic inbox or unrelated lane.`);
+    }
+  }
+  return Array.from(new Set(failures));
+}
+
 /**
  * Exact evidence ownership is compiler work, not a reason to repurchase a
  * correct visual idea. The source author chooses the stage structure and may

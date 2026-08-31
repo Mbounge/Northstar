@@ -224,12 +224,13 @@ test("bounded patches preserve canonical rails and bind evidence copies server-s
     previous,
     evidence,
     operations: [
-      { op: "insert-after", targetNodeId: "lane", html: '<section data-canvas-v2-node-id="analysis"><img data-canvas-v2-node-id="copy-1" data-canvas-v2-copy-evidence-handle="lane-0-screen-0" alt="Evidence detail"></section>' },
+      { op: "insert-after", targetNodeId: "lane", html: '<section data-canvas-v2-node-id="analysis"><img data-canvas-v2-node-id="copy-1" data-canvas-v2-copy-evidence-handle="lane-0-screen-0" data-canvas-v2-witness-group="qualified-assessment" alt="Evidence detail"></section>' },
       { op: "upsert-css", layerId: "analysis", css: ".northstar-canvas { display:grid; }" },
     ],
   });
   assert.match(next.html, /data-canvas-v2-source-node-id="canonical-1"/);
   assert.match(next.html, /data-canvas-v2-scale-intent="peer"/);
+  assert.match(next.html, /data-canvas-v2-witness-group="qualified-assessment"/);
   assert.match(next.html, /alt="Screen 1"/);
   assert.doesNotMatch(next.html, /alt="Evidence detail"/);
   assert.match(next.html, /max-height:376px!important/);

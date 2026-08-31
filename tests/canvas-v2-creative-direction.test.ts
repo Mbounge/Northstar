@@ -255,6 +255,9 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /validateCanvasV2RenderedAnalysisEvidenceScale/);
   assert.match(route, /validateCanvasV2RenderedComparisonCommunication/);
   assert.match(route, /validateCanvasV2AuthoredStageEvidenceContract/);
+  assert.match(route, /validateCanvasV2WitnessOwnershipContract/);
+  assert.match(route, /data-canvas-v2-evidence-group/);
+  assert.match(route, /There is no fixed authored screenshot quota/);
   assert.match(route, /Every comparison checkpoint or stage must declare evidence ownership/);
   assert.match(route, /validateCanvasV2RenderedRelationshipGeometry/);
   assert.match(grammar, /Inline SVG is available for model-authored relationship geometry/);
@@ -270,8 +273,9 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(grammar, /rebuild every affected path in that same edit/);
   assert.match(route, /validateCanvasV2CreativeBriefExecution/);
   assert.match(route, /validateCanvasV2AnalysisEvidenceContinuity/);
-  assert.match(route, /CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS = 16/);
-  assert.match(route, /Never default to three screenshots per app/);
+  assert.doesNotMatch(route, /CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS/);
+  assert.doesNotMatch(route, /\.slice\(0,\s*CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS\)/);
+  assert.match(route, /never an arbitrary count, a symmetric count, or the whole atlas by default/);
   assert.match(route, /one grounded visual witness per canonical lane/);
   assert.match(route, /if \(flow\.screens\.some\(\(screen\) => directorSelectedEvidenceIds\.has\(screen\.evidenceId\)\)\) return \[\]/);
   assert.doesNotMatch(route, /rankedScreenSelections[\s\S]{0,1200}slice\(0, 3\)/);

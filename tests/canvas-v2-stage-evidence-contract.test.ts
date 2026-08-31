@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   reconcileCanvasV2AuthoredStageEvidence,
+  reconcileCanvasV2WitnessOwnership,
   validateCanvasV2AuthoredStageEvidenceContract,
+  validateCanvasV2WitnessOwnershipContract,
 } from "@/lib/canvas-v2/stage-evidence-contract";
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
 
@@ -73,4 +75,36 @@ test("the stage contract does not force comparison machinery onto simpler visual
     stagePlan: "Create one clear answer.",
     selectedScreenshotEvidenceCount: 0,
   }), []);
+});
+
+test("selected witnesses are moved from the compiler inbox into their exact semantic owners", () => {
+  const previous: CanvasV2ArtifactDocument = {
+    html: `<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="comparison" data-canvas-v2-design-region><article data-canvas-v2-node-id="entry-claim" data-canvas-v2-evidence-group="entry"><h2 data-canvas-v2-node-id="entry-title">Entry</h2></article><article data-canvas-v2-node-id="assessment-claim" data-canvas-v2-evidence-group="qualified-assessment"><h2 data-canvas-v2-node-id="assessment-title">Qualified assessment</h2></article><div data-canvas-v2-node-id="comparison-evidence-inbox" class="canvas-v2-evidence-inbox"><img data-canvas-v2-node-id="entry-screen" data-canvas-v2-evidence-id="screen:entry" data-canvas-v2-evidence-role="analysis-copy" src="https://evidence.test/entry.png"><img data-canvas-v2-node-id="assessment-screen" data-canvas-v2-evidence-id="screen:assessment" data-canvas-v2-evidence-role="analysis-copy" src="https://evidence.test/assessment.png"></div></section></main>`,
+    css: "",
+  };
+  const evidenceAssignments = [
+    { evidenceId: "screen:entry", witnessGroup: "entry" },
+    { evidenceId: "screen:assessment", witnessGroup: "qualified-assessment" },
+  ];
+  assert.match(validateCanvasV2WitnessOwnershipContract({ document: previous, targetIslandId: "comparison", evidenceAssignments }).join(" "), /detached from witness group entry/);
+  const next = reconcileCanvasV2WitnessOwnership({ document: previous, targetIslandId: "comparison", evidenceAssignments });
+  assert.deepEqual(validateCanvasV2WitnessOwnershipContract({ document: next, targetIslandId: "comparison", evidenceAssignments }), []);
+  assert.match(next.html, /data-canvas-v2-evidence-id="screen:entry"[^>]*data-canvas-v2-witness-group="entry"/);
+  assert.match(next.html, /data-canvas-v2-evidence-id="screen:assessment"[^>]*data-canvas-v2-witness-group="qualified-assessment"/);
+  const entryStart = next.html.indexOf('data-canvas-v2-node-id="entry-claim"');
+  const assessmentStart = next.html.indexOf('data-canvas-v2-node-id="assessment-claim"');
+  assert.ok(next.html.indexOf('data-canvas-v2-evidence-id="screen:entry"') > entryStart);
+  assert.ok(next.html.indexOf('data-canvas-v2-evidence-id="screen:entry"') < assessmentStart);
+  assert.ok(next.html.indexOf('data-canvas-v2-evidence-id="screen:assessment"') > assessmentStart);
+});
+
+test("witness ownership has no fixed sixteen-screenshot composition ceiling", () => {
+  const count = 24;
+  const groups = Array.from({ length: count }, (_, index) => `<article data-canvas-v2-node-id="claim-${index}" data-canvas-v2-evidence-group="claim-${index}"><img data-canvas-v2-node-id="screen-${index}" data-canvas-v2-evidence-id="screen:${index}" data-canvas-v2-evidence-role="analysis-copy" data-canvas-v2-witness-group="claim-${index}" src="https://evidence.test/${index}.png"></article>`).join("");
+  const document: CanvasV2ArtifactDocument = {
+    html: `<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="comparison" data-canvas-v2-design-region>${groups}</section></main>`,
+    css: "",
+  };
+  const evidenceAssignments = Array.from({ length: count }, (_, index) => ({ evidenceId: `screen:${index}`, witnessGroup: `claim-${index}` }));
+  assert.deepEqual(validateCanvasV2WitnessOwnershipContract({ document, targetIslandId: "comparison", evidenceAssignments }), []);
 });
