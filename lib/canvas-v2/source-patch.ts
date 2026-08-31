@@ -64,7 +64,7 @@ const EVIDENCE_GEOMETRY_GUARD = `${EVIDENCE_GEOMETRY_GUARD_START}
 /* Grounded analysis copies are composition material, not unconstrained
    canvases. The visual director chooses the scale class; the compiler owns
    its hard geometry envelope before the candidate can ever render. */
-.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]{display:block;min-width:0!important;min-height:0!important;max-width:100%!important;max-inline-size:100%!important;object-fit:contain!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]{display:block;width:auto!important;height:auto!important;inline-size:auto!important;block-size:auto!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-inline-size:100%!important;object-fit:contain!important}
 .northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="identity-mark"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important}
 .northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="peer"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important}
 .northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="bounded-emphasis"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important}
@@ -348,6 +348,7 @@ export function normalizeCanvasV2SourcePatchHeadingHierarchy(
 
 function compilerEvidenceStyle(authoredStyle: string | undefined, intent: CanvasV2EvidenceScaleIntent): string {
   const compilerOwnedProperties = new Set([
+    "width", "height", "inline-size", "block-size",
     "min-width", "min-height", "min-inline-size", "min-block-size",
     "max-width", "max-height", "max-inline-size", "max-block-size",
     "object-fit",
@@ -360,6 +361,10 @@ function compilerEvidenceStyle(authoredStyle: string | undefined, intent: Canvas
   const ceiling = ANALYSIS_COPY_MAX_HEIGHT[intent];
   return [
     ...retained,
+    "width:auto!important",
+    "height:auto!important",
+    "inline-size:auto!important",
+    "block-size:auto!important",
     "min-width:0!important",
     "min-height:0!important",
     "min-inline-size:0!important",

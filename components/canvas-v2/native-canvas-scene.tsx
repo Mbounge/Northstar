@@ -950,6 +950,17 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       -webkit-user-drag:none!important;
       user-select:none!important;
     }
+    /* A grounded witness is one native image object, not a stage-width box
+       containing a narrower raster. Older accepted revisions can still carry
+       both authored dimensions; normalize only untouched flow witnesses here
+       so their selector, hit target, and visible screenshot share one honest
+       intrinsic-ratio footprint. A human resize remains authoritative. */
+    [data-canvas-v2-native-scene="true"] img[data-canvas-v2-native-runtime-node="true"][data-canvas-v2-native-layout="flow"][data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-user-edited]) {
+      width:auto!important;
+      height:auto!important;
+      inline-size:auto!important;
+      block-size:auto!important;
+    }
     [data-canvas-v2-native-scene="true"] [data-canvas-v2-native-runtime-node="true"][data-canvas-v2-native-layout="flow"] {
       translate:var(--canvas-v2-native-delta-x) var(--canvas-v2-native-delta-y)!important;
       rotate:var(--canvas-v2-native-rotation)!important;

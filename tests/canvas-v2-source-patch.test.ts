@@ -284,7 +284,7 @@ test("nested composition chapters cannot become overlapping programmatic islands
   assert.doesNotMatch(nestedTag, /data-canvas-v2-design-region|data-canvas-v2-island-id|data-canvas-v2-story-role|data-canvas-v2-placement-mode|data-canvas-v2-target-zone/);
 });
 
-test("the compiler, not model CSS, owns grounded analysis-copy scale ceilings", () => {
+test("the compiler owns intrinsic-ratio analysis-copy geometry and scale ceilings", () => {
   const next = applyCanvasV2SourcePatch({
     previous,
     evidence,
@@ -299,7 +299,8 @@ test("the compiler, not model CSS, owns grounded analysis-copy scale ceilings", 
     ],
   });
   assert.match(next.html, /data-canvas-v2-scale-intent="bounded-emphasis"/);
-  assert.match(next.html, /style="[^"]*height:4800px!important[^"]*max-height:646px!important/);
+  assert.match(next.html, /style="[^"]*width:auto!important[^"]*height:auto!important[^"]*max-height:646px!important/);
+  assert.doesNotMatch(next.html, /(?:width:2400px|height:4800px)/);
   assert.match(next.html, /min-height:0!important/);
   assert.doesNotMatch(next.html, /min-height:4800px/);
   assert.doesNotMatch(next.html, /\swidth="2400"/);
