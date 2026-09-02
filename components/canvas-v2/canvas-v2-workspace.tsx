@@ -22,19 +22,16 @@ import {
   Minus,
   Moon,
   MousePointer2,
-  Palette,
   Pencil,
   Plus,
   Shapes,
   Slash,
   Square,
   StickyNote,
-  Trash2,
   Type,
   Undo2,
   Redo2,
   RotateCw,
-  Settings2,
   Ungroup,
   Unlock,
   Upload,
@@ -67,6 +64,7 @@ import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachmen
 import { CANVAS_V2_MIN_CANVAS, type CanvasV2CanvasGeometry } from "@/lib/canvas-v2/canvas-geometry";
 import type { CanvasV2InspectableElement, CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
 import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import { canvasV2OpaquePaintColor, canvasV2PaintMode, canvasV2PaintValue, type CanvasV2PaintMode } from "@/lib/canvas-v2/paint-style";
 import { readCanvasV2BoardObjectGraph, type CanvasV2BoardObject } from "@/lib/canvas-v2/board-object-graph";
 import { resolveCanvasV2ContextToolbarPosition } from "@/lib/canvas-v2/context-toolbar-placement";
 import {
@@ -186,6 +184,11 @@ interface DirectGesturePreview {
   guides?: CanvasV2SnapGuide[];
 }
 
+interface CanvasV2DeletionChromeSnapshot {
+  element: HTMLElement | SVGElement;
+  visibility: { value: string; priority: string };
+}
+
 function transientGeometryForDirectGesture(
   gesture: DirectGesture,
   preview: DirectGesturePreview,
@@ -242,6 +245,8 @@ function sameInspectableElements(
       && candidate.visualStyle?.color === item.visualStyle?.color
       && candidate.visualStyle?.backgroundColor === item.visualStyle?.backgroundColor
       && candidate.visualStyle?.borderColor === item.visualStyle?.borderColor
+      && candidate.visualStyle?.borderStyle === item.visualStyle?.borderStyle
+      && candidate.visualStyle?.borderWidth === item.visualStyle?.borderWidth
       && candidate.visualStyle?.fontFamily === item.visualStyle?.fontFamily
       && candidate.visualStyle?.fontSize === item.visualStyle?.fontSize
       && candidate.visualStyle?.lineHeight === item.visualStyle?.lineHeight
@@ -322,6 +327,8 @@ function synchronizeSelectionWithNativeScene(
       color: node.inlineStyle.color ?? item.visualStyle.color,
       backgroundColor: node.inlineStyle["background-color"] ?? node.inlineStyle.background ?? item.visualStyle.backgroundColor,
       borderColor: node.inlineStyle["border-color"] ?? item.visualStyle.borderColor,
+      borderStyle: node.inlineStyle["border-style"] ?? item.visualStyle.borderStyle,
+      borderWidth: node.inlineStyle["border-width"] ?? item.visualStyle.borderWidth,
       borderRadius: node.inlineStyle["border-radius"] ?? item.visualStyle.borderRadius,
       fontFamily: node.inlineStyle["font-family"] ?? item.visualStyle.fontFamily,
       fontSize: node.inlineStyle["font-size"] ?? item.visualStyle.fontSize,
@@ -396,8 +403,16 @@ const TOOL_ITEMS = [
   { label: "Frame", icon: Square, primitive: "frame" as const },
   { label: "Text", icon: Type, primitive: "text" as const },
   { label: "Note", icon: StickyNote, primitive: "note" as const },
-  { label: "Shape", icon: Circle, primitive: "shape" as const },
+  { label: "Shape", icon: Circle, primitive: "shape" as const, shapeVariant: "ellipse" as const },
   { label: "Connector", icon: Workflow, primitive: "connector" as const, connectorVariant: "arrow" as const },
+];
+
+const CANVAS_V2_SHAPE_OPTIONS: ReadonlyArray<{ label: string; variant: CanvasV2ShapeVariant }> = [
+  { label: "Rectangle", variant: "rectangle" },
+  { label: "Circle", variant: "ellipse" },
+  { label: "Diamond", variant: "diamond" },
+  { label: "Triangle", variant: "triangle" },
+  { label: "Pill", variant: "pill" },
 ];
 
 const HUMAN_AUTHORING_ITEMS: ReadonlyArray<{
@@ -616,9 +631,10 @@ export function CanvasV2Workspace({
   const [mutationError, setMutationError] = useState<string>();
   const [layersOpen, setLayersOpen] = useState(false);
   const [objectMenu, setObjectMenu] = useState<CanvasV2ObjectMenu>();
-  const [toolbarMenu, setToolbarMenu] = useState<"color" | "font" | "size" | "image" | "more">();
+  const [toolbarMenu, setToolbarMenu] = useState<"shape" | "color" | "line" | "font" | "size" | "image">();
   const [colorProperty, setColorProperty] = useState<CanvasV2EditableStyleProperty>("background-color");
   const [customColorDraft, setCustomColorDraft] = useState("#6d59ed");
+  const [lineColorDraft, setLineColorDraft] = useState("#1f1f20");
   const [altTextDraft, setAltTextDraft] = useState("");
   const [toolbarSize, setToolbarSize] = useState({ width: 420, height: 58 });
   // A fresh board opens at the origin of its large world plane. This is a one-time camera
@@ -634,6 +650,7 @@ export function CanvasV2Workspace({
   const [spacePan, setSpacePan] = useState(false);
   const [canvasGeometry, setCanvasGeometry] = useState<CanvasV2CanvasGeometry>(CANVAS_V2_MIN_CANVAS);
   const workspaceRef = useRef<HTMLElement>(null);
+  const atmosphereLayerRef = useRef<HTMLDivElement>(null);
   const workspaceSurfaceRef = useRef<HTMLDivElement>(null);
   const canvasSceneRef = useRef<CanvasV2CanvasSceneHandle>(null);
   const selectionOverlayRef = useRef<HTMLDivElement>(null);
@@ -662,6 +679,7 @@ export function CanvasV2Workspace({
   const connectorEndHandleRef = useRef<HTMLButtonElement>(null);
   const connectorCurveHandleRef = useRef<HTMLButtonElement>(null);
   const connectorGestureElementRef = useRef<{ element: HTMLElement; visibility: string } | undefined>(undefined);
+  const deletionChromeSnapshotsRef = useRef<CanvasV2DeletionChromeSnapshot[]>([]);
   const drawingGestureRef = useRef<CanvasV2DrawingGesture | undefined>(undefined);
   const drawingPreviewRef = useRef<SVGPolylineElement>(null);
   const geometryRef = useRef(canvasGeometry);
@@ -670,6 +688,7 @@ export function CanvasV2Workspace({
   const marqueeRef = useRef<MarqueeGesture | undefined>(undefined);
   const viewportPreviewFrameRef = useRef<number | undefined>(undefined);
   const wheelCommitTimerRef = useRef<number | undefined>(undefined);
+  const wheelCommitDeadlineRef = useRef(0);
   const pendingViewportRef = useRef<CanvasV2WorkspaceViewport | undefined>(undefined);
   const gesturePreviewFrameRef = useRef<number | undefined>(undefined);
   const pendingGesturePreviewRef = useRef<DirectGesturePreview | undefined>(undefined);
@@ -902,10 +921,16 @@ export function CanvasV2Workspace({
     }
     const grid = gridOverlayRef.current;
     if (grid) {
-      grid.style.backgroundSize = `${CANVAS_V2_WORKSPACE.grid * next.scale}px ${CANVAS_V2_WORKSPACE.grid * next.scale}px`;
-      grid.style.backgroundPosition = `${next.x}px ${next.y}px`;
+      const backgroundSize = `${CANVAS_V2_WORKSPACE.grid * next.scale}px ${CANVAS_V2_WORKSPACE.grid * next.scale}px`;
+      const backgroundPosition = `${next.x}px ${next.y}px`;
+      if (grid.style.backgroundSize !== backgroundSize) grid.style.backgroundSize = backgroundSize;
+      if (grid.style.backgroundPosition !== backgroundPosition) grid.style.backgroundPosition = backgroundPosition;
     }
-    if (zoomPercentageRef.current) zoomPercentageRef.current.textContent = `${Math.round(next.scale * 100)}%`;
+    const zoomPercentage = zoomPercentageRef.current;
+    if (zoomPercentage) {
+      const label = `${Math.round(next.scale * 100)}%`;
+      if (zoomPercentage.textContent !== label) zoomPercentage.textContent = label;
+    }
     const toolbar = contextualToolbarRef.current;
     const selection = activeSelectionBoundsRef.current;
     if (toolbar && selection) {
@@ -926,17 +951,22 @@ export function CanvasV2Workspace({
       }
       toolbar.style.visibility = "";
     }
-    const workspace = workspaceRef.current;
-    if (workspace) {
+    const atmosphereLayer = atmosphereLayerRef.current;
+    if (atmosphereLayer) {
       // Camera preview is a hot path. Cached ResizeObserver geometry avoids a
       // DOM read after the surface write, which would force synchronous layout
-      // on every trackpad frame.
+      // on every trackpad frame. Keep these inherited custom properties on the
+      // isolated atmosphere plane rather than the workspace ancestor: changing
+      // them above the native scene would invalidate the whole canvas subtree.
       const atmosphere = canvasV2NavigationAtmosphere(next, workspaceSizeRef.current, CANVAS_V2_EMPTY_INSETS);
-      workspace.style.setProperty("--canvas-v2-atmosphere-primary-x", `${atmosphere.primaryX}%`);
-      workspace.style.setProperty("--canvas-v2-atmosphere-primary-y", `${atmosphere.primaryY}%`);
-      workspace.style.setProperty("--canvas-v2-atmosphere-secondary-x", `${atmosphere.secondaryX}%`);
-      workspace.style.setProperty("--canvas-v2-atmosphere-secondary-y", `${atmosphere.secondaryY}%`);
-      workspace.style.setProperty("--canvas-v2-atmosphere-angle", `${atmosphere.angle}deg`);
+      atmosphereLayer.style.setProperty("--canvas-v2-atmosphere-primary-x", `${atmosphere.primaryX}%`);
+      atmosphereLayer.style.setProperty("--canvas-v2-atmosphere-primary-y", `${atmosphere.primaryY}%`);
+      atmosphereLayer.style.setProperty("--canvas-v2-atmosphere-secondary-x", `${atmosphere.secondaryX}%`);
+      atmosphereLayer.style.setProperty("--canvas-v2-atmosphere-secondary-y", `${atmosphere.secondaryY}%`);
+      atmosphereLayer.style.setProperty("--canvas-v2-atmosphere-angle", `${atmosphere.angle}deg`);
+    }
+    const workspace = workspaceRef.current;
+    if (workspace) {
       const frame = Number(workspace.dataset.canvasV2CameraPreviewFrame ?? "0") + 1;
       workspace.dataset.canvasV2CameraPreviewFrame = String(frame);
     }
@@ -975,12 +1005,13 @@ export function CanvasV2Workspace({
 
   const beginCameraPreview = useCallback(() => {
     const workspace = workspaceRef.current;
-    if (workspace) workspace.dataset.canvasV2CameraPreview = "active";
+    if (workspace && workspace.dataset.canvasV2CameraPreview !== "active") workspace.dataset.canvasV2CameraPreview = "active";
   }, []);
 
   const finishCameraPreview = useCallback(() => {
     if (wheelCommitTimerRef.current !== undefined) clearTimeout(wheelCommitTimerRef.current);
     wheelCommitTimerRef.current = undefined;
+    wheelCommitDeadlineRef.current = 0;
     const next = viewportRef.current;
     if (viewportPreviewFrameRef.current !== undefined) cancelAnimationFrame(viewportPreviewFrameRef.current);
     viewportPreviewFrameRef.current = undefined;
@@ -992,8 +1023,18 @@ export function CanvasV2Workspace({
   }, [applyViewportVisual]);
 
   const scheduleWheelCommit = useCallback(() => {
-    if (wheelCommitTimerRef.current !== undefined) clearTimeout(wheelCommitTimerRef.current);
-    wheelCommitTimerRef.current = window.setTimeout(finishCameraPreview, 96);
+    wheelCommitDeadlineRef.current = performance.now() + 96;
+    if (wheelCommitTimerRef.current !== undefined) return;
+    const settle = () => {
+      const remaining = wheelCommitDeadlineRef.current - performance.now();
+      if (remaining > 0) {
+        wheelCommitTimerRef.current = window.setTimeout(settle, Math.max(1, remaining));
+        return;
+      }
+      wheelCommitTimerRef.current = undefined;
+      finishCameraPreview();
+    };
+    wheelCommitTimerRef.current = window.setTimeout(settle, 96);
   }, [finishCameraPreview]);
 
   useEffect(() => () => {
@@ -1001,6 +1042,7 @@ export function CanvasV2Workspace({
     if (gesturePreviewFrameRef.current !== undefined) cancelAnimationFrame(gesturePreviewFrameRef.current);
     if (marqueePreviewFrameRef.current !== undefined) cancelAnimationFrame(marqueePreviewFrameRef.current);
     if (wheelCommitTimerRef.current !== undefined) clearTimeout(wheelCommitTimerRef.current);
+    wheelCommitDeadlineRef.current = 0;
   }, []);
 
   const receiveScene = useCallback((elements: CanvasV2InspectableElement[]) => {
@@ -1638,7 +1680,54 @@ export function CanvasV2Workspace({
     workspaceRef.current?.focus({ preventScroll: true });
   };
 
+  const restoreDeletionPreview = () => {
+    canvasSceneRef.current?.restoreNodeRemovalPreview();
+    for (const snapshot of deletionChromeSnapshotsRef.current) {
+      if (snapshot.visibility.value) snapshot.element.style.setProperty("visibility", snapshot.visibility.value, snapshot.visibility.priority);
+      else snapshot.element.style.removeProperty("visibility");
+    }
+    deletionChromeSnapshotsRef.current = [];
+  };
+
+  const previewDeletion = (nodeIds: readonly string[]) => {
+    restoreDeletionPreview();
+    canvasSceneRef.current?.previewNodeRemoval(nodeIds);
+    const chrome: Array<HTMLElement | SVGElement | null> = [
+      selectionOverlayRef.current,
+      ...selectionMemberOverlayRefs.current.values(),
+      contextualToolbarRef.current,
+      connectorStartHandleRef.current,
+      connectorEndHandleRef.current,
+      connectorCurveHandleRef.current,
+      connectorPreviewPathRef.current,
+      connectorPreviewEndRef.current,
+      objectMenuRef.current,
+    ];
+    const seen = new Set<HTMLElement | SVGElement>();
+    deletionChromeSnapshotsRef.current = chrome.flatMap((element) => {
+      if (!element || seen.has(element)) return [];
+      seen.add(element);
+      const snapshot: CanvasV2DeletionChromeSnapshot = {
+        element,
+        visibility: {
+          value: element.style.getPropertyValue("visibility"),
+          priority: element.style.getPropertyPriority("visibility"),
+        },
+      };
+      element.style.setProperty("visibility", "hidden", "important");
+      return [snapshot];
+    });
+  };
+
+  const commitDeletionPreview = () => {
+    canvasSceneRef.current?.commitNodeRemovalPreview();
+    deletionChromeSnapshotsRef.current = [];
+  };
+
   const submitMutation = (mutation: CanvasV2ManualMutation) => {
+    const atomicMutations = mutation.kind === "batch" ? mutation.mutations : [mutation];
+    const deletedNodeIds = atomicMutations.flatMap((item) => item.kind === "delete" ? [item.nodeId] : []);
+    if (deletedNodeIds.length) previewDeletion(deletedNodeIds);
     try {
       // Event handlers may run again before React has painted the preceding
       // manual commit. Read the hook's synchronous native authority instead
@@ -1649,7 +1738,6 @@ export function CanvasV2Workspace({
       const document = nextNativeScene
         ? serializeCanvasV2NativeScene(nextNativeScene)
         : applyCanvasV2ManualMutation(engine.committed.document, mutation);
-      const atomicMutations = mutation.kind === "batch" ? mutation.mutations : [mutation];
       const createdSelection = atomicMutations.flatMap((item) => item.kind === "create"
         ? [item.nodeId]
         : item.kind === "duplicate"
@@ -1678,6 +1766,7 @@ export function CanvasV2Workspace({
         // event should simply leave committed truth untouched and never leak
         // an internal transaction message onto the canvas.
         setMutationError(undefined);
+        if (deletedNodeIds.length) restoreDeletionPreview();
         return false;
       }
       // The selection overlay is part of the same visual transaction as the
@@ -1703,8 +1792,10 @@ export function CanvasV2Workspace({
         setSelectionTarget(mutation.groupNodeId);
       }
       if (mutation.kind === "ungroup" || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete"))) selectElement(undefined);
+      if (deletedNodeIds.length) commitDeletionPreview();
       return true;
     } catch (error) {
+      if (deletedNodeIds.length) restoreDeletionPreview();
       setMutationError(error instanceof Error ? error.message : "The manual edit could not be prepared.");
       return false;
     }
@@ -1983,12 +2074,70 @@ export function CanvasV2Workspace({
     setObjectMenu(undefined);
   };
 
-  const styleSelection = (property: CanvasV2EditableStyleProperty, value: string) => {
+  const styleSelection = (property: CanvasV2EditableStyleProperty, value: string, keepToolbarOpen = false) => {
     batchForSelection(
       `Updated ${property} for ${selectedElements.length} selected object${selectedElements.length === 1 ? "" : "s"}.`,
       (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "style", nodeId: item.nodeId, property, value },
     );
-    setToolbarMenu(undefined);
+    if (!keepToolbarOpen) setToolbarMenu(undefined);
+  };
+
+  const styleSelectionProperties = (
+    label: string,
+    properties: Array<{ property: CanvasV2EditableStyleProperty; value: string }>,
+    keepToolbarOpen = false,
+  ) => {
+    const mutable = selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked);
+    if (!mutable.length || !properties.length) return;
+    submitMutation({
+      kind: "batch",
+      label,
+      mutations: mutable.flatMap((item) => properties.map(({ property, value }) => ({ kind: "style" as const, nodeId: item.nodeId, property, value }))),
+    });
+    if (!keepToolbarOpen) setToolbarMenu(undefined);
+  };
+
+  const applyPaintMode = (mode: CanvasV2PaintMode) => {
+    // The public renderer may theme a solid authored color for contrast. The
+    // paint control owns the user's chosen hue, so changing opacity must use
+    // that authored hue rather than sampling the theme-local visible result.
+    const hue = canvasV2OpaquePaintColor(customColorDraft, selectedPaletteValue);
+    const value = mode === "none" && selectionHasStroke ? "none" : canvasV2PaintValue(mode, hue, customColorDraft);
+    styleSelection(colorProperty, value, true);
+  };
+
+  const applyPaletteHue = (hue: string) => {
+    const normalized = canvasV2OpaquePaintColor(hue, customColorDraft);
+    setCustomColorDraft(normalized.toUpperCase());
+    const mode = colorProperty === "color" || selectedPaintMode === "none" ? "fill" : selectedPaintMode;
+    styleSelection(colorProperty, canvasV2PaintValue(mode, normalized, customColorDraft), true);
+  };
+
+  const applyLineStyle = (style: "solid" | "dashed" | "none") => {
+    const width = Number.parseFloat(selectedVisualStyle?.borderWidth || "0");
+    styleSelectionProperties(
+      `Changed the selected object line to ${style}.`,
+      [
+        { property: "border-style", value: style },
+        ...(style !== "none" && !(width > 0) ? [{ property: "border-width" as const, value: "2px" }] : []),
+      ],
+      true,
+    );
+  };
+
+  const applyLineColor = (hue: string) => {
+    const normalized = canvasV2OpaquePaintColor(hue, lineColorDraft);
+    setLineColorDraft(normalized.toUpperCase());
+    const width = Number.parseFloat(selectedVisualStyle?.borderWidth || "0");
+    styleSelectionProperties(
+      "Changed the selected object line color.",
+      [
+        { property: "border-color", value: normalized },
+        ...(selectedLineStyle === "none" ? [{ property: "border-style" as const, value: "solid" }] : []),
+        ...(!(width > 0) ? [{ property: "border-width" as const, value: "2px" }] : []),
+      ],
+      true,
+    );
   };
 
   const alignObjectSelection = (mode: "left" | "center" | "right" | "top" | "middle" | "bottom") => {
@@ -2150,7 +2299,9 @@ export function CanvasV2Workspace({
     if (!images.length) return false;
     if (replaceNodeId) {
       const image = images[0];
-      return submitMutation({ kind: "image-source", nodeId: replaceNodeId, src: image.dataUrl, alt: image.name.replace(/\.[^.]+$/, "") });
+      const accepted = submitMutation({ kind: "image-source", nodeId: replaceNodeId, src: image.dataUrl, alt: image.name.replace(/\.[^.]+$/, "") });
+      if (accepted) setTool("select");
+      return accepted;
     }
     const anchor = origin ?? centeredCanvasV2WorkspaceOrigin({ width: 420, height: 320 }, viewport, cameraSize(), contentInsets());
     const columns = Math.max(1, Math.ceil(Math.sqrt(images.length)));
@@ -2176,6 +2327,11 @@ export function CanvasV2Workspace({
     });
     const accepted = submitMutation({ kind: "batch", label: `Added ${images.length} image${images.length === 1 ? "" : "s"} to the canvas.`, mutations });
     if (accepted) {
+      // Uploading or pasting is an object-authoring action. Leave a drawing
+      // tool behind and return to selection so the inserted image and its
+      // inspector are immediately interactive on the first click.
+      cancelDrawingGesture();
+      setTool("select");
       setSelectedElements([]);
       setSelectionTarget(nodeIds.at(-1));
     }
@@ -2269,6 +2425,17 @@ export function CanvasV2Workspace({
     else if (!element && selectedElements.length) selectElement(undefined);
     const width = 230;
     const height = element ? 410 : 54;
+    setObjectMenu({
+      x: Math.max(10, Math.min(window.innerWidth - width - 10, event.clientX)),
+      y: Math.max(10, Math.min(window.innerHeight - height - 10, event.clientY)),
+    });
+  };
+
+  const openSelectedObjectsMenu = (event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const width = 230;
+    const height = 410;
     setObjectMenu({
       x: Math.max(10, Math.min(window.innerWidth - width - 10, event.clientX)),
       y: Math.max(10, Math.min(window.innerHeight - height - 10, event.clientY)),
@@ -2487,7 +2654,8 @@ export function CanvasV2Workspace({
     return true;
   }) : RESIZE_HANDLES;
   const selectionPermanent = selectedElements.some((item) => item.nodeId === "canvas");
-  const selectionIsText = Boolean(selectedElements.length === 1 && selectedElement?.textEditable && (
+  const selectionIsShape = selectedElements.length === 1 && selectedElement?.kind === "shape" && selectedElement.shapeVariant !== undefined;
+  const selectionIsText = Boolean(selectedElements.length === 1 && selectedElement?.textEditable && selectedElement.kind !== "shape" && selectedElement.kind !== "note" && (
     selectedElement.textPreview !== undefined
     || ["p", "span", "small", "strong", "em", "label", "button", "h1", "h2", "h3", "h4", "h5", "h6"].includes(selectedElement.tagName)
   ));
@@ -2503,8 +2671,10 @@ export function CanvasV2Workspace({
   );
   const paletteSubject = colorProperty === "color" ? "Text" : colorProperty === "border-color" ? "Border" : selectionHasStroke ? "Stroke" : "Fill";
   const paletteSupportsRemoval = colorProperty !== "color";
-  const paletteIsTransparent = selectedPaletteValue === "transparent" || selectedPaletteValue?.startsWith("rgba(");
-  const paletteHasNoFill = selectedPaletteValue === "none" || selectedPaletteValue === "unset";
+  const selectedPaintMode = canvasV2PaintMode(selectedPaletteValue);
+  const selectedPaletteHue = canvasV2OpaquePaintColor(selectedPaletteValue, customColorDraft);
+  const selectedLineStyle = selectedVisualStyle?.borderStyle === "dashed" ? "dashed" : selectedVisualStyle?.borderStyle === "none" || Number.parseFloat(selectedVisualStyle?.borderWidth || "0") <= 0 ? "none" : "solid";
+  const fillTriggerPaintMode = canvasV2PaintMode(selectedVisualStyle?.backgroundColor);
   const sourceNodes = useMemo(() => {
     const selectableIds = new Set(sceneElements.map((element) => element.nodeId));
     const sourceGraph = readCanvasV2BoardObjectGraph(engine.committed.document);
@@ -2729,17 +2899,7 @@ export function CanvasV2Workspace({
         data-canvas-v2-cursor={tool === "pan" || spacePan ? "pan" : tool}
         className={`absolute inset-0 overflow-clip overscroll-none ${tool === "pan" || spacePan ? "cursor-grab active:cursor-grabbing" : ""}`}
         style={{
-          "--canvas-v2-atmosphere-primary-x": `${navigationAtmosphere.primaryX}%`,
-          "--canvas-v2-atmosphere-primary-y": `${navigationAtmosphere.primaryY}%`,
-          "--canvas-v2-atmosphere-secondary-x": `${navigationAtmosphere.secondaryX}%`,
-          "--canvas-v2-atmosphere-secondary-y": `${navigationAtmosphere.secondaryY}%`,
-          "--canvas-v2-atmosphere-angle": `${navigationAtmosphere.angle}deg`,
           backgroundColor: theme === "dark" ? "#0d0e16" : "#fafbff",
-          backgroundImage: theme === "dark"
-            ? "radial-gradient(ellipse 82% 72% at var(--canvas-v2-atmosphere-primary-x) var(--canvas-v2-atmosphere-primary-y), rgba(101,82,255,.30) 0%, rgba(67,76,184,.13) 34%, transparent 72%), radial-gradient(ellipse 58% 52% at var(--canvas-v2-atmosphere-secondary-x) var(--canvas-v2-atmosphere-secondary-y), rgba(69,145,255,.08) 0%, transparent 70%), linear-gradient(var(--canvas-v2-atmosphere-angle), #11121d 0%, #0d0e16 54%, #10111b 100%)"
-            : "radial-gradient(ellipse 82% 72% at var(--canvas-v2-atmosphere-primary-x) var(--canvas-v2-atmosphere-primary-y), rgba(111,91,246,.22) 0%, rgba(69,145,255,.09) 36%, transparent 72%), radial-gradient(ellipse 58% 52% at var(--canvas-v2-atmosphere-secondary-x) var(--canvas-v2-atmosphere-secondary-y), rgba(74,166,255,.07) 0%, transparent 70%), linear-gradient(var(--canvas-v2-atmosphere-angle), #fbfcff 0%, #f8faff 54%, #ffffff 100%)",
-          backgroundRepeat: "no-repeat",
-          backgroundSize: "100% 100%",
           overscrollBehavior: "none",
           touchAction: "none",
           ...(!spacePan && tool === "draw"
@@ -2763,6 +2923,26 @@ export function CanvasV2Workspace({
           event.currentTarget.scrollTop = 0;
         }}
       >
+        <div
+          ref={atmosphereLayerRef}
+          aria-hidden="true"
+          data-testid="canvas-v2-atmosphere"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            "--canvas-v2-atmosphere-primary-x": `${navigationAtmosphere.primaryX}%`,
+            "--canvas-v2-atmosphere-primary-y": `${navigationAtmosphere.primaryY}%`,
+            "--canvas-v2-atmosphere-secondary-x": `${navigationAtmosphere.secondaryX}%`,
+            "--canvas-v2-atmosphere-secondary-y": `${navigationAtmosphere.secondaryY}%`,
+            "--canvas-v2-atmosphere-angle": `${navigationAtmosphere.angle}deg`,
+            backgroundColor: theme === "dark" ? "#0d0e16" : "#fafbff",
+            backgroundImage: theme === "dark"
+              ? "radial-gradient(ellipse 82% 72% at var(--canvas-v2-atmosphere-primary-x) var(--canvas-v2-atmosphere-primary-y), rgba(101,82,255,.30) 0%, rgba(67,76,184,.13) 34%, transparent 72%), radial-gradient(ellipse 58% 52% at var(--canvas-v2-atmosphere-secondary-x) var(--canvas-v2-atmosphere-secondary-y), rgba(69,145,255,.08) 0%, transparent 70%), linear-gradient(var(--canvas-v2-atmosphere-angle), #11121d 0%, #0d0e16 54%, #10111b 100%)"
+              : "radial-gradient(ellipse 82% 72% at var(--canvas-v2-atmosphere-primary-x) var(--canvas-v2-atmosphere-primary-y), rgba(111,91,246,.22) 0%, rgba(69,145,255,.09) 36%, transparent 72%), radial-gradient(ellipse 58% 52% at var(--canvas-v2-atmosphere-secondary-x) var(--canvas-v2-atmosphere-secondary-y), rgba(74,166,255,.07) 0%, transparent 70%), linear-gradient(var(--canvas-v2-atmosphere-angle), #fbfcff 0%, #f8faff 54%, #ffffff 100%)",
+            backgroundRepeat: "no-repeat",
+            backgroundSize: "100% 100%",
+            contain: "strict",
+          } as CSSProperties}
+        />
         {showCanvasGrid && (
           <div
             ref={gridOverlayRef}
@@ -2845,7 +3025,8 @@ export function CanvasV2Workspace({
                 aria-label={`Move ${selectedElements.length} selected objects`}
                 title="Drag the selection"
                 data-testid="canvas-v2-aggregate-drag-surface"
-                onPointerDown={(event) => beginDirectGesture("move", event)}
+                onPointerDown={(event) => { if (event.button === 0) beginDirectGesture("move", event); }}
+                onContextMenu={openSelectedObjectsMenu}
                 className="pointer-events-auto absolute inset-0 z-[5] cursor-move bg-transparent"
               />}
               {!selectionPermanent && selectedElement.kind !== "connector" && visibleResizeHandles.map(({ handle, className, cursor }) => {
@@ -3012,8 +3193,34 @@ export function CanvasV2Workspace({
         </>}
 
         {selectionCanFill && <>
-          <button title="Fill color" aria-label="Change fill color" onClick={() => { setColorProperty("background-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-9 items-center gap-2 rounded-xl px-2 hover:bg-white/[.1]"><span className="h-5 w-5 rounded-full border-2 border-white/35" style={{ background: selectedVisualStyle?.backgroundColor || "var(--northstar-surface)" }} /><span className="text-xs font-bold">Fill</span></button>
-          <button title="Border color" aria-label="Change border color" onClick={() => { setColorProperty("border-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Palette className="h-4 w-4" /></button>
+          {selectionIsShape && <>
+            <button title="Shape" aria-label="Change shape" onClick={() => setToolbarMenu((current) => current === "shape" ? undefined : "shape")} className="flex h-9 items-center gap-1.5 rounded-xl px-2 hover:bg-white/[.1]">
+              <span className="block h-6 w-6"><CanvasV2PrimitiveThumbnail input={{ primitive: "shape", shapeVariant: selectedElement.shapeVariant }} /></span>
+              <ChevronDown className="h-3.5 w-3.5 text-white/60" />
+            </button>
+            <div className="mx-0.5 h-7 w-px bg-white/[.12]" />
+          </>}
+          <button title="Fill" aria-label="Change fill" onClick={() => { setColorProperty("background-color"); setCustomColorDraft(canvasV2OpaquePaintColor(selectedVisualStyle?.backgroundColor, customColorDraft).toUpperCase()); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-9 items-center gap-2 rounded-xl px-2 hover:bg-white/[.1]">
+            <span className="relative grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded-full border border-white/35" style={fillTriggerPaintMode === "fill" ? {
+              background: selectedVisualStyle?.backgroundColor || "var(--northstar-surface)",
+            } : {
+              backgroundColor: "#34343a",
+              backgroundImage: "conic-gradient(rgba(255,255,255,.22) 25%,transparent 0 50%,rgba(255,255,255,.22) 0 75%,transparent 0)",
+              backgroundSize: "8px 8px",
+            }}>
+              {fillTriggerPaintMode === "transparent" && <span className="absolute inset-0" style={{ background: selectedVisualStyle?.backgroundColor }} />}
+              {fillTriggerPaintMode === "none" && <Slash className="relative h-4 w-4 text-white/85" />}
+            </span>
+            <span className="text-xs font-bold">Fill</span>
+            <ChevronDown className="h-3.5 w-3.5 text-white/60" />
+          </button>
+          <div className="mx-0.5 h-7 w-px bg-white/[.12]" />
+          <button title="Line" aria-label="Change line" onClick={() => { setLineColorDraft(canvasV2OpaquePaintColor(selectedVisualStyle?.borderColor, lineColorDraft).toUpperCase()); setToolbarMenu((current) => current === "line" ? undefined : "line"); }} className="flex h-9 items-center gap-2 rounded-xl px-2.5 hover:bg-white/[.1]">
+            <span aria-hidden className="grid h-5 w-6 content-center gap-[3px]">
+              {[0, 1, 2].map((bar) => <span key={bar} className={`block h-[1.5px] rounded-full ${selectedLineStyle === "dashed" ? "bg-[repeating-linear-gradient(90deg,currentColor_0_4px,transparent_4px_7px)]" : selectedLineStyle === "none" ? "bg-white/20" : "bg-current"}`} />)}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 text-white/60" />
+          </button>
         </>}
 
         {selectionHasStroke && <button title="Stroke color" aria-label="Change stroke color" onClick={() => { setColorProperty("background-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-9 items-center gap-2 rounded-xl px-2 hover:bg-white/[.1]"><span className="h-1 w-6 rounded-full" style={{ background: selectedVisualStyle?.backgroundColor || "#6754de" }} /><span className="text-xs font-bold">Stroke</span></button>}
@@ -3030,10 +3237,10 @@ export function CanvasV2Workspace({
         <div className="mx-1 h-7 w-px bg-white/[.12]" />
         <button title="Duplicate" aria-label="Duplicate selected elements" onClick={duplicateSelection} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Copy className="h-4 w-4" /></button>
         {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
-        <button title="Lock or unlock" aria-label="Toggle lock for selected elements" onClick={toggleSelectionLock} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30">{selectedElements.every((item) => item.locked) ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}</button>
-        <button title="Delete" aria-label="Delete selected elements" onClick={() => batchForSelection("Deleted selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "delete", nodeId: item.nodeId })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit || selectedElements.every((item) => item.locked)} className="grid h-9 w-9 place-items-center rounded-xl text-[#ff8f91] hover:bg-red-500/[.14] disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>
-        <button title="More object actions" aria-label="More object actions" onClick={() => setToolbarMenu((current) => current === "more" ? undefined : "more")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Settings2 className="h-4 w-4" /></button>
-        <button title="Clear selection" aria-label="Clear element selection" onClick={() => selectElement(undefined)} className="grid h-9 w-9 place-items-center rounded-xl text-white/70 hover:bg-white/[.1] hover:text-white"><X className="h-4 w-4" /></button>
+
+        {toolbarMenu === "shape" && <div data-testid="canvas-v2-shape-palette" aria-label="Shape choices" className={`absolute left-1/2 grid w-[286px] max-w-[calc(100vw-20px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-[17px] border border-white/[.09] bg-[#1d1d1f] p-2 text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
+          {CANVAS_V2_SHAPE_OPTIONS.map((option) => <button key={option.variant} title={option.label} aria-label={`Change shape to ${option.label}`} aria-pressed={selectedElement.shapeVariant === option.variant} onClick={() => { submitMutation({ kind: "shape-variant", nodeId: selectedElement.nodeId, variant: option.variant }); setToolbarMenu(undefined); }} className={`grid h-12 place-items-center rounded-[10px] p-2 transition ${selectedElement.shapeVariant === option.variant ? "bg-[#8b36f4]" : "hover:bg-white/[.08]"}`}><span className="block h-8 w-8"><CanvasV2PrimitiveThumbnail input={{ primitive: "shape", shapeVariant: option.variant }} /></span></button>)}
+        </div>}
 
         {toolbarMenu === "font" && <div aria-label="Text style menu" className={`absolute left-12 w-[180px] rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
           {TEXT_STYLE_OPTIONS.map((option) => <button key={option.label} onClick={() => styleSelection("font-family", option.value)} className="flex h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold hover:bg-white/[.1]" style={{ fontFamily: option.value }}>{option.label}</button>)}
@@ -3043,44 +3250,72 @@ export function CanvasV2Workspace({
           {TEXT_SIZE_OPTIONS.map((size) => <button key={size} onClick={() => styleSelection("font-size", `${size}px`)} className="grid h-10 place-items-center rounded-xl text-sm font-bold hover:bg-white/[.1]">{size}</button>)}
         </div>}
 
-        {toolbarMenu === "color" && <div data-testid="canvas-v2-color-palette" aria-label="Color palette" className={`absolute left-1/2 w-[340px] max-w-[calc(100vw-20px)] -translate-x-1/2 overflow-hidden rounded-[16px] border border-white/[.08] bg-[#1d1d1f] text-white shadow-[0_16px_44px_rgba(0,0,0,.42)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+7px)]" : "top-[calc(100%+7px)]"}`}>
-          <div className="flex min-h-[40px] items-center gap-1 px-2.5 py-1.5">
+        {toolbarMenu === "color" && <div data-testid="canvas-v2-color-palette" aria-label="Color palette" className={`absolute left-1/2 w-[366px] max-w-[calc(100vw-20px)] -translate-x-1/2 overflow-hidden rounded-[17px] border border-white/[.09] bg-[#1d1d1f] text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
+          <div className="flex min-h-[46px] items-center gap-1 px-2.5 py-1.5">
             <button
               aria-label={`Use solid ${paletteSubject.toLowerCase()}`}
-              aria-pressed={!paletteIsTransparent && !paletteHasNoFill}
-              onClick={() => styleSelection(colorProperty, /^#[0-9a-f]{6}$/i.test(customColorDraft) ? customColorDraft : "#6d59ed")}
-              className={`flex h-7 items-center gap-1.5 rounded-[7px] px-2 text-[11px] font-semibold transition ${!paletteIsTransparent && !paletteHasNoFill ? "bg-[#8f46ff] shadow-[0_0_0_1px_#a467ff]" : "hover:bg-white/[.08]"}`}
+              aria-pressed={selectedPaintMode === "fill"}
+              onClick={() => applyPaintMode("fill")}
+              className={`flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-xs font-semibold transition ${selectedPaintMode === "fill" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}
             >
-              <span className="grid h-3.5 w-3.5 place-items-center rounded-[3px] border border-white/90"><span className="h-2 w-2 rounded-[1px] border border-white/75" /></span>
+              <span className="grid h-4 w-4 place-items-center rounded-[4px] border-2 border-white/90"><span className="h-2 w-2 rounded-[1px] border border-white/65" /></span>
               {paletteSubject}
             </button>
             {paletteSupportsRemoval && <>
-              <button aria-label={`Make ${paletteSubject.toLowerCase()} transparent`} aria-pressed={paletteIsTransparent} onClick={() => styleSelection(colorProperty, "transparent")} className={`flex h-7 items-center gap-1.5 rounded-[7px] px-2 text-[11px] font-semibold transition ${paletteIsTransparent ? "bg-white/[.12]" : "hover:bg-white/[.08]"}`}>
-                <Grid3X3 className="h-3.5 w-3.5" />Transparent
+              <button aria-label={`Make ${paletteSubject.toLowerCase()} transparent`} aria-pressed={selectedPaintMode === "transparent"} onClick={() => applyPaintMode("transparent")} className={`flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-xs font-semibold transition ${selectedPaintMode === "transparent" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
+                <Grid3X3 className="h-4 w-4" />Transparent
               </button>
-              <button aria-label={`Remove ${paletteSubject.toLowerCase()}`} aria-pressed={paletteHasNoFill} onClick={() => styleSelection(colorProperty, selectionHasStroke ? "none" : "unset")} className={`flex h-7 items-center gap-1.5 rounded-[7px] px-2 text-[11px] font-semibold transition ${paletteHasNoFill ? "bg-white/[.12]" : "hover:bg-white/[.08]"}`}>
-                <Square className="h-3.5 w-3.5" />No {paletteSubject.toLowerCase()}
+              <button aria-label={`Remove ${paletteSubject.toLowerCase()}`} aria-pressed={selectedPaintMode === "none"} onClick={() => applyPaintMode("none")} className={`flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-xs font-semibold transition ${selectedPaintMode === "none" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
+                <Square className="h-4 w-4" />No {paletteSubject.toLowerCase()}
               </button>
             </>}
           </div>
           <div className="h-px bg-white/[.12]" />
-          <div className="space-y-2 px-2.5 py-2.5">
+          <div className="space-y-2.5 px-3 py-3">
             {CANVAS_COLOR_SWATCH_ROWS.map((row, rowIndex) => <div key={rowIndex} className="grid grid-cols-11 items-center gap-1.5">
               {row.map((swatch) => {
-                const selected = selectedPaletteValue === swatch.value;
+                const selected = selectedPaintMode !== "none" && selectedPaletteHue === swatch.value;
                 return <button
                   key={swatch.label}
                   title={swatch.label}
                   aria-label={`Use ${swatch.label}`}
                   aria-pressed={selected}
-                  onClick={() => { setCustomColorDraft(swatch.value.toUpperCase()); styleSelection(colorProperty, swatch.value); }}
-                  className={`h-6 w-6 rounded-full border shadow-[0_1px_1px_rgba(0,0,0,.18)_inset] transition hover:scale-110 ${selected ? "border-[#1d1d1f] ring-2 ring-[#934cff] ring-offset-1 ring-offset-[#1d1d1f]" : swatch.value === "#1f1f20" ? "border-white/20" : "border-white/30"}`}
+                  onClick={() => applyPaletteHue(swatch.value)}
+                  className={`h-7 w-7 rounded-full border shadow-[0_1px_1px_rgba(0,0,0,.18)_inset] transition hover:scale-110 ${selected ? "border-[#1d1d1f] ring-2 ring-[#934cff] ring-offset-1 ring-offset-[#1d1d1f]" : swatch.value === "#1f1f20" ? "border-white/20" : "border-white/30"}`}
                   style={{ background: swatch.value }}
                 />;
               })}
-              {rowIndex === 1 && <label title="Choose a custom color" className="relative h-6 w-6 cursor-pointer overflow-hidden rounded-full border border-white/30 bg-[conic-gradient(from_90deg,#ff4f4f,#ffd84d,#58dc76,#4dc8ff,#8c5cff,#ff4db8,#ff4f4f)] shadow-inner transition hover:scale-110 hover:border-white/70">
+              {rowIndex === 1 && <label title="Choose a custom color" className="relative h-7 w-7 cursor-pointer overflow-hidden rounded-full border border-white/30 bg-[conic-gradient(from_90deg,#ff4f4f,#ffd84d,#58dc76,#4dc8ff,#8c5cff,#ff4db8,#ff4f4f)] shadow-inner transition hover:scale-110 hover:border-white/70">
                 <span className="absolute inset-[5px] rounded-full bg-white/20 blur-[1px]" />
-                <input aria-label="Choose custom color" type="color" value={/^#[0-9a-f]{6}$/i.test(customColorDraft) ? customColorDraft : "#6d59ed"} onChange={(event) => { const value = event.target.value.toUpperCase(); setCustomColorDraft(value); styleSelection(colorProperty, value); }} className="absolute inset-0 cursor-pointer opacity-0" />
+                <input aria-label="Choose custom color" type="color" value={/^#[0-9a-f]{6}$/i.test(customColorDraft) ? customColorDraft : "#6d59ed"} onChange={(event) => applyPaletteHue(event.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
+              </label>}
+            </div>)}
+          </div>
+        </div>}
+
+        {toolbarMenu === "line" && <div data-testid="canvas-v2-line-palette" aria-label="Line style and color" className={`absolute left-1/2 w-[366px] max-w-[calc(100vw-20px)] -translate-x-1/2 overflow-hidden rounded-[17px] border border-white/[.09] bg-[#1d1d1f] text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
+          <div className="flex min-h-[48px] items-center gap-1 px-2.5 py-1.5">
+            {(["solid", "dashed", "none"] as const).map((lineStyle) => <button
+              key={lineStyle}
+              aria-label={`${lineStyle[0].toUpperCase()}${lineStyle.slice(1)} line`}
+              aria-pressed={selectedLineStyle === lineStyle}
+              onClick={() => applyLineStyle(lineStyle)}
+              className={`flex h-8 flex-1 items-center justify-center gap-2 rounded-[8px] px-2 text-xs font-semibold capitalize transition ${selectedLineStyle === lineStyle ? "bg-[#8b36f4] text-white" : "hover:bg-white/[.08]"}`}
+            >
+              {lineStyle === "none" ? <Slash className="h-4 w-4" /> : <span aria-hidden className={`h-px w-5 ${lineStyle === "dashed" ? "bg-[repeating-linear-gradient(90deg,currentColor_0_4px,transparent_4px_7px)]" : "bg-current"}`} />}
+              {lineStyle}
+            </button>)}
+          </div>
+          <div className="h-px bg-white/[.12]" />
+          <div className="space-y-2.5 px-3 py-3">
+            {CANVAS_COLOR_SWATCH_ROWS.map((row, rowIndex) => <div key={rowIndex} className="grid grid-cols-11 items-center gap-1.5">
+              {row.map((swatch) => {
+                const selected = canvasV2OpaquePaintColor(selectedVisualStyle?.borderColor, lineColorDraft) === swatch.value;
+                return <button key={swatch.label} title={swatch.label} aria-label={`Use ${swatch.label} line`} aria-pressed={selected} onClick={() => applyLineColor(swatch.value)} className={`h-7 w-7 rounded-full border shadow-[0_1px_1px_rgba(0,0,0,.18)_inset] transition hover:scale-110 ${selected ? "border-[#1d1d1f] ring-2 ring-[#934cff] ring-offset-1 ring-offset-[#1d1d1f]" : swatch.value === "#1f1f20" ? "border-white/20" : "border-white/30"}`} style={{ background: swatch.value }} />;
+              })}
+              {rowIndex === 1 && <label title="Choose a custom line color" className="relative h-7 w-7 cursor-pointer overflow-hidden rounded-full border border-white/30 bg-[conic-gradient(from_90deg,#ff4f4f,#ffd84d,#58dc76,#4dc8ff,#8c5cff,#ff4db8,#ff4f4f)] shadow-inner transition hover:scale-110 hover:border-white/70">
+                <span className="absolute inset-[5px] rounded-full bg-white/20 blur-[1px]" />
+                <input aria-label="Choose custom line color" type="color" value={/^#[0-9a-f]{6}$/i.test(lineColorDraft) ? lineColorDraft : "#1f1f20"} onChange={(event) => applyLineColor(event.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
               </label>}
             </div>)}
           </div>
@@ -3091,11 +3326,6 @@ export function CanvasV2Workspace({
           <button type="submit" className="h-10 rounded-xl bg-[#7158ef] px-4 text-xs font-bold">Save</button>
         </form>}
 
-        {toolbarMenu === "more" && <div aria-label="Object actions" className={`absolute right-0 flex items-center gap-1 rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
-          <button title="Hide" aria-label="Hide selected elements" onClick={() => batchForSelection("Hid selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "visibility", nodeId: item.nodeId, hidden: true })} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><EyeOff className="h-4 w-4" /></button>
-          <button title="Send backward" aria-label="Send selected objects backward" onClick={() => layerSelection("backward")} disabled={selectionPermanent || selectedElements.every((item) => item.locked)} className="h-9 rounded-xl px-2 text-[11px] font-bold hover:bg-white/[.1] disabled:opacity-30">−1</button>
-          <button title="Bring forward" aria-label="Bring selected objects forward" onClick={() => layerSelection("forward")} disabled={selectionPermanent || selectedElements.every((item) => item.locked)} className="h-9 rounded-xl px-2 text-[11px] font-bold hover:bg-white/[.1] disabled:opacity-30">+1</button>
-        </div>}
       </aside>}
       {mutationError && <div role="alert" className="absolute right-5 top-[90px] z-50 max-w-[340px] rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-xs leading-5 text-red-700 shadow-xl backdrop-blur dark:border-red-500/25 dark:bg-[#241d24]/95 dark:text-red-300">{mutationError}</div>}
 
@@ -3125,7 +3355,7 @@ export function CanvasV2Workspace({
         <button onClick={() => { cancelDrawingGesture(); setTool("pan"); }} title="Pan" aria-pressed={tool === "pan"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "pan" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Hand className="h-[19px] w-[19px]" /></button>
         <button onClick={() => { selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
-        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, undefined, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => createPrimitive(primitive, options)} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
+        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => createPrimitive(primitive, options)} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
         <button title="Upload image · or drop a file on canvas" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
         <button title="More creation tools" onClick={() => { setPanel("shapes"); setChatOpen(true); }} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Plus className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />

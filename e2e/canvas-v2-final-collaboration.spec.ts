@@ -95,7 +95,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await expect(text).toHaveText("Human continuation edit.");
     await expect(text).toHaveAttribute("data-canvas-v2-last-author", "user");
     await expect(page.getByText(`Selected · ${nodeId}`, { exact: true })).toBeVisible();
-    await expect(app(page).getByRole("button", { name: "Clear element selection" })).toBeVisible();
+    await expect(app(page).getByTestId("canvas-v2-element-selection")).toBeVisible();
 
     await app(page).getByRole("button", { name: "Redo canvas action" }).click();
     await expect(text).toHaveText("Northstar continued from the human revision.");

@@ -1,7 +1,7 @@
 import type { CanvasV2ArtifactDocument, CanvasV2ArtifactRevision, CanvasV2ElementBounds, CanvasV2RenderObservation, CanvasV2SpatialIntersection, CanvasV2SurfaceZoneId, CanvasV2TerritoryRelation } from "@/lib/canvas-v2/types";
 import type { CanvasV2BoardObjectKind } from "@/lib/canvas-v2/board-object-graph";
 import { CANVAS_V2_WORKSPACE, type CanvasV2WorkspacePoint } from "@/lib/canvas-v2/workspace-coordinate-space";
-import type { CanvasV2ManualMutation, CanvasV2ShapeVariant } from "@/lib/canvas-v2/manual-mutations";
+import { canvasV2ShapeVariantStyle, type CanvasV2ManualMutation, type CanvasV2ShapeVariant } from "@/lib/canvas-v2/manual-mutations";
 import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorBendFromPoint, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
 
@@ -338,7 +338,7 @@ const CANVAS_V2_INLINE_TEXT_TAGS = new Set([
   "a", "b", "bdi", "bdo", "br", "cite", "code", "data", "del", "em", "i", "ins", "kbd", "mark", "q", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var", "wbr",
 ]);
 const CANVAS_V2_TEXT_CONTAINER_TAGS = new Set([
-  "a", "b", "blockquote", "button", "cite", "code", "data", "dd", "del", "div", "dt", "em", "figcaption",
+  "a", "article", "b", "blockquote", "button", "cite", "code", "data", "dd", "del", "div", "dt", "em", "figcaption",
   "h1", "h2", "h3", "h4", "h5", "h6", "i", "ins", "kbd", "label", "li", "mark", "p", "q", "s", "samp",
   "small", "span", "strong", "sub", "sup", "time", "u", "var",
 ]);
@@ -351,7 +351,9 @@ const CANVAS_V2_WRITABLE_SURFACE_PATTERN = /(?:^|[\s_-])(answer|assumption|candi
  * legacy writing surfaces so already-created boards gain the same behavior.
  */
 export function canvasV2NativeSceneNodeIsWritable(node: CanvasV2NativeSceneNode): boolean {
-  return node.attributes["data-canvas-v2-writable"] === "true";
+  return node.attributes["data-canvas-v2-writable"] === "true"
+    || node.attributes["data-canvas-v2-primitive"] === "shape"
+    || node.attributes["data-canvas-v2-primitive"] === "note";
 }
 
 export function canvasV2NativeSceneNodeLooksWritable(node: CanvasV2NativeSceneNode): boolean {
@@ -1198,7 +1200,9 @@ export function compileCanvasV2NativeScene(input: {
   // unaddressed <em>/<strong> child remains selectable as one object.
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   for (const node of nodes) {
-    if (canvasV2NativeSceneNodeLooksWritable(node)) {
+    if (canvasV2NativeSceneNodeLooksWritable(node)
+      || node.attributes["data-canvas-v2-primitive"] === "shape"
+      || node.attributes["data-canvas-v2-primitive"] === "note") {
       // Persist the upgrade through native serialization so the capability is
       // stable across undo/redo, later AI turns, and future compiles.
       node.attributes["data-canvas-v2-writable"] = "true";
@@ -2027,7 +2031,7 @@ function nativePrimitiveNodes(
     tagName: "article",
     kind: "note",
     geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
-    attributes: { ...base.attributes, "aria-label": "Note" },
+    attributes: { ...base.attributes, "data-canvas-v2-writable": "true", "aria-label": "Note" },
     inlineStyle: {
       padding: "20px",
       border: "1px solid var(--northstar-note-line)",
@@ -2051,20 +2055,14 @@ function nativePrimitiveNodes(
   }];
   if (mutation.primitive === "shape") {
     const variant: CanvasV2ShapeVariant = mutation.shapeVariant ?? "rectangle";
-    const variantStyle: Record<string, string> = variant === "ellipse"
-      ? { "border-radius": "999px" }
-      : variant === "diamond"
-        ? { "border-radius": "18px", "clip-path": "polygon(50% 0,100% 50%,50% 100%,0 50%)" }
-        : variant === "triangle"
-          ? { "border-radius": "0", "clip-path": "polygon(50% 0,100% 100%,0 100%)" }
-          : variant === "pill" ? { "border-radius": "999px" } : { "border-radius": "24px" };
+    const variantStyle = canvasV2ShapeVariantStyle(variant);
     return [{
       ...base,
       tagName: "div",
       kind: "shape",
       geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
-      attributes: { ...base.attributes, "data-canvas-v2-shape": variant, "aria-label": `${variant} shape` },
-      inlineStyle: { ...variantStyle, background: "var(--northstar-violet)" },
+      attributes: { ...base.attributes, "data-canvas-v2-shape": variant, "data-canvas-v2-writable": "true", "aria-label": `${variant} shape` },
+      inlineStyle: { ...variantStyle, display: "flex", "align-items": "center", "justify-content": "center", padding: "16px", "text-align": "center", font: "600 18px/1.3 Inter,system-ui,sans-serif", color: "var(--northstar-ink)", background: "var(--northstar-violet)" },
       content: [],
     }];
   }
@@ -2636,6 +2634,11 @@ function applyAtomicNativeMutation(
         if (stroke?.attributes.stroke && stroke.attributes["data-canvas-v2-connector-part"] !== "hit") stroke.attributes.stroke = mutation.value;
       }
     } else node.inlineStyle[mutation.property] = mutation.value;
+  } else if (mutation.kind === "shape-variant") {
+    if (node.kind !== "shape" || node.attributes["data-canvas-v2-primitive"] !== "shape") throw new Error("Shape switching is available only for a shape object.");
+    node.attributes["data-canvas-v2-shape"] = mutation.variant;
+    node.attributes["aria-label"] = `${mutation.variant} shape`;
+    Object.assign(node.inlineStyle, canvasV2ShapeVariantStyle(mutation.variant));
   } else if (mutation.kind === "attribute") {
     node.attributes.alt = mutation.value;
   } else if (mutation.kind === "image-source") {

@@ -17,6 +17,7 @@ export type CanvasV2AtomicManualMutation =
   | { kind: "transform"; nodeId: string; deltaX: number; deltaY: number; width: number; height: number; fontSize?: number; lineHeight?: number }
   | { kind: "text"; nodeId: string; text: string; nativeContent?: CanvasV2NativeTextContentUpdate[]; layout?: { width?: number; height?: number } }
   | { kind: "style"; nodeId: string; property: CanvasV2EditableStyleProperty; value: string }
+  | { kind: "shape-variant"; nodeId: string; variant: CanvasV2ShapeVariant }
   | { kind: "attribute"; nodeId: string; name: "alt"; value: string }
   | { kind: "image-source"; nodeId: string; src: string; alt?: string }
   | { kind: "connector-endpoint"; nodeId: string; endpoint: "from" | "to"; x: number; y: number; attachNodeId?: string }
@@ -55,6 +56,8 @@ export type CanvasV2EditableStyleProperty =
   | "color"
   | "background-color"
   | "border-color"
+  | "border-style"
+  | "border-width"
   | "border-radius"
   | "font-family"
   | "font-size"
@@ -69,6 +72,8 @@ const EDITABLE_STYLE_PROPERTIES = new Set<CanvasV2EditableStyleProperty>([
   "color",
   "background-color",
   "border-color",
+  "border-style",
+  "border-width",
   "border-radius",
   "font-family",
   "font-size",
@@ -80,6 +85,13 @@ const EDITABLE_STYLE_PROPERTIES = new Set<CanvasV2EditableStyleProperty>([
   "object-fit",
 ]);
 
+export function canvasV2ShapeVariantStyle(variant: CanvasV2ShapeVariant): Record<"border-radius" | "clip-path", string> {
+  if (variant === "ellipse" || variant === "pill") return { "border-radius": "999px", "clip-path": "none" };
+  if (variant === "diamond") return { "border-radius": "18px", "clip-path": "polygon(50% 0,100% 50%,50% 100%,0 50%)" };
+  if (variant === "triangle") return { "border-radius": "0", "clip-path": "polygon(50% 0,100% 100%,0 100%)" };
+  return { "border-radius": "24px", "clip-path": "none" };
+}
+
 function safeStyleValue(property: CanvasV2EditableStyleProperty, value: string): string {
   const normalized = value.trim().slice(0, 160);
   if (!normalized || /[{}<>;]/.test(normalized)) throw new Error(`Invalid ${property} style value.`);
@@ -88,6 +100,11 @@ function safeStyleValue(property: CanvasV2EditableStyleProperty, value: string):
     if (!Number.isFinite(numeric) || numeric < 0 || numeric > 1) throw new Error("Opacity must be between zero and one.");
   }
   if (property === "object-fit" && !["contain", "cover", "fill", "scale-down", "none"].includes(normalized)) throw new Error("Unsupported image fit mode.");
+  if (property === "border-style" && !["solid", "dashed", "none"].includes(normalized)) throw new Error("Unsupported line style.");
+  if (property === "border-width") {
+    const width = normalized.match(/^(\d+(?:\.\d+)?)px$/)?.[1];
+    if (width === undefined || Number(width) < 0 || Number(width) > 64) throw new Error("Line width must be between zero and 64 pixels.");
+  }
   if (property === "text-align" && !["left", "center", "right", "justify", "start", "end"].includes(normalized)) throw new Error("Unsupported text alignment.");
   return normalized;
 }
@@ -236,13 +253,7 @@ export function applyCanvasV2ManualMutation(
     const height = Math.max(1, finite(mutation.height ?? (mutation.primitive === "table" ? 120 : mutation.primitive === "frame" ? 240 : mutation.primitive === "text" ? 48 : 160), "Height"));
     const provenance = `data-canvas-v2-origin="user" data-canvas-v2-primitive="${mutation.primitive}" data-canvas-v2-user-edited="create" data-canvas-v2-last-author="user" data-canvas-v2-edit-version="1" data-canvas-v2-manual-x="${x}" data-canvas-v2-manual-y="${y}" data-canvas-v2-manual-width="${width}" data-canvas-v2-manual-height="${height}"`;
     const shapeVariant = mutation.shapeVariant ?? "rectangle";
-    const shapeStyle = shapeVariant === "ellipse"
-      ? "border-radius:999px"
-      : shapeVariant === "diamond"
-        ? "border-radius:18px;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)"
-        : shapeVariant === "triangle"
-          ? "border-radius:0;clip-path:polygon(50% 0,100% 100%,0 100%)"
-          : shapeVariant === "pill" ? "border-radius:999px" : "border-radius:24px";
+    const shapeStyle = Object.entries(canvasV2ShapeVariantStyle(shapeVariant)).map(([property, value]) => `${property}:${value}`).join(";");
     const endX = finite(mutation.endX ?? x + width, "Line end X");
     const endY = finite(mutation.endY ?? y, "Line end Y");
     const lineWidth = Math.max(1, Math.hypot(endX - x, endY - y));
@@ -260,11 +271,11 @@ export function applyCanvasV2ManualMutation(
     const markup = mutation.primitive === "text"
       ? `<p data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} style="position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;margin:0;font:600 28px/1.3 Inter,system-ui,sans-serif;color:var(--northstar-ink)">New text</p>`
       : mutation.primitive === "note"
-        ? `<article data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} aria-label="Note" style="position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;padding:20px;border:1px solid var(--northstar-note-line);border-radius:8px;background:var(--northstar-note-surface);color:var(--northstar-note-ink);box-shadow:0 8px 22px var(--northstar-note-shadow);font:600 18px/1.45 Inter,system-ui,sans-serif">Add a note</article>`
+        ? `<article data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} data-canvas-v2-writable="true" aria-label="Note" style="position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;padding:20px;border:1px solid var(--northstar-note-line);border-radius:8px;background:var(--northstar-note-surface);color:var(--northstar-note-ink);box-shadow:0 8px 22px var(--northstar-note-shadow);font:600 18px/1.45 Inter,system-ui,sans-serif">Add a note</article>`
       : mutation.primitive === "frame"
         ? `<section data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} aria-label="Frame" style="position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;border:2px solid var(--northstar-violet);border-radius:20px;background:var(--northstar-surface)"></section>`
         : mutation.primitive === "shape"
-          ? `<div data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} data-canvas-v2-shape="${shapeVariant}" aria-label="${shapeVariant} shape" style="position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;${shapeStyle};background:var(--northstar-violet)"></div>`
+          ? `<div data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} data-canvas-v2-shape="${shapeVariant}" data-canvas-v2-writable="true" aria-label="${shapeVariant} shape" style="position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;${shapeStyle};display:flex;align-items:center;justify-content:center;padding:16px;text-align:center;font:600 18px/1.3 Inter,system-ui,sans-serif;color:var(--northstar-ink);background:var(--northstar-violet)"></div>`
           : mutation.primitive === "connector"
             ? `<svg data-canvas-v2-node-id="${mutation.nodeId}" ${provenance}${connectorBindings} data-canvas-v2-connector-variant="${connectorVariant}" data-canvas-v2-connector-from-x="${x}" data-canvas-v2-connector-from-y="${y}" data-canvas-v2-connector-to-x="${endX}" data-canvas-v2-connector-to-y="${endY}" data-canvas-v2-connector-bend="${connectorVariant === "curve" ? 72 : 0}" data-canvas-v2-connector-control-x="${connectorGeometry.control.x}" data-canvas-v2-connector-control-y="${connectorGeometry.control.y}" aria-label="${connectorVariant} connector" viewBox="0 0 ${connectorGeometry.bounds.width} ${connectorGeometry.bounds.height}" style="position:absolute;left:${connectorGeometry.bounds.x}px;top:${connectorGeometry.bounds.y}px;width:${connectorGeometry.bounds.width}px;height:${connectorGeometry.bounds.height}px;${mutation.fromNodeId && mutation.toNodeId ? "z-index:-1;" : ""}overflow:visible"><path data-canvas-v2-connector-part="path" d="${connectorGeometry.path}" fill="none" stroke="var(--northstar-violet)" stroke-width="4" stroke-linecap="round"></path><path data-canvas-v2-connector-part="hit" d="${connectorGeometry.path}" fill="none" stroke="transparent" stroke-width="20" stroke-linecap="round" vector-effect="non-scaling-stroke" pointer-events="stroke"></path><circle data-canvas-v2-connector-part="start" cx="${connectorGeometry.localStart.x}" cy="${connectorGeometry.localStart.y}" r="5.5" fill="var(--northstar-surface)" stroke="var(--northstar-violet)" stroke-width="2.5"></circle>${connectorEnd}</svg>`
             : mutation.primitive === "line"
@@ -348,6 +359,14 @@ export function applyCanvasV2ManualMutation(
         if (stroke.dataset.canvasV2ConnectorPart !== "hit") stroke.setAttribute("stroke", value);
       });
     } else element.style.setProperty(mutation.property, value, "important");
+    markUserEdit(element, mutation.kind);
+  } else if (mutation.kind === "shape-variant") {
+    if (element.dataset.canvasV2Primitive !== "shape") throw new Error("Shape switching is available only for a shape object.");
+    element.dataset.canvasV2Shape = mutation.variant;
+    element.setAttribute("aria-label", `${mutation.variant} shape`);
+    const style = canvasV2ShapeVariantStyle(mutation.variant);
+    element.style.setProperty("border-radius", style["border-radius"], "important");
+    element.style.setProperty("clip-path", style["clip-path"], "important");
     markUserEdit(element, mutation.kind);
   } else if (mutation.kind === "attribute") {
     if (mutation.name !== "alt" || element.tagName !== "IMG") throw new Error("Alt text is available only for an image object.");
@@ -493,6 +512,7 @@ export function describeCanvasV2ManualMutation(mutation: CanvasV2ManualMutation)
   if (mutation.kind === "transform") return `Transformed ${mutation.nodeId} by ${Math.round(mutation.deltaX)} × ${Math.round(mutation.deltaY)} to ${Math.round(mutation.width)} × ${Math.round(mutation.height)} pixels.`;
   if (mutation.kind === "text") return `Updated text in ${mutation.nodeId}.`;
   if (mutation.kind === "style") return `Updated ${mutation.property} for ${mutation.nodeId}.`;
+  if (mutation.kind === "shape-variant") return `Changed ${mutation.nodeId} to a ${mutation.variant} shape.`;
   if (mutation.kind === "attribute") return `Updated ${mutation.name} for ${mutation.nodeId}.`;
   if (mutation.kind === "image-source") return `Replaced image ${mutation.nodeId}.`;
   if (mutation.kind === "connector-endpoint") return `${mutation.attachNodeId ? "Attached" : "Moved"} the ${mutation.endpoint} end of ${mutation.nodeId}.`;

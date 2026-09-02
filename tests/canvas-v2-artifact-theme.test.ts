@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -58,4 +59,13 @@ test("contrast measurement accepts authored hex, alpha hex, comma rgb, and moder
   assert.ok((canvasV2ContrastRatio("#ffffff", "#000000") ?? 0) > 20);
   assert.ok((canvasV2ContrastRatio("#ffffffcc", "rgb(0 0 0)") ?? 0) > 12);
   assert.ok((canvasV2ContrastRatio("rgb(255, 255, 255)", "rgba(0,0,0,1)") ?? 0) > 20);
+});
+
+test("a new native authored color cannot be overwritten by the previous theme pass", () => {
+  const source = readFileSync("lib/canvas-v2/artifact-theme.ts", "utf8");
+  const nativeScene = readFileSync("components/canvas-v2/native-canvas-scene.tsx", "utf8");
+  assert.match(source, /style\.getPropertyValue\(property\)\.trim\(\) !== stored\.appliedValue\.trim\(\)/);
+  assert.match(source, /appliedValue: next/);
+  assert.doesNotMatch(nativeScene, /applyCanvasV2ArtifactTheme\(document/);
+  assert.match(nativeScene, /applyCanvasV2ArtifactThemeToElement\(root/);
 });

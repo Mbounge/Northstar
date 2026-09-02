@@ -3,6 +3,7 @@ export type CanvasV2ArtifactTheme = "light" | "dark";
 interface StoredStyle {
   value: string;
   priority: string;
+  appliedValue: string;
 }
 
 interface CanvasV2Color {
@@ -53,6 +54,13 @@ function restoreTheme(state: CanvasV2ArtifactThemeState): void {
   state.originals.forEach((properties, element) => {
     const style = (element as HTMLElement | SVGElement).style;
     properties.forEach((stored, property) => {
+      // The public native scene is reconciled by React between theme passes.
+      // If React has already committed a new authored value, restoring the
+      // previous pass's original here would overwrite that fresh canvas edit
+      // (for example, a solid fill becoming a translucent tinted fill).
+      // Only unwind an override while the exact override we installed still
+      // owns the live property.
+      if (style.getPropertyValue(property).trim() !== stored.appliedValue.trim()) return;
       if (stored.value) style.setProperty(property, stored.value, stored.priority);
       else style.removeProperty(property);
     });
@@ -365,7 +373,7 @@ function themeElements(
     const style = (element as HTMLElement | SVGElement).style;
     const applyProperty = (property: string, next: string | undefined) => {
       if (!next) return;
-      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property) });
+      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property), appliedValue: next });
       // Authored compositions may contain stylesheet declarations marked
       // !important. Theme and contrast are host invariants, so this final
       // scoped override intentionally outranks authored presentation CSS.

@@ -149,14 +149,15 @@ test("notes, lines, drawings and local images are separate selectable objects", 
   await app(page).getByTitle("Redo").click();
   await expect(drawing).toHaveCount(1);
 
-  await page.getByLabel("Choose an image for the canvas").setInputFiles({
-    name: "research-sketch.svg",
-    mimeType: "image/svg+xml",
-    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" fill="#7661f3"/></svg>'),
-  });
+  // Undo/redo commits are synchronous in the native scene but the durable
+  // revision acknowledgement may settle one frame later. Use the same enabled
+  // state a person sees before opening the picker so this test never bypasses
+  // the product's in-flight edit guard through the hidden file input.
+  await expect(app(page).getByTitle("Upload image · or drop a file on canvas")).toBeEnabled();
+  await page.getByLabel("Choose images for the canvas").setInputFiles("public/northstar/design-references/evidence-canvas.png");
   const image = scene(page).locator('img[data-canvas-v2-local-image="true"]');
   await expect(image).toHaveCount(1);
-  await expect(image).toHaveAttribute("alt", "research sketch");
+  await expect(image).toHaveAttribute("alt", "evidence canvas");
   await image.click();
   await expect(app(page).getByRole("button", { name: "Contain image" })).toBeVisible();
   await expect(app(page).getByRole("button", { name: "Crop image to fill" })).toBeVisible();
@@ -225,4 +226,85 @@ test("connector library exposes straight, arrow and independently adjustable cur
   expect(coordinatesAfter.toY - coordinatesBefore.toY).toBeCloseTo(deltaY, 1);
   expect(coordinatesAfter.controlX - coordinatesBefore.controlX).toBeCloseTo(deltaX, 1);
   expect(coordinatesAfter.controlY - coordinatesBefore.controlY).toBeCloseTo(deltaY, 1);
+});
+
+test("quick shapes are true circles, accept direct text, and switch shape in place", async ({ page }) => {
+  await openCleanCanvas(page, "/canvas-v2-e2e");
+  await app(page).getByTitle("Create Shape · drag to place").click();
+  const shape = scene(page).locator('[data-canvas-v2-primitive="shape"]').first();
+  await expect(shape).toHaveAttribute("data-canvas-v2-shape", "ellipse");
+  await expect(shape).toHaveAttribute("data-canvas-v2-writable", "true");
+  const circleBounds = await shape.boundingBox();
+  expect(circleBounds).toBeTruthy();
+  expect(Math.abs(circleBounds!.width - circleBounds!.height)).toBeLessThan(1);
+
+  await shape.dblclick({ position: { x: circleBounds!.width / 2, y: circleBounds!.height / 2 } });
+  const shapeEditor = scene(page).locator('[contenteditable="plaintext-only"][data-canvas-v2-direct-editing="true"]');
+  await expect(shapeEditor).toBeVisible();
+  await shapeEditor.fill("Editable circle");
+  await shapeEditor.press("ControlOrMeta+Enter");
+  await expect(shape).toContainText("Editable circle");
+
+  for (const [label, variant] of [["Rectangle", "rectangle"], ["Diamond", "diamond"], ["Triangle", "triangle"], ["Pill", "pill"], ["Circle", "ellipse"]] as const) {
+    await app(page).getByRole("button", { name: "Change shape" }).click();
+    const shapePalette = app(page).getByTestId("canvas-v2-shape-palette");
+    await expect(shapePalette).toBeVisible();
+    await shapePalette.getByRole("button", { name: `Change shape to ${label}` }).click();
+    await expect(shape).toHaveAttribute("data-canvas-v2-shape", variant);
+    await expect(shape).toContainText("Editable circle");
+  }
+  await expect(shape).toHaveCSS("clip-path", "none");
+
+  await app(page).getByTitle("Create Note · drag to place").click();
+  const note = scene(page).locator('[data-canvas-v2-primitive="note"]');
+  await expect(note).toHaveAttribute("data-canvas-v2-writable", "true");
+  await note.dblclick();
+  const noteEditor = scene(page).locator('[contenteditable="plaintext-only"][data-canvas-v2-direct-editing="true"]');
+  await expect(noteEditor).toBeVisible();
+  await noteEditor.fill("My own note");
+  await noteEditor.press("ControlOrMeta+Enter");
+  await expect(note).toContainText("My own note");
+});
+
+test("semantic paint and line controls persist hue, transparency and line style", async ({ page }) => {
+  await openCleanCanvas(page, "/canvas-v2-e2e");
+  await app(page).getByTitle("Create Shape · drag to place").click();
+  const rectangle = scene(page).locator('[data-canvas-v2-primitive="shape"]').first();
+  await expect(rectangle).toHaveCount(1);
+  await rectangle.click();
+
+  await app(page).getByRole("button", { name: "Change fill" }).click();
+  const paint = app(page).getByTestId("canvas-v2-color-palette");
+  await expect(paint).toBeVisible();
+  await paint.getByRole("button", { name: "Use Sunflower" }).click();
+  await expect(paint.getByRole("button", { name: "Use solid fill" })).toHaveAttribute("aria-pressed", "true");
+  await paint.getByRole("button", { name: "Make fill transparent" }).click();
+  await expect(rectangle).toHaveCSS("background-color", "rgba(255, 200, 75, 0.4)");
+  await expect(paint.getByRole("button", { name: "Make fill transparent" })).toHaveAttribute("aria-pressed", "true");
+  await app(page).getByRole("button", { name: "Switch to light mode" }).click();
+  await expect(rectangle).toHaveCSS("background-color", "rgba(255, 200, 75, 0.4)");
+  await app(page).getByRole("button", { name: "Switch to dark mode" }).click();
+  await expect(rectangle).toHaveCSS("background-color", "rgba(255, 200, 75, 0.4)");
+
+  await paint.getByRole("button", { name: "Remove fill" }).click();
+  await expect(rectangle).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(paint.getByRole("button", { name: "Remove fill" })).toHaveAttribute("aria-pressed", "true");
+  await paint.getByRole("button", { name: "Use Green" }).click();
+  await expect(paint.getByRole("button", { name: "Use Green" })).toHaveAttribute("aria-pressed", "true");
+
+  await app(page).getByRole("button", { name: "Change fill" }).click();
+  await app(page).getByRole("button", { name: "Change line" }).click();
+  const line = app(page).getByTestId("canvas-v2-line-palette");
+  await expect(line).toBeVisible();
+  await line.getByRole("button", { name: "Dashed line" }).click();
+  await line.getByRole("button", { name: "Use Blue line" }).click();
+  await expect(rectangle).toHaveCSS("border-style", "dashed");
+  await expect(rectangle).toHaveCSS("border-width", "2px");
+  await expect(rectangle).toHaveCSS("border-color", "rgb(66, 168, 238)");
+
+  await line.getByRole("button", { name: "None line" }).click();
+  await expect(rectangle).toHaveCSS("border-style", "none");
+  await app(page).getByTitle("Undo").click();
+  await expect(rectangle).toHaveCSS("border-style", "dashed");
+  await expect(rectangle).toHaveCSS("border-color", "rgb(66, 168, 238)");
 });

@@ -57,9 +57,50 @@ test("canonical evidence remains a normal directly editable canvas object", () =
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
   assert.doesNotMatch(source, /Grounded evidence is protected/);
   assert.doesNotMatch(workspace, /item\.canonicalEvidence \? undefined : \{ kind: "delete"/);
-  assert.match(workspace, /aria-label="Delete selected elements"/);
+  assert.match(workspace, /aria-label="Canvas object menu"/);
+  assert.match(workspace, /Deleted selected objects\./);
   assert.match(source, /canvasV2EvidenceCopyOf/);
   assert.match(source, /canvasV2EvidenceRole = "copy"/);
+});
+
+test("delete is a same-input visual transaction with commit rejection rollback", () => {
+  const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
+  const nativeScene = readFileSync("components/canvas-v2/native-canvas-scene.tsx", "utf8");
+  const submitStart = workspace.indexOf("const submitMutation =");
+  const submitEnd = workspace.indexOf("const drawingPoint =", submitStart);
+  const transaction = workspace.slice(submitStart, submitEnd);
+
+  assert.ok(transaction.indexOf("previewDeletion(deletedNodeIds)") < transaction.indexOf("applyCanvasV2NativeSceneMutation"));
+  assert.match(transaction, /if \(deletedNodeIds\.length\) restoreDeletionPreview\(\);/);
+  assert.match(transaction, /if \(deletedNodeIds\.length\) commitDeletionPreview\(\);/);
+  assert.match(workspace, /contextualToolbarRef\.current,/);
+  assert.match(workspace, /selectionOverlayRef\.current,/);
+  assert.match(nativeScene, /previewNodeRemoval/);
+  assert.match(nativeScene, /data-canvas-v2-removal-preview/);
+  assert.match(nativeScene, /setProperty\("visibility", "hidden", "important"\)/);
+});
+
+test("the primary inspector stays focused while management actions remain available", () => {
+  const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
+  const inspectorStart = workspace.indexOf('aria-label="Element inspector"');
+  const inspectorEnd = workspace.indexOf("{toolbarMenu === \"font\"", inspectorStart);
+  assert.notEqual(inspectorStart, -1);
+  assert.notEqual(inspectorEnd, -1);
+  const primaryInspector = workspace.slice(inspectorStart, inspectorEnd);
+
+  assert.match(primaryInspector, /aria-label="Change fill"/);
+  assert.match(primaryInspector, /aria-label="Change line"/);
+  assert.match(primaryInspector, /aria-label="Duplicate selected elements"/);
+  assert.doesNotMatch(primaryInspector, /Toggle lock for selected elements/);
+  assert.doesNotMatch(primaryInspector, /Delete selected elements/);
+  assert.doesNotMatch(primaryInspector, /More object actions/);
+  assert.doesNotMatch(primaryInspector, /Clear element selection/);
+
+  assert.match(workspace, /aria-label="Canvas object menu"/);
+  assert.match(workspace, /\? "Unlock" : "Lock"/);
+  assert.match(workspace, />Delete<\/button>/);
+  assert.match(workspace, /event\.key === "Delete" \|\| event\.key === "Backspace"/);
+  assert.match(workspace, /event\.key === "Escape"/);
 });
 
 test("journey divider rule and label are independent native objects", () => {

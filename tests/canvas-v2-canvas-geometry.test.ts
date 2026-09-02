@@ -132,7 +132,7 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(marqueePreview, /marqueeElement\.style\.width/);
   assert.doesNotMatch(marqueePreview, /setMarquee/);
   assert.match(nativeScene, /memo\(function NativeNode/);
-  assert.match(nativeScene, /useImperativeHandle\(imperativeRef, \(\) => \(\{ applyTransientGeometry \}\)/);
+  assert.match(nativeScene, /useImperativeHandle\(imperativeRef, \(\) => \(\{\s*applyTransientGeometry,\s*previewNodeRemoval,/);
   assert.match(nativeScene, /transientStyleSnapshotsRef/);
   assert.match(nativeScene, /setCompiledRevisionId\(revision\.id\)/);
   assert.match(nativeScene, /compiledRevisionId !== revision\.id && <iframe/);

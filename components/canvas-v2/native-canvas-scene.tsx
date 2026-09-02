@@ -17,7 +17,6 @@ import {
 } from "react";
 
 import {
-  applyCanvasV2ArtifactTheme,
   applyCanvasV2ArtifactThemeToElement,
   createCanvasV2ArtifactThemeState,
   type CanvasV2ArtifactTheme,
@@ -71,6 +70,9 @@ export interface CanvasV2NativeCanvasSceneProps {
 
 export interface CanvasV2NativeCanvasSceneHandle {
   applyTransientGeometry: (geometry?: Readonly<Record<string, CanvasV2TransientGeometry>>) => void;
+  previewNodeRemoval: (nodeIds: readonly string[]) => void;
+  restoreNodeRemovalPreview: () => void;
+  commitNodeRemovalPreview: () => void;
 }
 
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
@@ -289,6 +291,10 @@ function inspectNativeNode(
     return undefined;
   };
   const evidenceAuthorityValue = inheritedAttribute("data-canvas-v2-evidence-authority");
+  const shapeVariantValue = node.attributes["data-canvas-v2-shape"];
+  const shapeVariant = shapeVariantValue === "rectangle" || shapeVariantValue === "ellipse" || shapeVariantValue === "diamond" || shapeVariantValue === "triangle" || shapeVariantValue === "pill"
+    ? shapeVariantValue
+    : undefined;
   const connector = node.kind === "connector" ? (() => {
     const numberAttribute = (name: string, fallback: number) => {
       const value = Number(node.attributes[name]);
@@ -334,12 +340,18 @@ function inspectNativeNode(
       ? evidenceAuthorityValue
       : undefined,
     altText: node.kind === "image" ? node.attributes.alt ?? "" : undefined,
+    ...(shapeVariant ? { shapeVariant } : {}),
     ...(connector ? { connector } : {}),
     visualStyle: {
-      color: computed?.color ?? "",
-      backgroundColor: computed?.backgroundColor ?? "",
-      borderColor: computed?.borderColor ?? "",
-      borderRadius: computed?.borderRadius ?? "",
+      // Inspector state describes durable authored truth. The public DOM can
+      // carry a reversible light/dark contrast override, which is what the
+      // person sees but not what a paint-mode change should sample as its hue.
+      color: node.inlineStyle.color ?? computed?.color ?? "",
+      backgroundColor: node.inlineStyle["background-color"] ?? node.inlineStyle.background ?? computed?.backgroundColor ?? "",
+      borderColor: node.inlineStyle["border-color"] ?? computed?.borderColor ?? "",
+      borderStyle: node.inlineStyle["border-style"] ?? computed?.borderStyle ?? "",
+      borderWidth: node.inlineStyle["border-width"] ?? computed?.borderWidth ?? "",
+      borderRadius: node.inlineStyle["border-radius"] ?? computed?.borderRadius ?? "",
       fontFamily: computed?.fontFamily ?? "",
       fontSize: computed?.fontSize ?? "",
       lineHeight: computed?.lineHeight ?? "",
@@ -374,6 +386,12 @@ interface NativeTransientStyleSnapshot {
   element: HTMLElement;
   transientAttribute: boolean;
   properties: Record<string, { value: string; priority: string }>;
+}
+
+interface NativeRemovalPreviewSnapshot {
+  element: HTMLElement;
+  previewAttribute: boolean;
+  visibility: { value: string; priority: string };
 }
 
 // Scene z-order is relative object geometry. Keep that entire range above the
@@ -484,15 +502,16 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const publicSceneRef = useRef<HTMLDivElement>(null);
   const compileSequenceRef = useRef(0);
   const reconciledSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
-  const themeStateRef = useRef(createCanvasV2ArtifactThemeState());
   const publicThemeStateRef = useRef(createCanvasV2ArtifactThemeState());
   const transientStyleSnapshotsRef = useRef(new Map<string, NativeTransientStyleSnapshot>());
   const transientConnectorIdsRef = useRef(new Set<string>());
   const transientSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
+  const removalPreviewSnapshotsRef = useRef<NativeRemovalPreviewSnapshot[]>([]);
   const [scene, setScene] = useState<CanvasV2NativeSceneDocument>();
   const [compileError, setCompileError] = useState<string>();
   const [compiledRevisionId, setCompiledRevisionId] = useState<string>();
   const activePointerRef = useRef<{ pointerId: number; element?: CanvasV2InspectableElement } | undefined>(undefined);
+  const hoveredPointerNodeRef = useRef<string | undefined>(undefined);
   const runtimeDocument = useMemo(() => buildCanvasV2RuntimeDocument(revision), [revision]);
   const renderedScene = sceneOverride ?? scene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
@@ -504,8 +523,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     if (!document?.body) return;
     if (document.documentElement.dataset.canvasV2RevisionId !== revision.id) return;
     try {
-      themeStateRef.current = createCanvasV2ArtifactThemeState();
-      applyCanvasV2ArtifactTheme(document, theme, themeStateRef.current);
+      // Compile durable native truth from authored styles. Light/dark contrast
+      // is a reversible public-render concern below; compiling after a theme
+      // pass would bake a dark-mode substitute into the next manual edit and
+      // destroy the user's original hue when the theme changes.
       await document.fonts.ready;
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       if (sequence !== compileSequenceRef.current
@@ -521,7 +542,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     } catch (error) {
       setCompileError(error instanceof Error ? error.message : "The native scene could not be compiled.");
     }
-  }, [height, revision, theme, width]);
+  }, [height, revision, width]);
 
   useEffect(() => {
     if (compilerRef.current?.contentDocument?.body) void compile();
@@ -681,7 +702,58 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     transientConnectorIdsRef.current = affectedConnectorIds;
   }, [byId, bySourceId, renderedScene]);
 
-  useImperativeHandle(imperativeRef, () => ({ applyTransientGeometry }), [applyTransientGeometry]);
+  const restoreNodeRemovalPreview = useCallback(() => {
+    for (const snapshot of removalPreviewSnapshotsRef.current) {
+      if (snapshot.visibility.value) snapshot.element.style.setProperty("visibility", snapshot.visibility.value, snapshot.visibility.priority);
+      else snapshot.element.style.removeProperty("visibility");
+      if (snapshot.previewAttribute) snapshot.element.setAttribute("data-canvas-v2-removal-preview", "true");
+      else snapshot.element.removeAttribute("data-canvas-v2-removal-preview");
+    }
+    removalPreviewSnapshotsRef.current = [];
+  }, []);
+
+  const previewNodeRemoval = useCallback((nodeIds: readonly string[]) => {
+    restoreNodeRemovalPreview();
+    const root = publicSceneRef.current;
+    if (!root) return;
+    const snapshots: NativeRemovalPreviewSnapshot[] = [];
+    const seen = new Set<HTMLElement>();
+    for (const nodeId of new Set(nodeIds)) {
+      const selectorId = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(nodeId) : nodeId.replaceAll('"', '\\"');
+      for (const element of root.querySelectorAll<HTMLElement>(`[data-canvas-v2-node-id="${selectorId}"]`)) {
+        if (seen.has(element)) continue;
+        seen.add(element);
+        snapshots.push({
+          element,
+          previewAttribute: element.hasAttribute("data-canvas-v2-removal-preview"),
+          visibility: {
+            value: element.style.getPropertyValue("visibility"),
+            priority: element.style.getPropertyPriority("visibility"),
+          },
+        });
+        // Deletion is an immediate visual transaction. Keep the DOM node only
+        // long enough for the durable scene/history commit to replace it; it
+        // must stop painting and receiving pointer input in this input task.
+        element.setAttribute("data-canvas-v2-removal-preview", "true");
+        element.style.setProperty("visibility", "hidden", "important");
+      }
+    }
+    removalPreviewSnapshotsRef.current = snapshots;
+  }, [restoreNodeRemovalPreview]);
+
+  const commitNodeRemovalPreview = useCallback(() => {
+    // The accepted native scene removes these nodes. Dropping the snapshots
+    // without restoring their styles prevents a flash of the retired DOM while
+    // React commits that scene immediately after this event handler returns.
+    removalPreviewSnapshotsRef.current = [];
+  }, []);
+
+  useImperativeHandle(imperativeRef, () => ({
+    applyTransientGeometry,
+    previewNodeRemoval,
+    restoreNodeRemovalPreview,
+    commitNodeRemovalPreview,
+  }), [applyTransientGeometry, commitNodeRemovalPreview, previewNodeRemoval, restoreNodeRemovalPreview]);
 
   useLayoutEffect(() => {
     applyTransientGeometry(transientGeometry);
@@ -691,7 +763,8 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     for (const snapshot of transientStyleSnapshotsRef.current.values()) restoreNativeTransientStyle(snapshot);
     transientStyleSnapshotsRef.current.clear();
     transientConnectorIdsRef.current.clear();
-  }, []);
+    restoreNodeRemovalPreview();
+  }, [restoreNodeRemovalPreview]);
 
   useLayoutEffect(() => {
     if (!renderedScene || reconciledSceneRef.current === renderedScene) return;
@@ -722,10 +795,18 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     return undefined;
   }, [bySourceId]);
 
-  const inspectTarget = useCallback((target: EventTarget | null) => {
+  const inspectHoverTarget = useCallback((target: EventTarget | null) => {
     const targetResult = targetNode(target);
-    return targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined;
-  }, [byId, targetNode]);
+    const nodeId = targetResult?.node.sourceNodeId ?? targetResult?.node.id;
+    if (hoveredPointerNodeRef.current === nodeId) return;
+    hoveredPointerNodeRef.current = nodeId;
+    onElementHover?.(targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined);
+  }, [byId, onElementHover, targetNode]);
+
+  useEffect(() => {
+    hoveredPointerNodeRef.current = undefined;
+    if (!inspectionEnabled) onElementHover?.(undefined);
+  }, [inspectionEnabled, onElementHover, renderedScene]);
 
   const allInspectable = useCallback(() => {
     if (!renderedScene) return [];
@@ -778,7 +859,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   };
 
   const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (inspectionEnabled && !activePointerRef.current) onElementHover?.(inspectTarget(event.target));
+    if (inspectionEnabled && !activePointerRef.current) inspectHoverTarget(event.target);
     const active = activePointerRef.current;
     if (!active || active.pointerId !== event.pointerId) return;
     if (active.element && onElementPointer) onElementPointer({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: active.element });
@@ -1043,7 +1124,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
         onPointerMove={pointerMove}
         onPointerUp={pointerUp}
         onPointerCancel={pointerUp}
-        onPointerLeave={() => onElementHover?.(undefined)}
+        onPointerLeave={() => {
+          hoveredPointerNodeRef.current = undefined;
+          onElementHover?.(undefined);
+        }}
         onClickCapture={repeatedClick}
         // Capture before an authored descendant, browser word-selection, or
         // freshly mounted selection chrome can consume the second click. The

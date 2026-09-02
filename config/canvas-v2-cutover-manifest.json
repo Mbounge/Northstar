@@ -48,7 +48,7 @@
     "sharedDataAdapter": "lib/app-data/canvas-v2-catalog.ts",
     "sharedMediaAdapter": "lib/app-data/review-media.ts",
     "pageLifecycle": "in-memory only; refresh starts a clean canvas and discards obsolete V2 recovery keys",
-    "expectedSourceFileCount": 75
+    "expectedSourceFileCount": 76
   },
   "testOnly": {
     "routeRoots": [

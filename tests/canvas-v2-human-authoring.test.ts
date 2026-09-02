@@ -5,6 +5,7 @@ import { validateCanvasV2EvidenceBindings } from "../lib/canvas-v2/artifact-safe
 import {
   CANVAS_V2_NATIVE_SCENE_SCHEMA,
   applyCanvasV2NativeSceneMutation,
+  canvasV2NativeSceneNodeSupportsTextEditing,
   serializeCanvasV2NativeScene,
   type CanvasV2NativeSceneDocument,
 } from "../lib/canvas-v2/native-scene";
@@ -41,6 +42,8 @@ test("the native authoring vocabulary creates every object as an independent use
   assert.deepEqual(authored.map((node) => node.kind), ["text", "note", "frame", "shape", "line", "table", "drawing", "image"]);
   assert.equal(authored.every((node) => node.selectable && node.lastAuthor === "user" && node.attributes["data-canvas-v2-origin"] === "user"), true);
   assert.equal(scene.nodes.find((node) => node.sourceNodeId === "ellipse")?.attributes["data-canvas-v2-shape"], "ellipse");
+  assert.equal(scene.nodes.find((node) => node.sourceNodeId === "ellipse")?.attributes["data-canvas-v2-writable"], "true");
+  assert.equal(scene.nodes.find((node) => node.sourceNodeId === "note")?.attributes["data-canvas-v2-writable"], "true");
   assert.equal(scene.nodes.find((node) => node.sourceNodeId === "drawing")?.childIds.length, 1);
   const drawingStroke = scene.nodes.find((node) => node.id === "drawing-stroke");
   assert.equal(drawingStroke?.attributes.points, "8,30 54,8 120,58 172,20");
@@ -56,6 +59,61 @@ test("the native authoring vocabulary creates every object as an independent use
   assert.match(document.html, /<polyline[^>]*points=/);
   assert.match(document.html, /data-canvas-v2-local-image="true"/);
   assert.deepEqual(validateCanvasV2EvidenceBindings(document, []), []);
+});
+
+test("inserted notes and shapes own editable text and shapes can change variant in place", () => {
+  const created = applyCanvasV2NativeSceneMutation(emptyScene(), {
+    kind: "batch",
+    label: "Create editable visual objects",
+    mutations: [
+      { kind: "create", nodeId: "circle", primitive: "shape", shapeVariant: "ellipse", x: 100, y: 100, width: 160, height: 160 },
+      { kind: "create", nodeId: "note", primitive: "note", x: 320, y: 100, width: 220, height: 180 },
+    ],
+  });
+  const byId = new Map(created.nodes.map((node) => [node.id, node]));
+  const circle = created.nodes.find((node) => node.sourceNodeId === "circle")!;
+  const note = created.nodes.find((node) => node.sourceNodeId === "note")!;
+  assert.equal(circle.geometry.width, circle.geometry.height);
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(circle, byId), true);
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(note, byId), true);
+
+  const labelled = applyCanvasV2NativeSceneMutation(created, { kind: "text", nodeId: "circle", text: "Editable circle" });
+  assert.equal(labelled.nodes.find((node) => node.sourceNodeId === "circle")?.directText, "Editable circle");
+  const diamond = applyCanvasV2NativeSceneMutation(labelled, { kind: "shape-variant", nodeId: "circle", variant: "diamond" });
+  const diamondNode = diamond.nodes.find((node) => node.sourceNodeId === "circle")!;
+  assert.equal(diamondNode.attributes["data-canvas-v2-shape"], "diamond");
+  assert.match(diamondNode.inlineStyle["clip-path"], /polygon/);
+  assert.equal(diamondNode.directText, "Editable circle");
+
+  const ellipse = applyCanvasV2NativeSceneMutation(diamond, { kind: "shape-variant", nodeId: "circle", variant: "ellipse" });
+  const ellipseNode = ellipse.nodes.find((node) => node.sourceNodeId === "circle")!;
+  assert.equal(ellipseNode.inlineStyle["clip-path"], "none");
+  assert.equal(ellipseNode.inlineStyle["border-radius"], "999px");
+});
+
+test("older authored shape revisions inherit the universal shape text contract", () => {
+  const variants = ["rectangle", "ellipse", "diamond", "triangle", "pill"] as const;
+  const source = applyCanvasV2NativeSceneMutation(emptyScene(), {
+    kind: "batch",
+    label: "Create every text-bearing shape",
+    mutations: variants.map((shapeVariant, index) => ({
+      kind: "create" as const,
+      nodeId: `legacy-${shapeVariant}`,
+      primitive: "shape" as const,
+      shapeVariant,
+      x: 100 + index * 180,
+      y: 100,
+    })),
+  });
+  const legacy = structuredClone(source);
+  legacy.nodes.filter((node) => node.attributes["data-canvas-v2-primitive"] === "shape").forEach((shape) => {
+    delete shape.attributes["data-canvas-v2-writable"];
+  });
+  const byId = new Map(legacy.nodes.map((node) => [node.id, node]));
+  for (const variant of variants) {
+    const shape = legacy.nodes.find((node) => node.sourceNodeId === `legacy-${variant}`)!;
+    assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(shape, byId), true, `${variant} should accept direct text`);
+  }
 });
 
 test("connectors remain attached when either endpoint moves and detach only when directly manipulated", () => {

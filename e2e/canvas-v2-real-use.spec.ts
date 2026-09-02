@@ -340,13 +340,13 @@ test("single and multi-selected canonical screenshots delete through toolbar and
   expect(eighthSlotBefore).not.toBeNull();
 
   await awinScreens.nth(2).click();
-  await page.getByRole("button", { name: "Delete selected elements" }).click();
+  await page.keyboard.press("Delete");
   await expect(awinScreens).toHaveCount(46);
 
   await awinScreens.nth(3).click();
   await awinScreens.nth(4).click({ modifiers: ["Meta"] });
   await expect(page.getByText("2 objects selected", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Delete selected elements" }).click();
+  await page.keyboard.press("Delete");
   await expect(awinScreens).toHaveCount(44);
   const seventhSlotAfter = await awinLane.locator('[data-canvas-v2-flow-index="6"]').boundingBox();
   const eighthSlotAfter = await awinLane.locator('[data-canvas-v2-flow-index="7"]').boundingBox();
@@ -397,7 +397,7 @@ test("AI authorship finds real open territory around an existing human object an
   const cameraBeforeAuthorship = await camera();
   // The object remains on the multiplayer board, but the prompt is a
   // whole-board composition request rather than an explicit selection edit.
-  await page.getByRole("button", { name: "Clear element selection" }).click();
+  await page.keyboard.press("Escape");
 
   await send(page, STANDARD_PROMPT);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
@@ -716,7 +716,7 @@ test("AI-authored screenshots use the same atomic move and resize lifecycle as n
   const generatedAggregate = await page.getByTestId("canvas-v2-element-selection").boundingBox();
   expect(generatedAggregate).not.toBeNull();
   expect(generatedAggregate!.width).toBeLessThan(landingBefore!.width + signInBefore!.width + 80);
-  await page.getByRole("button", { name: "Clear element selection" }).click();
+  await page.keyboard.press("Escape");
 
   await page.mouse.move(landingBefore!.x + landingBefore!.width / 2, landingBefore!.y + landingBefore!.height / 2);
   await page.mouse.down();
@@ -1116,7 +1116,7 @@ test("the production canvas route shares camera, singular selection, and mutatio
   );
   await page.mouse.up();
   await expect(page.getByText("2 objects selected", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Clear element selection" }).click();
+  await page.keyboard.press("Escape");
 
   await page.getByTitle("Fit content").click();
 
@@ -1554,7 +1554,7 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
   const text = frame.locator('[data-canvas-v2-node-id^="manual-text-"]');
   await expect(text).toHaveCount(1);
 
-  await page.getByRole("button", { name: "Clear element selection" }).click();
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("complementary", { name: "Layers panel" })).toHaveCount(0);
   const firstDragBounds = await text.boundingBox();
   expect(firstDragBounds).not.toBeNull();
@@ -1577,7 +1577,7 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
   await canvasApp(page).getByTitle("Create Shape").click();
   const shape = frame.locator('[data-canvas-v2-node-id^="manual-shape-"]');
   await expect(shape).toHaveCount(1);
-  await page.getByRole("button", { name: "Clear element selection" }).click();
+  await page.keyboard.press("Escape");
   const textScreenBounds = await text.boundingBox();
   const shapeScreenBounds = await shape.boundingBox();
   expect(textScreenBounds).not.toBeNull();

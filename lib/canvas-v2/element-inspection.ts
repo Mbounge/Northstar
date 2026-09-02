@@ -1,4 +1,5 @@
 import { buildCanvasV2ConnectorGeometry, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import type { CanvasV2ShapeVariant } from "@/lib/canvas-v2/manual-mutations";
 
 export interface CanvasV2InspectableElement {
   nodeId: string;
@@ -23,6 +24,7 @@ export interface CanvasV2InspectableElement {
   evidenceSourceId?: string;
   evidenceAuthority?: "observed" | "supplied" | "calculated" | "inferred";
   altText?: string;
+  shapeVariant?: CanvasV2ShapeVariant;
   connector?: {
     variant: CanvasV2ConnectorVariant;
     from: { x: number; y: number; attachedNodeId?: string };
@@ -34,6 +36,8 @@ export interface CanvasV2InspectableElement {
     color: string;
     backgroundColor: string;
     borderColor: string;
+    borderStyle: string;
+    borderWidth: string;
     borderRadius: string;
     fontFamily: string;
     fontSize: string;
@@ -82,6 +86,10 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
   const workspaceRoot = element.getAttribute("data-canvas-v2-workspace-root") === "true";
   const permanentRootAttribute = element.getAttribute("data-canvas-v2-permanent-root") === "true";
   const authoredPrimitive = element.getAttribute("data-canvas-v2-primitive");
+  const shapeVariantValue = element.getAttribute("data-canvas-v2-shape");
+  const shapeVariant = shapeVariantValue === "rectangle" || shapeVariantValue === "ellipse" || shapeVariantValue === "diamond" || shapeVariantValue === "triangle" || shapeVariantValue === "pill"
+    ? shapeVariantValue
+    : undefined;
   const kind = workspaceRoot || permanentRootAttribute || nodeId === "canvas"
     ? "root"
     : authoredPrimitive === "note" || authoredPrimitive === "line" || authoredPrimitive === "connector" || authoredPrimitive === "drawing"
@@ -139,7 +147,8 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
     // The world canvas is the coordinate surface, never a user object. This
     // remains false even while the board is empty so a blank double-click can
     // only deselect; it cannot turn the old canvas wrapper into an editor.
-    textEditable: !permanentRoot && (kind === "text" || kind === "note"),
+    textEditable: !permanentRoot && (kind === "text" || kind === "note" || authoredPrimitive === "shape" || element.getAttribute("data-canvas-v2-writable") === "true"),
+    writable: authoredPrimitive === "shape" || authoredPrimitive === "note" || element.getAttribute("data-canvas-v2-writable") === "true",
     locked: permanentRoot || element.getAttribute("data-canvas-v2-locked") === "true",
     hidden: (element as HTMLElement).hidden || element.getAttribute("data-canvas-v2-hidden") === "true",
     userEdited: element.hasAttribute("data-canvas-v2-user-edited"),
@@ -158,11 +167,14 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
       ? evidenceAuthorityValue
       : undefined,
     altText: element.tagName === "IMG" ? element.getAttribute("alt") ?? "" : undefined,
+    ...(shapeVariant ? { shapeVariant } : {}),
     ...(connector ? { connector } : {}),
     visualStyle: {
       color: computed?.color ?? "",
       backgroundColor: computed?.backgroundColor ?? "",
       borderColor: computed?.borderColor ?? "",
+      borderStyle: computed?.borderStyle ?? "",
+      borderWidth: computed?.borderWidth ?? "",
       borderRadius: computed?.borderRadius ?? "",
       fontFamily: computed?.fontFamily ?? "",
       fontSize: computed?.fontSize ?? "",
