@@ -519,7 +519,12 @@ test("current human findings repair missing clerical lineage and ignore a redund
   assert.equal(next.validationBacklog[0]!.result?.effect, "strengthened");
 });
 
-test("accepted current findings deterministically complete the active validation when model fields are omitted", () => {
+for (const humanInput of [
+  "I accept this validation plan. Four of five teams described consequential pain, so the threshold is met and we should proceed to a pilot.",
+  "I do not accept this validation plan. Four of five users found the flow helpful, but I reject the proposed decision.",
+  "Four of five users said they would accept the onboarding terms. These are findings, not my acceptance of this validation plan.",
+  "Four of five teams found it helpful. We should not stop the pilot.",
+]) test(`omitted interpretation never invents an outcome or acceptance: ${humanInput}`, () => {
   const initial = state();
   const planned = applyCanvasV2DiscoveryTransition({
     state: initial,
@@ -542,7 +547,7 @@ test("accepted current findings deterministically complete the active validation
     },
     previous: planned,
     revisionId: "revision-accepted-findings",
-    humanInput: "I accept this validation plan. Four of five teams described consequential pain, so the threshold is met and we should proceed to a pilot.",
+    humanInput,
     now: NOW,
   });
   const proposed = passiveTransition(continued);
@@ -554,10 +559,10 @@ test("accepted current findings deterministically complete the active validation
   assert.equal(parsed.validationUpdates?.length, 1);
   assert.equal(parsed.validationUpdates![0]!.id, continued.validationBacklog[0]!.id);
   assert.equal(parsed.validationUpdates![0]!.status, "completed");
-  assert.equal(parsed.validationUpdates![0]!.result?.effect, "strengthened");
+  assert.equal(parsed.validationUpdates![0]!.result?.effect, "inconclusive");
   assert.equal(parsed.validationUpdates![0]!.result?.humanInputId, continued.humanInputs.at(-1)!.id);
-  assert.equal(parsed.humanConclusions?.length, 1);
-  assert.equal(parsed.humanConclusions![0]!.disposition, "accepted");
+  assert.equal(parsed.humanConclusions?.length, 0);
+  assert.equal(parsed.validationUpdates![0]!.result?.summary, humanInput);
 
   const graph = syncCanvasV2DiscoveryGraph({
     revisionId: "revision-accepted-findings",
@@ -569,8 +574,8 @@ test("accepted current findings deterministically complete the active validation
   const decoded = codec.decodeTransition(parsed);
   const next = applyCanvasV2DiscoveryTransition({ state: continued, transition: decoded, graph, now: NOW });
   assert.equal(next.validationBacklog[0]!.status, "completed");
-  assert.equal(next.validationBacklog[0]!.result?.effect, "strengthened");
-  assert.equal(next.humanConclusions[0]!.disposition, "accepted");
+  assert.equal(next.validationBacklog[0]!.result?.effect, "inconclusive");
+  assert.equal(next.humanConclusions.length, 0);
 });
 
 test("an unresolved validation waits for findings instead of allowing premature completion", () => {

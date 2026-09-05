@@ -7,6 +7,7 @@ import {
   validateCanvasV2ClaimedCanonicalFlowCounts,
   normalizeCanvasV2ClaimedCanonicalFlowCounts,
   validateCanvasV2EvidenceContinuity,
+  canvasV2VisibleEvidenceIds,
   validateCanvasV2GroundedAppIdentityUsage,
   validateCanvasV2QuantitativeClaimLabels,
   validateCanvasV2RequestedAnalysisEvidenceUsage,
@@ -223,6 +224,7 @@ test("every canonical flow requires complete contiguous screen indices", () => {
   const invalid = { ...canonical, html: canonical.html.replace('data-canvas-v2-flow-index="1"', 'data-canvas-v2-flow-index="4"') };
   const empty = { html: '<main data-canvas-v2-node-id="canvas"></main>', css: "" };
   assert.match(validateCanvasV2EvidenceContinuity(empty, invalid, evidence).join(" "), /indices must be complete and contiguous/);
+  assert.match(validateCanvasV2EvidenceContinuity(empty, invalid, evidence, { allowUserEvidenceRemoval: true }).join(" "), /indices must be complete and contiguous/);
 });
 
 test("analytical copies are freely composable but remain traceable to a canonical source", () => {
@@ -1211,4 +1213,18 @@ test("invented quantitative precision must remain visibly hypothetical", () => {
     [],
     "a visibly proposed threshold is a decision rule, not a fabricated observation",
   );
+});
+
+test("human evidence removal remains valid across subsequent manual and model documents", () => {
+  const removed = { ...canonical, html: canonical.html.replace(/<img[^>]*data-canvas-v2-node-id="flow-awin-screen-1"[^>]*>/, "") };
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(canonical, removed, evidence, { allowUserEvidenceRemoval: true }), []);
+  const next = { ...removed, html: removed.html.replace("</main>", '<p data-canvas-v2-node-id="human-note">Keep exploring</p></main>') };
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(removed, next, evidence), []);
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(next, { ...next, css: "p{color:blue}" }, evidence), []);
+  assert.equal(canvasV2VisibleEvidenceIds(next).has("screen:awin-1"), false);
+  const modelRemoval = { ...next, html: next.html.replace(/<img[^>]*data-canvas-v2-node-id="flow-awin-screen-2"[^>]*>/, "") };
+  assert.match(validateCanvasV2EvidenceContinuity(next, modelRemoval, evidence).join(" "), /must remain visible|complete, ordered/);
+  const empty = { html: "<main></main>", css: "" };
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(canonical, empty, evidence, { allowUserEvidenceRemoval: true }), []);
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(empty, { html: "<main>A new idea</main>", css: "" }, evidence), []);
 });

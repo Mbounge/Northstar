@@ -76,7 +76,7 @@ export interface CanvasV2EvidenceMetric {
   unit?: string;
   format?: "number" | "currency" | "percent" | "duration" | "text";
   definition: string;
-  authority: Exclude<CanvasV2EvidenceAuthority, "inferred">;
+  authority: CanvasV2EvidenceAuthority;
   timeRange?: CanvasV2EvidenceTimeRange;
   filters?: Record<string, string | number | boolean>;
   sourceAssetIds?: string[];

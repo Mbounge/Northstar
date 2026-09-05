@@ -1,3 +1,4 @@
+import { placeActivatedTool, fitAllCanvas } from "./canvas-v2-authoring-helpers";
 import { expect, test, type Page } from "@playwright/test";
 
 function app(page: Page) {
@@ -56,6 +57,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await shapes.nth(1).click({ modifiers: ["Shift"] });
     await expect(app(page).getByText("2 selected", { exact: true })).toBeVisible();
     await app(page).getByTitle("Create Connector · drag to place").click();
+    await placeActivatedTool(page);
     const connector = scene(page).locator('[data-canvas-v2-primitive="connector"]');
     await expect(connector).toHaveCount(1);
     await expect(connector).toHaveAttribute("data-canvas-v2-connector-from", /manual-shape-/);
@@ -231,6 +233,7 @@ test("connector library exposes straight, arrow and independently adjustable cur
 test("quick shapes are true circles, accept direct text, and switch shape in place", async ({ page }) => {
   await openCleanCanvas(page, "/canvas-v2-e2e");
   await app(page).getByTitle("Create Shape · drag to place").click();
+  await placeActivatedTool(page);
   const shape = scene(page).locator('[data-canvas-v2-primitive="shape"]').first();
   await expect(shape).toHaveAttribute("data-canvas-v2-shape", "ellipse");
   await expect(shape).toHaveAttribute("data-canvas-v2-writable", "true");
@@ -239,7 +242,7 @@ test("quick shapes are true circles, accept direct text, and switch shape in pla
   expect(Math.abs(circleBounds!.width - circleBounds!.height)).toBeLessThan(1);
 
   await shape.dblclick({ position: { x: circleBounds!.width / 2, y: circleBounds!.height / 2 } });
-  const shapeEditor = scene(page).locator('[contenteditable="plaintext-only"][data-canvas-v2-direct-editing="true"]');
+  const shapeEditor = scene(page).locator('[contenteditable="true"][data-canvas-v2-direct-editing="true"]');
   await expect(shapeEditor).toBeVisible();
   await shapeEditor.fill("Editable circle");
   await shapeEditor.press("ControlOrMeta+Enter");
@@ -256,10 +259,12 @@ test("quick shapes are true circles, accept direct text, and switch shape in pla
   await expect(shape).toHaveCSS("clip-path", "none");
 
   await app(page).getByTitle("Create Note · drag to place").click();
+
+  await placeActivatedTool(page);
   const note = scene(page).locator('[data-canvas-v2-primitive="note"]');
   await expect(note).toHaveAttribute("data-canvas-v2-writable", "true");
   await note.dblclick();
-  const noteEditor = scene(page).locator('[contenteditable="plaintext-only"][data-canvas-v2-direct-editing="true"]');
+  const noteEditor = scene(page).locator('[contenteditable="true"][data-canvas-v2-direct-editing="true"]');
   await expect(noteEditor).toBeVisible();
   await noteEditor.fill("My own note");
   await noteEditor.press("ControlOrMeta+Enter");
@@ -269,6 +274,7 @@ test("quick shapes are true circles, accept direct text, and switch shape in pla
 test("semantic paint and line controls persist hue, transparency and line style", async ({ page }) => {
   await openCleanCanvas(page, "/canvas-v2-e2e");
   await app(page).getByTitle("Create Shape · drag to place").click();
+  await placeActivatedTool(page);
   const rectangle = scene(page).locator('[data-canvas-v2-primitive="shape"]').first();
   await expect(rectangle).toHaveCount(1);
   await rectangle.click();
@@ -307,4 +313,63 @@ test("semantic paint and line controls persist hue, transparency and line style"
   await app(page).getByTitle("Undo").click();
   await expect(rectangle).toHaveCSS("border-style", "dashed");
   await expect(rectangle).toHaveCSS("border-color", "rgb(66, 168, 238)");
+});
+
+// Audit regressions: these use the native scene and deterministic fixture only.
+test("audit closure: Escape commits text and copy survives deletion with reversible cut/paste", async ({ page }) => {
+  await openCleanCanvas(page, "/canvas-v2-e2e");
+  await app(page).getByTitle("Create Text · drag to place").click();
+  await placeActivatedTool(page);
+  const text = scene(page).getByText("New text", { exact: true });
+  await text.dblclick();
+  await expect(text).toHaveAttribute("contenteditable", "true");
+  await text.fill("Escape keeps my Northstar idea");
+  await text.press("Escape");
+  const edited = scene(page).getByText("Escape keeps my Northstar idea", { exact: true });
+  await expect(edited).toBeVisible();
+  await expect(edited).not.toHaveAttribute("contenteditable");
+  await app(page).getByRole("button", { name: "Undo canvas action", exact: true }).click();
+  await expect(text).toBeVisible();
+  await app(page).getByRole("button", { name: "Redo canvas action", exact: true }).click();
+  await edited.click({ button: "right" });
+  await app(page).getByRole("menuitem", { name: "Copy ⌘C", exact: true }).click();
+  await edited.click({ button: "right" });
+  await app(page).getByRole("menuitem", { name: "Delete", exact: true }).click();
+  await expect(edited).toHaveCount(0);
+  await workspace(page).click({ button: "right", position: { x: 650, y: 180 } });
+  await app(page).getByRole("menuitem", { name: "Paste ⌘V", exact: true }).click();
+  await expect(edited).toHaveCount(1);
+  const copiedId = await edited.getAttribute("data-canvas-v2-node-id");
+  await edited.click({ button: "right" });
+  await app(page).getByRole("menuitem", { name: "Cut ⌘X", exact: true }).click();
+  await expect(edited).toHaveCount(0);
+  await workspace(page).click({ button: "right", position: { x: 650, y: 180 } });
+  await app(page).getByRole("menuitem", { name: "Paste ⌘V", exact: true }).click();
+  await expect(edited).toHaveCount(1);
+  await expect(edited).not.toHaveAttribute("data-canvas-v2-node-id", copiedId!);
+  await app(page).getByRole("button", { name: "Undo canvas action", exact: true }).click();
+  await expect(edited).toHaveCount(0);
+  await app(page).getByRole("button", { name: "Undo canvas action", exact: true }).click();
+  await expect(edited).toHaveAttribute("data-canvas-v2-node-id", copiedId!);
+});
+
+test("audit closure: deleting canonical evidence permits the next canvas edits", async ({ page }) => {
+  test.setTimeout(90_000);
+  await openCleanCanvas(page, "/canvas-v2-e2e");
+  await app(page).getByRole("textbox", { name: "Message North Star", exact: true }).fill("Research Awin and Ghost");
+  await app(page).getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(scene(page).getByRole("img", { name: "Landing", exact: true })).toHaveCount(1);
+  await expect(app(page).getByTitle("Create Shape · drag to place")).toBeEnabled({ timeout: 60_000 });
+  await fitAllCanvas(page);
+  const landing = scene(page).getByRole("img", { name: "Landing", exact: true });
+  await landing.click({ button: "right" });
+  await app(page).getByRole("menuitem", { name: "Delete", exact: true }).click();
+  await expect(landing).toHaveCount(0);
+  await app(page).getByTitle("Create Shape · drag to place").click();
+  await placeActivatedTool(page);
+  await expect(scene(page).locator('[data-canvas-v2-primitive="shape"]')).toHaveCount(1);
+  await app(page).getByTitle("Create Note · drag to place").click();
+  await placeActivatedTool(page);
+  await expect(scene(page).locator('[data-canvas-v2-primitive="note"]')).toHaveCount(1);
+  await expect(landing).toHaveCount(0);
 });

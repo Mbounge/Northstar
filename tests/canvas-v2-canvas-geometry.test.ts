@@ -135,7 +135,8 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(nativeScene, /useImperativeHandle\(imperativeRef, \(\) => \(\{\s*applyTransientGeometry,\s*previewNodeRemoval,/);
   assert.match(nativeScene, /transientStyleSnapshotsRef/);
   assert.match(nativeScene, /setCompiledRevisionId\(revision\.id\)/);
-  assert.match(nativeScene, /compiledRevisionId !== revision\.id && <iframe/);
+  assert.match(nativeScene, /sceneOverride\?\.revisionId !== revision\.id && compiledRevisionId !== revision\.id/);
+  assert.match(nativeScene, /needsCompiler && <iframe/);
   assert.match(nativeScene, /querySelectorAll<HTMLElement>\("\[data-canvas-v2-node-id\]"\)/);
   assert.match(nativeScene, /contentVisibility: "auto"/);
   assert.match(nativeScene, /node\.canonicalEvidence \|\| node\.attributes\["data-canvas-v2-evidence-role"\] === "canonical"/);

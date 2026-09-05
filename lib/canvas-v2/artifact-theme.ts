@@ -4,6 +4,8 @@ interface StoredStyle {
   value: string;
   priority: string;
   appliedValue: string;
+  backgroundShorthand?: string;
+  backgroundPriority?: string;
 }
 
 interface CanvasV2Color {
@@ -62,6 +64,7 @@ function restoreTheme(state: CanvasV2ArtifactThemeState): void {
       // owns the live property.
       if (style.getPropertyValue(property).trim() !== stored.appliedValue.trim()) return;
       if (stored.value) style.setProperty(property, stored.value, stored.priority);
+      else if (property === "background-color" && stored.backgroundShorthand) style.setProperty("background", stored.backgroundShorthand, stored.backgroundPriority);
       else style.removeProperty(property);
     });
   });
@@ -343,6 +346,9 @@ function themedValue(
   if (property === "color") return canvasV2ThemeForegroundColor(value, background, theme);
   if (property === "fill" || property === "stroke") {
     if (element.namespaceURI !== SVG_NAMESPACE) return undefined;
+    // Connector-label strokes are a background halo, not a foreground rule.
+    // Applying text contrast to the halo paints over the readable glyphs.
+    if (property === "stroke" && element.getAttribute("data-canvas-v2-connector-part") === "label" && element.getAttribute("data-canvas-v2-label-background") !== "true") return serializeColor(HOST_BACKGROUND[theme]);
     const textVector = element.tagName === "text" || element.tagName === "tspan";
     const semanticVector = theme === "dark" ? darkVector(value) : lightVector(value);
     const candidate = semanticVector ?? value;
@@ -373,7 +379,7 @@ function themeElements(
     const style = (element as HTMLElement | SVGElement).style;
     const applyProperty = (property: string, next: string | undefined) => {
       if (!next) return;
-      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property), appliedValue: next });
+      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property), appliedValue: next, ...(property === "background-color" ? { backgroundShorthand: style.getPropertyValue("background"), backgroundPriority: style.getPropertyPriority("background") } : {}) });
       // Authored compositions may contain stylesheet declarations marked
       // !important. Theme and contrast are host invariants, so this final
       // scoped override intentionally outranks authored presentation CSS.

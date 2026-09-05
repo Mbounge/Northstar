@@ -1,3 +1,4 @@
+import { placeActivatedTool } from "./canvas-v2-authoring-helpers";
 import { expect, test, type Page } from "@playwright/test";
 
 function app(page: Page) {
@@ -46,6 +47,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     const board = scene(page);
     const surface = workspace(page).getByTestId("canvas-v2-workspace-surface");
     await app(page).getByTitle("Create Text").click();
+    await placeActivatedTool(page);
     const text = board.locator('[data-canvas-v2-node-id^="manual-text-"]');
     await expect(text).toHaveCount(1);
     const nodeId = await text.getAttribute("data-canvas-v2-node-id");

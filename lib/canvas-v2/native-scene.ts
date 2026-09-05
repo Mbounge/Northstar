@@ -1,8 +1,9 @@
-import type { CanvasV2ArtifactDocument, CanvasV2ArtifactRevision, CanvasV2ElementBounds, CanvasV2RenderObservation, CanvasV2SpatialIntersection, CanvasV2SurfaceZoneId, CanvasV2TerritoryRelation } from "@/lib/canvas-v2/types";
+import { CANVAS_V2_RICH_TEXT_TAGS, canvasV2RichTextStyle, canvasV2SafeTextLink } from "./rich-text";
+import type { CanvasV2ArtifactDocument, CanvasV2ArtifactRevision, CanvasV2ElementBounds, CanvasV2EvidenceAsset, CanvasV2RenderObservation, CanvasV2SpatialIntersection, CanvasV2SurfaceZoneId, CanvasV2TerritoryRelation } from "@/lib/canvas-v2/types";
 import type { CanvasV2BoardObjectKind } from "@/lib/canvas-v2/board-object-graph";
 import { CANVAS_V2_WORKSPACE, type CanvasV2WorkspacePoint } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { canvasV2ShapeVariantStyle, type CanvasV2ManualMutation, type CanvasV2ShapeVariant } from "@/lib/canvas-v2/manual-mutations";
-import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorBendFromPoint, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import { buildCanvasV2ConnectorGeometry, readCanvasV2ConnectorWaypoints, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, type CanvasV2ConnectorCap, canvasV2ConnectorBendFromPoint, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
 
 export const CANVAS_V2_NATIVE_SCENE_SCHEMA = "canvas-v2.native-scene.v1" as const;
@@ -185,7 +186,7 @@ export interface CanvasV2PaintedEdgeDescriptor {
 const CANVAS_V2_PHRASING_EDGE_OWNERS = new Set([
   "a", "b", "bdi", "bdo", "button", "cite", "code", "data", "del", "em",
   "h1", "h2", "h3", "h4", "h5", "h6", "i", "ins", "kbd", "label", "mark",
-  "p", "q", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var",
+  "p", "q", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var", "td", "th",
 ]);
 
 /** Resolve the final browser paint instead of guessing from a CSS shorthand. */
@@ -338,6 +339,7 @@ const CANVAS_V2_INLINE_TEXT_TAGS = new Set([
   "a", "b", "bdi", "bdo", "br", "cite", "code", "data", "del", "em", "i", "ins", "kbd", "mark", "q", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var", "wbr",
 ]);
 const CANVAS_V2_TEXT_CONTAINER_TAGS = new Set([
+  "td", "th",
   "a", "article", "b", "blockquote", "button", "cite", "code", "data", "dd", "del", "div", "dt", "em", "figcaption",
   "h1", "h2", "h3", "h4", "h5", "h6", "i", "ins", "kbd", "label", "li", "mark", "p", "q", "s", "samp",
   "small", "span", "strong", "sub", "sup", "time", "u", "var",
@@ -396,7 +398,7 @@ export function canvasV2NativeSceneNodeSupportsTextEditing(
   const inlineSubtree = (candidate: CanvasV2NativeSceneNode, seen: Set<string>): boolean => {
     if (seen.has(candidate.id)) return false;
     seen.add(candidate.id);
-    if (candidate.sourceNodeId || !CANVAS_V2_INLINE_TEXT_TAGS.has(candidate.tagName)) return false;
+    if ((candidate.sourceNodeId && candidate.attributes["data-canvas-v2-rich-text"] !== "true") || (!CANVAS_V2_INLINE_TEXT_TAGS.has(candidate.tagName) && !CANVAS_V2_RICH_TEXT_TAGS.has(candidate.tagName))) return false;
     return candidate.childIds.every((childId) => {
       const child = byId.get(childId);
       return Boolean(child && inlineSubtree(child, seen));
@@ -744,6 +746,7 @@ function kindFor(element: Element): CanvasV2BoardObjectKind {
   // not demote them back to generic shapes on the next AI turn: their typed
   // endpoints, curve controls, hit target and attachment lifecycle are all
   // durable scene state.
+  if (html.dataset?.canvasV2CropFrame === "true") return "image";
   if (html.dataset?.canvasV2Primitive === "connector") return "connector";
   if (html.dataset?.canvasV2PaintedEdge) return "shape";
   if (html.dataset?.canvasV2Group === "true") return "group";
@@ -1141,9 +1144,9 @@ export function compileCanvasV2NativeScene(input: {
       order,
       tagName: element.tagName.toLowerCase(),
       namespace: element.namespaceURI === SVG_NAMESPACE ? "svg" : "html",
-      layoutMode: parentElement && computed?.position !== "absolute" && computed?.position !== "fixed" ? "flow" : "absolute",
+      layoutMode: html.dataset?.canvasV2SceneLayout === "flow" ? "flow" : html.dataset?.canvasV2SceneLayout === "absolute" ? "absolute" : parentElement && computed?.position !== "absolute" && computed?.position !== "fixed" ? "flow" : "absolute",
       kind: kindFor(element),
-      selectable: Boolean(sourceNodeId) && kindFor(element) !== "root",
+      selectable: Boolean(sourceNodeId) && kindFor(element) !== "root" && html.dataset?.canvasV2RichText !== "true" && html.dataset?.canvasV2CropSource !== "true" && !["tbody", "tr"].includes(element.tagName.toLowerCase()),
       hidden: html.hidden || computed?.display === "none" || computed?.visibility === "hidden",
       locked: html.dataset?.canvasV2Locked === "true" || kindFor(element) === "root",
       canonicalEvidence: Boolean(element.closest("[data-canvas-v2-canonical-flow]")),
@@ -1800,6 +1803,126 @@ function cloneScene(scene: CanvasV2NativeSceneDocument): CanvasV2NativeSceneDocu
   };
 }
 
+/** A private deep snapshot: later edits, deletion and undo cannot change copied content. */
+export interface CanvasV2NativeClipboard {
+  scene: CanvasV2NativeSceneDocument;
+  evidenceAssets?: CanvasV2EvidenceAsset[];
+}
+
+export function copyCanvasV2NativeSelection(
+  source: CanvasV2NativeSceneDocument,
+  sourceNodeIds: readonly string[],
+  evidenceAssets: readonly CanvasV2EvidenceAsset[] = [],
+): CanvasV2NativeClipboard | undefined {
+  const snapshot = cloneScene(source);
+  const byId = canvasV2NativeSceneNodeMap(snapshot);
+  const selected = new Set(snapshot.nodes.filter((node) => node.kind !== "root" && node.sourceNodeId && sourceNodeIds.includes(node.sourceNodeId)).map((node) => node.id));
+  const roots = [...selected].filter((id) => {
+    let parentId = byId.get(id)?.parentId;
+    while (parentId) {
+      if (selected.has(parentId)) return false;
+      parentId = byId.get(parentId)?.parentId;
+    }
+    return true;
+  });
+  if (!roots.length) return undefined;
+  const included = new Set<string>();
+  const visit = (id: string) => {
+    if (included.has(id)) return;
+    included.add(id);
+    byId.get(id)?.childIds.forEach(visit);
+  };
+  for (const id of roots) {
+    const node = byId.get(id)!;
+    const bounds = canvasV2NativeSceneAbsoluteBounds(source, node.sourceNodeId)!;
+    materializeResolvedSubtreeStyle(snapshot, node);
+    node.geometry.x = bounds.x;
+    node.geometry.y = bounds.y;
+    node.parentId = undefined;
+    node.layoutMode = "absolute";
+    visit(id);
+  }
+  snapshot.nodes = snapshot.nodes.filter((node) => included.has(node.id));
+  snapshot.rootIds = roots;
+  for (const node of snapshot.nodes) {
+    if (!node.detachedFromParentId || included.has(node.detachedFromParentId)) continue;
+    node.detachedFromParentId = undefined;
+    node.detachedFromParentIndex = undefined;
+    delete node.attributes["data-canvas-v2-detached-from"];
+    delete node.attributes["data-canvas-v2-detached-index"];
+  }
+  const evidenceIds = new Set(snapshot.nodes.flatMap((node) => node.evidence?.id ? [node.evidence.id] : []));
+  return { scene: snapshot, evidenceAssets: structuredClone(evidenceAssets.filter((asset) => evidenceIds.has(asset.id))) };
+}
+
+export function pasteCanvasV2NativeClipboard(
+  source: CanvasV2NativeSceneDocument,
+  clipboard: CanvasV2NativeClipboard,
+  stamp: string,
+  offset: number | { x: number; y: number } = 36,
+): { scene: CanvasV2NativeSceneDocument; nodeIds: string[] } {
+  const scene = cloneScene(source);
+  const snapshot = cloneScene(clipboard.scene);
+  const delta = typeof offset === "number" ? { x: offset, y: offset } : offset;
+  const occupied = new Set(scene.nodes.flatMap((node) => [node.id, node.sourceNodeId ?? ""]));
+  const ids = new Map<string, string>();
+  const sourceIds = new Map<string, string>();
+  for (const [index, node] of snapshot.nodes.entries()) {
+    let id = `paste-${stamp}-${index}`;
+    while (occupied.has(id)) id += "-copy";
+    occupied.add(id);
+    ids.set(node.id, id);
+    if (node.sourceNodeId) sourceIds.set(node.sourceNodeId, id);
+  }
+  const roots = new Set(snapshot.rootIds);
+  for (const node of snapshot.nodes) {
+    const originalId = node.id;
+    const originalSourceId = node.sourceNodeId;
+    node.id = ids.get(originalId)!;
+    node.sourceNodeId = originalSourceId ? sourceIds.get(originalSourceId) : undefined;
+    node.parentId = node.parentId ? ids.get(node.parentId) : undefined;
+    node.detachedFromParentId = node.detachedFromParentId ? ids.get(node.detachedFromParentId) : undefined;
+    if (node.detachedFromParentId) node.attributes["data-canvas-v2-detached-from"] = node.detachedFromParentId;
+    node.childIds = node.childIds.map((id) => ids.get(id)!);
+    node.content = node.content.map((item) => item.kind === "node" ? { kind: "node", id: ids.get(item.id)! } : item);
+    if (node.sourceNodeId) node.attributes["data-canvas-v2-node-id"] = node.sourceNodeId;
+    // A pasted witness refers to its original source; it is never a second canonical lane.
+    delete node.attributes["data-canvas-v2-canonical-flow"];
+    node.canonicalEvidence = false;
+    if (node.evidence) {
+      node.evidence = { ...node.evidence, role: "analysis-copy", sourceNodeId: node.evidence.sourceNodeId ?? originalSourceId };
+      node.attributes["data-canvas-v2-evidence-role"] = "analysis-copy";
+      if (node.evidence.sourceNodeId) node.attributes["data-canvas-v2-source-node-id"] = node.evidence.sourceNodeId;
+    }
+    if (roots.has(originalId)) {
+      node.geometry.x += delta.x;
+      node.geometry.y += delta.y;
+    }
+    if (node.kind === "connector") {
+      const copiedWaypoints = readCanvasV2ConnectorWaypoints(node.attributes["data-canvas-v2-connector-waypoints"]);
+      if (copiedWaypoints) node.attributes["data-canvas-v2-connector-waypoints"] = JSON.stringify(copiedWaypoints.map(p => ({ x: p.x+delta.x, y: p.y+delta.y })));
+      for (const endpoint of ["from", "to"]) {
+        const key = `data-canvas-v2-connector-${endpoint}`;
+        const mapped = sourceIds.get(node.attributes[key]);
+        if (mapped) node.attributes[key] = mapped;
+        else delete node.attributes[key];
+      }
+      for (const point of ["from", "to", "control"]) {
+        for (const axis of ["x", "y"]) {
+          const key = `data-canvas-v2-connector-${point}-${axis}`;
+          if (node.attributes[key] !== undefined) node.attributes[key] = String(Number(node.attributes[key]) + (axis === "x" ? delta.x : delta.y));
+        }
+      }
+    }
+    markNativeUserEdit(node, "paste");
+  }
+  scene.nodes.push(...snapshot.nodes);
+  scene.rootIds.push(...snapshot.rootIds.map((id) => ids.get(id)!));
+  scene.nodes.forEach((node, index) => { node.order = index; });
+  reconcileCanvasV2NativeConnectors(scene);
+  return { scene, nodeIds: snapshot.rootIds.map((id) => ids.get(id)!) };
+}
+
 function sourceNode(scene: CanvasV2NativeSceneDocument, nodeId: string): CanvasV2NativeSceneNode {
   const node = scene.nodes.find((candidate) => candidate.sourceNodeId === nodeId);
   if (!node) throw new Error(`Canvas V2 expected one native scene node named ${nodeId}.`);
@@ -1941,7 +2064,7 @@ function detachNativeNodeFromParent(scene: CanvasV2NativeSceneDocument, node: Ca
   node.layoutMode = "absolute";
   node.geometry.x = round(x);
   node.geometry.y = round(y);
-  node.detachedFromParentId = semanticParentId;
+  node.detachedFromParentId = semanticParent?.attributes["data-canvas-v2-section"] === "true" ? undefined : semanticParentId;
   node.detachedFromParentIndex = Math.max(0, semanticIndex);
   node.attributes["data-canvas-v2-detached"] = "true";
   node.attributes["data-canvas-v2-detached-from"] = semanticParentId;
@@ -2019,12 +2142,13 @@ function nativePrimitiveNodes(
   const height = Math.max(1, round(mutation.height ?? (mutation.primitive === "table" ? 120 : mutation.primitive === "frame" ? 240 : mutation.primitive === "text" ? 48 : 160)));
   if (mutation.primitive === "text") return [{
     ...base,
-    tagName: "p",
+    tagName: "div",
     kind: "text",
     geometry: { x: round(mutation.x), y: round(mutation.y), width, height, rotation: 0, zIndex: 0 },
     inlineStyle: { margin: "0", font: "600 28px/1.3 Inter,system-ui,sans-serif", color: "var(--northstar-ink)" },
-    directText: "New text",
-    content: [{ kind: "text", value: "New text" }],
+    attributes: { ...base.attributes, "data-canvas-v2-text-mode": mutation.textMode ?? "area" },
+    directText: mutation.text ?? "New text",
+    content: [{ kind: "text", value: mutation.text ?? "New text" }],
   }];
   if (mutation.primitive === "note") return [{
     ...base,
@@ -2096,6 +2220,8 @@ function nativePrimitiveNodes(
         viewBox: `0 0 ${geometry.bounds.width} ${geometry.bounds.height}`,
         "aria-label": `${variant} connector`,
         "data-canvas-v2-connector-variant": variant,
+        "data-canvas-v2-connector-color": "#808080",
+        "data-canvas-v2-connector-weight": "2",
         "data-canvas-v2-connector-from-x": String(round(mutation.x)),
         "data-canvas-v2-connector-from-y": String(round(mutation.y)),
         "data-canvas-v2-connector-to-x": String(endX),
@@ -2132,12 +2258,12 @@ function nativePrimitiveNodes(
     });
     return [
       root,
-      connectorChild(pathId, "path", { "data-canvas-v2-connector-part": "path", d: geometry.path, fill: "none", stroke: "var(--northstar-violet)", "stroke-width": "4", "stroke-linecap": "round" }),
+      connectorChild(pathId, "path", { "data-canvas-v2-connector-part": "path", d: geometry.path, fill: "none", stroke: "#808080", "stroke-width": "2", "stroke-linecap": "round" }),
       connectorChild(hitId, "path", { "data-canvas-v2-connector-part": "hit", d: geometry.path, fill: "none", stroke: "transparent", "stroke-width": "20", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke", "pointer-events": "stroke" }),
-      connectorChild(startId, "circle", { "data-canvas-v2-connector-part": "start", cx: String(geometry.localStart.x), cy: String(geometry.localStart.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "var(--northstar-violet)", "stroke-width": "2.5" }),
+      connectorChild(startId, "circle", { "data-canvas-v2-connector-part": "start", cx: String(geometry.localStart.x), cy: String(geometry.localStart.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "#808080", "stroke-width": "2.5" }),
       connectorChild(endId, variant === "arrow" ? "polyline" : "circle", variant === "arrow"
-        ? { "data-canvas-v2-connector-part": "end", points: geometry.arrowPoints, fill: "none", stroke: "var(--northstar-violet)", "stroke-width": "3.5", "stroke-linecap": "round", "stroke-linejoin": "round" }
-        : { "data-canvas-v2-connector-part": "end", cx: String(geometry.localEnd.x), cy: String(geometry.localEnd.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "var(--northstar-violet)", "stroke-width": "2.5" }),
+        ? { "data-canvas-v2-connector-part": "end", points: geometry.arrowPoints, fill: "none", stroke: "#808080", "stroke-width": "3.5", "stroke-linecap": "round", "stroke-linejoin": "round" }
+        : { "data-canvas-v2-connector-part": "end", cx: String(geometry.localEnd.x), cy: String(geometry.localEnd.y), r: "5.5", fill: "var(--northstar-surface)", stroke: "#808080", "stroke-width": "2.5" }),
     ];
   }
   if (mutation.primitive === "line") {
@@ -2219,6 +2345,59 @@ function nativePrimitiveNodes(
     directText: "Cell 1    Cell 2\nCell 3    Cell 4",
     content: [{ kind: "text", value: "Cell 1    Cell 2\nCell 3    Cell 4" }],
   }];
+}
+
+export function canvasV2NativeTableRows(scene: CanvasV2NativeSceneDocument, tableId: string): CanvasV2NativeSceneNode[][] {
+  const byId = canvasV2NativeSceneNodeMap(scene);
+  const root = scene.nodes.find((node) => node.sourceNodeId === tableId);
+  const rows: CanvasV2NativeSceneNode[][] = [];
+  const visit = (node: CanvasV2NativeSceneNode) => {
+    if (node.tagName === "tr") rows.push(node.childIds.map((id) => byId.get(id)!).filter((cell) => cell && ["td", "th"].includes(cell.tagName)));
+    else node.childIds.forEach((id) => { const child = byId.get(id); if (child) visit(child); });
+  };
+  if (root) visit(root);
+  return rows;
+}
+
+function editNativeTable(scene: CanvasV2NativeSceneDocument, node: CanvasV2NativeSceneNode, mutation: Extract<CanvasV2ManualMutation, { kind: "table-edit" }>): void {
+  if (node.kind !== "table") throw new Error("Select a table to edit its rows or columns.");
+  let rows: Array<Array<CanvasV2NativeSceneNode | string>> = canvasV2NativeTableRows(scene, node.sourceNodeId!).map((row) => [...row]);
+  if (!rows.length) rows = [["Cell 1", "Cell 2"], ["Cell 3", "Cell 4"]];
+  const columns = Math.max(1, ...rows.map((row) => row.length));
+  const index = Math.max(0, Math.floor(mutation.index ?? (mutation.action.includes("column") ? columns : rows.length)));
+  if (mutation.action === "replace") rows = (mutation.cells ?? [[""]]).map((row) => [...row]);
+  else if (mutation.action === "add-row") rows.splice(Math.min(rows.length, index), 0, Array(columns).fill(""));
+  else if (mutation.action === "remove-row" && rows.length > 1) rows.splice(Math.min(rows.length - 1, index), 1);
+  else if (mutation.action === "add-column") rows.forEach((row) => row.splice(Math.min(row.length, index), 0, ""));
+  else if (mutation.action === "remove-column" && columns > 1) rows.forEach((row) => row.splice(Math.min(row.length - 1, index), 1));
+  if (rows.length > 200 || rows.some((row) => row.length > 50)) throw new Error("A canvas table supports up to 200 rows and 50 columns.");
+  const count = Math.max(1, ...rows.map((row) => row.length));
+  const oldIds = new Set<string>();
+  const byId = canvasV2NativeSceneNodeMap(scene);
+  const collect = (id: string) => { if (oldIds.has(id)) return; oldIds.add(id); byId.get(id)?.childIds.forEach(collect); };
+  node.childIds.forEach(collect);
+  const keptIds = new Set<string>();
+  const keep = (id: string) => { if (keptIds.has(id)) return; keptIds.add(id); byId.get(id)?.childIds.forEach(keep); };
+  rows.flat().forEach((cell) => { if (typeof cell !== "string") keep(cell.id); });
+  scene.nodes = scene.nodes.filter((item) => !oldIds.has(item.id) || keptIds.has(item.id));
+  const make = (tagName: string, parentId: string, text?: string): CanvasV2NativeSceneNode => {
+    const id = uniqueNativeNodeId(scene, `${node.id}-${tagName}-${scene.nodes.length}`);
+    const child: CanvasV2NativeSceneNode = { ...node, id, sourceNodeId: id, parentId, kind: "text", tagName, layoutMode: "flow", selectable: tagName === "td", childIds: [], content: text === undefined ? [] : [{ kind: "text", value: text }], directText: text, geometry: { x: 0, y: 0, width: node.geometry.width / count, height: 44, rotation: 0, zIndex: 0 }, attributes: { "data-canvas-v2-node-id": id, ...(tagName === "td" ? { "data-canvas-v2-writable": "true" } : {}) }, inlineStyle: tagName === "td" ? { border: "1px solid var(--northstar-line)", padding: "12px", "min-width": "80px", "vertical-align": "top", font: "400 16px/1.4 Inter,system-ui,sans-serif" } : {}, resolvedStyle: undefined };
+    scene.nodes.push(child); return child;
+  };
+  const body = make("tbody", node.id);
+  node.childIds = [body.id]; node.content = [{ kind: "node", id: body.id }]; node.directText = undefined;
+  for (const row of rows) {
+    const tr = make("tr", body.id); body.childIds.push(tr.id); body.content.push({ kind: "node", id: tr.id });
+    for (let index = 0; index < count; index += 1) {
+      const source = row[index] ?? "";
+      const cell = typeof source === "string" ? make("td", tr.id, source) : source;
+      cell.parentId = tr.id; cell.geometry.width = node.geometry.width / count;
+      tr.childIds.push(cell.id); tr.content.push({ kind: "node", id: cell.id });
+    }
+  }
+  node.geometry.height = Math.max(44, rows.length * 48);
+  node.inlineStyle["table-layout"] = "fixed";
 }
 
 function nativeAbsoluteOrigin(scene: CanvasV2NativeSceneDocument, node: CanvasV2NativeSceneNode): { x: number; y: number } {
@@ -2346,6 +2525,8 @@ export function promoteCanvasV2AuthoredRelationships(
       "data-canvas-v2-connector-bend": String(bend),
       "data-canvas-v2-connector-control-x": String(geometry.control.x),
       "data-canvas-v2-connector-control-y": String(geometry.control.y),
+      "data-canvas-v2-connector-start-cap": "none",
+      "data-canvas-v2-connector-end-cap": promotion.arrow ? "line-arrow" : "none",
       ...(promotion.arrow ? { "data-canvas-v2-connector-arrow": "true" } : {}),
     };
     connector.inlineStyle = { ...connector.inlineStyle, overflow: "visible", "pointer-events": "auto" };
@@ -2443,19 +2624,20 @@ export function reconcileCanvasV2NativeConnectors(scene: CanvasV2NativeSceneDocu
     connector.attributes["data-canvas-v2-connector-to-x"] = String(round(end.x));
     connector.attributes["data-canvas-v2-connector-to-y"] = String(round(end.y));
     const variantValue = connector.attributes["data-canvas-v2-connector-variant"];
-    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" ? variantValue : "arrow";
+    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" || variantValue === "bent" ? variantValue : "arrow";
     const storedControlX = Number(connector.attributes["data-canvas-v2-connector-control-x"]);
     const storedControlY = Number(connector.attributes["data-canvas-v2-connector-control-y"]);
     const geometry = buildCanvasV2ConnectorGeometry({
       start,
       end,
       variant,
+      waypoints: readCanvasV2ConnectorWaypoints(connector.attributes["data-canvas-v2-connector-waypoints"]),
       bend: numberAttribute(connector, "data-canvas-v2-connector-bend", 72),
-      ...(variant === "curve" && Number.isFinite(storedControlX) && Number.isFinite(storedControlY)
+      ...((variant === "curve" || variant === "bent") && Number.isFinite(storedControlX) && Number.isFinite(storedControlY)
         ? { control: { x: storedControlX, y: storedControlY } }
         : {}),
     });
-    if (variant === "curve") {
+    if (variant === "curve" || variant === "bent") {
       connector.attributes["data-canvas-v2-connector-control-x"] = String(geometry.control.x);
       connector.attributes["data-canvas-v2-connector-control-y"] = String(geometry.control.y);
     }
@@ -2468,6 +2650,16 @@ export function reconcileCanvasV2NativeConnectors(scene: CanvasV2NativeSceneDocu
     connector.geometry.height = geometry.bounds.height;
     connector.geometry.rotation = 0;
     connector.attributes.viewBox = `0 0 ${geometry.bounds.width} ${geometry.bounds.height}`;
+    // Authored relationships may initially omit a cap node. Materialize both
+    // ends so the same editor controls apply to human and discovery connectors.
+    for (const endpoint of ["start", "end"] as const) {
+      if (connector.childIds.some(id => byId.get(id)?.attributes["data-canvas-v2-connector-part"] === endpoint)) continue;
+      const template = connector.childIds.map(id => byId.get(id)).find(child => child?.attributes["data-canvas-v2-connector-part"] === "path");
+      if (!template) continue;
+      const id = uniqueNativeNodeId(scene, `${connector.id}-${endpoint}`);
+      const cap: CanvasV2NativeSceneNode = { ...template, id, sourceNodeId: undefined, childIds: [], content: [], inlineStyle: {}, attributes: { "data-canvas-v2-connector-part": endpoint, stroke: template.attributes.stroke } };
+      scene.nodes.push(cap); byId.set(id, cap); connector.childIds.push(id); connector.content.push({ kind: "node", id });
+    }
     for (const childId of connector.childIds) {
       const child = byId.get(childId);
       if (!child) continue;
@@ -2475,15 +2667,57 @@ export function reconcileCanvasV2NativeConnectors(scene: CanvasV2NativeSceneDocu
       child.geometry.height = geometry.bounds.height;
       const part = child.attributes["data-canvas-v2-connector-part"];
       if (part === "path" || part === "hit") child.attributes.d = geometry.path;
-      else if (part === "start") {
-        child.attributes.cx = String(geometry.localStart.x);
-        child.attributes.cy = String(geometry.localStart.y);
-      } else if (part === "end" && child.tagName === "polyline") child.attributes.points = geometry.arrowPoints;
-      else if (part === "end") {
-        child.attributes.cx = String(geometry.localEnd.x);
-        child.attributes.cy = String(geometry.localEnd.y);
+      const color = connector.attributes["data-canvas-v2-connector-color"];
+      const weight = connector.attributes["data-canvas-v2-connector-weight"];
+      if (part === "path") {
+        if (color) { child.attributes.stroke = color; child.inlineStyle.stroke = color; }
+        if (weight) child.attributes["stroke-width"] = weight;
+        if (connector.attributes["data-canvas-v2-connector-dashed"] !== undefined) child.attributes["stroke-dasharray"] = connector.attributes["data-canvas-v2-connector-dashed"] === "true" ? `${Number(weight || 4) * 3} ${Number(weight || 4) * 2}` : "none";
+      } else if (part === "start" || part === "end") {
+        const cap = (connector.attributes[`data-canvas-v2-connector-${part}-cap`] || (part === "end" && variant === "arrow" ? "line-arrow" : "none")) as CanvasV2ConnectorCap;
+        const stroke = color || child.attributes.stroke || "var(--northstar-violet)";
+        child.tagName = "path";
+        if (color) { child.inlineStyle.stroke = color; child.inlineStyle.color = color; }
+        child.inlineStyle.fill = ["triangle", "reverse-triangle"].includes(cap) ? stroke : "none";
+        child.attributes = { "data-canvas-v2-connector-part": part, ...canvasV2ConnectorCapAttributes(geometry, part, cap, variant), stroke, color: stroke, fill: ["triangle", "reverse-triangle"].includes(cap) ? stroke : "none", "stroke-width": weight || "2", "stroke-linejoin": "round", "stroke-linecap": "round" };
+      } else if (part === "label") {
+        const point = canvasV2ConnectorLabelPoint(geometry, variant, Number(connector.attributes["data-canvas-v2-connector-label-position"] ?? 0.5));
+        const lines = Math.max(1, child.childIds.length);
+        child.attributes.x = String(point.x); child.attributes.y = String(point.y - 12 - (lines - 1) * 21.6);
+        child.inlineStyle["font-weight"] = connector.attributes["data-canvas-v2-connector-label-bold"] === "true" ? "700" : "500";
+        child.inlineStyle["text-decoration"] = connector.attributes["data-canvas-v2-connector-label-strike"] === "true" ? "line-through" : "none";
+        child.attributes["data-canvas-v2-label-background"] = connector.attributes["data-canvas-v2-connector-label-background"] || "false";
+        child.attributes.stroke = "var(--northstar-surface)";
+        child.attributes["stroke-width"] = child.attributes["data-canvas-v2-label-background"] === "true" ? "0" : "6";
+        let background = connector.childIds.map(id => byId.get(id)).find(item => item?.attributes["data-canvas-v2-connector-part"] === "label-background");
+        if (!background && child.attributes["data-canvas-v2-label-background"] === "true") {
+          const id = uniqueNativeNodeId(scene, `${connector.id}-label-background`);
+          background = { ...child, id, sourceNodeId: undefined, tagName: "rect", childIds: [], content: [], directText: undefined, inlineStyle: {}, attributes: { "data-canvas-v2-connector-part": "label-background" } };
+          scene.nodes.push(background); byId.set(id, background); connector.childIds.unshift(id); connector.content.unshift({ kind: "node", id });
+        }
+        if (background) {
+          const width = Math.max(20, ...(connector.attributes["data-canvas-v2-connector-label"] || "").split("\n").map(line => line.length * 10.5 + 16));
+          Object.assign(background.attributes, { x: String(point.x - width / 2), y: String(Number(child.attributes.y) - 19), width: String(width), height: String(lines * 21.6 + 8), rx: "4", fill: color || "var(--northstar-violet)", visibility: child.attributes["data-canvas-v2-label-background"] === "true" ? "visible" : "hidden" });
+          background.inlineStyle.fill = color || "var(--northstar-violet)";
+        }
+        for (const lineId of child.childIds) { const line = byId.get(lineId); if (line) line.attributes.x = child.attributes.x; }
       }
     }
+  }
+}
+
+function translateGroupedConnectorCoordinates(scene: CanvasV2NativeSceneDocument, root: CanvasV2NativeSceneNode, dx: number, dy: number): void {
+  const byId = canvasV2NativeSceneNodeMap(scene), pending = [...root.childIds], seen = new Set<string>();
+  while (pending.length) {
+    const id = pending.pop()!; if (seen.has(id)) continue; seen.add(id);
+    const child = byId.get(id); if (!child) continue; pending.push(...child.childIds);
+    if (child.kind !== "connector") continue;
+    for (const point of ["from", "to", "control"]) for (const axis of ["x", "y"]) {
+      const key = `data-canvas-v2-connector-${point}-${axis}`;
+      if (child.attributes[key] !== undefined) child.attributes[key] = String(Number(child.attributes[key])+(axis === "x" ? dx : dy));
+    }
+    const waypoints = readCanvasV2ConnectorWaypoints(child.attributes["data-canvas-v2-connector-waypoints"]);
+    if (waypoints) child.attributes["data-canvas-v2-connector-waypoints"] = JSON.stringify(waypoints.map(p => ({ x: p.x+dx, y: p.y+dy })));
   }
 }
 
@@ -2496,6 +2730,7 @@ function applyAtomicNativeMutation(
     const nodes = nativePrimitiveNodes(scene, mutation);
     scene.nodes.push(...nodes);
     scene.rootIds.push(nodes[0].id);
+    if (mutation.primitive === "table") editNativeTable(scene, nodes[0], { kind: "table-edit", nodeId: mutation.nodeId, action: "replace", cells: [["", ""], ["", ""]] });
     return;
   }
   if (mutation.kind === "group") {
@@ -2544,12 +2779,93 @@ function applyAtomicNativeMutation(
       delete node.attributes["data-canvas-v2-detached-index"];
       markNativeUserEdit(node, "group");
     }
+    if (mutation.section) {
+      group.attributes["data-canvas-v2-section"] = "true";
+      group.inlineStyle = { border: "2px solid var(--northstar-violet)", "border-radius": "12px", background: "var(--northstar-surface-subtle)" };
+      const titleId = `${group.id}-title`;
+      const title: CanvasV2NativeSceneNode = { ...group, id: titleId, sourceNodeId: titleId, parentId: group.id, childIds: [], tagName: "div", kind: "text", content: [{ kind: "text", value: mutation.label ?? "Section" }], attributes: { "data-canvas-v2-node-id": titleId, "data-canvas-v2-writable": "true", "data-canvas-v2-section-title": "true" }, inlineStyle: { font: "600 20px/1.4 Inter,system-ui,sans-serif", color: "var(--northstar-ink)" }, geometry: { x: 20, y: 12, width: Math.max(120, group.geometry.width - 40), height: 32, rotation: 0, zIndex: 1 } };
+      group.childIds.unshift(titleId); group.content.unshift({ kind: "node", id: titleId }); scene.nodes.push(title);
+    }
     scene.nodes.push(group);
     scene.rootIds.push(group.id);
     return;
   }
   const node = sourceNode(scene, mutation.nodeId);
-  if (mutation.kind === "move") {
+  if (mutation.kind === "table-edit") {
+    editNativeTable(scene, node, mutation);
+  } else if (mutation.kind === "image-crop") {
+    if (node.kind !== "image") throw new Error("Select an image to crop.");
+    if (node.canonicalEvidence || node.evidence?.role === "canonical") throw new Error("Create an analysis copy before cropping a canonical source.");
+    if (mutation.frame) {
+      prepareNativeGeometryMutation(scene, node);
+      node.geometry = { ...node.geometry, x: round(node.geometry.x + mutation.frame.deltaX), y: round(node.geometry.y + mutation.frame.deltaY), width: Math.max(1, round(mutation.frame.width)), height: Math.max(1, round(mutation.frame.height)) };
+    }
+    const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+    const x = clamp(mutation.x, 0, 100), y = clamp(mutation.y, 0, 100), zoom = clamp(mutation.zoom, 1, 5);
+    let image = node.childIds.map((id) => scene.nodes.find((item) => item.id === id)).find((item) => item?.tagName === "img");
+    if (!image) {
+      const id = uniqueNativeNodeId(scene, `${node.id}-crop-source`);
+      image = { ...node, id, sourceNodeId: id, parentId: node.id, selectable: false, tagName: "img", layoutMode: "flow", childIds: [], content: [], attributes: { ...node.attributes, "data-canvas-v2-node-id": id, "data-canvas-v2-crop-source": "true" }, inlineStyle: {}, resolvedStyle: undefined, geometry: { x: 0, y: 0, width: node.geometry.width, height: node.geometry.height, rotation: 0, zIndex: 0 } };
+      node.tagName = "div"; node.evidence = undefined;
+      node.attributes["data-canvas-v2-crop-frame"] = "true";
+      for (const key of ["data-canvas-v2-evidence-id", "data-canvas-v2-evidence-role", "data-canvas-v2-source-node-id", "src"]) delete node.attributes[key];
+      node.childIds = [id]; node.content = [{ kind: "node", id }]; scene.nodes.push(image);
+    }
+    node.attributes["data-canvas-v2-crop-x"] = String(x);
+    node.attributes["data-canvas-v2-crop-y"] = String(y);
+    node.attributes["data-canvas-v2-crop-zoom"] = String(zoom);
+    node.inlineStyle.overflow = "hidden";
+    image.inlineStyle = { position: "absolute", width: `${zoom * 100}%`, height: `${zoom * 100}%`, "max-width": "none", left: `${-(zoom - 1) * x}%`, top: `${-(zoom - 1) * y}%`, "object-fit": "cover", "object-position": `${x}% ${y}%` };
+    if (mutation.image) {
+      const pixels = mutation.image;
+      Object.assign(image.inlineStyle, { width: `${pixels.width / node.geometry.width * 100}%`, height: `${pixels.height / node.geometry.height * 100}%`, left: `${pixels.left / node.geometry.width * 100}%`, top: `${pixels.top / node.geometry.height * 100}%` });
+    }
+  } else if (mutation.kind === "connector-style") {
+    if (node.kind !== "connector") throw new Error("Connector appearance requires a connector.");
+    const keys: Record<string, string> = { color: "color", weight: "weight", dashed: "dashed", start: "start-cap", end: "end-cap", labelBold: "label-bold", labelStrike: "label-strike", labelBackground: "label-background" };
+    for (const [key, value] of Object.entries(mutation.style)) {
+      if (key === "color" && !/^#[0-9a-f]{6}$/i.test(String(value))) throw new Error("Choose a valid connector color.");
+      if (keys[key]) node.attributes[`data-canvas-v2-connector-${keys[key]}`] = String(value);
+    }
+    if (mutation.style.route) {
+      node.attributes["data-canvas-v2-connector-end-cap"] ??= node.attributes["data-canvas-v2-connector-variant"] === "arrow" ? "line-arrow" : "none";
+      node.attributes["data-canvas-v2-connector-variant"] = mutation.style.route;
+      delete node.attributes["data-canvas-v2-connector-waypoints"];
+      delete node.attributes["data-canvas-v2-connector-control-x"]; delete node.attributes["data-canvas-v2-connector-control-y"];
+      node.attributes["data-canvas-v2-connector-bend"] = mutation.style.route === "curve" ? "72" : "0";
+    }
+  } else if (mutation.kind === "connector-path") {
+    if (node.kind !== "connector" || mutation.waypoints.length > 100 || mutation.waypoints.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y))) throw new Error("Invalid connector path.");
+    node.attributes["data-canvas-v2-connector-variant"] = "bent";
+    node.attributes["data-canvas-v2-connector-waypoints"] = JSON.stringify(mutation.waypoints);
+  } else if (mutation.kind === "connector-label-position") {
+    if (node.kind !== "connector" || !Number.isFinite(mutation.position)) throw new Error("Select a connector label to move.");
+    node.attributes["data-canvas-v2-connector-label-position"] = String(Math.max(0, Math.min(1, mutation.position)));
+  } else if (mutation.kind === "connector-label") {
+    if (node.kind !== "connector") throw new Error("Select a connector to label it.");
+    node.attributes["data-canvas-v2-connector-label"] = mutation.text.slice(0, 1200);
+    const existing = node.childIds.map((id) => scene.nodes.find((item) => item.id === id)).find((item) => item?.attributes["data-canvas-v2-connector-part"] === "label");
+    if (existing) { existing.content = [{ kind: "text", value: mutation.text.slice(0, 1200) }]; existing.directText = mutation.text.slice(0, 1200); }
+    else {
+      const id = uniqueNativeNodeId(scene, `${node.id}-label`);
+      const label: CanvasV2NativeSceneNode = { ...node, id, sourceNodeId: id, parentId: node.id, childIds: [], tagName: "text", kind: "text", layoutMode: "flow", selectable: false, geometry: { x: 0, y: 0, width: 0, height: 0, rotation: 0, zIndex: 0 }, attributes: { "data-canvas-v2-node-id": id, "data-canvas-v2-connector-part": "label", x: String(node.geometry.width / 2), y: String(node.geometry.height / 2 - 10), "text-anchor": "middle", "paint-order": "stroke", stroke: "var(--northstar-surface)", "stroke-width": "6", fill: "var(--northstar-ink)" }, inlineStyle: { font: "500 18px Inter,system-ui,sans-serif" }, content: [{ kind: "text", value: mutation.text.slice(0, 1200) }], directText: mutation.text.slice(0, 1200) };
+      scene.nodes.push(label); node.childIds.push(id); node.content.push({ kind: "node", id });
+    }
+    const label = scene.nodes.find(item => item.parentId === node.id && item.attributes["data-canvas-v2-connector-part"] === "label")!;
+    const previousLines = new Set(label.childIds);
+    scene.nodes = scene.nodes.filter(item => !previousLines.has(item.id));
+    label.childIds = [];
+    const lines = mutation.text.slice(0, 1200).split("\n");
+    label.content = [{ kind: "text", value: mutation.text.slice(0, 1200) }];
+    if (lines.length > 1) {
+      label.content = lines.map((line, index) => {
+        const id = uniqueNativeNodeId(scene, `${label.id}-line-${index}`);
+        scene.nodes.push({ ...label, id, sourceNodeId: id, parentId: label.id, childIds: [], tagName: "tspan", content: [{ kind: "text", value: line || " " }], directText: line, attributes: { "data-canvas-v2-node-id": id, "data-canvas-v2-connector-part": "label", x: label.attributes.x, dy: index ? "1.2em" : "0" }, inlineStyle: {} });
+        label.childIds.push(id);
+        return { kind: "node" as const, id };
+      });
+    }
+  } else if (mutation.kind === "move") {
     if (node.kind === "connector") {
       const value = (name: string, fallback: number) => {
         const current = Number(node.attributes[name]);
@@ -2560,19 +2876,23 @@ function applyAtomicNativeMutation(
       node.attributes["data-canvas-v2-connector-from-y"] = String(round(value("data-canvas-v2-connector-from-y", origin.y + node.geometry.height / 2) + mutation.deltaY));
       node.attributes["data-canvas-v2-connector-to-x"] = String(round(value("data-canvas-v2-connector-to-x", origin.x + node.geometry.width - 16) + mutation.deltaX));
       node.attributes["data-canvas-v2-connector-to-y"] = String(round(value("data-canvas-v2-connector-to-y", origin.y + node.geometry.height / 2) + mutation.deltaY));
-      if (node.attributes["data-canvas-v2-connector-variant"] === "curve") {
+      const waypoints = readCanvasV2ConnectorWaypoints(node.attributes["data-canvas-v2-connector-waypoints"]);
+      if (waypoints) node.attributes["data-canvas-v2-connector-waypoints"] = JSON.stringify(waypoints.map(p => ({ x: p.x+mutation.deltaX, y: p.y+mutation.deltaY })));
+      if (["curve", "bent"].includes(node.attributes["data-canvas-v2-connector-variant"])) {
         node.attributes["data-canvas-v2-connector-control-x"] = String(round(value("data-canvas-v2-connector-control-x", origin.x + node.geometry.width / 2) + mutation.deltaX));
         node.attributes["data-canvas-v2-connector-control-y"] = String(round(value("data-canvas-v2-connector-control-y", origin.y + node.geometry.height / 2) + mutation.deltaY));
       }
       delete node.attributes["data-canvas-v2-connector-from"];
       delete node.attributes["data-canvas-v2-connector-to"];
     } else {
+      translateGroupedConnectorCoordinates(scene, node, mutation.deltaX, mutation.deltaY);
       prepareNativeGeometryMutation(scene, node);
       node.geometry.x = round(node.geometry.x + mutation.deltaX);
       node.geometry.y = round(node.geometry.y + mutation.deltaY);
     }
   } else if (mutation.kind === "resize") {
     if (node.kind === "connector") throw new Error("Drag a connector endpoint to resize it.");
+    if (node.kind === "text" || node.attributes["data-canvas-v2-text-mode"] === "point") node.attributes["data-canvas-v2-text-mode"] = "area";
     prepareNativeGeometryMutation(scene, node);
     node.geometry.width = Math.max(Math.max(1, Math.min(24, node.geometry.width * 0.1)), round(mutation.width));
     node.geometry.height = Math.max(Math.max(1, Math.min(24, node.geometry.height * 0.1)), round(mutation.height));
@@ -2580,6 +2900,11 @@ function applyAtomicNativeMutation(
     if (mutation.lineHeight !== undefined) node.inlineStyle["line-height"] = `${round(mutation.lineHeight)}px`;
   } else if (mutation.kind === "transform") {
     if (node.kind === "connector") throw new Error("Drag a connector endpoint to transform it.");
+    if (node.attributes["data-canvas-v2-section"] === "true") {
+      // Resizing a section changes its enclosure, not the positions of its contents.
+      for (const id of node.childIds) { const child = scene.nodes.find(item => item.id === id); if (child && child.attributes["data-canvas-v2-section-title"] !== "true" && !child.id.endsWith("-title")) { child.geometry.x -= mutation.deltaX; child.geometry.y -= mutation.deltaY; } }
+    } else translateGroupedConnectorCoordinates(scene, node, mutation.deltaX, mutation.deltaY);
+    if (node.kind === "text" || node.attributes["data-canvas-v2-text-mode"] === "point") node.attributes["data-canvas-v2-text-mode"] = "area";
     prepareNativeGeometryMutation(scene, node);
     node.geometry.x = round(node.geometry.x + mutation.deltaX);
     node.geometry.y = round(node.geometry.y + mutation.deltaY);
@@ -2603,13 +2928,55 @@ function applyAtomicNativeMutation(
     const originalDescendants = descendants(node.id);
     if (mutation.nativeContent?.length) {
       const editableIds = new Set([node.id, ...originalDescendants]);
+      // Only text nodes reachable from this edited root can enter the scene.
+      const updates = new Map(mutation.nativeContent.map((item) => [item.sceneNodeId, item]));
+      const reachable = new Set<string>();
+      const createRichNode = (id: string, parentId?: string) => {
+        if (reachable.has(id)) return;
+        const update = updates.get(id);
+        if (!update || (!editableIds.has(id) && (!update.tagName || !CANVAS_V2_RICH_TEXT_TAGS.has(update.tagName) || byId.has(id)))) return;
+        reachable.add(id);
+        let target = byId.get(id);
+        if (!target) {
+          target = { ...node, id, sourceNodeId: id, parentId, tagName: update.tagName!, kind: "text", namespace: "html", layoutMode: "flow", selectable: false, childIds: [], content: [], canonicalEvidence: false, evidence: undefined, detachedFromParentId: undefined, detachedFromParentIndex: undefined, geometry: { x: 0, y: 0, width: 0, height: 0, rotation: 0, zIndex: 0 }, attributes: { "data-canvas-v2-node-id": id, "data-canvas-v2-rich-text": "true" }, inlineStyle: {}, resolvedStyle: undefined };
+          scene.nodes.push(target);
+          byId.set(id, target);
+          editableIds.add(id);
+        }
+        if (id !== node.id) {
+          target.parentId = parentId;
+          if (update.tagName && CANVAS_V2_RICH_TEXT_TAGS.has(update.tagName)) target.tagName = update.tagName;
+          if (target.tagName === "a") {
+            const href = canvasV2SafeTextLink(update.href ?? "");
+            if (href) { target.attributes.href = href; target.attributes.rel = "noopener noreferrer"; }
+            else delete target.attributes.href;
+          }
+        }
+        if (update.style) {
+          // Range commands can remove a property as well as set one. Preserve
+          // layout/shape styles while replacing the editable typography set.
+          const typography = canvasV2RichTextStyle(update.style);
+          // Root fill and padding belong to the object. Inline highlighting
+          // belongs to rich runs; theme overrides must never become object paint.
+          const objectProperty = (key: string) => id === node.id && ["background-color", "padding-left"].includes(key);
+          for (const key of Object.keys(canvasV2RichTextStyle(target.inlineStyle))) if (!objectProperty(key)) delete target.inlineStyle[key];
+          for (const [key, value] of Object.entries(typography)) if (!objectProperty(key)) target.inlineStyle[key] = value;
+        }
+        if (target.tagName === "ol" || target.tagName === "ul") {
+          target.inlineStyle["list-style-type"] ??= target.tagName === "ol" ? "decimal" : "disc";
+          target.inlineStyle["padding-left"] ??= "1.5em";
+        }
+        for (const item of update.content) if (item.kind === "node") createRichNode(item.id, id);
+      };
+      createRichNode(node.id);
+      if (node.tagName === "p" && mutation.nativeContent.some((item) => item.tagName && ["ul", "ol", "div", "p"].includes(item.tagName))) node.tagName = "div";
       for (const update of mutation.nativeContent) {
         const target = editableIds.has(update.sceneNodeId) ? byId.get(update.sceneNodeId) : undefined;
         if (!target) continue;
         const content: CanvasV2NativeSceneNode["content"] = [];
         for (const item of update.content) {
           if (item.kind === "text") content.push({ kind: "text", value: item.value });
-          else if (editableIds.has(item.id) && byId.has(item.id)) content.push({ kind: "node", id: item.id });
+          else if (reachable.has(item.id) && byId.get(item.id)?.parentId === target.id) content.push({ kind: "node", id: item.id });
         }
         target.content = content;
         target.childIds = content.flatMap((item) => item.kind === "node" ? [item.id] : []);
@@ -2624,8 +2991,8 @@ function applyAtomicNativeMutation(
       node.childIds = [];
       node.directText = mutation.text;
     }
-    if (mutation.layout?.width !== undefined) node.geometry.width = Math.max(node.geometry.width, round(mutation.layout.width));
-    if (mutation.layout?.height !== undefined) node.geometry.height = Math.max(node.geometry.height, round(mutation.layout.height));
+    if (mutation.layout?.width !== undefined) node.geometry.width = Math.max(1, round(mutation.layout.width));
+    if (mutation.layout?.height !== undefined) node.geometry.height = Math.max(1, round(mutation.layout.height));
   } else if (mutation.kind === "style") {
     if ((node.kind === "drawing" || node.kind === "connector") && mutation.property === "background-color") {
       const byId = canvasV2NativeSceneNodeMap(scene);
@@ -2633,7 +3000,21 @@ function applyAtomicNativeMutation(
         const stroke = byId.get(childId);
         if (stroke?.attributes.stroke && stroke.attributes["data-canvas-v2-connector-part"] !== "hit") stroke.attributes.stroke = mutation.value;
       }
-    } else node.inlineStyle[mutation.property] = mutation.value;
+    } else {
+      node.inlineStyle[mutation.property] = mutation.value;
+      // Whole-object text controls also own nested range formatting. Setting
+      // the container alone cannot turn off an italic span or recolor a link.
+      if (canvasV2NativeSceneNodeSupportsTextEditing(node, canvasV2NativeSceneNodeMap(scene)) && ["color", "font-family", "font-size", "font-style", "font-weight", "text-decoration", "text-align"].includes(mutation.property)) {
+        const byId = canvasV2NativeSceneNodeMap(scene);
+        const pending = [...node.childIds];
+        while (pending.length) {
+          const child = byId.get(pending.pop()!);
+          if (!child) continue;
+          child.inlineStyle[mutation.property] = mutation.value;
+          pending.push(...child.childIds);
+        }
+      }
+    }
   } else if (mutation.kind === "shape-variant") {
     if (node.kind !== "shape" || node.attributes["data-canvas-v2-primitive"] !== "shape") throw new Error("Shape switching is available only for a shape object.");
     node.attributes["data-canvas-v2-shape"] = mutation.variant;
@@ -2643,7 +3024,8 @@ function applyAtomicNativeMutation(
     node.attributes.alt = mutation.value;
   } else if (mutation.kind === "image-source") {
     if (node.kind !== "image" || node.attributes["data-canvas-v2-local-image"] !== "true") throw new Error("Replace is available only for a user image object.");
-    node.attributes.src = mutation.src;
+    const imageTarget = node.attributes["data-canvas-v2-crop-frame"] === "true" ? scene.nodes.find((item) => node.childIds.includes(item.id) && item.tagName === "img") ?? node : node;
+    imageTarget.attributes.src = mutation.src;
     if (mutation.alt !== undefined) node.attributes.alt = mutation.alt;
   } else if (mutation.kind === "connector-endpoint") {
     if (node.kind !== "connector") throw new Error("Endpoints are available only for a connector object.");
@@ -2656,7 +3038,7 @@ function applyAtomicNativeMutation(
       node.attributes[coordinatePrefix] = mutation.attachNodeId;
     } else delete node.attributes[coordinatePrefix];
   } else if (mutation.kind === "connector-curve") {
-    if (node.kind !== "connector" || node.attributes["data-canvas-v2-connector-variant"] !== "curve") throw new Error("Curve adjustment is available only for a curved connector.");
+    if (node.kind !== "connector" || !["curve", "bent"].includes(node.attributes["data-canvas-v2-connector-variant"])) throw new Error("Curve adjustment is available only for a curved connector.");
     node.attributes["data-canvas-v2-connector-control-x"] = String(round(mutation.x));
     node.attributes["data-canvas-v2-connector-control-y"] = String(round(mutation.y));
   } else if (mutation.kind === "delete") {
@@ -2756,6 +3138,58 @@ function applyAtomicNativeMutation(
   markNativeUserEdit(node, mutation.kind);
 }
 
+/** Human sections own fully enclosed board objects; authored/evidence hierarchies stay intact. */
+function reconcileHumanSectionMembership(scene: CanvasV2NativeSceneDocument): void {
+  const byId = canvasV2NativeSceneNodeMap(scene);
+  const sections = scene.nodes.filter(node => node.attributes["data-canvas-v2-section"] === "true" && !node.locked);
+  if (!sections.length) return;
+  const world = (node: CanvasV2NativeSceneNode) => {
+    let x = node.geometry.x, y = node.geometry.y;
+    const seen = new Set([node.id]);
+    let parent = byId.get(node.parentId ?? "");
+    while (parent && !seen.has(parent.id)) { seen.add(parent.id); x += parent.geometry.x; y += parent.geometry.y; parent = byId.get(parent.parentId ?? ""); }
+    return { ...node.geometry, x, y };
+  };
+  const contains = (outer: CanvasV2NativeSceneNode, inner: CanvasV2NativeSceneNode) => {
+    const a = world(outer), b = world(inner);
+    return b.x >= a.x && b.y >= a.y && b.x + b.width <= a.x + a.width && b.y + b.height <= a.y + a.height;
+  };
+  for (const node of [...scene.nodes]) {
+    const parent = byId.get(node.parentId ?? "");
+    if (!node.selectable || node.locked || node.canonicalEvidence || node.evidence?.role === "canonical"
+      || (node.attributes["data-canvas-v2-section-title"] === "true" || node.id.endsWith("-title")) || node.kind === "connector" || node.geometry.rotation
+      || (parent && parent.attributes["data-canvas-v2-section"] !== "true")) continue;
+    // A group containing evidence is also excluded, even when legacy metadata did not mark its root.
+    const descendants = [...node.childIds];
+    let protectedEvidence = false;
+    for (let index = 0; index < descendants.length; index++) {
+      const child = byId.get(descendants[index]);
+      if (!child) continue;
+      if (child.canonicalEvidence || child.evidence?.role === "canonical") { protectedEvidence = true; break; }
+      descendants.push(...child.childIds);
+    }
+    if (protectedEvidence) continue;
+    const target = sections.filter(section => section.id !== node.id && !descendants.includes(section.id)
+      && !section.geometry.rotation && contains(section, node))
+      .sort((a, b) => a.geometry.width * a.geometry.height - b.geometry.width * b.geometry.height)[0];
+    if (target?.id === parent?.id) continue;
+    if (!target && !parent) continue;
+    const bounds = world(node);
+    materializeResolvedSubtreeStyle(scene, node);
+    removeNodeReference(scene, node.id);
+    node.parentId = target?.id;
+    node.layoutMode = "absolute";
+    const origin = target ? world(target) : { x: 0, y: 0 };
+    node.geometry.x = round(bounds.x - origin.x); node.geometry.y = round(bounds.y - origin.y);
+    node.detachedFromParentId = undefined; node.detachedFromParentIndex = undefined;
+    node.attributes["data-canvas-v2-detached"] = "false";
+    delete node.attributes["data-canvas-v2-detached-from"];
+    delete node.attributes["data-canvas-v2-detached-index"];
+    if (target) { target.childIds.push(node.id); target.content.push({ kind: "node", id: node.id }); }
+    else scene.rootIds.push(node.id);
+  }
+}
+
 export function applyCanvasV2NativeSceneMutation(
   source: CanvasV2NativeSceneDocument,
   mutation: CanvasV2ManualMutation,
@@ -2768,6 +3202,8 @@ export function applyCanvasV2NativeSceneMutation(
   if (mutation.kind === "batch") {
     for (const item of mutation.mutations) applyAtomicNativeMutation(scene, item);
   } else applyAtomicNativeMutation(scene, mutation);
+  const atomic = mutation.kind === "batch" ? mutation.mutations : [mutation];
+  if (atomic.some(item => ["move", "resize", "transform", "create"].includes(item.kind) || (item.kind === "group" && item.section))) reconcileHumanSectionMembership(scene);
   reconcileCanvasV2NativeConnectors(scene);
   scene.nodes.forEach((node, order) => { node.order = order; });
   return scene;

@@ -1,7 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
+import { canvasV2SourceFingerprint } from "./canvas-v2-source-fingerprint.mjs";
 
 const root = process.cwd();
+if (!process.argv.includes("--historical")) {
+  const currentPath = path.join(root, "config/canvas-v2-current-proof.json");
+  const current = fs.existsSync(currentPath) ? JSON.parse(fs.readFileSync(currentPath, "utf8")) : undefined;
+  const fingerprint = canvasV2SourceFingerprint(root);
+  if (!current || current.sourceSha256 !== fingerprint.sha256) {
+    console.error("No current source-bound Canvas V2 proof. Historical results cannot certify this build.");
+    process.exit(1);
+  }
+  if (current.evidenceKind !== "live-provider" || current.productionCertified !== true) {
+    console.error(`Current source has ${current.evidenceKind} verification only. Live production certification remains unverified.`);
+    process.exit(1);
+  }
+  console.log(`Canvas V2 current production proof verified for ${fingerprint.sha256}.`);
+  process.exit(0);
+}
 const proofPath = path.join(root, "config/canvas-v2-production-proof.json");
 const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
 const failures = [];
@@ -76,5 +92,5 @@ if (failures.length) {
   console.error("Canvas V2 production proof failed:\n" + failures.map((failure) => `- ${failure}`).join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Canvas V2 authenticated production proof verified: ${proof.catalog.assetRangeProbeSuccessCount} real assets, ${proof.standardPrompt.canonicalScreenshotCount} canonical screenshots, evidence-first synthesis, and terminal completion.`);
+  console.log(`Canvas V2 historical authenticated production proof verified (does not certify current source): ${proof.catalog.assetRangeProbeSuccessCount} real assets, ${proof.standardPrompt.canonicalScreenshotCount} canonical screenshots, evidence-first synthesis, and terminal completion.`);
 }

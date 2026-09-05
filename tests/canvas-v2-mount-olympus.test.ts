@@ -122,6 +122,7 @@ test("a healthy summit receipt proves decision readiness, nonlinear sources, fir
       status: "completed",
     },
   ];
+  initial.completion = { ...initial.completion, readiness: "ready", materialOpenRequirements: [], satisfiedCriteria: [...initial.completion.criteria] };
   const discoveryState = completeCanvasV2DiscoveryState({
     state: initial,
     summary: "The launch path is decision-ready with its evidence boundary intact.",

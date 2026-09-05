@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   applyCanvasV2DiscoveryTransition,
+  assessCanvasV2DiscoveryCompletion,
   completeCanvasV2DiscoveryState,
   createCanvasV2DiscoveryState,
   parseCanvasV2InquiryInterpretation,
@@ -705,7 +706,7 @@ test("discovery state commits atomically with canvas edits and follows undo and 
 test("completion is inquiry-specific and cannot erase an unresolved evidence requirement", () => {
   const state = createCanvasV2DiscoveryState({ interpretation: interpretation(), now: NOW });
   assert.throws(() => completeCanvasV2DiscoveryState({ state, summary: "Done", now: NOW }), /material requirements remain open/);
-  const ready = { ...state, completion: { ...state.completion, readiness: "ready" as const, materialOpenRequirements: [] } };
+  const ready = { ...state, completion: { ...state.completion, readiness: "ready" as const, materialOpenRequirements: [], satisfiedCriteria: [...state.completion.criteria] } };
   const complete = completeCanvasV2DiscoveryState({ state: ready, summary: "The recommendation, contradiction, and evidence boundary are explicit.", now: NOW });
   assert.equal(complete.status, "complete");
   assert.equal(complete.completion.readiness, "complete");
@@ -717,17 +718,10 @@ test("completion also refuses a not-ready inquiry even when no evidence requirem
   assert.throws(() => completeCanvasV2DiscoveryState({ state, summary: "Done", now: NOW }), /before its inquiry-specific readiness criteria/);
 });
 
-test("runtime-verified render truth settles stale discovery checklist text without a model retry", () => {
+test("runtime verification cannot erase unresolved semantic requirements", () => {
   const state = createCanvasV2DiscoveryState({ interpretation: interpretation(), now: NOW });
-  const complete = completeCanvasV2DiscoveryState({
-    state,
-    summary: "The verified render contains the grounded comparison, preserved rails, boundary, and limitations.",
-    now: NOW,
-    runtimeVerified: true,
-  });
-  assert.equal(complete.status, "complete");
-  assert.equal(complete.completion.readiness, "complete");
-  assert.deepEqual(complete.completion.materialOpenRequirements, []);
+  assert.throws(() => completeCanvasV2DiscoveryState({ state, summary: "The render is valid", now: NOW, runtimeVerified: true }), /material requirements remain open/);
+  assert.notEqual(state.status, "complete");
 });
 
 test("a model conclusion becomes ready until rendered runtime validation publishes completion", () => {
@@ -831,4 +825,15 @@ test("the design request prefers current-run human discovery state over the olde
   const source = readFileSync(new URL("../components/canvas-v2/use-canvas-v2-design-loop.ts", import.meta.url), "utf8");
   assert.match(source, /discoveryState:\s*activeLoop\.discoveryState\s*\?\?\s*revision\.discoveryState/);
   assert.doesNotMatch(source, /discoveryState:\s*revision\.discoveryState\s*\?\?\s*activeLoop\.discoveryState/);
+});
+
+
+test("semantic closure needs every exact inquiry criterion even after a valid render", () => {
+  const state = createCanvasV2DiscoveryState({ interpretation: interpretation(), now: NOW });
+  const partial = assessCanvasV2DiscoveryCompletion(state, { satisfiedCriteria: [state.completion.criteria[0], "Invented completion criterion"], materialOpenRequirements: [], rationale: "Only the recommendation has been addressed." });
+  assert.deepEqual(partial.completion.satisfiedCriteria, [state.completion.criteria[0]]);
+  assert.throws(() => completeCanvasV2DiscoveryState({ state: partial, summary: "Done", now: NOW, runtimeVerified: true }), /explicit semantic assessment/);
+  const complete = assessCanvasV2DiscoveryCompletion(state, { satisfiedCriteria: [...state.completion.criteria], materialOpenRequirements: [], rationale: "The recommendation and uncertainty are both explicit in the committed work." });
+  assert.equal(completeCanvasV2DiscoveryState({ state: complete, summary: "Resolved", now: NOW }).status, "complete");
+  assert.notEqual(state.status, "complete");
 });

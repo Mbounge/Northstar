@@ -69,5 +69,9 @@
     "No V1 deletion",
     "No remote canvas persistence",
     "No user, tenant, token, key, asset URL, app identifier, flow identifier, or evidence identifier is recorded"
-  ]
+  ],
+  "scope": "historical-only",
+  "sourceSha256": null,
+  "currentSourceCertified": false,
+  "note": "Historical observation retained verbatim. Provider and persistence details describe the August 12 run, not the current application."
 }

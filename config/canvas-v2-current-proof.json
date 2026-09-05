@@ -1,0 +1,77 @@
+{
+  "schema": "northstar.canvas-v2-current-proof.v1",
+  "observedAt": "2026-09-05",
+  "sourceSha256": "3cbeefa2ba211c7643876b0ecad9d02c2d74bb8985b4abcc6bf1588ead80acb7",
+  "sourceFileCount": 90,
+  "evidenceKind": "deterministic",
+  "productionCertified": false,
+  "productionRoute": "/canvas",
+  "checks": {
+    "activeUnitTests": {
+      "passed": 524,
+      "failed": 0
+    },
+    "typecheck": "passed",
+    "lint": {
+      "errors": 0,
+      "warnings": 174
+    },
+    "productionBuild": "passed",
+    "canonicalCutover": "passed"
+  },
+  "browserVerification": {
+    "status": "manual-partial",
+    "productionRoute": "/canvas",
+    "manualChecks": [
+      "native character selection without moving the object",
+      "mixed text colors and compact shared palettes",
+      "wrapped text bounds and unchanged font on side resize",
+      "immediate deletion cleanup and undo",
+      "native object clipboard after source cut/deletion",
+      "table cell editing and toolbar placement",
+      "direct crop edges, repositioning, Enter completion, Escape cancellation and undo",
+      "connector paint, caps, routing, draggable label, segment shaping and undo",
+      "section membership, heading-safe tidy and direct spacing handles",
+      "shape fill retained during editing and theme changes",
+      "top-edge object and range menus remain fully inside the viewport",
+      "repeated italic, numbered-list and link edits with undo/redo and safe double-click reopening",
+      "attached connector label background follows object movement",
+      "100-image local browser pan/zoom and selected-image drag/undo measurement"
+    ],
+    "automated": {
+      "status": "blocked-at-browser-startup",
+      "discoveredCases": 14,
+      "executedCases": 0,
+      "reason": "Standalone Chromium exits at startup (SIGTRAP/EPERM) before application assertions; the in-app browser works and was used for manual verification."
+    },
+    "remaining": [
+      "automated production-route browser suite (Chromium still exits before assertions)",
+      "cross-platform and larger-board stress acceptance beyond the sampled 100-image local board",
+      "final user visual acceptance"
+    ],
+    "oneToOneFigJamCertified": false,
+    "largeBoard": {
+      "status": "local-sampled",
+      "imageObjects": 100,
+      "uniqueLocalReferences": 12,
+      "decodedImages": 100,
+      "panZoom": {
+        "longTasks": 0,
+        "activeFrameP95Ms": 33.7
+      },
+      "dragUndoBefore": {
+        "longestTaskMs": 1747
+      },
+      "dragUndoAfter": {
+        "longestTaskMs": 56,
+        "activeFrameP95Ms": 33.4
+      },
+      "limits": "Local development in-app browser, repeated references, separate short samples; not a controlled cross-platform benchmark or presentation-latency certification."
+    }
+  },
+  "liveProviderVerification": {
+    "status": "not-run",
+    "reason": "User prohibited AI prompts/account usage. No paid provider calls were made. Broader AI composition quality belongs to a later patch."
+  },
+  "scope": "Cumulative audit implementation and browser-driven UX fixes in the shared production canvas path, including AI-authored objects. Deterministic checks and partial manual browser evidence do not certify full FigJam parity, live-model quality or cross-platform performance."
+}

@@ -249,6 +249,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const [pendingResearch, setPendingResearch] = useState<PendingResearch>();
   const [pendingManualEdit, setPendingManualEdit] = useState<PendingManualEdit>();
   const [manualError, setManualError] = useState<string>();
+  const manualFailureRef = useRef<string | undefined>(undefined);
   const [manualNotice, setManualNotice] = useState<string>();
   const [observations, setObservations] = useState<Record<string, CanvasV2RenderObservation>>({});
   const [nativeScene, setNativeScene] = useState<CanvasV2NativeSceneDocument>();
@@ -309,12 +310,21 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       const nextById = new Map(next.nodes.map((node) => [node.id, node]));
       let flowGeometryChanged = false;
       const nodes = current.nodes.map((node) => {
+        const measured = nextById.get(node.id);
+        const textMode = node.attributes["data-canvas-v2-text-mode"];
+        if (measured && (textMode === "point" || textMode === "area") && measured.attributes["data-canvas-v2-text-mode"] === textMode) {
+          const width = textMode === "point" ? measured.geometry.width : node.geometry.width;
+          const height = measured.geometry.height;
+          if (width !== node.geometry.width || height !== node.geometry.height) {
+            flowGeometryChanged = true;
+            return { ...node, geometry: { ...node.geometry, width, height } };
+          }
+        }
         // Public-font and normal-flow layout can settle after the hidden
         // compiler has produced the candidate. Accept that one measured
         // refinement for flow nodes only. Absolute objects—including every
         // completed manual move/resize—remain transactionally immutable.
         if (node.layoutMode !== "flow") return node;
-        const measured = nextById.get(node.id);
         if (!measured || measured.layoutMode !== "flow") return node;
         const geometryChanged = measured.geometry.x !== node.geometry.x
           || measured.geometry.y !== node.geometry.y
@@ -882,7 +892,11 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     // quick follow-up resize/group action. Validate source safety, then commit
     // native truth synchronously; the off-screen compiler remains a verifier.
     const currentCommitted = committedRef.current;
-    if (running || candidate || (!nativeSceneRevision && !observationsRef.current[currentCommitted.id])) return false;
+    manualFailureRef.current = undefined;
+    // Human edits interrupt uncommitted AI work. Abort and invalidate its run
+    // synchronously so late responses cannot replace the human revision.
+    if (loopRef.current && canvasV2LoopIsActive(loopRef.current)) stop();
+    if (pendingManualEdit || (!nativeSceneRevision && !observationsRef.current[currentCommitted.id])) return false;
     if (nativeSceneRevision && nativeSceneRevision.revisionId !== currentCommitted.id) return false;
     try {
       const safeDocument = assertCanvasV2ArtifactDocument(document);
@@ -923,7 +937,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       setCandidate(nextCandidate);
       return true;
     } catch (error) {
-      setManualError(error instanceof Error ? error.message : "The manual revision could not be validated.");
+      manualFailureRef.current = error instanceof Error ? error.message : "The manual revision could not be validated.";
+      setManualError(manualFailureRef.current);
       return false;
     }
   };
@@ -1367,6 +1382,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     start,
     stop,
     applyManualDocument,
+    readManualFailure: () => manualFailureRef.current,
     nativeScene: nativeScene?.revisionId === committed.id ? nativeScene : undefined,
     readNativeScene,
     receiveNativeScene,

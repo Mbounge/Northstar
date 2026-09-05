@@ -96,6 +96,11 @@ export function validateCanvasV2EvidenceBindings(
   return failures;
 }
 
+/** Known sources can outlive their visible objects after a human removal. */
+export function canvasV2VisibleEvidenceIds(document: CanvasV2ArtifactDocument): Set<string> {
+  return new Set(Array.from(document.html.matchAll(/\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]));
+}
+
 export function validateCanvasV2EvidenceContinuity(
   previous: CanvasV2ArtifactDocument,
   next: CanvasV2ArtifactDocument,
@@ -103,9 +108,10 @@ export function validateCanvasV2EvidenceContinuity(
   options: { allowUserEvidenceRemoval?: boolean } = {},
 ): string[] {
   const failures: string[] = [];
-  const nextIds = new Set(Array.from(next.html.matchAll(/\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]));
+  const previousIds = canvasV2VisibleEvidenceIds(previous);
+  const nextIds = canvasV2VisibleEvidenceIds(next);
   if (!options.allowUserEvidenceRemoval) {
-    for (const asset of evidence) if (!nextIds.has(asset.id)) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
+    for (const asset of evidence) if (previousIds.has(asset.id) && !nextIds.has(asset.id)) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
   }
   failures.push(...validateCanvasV2EvidenceAuthorshipTransition(previous, next, evidence, options));
   return Array.from(new Set(failures));

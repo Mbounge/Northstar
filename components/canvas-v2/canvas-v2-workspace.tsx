@@ -1,5 +1,11 @@
 "use client";
 
+import { useCanvasV2PopoverViewport } from "./use-popover-viewport";
+
+import { canvasV2TextColorSwatch, readCanvasV2RichText, sanitizeCanvasV2RichTextHtml } from "@/lib/canvas-v2/rich-text";
+
+import { canvasV2TidyItems, canvasV2TidyMutation, canvasV2IsSectionHeading } from "@/lib/canvas-v2/tidy-layout";
+import { encodeCanvasV2Clipboard, decodeCanvasV2Clipboard, parseCanvasV2TabularText } from "@/lib/canvas-v2/clipboard";
 import {
   AlignCenter,
   AlignLeft,
@@ -9,6 +15,8 @@ import {
   ChevronDown,
   Circle,
   Copy,
+  Crop,
+  Check,
   Diamond,
   EyeOff,
   Grid3X3,
@@ -46,6 +54,9 @@ import {
   type CanvasV2CanvasSceneHandle,
   type CanvasV2TransientGeometry,
 } from "@/components/canvas-v2/canvas-scene";
+import { CanvasV2ColorPalette, CANVAS_COLOR_SWATCH_ROWS } from "@/components/canvas-v2/color-palette";
+import { CanvasV2ConnectorToolbar } from "@/components/canvas-v2/connector-toolbar";
+import type { CanvasV2ConnectorAppearance } from "@/lib/canvas-v2/connector-geometry";
 import { CanvasV2ChatPanel } from "@/components/canvas-v2/canvas-v2-chat-panel";
 import { prepareCanvasV2CanvasImages } from "@/components/canvas-v2/chat-image-attachments";
 import {
@@ -63,7 +74,7 @@ import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
 import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachments";
 import { CANVAS_V2_MIN_CANVAS, type CanvasV2CanvasGeometry } from "@/lib/canvas-v2/canvas-geometry";
 import type { CanvasV2InspectableElement, CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
-import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, canvasV2ConnectorNearestLabelPosition, canvasV2MoveConnectorSegment, type CanvasV2ConnectorCap, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { canvasV2OpaquePaintColor, canvasV2PaintMode, canvasV2PaintValue, type CanvasV2PaintMode } from "@/lib/canvas-v2/paint-style";
 import { readCanvasV2BoardObjectGraph, type CanvasV2BoardObject } from "@/lib/canvas-v2/board-object-graph";
 import { resolveCanvasV2ContextToolbarPosition } from "@/lib/canvas-v2/context-toolbar-placement";
@@ -79,6 +90,10 @@ import {
 } from "@/lib/canvas-v2/manual-mutations";
 import {
   applyCanvasV2NativeSceneMutation,
+  copyCanvasV2NativeSelection,
+  pasteCanvasV2NativeClipboard,
+  canvasV2NativeTableRows,
+  type CanvasV2NativeClipboard,
   canvasV2NativeSceneSelectionContainsTarget,
   serializeCanvasV2NativeScene,
   type CanvasV2NativeSceneDocument,
@@ -119,8 +134,26 @@ import {
 } from "@/lib/canvas-v2/workspace-coordinate-space";
 
 type Panel = "chat" | "shapes" | "apps";
-type CanvasTool = "select" | "pan" | "draw";
+type CanvasTool = "select" | "pan" | "draw" | "place";
 type HumanAuthoringTab = "basics" | "shapes" | "diagram" | "connectors" | "media";
+
+interface ImageCropDraft {
+  nodeId: string;
+  original: CanvasV2InspectableElement["bounds"];
+  frame: CanvasV2InspectableElement["bounds"];
+  image: CanvasV2InspectableElement["bounds"];
+}
+
+function imageCropMutation(draft: ImageCropDraft): Extract<CanvasV2ManualMutation, { kind: "image-crop" }> {
+  const { frame, image, original } = draft;
+  return { kind: "image-crop", nodeId: draft.nodeId,
+    x: image.width === frame.width ? 50 : (frame.x - image.x) / (image.width - frame.width) * 100,
+    y: image.height === frame.height ? 50 : (frame.y - image.y) / (image.height - frame.height) * 100,
+    zoom: image.width / frame.width,
+    frame: { deltaX: frame.x - original.x, deltaY: frame.y - original.y, width: frame.width, height: frame.height },
+    image: { left: image.x - frame.x, top: image.y - frame.y, width: image.width, height: image.height },
+  };
+}
 
 interface DirectGesture {
   kind: "move" | "resize" | "rotate";
@@ -159,7 +192,11 @@ interface CanvasV2PrimitiveDrag {
 }
 
 interface CanvasV2ConnectorGesture {
-  kind: "endpoint" | "curve";
+  kind: "endpoint" | "curve" | "label" | "segment";
+  segmentIndex?: number;
+  waypoints?: CanvasV2ConnectorPoint[];
+  originalWaypoints?: CanvasV2ConnectorPoint[];
+  labelPosition?: number;
   pointerId: number;
   nodeId: string;
   endpoint?: "from" | "to";
@@ -198,7 +235,7 @@ function transientGeometryForDirectGesture(
     const rotation = preview.rotations?.[item.nodeId];
     if (!next && rotation === undefined) return [];
     const originalFontSize = Number.parseFloat(item.visualStyle?.fontSize ?? "");
-    const nextFontSize = gesture.kind === "resize" && next && item.textEditable
+    const nextFontSize = gesture.kind === "resize" && next && item.textEditable && (gesture.originals.length > 1 || gesture.handle?.includes("-"))
       ? scaleCanvasV2FontSize(originalFontSize, gesture.original, gesture.draftBounds)
       : undefined;
     const originalLineHeight = Number.parseFloat(item.visualStyle?.lineHeight ?? "");
@@ -243,6 +280,7 @@ function sameInspectableElements(
       && candidate.connector?.to.attachedNodeId === item.connector?.to.attachedNodeId
       && candidate.connector?.bend === item.connector?.bend
       && candidate.visualStyle?.color === item.visualStyle?.color
+      && candidate.visualStyle?.textColors?.join("|") === item.visualStyle?.textColors?.join("|")
       && candidate.visualStyle?.backgroundColor === item.visualStyle?.backgroundColor
       && candidate.visualStyle?.borderColor === item.visualStyle?.borderColor
       && candidate.visualStyle?.borderStyle === item.visualStyle?.borderStyle
@@ -285,13 +323,14 @@ function eligibleCanvasSelection(elements: readonly CanvasV2InspectableElement[]
 function individualMarqueeSelection(
   hits: readonly CanvasV2InspectableElement[],
   scene: readonly CanvasV2InspectableElement[],
+  native?: CanvasV2NativeSceneDocument,
 ): CanvasV2InspectableElement[] {
   const candidates = eligibleCanvasSelection(hits);
   const parentIds = new Set(scene.flatMap((element) => element.parentNodeId ? [element.parentNodeId] : []));
   // A marquee is precision selection: it targets painted leaf objects only.
   // Semantic containers remain useful click targets, but their large group or
   // island bounds must never swallow every child touched by a drag rectangle.
-  return candidates.filter((element) => !parentIds.has(element.nodeId));
+  return candidates.filter(element => { const node = native?.nodes.find(node => node.sourceNodeId === element.nodeId); return !parentIds.has(element.nodeId) && !(node && native && canvasV2IsSectionHeading(node,native)); });
 }
 
 function synchronizeSelectionWithNativeScene(
@@ -500,33 +539,7 @@ function CanvasV2PrimitiveThumbnail({ input, drag = false }: { input: CanvasV2Pr
   return <div aria-hidden className="grid h-full w-full place-items-center rounded-xl border-2 border-[#7661f3] bg-[#7661f3]/10 text-[#6653e8]"><ImageIcon className="h-7 w-7" /></div>;
 }
 
-const CANVAS_COLOR_SWATCH_ROWS = [
-  [
-    { label: "Ink", value: "#1f1f20" },
-    { label: "Graphite", value: "#8d8d8d" },
-    { label: "Vermilion", value: "#ff4f2e" },
-    { label: "Orange", value: "#ffa23f" },
-    { label: "Sunflower", value: "#ffc84b" },
-    { label: "Green", value: "#62d378" },
-    { label: "Teal", value: "#57cec8" },
-    { label: "Blue", value: "#42a8ee" },
-    { label: "Violet", value: "#874cf2" },
-    { label: "Pink", value: "#f044b5" },
-    { label: "White", value: "#ffffff" },
-  ],
-  [
-    { label: "Silver", value: "#bdbdbd" },
-    { label: "Cloud", value: "#e3e3e3" },
-    { label: "Blush", value: "#ffc4bf" },
-    { label: "Peach", value: "#ffe0c4" },
-    { label: "Butter", value: "#ffe9b8" },
-    { label: "Mint", value: "#c9efd1" },
-    { label: "Sea glass", value: "#c6efed" },
-    { label: "Sky", value: "#c5e3f7" },
-    { label: "Lavender", value: "#d9cef7" },
-    { label: "Rose", value: "#f6c9e6" },
-  ],
-] as const;
+
 
 // Keep the previous symbol alive for one Fast Refresh boundary. A dev server
 // can briefly execute the previous render closure after accepting the module's
@@ -616,9 +629,24 @@ export function CanvasV2Workspace({
   const [northStarMenuOpen, setNorthStarMenuOpen] = useState(false);
   const [showCanvasGrid, setShowCanvasGrid] = useState(false);
   const [tool, setTool] = useState<CanvasTool>("select");
+  const hoverOutlineRef = useRef<HTMLDivElement>(null);
   const [hoveredElement, setHoveredElement] = useState<CanvasV2InspectableElement>();
   const [selectedElements, setSelectedElements] = useState<CanvasV2InspectableElement[]>([]);
   const selectedElement = selectedElements[selectedElements.length - 1];
+  const [placementTool, setPlacementTool] = useState<{ primitive: CanvasV2ManualPrimitive; shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant }>();
+  const [placement, setPlacement] = useState<{ start: CanvasV2ManualPoint; end: CanvasV2ManualPoint; pointerId: number }>();
+  const placementRef = useRef<typeof placement>(undefined);
+  const [editTextRequest, setEditTextRequest] = useState<{ nodeId: string; nonce: number; selectAll?: boolean }>();
+  const cropGestureRef = useRef<{ pointerId: number; clientX: number; clientY: number; handle?: CanvasV2ResizeHandle; draft: ImageCropDraft } | undefined>(undefined);
+  const cropInitialRef = useRef<ImageCropDraft | undefined>(undefined);
+  const [tidyIds, setTidyIds] = useState<string[]>([]);
+  const [tidyDraft, setTidyDraft] = useState<CanvasV2ManualMutation>();
+  const tidyGestureRef = useRef<{ pointerId: number; axis: "x" | "y"; start: number; items: CanvasV2InspectableElement[]; gapX: number; gapY: number; mutation?: CanvasV2ManualMutation } | undefined>(undefined);
+  const [cropDraft, setCropDraft] = useState<ImageCropDraft>();
+  const cropFinishRef = useRef<() => void>(() => undefined);
+  const [connectorLabelDraft, setConnectorLabelDraft] = useState<{ nodeId: string; text: string; bounds: CanvasV2InspectableElement["bounds"] }>();
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const [zoomDraft, setZoomDraft] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string>();
   // Conversation and run lifecycle belong to the workspace, not to the
   // collapsible presentation panel. Closing the panel or visiting Apps must
@@ -631,7 +659,7 @@ export function CanvasV2Workspace({
   const [mutationError, setMutationError] = useState<string>();
   const [layersOpen, setLayersOpen] = useState(false);
   const [objectMenu, setObjectMenu] = useState<CanvasV2ObjectMenu>();
-  const [toolbarMenu, setToolbarMenu] = useState<"shape" | "color" | "line" | "font" | "size" | "image">();
+  const [toolbarMenu, setToolbarMenu] = useState<"shape" | "color" | "line" | "font" | "size" | "image" | "arrange">();
   const [colorProperty, setColorProperty] = useState<CanvasV2EditableStyleProperty>("background-color");
   const [customColorDraft, setCustomColorDraft] = useState("#6d59ed");
   const [lineColorDraft, setLineColorDraft] = useState("#1f1f20");
@@ -664,6 +692,7 @@ export function CanvasV2Workspace({
   const statusPillRef = useRef<HTMLDivElement>(null);
   const chatPanelRef = useRef<HTMLElement>(null);
   const contextualToolbarRef = useRef<HTMLElement>(null);
+  useCanvasV2PopoverViewport(contextualToolbarRef, toolbarMenu);
   const activeSelectionBoundsRef = useRef<CanvasV2InspectableElement["bounds"] | undefined>(undefined);
   const objectMenuRef = useRef<HTMLDivElement>(null);
   const localImageInputRef = useRef<HTMLInputElement>(null);
@@ -674,6 +703,7 @@ export function CanvasV2Workspace({
   const [primitiveDrag, setPrimitiveDrag] = useState<CanvasV2PrimitiveDrag>();
   const connectorGestureRef = useRef<CanvasV2ConnectorGesture | undefined>(undefined);
   const connectorPreviewPathRef = useRef<SVGPathElement>(null);
+  const connectorPreviewGroupRef = useRef<SVGGElement>(null);
   const connectorPreviewEndRef = useRef<SVGPolylineElement>(null);
   const connectorStartHandleRef = useRef<HTMLButtonElement>(null);
   const connectorEndHandleRef = useRef<HTMLButtonElement>(null);
@@ -702,10 +732,12 @@ export function CanvasV2Workspace({
   const finishDrawingGestureHandlerRef = useRef<(pointerId: number, clientX?: number, clientY?: number) => boolean>(() => false);
   const workspaceKeydownHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   const workspaceKeyupHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  const workspaceCopyHandlerRef = useRef<(event: ClipboardEvent) => void>(() => undefined);
+  const clipboardPublishRef = useRef<ReturnType<typeof encodeCanvasV2Clipboard> | undefined>(undefined);
   const workspacePasteHandlerRef = useRef<(event: ClipboardEvent) => void>(() => undefined);
   const workspaceWheelHandlerRef = useRef<(event: globalThis.WheelEvent) => void>(() => undefined);
   const sceneElementsRef = useRef<CanvasV2InspectableElement[]>([]);
-  const internalClipboardRef = useRef<{ nodeIds: string[]; cut: boolean }>({ nodeIds: [], cut: false });
+  const internalClipboardRef = useRef<{ snapshot?: CanvasV2NativeClipboard; pasteCount: number }>({ pasteCount: 0 });
   const renderCountRef = useRef(0);
   renderCountRef.current += 1;
 
@@ -1131,6 +1163,15 @@ export function CanvasV2Workspace({
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     lastCanvasPointerRef.current = workspacePoint(event.clientX, event.clientY);
+    if (tool === "place" && placementTool && !spacePan && event.button === 0) {
+      chat.stop();
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const point = workspacePoint(event.clientX, event.clientY);
+      placementRef.current = { start: point, end: point, pointerId: event.pointerId };
+      setPlacement(placementRef.current);
+      return;
+    }
     if (tool === "draw" && !spacePan && event.button === 0) {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1215,7 +1256,7 @@ export function CanvasV2Workspace({
     const hits = bounds.width < 3 && bounds.height < 3
       ? []
       : sceneElementsRef.current.filter((item) => item.nodeId !== "canvas" && canvasV2BoundsIntersect(bounds, item.bounds));
-    const preciseHits = individualMarqueeSelection(hits, sceneElementsRef.current);
+    const preciseHits = individualMarqueeSelection(hits.filter(item => !item.sectionHeading), sceneElementsRef.current);
     setSelectedElements((current) => gesture.additive
       ? [...current.filter((item) => !preciseHits.some((hit) => hit.nodeId === item.nodeId)), ...preciseHits]
       : preciseHits);
@@ -1505,7 +1546,7 @@ export function CanvasV2Workspace({
         return { kind: "move" as const, nodeId: item.nodeId, deltaX: next.x - item.bounds.x, deltaY: next.y - item.bounds.y };
       }
       const originalFontSize = Number.parseFloat(item.visualStyle?.fontSize ?? "");
-      const fontSize = item.textEditable
+      const fontSize = item.textEditable && (directGesture.originals.length > 1 || directGesture.handle?.includes("-"))
         ? scaleCanvasV2FontSize(originalFontSize, directGesture.original, directGesture.draftBounds)
         : undefined;
       const originalLineHeight = Number.parseFloat(item.visualStyle?.lineHeight ?? "");
@@ -1539,6 +1580,11 @@ export function CanvasV2Workspace({
 
   const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     lastCanvasPointerRef.current = workspacePoint(event.clientX, event.clientY);
+    if (placementRef.current?.pointerId === event.pointerId) {
+      placementRef.current = { ...placementRef.current, end: workspacePoint(event.clientX, event.clientY) };
+      setPlacement(placementRef.current);
+      return;
+    }
     if (updateDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY)) return;
     if (updateConnectorGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY)) return;
     if (updateDirectGesture(event.pointerId, event.clientX, event.clientY, event.shiftKey)) return;
@@ -1555,6 +1601,15 @@ export function CanvasV2Workspace({
   };
 
   const pointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const placed = placementRef.current;
+    if (placed?.pointerId === event.pointerId && placementTool) {
+      placementRef.current = undefined; setPlacement(undefined);
+      const end = workspacePoint(event.clientX, event.clientY);
+      const dragged = Math.hypot(end.x - placed.start.x, end.y - placed.start.y) * viewportRef.current.scale > 4;
+      const size = dragged ? { width: Math.max(24, Math.abs(end.x - placed.start.x)), height: Math.max(24, Math.abs(end.y - placed.start.y)) } : undefined;
+      createPrimitive(placementTool.primitive, { ...placementTool, origin: size ? { x: Math.min(end.x, placed.start.x) + size.width / 2, y: Math.min(end.y, placed.start.y) + size.height / 2 } : placed.start, size, autoEdit: true, textMode: dragged ? "area" : "point", ...(dragged && ["line", "connector"].includes(placementTool.primitive) ? { endpoints: { start: placed.start, end } } : {}), pointOrigin: !dragged && placementTool.primitive === "text" });
+      return;
+    }
     if (finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY)) return;
     if (finishConnectorGestureHandlerRef.current(event.pointerId)) return;
     if (finishDirectGesture(event.pointerId)) return;
@@ -1606,10 +1661,11 @@ export function CanvasV2Workspace({
   }, []);
 
   const startDirectGesture = (kind: DirectGesture["kind"], pointerId: number, clientX: number, clientY: number, elements: CanvasV2InspectableElement[], handle?: CanvasV2ResizeHandle, clickSelection?: CanvasV2InspectableElement[]) => {
+    chat.stop();
     cancelDirectGesturePreview();
     const mutable = elements.filter((item) => item.nodeId !== "canvas" && !item.locked);
     const selectionBounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
-    if (!mutable.length || !selectionBounds || engine.running || engine.applyingManualEdit) return false;
+    if (!mutable.length || !selectionBounds || engine.applyingManualEdit) return false;
     const elementBounds = Object.fromEntries(mutable.map((item) => [item.nodeId, item.bounds]));
     const pointer = workspacePoint(clientX, clientY);
     const center = { x: selectionBounds.x + selectionBounds.width / 2, y: selectionBounds.y + selectionBounds.height / 2 };
@@ -1650,9 +1706,10 @@ export function CanvasV2Workspace({
     const additive = Boolean(event.shiftKey || event.metaKey);
     const selectedNodeIds = selectedElements.map((item) => item.nodeId);
     const currentNativeScene = engine.readNativeScene();
+    const owningSelectionIds = selectedNodeIds.filter(id => currentNativeScene?.nodes.find(node => node.sourceNodeId === id)?.attributes["data-canvas-v2-section"] !== "true");
     const selectionOwnsTarget = !additive && (
-      Boolean(event.element.parentNodeId && selectedNodeIds.includes(event.element.parentNodeId))
-      || canvasV2NativeSceneSelectionContainsTarget(currentNativeScene, selectedNodeIds, event.element.nodeId)
+      Boolean(event.element.parentNodeId && owningSelectionIds.includes(event.element.parentNodeId))
+      || canvasV2NativeSceneSelectionContainsTarget(currentNativeScene, owningSelectionIds, event.element.nodeId)
     );
     const alreadySelected = selectedElements.some((item) => item.nodeId === event.element.nodeId);
     const nextSelection = selectionOwnsTarget
@@ -1694,6 +1751,7 @@ export function CanvasV2Workspace({
     canvasSceneRef.current?.previewNodeRemoval(nodeIds);
     const chrome: Array<HTMLElement | SVGElement | null> = [
       selectionOverlayRef.current,
+      hoverOutlineRef.current,
       ...selectionMemberOverlayRefs.current.values(),
       contextualToolbarRef.current,
       connectorStartHandleRef.current,
@@ -1720,11 +1778,13 @@ export function CanvasV2Workspace({
   };
 
   const commitDeletionPreview = () => {
+    setHoveredElement(undefined);
     canvasSceneRef.current?.commitNodeRemovalPreview();
     deletionChromeSnapshotsRef.current = [];
   };
 
   const submitMutation = (mutation: CanvasV2ManualMutation) => {
+    chat.stop();
     const atomicMutations = mutation.kind === "batch" ? mutation.mutations : [mutation];
     const deletedNodeIds = atomicMutations.flatMap((item) => item.kind === "delete" ? [item.nodeId] : []);
     if (deletedNodeIds.length) previewDeletion(deletedNodeIds);
@@ -1761,11 +1821,9 @@ export function CanvasV2Workspace({
           || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete")),
         selectionNodeIds: historySelectionNodeIds,
       })) {
-        // Busy-state rejections are control flow, not product errors. Controls
-        // are disabled while AI work is active; a racing keyboard/pointer
-        // event should simply leave committed truth untouched and never leak
-        // an internal transaction message onto the canvas.
-        setMutationError(undefined);
+        setMutationError(engine.readManualFailure() ?? (atomicMutations.some(item => item.kind === "text")
+          ? "This edit could not be committed yet. Your text stays open so you can retry without losing it."
+          : "This edit could not be committed yet. Please try again."));
         if (deletedNodeIds.length) restoreDeletionPreview();
         return false;
       }
@@ -1829,7 +1887,7 @@ export function CanvasV2Workspace({
   };
 
   const startDrawingGesture = (pointerId: number, clientX: number, clientY: number) => {
-    if (drawingGestureRef.current || !engine.ready || engine.running || engine.applyingManualEdit) return false;
+    if (drawingGestureRef.current || !engine.ready || engine.applyingManualEdit) return false;
     selectElement(undefined);
     const gesture = { pointerId, points: [drawingPoint(clientX, clientY)] };
     drawingGestureRef.current = gesture;
@@ -1899,24 +1957,28 @@ export function CanvasV2Workspace({
       start,
       end,
       variant: gesture.variant,
-      ...(gesture.variant === "curve" ? { control: gesture.kind === "curve" ? gesture.draftPoint : gesture.control } : {}),
+      waypoints: gesture.waypoints,
+      ...((gesture.variant === "curve" || gesture.variant === "bent") ? { control: gesture.kind === "curve" ? gesture.draftPoint : gesture.control } : {}),
     });
-    const path = connectorPreviewPathRef.current;
-    if (path) {
-      path.style.visibility = "visible";
-      path.setAttribute("d", gesture.variant === "curve"
-        ? `M ${start.x} ${start.y} Q ${geometry.control.x} ${geometry.control.y} ${end.x} ${end.y}`
-        : `M ${start.x} ${start.y} L ${end.x} ${end.y}`);
-    }
-    const arrow = connectorPreviewEndRef.current;
-    if (arrow) {
-      if (gesture.variant === "arrow") {
-        arrow.style.visibility = "visible";
-        arrow.setAttribute("points", geometry.arrowPoints.split(" ").map((pair) => {
-          const [x, y] = pair.split(",").map(Number);
-          return `${x + geometry.bounds.x},${y + geometry.bounds.y}`;
-        }).join(" "));
-      } else arrow.style.visibility = "hidden";
+    const group = connectorPreviewGroupRef.current;
+    const original = connectorGestureElementRef.current?.element;
+    if (group && original) {
+      let preview = group.firstElementChild as SVGSVGElement | null;
+      if (!preview) { preview = original.cloneNode(true) as unknown as SVGSVGElement; preview.querySelectorAll("[data-canvas-v2-node-id]").forEach(item => item.removeAttribute("data-canvas-v2-node-id")); preview.removeAttribute("data-canvas-v2-node-id"); group.appendChild(preview); }
+      preview.setAttribute("style", "overflow:visible;visibility:visible;pointer-events:none");
+      preview.setAttribute("x", String(geometry.bounds.x)); preview.setAttribute("y", String(geometry.bounds.y));
+      preview.setAttribute("width", String(geometry.bounds.width)); preview.setAttribute("height", String(geometry.bounds.height));
+      preview.setAttribute("viewBox", `0 0 ${geometry.bounds.width} ${geometry.bounds.height}`);
+      preview.querySelectorAll('[data-canvas-v2-connector-part="path"],[data-canvas-v2-connector-part="hit"]').forEach(part => part.setAttribute("d", geometry.path));
+      for (const endpoint of ["start", "end"] as const) {
+        const cap = (original.getAttribute(`data-canvas-v2-connector-${endpoint}-cap`) || (endpoint === "end" && gesture.variant === "arrow" ? "line-arrow" : "none")) as CanvasV2ConnectorCap;
+        const part = preview.querySelector(`[data-canvas-v2-connector-part="${endpoint}"]`);
+        if (part) for (const [key, value] of Object.entries(canvasV2ConnectorCapAttributes(geometry, endpoint, cap, gesture.variant))) part.setAttribute(key, value);
+      }
+      const label = preview.querySelector('text[data-canvas-v2-connector-part="label"]');
+      if (label) { const point = canvasV2ConnectorLabelPoint(geometry, gesture.variant, gesture.labelPosition); label.setAttribute("x", String(point.x)); label.setAttribute("y", String(point.y - 12 - Math.max(0, label.children.length - 1) * 21.6)); label.querySelectorAll("tspan").forEach(line => line.setAttribute("x", String(point.x)));
+        const background = preview.querySelector('[data-canvas-v2-connector-part="label-background"]');
+        if (background) { background.setAttribute("x", String(point.x - Number(background.getAttribute("width"))/2)); background.setAttribute("y", String(Number(label.getAttribute("y"))-19)); } }
     }
     const positionHandle = (handle: HTMLButtonElement | null, point: CanvasV2ConnectorPoint) => {
       if (!handle) return;
@@ -1930,11 +1992,12 @@ export function CanvasV2Workspace({
     if (activeHandle) {
       activeHandle.dataset.attached = gesture.attachNodeId ? "true" : "false";
       activeHandle.style.backgroundColor = gesture.attachNodeId ? "#18a873" : "#ffffff";
-      activeHandle.style.boxShadow = gesture.attachNodeId ? "0 0 0 5px rgba(24,168,115,.18)" : "0 0 0 4px rgba(109,89,237,.14)";
+      activeHandle.style.boxShadow = "none";
     }
   };
 
   const resetConnectorGesturePreview = () => {
+    connectorPreviewGroupRef.current?.replaceChildren();
     if (connectorPreviewPathRef.current) connectorPreviewPathRef.current.style.visibility = "hidden";
     if (connectorPreviewEndRef.current) connectorPreviewEndRef.current.style.visibility = "hidden";
     const hiddenConnector = connectorGestureElementRef.current;
@@ -1947,6 +2010,17 @@ export function CanvasV2Workspace({
     const gesture = connectorGestureRef.current;
     if (!gesture || gesture.pointerId !== pointerId) return false;
     const point = workspacePoint(clientX, clientY);
+    if (gesture.kind === "segment") {
+      const geometry = buildCanvasV2ConnectorGeometry({ start: gesture.start, end: gesture.end, variant: gesture.variant, control: gesture.control, waypoints: gesture.originalWaypoints });
+      gesture.waypoints = canvasV2MoveConnectorSegment(geometry.routePoints, gesture.segmentIndex ?? 0, point);
+      paintConnectorGesture(gesture); return true;
+    }
+    if (gesture.kind === "label") {
+      const geometry = buildCanvasV2ConnectorGeometry({ start: gesture.start, end: gesture.end, variant: gesture.variant, control: gesture.control, waypoints: gesture.waypoints });
+      gesture.labelPosition = canvasV2ConnectorNearestLabelPosition(geometry, gesture.variant, point);
+      paintConnectorGesture(gesture);
+      return true;
+    }
     if (gesture.kind === "curve") {
       gesture.draftPoint = point;
       paintConnectorGesture(gesture);
@@ -1978,6 +2052,8 @@ export function CanvasV2Workspace({
     if (!gesture || gesture.pointerId !== pointerId) return false;
     connectorGestureRef.current = undefined;
     resetConnectorGesturePreview();
+    if (gesture.kind === "segment") { if (gesture.waypoints) submitMutation({ kind: "connector-path", nodeId: gesture.nodeId, waypoints: gesture.waypoints }); return true; }
+    if (gesture.kind === "label") { submitMutation({ kind: "connector-label-position", nodeId: gesture.nodeId, position: gesture.labelPosition ?? 0.5 }); return true; }
     if (gesture.kind === "curve") {
       if (Math.hypot(gesture.draftPoint.x - gesture.control.x, gesture.draftPoint.y - gesture.control.y) >= 0.01) submitMutation({ kind: "connector-curve", nodeId: gesture.nodeId, x: gesture.draftPoint.x, y: gesture.draftPoint.y });
       return true;
@@ -1998,12 +2074,13 @@ export function CanvasV2Workspace({
   updateConnectorGestureHandlerRef.current = updateConnectorGesture;
   finishConnectorGestureHandlerRef.current = finishConnectorGesture;
 
-  const beginConnectorGesture = (kind: CanvasV2ConnectorGesture["kind"], event: ReactPointerEvent<HTMLButtonElement>, endpoint?: "from" | "to") => {
+  const beginConnectorGesture = (kind: CanvasV2ConnectorGesture["kind"], event: ReactPointerEvent<HTMLButtonElement>, endpoint?: "from" | "to", segmentIndex?: number) => {
     const connector = selectedElement?.connector;
-    if (!selectedElement || !connector || selectedElement.locked || engine.running || engine.applyingManualEdit) return;
+    if (!selectedElement || !connector || selectedElement.locked || engine.applyingManualEdit) return;
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
+    chat.stop();
     // Endpoint and curve controls own their pointer sequence exclusively. A
     // connector was initially selected through the scene's forwarded pointer
     // channel, whose terminal event can race the parent overlay becoming
@@ -2022,6 +2099,8 @@ export function CanvasV2Workspace({
       nodeId: selectedElement.nodeId,
       endpoint,
       variant: connector.variant,
+      waypoints: connector.waypoints, originalWaypoints: connector.waypoints, segmentIndex,
+      labelPosition: Number(engine.readNativeScene()?.nodes.find(node => node.sourceNodeId === selectedElement.nodeId)?.attributes["data-canvas-v2-connector-label-position"] ?? 0.5),
       start: connector.from,
       end: connector.to,
       control: connector.control,
@@ -2196,40 +2275,286 @@ export function CanvasV2Workspace({
     (item, index) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "duplicate", nodeId: item.nodeId, newNodeId: `${item.nodeId}-copy-${Date.now().toString(36)}-${index}` },
   );
 
+  const publishClipboard = (snapshot: CanvasV2NativeClipboard) => {
+    const payload = encodeCanvasV2Clipboard(snapshot);
+    // The synchronous copy event works in embedded browsers where the async
+    // clipboard API can reject writes despite a real keyboard gesture.
+    clipboardPublishRef.current = payload;
+    let copied = false;
+    try { copied = document.execCommand("copy"); } catch { /* Fall through to the async API. */ }
+    clipboardPublishRef.current = undefined;
+    if (copied) return;
+    if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+      void navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([payload.html], { type: "text/html" }), "text/plain": new Blob([payload.text], { type: "text/plain" }) })]).catch(() => { /* Internal copy remains available when OS clipboard access is denied. */ });
+    } else if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(payload.text).catch(() => undefined);
+  };
+
   const copySelection = () => {
-    internalClipboardRef.current = { nodeIds: selectedElements.filter((item) => item.nodeId !== "canvas").map((item) => item.nodeId), cut: false };
+    const scene = engine.readNativeScene();
+    if (scene) internalClipboardRef.current = { snapshot: copyCanvasV2NativeSelection(scene, selectedElements.map((item) => item.nodeId), engine.committed.evidence), pasteCount: 0 };
+    if (internalClipboardRef.current.snapshot) publishClipboard(internalClipboardRef.current.snapshot);
     setObjectMenu(undefined);
   };
 
   const cutSelection = () => {
+    const scene = engine.readNativeScene();
     const ids = selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked).map((item) => item.nodeId);
-    internalClipboardRef.current = { nodeIds: ids, cut: true };
-    if (ids.length) {
-      batchForSelection(`Cut ${ids.length} objects.`, (item) => ids.includes(item.nodeId) ? { kind: "visibility", nodeId: item.nodeId, hidden: true } : undefined);
-      selectElement(undefined);
+    const snapshot = scene ? copyCanvasV2NativeSelection(scene, ids, engine.committed.evidence) : undefined;
+    if (snapshot && submitMutation({
+      kind: "batch",
+      label: `Cut ${snapshot.scene.rootIds.length} objects.`,
+      mutations: snapshot.scene.rootIds.map((id) => ({ kind: "delete", nodeId: snapshot.scene.nodes.find((node) => node.id === id)!.sourceNodeId! })),
+    })) { internalClipboardRef.current = { snapshot, pasteCount: 0 }; publishClipboard(snapshot); }
+    setObjectMenu(undefined);
+  };
+
+  const pasteInternalClipboard = () => {
+    const clipboard = internalClipboardRef.current;
+    const source = engine.readNativeScene();
+    if (!clipboard.snapshot || !source) return;
+    try {
+      const copiedRoots = clipboard.snapshot.scene.nodes.filter((node) => clipboard.snapshot!.scene.rootIds.includes(node.id));
+      const left = Math.min(...copiedRoots.map((node) => node.geometry.x));
+      const top = Math.min(...copiedRoots.map((node) => node.geometry.y));
+      const anchor = lastCanvasPointerRef.current ?? centeredCanvasV2WorkspaceOrigin({ width: 220, height: 48 }, viewport, cameraSize(), contentInsets());
+      const pasted = pasteCanvasV2NativeClipboard(source, clipboard.snapshot, Date.now().toString(36), { x: anchor.x - left + 36 * clipboard.pasteCount, y: anchor.y - top + 36 * clipboard.pasteCount });
+      const positioned = pasted.scene;
+      const evidence = [...engine.committed.evidence];
+      for (const asset of clipboard.snapshot.evidenceAssets ?? []) {
+        const existing = evidence.find((item) => item.id === asset.id);
+        if (existing && existing.url !== asset.url) throw new Error("Copied evidence conflicts with an existing source. Paste it into a separate board.");
+        if (!existing) evidence.push(asset);
+      }
+      if (engine.applyManualDocument(serializeCanvasV2NativeScene(positioned), `Pasted ${pasted.nodeIds.length} objects.`, evidence, positioned, { selectionNodeIds: pasted.nodeIds })) {
+        clipboard.pasteCount += 1;
+        setSelectedElements([]);
+        setSelectionTarget(pasted.nodeIds[0]);
+        setMutationError(undefined);
+      } else setMutationError(engine.readManualFailure() ?? "The copied objects could not be pasted yet. Please try again.");
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : "The copied objects could not be pasted.");
     }
     setObjectMenu(undefined);
   };
 
-  const pasteClipboard = () => {
-    const clipboard = internalClipboardRef.current;
-    if (!clipboard.nodeIds.length) return;
-    const stamp = Date.now().toString(36);
-    const newIds = clipboard.nodeIds.map((nodeId, index) => `${nodeId}-paste-${stamp}-${index}`);
-    const mutations = clipboard.nodeIds.flatMap((nodeId, index) => [
-      { kind: "duplicate" as const, nodeId, newNodeId: newIds[index] },
-      { kind: "visibility" as const, nodeId: newIds[index], hidden: false },
-      ...(clipboard.cut ? [{ kind: "delete" as const, nodeId }] : []),
-    ]);
-    if (submitMutation({
-      kind: "batch",
-      label: `Pasted ${clipboard.nodeIds.length} objects.`,
-      mutations,
-    })) internalClipboardRef.current = { nodeIds: newIds, cut: false };
-    setObjectMenu(undefined);
+  const pasteExternalText = (text: string, html?: string) => {
+    if (!text.trim()) return;
+    const origin = lastCanvasPointerRef.current ?? centeredCanvasV2WorkspaceOrigin({ width: 320, height: 48 }, viewport, cameraSize(), contentInsets());
+    if (text.includes("\t")) {
+      if (selectedElement && selectedTable) { tableAction(selectedElement.nodeId, "paste", text); return; }
+      const nodeId = `table-${crypto.randomUUID()}`;
+      submitMutation({ kind: "batch", label: "Pasted spreadsheet cells.", mutations: [{ kind: "create", primitive: "table", nodeId, x: origin.x, y: origin.y }, { kind: "table-edit", nodeId, action: "replace", cells: parseCanvasV2TabularText(text) }] });
+    } else if (html) {
+      const source = engine.readNativeScene();
+      if (!source) return;
+      const nodeId = `pasted-text-${crypto.randomUUID()}`;
+      const editable = document.createElement("div");
+      editable.dataset.canvasV2NativeSceneId = nodeId;
+      editable.innerHTML = sanitizeCanvasV2RichTextHtml(html);
+      const created = applyCanvasV2NativeSceneMutation(source, { kind: "create", primitive: "text", nodeId, x: origin.x, y: origin.y, width: 360, height: 80, textMode: "area" });
+      const native = applyCanvasV2NativeSceneMutation(created, { kind: "text", nodeId, text, nativeContent: readCanvasV2RichText(editable) });
+      if (engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Pasted formatted text.", undefined, native, { selectionNodeIds: [nodeId] })) { setSelectedElements([]); setSelectionTarget(nodeId); }
+    } else createPrimitive("text", { text, origin, size: { width: 360, height: 48 }, textMode: "area" });
   };
 
-  const createPrimitive = (primitive: CanvasV2ManualPrimitive, options: { shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant; src?: string; alt?: string; origin?: { x: number; y: number }; size?: { width: number; height: number } } = {}) => {
+  const pasteClipboard = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const html = item.types.includes("text/html") ? await (await item.getType("text/html")).text() : "";
+        const snapshot = decodeCanvasV2Clipboard(html);
+        if (snapshot) { internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); return; }
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (imageType) { void addLocalImages([new File([await item.getType(imageType)], "Pasted image.png", { type: imageType })], lastCanvasPointerRef.current); return; }
+        if (item.types.includes("text/plain")) { pasteExternalText(await (await item.getType("text/plain")).text(), html); setObjectMenu(undefined); return; }
+      }
+    } catch { /* Keyboard paste remains available if the browser restricts clipboard reads. */ }
+    pasteInternalClipboard();
+  };
+
+  const cropPreviewScene = useMemo(() => {
+    if (!cropDraft || !engine.nativeScene) return undefined;
+    try { return applyCanvasV2NativeSceneMutation(engine.nativeScene, imageCropMutation(cropDraft)); } catch { return undefined; }
+  }, [cropDraft, engine.nativeScene]);
+
+  const selectedTable = (() => {
+    const native = engine.nativeScene;
+    let node = native?.nodes.find((item) => item.sourceNodeId === selectedElement?.nodeId);
+    while (node && native) {
+      if (node.kind === "table") return node;
+      node = native.nodes.find((item) => item.id === node!.parentId);
+    }
+    return undefined;
+  })();
+
+  const editTable = (action: "add-row" | "remove-row" | "add-column" | "remove-column") => {
+    if (!selectedTable || !engine.nativeScene) return;
+    const rows = canvasV2NativeTableRows(engine.nativeScene, selectedTable.sourceNodeId!);
+    let rowIndex = rows.findIndex((row) => row.some((cell) => cell.sourceNodeId === selectedElement?.nodeId));
+    let columnIndex = rows[rowIndex]?.findIndex((cell) => cell.sourceNodeId === selectedElement?.nodeId) ?? -1;
+    if (rowIndex < 0) rowIndex = rows.length - 1;
+    if (columnIndex < 0) columnIndex = (rows[0]?.length ?? 1) - 1;
+    const index = (action.includes("column") ? columnIndex : rowIndex) + (action.startsWith("add") ? 1 : 0);
+    submitMutation({ kind: "table-edit", nodeId: selectedTable.sourceNodeId!, action, index });
+    setSelectedElements([]); setSelectionTarget(selectedTable.sourceNodeId);
+  };
+
+  const sectionSelection = () => {
+    const native = engine.readNativeScene();
+    const copied = native && copyCanvasV2NativeSelection(native, selectedElements.filter((item) => !item.locked).map((item) => item.nodeId));
+    if (!copied) return;
+    const items = copied.scene.nodes.filter((node) => copied.scene.rootIds.includes(node.id)).map((node) => ({ nodeId: node.sourceNodeId!, bounds: node.geometry }));
+    const bounds = unionCanvasV2ObjectBounds(items.map((item) => item.bounds));
+    if (bounds) submitMutation({ kind: "group", section: true, groupNodeId: `section-${crypto.randomUUID()}`, label: "Section", items, bounds: { x: bounds.x - 24, y: bounds.y - 64, width: bounds.width + 48, height: bounds.height + 88 } });
+  };
+
+  const tidyMutation = (items: CanvasV2InspectableElement[], gapX: number, gapY: number) => canvasV2TidyMutation(items, engine.readNativeScene(), gapX, gapY);
+  const tidySelection = () => {
+    const items = canvasV2TidyItems(selectedElements, engine.readNativeScene()).sort((a,b) => a.bounds.y-b.bounds.y || a.bounds.x-b.bounds.x);
+    if (items.length < 2) return;
+    if (submitMutation(tidyMutation(items, 32, 32))) { setTidyIds(items.map(item => item.nodeId)); setSelectedElements(current => current.filter(item => items.some(candidate => candidate.nodeId === item.nodeId))); }
+  };
+  const tidyItems = tidyIds.map(id => selectedElements.find(item => item.nodeId === id)).filter((item): item is CanvasV2InspectableElement => Boolean(item));
+  const tidyActive = tidyItems.length >= 2 && tidyItems.length === selectedElements.length && tidyItems.length === tidyIds.length;
+  const tidyPreviewScene = useMemo(() => {
+    if (!tidyDraft || !engine.nativeScene) return undefined;
+    return applyCanvasV2NativeSceneMutation(engine.nativeScene, tidyDraft);
+  }, [tidyDraft, engine.nativeScene]);
+  const beginTidySpacing = (axis: "x" | "y", event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); chat.stop();
+    const columns = Math.ceil(Math.sqrt(tidyItems.length));
+    const width = Math.max(...tidyItems.map(item => item.bounds.width)), height = Math.max(...tidyItems.map(item => item.bounds.height));
+    tidyGestureRef.current = { pointerId: event.pointerId, axis, start: axis === "x" ? event.clientX : event.clientY, items: tidyItems, gapX: Math.max(0, tidyItems[1].bounds.x-tidyItems[0].bounds.x-width), gapY: tidyItems[columns] ? Math.max(0, tidyItems[columns].bounds.y-tidyItems[0].bounds.y-height) : 32 };
+  };
+  const moveTidySpacing = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const gesture = tidyGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    const delta = ((gesture.axis === "x" ? event.clientX : event.clientY)-gesture.start)/viewportRef.current.scale;
+    gesture.mutation = tidyMutation(gesture.items, Math.max(0, gesture.gapX+(gesture.axis === "x" ? delta : 0)), Math.max(0, gesture.gapY+(gesture.axis === "y" ? delta : 0)));
+    setTidyDraft(gesture.mutation);
+  };
+  const finishTidySpacing = (event: ReactPointerEvent<HTMLButtonElement>, cancel = false) => {
+    event.stopPropagation(); const gesture = tidyGestureRef.current; tidyGestureRef.current = undefined; setTidyDraft(undefined);
+    if (!cancel && gesture?.mutation) submitMutation(gesture.mutation);
+  };
+
+  const beginImageCrop = (element = selectedElement) => {
+    chat.stop();
+    if (!element || element.locked || element.kind !== "image") return;
+    setConnectorLabelDraft(undefined);
+    let source = engine.readNativeScene();
+    let node = source?.nodes.find((item) => item.sourceNodeId === element.nodeId);
+    if (!source || !node) return;
+    if (node.canonicalEvidence || node.evidence?.role === "canonical") {
+      const snapshot = copyCanvasV2NativeSelection(source, [element.nodeId]);
+      if (!snapshot) return;
+      const pasted = pasteCanvasV2NativeClipboard(source, snapshot, Date.now().toString(36));
+      if (!engine.applyManualDocument(serializeCanvasV2NativeScene(pasted.scene), "Created a crop copy of the source.", undefined, pasted.scene, { selectionNodeIds: pasted.nodeIds })) return;
+      source = pasted.scene; node = source.nodes.find((item) => item.sourceNodeId === pasted.nodeIds[0])!;
+      setSelectedElements([]); setSelectionTarget(node.sourceNodeId);
+    }
+    const frame = { ...node.geometry };
+    let parent = source.nodes.find(item => item.id === node!.parentId);
+    while (parent) { frame.x += parent.geometry.x; frame.y += parent.geometry.y; parent = source.nodes.find(item => item.id === parent!.parentId); }
+    const child = source.nodes.find(item => node!.childIds.includes(item.id) && item.tagName === "img");
+    const zoom = Number(node.attributes["data-canvas-v2-crop-zoom"] ?? 1);
+    const width = child ? frame.width * parseFloat(child.inlineStyle.width || "100%") / 100 : frame.width;
+    const height = child ? frame.height * parseFloat(child.inlineStyle.height || "100%") / 100 : frame.height;
+    const image = { x: frame.x + (child ? frame.width * parseFloat(child.inlineStyle.left || "0%") / 100 : 0), y: frame.y + (child ? frame.height * parseFloat(child.inlineStyle.top || "0%") / 100 : 0), width: width || frame.width * zoom, height: height || frame.height * zoom };
+    const draft = { nodeId: node.sourceNodeId!, original: { ...frame }, frame, image };
+    cropInitialRef.current = draft;
+    setCropDraft(draft);
+    workspaceRef.current?.focus({ preventScroll: true });
+  };
+
+  const finishCrop = () => {
+    if (!cropDraft) return;
+    if (JSON.stringify(cropDraft) === JSON.stringify(cropInitialRef.current) || submitMutation(imageCropMutation(cropDraft))) {
+      setCropDraft(undefined); cropGestureRef.current = undefined;
+    }
+  };
+  cropFinishRef.current = finishCrop;
+  const cropping = Boolean(cropDraft);
+  useEffect(() => {
+    if (!cropping) return;
+    const outside = (event: PointerEvent) => {
+      if (!(event.target as Element).closest("[data-canvas-v2-crop-control]")) cropFinishRef.current();
+    };
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Enter") return;
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === "Escape") { setCropDraft(undefined); cropGestureRef.current = undefined; }
+      else cropFinishRef.current();
+      workspaceRef.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", keyboard, true);
+    return () => { document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", keyboard, true); };
+  }, [cropping]);
+
+  const moveCropPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = cropGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    const dx = (event.clientX - gesture.clientX) / viewportRef.current.scale;
+    const dy = (event.clientY - gesture.clientY) / viewportRef.current.scale;
+    const { frame, image } = gesture.draft;
+    if (!gesture.handle) {
+      const x = Math.max(frame.x + frame.width - image.width, Math.min(frame.x, image.x + dx));
+      const y = Math.max(frame.y + frame.height - image.height, Math.min(frame.y, image.y + dy));
+      setCropDraft({ ...gesture.draft, image: { ...image, x, y } });
+      return;
+    }
+    const handle = gesture.handle;
+    const left = handle.includes("west") ? Math.max(image.x, Math.min(frame.x + frame.width - 24, frame.x + dx)) : frame.x;
+    const top = handle.includes("north") ? Math.max(image.y, Math.min(frame.y + frame.height - 24, frame.y + dy)) : frame.y;
+    const right = handle.includes("east") ? Math.min(image.x + image.width, Math.max(left + 24, frame.x + frame.width + dx)) : frame.x + frame.width;
+    const bottom = handle.includes("south") ? Math.min(image.y + image.height, Math.max(top + 24, frame.y + frame.height + dy)) : frame.y + frame.height;
+    setCropDraft({ ...gesture.draft, frame: { x: left, y: top, width: right - left, height: bottom - top } });
+  };
+  const zoomCrop = (zoom: number) => {
+    if (!cropDraft || !cropInitialRef.current) return;
+    const original = cropInitialRef.current.image;
+    const width = original.width * zoom, height = original.height * zoom;
+    const frame = cropDraft.frame;
+    const x = Math.max(frame.x + frame.width - width, Math.min(frame.x, cropDraft.image.x + (cropDraft.image.width - width) / 2));
+    const y = Math.max(frame.y + frame.height - height, Math.min(frame.y, cropDraft.image.y + (cropDraft.image.height - height) / 2));
+    setCropDraft({ ...cropDraft, image: { x, y, width, height } });
+  };
+
+  const beginConnectorLabel = (element = selectedElement) => {
+    if (!element || element.kind !== "connector" || element.locked) return;
+    chat.stop();
+    const node = engine.readNativeScene()?.nodes.find(item => item.sourceNodeId === element.nodeId);
+    let bounds = element.bounds;
+    if (element.connector) { const c = element.connector; const geometry = buildCanvasV2ConnectorGeometry({ start: c.from, end: c.to, variant: c.variant, control: c.control, waypoints: c.waypoints }); const point = canvasV2ConnectorLabelPoint(geometry, c.variant, Number(node?.attributes["data-canvas-v2-connector-label-position"] ?? 0.5)); bounds = { x: geometry.bounds.x + point.x, y: geometry.bounds.y + point.y, width: 0, height: 0 }; }
+    setConnectorLabelDraft({ nodeId: element.nodeId, text: node?.attributes["data-canvas-v2-connector-label"] ?? "", bounds });
+  };
+  const finishConnectorLabel = () => {
+    if (connectorLabelDraft && submitMutation({ kind: "connector-label", nodeId: connectorLabelDraft.nodeId, text: connectorLabelDraft.text })) setConnectorLabelDraft(undefined);
+  };
+
+  const activatePrimitive = (primitive: CanvasV2ManualPrimitive, options: { shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant } = {}) => {
+    if (canvasSceneRef.current?.finishTextEditing() === false) return;
+    if (primitive !== "connector") selectElement(undefined);
+    setPlacementTool({ primitive, ...options });
+    setTool("place");
+    workspaceRef.current?.focus({ preventScroll: true });
+  };
+
+  const focusSelection = () => {
+    const bounds = unionCanvasV2ObjectBounds(selectedElements.map((item) => item.bounds));
+    if (bounds) commitViewport(fitCanvasV2WorkspaceBounds(bounds, cameraSize(), contentInsets(), 96));
+  };
+
+  const editSelectedText = () => {
+    if (selectedElement?.kind === "connector") { beginConnectorLabel(); return; }
+    if (selectedElement?.kind === "image") { beginImageCrop(); return; }
+    if (selectedElement?.textEditable && !selectedElement.locked) setEditTextRequest({ nodeId: selectedElement.nodeId, nonce: Date.now(), selectAll: true });
+  };
+
+  const createPrimitive = (primitive: CanvasV2ManualPrimitive, options: { pointOrigin?: boolean; endpoints?: { start: { x: number; y: number }; end: { x: number; y: number } }; autoEdit?: boolean; textMode?: "point" | "area"; text?: string; shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant; src?: string; alt?: string; origin?: { x: number; y: number }; size?: { width: number; height: number } } = {}) => {
     cancelDrawingGesture();
     setTool("select");
     const suffix = options.shapeVariant ? `-${options.shapeVariant}` : options.connectorVariant ? `-${options.connectorVariant}` : "";
@@ -2244,7 +2569,7 @@ export function CanvasV2Workspace({
               : primitive === "line" || primitive === "connector" ? { width: 240, height: 4 }
                 : { width: 220, height: 48 });
     const centered = options.origin
-      ? { x: options.origin.x - size.width / 2, y: options.origin.y - size.height / 2 }
+      ? { x: options.origin.x - (options.pointOrigin ? 0 : size.width / 2), y: options.origin.y - (options.pointOrigin ? 0 : size.height / 2) }
       : centeredCanvasV2WorkspaceOrigin(size, viewport, cameraSize(), contentInsets());
     const occupied = sceneElementsRef.current
       .filter((item) => item.nodeId !== "canvas")
@@ -2252,23 +2577,30 @@ export function CanvasV2Workspace({
     let origin = centered;
     // Consecutive insertions must be separately targetable on their first
     // gesture instead of landing in an accidental topmost z-stack.
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; !options.origin && index < 12; index += 1) {
       if (!occupied.some((bounds) => canvasV2BoundsIntersect({ ...origin, ...size }, bounds))) break;
       origin = { x: centered.x + (index + 1) * 36, y: centered.y + (index + 1) * 36 };
     }
     const connectorTargets = primitive === "connector"
       ? selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked).slice(-2)
       : [];
-    const start = connectorTargets.length === 2
+    const attachmentAt = (point: { x: number; y: number }) => sceneElementsRef.current
+      .filter((item) => item.nodeId !== "canvas" && item.kind !== "root" && item.kind !== "connector" && !item.hidden && point.x >= item.bounds.x - 12 / viewportRef.current.scale && point.x <= item.bounds.x + item.bounds.width + 12 / viewportRef.current.scale && point.y >= item.bounds.y - 12 / viewportRef.current.scale && point.y <= item.bounds.y + item.bounds.height + 12 / viewportRef.current.scale)
+      .sort((a, b) => a.bounds.width * a.bounds.height - b.bounds.width * b.bounds.height)[0];
+    const fromTarget = primitive === "connector" && options.endpoints ? attachmentAt(options.endpoints.start) : connectorTargets.length === 2 ? connectorTargets[0] : undefined;
+    const toTarget = primitive === "connector" && options.endpoints ? attachmentAt(options.endpoints.end) : connectorTargets.length === 2 ? connectorTargets[1] : undefined;
+    const start = options.endpoints?.start ?? (connectorTargets.length === 2
       ? { x: connectorTargets[0].bounds.x + connectorTargets[0].bounds.width / 2, y: connectorTargets[0].bounds.y + connectorTargets[0].bounds.height / 2 }
-      : { x: origin.x, y: origin.y };
-    const end = connectorTargets.length === 2
+      : { x: origin.x, y: origin.y });
+    const end = options.endpoints?.end ?? (connectorTargets.length === 2
       ? { x: connectorTargets[1].bounds.x + connectorTargets[1].bounds.width / 2, y: connectorTargets[1].bounds.y + connectorTargets[1].bounds.height / 2 }
-      : { x: origin.x + size.width, y: origin.y };
-    return submitMutation({
+      : { x: origin.x + size.width, y: origin.y });
+    const accepted = submitMutation({
       kind: "create",
       primitive,
       nodeId,
+      textMode: options.textMode,
+      text: options.text,
       x: start.x,
       y: start.y,
       width: size.width,
@@ -2276,9 +2608,61 @@ export function CanvasV2Workspace({
       ...(primitive === "line" || primitive === "connector" ? { endX: end.x, endY: end.y } : {}),
       ...(options.shapeVariant ? { shapeVariant: options.shapeVariant } : {}),
       ...(options.connectorVariant ? { connectorVariant: options.connectorVariant } : {}),
-      ...(connectorTargets.length === 2 ? { fromNodeId: connectorTargets[0].nodeId, toNodeId: connectorTargets[1].nodeId } : {}),
+      ...(fromTarget ? { fromNodeId: fromTarget.nodeId } : {}),
+      ...(toTarget && toTarget.nodeId !== fromTarget?.nodeId ? { toNodeId: toTarget.nodeId } : {}),
       ...(options.src ? { src: options.src, alt: options.alt ?? "" } : {}),
     });
+    if (accepted && options.autoEdit && (primitive === "text" || primitive === "note" || primitive === "shape")) setEditTextRequest({ nodeId, nonce: Date.now(), selectAll: true });
+    return accepted;
+  };
+
+  const quickCreateConnected = () => {
+    if (!selectedElement || !["shape", "note"].includes(selectedElement.kind ?? "") || selectedElement.locked) return;
+    const source = engine.readNativeScene()?.nodes.find((node) => node.sourceNodeId === selectedElement.nodeId);
+    if (!source) return;
+    const nodeId = `connected-${crypto.randomUUID()}`;
+    const bounds = selectedElement.bounds;
+    const x = bounds.x + bounds.width + 120, y = bounds.y;
+    const accepted = submitMutation({ kind: "batch", label: "Created a connected object.", mutations: [
+      { kind: "create", primitive: selectedElement.kind === "note" ? "note" : "shape", nodeId, x, y, width: bounds.width, height: bounds.height, shapeVariant: source.attributes["data-canvas-v2-shape"] as CanvasV2ShapeVariant | undefined },
+      { kind: "create", primitive: "connector", nodeId: `connection-${crypto.randomUUID()}`, x: bounds.x + bounds.width, y: bounds.y + bounds.height / 2, endX: x, endY: y + bounds.height / 2, fromNodeId: selectedElement.nodeId, toNodeId: nodeId, connectorVariant: "arrow" },
+    ] });
+    if (accepted) setEditTextRequest({ nodeId, nonce: Date.now(), selectAll: true });
+  };
+
+  const tableAction = (cellId: string, action: "next" | "previous" | "paste", text?: string) => {
+    let native = engine.readNativeScene();
+    if (!native) return;
+    let table = native.nodes.find((node) => node.sourceNodeId === cellId);
+    while (table && table.kind !== "table") table = native.nodes.find((node) => node.id === table!.parentId);
+    if (!table?.sourceNodeId) return;
+    const tableId = table.sourceNodeId;
+    let rows = canvasV2NativeTableRows(native, tableId);
+    const row = rows.findIndex((items) => items.some((cell) => cell.sourceNodeId === cellId));
+    const column = rows[row]?.findIndex((cell) => cell.sourceNodeId === cellId) ?? -1;
+    if (row < 0 || column < 0) return;
+    if (action === "paste") {
+      const values = parseCanvasV2TabularText(text ?? "");
+      const requiredRows = row + values.length;
+      const requiredColumns = column + Math.max(1, ...values.map((items) => items.length));
+      if (requiredRows > 200 || requiredColumns > 50) { setMutationError("A canvas table supports up to 200 rows and 50 columns."); return; }
+      while (rows.length < requiredRows) { native = applyCanvasV2NativeSceneMutation(native, { kind: "table-edit", nodeId: tableId, action: "add-row" }); rows = canvasV2NativeTableRows(native, tableId); }
+      while (rows[0].length < requiredColumns) { native = applyCanvasV2NativeSceneMutation(native, { kind: "table-edit", nodeId: tableId, action: "add-column" }); rows = canvasV2NativeTableRows(native, tableId); }
+      const mutations = values.flatMap((items, r) => items.map((value, c) => ({ kind: "text" as const, nodeId: rows[row + r][column + c].sourceNodeId!, text: value })));
+      native = applyCanvasV2NativeSceneMutation(native, { kind: "batch", label: "Pasted spreadsheet cells.", mutations });
+      engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Pasted spreadsheet cells.", undefined, native, { selectionNodeIds: [cellId] });
+    } else {
+      const index = row * rows[0].length + column + (action === "previous" ? -1 : 1);
+      if (index < 0) return;
+      if (index >= rows.flat().length) {
+        if (rows.length >= 200) return;
+        native = applyCanvasV2NativeSceneMutation(native, { kind: "table-edit", nodeId: tableId, action: "add-row" });
+        if (!engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Added a table row.", undefined, native)) return;
+        rows = canvasV2NativeTableRows(native, tableId);
+      }
+      const nextId = rows.flat()[index]?.sourceNodeId;
+      if (nextId) setEditTextRequest({ nodeId: nextId, nonce: Date.now(), selectAll: true });
+    }
   };
 
   const chooseLocalImage = (replaceNodeId?: string) => {
@@ -2346,7 +2730,7 @@ export function CanvasV2Workspace({
     }
     try {
       const prepared = await prepareCanvasV2CanvasImages(replaceNodeId ? images.slice(0, 1) : images);
-      if (!engine.ready || engine.running || engine.applyingManualEdit) return false;
+      if (!engine.ready || engine.applyingManualEdit) return false;
       return addPreparedCanvasImages(prepared, origin, replaceNodeId);
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : "The image could not be prepared.");
@@ -2397,7 +2781,7 @@ export function CanvasV2Workspace({
   const dropOnCanvas = (event: ReactDragEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!engine.ready || engine.running || engine.applyingManualEdit) return;
+    if (!engine.ready || engine.applyingManualEdit) return;
     const origin = workspacePoint(event.clientX, event.clientY);
     const imageFiles = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/"));
     clearPrimitiveDrag();
@@ -2494,14 +2878,32 @@ export function CanvasV2Workspace({
 
   workspaceKeydownHandlerRef.current = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+      if (target?.closest('input, textarea, select, [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
       const command = event.metaKey || event.ctrlKey;
-      if (event.code === "Space") {
+      const key = event.key.toLowerCase();
+      if (!command && event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
+        event.preventDefault(); if (event.code === "Digit1") fitContent(); else focusSelection();
+      } else if (!command && event.shiftKey && key === "s") { event.preventDefault(); sectionSelection();
+      } else if (!command && event.key === "Enter") {
+        event.preventDefault(); if (cropDraft) finishCrop(); else editSelectedText();
+      } else if (!command && event.key === "Tab" && target === workspaceRef.current) {
+        event.preventDefault();
+        const items = individualMarqueeSelection(sceneElementsRef.current, sceneElementsRef.current, engine.readNativeScene());
+        const index = items.findIndex((item) => item.nodeId === selectedElement?.nodeId);
+        const next = items[(index + (event.shiftKey ? -1 : 1) + items.length) % items.length];
+        if (next) selectElement(next, { additive: false, range: false, directEdit: false });
+      } else if (!command && !event.altKey && !event.shiftKey && ["t", "s", "r", "o", "l", "h", "v", "p", "f"].includes(key)) {
+        event.preventDefault();
+        if (key === "h" || key === "v" || key === "p") { selectElement(undefined); setTool(key === "h" ? "pan" : key === "p" ? "draw" : "select"); }
+        else activatePrimitive(key === "t" ? "text" : key === "s" ? "note" : key === "l" ? "connector" : key === "f" ? "frame" : "shape", key === "o" ? { shapeVariant: "ellipse" } : key === "r" ? { shapeVariant: "rectangle" } : {});
+      } else if (event.code === "Space") {
         event.preventDefault();
         setSpacePan(true);
       } else if (event.key === "Escape") {
+        setCropDraft(undefined); setConnectorLabelDraft(undefined); setZoomMenuOpen(false);
         cancelDrawingGesture();
-        if (tool === "draw") setTool("select");
+        setTool("select");
+        placementRef.current = undefined; setPlacement(undefined);
         selectElement(undefined);
       } else if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -2509,7 +2911,7 @@ export function CanvasV2Workspace({
       } else if (command && event.key.toLowerCase() === "a") {
         event.preventDefault();
         window.getSelection()?.removeAllRanges();
-        const selectable = individualMarqueeSelection(sceneElementsRef.current, sceneElementsRef.current);
+        const selectable = individualMarqueeSelection(sceneElementsRef.current, sceneElementsRef.current, engine.readNativeScene());
         setSelectedElements(selectable);
         setSelectionTarget(selectable.at(-1)?.nodeId);
         setToolbarMenu(undefined);
@@ -2544,10 +2946,23 @@ export function CanvasV2Workspace({
   workspaceKeyupHandlerRef.current = (event: KeyboardEvent) => {
     if (event.code === "Space") setSpacePan(false);
   };
+  workspaceCopyHandlerRef.current = (event: ClipboardEvent) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"]') || !selectedElements.length || !event.clipboardData) return;
+    const scene = engine.readNativeScene();
+    const snapshot = scene && copyCanvasV2NativeSelection(scene, selectedElements.map(item => item.nodeId), engine.committed.evidence);
+    if (!snapshot) return;
+    const payload = encodeCanvasV2Clipboard(snapshot);
+    event.preventDefault();
+    event.clipboardData.setData("text/html", payload.html);
+    event.clipboardData.setData("text/plain", payload.text);
+    internalClipboardRef.current = { snapshot, pasteCount: 0 };
+    if (event.type === "cut") batchForSelection("Cut selected objects.", item => item.locked ? undefined : { kind: "delete", nodeId: item.nodeId });
+  };
   workspacePasteHandlerRef.current = (event: ClipboardEvent) => {
     const target = event.target as HTMLElement | null;
-    if (target?.closest('input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
-    if (!engine.ready || engine.running || engine.applyingManualEdit) return;
+    if (target?.closest('input, textarea, select, [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+    if (!engine.ready || engine.applyingManualEdit) return;
     const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
     const itemFiles = directFiles.length ? [] : Array.from(event.clipboardData?.items ?? [])
       .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
@@ -2559,10 +2974,11 @@ export function CanvasV2Workspace({
       void addLocalImages(images, lastCanvasPointerRef.current);
       return;
     }
-    if (internalClipboardRef.current.nodeIds.length) {
-      event.preventDefault();
-      pasteClipboard();
-    }
+    const snapshot = decodeCanvasV2Clipboard(event.clipboardData?.getData("text/html") ?? "");
+    const text = event.clipboardData?.getData("text/plain") ?? "";
+    if (snapshot) { event.preventDefault(); internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); }
+    else if (text) { event.preventDefault(); pasteExternalText(text, event.clipboardData?.getData("text/html")); }
+    else if (internalClipboardRef.current.snapshot && !event.clipboardData?.types.length) { event.preventDefault(); pasteInternalClipboard(); }
   };
 
   useEffect(() => {
@@ -2572,13 +2988,25 @@ export function CanvasV2Workspace({
     const keydown = (event: KeyboardEvent) => workspaceKeydownHandlerRef.current(event);
     const keyup = (event: KeyboardEvent) => workspaceKeyupHandlerRef.current(event);
     const paste = (event: ClipboardEvent) => workspacePasteHandlerRef.current(event);
+    const copy = (event: ClipboardEvent) => {
+      const payload = clipboardPublishRef.current;
+      if (!payload) { workspaceCopyHandlerRef.current(event); return; }
+      if (!event.clipboardData) return;
+      event.preventDefault();
+      event.clipboardData.setData("text/html", payload.html);
+      event.clipboardData.setData("text/plain", payload.text);
+    };
     window.addEventListener("keydown", keydown);
     window.addEventListener("keyup", keyup);
     window.addEventListener("paste", paste);
+    window.addEventListener("copy", copy);
+    window.addEventListener("cut", copy);
     return () => {
       window.removeEventListener("keydown", keydown);
       window.removeEventListener("keyup", keyup);
       window.removeEventListener("paste", paste);
+      window.removeEventListener("copy", copy);
+      window.removeEventListener("cut", copy);
     };
   }, []);
 
@@ -2715,10 +3143,11 @@ export function CanvasV2Workspace({
     const availableHeight = workspaceRef.current?.clientHeight ?? 900;
     const bottomChrome = 92;
     const resolvedToolbarWidth = Math.min(toolbarSize.width, availableWidth - 32);
-    const selectionLeft = viewport.x + activeSelectionBounds.x * viewport.scale;
-    const selectionRight = viewport.x + (activeSelectionBounds.x + activeSelectionBounds.width) * viewport.scale;
-    const selectionTop = viewport.y + activeSelectionBounds.y * viewport.scale;
-    const selectionBottom = viewport.y + (activeSelectionBounds.y + activeSelectionBounds.height) * viewport.scale;
+    const toolbarBounds = cropDraft?.frame || (selectedTable && sceneElements.find((item) => item.nodeId === selectedTable.sourceNodeId)?.bounds) || activeSelectionBounds;
+    const selectionLeft = viewport.x + toolbarBounds.x * viewport.scale;
+    const selectionRight = viewport.x + (toolbarBounds.x + toolbarBounds.width) * viewport.scale;
+    const selectionTop = viewport.y + toolbarBounds.y * viewport.scale;
+    const selectionBottom = viewport.y + (toolbarBounds.y + toolbarBounds.height) * viewport.scale;
     const selectedIds = new Set(selectedElements.map((item) => item.nodeId));
     const occupied = sceneElements
       .filter((item) => !selectedIds.has(item.nodeId) && !item.hidden)
@@ -2755,7 +3184,7 @@ export function CanvasV2Workspace({
       placement: chosen.placement,
       style: { left: chosen.center, top: chosen.top },
     };
-  }, [activeSelectionBounds, chatOpen, sceneElements, selectedElements, toolbarSize, viewport]);
+  }, [activeSelectionBounds, chatOpen, cropDraft, sceneElements, selectedElements, selectedTable, toolbarSize, viewport]);
 
   useEffect(() => {
     const toolbar = contextualToolbarRef.current;
@@ -2870,7 +3299,7 @@ export function CanvasV2Workspace({
           <button aria-label="Collapse North Star panel" onClick={() => setChatOpen(false)} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
         </div>
 
-        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.running || engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
           <div className="flex items-end justify-between px-1"><div><span className="text-[10px] font-black uppercase tracking-[.18em] text-[#735fef] dark:text-[#aa9cff]">Object library</span><h2 className="mt-1 text-base font-black tracking-[-.02em]">Add to canvas</h2></div><span className="pb-0.5 text-[10px] font-semibold text-[#92919e] dark:text-[#8f8b99]">Click or drag</span></div>
           <div role="tablist" aria-label="Object library categories" className="mt-4 grid grid-cols-5 gap-1 rounded-[14px] bg-[#f2f1f6] p-1 dark:bg-white/[.05]">
             {HUMAN_AUTHORING_TABS.map((item) => <button key={item.id} type="button" role="tab" aria-selected={authoringTab === item.id} onClick={() => setAuthoringTab(item.id)} className={`h-8 rounded-[10px] text-[10px] font-black transition ${authoringTab === item.id ? "bg-white text-[#5545c8] shadow-[0_2px_9px_rgba(45,41,78,.1)] dark:bg-white/[.12] dark:text-[#c8c0ff]" : "text-[#858391] hover:text-[#4e4d58] dark:text-[#928e9d] dark:hover:text-[#d4d1da]"}`}>{item.label}</button>)}
@@ -2880,10 +3309,10 @@ export function CanvasV2Workspace({
               const payload = { primitive, ...(shapeVariant ? { shapeVariant } : {}), ...(connectorVariant ? { connectorVariant } : {}) };
               const silhouette = primitiveSilhouette(payload);
               const relationship = primitive === "line" || primitive === "connector";
-              if (primitive === "drawing") return <button key={label} type="button" aria-label="Drawing" aria-pressed={tool === "draw"} onClick={() => { selectElement(undefined); setTool("draw"); setChatOpen(false); }} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className={`group flex h-[108px] flex-col items-center justify-center bg-transparent text-center transition disabled:opacity-35 ${tool === "draw" ? "text-[#5d49da]" : ""}`}><span className="grid h-[78px] w-full place-items-center"><span className="block h-[54px] w-[96px] transition duration-200 group-hover:scale-110 group-active:scale-95"><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Drawing</span><span aria-hidden className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">Select, then paint</span></button>;
-              return <button key={label} type="button" draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, shapeVariant, connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => createPrimitive(primitive, { shapeVariant, connectorVariant })} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className={`group flex cursor-grab flex-col items-center justify-center bg-transparent text-center transition active:cursor-grabbing disabled:opacity-35 ${relationship ? "h-[132px]" : "h-[108px]"}`}><span className={`grid w-full place-items-center ${relationship ? "h-[92px]" : "h-[78px]"}`}><span className="block transition duration-200 group-hover:scale-110 group-active:scale-95" style={{ width: relationship ? 104 : Math.min(96, silhouette.width * 0.76), height: relationship ? 48 : Math.min(72, silhouette.height * 0.76) }}><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">{label}</span>{relationship && <span className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">{primitive === "connector" ? "2 attachable ends" : "Independent"}</span>}</button>;
+              if (primitive === "drawing") return <button key={label} type="button" aria-label="Drawing" aria-pressed={tool === "draw"} onClick={() => { selectElement(undefined); setTool("draw"); setChatOpen(false); }} disabled={!engine.ready || engine.applyingManualEdit} className={`group flex h-[108px] flex-col items-center justify-center bg-transparent text-center transition disabled:opacity-35 ${tool === "draw" ? "text-[#5d49da]" : ""}`}><span className="grid h-[78px] w-full place-items-center"><span className="block h-[54px] w-[96px] transition duration-200 group-hover:scale-110 group-active:scale-95"><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Drawing</span><span aria-hidden className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">Select, then paint</span></button>;
+              return <button key={label} type="button" draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, shapeVariant, connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, { shapeVariant, connectorVariant })} disabled={!engine.ready || engine.applyingManualEdit} className={`group flex cursor-grab flex-col items-center justify-center bg-transparent text-center transition active:cursor-grabbing disabled:opacity-35 ${relationship ? "h-[132px]" : "h-[108px]"}`}><span className={`grid w-full place-items-center ${relationship ? "h-[92px]" : "h-[78px]"}`}><span className="block transition duration-200 group-hover:scale-110 group-active:scale-95" style={{ width: relationship ? 104 : Math.min(96, silhouette.width * 0.76), height: relationship ? 48 : Math.min(72, silhouette.height * 0.76) }}><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">{label}</span>{relationship && <span className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">{primitive === "connector" ? "2 attachable ends" : "Independent"}</span>}</button>;
             })}
-            {authoringTab === "media" && <button type="button" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="group flex h-[108px] flex-col items-center justify-center bg-transparent text-center disabled:opacity-35"><span className="grid h-[78px] w-full place-items-center"><span className="block h-[64px] w-[88px] transition duration-200 group-hover:scale-110"><CanvasV2PrimitiveThumbnail input={{ primitive: "image" }} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Image</span></button>}
+            {authoringTab === "media" && <button type="button" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.applyingManualEdit} className="group flex h-[108px] flex-col items-center justify-center bg-transparent text-center disabled:opacity-35"><span className="grid h-[78px] w-full place-items-center"><span className="block h-[64px] w-[88px] transition duration-200 group-hover:scale-110"><CanvasV2PrimitiveThumbnail input={{ primitive: "image" }} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Image</span></button>}
           </div>
           <div className="flex items-center justify-center gap-2 pb-1 pt-2 text-[10px] text-[#94929f] dark:text-[#8f8b99]">{authoringTab === "media" ? <><Pencil className="h-3.5 w-3.5 text-[#7461ea]" />Select Drawing, then paint on canvas</> : <><MousePointer2 className="h-3.5 w-3.5 text-[#7461ea]" />Drag to preview and place precisely</>}</div>
         </div>}
@@ -2986,7 +3415,7 @@ export function CanvasV2Workspace({
               onObservation={engine.receiveObservation}
               onCaptureError={engine.captureFailed}
               bare
-              framePointerEvents={tool === "pan" || spacePan ? "none" : "auto"}
+              framePointerEvents={tool === "pan" || tool === "place" || spacePan ? "none" : "auto"}
               inspectionEnabled={tool === "select" && !spacePan}
               selectedNodeId={selectionTarget}
               selectedNodeIds={requestedSelectionNodeIds}
@@ -2994,9 +3423,13 @@ export function CanvasV2Workspace({
               onElementSelect={selectCanvasElement}
               onSelectionRefresh={refreshSelection}
               onSceneSnapshot={receiveScene}
-              onNativeScene={engine.receiveNativeScene}
-              nativeSceneOverride={engine.nativeScene}
+              onNativeScene={cropDraft || tidyDraft ? undefined : engine.receiveNativeScene}
+              nativeSceneOverride={tidyPreviewScene ?? cropPreviewScene ?? engine.nativeScene}
               preferredPlacement={preferredAiPlacement}
+              onElementDoubleClick={(element) => { if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
+              onBeforeUserEdit={chat.stop}
+              editTextRequest={editTextRequest}
+              onTableAction={tableAction}
               onElementTextCommit={(element, text, nativeContent, layout) => submitMutation({ kind: "text", nodeId: element.nodeId, text, nativeContent, layout })}
               width={CANVAS_V2_WORKSPACE.width}
               height={CANVAS_V2_WORKSPACE.height}
@@ -3005,10 +3438,28 @@ export function CanvasV2Workspace({
               onWorkspacePointer={forwardedWorkspacePointer}
               onElementPointer={forwardedElementPointer}
             />
+            {tidyActive && !editingNodeId && (["x", "y"] as const).map(axis => {
+              const columns = Math.ceil(Math.sqrt(tidyItems.length));
+              if (axis === "y" && !tidyItems[columns]) return null;
+              const first = tidyItems[0].bounds;
+              const next = tidyItems[axis === "x" ? 1 : columns].bounds;
+              const left = axis === "x" ? (first.x+first.width+next.x)/2 : first.x+first.width/2;
+              const top = axis === "y" ? (first.y+first.height+next.y)/2 : first.y+first.height/2;
+              return <button key={axis} aria-label={`Adjust ${axis === "x" ? "horizontal" : "vertical"} tidy spacing`} title="Drag to adjust spacing" onPointerDown={event => beginTidySpacing(axis,event)} onPointerMove={moveTidySpacing} onPointerUp={event => finishTidySpacing(event)} onPointerCancel={event => finishTidySpacing(event,true)} onKeyDown={event => { if (event.key === "Escape") { tidyGestureRef.current = undefined; setTidyDraft(undefined); } }} className={`absolute z-50 rounded bg-[#ef4fb8] ${axis === "x" ? "cursor-col-resize" : "cursor-row-resize"}`} style={{ left, top, width: axis === "x" ? 4 : 24, height: axis === "y" ? 4 : 24, transform: `translate(-50%,-50%) scale(${1/viewport.scale})` }} />;
+            })}
+            {placement && <div data-testid="canvas-v2-placement-preview" className="pointer-events-none absolute z-50 border border-[#1597f4] bg-[#1597f4]/10" style={{ left: Math.min(placement.start.x, placement.end.x), top: Math.min(placement.start.y, placement.end.y), width: Math.max(24, Math.abs(placement.end.x - placement.start.x)), height: Math.max(24, Math.abs(placement.end.y - placement.start.y)) }} />}
             <svg aria-hidden data-testid="canvas-v2-drawing-preview" viewBox={`0 0 ${CANVAS_V2_WORKSPACE.width} ${CANVAS_V2_WORKSPACE.height}`} className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible">
               <polyline ref={drawingPreviewRef} fill="none" stroke="#6754de" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" style={{ visibility: "hidden" }} />
             </svg>
-            {tool === "select" && selectedElements.length === 0 && hoveredElement && hoveredElement.nodeId !== "canvas" && hoveredElement.kind !== "root" && hoveredElement.kind !== "connector" && !selectionNodeIds.includes(hoveredElement.nodeId) && <div aria-hidden className="pointer-events-none absolute border border-[#8d7cff]/70 bg-[#7661f3]/[.025]" style={{ left: hoveredElement.bounds.x, top: hoveredElement.bounds.y, width: hoveredElement.bounds.width, height: hoveredElement.bounds.height }} />}
+            {connectorLabelDraft && <>
+              <style>{`[data-canvas-v2-node-id="${connectorLabelDraft.nodeId}"] [data-canvas-v2-connector-part="label"] { visibility:hidden!important; }`}</style>
+              <textarea autoFocus data-canvas-v2-inline-label aria-label="Connector label text" value={connectorLabelDraft.text} onChange={event => setConnectorLabelDraft({ ...connectorLabelDraft, text: event.target.value })} onFocus={event => event.currentTarget.select()} onBlur={finishConnectorLabel} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { event.stopPropagation(); if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) { event.preventDefault(); event.currentTarget.blur(); } }} rows={Math.max(1, connectorLabelDraft.text.split("\n").length)} className="absolute z-50 resize-none border-0 bg-[#fafbff] p-0 text-center text-[#151620] dark:bg-[#0d0e16] dark:text-[#f4f3f8] outline-none" style={{ left: connectorLabelDraft.bounds.x + connectorLabelDraft.bounds.width / 2, top: connectorLabelDraft.bounds.y + connectorLabelDraft.bounds.height / 2 - 12 - connectorLabelDraft.text.split("\n").length * 10.8, transform: "translate(-50%,-50%)", width: Math.max(100, Math.min(640, Math.max(...connectorLabelDraft.text.split("\n").map(line => line.length)) * 11 + 24)), font: "500 18px/1.2 Inter,system-ui,sans-serif", fontWeight: engine.nativeScene?.nodes.find(node => node.sourceNodeId === connectorLabelDraft.nodeId)?.attributes["data-canvas-v2-connector-label-bold"] === "true" ? 700 : 500, textDecoration: engine.nativeScene?.nodes.find(node => node.sourceNodeId === connectorLabelDraft.nodeId)?.attributes["data-canvas-v2-connector-label-strike"] === "true" ? "line-through" : "none" }} />
+            </>}
+            {cropDraft && <div data-canvas-v2-crop-control data-testid="canvas-v2-crop-bounds" className="absolute z-40 cursor-move border-[#1597f4]" style={{ left: cropDraft.frame.x, top: cropDraft.frame.y, width: cropDraft.frame.width, height: cropDraft.frame.height, borderWidth: 2 / viewport.scale }} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); cropGestureRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, draft: cropDraft }; }} onPointerMove={moveCropPointer} onPointerUp={event => { event.stopPropagation(); cropGestureRef.current = undefined; }} onPointerCancel={() => { cropGestureRef.current = undefined; }}>
+              <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-30">{Array.from({ length: 9 }, (_, i) => <div key={i} className="border border-white" />)}</div>
+              {RESIZE_HANDLES.map(({ handle, className, cursor }) => <button key={handle} aria-label={`Crop image from ${handle}`} title="Drag to crop" className={`absolute h-4 w-4 border-2 border-[#1597f4] bg-white ${className} ${cursor}`} style={{ scale: 0.7 / viewport.scale }} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); cropGestureRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, handle, draft: cropDraft }; }} />)}
+            </div>}
+            {tool === "select" && selectedElements.length === 0 && hoveredElement && hoveredElement.nodeId !== "canvas" && hoveredElement.kind !== "root" && hoveredElement.kind !== "connector" && !selectionNodeIds.includes(hoveredElement.nodeId) && <div ref={hoverOutlineRef} data-testid="canvas-v2-hover-outline" aria-hidden className="pointer-events-none absolute border border-[#8d7cff]/70 bg-[#7661f3]/[.025]" style={{ left: hoveredElement.bounds.x, top: hoveredElement.bounds.y, width: hoveredElement.bounds.width, height: hoveredElement.bounds.height }} />}
             {!editingNodeId && selectedElements.length > 1 && selectedElements.map((element) => <div
               key={element.nodeId}
               ref={(node) => {
@@ -3019,7 +3470,7 @@ export function CanvasV2Workspace({
               className="pointer-events-none absolute border border-[#8d7cff]/70"
               style={{ left: element.bounds.x, top: element.bounds.y, width: element.bounds.width, height: element.bounds.height, rotate: `${element.rotation ?? 0}deg` }}
             />)}
-            {!editingNodeId && selectedElement && activeSelectionBounds && <div ref={selectionOverlayRef} data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: selectedElements.length === 1 && selectedElement.kind === "connector" ? 0 : 1 / viewport.scale, rotate: selectedElements.length === 1 ? `${selectedElement.rotation ?? 0}deg` : undefined }}>
+            {!editingNodeId && !cropDraft && !connectorLabelDraft && selectedElement && activeSelectionBounds && <div ref={selectionOverlayRef} data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: selectedElements.length === 1 && selectedElement.kind === "connector" ? 0 : 1 / viewport.scale, rotate: selectedElements.length === 1 ? `${selectedElement.rotation ?? 0}deg` : undefined }}>
               {selectedElements.length > 1 && !selectionPermanent && <button
                 type="button"
                 aria-label={`Move ${selectedElements.length} selected objects`}
@@ -3052,11 +3503,22 @@ export function CanvasV2Workspace({
                 return <button key={corner} aria-label={`Rotate selected objects from ${corner}`} title="Drag to rotate" onPointerDown={(event) => beginDirectGesture("rotate", event)} style={{ scale: `${0.6 / viewport.scale}`, ...(corner.includes("west") ? { left: offset } : { right: offset }), ...(corner.includes("north") ? { top: offset } : { bottom: offset }) }} className={`group pointer-events-auto absolute z-20 h-7 w-7 cursor-grab rounded-full bg-transparent active:cursor-grabbing ${className}`}><span className={`pointer-events-none absolute grid h-6 w-6 scale-75 place-items-center rounded-full border border-[#dad6ff] bg-white text-[#6d59ed] opacity-0 shadow-lg transition group-hover:scale-100 group-hover:opacity-100 group-focus-visible:scale-100 group-focus-visible:opacity-100 dark:border-[#554a89] dark:bg-[#211e2b] dark:text-[#b9adff] ${iconClassName}`}><RotateCw className="h-3.5 w-3.5" /></span></button>;
               })}
             </div>}
-            {!editingNodeId && selectedElements.length === 1 && selectedElement?.connector && <>
+            {!editingNodeId && !connectorLabelDraft && selectedElements.length === 1 && selectedElement?.connector && <>
               <svg aria-hidden className="pointer-events-none absolute inset-0 z-40 overflow-visible" width={CANVAS_V2_WORKSPACE.width} height={CANVAS_V2_WORKSPACE.height}>
                 <path ref={connectorPreviewPathRef} data-testid="canvas-v2-connector-gesture-preview" visibility="hidden" fill="none" stroke="#6d59ed" strokeWidth={4} strokeLinecap="round" />
+                <g ref={connectorPreviewGroupRef} />
                 <polyline ref={connectorPreviewEndRef} visibility="hidden" fill="none" stroke="#6d59ed" strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round" />
               </svg>
+              {(() => {
+                const node = engine.nativeScene?.nodes.find(item => item.sourceNodeId === selectedElement.nodeId);
+                const text = node?.attributes["data-canvas-v2-connector-label"];
+                if (!text) return null;
+                const c = selectedElement.connector!;
+                const geometry = buildCanvasV2ConnectorGeometry({ start: c.from, end: c.to, variant: c.variant, control: c.control, waypoints: c.waypoints });
+                const p = canvasV2ConnectorLabelPoint(geometry, c.variant, Number(node?.attributes["data-canvas-v2-connector-label-position"] ?? 0.5));
+                const lines = text.split("\n");
+                return <button aria-label="Move connector label along path" title="Drag label · double-click to edit" onPointerDown={event => beginConnectorGesture("label", event)} onDoubleClick={() => beginConnectorLabel()} className="absolute z-50 cursor-move border-0 bg-transparent" style={{ left: geometry.bounds.x+p.x, top: geometry.bounds.y+p.y-12-(lines.length-1)*21.6-18, width: Math.max(30, ...lines.map(line => line.length*10.5+12)), height: lines.length*21.6, transform: "translateX(-50%)" }} />;
+              })()}
               {(["from", "to"] as const).map((endpoint) => {
                 const value = selectedElement.connector![endpoint];
                 const attached = Boolean(value.attachedNodeId);
@@ -3069,10 +3531,19 @@ export function CanvasV2Workspace({
                   data-canvas-v2-connector-endpoint={endpoint}
                   data-attached={attached}
                   onPointerDown={(event) => beginConnectorGesture("endpoint", event, endpoint)}
-                  className="pointer-events-auto absolute z-50 h-4 w-4 cursor-crosshair rounded-full border-[3px] border-[#6d59ed] transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1597f4]"
-                  style={{ left: value.x, top: value.y, transform: `translate(-50%,-50%) scale(${1 / viewport.scale})`, backgroundColor: attached ? "#18a873" : "#ffffff", boxShadow: attached ? "0 0 0 5px rgba(24,168,115,.18)" : "0 0 0 4px rgba(109,89,237,.14)" }}
+                  className="pointer-events-auto absolute z-50 h-3.5 w-3.5 cursor-crosshair rounded-full border-2 border-[#1597f4] transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1597f4]"
+                  style={{ left: value.x, top: value.y, transform: `translate(-50%,-50%) scale(${1 / viewport.scale})`, backgroundColor: attached ? "#18a873" : "#ffffff", boxShadow: "none" }}
                 />;
               })}
+              {selectedElement.connector.variant === "bent" && (() => {
+                const c = selectedElement.connector!;
+                const geometry = buildCanvasV2ConnectorGeometry({ start: c.from, end: c.to, variant: c.variant, control: c.control, waypoints: c.waypoints });
+                return geometry.routePoints.slice(1).map((point,index) => {
+                  const previous = geometry.routePoints[index];
+                  if (Math.hypot(point.x-previous.x,point.y-previous.y)*viewport.scale < 20) return null;
+                  return <button key={index} aria-label={`Adjust connector segment ${index+1}`} title="Drag to reshape path" onPointerDown={event => beginConnectorGesture("segment",event,undefined,index)} className={`absolute z-50 h-2 w-2 rounded-sm border border-[#1597f4] bg-white ${point.y === previous.y ? "cursor-row-resize" : "cursor-col-resize"}`} style={{ left: (point.x+previous.x)/2, top: (point.y+previous.y)/2, transform: `translate(-50%,-50%) scale(${1/viewport.scale})` }} />;
+                });
+              })()}
               {selectedElement.connector.variant === "curve" && <button
                 ref={connectorCurveHandleRef}
                 type="button"
@@ -3157,51 +3628,67 @@ export function CanvasV2Workspace({
         aria-label="Element inspector"
         data-testid="canvas-v2-context-toolbar"
         data-placement={contextualToolbarPosition.placement}
+        data-canvas-v2-crop-control={cropDraft ? "true" : undefined}
         onWheel={(event) => {
           event.preventDefault();
           event.stopPropagation();
           navigateWorkspaceWheel(event);
         }}
-        className="absolute z-50 flex min-h-14 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[18px] border border-white/[.08] bg-[#1c1c20]/[.98] px-2.5 text-white shadow-[0_18px_60px_rgba(21,18,38,.34)] backdrop-blur-xl"
+        className="absolute z-50 flex min-h-10 flex-nowrap whitespace-nowrap [&>button]:shrink-0 [&>span]:shrink-0 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[12px] border border-white/[.08] bg-[#1c1c20]/[.98] px-1.5 text-white shadow-[0_6px_20px_rgba(0,0,0,.22)] backdrop-blur-xl"
         style={contextualToolbarPosition.style}
       >
         {selectedElements.length > 1 && <>
-          <span className="px-2 text-xs font-bold text-white/75">{selectedElements.length} selected</span>
-          <button title="Align left" aria-label="Align selected objects left" onClick={() => alignObjectSelection("left")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignLeft className="h-4 w-4" /></button>
-          <button title="Align centers" aria-label="Align selected object centers" onClick={() => alignObjectSelection("center")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignCenter className="h-4 w-4" /></button>
-          <button title="Align right" aria-label="Align selected objects right" onClick={() => alignObjectSelection("right")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignRight className="h-4 w-4" /></button>
-          <button title="Align top" aria-label="Align selected objects top" onClick={() => alignObjectSelection("top")} className="grid h-9 w-9 place-items-center rounded-xl text-[10px] font-black hover:bg-white/[.1]">T</button>
-          <button title="Align middle" aria-label="Align selected object middles" onClick={() => alignObjectSelection("middle")} className="grid h-9 w-9 place-items-center rounded-xl text-[10px] font-black hover:bg-white/[.1]">M</button>
-          <button title="Align bottom" aria-label="Align selected objects bottom" onClick={() => alignObjectSelection("bottom")} className="grid h-9 w-9 place-items-center rounded-xl text-[10px] font-black hover:bg-white/[.1]">B</button>
-          <button title="Distribute horizontally" aria-label="Distribute selected objects horizontally" onClick={() => distributeObjectSelection("horizontal")} disabled={selectedElements.length < 3} className="h-9 rounded-xl px-2 text-[10px] font-black hover:bg-white/[.1] disabled:opacity-30">H↔</button>
-          <button title="Distribute vertically" aria-label="Distribute selected objects vertically" onClick={() => distributeObjectSelection("vertical")} disabled={selectedElements.length < 3} className="h-9 rounded-xl px-2 text-[10px] font-black hover:bg-white/[.1] disabled:opacity-30">V↕</button>
+          <span className="shrink-0 whitespace-nowrap px-2 text-[11px] font-medium text-white/60">{selectedElements.length} selected</span>
+          <div className="mx-0.5 h-5 w-px shrink-0 bg-white/12" />
+          <button aria-label="Create section from selection" title="Create section · Shift S" onClick={sectionSelection} className="h-7 shrink-0 whitespace-nowrap rounded-lg px-2 text-xs font-medium hover:bg-white/10">Section</button>
+          <button aria-label="Tidy up selection" title="Tidy up" onClick={tidySelection} className="h-7 shrink-0 whitespace-nowrap rounded-lg px-2 text-xs font-medium hover:bg-white/10">Tidy up</button>
+          <div className="relative shrink-0">
+            <button aria-label="Alignment and distribution" title="Align and distribute" aria-expanded={toolbarMenu === "arrange"} onClick={() => setToolbarMenu(current => current === "arrange" ? undefined : "arrange")} className={`flex h-7 items-center gap-1 rounded-lg px-2 hover:bg-white/10 ${toolbarMenu === "arrange" ? "bg-white/10" : ""}`}><AlignLeft className="h-4 w-4" /><ChevronDown className="h-3 w-3" /></button>
+            {toolbarMenu === "arrange" && <div data-canvas-v2-popover aria-label="Alignment choices" className={`absolute left-1/2 flex -translate-x-1/2 gap-1 rounded-[12px] border border-white/10 bg-[#1c1c20] p-1.5 shadow-lg ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+12px)]" : "top-[calc(100%+12px)]"}`}>
+              {(["left","center","right","top","middle","bottom"] as const).map((alignment,index) => {
+                const Icon = index % 3 === 0 ? AlignLeft : index % 3 === 1 ? AlignCenter : AlignRight;
+                return <button key={alignment} aria-label={`Align selected objects ${alignment}`} title={`Align ${alignment}`} onClick={() => { alignObjectSelection(alignment); setToolbarMenu(undefined); }} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg hover:bg-white/10"><Icon className={`h-4 w-4 ${index >= 3 ? "rotate-90" : ""}`} /></button>;
+              })}
+              <div className="mx-1 h-7 w-px bg-white/12" />
+              {(["horizontal","vertical"] as const).map(axis => <button key={axis} title={`Distribute ${axis}ly`} aria-label={`Distribute selected objects ${axis}ly`} disabled={selectedElements.length < 3} onClick={() => { distributeObjectSelection(axis); setToolbarMenu(undefined); }} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg hover:bg-white/10 disabled:opacity-30"><svg aria-hidden width="16" height="16" viewBox="0 0 16 16" className={axis === "vertical" ? "rotate-90" : ""} fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M1 2v12M15 2v12M6 4v8M10 4v8M1 8h5M10 8h5" /></svg></button>)}
+            </div>}
+          </div>
         </>}
 
+        {selectedElements.length === 1 && ["shape", "note"].includes(selectedElement.kind ?? "") && <button aria-label="Create connected object" title="Create connected object" onClick={quickCreateConnected} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg hover:bg-white/10"><Workflow className="h-4 w-4" /></button>}
+        {selectedElements.length === 1 && selectedTable && <div className="flex shrink-0 gap-1 border-r border-white/15 pr-2">{(["add-row", "remove-row", "add-column", "remove-column"] as const).map((action) => <button key={action} title={action.replaceAll("-", " ")} aria-label={action.replaceAll("-", " ")} onClick={() => editTable(action)} className="flex h-7 items-center gap-1 whitespace-nowrap rounded px-2 text-xs hover:bg-white/10">{action.startsWith("add") ? <Plus className="h-3 w-3" /> : <Minus className="h-3 w-3" />}{action.includes("column") ? "Col" : "Row"}</button>)}</div>}
+        {selectedElements.length === 1 && selectedElement.kind === "group" && <><button onClick={() => { const node = engine.nativeScene?.nodes.find((item) => item.sourceNodeId === selectedElement.nodeId); if (node?.attributes["data-canvas-v2-section"] === "true") setEditTextRequest({ nodeId: `${node.id}-title`, nonce: Date.now(), selectAll: true }); }} className="rounded px-2 py-2 text-xs hover:bg-white/10">Rename section</button><button onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="rounded px-2 py-2 text-xs hover:bg-white/10">Ungroup</button></>}
+        {selectedElements.every(item => item.kind === "connector") && selectedElement.kind === "connector" && <CanvasV2ConnectorToolbar editing={!!connectorLabelDraft} key={selectedElement.nodeId} placement={contextualToolbarPosition.placement} value={(() => {
+          const node = engine.nativeScene?.nodes.find(item => item.sourceNodeId === selectedElement.nodeId);
+          const a = node?.attributes ?? {};
+          const path = engine.nativeScene?.nodes.find(item => item.parentId === node?.id && item.attributes["data-canvas-v2-connector-part"] === "path");
+          return { color: a["data-canvas-v2-connector-color"] || (path?.attributes.stroke?.startsWith("#") ? path.attributes.stroke : selectedElement.connector?.color || "#808080"), weight: Number(a["data-canvas-v2-connector-weight"] || 4), dashed: a["data-canvas-v2-connector-dashed"] === "true", start: a["data-canvas-v2-connector-start-cap"] || "none", end: a["data-canvas-v2-connector-end-cap"] || (a["data-canvas-v2-connector-variant"] === "arrow" ? "line-arrow" : "none"), route: ["curve", "bent"].includes(a["data-canvas-v2-connector-variant"]) ? a["data-canvas-v2-connector-variant"] : "straight", labelBold: a["data-canvas-v2-connector-label-bold"] === "true", labelStrike: a["data-canvas-v2-connector-label-strike"] === "true", labelBackground: a["data-canvas-v2-connector-label-background"] === "true" } as CanvasV2ConnectorAppearance;
+        })()} onChange={style => submitMutation({ kind: "batch", label: "Updated connector appearance.", mutations: selectedElements.filter(item => item.kind === "connector" && !item.locked).map(item => ({ kind: "connector-style" as const, nodeId: item.nodeId, style })) })} onEditText={() => beginConnectorLabel()} />}
         {selectionIsText && <>
-          <button title="Text color" aria-label="Change text color" onClick={() => { setColorProperty("color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><span className="h-5 w-5 rounded-full border-2 border-white/35" style={{ background: selectedVisualStyle?.color || "var(--northstar-ink)" }} /></button>
-          <button aria-label="Text style" title="Text style" onClick={() => setToolbarMenu((current) => current === "font" ? undefined : "font")} className="flex h-9 min-w-[98px] items-center justify-between gap-2 rounded-xl px-3 text-xs font-bold hover:bg-white/[.1]">
-            <span>{selectedVisualStyle?.fontFamily?.includes("Georgia") ? "Bookish" : selectedVisualStyle?.fontFamily?.toLowerCase().includes("mono") ? "Technical" : "Simple"}</span><ChevronDown className="h-3.5 w-3.5" />
+          <button title="Text color" aria-label="Change text color" onClick={() => { setColorProperty("color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-7 shrink-0 items-center gap-2 rounded-lg px-2 hover:bg-white/[.1]"><span className="h-4 w-4 rounded-full border border-[#48484a]" data-testid="canvas-v2-text-color-swatch" title={(selectedVisualStyle?.textColors ?? []).join(", ")} style={{ background: canvasV2TextColorSwatch(selectedVisualStyle?.textColors ?? []) }} /><ChevronDown className="h-3 w-3" /></button>
+          <button aria-label="Text style" title="Text style" onClick={() => setToolbarMenu((current) => current === "font" ? undefined : "font")} className="flex h-7 min-w-[80px] items-center justify-between gap-2 rounded-lg px-3 text-xs font-bold hover:bg-white/[.1]">
+            <span>{selectedVisualStyle?.fontFamily === "mixed" ? "Mixed" : selectedVisualStyle?.fontFamily?.includes("Georgia") ? "Bookish" : selectedVisualStyle?.fontFamily?.toLowerCase().includes("mono") ? "Technical" : "Simple"}</span><ChevronDown className="h-3.5 w-3.5" />
           </button>
-          <button aria-label="Font size" title="Font size" onClick={() => setToolbarMenu((current) => current === "size" ? undefined : "size")} className="flex h-9 min-w-[62px] items-center justify-between gap-2 rounded-xl px-3 text-xs font-bold hover:bg-white/[.1]">
-            <span>{Math.round(Number.parseFloat(selectedVisualStyle?.fontSize || "24"))}</span><ChevronDown className="h-3.5 w-3.5" />
+          <button aria-label="Font size" title="Font size" onClick={() => setToolbarMenu((current) => current === "size" ? undefined : "size")} className="flex h-7 min-w-[52px] items-center justify-between gap-2 rounded-lg px-3 text-xs font-bold hover:bg-white/[.1]">
+            <span>{selectedVisualStyle?.fontSize === "mixed" ? "Mixed" : Math.round(Number.parseFloat(selectedVisualStyle?.fontSize || "24"))}</span><ChevronDown className="h-3.5 w-3.5" />
           </button>
-          <button title="Bold" aria-label="Toggle bold" onClick={() => styleSelection("font-weight", Number.parseInt(selectedVisualStyle?.fontWeight || "400", 10) >= 600 ? "400" : "700")} className={`grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] ${Number.parseInt(selectedVisualStyle?.fontWeight || "400", 10) >= 600 ? "bg-white/[.12]" : ""}`}><Bold className="h-4 w-4" /></button>
-          <button title="Italic" aria-label="Toggle italic" onClick={() => styleSelection("font-style", selectedVisualStyle?.fontStyle === "italic" ? "normal" : "italic")} className={`grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] ${selectedVisualStyle?.fontStyle === "italic" ? "bg-white/[.12]" : ""}`}><Italic className="h-4 w-4" /></button>
-          <button title="Align left" aria-label="Align text left" onClick={() => styleSelection("text-align", "left")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignLeft className="h-4 w-4" /></button>
-          <button title="Align center" aria-label="Align text center" onClick={() => styleSelection("text-align", "center")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignCenter className="h-4 w-4" /></button>
-          <button title="Align right" aria-label="Align text right" onClick={() => styleSelection("text-align", "right")} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><AlignRight className="h-4 w-4" /></button>
+          <button title="Bold" aria-label="Toggle bold" aria-pressed={selectedVisualStyle?.fontWeight === "mixed" ? "mixed" : Number.parseInt(selectedVisualStyle?.fontWeight || "400", 10) >= 600} onClick={() => styleSelection("font-weight", Number.parseInt(selectedVisualStyle?.fontWeight || "400", 10) >= 600 ? "400" : "700")} className={`grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] ${Number.parseInt(selectedVisualStyle?.fontWeight || "400", 10) >= 600 ? "bg-white/[.12]" : ""}`}><Bold className="h-4 w-4" /></button>
+          <button title="Italic" aria-label="Toggle italic" aria-pressed={selectedVisualStyle?.fontStyle === "mixed" ? "mixed" : selectedVisualStyle?.fontStyle === "italic"} onClick={() => styleSelection("font-style", selectedVisualStyle?.fontStyle === "italic" ? "normal" : "italic")} className={`grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] ${selectedVisualStyle?.fontStyle === "italic" ? "bg-white/[.12]" : ""}`}><Italic className="h-4 w-4" /></button>
+          <button title="Align left" aria-label="Align text left" onClick={() => styleSelection("text-align", "left")} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><AlignLeft className="h-4 w-4" /></button>
+          <button title="Align center" aria-label="Align text center" onClick={() => styleSelection("text-align", "center")} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><AlignCenter className="h-4 w-4" /></button>
+          <button title="Align right" aria-label="Align text right" onClick={() => styleSelection("text-align", "right")} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><AlignRight className="h-4 w-4" /></button>
         </>}
 
         {selectionCanFill && <>
           {selectionIsShape && <>
-            <button title="Shape" aria-label="Change shape" onClick={() => setToolbarMenu((current) => current === "shape" ? undefined : "shape")} className="flex h-9 items-center gap-1.5 rounded-xl px-2 hover:bg-white/[.1]">
+            <button title="Shape" aria-label="Change shape" onClick={() => setToolbarMenu((current) => current === "shape" ? undefined : "shape")} className="flex h-7 items-center gap-1.5 rounded-lg px-2 hover:bg-white/[.1]">
               <span className="block h-6 w-6"><CanvasV2PrimitiveThumbnail input={{ primitive: "shape", shapeVariant: selectedElement.shapeVariant }} /></span>
               <ChevronDown className="h-3.5 w-3.5 text-white/60" />
             </button>
             <div className="mx-0.5 h-7 w-px bg-white/[.12]" />
           </>}
-          <button title="Fill" aria-label="Change fill" onClick={() => { setColorProperty("background-color"); setCustomColorDraft(canvasV2OpaquePaintColor(selectedVisualStyle?.backgroundColor, customColorDraft).toUpperCase()); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-9 items-center gap-2 rounded-xl px-2 hover:bg-white/[.1]">
-            <span className="relative grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded-full border border-white/35" style={fillTriggerPaintMode === "fill" ? {
+          <button title="Fill" aria-label="Change fill" onClick={() => { setColorProperty("background-color"); setCustomColorDraft(canvasV2OpaquePaintColor(selectedVisualStyle?.backgroundColor, customColorDraft).toUpperCase()); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-7 items-center gap-2 rounded-lg px-2 hover:bg-white/[.1]">
+            <span className="relative grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded-full border border-white/35" style={fillTriggerPaintMode === "fill" ? {
               background: selectedVisualStyle?.backgroundColor || "var(--northstar-surface)",
             } : {
               backgroundColor: "#34343a",
@@ -3215,7 +3702,7 @@ export function CanvasV2Workspace({
             <ChevronDown className="h-3.5 w-3.5 text-white/60" />
           </button>
           <div className="mx-0.5 h-7 w-px bg-white/[.12]" />
-          <button title="Line" aria-label="Change line" onClick={() => { setLineColorDraft(canvasV2OpaquePaintColor(selectedVisualStyle?.borderColor, lineColorDraft).toUpperCase()); setToolbarMenu((current) => current === "line" ? undefined : "line"); }} className="flex h-9 items-center gap-2 rounded-xl px-2.5 hover:bg-white/[.1]">
+          <button title="Line" aria-label="Change line" onClick={() => { setLineColorDraft(canvasV2OpaquePaintColor(selectedVisualStyle?.borderColor, lineColorDraft).toUpperCase()); setToolbarMenu((current) => current === "line" ? undefined : "line"); }} className="flex h-7 items-center gap-2 rounded-lg px-2.5 hover:bg-white/[.1]">
             <span aria-hidden className="grid h-5 w-6 content-center gap-[3px]">
               {[0, 1, 2].map((bar) => <span key={bar} className={`block h-[1.5px] rounded-full ${selectedLineStyle === "dashed" ? "bg-[repeating-linear-gradient(90deg,currentColor_0_4px,transparent_4px_7px)]" : selectedLineStyle === "none" ? "bg-white/20" : "bg-current"}`} />)}
             </span>
@@ -3223,126 +3710,90 @@ export function CanvasV2Workspace({
           </button>
         </>}
 
-        {selectionHasStroke && <button title="Stroke color" aria-label="Change stroke color" onClick={() => { setColorProperty("background-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-9 items-center gap-2 rounded-xl px-2 hover:bg-white/[.1]"><span className="h-1 w-6 rounded-full" style={{ background: selectedVisualStyle?.backgroundColor || "#6754de" }} /><span className="text-xs font-bold">Stroke</span></button>}
+        {selectionHasStroke && selectedElement.kind !== "connector" && <button title="Stroke color" aria-label="Change stroke color" onClick={() => { setColorProperty("background-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-7 items-center gap-2 rounded-lg px-2 hover:bg-white/[.1]"><span className="h-1 w-6 rounded-full" style={{ background: selectedVisualStyle?.backgroundColor || "#6754de" }} /><span className="text-xs font-bold">Stroke</span></button>}
 
-        {selectionIsImage && <>
+        {cropDraft && <div data-canvas-v2-crop-control className="flex items-center gap-3 px-1"><Crop className="h-4 w-4" /><input aria-label="Crop zoom" title="Image zoom" type="range" min={Math.max(cropDraft.frame.width / (cropInitialRef.current?.image.width ?? cropDraft.frame.width), cropDraft.frame.height / (cropInitialRef.current?.image.height ?? cropDraft.frame.height))} max="5" step=".05" value={cropDraft.image.width / (cropInitialRef.current?.image.width ?? cropDraft.image.width)} onChange={event => zoomCrop(Number(event.target.value))} className="w-32 accent-[#1597f4]" /><button type="button" aria-label="Finish image crop" title="Finish crop · Enter" onClick={finishCrop} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/10"><Check className="h-4 w-4" /></button></div>}
+
+        {selectionIsImage && !cropDraft && <>
           <ImageIcon className="mx-2 h-4 w-4 text-[#a99cff]" />
-          <button title="Show the whole image" aria-label="Contain image" onClick={() => styleSelection("object-fit", "contain")} className={`h-9 rounded-xl px-2 text-xs font-bold hover:bg-white/[.1] ${selectedVisualStyle?.objectFit === "contain" ? "bg-white/[.12]" : ""}`}>Contain</button>
-          <button title="Crop image to fill its bounds" aria-label="Crop image to fill" onClick={() => styleSelection("object-fit", "cover")} className={`h-9 rounded-xl px-2 text-xs font-bold hover:bg-white/[.1] ${selectedVisualStyle?.objectFit === "cover" ? "bg-white/[.12]" : ""}`}>Crop</button>
-          <button title="Stretch image to fill" aria-label="Stretch image to fill" onClick={() => styleSelection("object-fit", "fill")} className={`h-9 rounded-xl px-2 text-xs font-bold hover:bg-white/[.1] ${selectedVisualStyle?.objectFit === "fill" ? "bg-white/[.12]" : ""}`}>Fill</button>
-          {selectedElement.origin === "user" && <button title="Replace local image" aria-label="Replace image" onClick={() => chooseLocalImage(selectedElement.nodeId)} className="h-9 rounded-xl px-2 text-xs font-bold hover:bg-white/[.1]">Replace</button>}
-          <button title="Edit image alt text" aria-label="Edit image alt text" onClick={() => { setAltTextDraft(selectedElement.altText ?? ""); setToolbarMenu((current) => current === "image" ? undefined : "image"); }} className="h-9 rounded-xl px-3 text-xs font-bold hover:bg-white/[.1]">Alt text</button>
+          <button title="Show the whole image" aria-label="Contain image" onClick={() => styleSelection("object-fit", "contain")} className={`h-7 rounded-lg px-2 text-xs font-bold hover:bg-white/[.1] ${selectedVisualStyle?.objectFit === "contain" ? "bg-white/[.12]" : ""}`}>Contain</button>
+          <button title="Crop image to fill its bounds" aria-label="Crop image to fill" onClick={() => beginImageCrop()} className={`h-7 rounded-lg px-2 text-xs font-bold hover:bg-white/[.1] ${selectedVisualStyle?.objectFit === "cover" ? "bg-white/[.12]" : ""}`}>Crop</button>
+          <button title="Stretch image to fill" aria-label="Stretch image to fill" onClick={() => styleSelection("object-fit", "fill")} className={`h-7 rounded-lg px-2 text-xs font-bold hover:bg-white/[.1] ${selectedVisualStyle?.objectFit === "fill" ? "bg-white/[.12]" : ""}`}>Fill</button>
+          {selectedElement.origin === "user" && <button title="Replace local image" aria-label="Replace image" onClick={() => chooseLocalImage(selectedElement.nodeId)} className="h-7 rounded-lg px-2 text-xs font-bold hover:bg-white/[.1]">Replace</button>}
+          <button title="Edit image alt text" aria-label="Edit image alt text" onClick={() => { setAltTextDraft(selectedElement.altText ?? ""); setToolbarMenu((current) => current === "image" ? undefined : "image"); }} className="h-7 rounded-lg px-3 text-xs font-bold hover:bg-white/[.1]">Alt text</button>
         </>}
 
-        <div className="mx-1 h-7 w-px bg-white/[.12]" />
-        <button title="Duplicate" aria-label="Duplicate selected elements" onClick={duplicateSelection} disabled={selectionPermanent || engine.running || engine.applyingManualEdit} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Copy className="h-4 w-4" /></button>
-        {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
+        {!cropDraft && selectedElement.kind !== "connector" && <div className="mx-1 h-7 w-px bg-white/[.12]" />}
+        {!cropDraft && selectedElement.kind !== "connector" && <button title="Duplicate" aria-label="Duplicate selected elements" onClick={duplicateSelection} disabled={selectionPermanent || engine.applyingManualEdit} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] disabled:opacity-30"><Copy className="h-4 w-4" /></button>}
+        {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
 
-        {toolbarMenu === "shape" && <div data-testid="canvas-v2-shape-palette" aria-label="Shape choices" className={`absolute left-1/2 grid w-[286px] max-w-[calc(100vw-20px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-[17px] border border-white/[.09] bg-[#1d1d1f] p-2 text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
+        {toolbarMenu === "shape" && <div data-canvas-v2-popover data-testid="canvas-v2-shape-palette" aria-label="Shape choices" className={`absolute left-1/2 grid w-[286px] max-w-[calc(100vw-20px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-[17px] border border-white/[.09] bg-[#1d1d1f] p-2 text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
           {CANVAS_V2_SHAPE_OPTIONS.map((option) => <button key={option.variant} title={option.label} aria-label={`Change shape to ${option.label}`} aria-pressed={selectedElement.shapeVariant === option.variant} onClick={() => { submitMutation({ kind: "shape-variant", nodeId: selectedElement.nodeId, variant: option.variant }); setToolbarMenu(undefined); }} className={`grid h-12 place-items-center rounded-[10px] p-2 transition ${selectedElement.shapeVariant === option.variant ? "bg-[#8b36f4]" : "hover:bg-white/[.08]"}`}><span className="block h-8 w-8"><CanvasV2PrimitiveThumbnail input={{ primitive: "shape", shapeVariant: option.variant }} /></span></button>)}
         </div>}
 
-        {toolbarMenu === "font" && <div aria-label="Text style menu" className={`absolute left-12 w-[180px] rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
-          {TEXT_STYLE_OPTIONS.map((option) => <button key={option.label} onClick={() => styleSelection("font-family", option.value)} className="flex h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold hover:bg-white/[.1]" style={{ fontFamily: option.value }}>{option.label}</button>)}
+        {toolbarMenu === "font" && <div data-canvas-v2-popover aria-label="Text style menu" className={`absolute left-12 w-[180px] rounded-[12px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          {TEXT_STYLE_OPTIONS.map((option) => <button key={option.label} onClick={() => styleSelection("font-family", option.value)} className="flex h-8 w-full items-center rounded-lg px-3 text-left text-sm font-semibold hover:bg-white/[.1]" style={{ fontFamily: option.value }}>{option.label}</button>)}
         </div>}
 
-        {toolbarMenu === "size" && <div aria-label="Font size menu" className={`absolute left-[162px] grid w-[104px] grid-cols-2 gap-1 rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
-          {TEXT_SIZE_OPTIONS.map((size) => <button key={size} onClick={() => styleSelection("font-size", `${size}px`)} className="grid h-10 place-items-center rounded-xl text-sm font-bold hover:bg-white/[.1]">{size}</button>)}
+        {toolbarMenu === "size" && <div data-canvas-v2-popover aria-label="Font size menu" className={`absolute left-[162px] grid w-[104px] grid-cols-2 gap-1 rounded-[12px] border border-white/[.1] bg-[#1c1c20] p-2 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          {TEXT_SIZE_OPTIONS.map((size) => <button key={size} onClick={() => styleSelection("font-size", `${size}px`)} className="grid h-10 place-items-center rounded-lg text-sm font-bold hover:bg-white/[.1]">{size}</button>)}
         </div>}
 
-        {toolbarMenu === "color" && <div data-testid="canvas-v2-color-palette" aria-label="Color palette" className={`absolute left-1/2 w-[366px] max-w-[calc(100vw-20px)] -translate-x-1/2 overflow-hidden rounded-[17px] border border-white/[.09] bg-[#1d1d1f] text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
-          <div className="flex min-h-[46px] items-center gap-1 px-2.5 py-1.5">
+        {toolbarMenu === "color" && <div data-canvas-v2-popover className={`absolute left-1/2 -translate-x-1/2 ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}><CanvasV2ColorPalette colors={selectedPaintMode === "none" ? [] : [selectedPaletteHue]} customColor={customColorDraft} onChange={applyPaletteHue} header={<>
             <button
               aria-label={`Use solid ${paletteSubject.toLowerCase()}`}
               aria-pressed={selectedPaintMode === "fill"}
               onClick={() => applyPaintMode("fill")}
-              className={`flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-xs font-semibold transition ${selectedPaintMode === "fill" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}
+              className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${selectedPaintMode === "fill" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}
             >
               <span className="grid h-4 w-4 place-items-center rounded-[4px] border-2 border-white/90"><span className="h-2 w-2 rounded-[1px] border border-white/65" /></span>
               {paletteSubject}
             </button>
             {paletteSupportsRemoval && <>
-              <button aria-label={`Make ${paletteSubject.toLowerCase()} transparent`} aria-pressed={selectedPaintMode === "transparent"} onClick={() => applyPaintMode("transparent")} className={`flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-xs font-semibold transition ${selectedPaintMode === "transparent" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
+              <button aria-label={`Make ${paletteSubject.toLowerCase()} transparent`} aria-pressed={selectedPaintMode === "transparent"} onClick={() => applyPaintMode("transparent")} className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${selectedPaintMode === "transparent" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
                 <Grid3X3 className="h-4 w-4" />Transparent
               </button>
-              <button aria-label={`Remove ${paletteSubject.toLowerCase()}`} aria-pressed={selectedPaintMode === "none"} onClick={() => applyPaintMode("none")} className={`flex h-8 items-center gap-2 rounded-[8px] px-2.5 text-xs font-semibold transition ${selectedPaintMode === "none" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
+              <button aria-label={`Remove ${paletteSubject.toLowerCase()}`} aria-pressed={selectedPaintMode === "none"} onClick={() => applyPaintMode("none")} className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${selectedPaintMode === "none" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
                 <Square className="h-4 w-4" />No {paletteSubject.toLowerCase()}
               </button>
             </>}
-          </div>
-          <div className="h-px bg-white/[.12]" />
-          <div className="space-y-2.5 px-3 py-3">
-            {CANVAS_COLOR_SWATCH_ROWS.map((row, rowIndex) => <div key={rowIndex} className="grid grid-cols-11 items-center gap-1.5">
-              {row.map((swatch) => {
-                const selected = selectedPaintMode !== "none" && selectedPaletteHue === swatch.value;
-                return <button
-                  key={swatch.label}
-                  title={swatch.label}
-                  aria-label={`Use ${swatch.label}`}
-                  aria-pressed={selected}
-                  onClick={() => applyPaletteHue(swatch.value)}
-                  className={`h-7 w-7 rounded-full border shadow-[0_1px_1px_rgba(0,0,0,.18)_inset] transition hover:scale-110 ${selected ? "border-[#1d1d1f] ring-2 ring-[#934cff] ring-offset-1 ring-offset-[#1d1d1f]" : swatch.value === "#1f1f20" ? "border-white/20" : "border-white/30"}`}
-                  style={{ background: swatch.value }}
-                />;
-              })}
-              {rowIndex === 1 && <label title="Choose a custom color" className="relative h-7 w-7 cursor-pointer overflow-hidden rounded-full border border-white/30 bg-[conic-gradient(from_90deg,#ff4f4f,#ffd84d,#58dc76,#4dc8ff,#8c5cff,#ff4db8,#ff4f4f)] shadow-inner transition hover:scale-110 hover:border-white/70">
-                <span className="absolute inset-[5px] rounded-full bg-white/20 blur-[1px]" />
-                <input aria-label="Choose custom color" type="color" value={/^#[0-9a-f]{6}$/i.test(customColorDraft) ? customColorDraft : "#6d59ed"} onChange={(event) => applyPaletteHue(event.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
-              </label>}
-            </div>)}
-          </div>
-        </div>}
+        </>} /></div>}
 
-        {toolbarMenu === "line" && <div data-testid="canvas-v2-line-palette" aria-label="Line style and color" className={`absolute left-1/2 w-[366px] max-w-[calc(100vw-20px)] -translate-x-1/2 overflow-hidden rounded-[17px] border border-white/[.09] bg-[#1d1d1f] text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
-          <div className="flex min-h-[48px] items-center gap-1 px-2.5 py-1.5">
+        {toolbarMenu === "line" && <div data-canvas-v2-popover data-testid="canvas-v2-line-palette" className={`absolute left-1/2 -translate-x-1/2 ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}><CanvasV2ColorPalette colors={[selectedVisualStyle?.borderColor || lineColorDraft]} customColor={lineColorDraft} onChange={applyLineColor} label="Line style and color" header={<>
             {(["solid", "dashed", "none"] as const).map((lineStyle) => <button
               key={lineStyle}
               aria-label={`${lineStyle[0].toUpperCase()}${lineStyle.slice(1)} line`}
               aria-pressed={selectedLineStyle === lineStyle}
               onClick={() => applyLineStyle(lineStyle)}
-              className={`flex h-8 flex-1 items-center justify-center gap-2 rounded-[8px] px-2 text-xs font-semibold capitalize transition ${selectedLineStyle === lineStyle ? "bg-[#8b36f4] text-white" : "hover:bg-white/[.08]"}`}
+              className={`flex h-7 flex-1 items-center justify-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold capitalize transition ${selectedLineStyle === lineStyle ? "bg-[#8b36f4] text-white" : "hover:bg-white/[.08]"}`}
             >
               {lineStyle === "none" ? <Slash className="h-4 w-4" /> : <span aria-hidden className={`h-px w-5 ${lineStyle === "dashed" ? "bg-[repeating-linear-gradient(90deg,currentColor_0_4px,transparent_4px_7px)]" : "bg-current"}`} />}
               {lineStyle}
             </button>)}
-          </div>
-          <div className="h-px bg-white/[.12]" />
-          <div className="space-y-2.5 px-3 py-3">
-            {CANVAS_COLOR_SWATCH_ROWS.map((row, rowIndex) => <div key={rowIndex} className="grid grid-cols-11 items-center gap-1.5">
-              {row.map((swatch) => {
-                const selected = canvasV2OpaquePaintColor(selectedVisualStyle?.borderColor, lineColorDraft) === swatch.value;
-                return <button key={swatch.label} title={swatch.label} aria-label={`Use ${swatch.label} line`} aria-pressed={selected} onClick={() => applyLineColor(swatch.value)} className={`h-7 w-7 rounded-full border shadow-[0_1px_1px_rgba(0,0,0,.18)_inset] transition hover:scale-110 ${selected ? "border-[#1d1d1f] ring-2 ring-[#934cff] ring-offset-1 ring-offset-[#1d1d1f]" : swatch.value === "#1f1f20" ? "border-white/20" : "border-white/30"}`} style={{ background: swatch.value }} />;
-              })}
-              {rowIndex === 1 && <label title="Choose a custom line color" className="relative h-7 w-7 cursor-pointer overflow-hidden rounded-full border border-white/30 bg-[conic-gradient(from_90deg,#ff4f4f,#ffd84d,#58dc76,#4dc8ff,#8c5cff,#ff4db8,#ff4f4f)] shadow-inner transition hover:scale-110 hover:border-white/70">
-                <span className="absolute inset-[5px] rounded-full bg-white/20 blur-[1px]" />
-                <input aria-label="Choose custom line color" type="color" value={/^#[0-9a-f]{6}$/i.test(lineColorDraft) ? lineColorDraft : "#1f1f20"} onChange={(event) => applyLineColor(event.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
-              </label>}
-            </div>)}
-          </div>
-        </div>}
+        </>} /></div>}
 
-        {toolbarMenu === "image" && <form onSubmit={(event) => { event.preventDefault(); submitMutation({ kind: "attribute", nodeId: selectedElement.nodeId, name: "alt", value: altTextDraft }); setToolbarMenu(undefined); }} className={`absolute left-1/2 flex w-[320px] -translate-x-1/2 items-center gap-2 rounded-[18px] border border-white/[.1] bg-[#1c1c20] p-3 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
-          <input aria-label="Image alt text" value={altTextDraft} onChange={(event) => setAltTextDraft(event.target.value)} placeholder="Describe this image" className="h-10 min-w-0 flex-1 rounded-xl bg-white/[.1] px-3 text-sm outline-none placeholder:text-white/40 focus:ring-2 focus:ring-[#8f7fff]" />
-          <button type="submit" className="h-10 rounded-xl bg-[#7158ef] px-4 text-xs font-bold">Save</button>
+        {toolbarMenu === "image" && <form data-canvas-v2-popover onSubmit={(event) => { event.preventDefault(); submitMutation({ kind: "attribute", nodeId: selectedElement.nodeId, name: "alt", value: altTextDraft }); setToolbarMenu(undefined); }} className={`absolute left-1/2 flex w-[320px] -translate-x-1/2 items-center gap-2 rounded-[12px] border border-white/[.1] bg-[#1c1c20] p-3 shadow-2xl ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}>
+          <input aria-label="Image alt text" value={altTextDraft} onChange={(event) => setAltTextDraft(event.target.value)} placeholder="Describe this image" className="h-10 min-w-0 flex-1 rounded-lg bg-white/[.1] px-3 text-sm outline-none placeholder:text-white/40 focus:ring-2 focus:ring-[#8f7fff]" />
+          <button type="submit" className="h-10 rounded-lg bg-[#7158ef] px-4 text-xs font-bold">Save</button>
         </form>}
 
       </aside>}
       {mutationError && <div role="alert" className="absolute right-5 top-[90px] z-50 max-w-[340px] rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-xs leading-5 text-red-700 shadow-xl backdrop-blur dark:border-red-500/25 dark:bg-[#241d24]/95 dark:text-red-300">{mutationError}</div>}
 
-      {objectMenu && <div ref={objectMenuRef} role="menu" aria-label="Canvas object menu" data-testid="canvas-v2-object-menu" className="absolute z-[70] w-[230px] rounded-[18px] border border-[#ddddea] bg-white/98 p-2 text-xs font-semibold shadow-[0_22px_70px_rgba(44,39,88,.22)] backdrop-blur-xl dark:border-white/[.11] dark:bg-[#1c1b23]/98 dark:shadow-[0_24px_75px_rgba(0,0,0,.48)]" style={{ left: objectMenu.x, top: objectMenu.y }}>
+      {objectMenu && <div ref={objectMenuRef} role="menu" aria-label="Canvas object menu" data-testid="canvas-v2-object-menu" className="absolute z-[70] w-[230px] rounded-[12px] border border-[#ddddea] bg-white/98 p-2 text-xs font-semibold shadow-[0_22px_70px_rgba(44,39,88,.22)] backdrop-blur-xl dark:border-white/[.11] dark:bg-[#1c1b23]/98 dark:shadow-[0_24px_75px_rgba(0,0,0,.48)]" style={{ left: objectMenu.x, top: objectMenu.y }}>
         {selectedElements.length ? <>
-          <button role="menuitem" onClick={copySelection} className="flex h-9 w-full items-center justify-between rounded-xl px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Copy</span><kbd className="text-[10px] text-[#9694a2]">⌘C</kbd></button>
-          <button role="menuitem" onClick={cutSelection} disabled={selectedElements.every((item) => item.locked)} className="flex h-9 w-full items-center justify-between rounded-xl px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Cut</span><kbd className="text-[10px] text-[#9694a2]">⌘X</kbd></button>
-          <button role="menuitem" onClick={() => { duplicateSelection(); setObjectMenu(undefined); }} className="flex h-9 w-full items-center justify-between rounded-xl px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Duplicate</span><kbd className="text-[10px] text-[#9694a2]">⌘D</kbd></button>
-          {selectedElements.length > 1 ? <button role="menuitem" onClick={() => { groupSelection(); setObjectMenu(undefined); }} disabled={selectedElements.filter((item) => !item.locked).length < 2} className="flex h-9 w-full items-center justify-between rounded-xl px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Group</span><kbd className="text-[10px] text-[#9694a2]">⌘G</kbd></button> : selectedElement?.kind === "group" ? <button role="menuitem" onClick={() => { submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId }); setObjectMenu(undefined); }} className="flex h-9 w-full items-center justify-between rounded-xl px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Ungroup</span><kbd className="text-[10px] text-[#9694a2]">⇧⌘G</kbd></button> : null}
+          <button role="menuitem" onClick={copySelection} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Copy</span><kbd className="text-[10px] text-[#9694a2]">⌘C</kbd></button>
+          <button role="menuitem" onClick={cutSelection} disabled={selectedElements.every((item) => item.locked)} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Cut</span><kbd className="text-[10px] text-[#9694a2]">⌘X</kbd></button>
+          <button role="menuitem" onClick={() => { duplicateSelection(); setObjectMenu(undefined); }} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Duplicate</span><kbd className="text-[10px] text-[#9694a2]">⌘D</kbd></button>
+          {selectedElements.length > 1 ? <button role="menuitem" onClick={() => { groupSelection(); setObjectMenu(undefined); }} disabled={selectedElements.filter((item) => !item.locked).length < 2} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Group</span><kbd className="text-[10px] text-[#9694a2]">⌘G</kbd></button> : selectedElement?.kind === "group" ? <button role="menuitem" onClick={() => { submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId }); setObjectMenu(undefined); }} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Ungroup</span><kbd className="text-[10px] text-[#9694a2]">⇧⌘G</kbd></button> : null}
           <div className="my-1 h-px bg-[#eceaf1] dark:bg-white/[.08]" />
-          <button role="menuitem" onClick={() => layerSelection("front")} disabled={selectedElements.every((item) => item.locked)} className="h-9 w-full rounded-xl px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]">Bring to front</button>
-          <button role="menuitem" onClick={() => layerSelection("back")} disabled={selectedElements.every((item) => item.locked)} className="h-9 w-full rounded-xl px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]">Send to back</button>
-          <button role="menuitem" onClick={toggleSelectionLock} className="h-9 w-full rounded-xl px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]">{selectedElements.every((item) => item.locked) ? "Unlock" : "Lock"}</button>
-          <button role="menuitem" onClick={() => { batchForSelection("Hid selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "visibility", nodeId: item.nodeId, hidden: true }); setObjectMenu(undefined); }} disabled={selectedElements.every((item) => item.locked)} className="h-9 w-full rounded-xl px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]">Hide</button>
+          <button role="menuitem" onClick={() => layerSelection("front")} disabled={selectedElements.every((item) => item.locked)} className="h-7 w-full rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]">Bring to front</button>
+          <button role="menuitem" onClick={() => layerSelection("back")} disabled={selectedElements.every((item) => item.locked)} className="h-7 w-full rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]">Send to back</button>
+          <button role="menuitem" onClick={toggleSelectionLock} className="h-7 w-full rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]">{selectedElements.every((item) => item.locked) ? "Unlock" : "Lock"}</button>
+          <button role="menuitem" onClick={() => { batchForSelection("Hid selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "visibility", nodeId: item.nodeId, hidden: true }); setObjectMenu(undefined); }} disabled={selectedElements.every((item) => item.locked)} className="h-7 w-full rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]">Hide</button>
           <div className="my-1 h-px bg-[#eceaf1] dark:bg-white/[.08]" />
-          <button role="menuitem" onClick={() => { batchForSelection("Deleted selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "delete", nodeId: item.nodeId }); setObjectMenu(undefined); }} disabled={selectedElements.every((item) => item.locked)} className="h-9 w-full rounded-xl px-3 text-left text-red-600 hover:bg-red-50 disabled:opacity-35 dark:text-red-300 dark:hover:bg-red-500/[.12]">Delete</button>
-        </> : <button role="menuitem" onClick={pasteClipboard} disabled={!internalClipboardRef.current.nodeIds.length} className="flex h-9 w-full items-center justify-between rounded-xl px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Paste</span><kbd className="text-[10px] text-[#9694a2]">⌘V</kbd></button>}
+          <button role="menuitem" onClick={() => { batchForSelection("Deleted selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "delete", nodeId: item.nodeId }); setObjectMenu(undefined); }} disabled={selectedElements.every((item) => item.locked)} className="h-7 w-full rounded-lg px-3 text-left text-red-600 hover:bg-red-50 disabled:opacity-35 dark:text-red-300 dark:hover:bg-red-500/[.12]">Delete</button>
+        </> : <button role="menuitem" onClick={pasteClipboard} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Paste</span><kbd className="text-[10px] text-[#9694a2]">⌘V</kbd></button>}
       </div>}
 
       {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Objects</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} style={{ paddingLeft: 8 + Math.min(4, node.depth) * 14 }} className={`flex items-center gap-2 rounded-xl py-2 pr-2 text-xs ${selectionNodeIds.includes(node.nodeId) ? "bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]" : "hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]"}`}><button onClick={(event) => { const element = sceneElements.find((item) => item.nodeId === node.nodeId); if (element) selectElement(element, { additive: event.shiftKey || event.metaKey, range: event.shiftKey, directEdit: false }); else { setSelectedElements([]); setSelectionTarget(node.nodeId); } setLayersOpen(false); }} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
@@ -3353,19 +3804,20 @@ export function CanvasV2Workspace({
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
         <button onClick={() => { cancelDrawingGesture(); setTool("select"); }} title="Select" aria-pressed={tool === "select"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "select" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><MousePointer2 className="h-[19px] w-[19px]" /></button>
         <button onClick={() => { cancelDrawingGesture(); setTool("pan"); }} title="Pan" aria-pressed={tool === "pan"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "pan" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Hand className="h-[19px] w-[19px]" /></button>
-        <button onClick={() => { selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
+        <button onClick={() => { selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.ready || engine.applyingManualEdit} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
-        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => createPrimitive(primitive, options)} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
-        <button title="Upload image · or drop a file on canvas" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.running || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
+        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} aria-pressed={tool === "place" && placementTool?.primitive === primitive} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, options)} disabled={!engine.ready || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
+        <button title="Upload image · or drop a file on canvas" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
         <button title="More creation tools" onClick={() => { setPanel("shapes"); setChatOpen(true); }} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Plus className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
         <button aria-label="Layers" title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>
       </div>
 
+      {zoomMenuOpen && <div role="dialog" aria-label="Zoom options" className="absolute bottom-16 right-5 z-50 grid w-56 gap-1 rounded-2xl bg-[#202024] p-3 text-sm text-white shadow-2xl"><form onSubmit={(event) => { event.preventDefault(); const percent = Number(zoomDraft.replace("%", "")); if (Number.isFinite(percent) && percent > 0) { zoomAtCenter(percent / (viewportRef.current.scale * 100)); setZoomMenuOpen(false); } }}><label className="flex items-center gap-2">Zoom<input autoFocus aria-label="Zoom percentage" value={zoomDraft} onChange={(event) => setZoomDraft(event.target.value)} className="w-24 rounded bg-white/10 px-2 py-1" />%<button type="submit" aria-label="Apply zoom">↵</button></label></form><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { fitContent(); setZoomMenuOpen(false); }}>Fit all <span className="float-right">⇧1</span></button><button className="rounded p-2 text-left hover:bg-white/10" disabled={!selectedElements.length} onClick={() => { focusSelection(); setZoomMenuOpen(false); }}>Zoom to selection <span className="float-right">⇧2</span></button><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { zoomAtCenter(1 / viewportRef.current.scale); setZoomMenuOpen(false); }}>100%</button></div>}
       <nav aria-label="Canvas navigation" data-testid="canvas-v2-navigation-controls" className="absolute bottom-[18px] right-[18px] z-40 flex items-center gap-1.5 text-[#4f4f5d] dark:text-[#d7d3df]">
         <div className="flex h-9 items-center overflow-hidden rounded-[12px] border border-[#dedee8]/90 bg-white/92 shadow-[0_8px_24px_rgba(50,45,100,.11)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_10px_28px_rgba(0,0,0,.28)]">
           <button onClick={() => zoomAtCenter(1 / 1.2)} aria-label="Zoom out" title="Zoom out" className="grid h-9 w-9 place-items-center transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:hover:bg-white/[.07]"><Minus className="h-4 w-4" /></button>
-          <button ref={zoomPercentageRef} onClick={() => fitContent()} aria-label={`Zoom ${Math.round(viewport.scale * 100)} percent; fit content`} title="Fit content · Pinch to zoom · Two-finger scroll to pan" className="h-9 min-w-[52px] border-x border-[#e7e6ed] px-1.5 text-[11px] font-bold tabular-nums transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:border-white/[.09] dark:hover:bg-white/[.07]">{Math.round(viewportRef.current.scale * 100)}%</button>
+          <button ref={zoomPercentageRef} onClick={() => { setZoomDraft(String(Math.round(viewportRef.current.scale * 100))); setZoomMenuOpen((open) => !open); }} aria-label={`Zoom ${Math.round(viewport.scale * 100)} percent; fit content`} title="Fit content · Pinch to zoom · Two-finger scroll to pan" className="h-9 min-w-[52px] border-x border-[#e7e6ed] px-1.5 text-[11px] font-bold tabular-nums transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:border-white/[.09] dark:hover:bg-white/[.07]">{Math.round(viewportRef.current.scale * 100)}%</button>
           <button onClick={() => zoomAtCenter(1.2)} aria-label="Zoom in" title="Zoom in" className="grid h-9 w-9 place-items-center transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:hover:bg-white/[.07]"><Plus className="h-4 w-4" /></button>
         </div>
       </nav>

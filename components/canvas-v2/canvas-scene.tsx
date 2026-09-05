@@ -4,6 +4,7 @@ import { toJpeg } from "html-to-image";
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { buildCanvasV2RuntimeDocument } from "@/lib/canvas-v2/runtime-document";
+import { canvasV2VisibleEvidenceIds } from "@/lib/canvas-v2/artifact-safety";
 import {
   applyCanvasV2ArtifactTheme,
   createCanvasV2ArtifactThemeState,
@@ -63,8 +64,11 @@ export interface CanvasV2CanvasSceneProps {
   /** Existing AI-owned roots that an explicit whole-board recompose may move. */
   relocatablePlacementNodeIds?: readonly string[];
   preferredPlacement?: { x: number; y: number };
+  onBeforeUserEdit?: () => void;
+  onTableAction?: (cellId: string, action: "next" | "previous" | "paste", text?: string) => void;
+  editTextRequest?: { nodeId: string; nonce: number; selectAll?: boolean };
   onElementDoubleClick?: (element: CanvasV2InspectableElement) => void;
-  onElementTextCommit?: (element: CanvasV2InspectableElement, text: string, nativeContent?: CanvasV2NativeTextContentUpdate[], layout?: { width?: number; height?: number }) => void;
+  onElementTextCommit?: (element: CanvasV2InspectableElement, text: string, nativeContent?: CanvasV2NativeTextContentUpdate[], layout?: { width?: number; height?: number }) => boolean | void;
   onGeometry?: (geometry: CanvasV2CanvasGeometry) => void;
   onWorkspaceWheel?: (event: { clientX: number; clientY: number; deltaX: number; deltaY: number; deltaMode?: number; ctrlKey: boolean; metaKey: boolean; shiftKey?: boolean }) => void;
   onWorkspacePointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => void;
@@ -816,7 +820,7 @@ function CanvasV2ObservationScene({
         if (designDetailResult.status === "rejected") console.warn("[canvas-v2] optional authored-region detail capture skipped", canvasV2CaptureErrorMessage(designDetailResult.reason));
       }
       if (!captureIsCurrent()) return;
-      const evidenceIds = new Set(revision.evidence.map((asset) => asset.id));
+      const evidenceIds = canvasV2VisibleEvidenceIds(revision.document);
       frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-evidence-id]").forEach((element) => {
         const id = element.dataset.canvasV2EvidenceId;
         if (id) evidenceIds.delete(id);
@@ -937,6 +941,9 @@ export const CanvasV2CanvasScene = forwardRef<CanvasV2CanvasSceneHandle, CanvasV
         onSceneSnapshot={props.onSceneSnapshot}
         onNativeScene={props.onNativeScene}
         sceneOverride={props.nativeSceneOverride}
+        onBeforeUserEdit={props.onBeforeUserEdit}
+        editTextRequest={props.editTextRequest}
+        onTableAction={props.onTableAction}
         onElementDoubleClick={props.onElementDoubleClick}
         onElementTextCommit={props.onElementTextCommit}
         onWorkspaceWheel={props.onWorkspaceWheel}

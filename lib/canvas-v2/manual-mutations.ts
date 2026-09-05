@@ -1,9 +1,12 @@
 import { assertCanvasV2ArtifactDocument } from "@/lib/canvas-v2/artifact-safety";
-import { buildCanvasV2ConnectorGeometry, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import { buildCanvasV2ConnectorGeometry, type CanvasV2ConnectorVariant, type CanvasV2ConnectorAppearance } from "@/lib/canvas-v2/connector-geometry";
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
 
 export interface CanvasV2NativeTextContentUpdate {
   sceneNodeId: string;
+  tagName?: string;
+  style?: Record<string, string>;
+  href?: string;
   content: Array<{ kind: "text"; value: string } | { kind: "node"; id: string }>;
 }
 
@@ -12,6 +15,12 @@ export type CanvasV2ShapeVariant = "rectangle" | "ellipse" | "diamond" | "triang
 export interface CanvasV2ManualPoint { x: number; y: number }
 
 export type CanvasV2AtomicManualMutation =
+  | { kind: "table-edit"; nodeId: string; action: "add-row" | "remove-row" | "add-column" | "remove-column" | "replace"; index?: number; cells?: string[][] }
+  | { kind: "image-crop"; nodeId: string; x: number; y: number; zoom: number; frame?: { deltaX: number; deltaY: number; width: number; height: number }; image?: { left: number; top: number; width: number; height: number } }
+  | { kind: "connector-style"; nodeId: string; style: CanvasV2ConnectorAppearance }
+  | { kind: "connector-path"; nodeId: string; waypoints: CanvasV2ManualPoint[] }
+  | { kind: "connector-label-position"; nodeId: string; position: number }
+  | { kind: "connector-label"; nodeId: string; text: string }
   | { kind: "move"; nodeId: string; deltaX: number; deltaY: number }
   | { kind: "resize"; nodeId: string; width: number; height: number; fontSize?: number; lineHeight?: number }
   | { kind: "transform"; nodeId: string; deltaX: number; deltaY: number; width: number; height: number; fontSize?: number; lineHeight?: number }
@@ -28,12 +37,14 @@ export type CanvasV2AtomicManualMutation =
   | { kind: "visibility"; nodeId: string; hidden: boolean }
   | { kind: "lock"; nodeId: string; locked: boolean }
   | { kind: "rotate"; nodeId: string; rotation: number }
-  | { kind: "group"; groupNodeId: string; label?: string; items: Array<{ nodeId: string; bounds: { x: number; y: number; width: number; height: number } }>; bounds: { x: number; y: number; width: number; height: number } }
+  | { kind: "group"; groupNodeId: string; label?: string; section?: boolean; items: Array<{ nodeId: string; bounds: { x: number; y: number; width: number; height: number } }>; bounds: { x: number; y: number; width: number; height: number } }
   | { kind: "ungroup"; nodeId: string }
   | {
       kind: "create";
       nodeId: string;
       primitive: CanvasV2ManualPrimitive;
+      textMode?: "point" | "area";
+      text?: string;
       x: number;
       y: number;
       width?: number;
@@ -510,6 +521,12 @@ export function describeCanvasV2ManualMutation(mutation: CanvasV2ManualMutation)
   if (mutation.kind === "move") return `Moved ${mutation.nodeId} by ${Math.round(mutation.deltaX)} × ${Math.round(mutation.deltaY)} pixels.`;
   if (mutation.kind === "resize") return `Resized ${mutation.nodeId} to ${Math.round(mutation.width)} × ${Math.round(mutation.height)} pixels.`;
   if (mutation.kind === "transform") return `Transformed ${mutation.nodeId} by ${Math.round(mutation.deltaX)} × ${Math.round(mutation.deltaY)} to ${Math.round(mutation.width)} × ${Math.round(mutation.height)} pixels.`;
+  if (mutation.kind === "table-edit") return "Updated table cells.";
+  if (mutation.kind === "image-crop") return "Cropped the selected image.";
+  if (mutation.kind === "connector-style") return "Updated connector appearance.";
+  if (mutation.kind === "connector-path") return "Reshaped connector path.";
+  if (mutation.kind === "connector-label-position") return "Moved connector label.";
+  if (mutation.kind === "connector-label") return "Updated connector label.";
   if (mutation.kind === "text") return `Updated text in ${mutation.nodeId}.`;
   if (mutation.kind === "style") return `Updated ${mutation.property} for ${mutation.nodeId}.`;
   if (mutation.kind === "shape-variant") return `Changed ${mutation.nodeId} to a ${mutation.variant} shape.`;

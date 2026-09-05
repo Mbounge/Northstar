@@ -32,7 +32,7 @@ test("selection geometry feeds the single manual candidate pipeline", () => {
   assert.match(workspace, /data-testid="canvas-v2-context-toolbar"/);
   assert.match(workspace, /onElementPointer=\{forwardedElementPointer\}/);
   assert.match(workspace, /onElementTextCommit=/);
-  assert.match(workspace, /nativeSceneOverride=\{engine\.nativeScene\}/);
+  assert.match(workspace, /nativeSceneOverride=\{tidyPreviewScene \?\? cropPreviewScene \?\? engine\.nativeScene\}/);
   assert.match(workspace, /ref=\{canvasSceneRef\}/);
   assert.match(workspace, /canvasSceneRef\.current\?\.applyTransientGeometry/);
   assert.doesNotMatch(workspace, /transientGeometry=\{transientGeometry\}/);

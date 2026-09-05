@@ -557,25 +557,15 @@ export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2
     validationUpdates = [{ ...resultUpdate, id: activeValidation.id }];
   }
   if (move.kind === "integrate-validation" && !validationUpdates.some((item) => item.result) && currentHumanInput && activeValidation) {
-    const interpretationText = [
-      optionalText(input.latestUnderstanding, 2_400),
-      optionalText((input.move as Record<string, unknown> | undefined)?.result, 1_200),
-      ...records(input.statements).map((item) => optionalText(item.statement, 1_200)),
-      currentHumanInput.summary,
-    ].filter((value): value is string => Boolean(value)).join(" ");
-    const effect: NonNullable<NonNullable<CanvasV2DiscoveryStateTransition["validationUpdates"]>[number]["result"]>["effect"] = /\boverturn(?:ed|s|ing)?\b|\bstop\b/i.test(interpretationText)
-      ? "overturned"
-      : /\bweaken(?:ed|s|ing)?\b|\brevise\b/i.test(interpretationText)
-        ? "weakened"
-        : /\bstrengthen(?:ed|s|ing)?\b|\bthreshold\s+(?:is\s+)?met\b|\bproceed\b|\bpilot\b/i.test(interpretationText)
-          ? "strengthened"
-          : "mixed";
+    // An omitted semantic judgment is not a clerical field we can infer from
+    // words such as "stop" or "pilot". Retain the exact supplied result without
+    // manufacturing its effect; a later explicit assessment can refine it.
     validationUpdates = [{
       id: activeValidation.id,
       status: "completed",
       result: {
         summary: currentHumanInput.summary,
-        effect,
+        effect: "inconclusive",
         evidenceNodeIds: [],
         humanInputId: currentHumanInput.id,
       },
@@ -597,20 +587,9 @@ export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2
       ? { ...item, subjectId: activeValidation.id }
       : item);
   }
-  if (move.kind === "integrate-validation" && currentHumanInput && activeValidation
-    && /\b(?:i\s+)?accept(?:ed|ing)?\b/i.test(currentHumanInput.summary)
-    && !humanConclusions.some((item) => item.subjectType === "validation" && item.subjectId === activeValidation.id)) {
-    const acceptedConclusion: NonNullable<CanvasV2DiscoveryStateTransition["humanConclusions"]>[number] = {
-      id: `${activeValidation.id}:human-acceptance:${state.version}`,
-      subjectType: "validation",
-      subjectId: activeValidation.id,
-      disposition: "accepted",
-      summary: "The person accepted this validation plan and supplied its findings.",
-      rationale: currentHumanInput.summary,
-      humanInputId: currentHumanInput.id,
-    };
-    humanConclusions = [...humanConclusions, acceptedConclusion].slice(0, 6);
-  }
+  // Human conclusions must be supplied explicitly in the structured move.
+  // Participant quotes, negation and conditional language are not consent;
+  // never synthesize a decision merely because the input contains "accept".
   const sensemakingInput = input.sensemaking && typeof input.sensemaking === "object" && !Array.isArray(input.sensemaking)
     ? input.sensemaking as Record<string, unknown>
     : undefined;

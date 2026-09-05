@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { canvasV2ChatStatusForLoop, type CanvasV2ChatStatus } from "@/lib/canvas-v2/chat-lifecycle";
 import {
   canvasV2NewTurnContinuation,
+  stopCanvasV2Loop,
   type CanvasV2LoopContinuation,
   type CanvasV2LoopState,
 } from "@/lib/canvas-v2/design-loop";
@@ -122,7 +123,8 @@ export function useCanvasV2Chat(input: {
   const submit = async (messageOverride?: string) => {
     const requestedMessage = typeof messageOverride === "string" ? messageOverride : draft;
     const message = requestedMessage.trim() || (attachments.length ? "Review the attached supplied evidence." : "");
-    if (!message || busy) return;
+    if (!message || routing || input.engine.applyingManualEdit) return;
+    if (busy) stop();
     const submittedAttachments = attachments;
     const turnId = id();
     const sequence = routingSequence.current + 1;
@@ -271,7 +273,7 @@ export function useCanvasV2Chat(input: {
     controller.current = undefined;
     input.engine.stop();
     const stoppedTurnIds = new Set([activeRoutingTurnId.current, activeDesignTurnId.current].filter((turnId): turnId is string => Boolean(turnId)));
-    if (stoppedTurnIds.size) setTurns((current) => current.map((turn) => stoppedTurnIds.has(turn.id) && (turn.status === "routing" || turn.status === "running") ? { ...turn, status: "stopped", error: undefined, retry: undefined } : turn));
+    if (stoppedTurnIds.size) setTurns((current) => current.map((turn) => stoppedTurnIds.has(turn.id) && (turn.status === "routing" || turn.status === "running") ? { ...turn, status: "stopped", loop: turn.loop ? stopCanvasV2Loop(turn.loop) : undefined, error: undefined, retry: undefined } : turn));
     activeRoutingTurnId.current = undefined;
     activeDesignTurnId.current = undefined;
   };
@@ -279,7 +281,7 @@ export function useCanvasV2Chat(input: {
   const continueTurn = (turnId: string) => {
     if (busy) return;
     const turn = turns.find((candidate) => candidate.id === turnId);
-    if (!turn || turn.status !== "incomplete" || !turn.canvasInstruction || !turn.loop) return;
+    if (!turn || !(["incomplete", "stopped"] as string[]).includes(turn.status) || !turn.canvasInstruction || !turn.loop) return;
     const priorWorkingContext = turn.loop.workingContext ?? turn.workingContext;
     // Continuation is authority over the scene that exists *now*, not the
     // scene that existed when the interrupted turn began. Rebuild the compact

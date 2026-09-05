@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   CANVAS_V2_NATIVE_SCENE_SCHEMA,
   applyCanvasV2NativeSceneMutation,
+  copyCanvasV2NativeSelection,
+  pasteCanvasV2NativeClipboard,
   canvasV2NativeSceneLeafNeedsIdentity,
   canvasV2NativeSceneNodeHasRenderableNamespace,
   canvasV2NativeSceneNodeLooksWritable,
@@ -470,7 +472,8 @@ test("AI relationship paths become directly selectable native connectors with du
   assert.equal(hit.attributes["vector-effect"], "non-scaling-stroke");
   assert.equal(hit.attributes["pointer-events"], "stroke");
   assert.equal(hit.attributes.d, path.attributes.d);
-  assert.equal(arrow.tagName, "polyline");
+  assert.equal(arrow.tagName, "path");
+  assert.match(arrow.attributes.d, /M -12 -7 L 0 0 L -12 7/);
 
   const attachedPath = path.attributes.d;
   const movedEndpoint = applyCanvasV2NativeSceneMutation(source, { kind: "move", nodeId: "decision", deltaX: 160, deltaY: 90 });
@@ -514,7 +517,8 @@ test("human and AI connector variants share one selectable SVG mutation lifecycl
     assert.equal(hitPath.attributes.stroke, "transparent", `${variant} hit path remains invisible`);
     assert.equal(hitPath.attributes["stroke-width"], "20", `${variant} has a forgiving hit target`);
     assert.equal(hitPath.attributes.d, visiblePath.attributes.d, `${variant} hit geometry matches its visible geometry`);
-    assert.equal(end.tagName, variant === "arrow" ? "polyline" : "circle", `${variant} has the intended ending`);
+    assert.equal(end.tagName, "path");
+    assert.equal(Boolean(end.attributes.d), variant === "arrow", `${variant} has the intended ending`);
   }
 
   const beforeMoveConnector = source.nodes.find((node) => node.sourceNodeId === "connector-curve")!;
@@ -1379,7 +1383,7 @@ test("marquee selection targets individual leaves instead of semantic group boun
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
   assert.match(workspace, /function individualMarqueeSelection/);
   assert.match(workspace, /parentIds\.has\(element\.nodeId\)/);
-  assert.match(workspace, /individualMarqueeSelection\(hits, sceneElementsRef\.current\)/);
+  assert.match(workspace, /individualMarqueeSelection\(hits\.filter\(item => !item\.sectionHeading\), sceneElementsRef\.current\)/);
   assert.doesNotMatch(workspace, /const topLevelHits = topLevelCanvasSelection\(hits\)/);
 });
 
@@ -1390,4 +1394,280 @@ test("transparent semantic wrappers never return as implicit groups through Laye
   assert.match(compiler, /node\.selectable = false/);
   assert.match(workspace, /selectableIds\.has\(node\.nodeId\)/);
   assert.match(workspace, /Explicit user-created groups are selectable scene elements/);
+});
+
+test("clipboard retains copied text and style after original edit or deletion, with fresh paste identities", () => {
+  const original = scene();
+  original.nodes[0].resolvedStyle = { color: "rgb(24, 40, 80)" };
+  const clipboard = copyCanvasV2NativeSelection(original, ["note"])!;
+  original.nodes[0].content[0] = { kind: "text", value: "Changed after copy" };
+  original.nodes[0].resolvedStyle.color = "red";
+  const deleted = applyCanvasV2NativeSceneMutation(original, { kind: "delete", nodeId: "note" });
+  const pasted = pasteCanvasV2NativeClipboard(deleted, clipboard, "first");
+  assert.match(serializeCanvasV2NativeScene(pasted.scene).html, /A finding/);
+  assert.doesNotMatch(serializeCanvasV2NativeScene(pasted.scene).html, /Changed after copy/);
+  assert.equal(pasted.scene.nodes[0].inlineStyle.color, "rgb(24, 40, 80)");
+  assert.equal(pasted.scene.nodes[0].geometry.x, 1236);
+  const second = pasteCanvasV2NativeClipboard(pasted.scene, clipboard, "first", 72);
+  assert.notEqual(second.nodeIds[0], pasted.nodeIds[0]);
+  assert.equal(second.scene.nodes.length, 2);
+  assert.equal(clipboard.scene.nodes[0].geometry.x, 1200);
+});
+
+test("clipboard includes a selected descendant once and preserves nested layout without its original parent", () => {
+  const original = scene();
+  const parent = { ...structuredClone(original.nodes[0]), id: "parent", sourceNodeId: "parent", kind: "group" as const, childIds: ["note"], content: [{ kind: "node" as const, id: "note" }] };
+  original.nodes[0].parentId = "parent";
+  original.nodes[0].geometry.x = 20;
+  original.nodes.push(parent);
+  original.rootIds = ["parent"];
+  const both = copyCanvasV2NativeSelection(original, ["parent", "note"])!;
+  assert.equal(both.scene.rootIds.length, 1);
+  const pasted = pasteCanvasV2NativeClipboard({ ...scene(), nodes: [], rootIds: [] }, both, "group");
+  assert.equal(pasted.scene.nodes.length, 2);
+  const child = pasted.scene.nodes.find((node) => node.parentId)!;
+  assert.equal(child.geometry.x, 20);
+  assert.equal(child.parentId, pasted.nodeIds[0]);
+  const single = copyCanvasV2NativeSelection(original, ["note"])!;
+  assert.equal(single.scene.nodes[0].geometry.x, 1220);
+  assert.equal(single.scene.nodes[0].parentId, undefined);
+});
+
+test("clipboard remaps internal connector attachments and detaches external endpoints", () => {
+  let original = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "connector", nodeId: "connection", x: 1500, y: 1200, width: 240, height: 4 });
+  original = applyCanvasV2NativeSceneMutation(original, { kind: "connector-endpoint", nodeId: "connection", endpoint: "from", x: 1420, y: 1224, attachNodeId: "note" });
+  const together = pasteCanvasV2NativeClipboard(original, copyCanvasV2NativeSelection(original, ["note", "connection"])!, "linked");
+  const connector = together.scene.nodes.find((node) => node.sourceNodeId === together.nodeIds[1])!;
+  assert.equal(connector.attributes["data-canvas-v2-connector-from"], together.nodeIds[0]);
+  const alone = pasteCanvasV2NativeClipboard(original, copyCanvasV2NativeSelection(original, ["connection"])!, "free");
+  const free = alone.scene.nodes.find((node) => node.sourceNodeId === alone.nodeIds[0])!;
+  assert.equal(free.attributes["data-canvas-v2-connector-from"], undefined);
+});
+
+test("copied canonical evidence remains a source-linked analysis witness", () => {
+  const original = scene();
+  Object.assign(original.nodes[0], { tagName: "img", kind: "image", canonicalEvidence: true, evidence: { id: "screen:1", role: "canonical" } });
+  original.nodes[0].attributes.src = "https://evidence.test/exact.png";
+  const pasted = pasteCanvasV2NativeClipboard(original, copyCanvasV2NativeSelection(original, ["note"])!, "evidence");
+  const copy = pasted.scene.nodes[1];
+  assert.equal(copy.evidence?.role, "analysis-copy");
+  assert.equal(copy.evidence?.sourceNodeId, "note");
+  assert.equal(copy.attributes.src, original.nodes[0].attributes.src);
+  assert.equal(copy.canonicalEvidence, false);
+});
+
+test("rich text remains editable and serializes range styles, links and lists", () => {
+  const original = scene();
+  const next = applyCanvasV2NativeSceneMutation(original, { kind: "text", nodeId: "note", text: "EvidenceDecision", nativeContent: [
+    { sceneNodeId: "note", content: [{ kind: "node", id: "list" }] },
+    { sceneNodeId: "list", tagName: "ul", content: [{ kind: "node", id: "item" }] },
+    { sceneNodeId: "item", tagName: "li", content: [{ kind: "node", id: "link" }] },
+    { sceneNodeId: "link", tagName: "a", href: "https://example.com/source", style: { color: "blue", "font-weight": "700" }, content: [{ kind: "text", value: "Evidence" }] },
+  ] });
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(next.nodes[0], new Map(next.nodes.map((node) => [node.id, node]))), true);
+  const html = serializeCanvasV2NativeScene(next).html;
+  assert.match(html, /list-style-type:disc/);
+  assert.match(html, /padding-left:1.5em/);
+  assert.match(html, /<ul/); assert.match(html, /<li/); assert.match(html, /href="https:\/\/example.com\/source"/); assert.match(html, /font-weight:700/);
+  assert.equal(original.nodes.length, 1);
+  const subsequent = applyCanvasV2NativeSceneMutation(next, { kind: "move", nodeId: "note", deltaX: 100, deltaY: 40 });
+  assert.match(serializeCanvasV2NativeScene(subsequent).html, /href="https:\/\/example.com\/source"/);
+});
+
+test("rich text rejects foreign object references and unsafe style or link content", () => {
+  const next = applyCanvasV2NativeSceneMutation(scene(), { kind: "text", nodeId: "note", text: "Safe", nativeContent: [
+    { sceneNodeId: "note", content: [{ kind: "node", id: "safe" }, { kind: "node", id: "bad" }] },
+    { sceneNodeId: "safe", tagName: "a", href: "javascript:alert(1)", style: { color: "red", position: "fixed", "background-color": "url(https://evil.test)" }, content: [{ kind: "text", value: "Safe" }] },
+    { sceneNodeId: "bad", tagName: "script", content: [{ kind: "text", value: "alert(1)" }] },
+  ] });
+  const html = serializeCanvasV2NativeScene(next).html;
+  assert.doesNotMatch(html, /javascript:|<script|evil.test|position:fixed/);
+  assert.match(html, /color:red/);
+});
+
+test("native tables retain existing cell identity and rich content when inserting and removing rows and columns", () => {
+  let table = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "table", nodeId: "table", x: 100, y: 100 });
+  const first = table.nodes.find((node) => node.tagName === "td")!;
+  table = applyCanvasV2NativeSceneMutation(table, { kind: "text", nodeId: first.sourceNodeId!, text: "Retained finding" });
+  table = applyCanvasV2NativeSceneMutation(table, { kind: "table-edit", nodeId: "table", action: "add-row", index: 1 });
+  table = applyCanvasV2NativeSceneMutation(table, { kind: "table-edit", nodeId: "table", action: "add-column", index: 1 });
+  assert.equal(table.nodes.filter((node) => node.tagName === "td").length, 9);
+  assert.equal(table.nodes.find((node) => node.id === first.id)?.directText, "Retained finding");
+  table = applyCanvasV2NativeSceneMutation(table, { kind: "table-edit", nodeId: "table", action: "remove-row", index: 2 });
+  table = applyCanvasV2NativeSceneMutation(table, { kind: "table-edit", nodeId: "table", action: "remove-column", index: 2 });
+  assert.equal(table.nodes.filter((node) => node.tagName === "td").length, 4);
+  assert.match(serializeCanvasV2NativeScene(table).html, /<table[\s\S]*<tbody[\s\S]*<tr[\s\S]*<td/);
+  assert.equal(canvasV2NativeSceneNodeSupportsTextEditing(table.nodes.find((node) => node.id === first.id)!, new Map(table.nodes.map((node) => [node.id, node]))), true);
+});
+
+test("sections keep contained objects in place and travel together without replacing their content", () => {
+  const original = scene();
+  const section = applyCanvasV2NativeSceneMutation(original, { kind: "group", section: true, groupNodeId: "section", label: "Research", items: [{ nodeId: "note", bounds: original.nodes[0].geometry }], bounds: { x: 1176, y: 1136, width: 268, height: 136 } });
+  assert.equal(section.nodes.find((node) => node.id === "section")?.attributes["data-canvas-v2-section"], "true");
+  const moved = applyCanvasV2NativeSceneMutation(section, { kind: "move", nodeId: "section", deltaX: 200, deltaY: 100 });
+  assert.equal(moved.nodes.find((node) => node.id === "note")?.geometry.x, 24);
+  assert.match(serializeCanvasV2NativeScene(moved).html, /Research/);
+  assert.match(serializeCanvasV2NativeScene(moved).html, /A finding/);
+});
+
+test("crop frames retain exact image bytes and provenance while persisting composition separately", () => {
+  const source = scene();
+  Object.assign(source.nodes[0], { kind: "image", tagName: "img", evidence: { id: "evidence-1", role: "analysis-copy", sourceNodeId: "canonical-1" } });
+  Object.assign(source.nodes[0].attributes, { src: "https://evidence.test/1.png", "data-canvas-v2-evidence-id": "evidence-1", "data-canvas-v2-evidence-role": "analysis-copy", "data-canvas-v2-source-node-id": "canonical-1" });
+  const cropped = applyCanvasV2NativeSceneMutation(source, { kind: "image-crop", nodeId: "note", x: 75, y: 20, zoom: 2 });
+  const image = cropped.nodes.find((node) => node.tagName === "img")!;
+  assert.equal(image.attributes.src, "https://evidence.test/1.png");
+  assert.equal(image.evidence?.sourceNodeId, "canonical-1");
+  assert.equal(image.inlineStyle.width, "200%");
+  assert.equal(image.inlineStyle.left, "-75%");
+  assert.equal(cropped.nodes[0].geometry.width, 220);
+  assert.match(serializeCanvasV2NativeScene(cropped).html, /data-canvas-v2-crop-frame="true"/);
+  source.nodes[0].canonicalEvidence = true;
+  assert.throws(() => applyCanvasV2NativeSceneMutation(source, { kind: "image-crop", nodeId: "note", x: 0, y: 0, zoom: 2 }), /analysis copy/);
+});
+
+test("connector labels remain native SVG text after endpoint movement", () => {
+  let connected = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "connector", nodeId: "connector", x: 100, y: 100, endX: 400, endY: 100 });
+  connected = applyCanvasV2NativeSceneMutation(connected, { kind: "connector-label", nodeId: "connector", text: "Validates" });
+  connected = applyCanvasV2NativeSceneMutation(connected, { kind: "connector-endpoint", nodeId: "connector", endpoint: "to", x: 700, y: 100 });
+  const connector = connected.nodes.find((node) => node.sourceNodeId === "connector")!;
+  const label = connected.nodes.find((node) => node.attributes["data-canvas-v2-connector-part"] === "label")!;
+  assert.equal(label.attributes.x, String(connector.geometry.width / 2));
+  assert.match(serializeCanvasV2NativeScene(connected).html, /<text[^>]*>Validates<\/text>/);
+});
+
+test("range formatting removal and root alignment persist without changing non-text layout", () => {
+  const original = scene();
+  original.nodes[0].inlineStyle = { position: "absolute", color: "red", "font-style": "italic", "text-align": "left" };
+  const next = applyCanvasV2NativeSceneMutation(original, { kind: "text", nodeId: "note", text: "Plain now", nativeContent: [{ sceneNodeId: "note", style: { "text-align": "center" }, content: [{ kind: "text", value: "Plain now" }] }] });
+  assert.equal(next.nodes[0].inlineStyle["font-style"], undefined);
+  assert.equal(next.nodes[0].inlineStyle["text-align"], "center");
+  assert.equal(next.nodes[0].inlineStyle.position, "absolute");
+  assert.equal(original.nodes[0].inlineStyle["font-style"], "italic");
+});
+
+test("editable text markup preserves native rich identities and safely escapes literal text", async () => {
+  const { canvasV2NativeTextMarkup } = await import("../lib/canvas-v2/rich-text");
+  const next = applyCanvasV2NativeSceneMutation(scene(), { kind: "text", nodeId: "note", text: "<Finding>", nativeContent: [
+    { sceneNodeId: "note", content: [{ kind: "node", id: "inline" }] },
+    { sceneNodeId: "inline", tagName: "strong", style: { color: "red" }, content: [{ kind: "text", value: "<Finding>" }] },
+  ] });
+  const markup = canvasV2NativeTextMarkup(next.nodes[0], new Map(next.nodes.map((node) => [node.id, node])));
+  assert.match(markup, /<strong[^>]*data-canvas-v2-native-scene-id="inline"/);
+  assert.match(markup, /&lt;Finding&gt;/);
+  assert.match(markup, /color:red/);
+  assert.doesNotMatch(markup, /<Finding>/);
+});
+
+test("connector appearance survives routing, endpoint movement and copying without changing identity", () => {
+  let source = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "connector", nodeId: "relationship", x: 100, y: 100, endX: 500, endY: 260 });
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "connector-style", nodeId: "relationship", style: { color: "#1597f4", weight: 4, dashed: true, start: "circle", end: "diamond", route: "bent" } });
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "connector-curve", nodeId: "relationship", x: 220, y: 180 });
+  const before = source.nodes.find(n => n.id === "relationship-path")!.attributes.d;
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "connector-endpoint", nodeId: "relationship", endpoint: "to", x: 650, y: 300 });
+  const path = source.nodes.find(n => n.id === "relationship-path")!;
+  assert.notEqual(path.attributes.d, before);
+  assert.match(path.attributes.d, / H .* V .* H /);
+  assert.equal(path.attributes.stroke, "#1597f4");
+  assert.equal(path.inlineStyle.stroke, "#1597f4", "React replaces stale theme paint during color edits");
+  assert.equal(path.attributes["stroke-width"], "4");
+  assert.equal(path.attributes["stroke-dasharray"], "12 8");
+  assert.match(source.nodes.find(n => n.id === "relationship-start")!.attributes.d, / A 5 5 /);
+  assert.match(source.nodes.find(n => n.id === "relationship-end")!.attributes.d, /-14 0/);
+  const snapshot = copyCanvasV2NativeSelection(source, ["relationship"])!;
+  const pasted = pasteCanvasV2NativeClipboard(source, snapshot, "caps");
+  const copy = pasted.scene.nodes.find(n => n.sourceNodeId === pasted.nodeIds[0])!;
+  assert.equal(copy.attributes["data-canvas-v2-connector-start-cap"], "circle");
+  assert.equal(copy.attributes["data-canvas-v2-connector-end-cap"], "diamond");
+  assert.equal(copy.attributes["data-canvas-v2-connector-dashed"], "true");
+});
+
+test("multiline connector labels stay centered on their routed path", () => {
+  let source = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "connector", nodeId: "labelled", x: 100, y: 100, endX: 500, endY: 300 });
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "connector-label", nodeId: "labelled", text: "leads to\nnext step" });
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "connector-style", nodeId: "labelled", style: { route: "bent", labelBold: true } });
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "connector-curve", nodeId: "labelled", x: 220, y: 200 });
+  const label = source.nodes.find(n => n.parentId === "labelled" && n.tagName === "text")!;
+  const connector = source.nodes.find(n => n.id === "labelled")!;
+  assert.equal(Number(label.attributes.x) + connector.geometry.x, 220);
+  assert.equal(label.childIds.length, 2);
+  assert.equal(label.inlineStyle["font-weight"], "700");
+  assert.match(serializeCanvasV2NativeScene(source).html, /<tspan[^>]*>leads to<\/tspan>/);
+});
+
+test("dragging crop edges retains image scale and source pixels", () => {
+  const source = scene();
+  Object.assign(source.nodes[0], { kind: "image", tagName: "img" });
+  source.nodes[0].attributes.src = "data:image/png;base64,unchanged";
+  const cropped = applyCanvasV2NativeSceneMutation(source, { kind: "image-crop", nodeId: "note", x: 50, y: 50, zoom: 1, frame: { deltaX: 20, deltaY: 0, width: 110, height: 88 }, image: { left: -20, top: 0, width: 220, height: 88 } });
+  const frame = cropped.nodes[0], image = cropped.nodes.find(n => n.tagName === "img")!;
+  assert.equal(frame.geometry.x, source.nodes[0].geometry.x + 20);
+  assert.equal(frame.geometry.width, 110);
+  assert.equal(parseFloat(image.inlineStyle.width) / 100 * frame.geometry.width, 220);
+  assert.equal(image.attributes.src, source.nodes[0].attributes.src);
+  assert.equal(source.nodes[0].geometry.width, 220);
+});
+
+
+test("human sections capture moved objects, release objects dragged out, and preserve world geometry", () => {
+  let board = applyCanvasV2NativeSceneMutation(scene(), { kind: "group", section: true, groupNodeId: "section", items: [{ nodeId: "note", bounds: scene().nodes[0].geometry }], bounds: { x: 1100, y: 1100, width: 400, height: 400 } });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "move", nodeId: "note", deltaX: 600, deltaY: 0 });
+  assert.equal(board.nodes.find(node => node.id === "note")?.parentId, undefined);
+  assert.equal(board.nodes.find(node => node.id === "note")?.geometry.x, 1800);
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "move", nodeId: "note", deltaX: -600, deltaY: 0 });
+  assert.equal(board.nodes.find(node => node.id === "note")?.parentId, "section");
+  assert.equal(board.nodes.find(node => node.id === "note")?.geometry.x, 100);
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "move", nodeId: "section", deltaX: 100, deltaY: 0 });
+  assert.equal(board.nodes.find(node => node.id === "note")?.geometry.x, 100);
+});
+
+test("resizing a section over an independent object captures it without moving or stealing canonical evidence", () => {
+  let board = applyCanvasV2NativeSceneMutation(scene(), { kind: "group", section: true, groupNodeId: "section", items: [{ nodeId: "note", bounds: scene().nodes[0].geometry }], bounds: { x: 1100, y: 1100, width: 400, height: 400 } });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "create", primitive: "shape", nodeId: "outside", x: 1550, y: 1200, width: 80, height: 80 });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "resize", nodeId: "section", width: 600, height: 400 });
+  assert.equal(board.nodes.find(node => node.sourceNodeId === "outside")?.parentId, "section");
+  assert.equal(board.nodes.find(node => node.sourceNodeId === "outside")?.geometry.x, 450);
+  const evidence = board.nodes.find(node => node.sourceNodeId === "outside")!;
+  evidence.parentId = undefined; evidence.geometry.x = 1550; evidence.geometry.y = 1200; evidence.canonicalEvidence = true;
+  board.nodes.find(node => node.id === "section")!.childIds = board.nodes.find(node => node.id === "section")!.childIds.filter(id => id !== evidence.id);
+  board.rootIds.push(evidence.id);
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "move", nodeId: "section", deltaX: 0, deltaY: 0 });
+  assert.equal(board.nodes.find(node => node.sourceNodeId === "outside")?.parentId, undefined);
+});
+
+
+test("moving grouped connectors preserves their path and pasted custom paths translate as a unit", () => {
+  let board = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "connector", nodeId: "line", x: 100, y: 100, width: 300, height: 200, connectorVariant: "bent" });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "connector-path", nodeId: "line", waypoints: [{ x: 200, y: 100 }, { x: 200, y: 300 }] });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "connector-label", nodeId: "line", text: "Evidence" });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "connector-label-position", nodeId: "line", position: 0.8 });
+  const line = board.nodes.find(n => n.sourceNodeId === "line")!;
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "group", section: true, groupNodeId: "section", items: [{ nodeId: "line", bounds: line.geometry }], bounds: { x: 0, y: 0, width: 600, height: 500 } });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "move", nodeId: "section", deltaX: 100, deltaY: 50 });
+  const moved = board.nodes.find(n => n.sourceNodeId === "line")!;
+  assert.equal(moved.attributes["data-canvas-v2-connector-from-x"], "200");
+  assert.equal(moved.attributes["data-canvas-v2-connector-from-y"], "150");
+  const copy = copyCanvasV2NativeSelection(board,["section"])!;
+  const pasted = pasteCanvasV2NativeClipboard(board,copy,"test",100).scene.nodes.find(n => n.kind === "connector" && n.attributes["data-canvas-v2-primitive"] === "connector" && n.sourceNodeId !== "line")!;
+  assert.deepEqual(JSON.parse(pasted.attributes["data-canvas-v2-connector-waypoints"]), [{ x: 400,y: 250 },{ x:400,y:450 }]);
+  assert.equal(pasted.attributes["data-canvas-v2-connector-label-position"], "0.8");
+});
+
+test("resizing the top-left edge of a section keeps contained objects at their world positions", () => {
+  let board = applyCanvasV2NativeSceneMutation(scene(), { kind: "group", section: true, groupNodeId: "section", items: [{ nodeId: "note", bounds: scene().nodes[0].geometry }], bounds: { x: 1100,y: 1100,width: 500,height: 500 } });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "transform", nodeId: "section", deltaX: -100, deltaY: -100, width: 600, height: 600 });
+  assert.equal(board.nodes.find(n => n.id === "note")?.geometry.x,200);
+  assert.equal(board.nodes.find(n => n.id === "section")?.geometry.x,1000);
+});
+
+
+test("AI-authored text uses the same wrapping contract after a human resize", () => {
+  const authored = scene();
+  authored.nodes[0].lastAuthor = "northstar";
+  const resized = applyCanvasV2NativeSceneMutation(authored,{kind:"resize",nodeId:"note",width:100,height:48});
+  const text = resized.nodes.find(n=>n.id==="note")!;
+  assert.equal(text.attributes["data-canvas-v2-text-mode"],"area");
+  assert.equal(text.geometry.width,100);
+  assert.deepEqual(text.content,authored.nodes[0].content);
+  assert.equal(text.sourceNodeId,"note");
 });

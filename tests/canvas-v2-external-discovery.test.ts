@@ -6,7 +6,7 @@ import {
   createCanvasV2OpenAIWebEvidenceProvider,
 } from "../lib/canvas-v2/external-evidence-provider";
 import { canvasV2EvidencePacketsNeedingMaterialization } from "../lib/canvas-v2/evidence-packet-insertion";
-import { mergeCanvasV2EvidencePackets } from "../lib/canvas-v2/evidence-packets";
+import { compactCanvasV2EvidencePacketsForModel, mergeCanvasV2EvidencePackets } from "../lib/canvas-v2/evidence-packets";
 import { runCanvasV2EvidenceBridge, type CanvasV2EvidenceProviderRequest } from "../lib/canvas-v2/evidence-bridge";
 import {
   canvasV2DiscoveryMoveNeedsRetrieval,
@@ -311,4 +311,31 @@ test("public research continues for new evidence gaps but never repeats an uncha
   assert.deepEqual(constrained.move.sourceCategories, ["canvas"]);
   assert.equal(constrained.move.externalResearchRequest, undefined);
   assert.equal(constrained.progress.label, "Turning the research into a decision");
+});
+
+test("external estimates retain inferred authority through packets and discovery graph metrics", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "fixture-key";
+  try {
+    const payload = webPayload();
+    const item = payload.output.find((item) => item.type === "message")!.content![0];
+    const report = JSON.parse(item.text);
+    report.findings[0].authority = "inferred";
+    report.findings[0].metrics[0].definition = "An estimate inferred from the source.";
+    item.text = JSON.stringify(report);
+    const provider = createCanvasV2OpenAIWebEvidenceProvider({
+      model: "gpt-5.6-luna", requestSignal: new AbortController().signal,
+      fetcher: async () => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }),
+    });
+    const result = await provider.retrieve({ ...request(), externalResearchRequest: { ...researchRequest, question: "Estimate authority regression" } });
+    const packet = result.packets.find((packet) => packet.metrics.length)!;
+    assert.equal(packet.authority, "inferred");
+    assert.equal(packet.metrics[0].authority, "inferred");
+    assert.equal(compactCanvasV2EvidencePacketsForModel([packet])[0].metrics[0].authority, "inferred");
+    const graph = syncCanvasV2DiscoveryGraph({ revisionId: "estimated", updatedAt: NOW, document: { html: "<main></main>", css: "" }, evidencePackets: result.packets });
+    assert.equal(graph.nodes.find((node) => node.kind === "metric")?.authority, "inferred");
+  } finally {
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousKey;
+  }
 });

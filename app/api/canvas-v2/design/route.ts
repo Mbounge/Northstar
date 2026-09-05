@@ -141,6 +141,8 @@ import {
   buildCanvasV2SensemakingPresentationBrief,
   compactCanvasV2DiscoveryStateForModel,
   completeCanvasV2DiscoveryState,
+  assessCanvasV2DiscoveryCompletion,
+  canvasV2DiscoveryCompletionFailures,
   createCanvasV2DiscoveryState,
   parseCanvasV2EmergentDepthSignal,
   reconcileCanvasV2PresentedValidations,
@@ -275,10 +277,20 @@ Keep completionRationale as a terse internal verification judgment. Separately w
 The discoveryModelContext is deliberately delta-first. Full changed and mandatory records are supplied; unchanged stableReferences remain valid durable memory. If—and only if—one omitted or referenced record is materially necessary to make the next visual decision, return its exact ID in requestedDiscoveryNodeIds and keep the rest of the brief coherent. Otherwise return an empty list. Never request broad expansion, never guess omitted content, and never use expansion as a substitute for visual judgment.
 
 ${NORTHSTAR_V2_CANVAS_GRAMMAR}`;
+// completionAssessment must use the inquiry's exact criteria and current
+// human findings. A clean render is not evidence that those criteria hold.
 const CREATIVE_BRIEF_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
+    completionAssessment: {
+      description: "Required when recommending complete: assess the exact discovery completion criteria against the current committed canvas and evidence, retaining all unresolved material requirements. Null while continuing. Never infer human acceptance from a finished render.",
+      anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, properties: {
+        satisfiedCriteria: { type: "array", items: { type: "string" } },
+        materialOpenRequirements: { type: "array", items: { type: "string" } },
+        rationale: { type: "string" },
+      }, required: ["satisfiedCriteria", "materialOpenRequirements", "rationale"] }],
+    },
     visualDiagnosis: { type: "string" },
     materialMove: { type: "string" },
     currentSemanticJob: { type: "string" },
@@ -347,7 +359,7 @@ const CREATIVE_BRIEF_SCHEMA = {
     remainingOpportunities: { type: "array", minItems: 0, maxItems: 6, items: { type: "string" } },
     nextMoves: { type: "array", minItems: 0, maxItems: 5, items: { type: "string" } },
   },
-  required: ["visualDiagnosis", "materialMove", "currentSemanticJob", "deferredSemanticJobs", "spatialDirection", "targetIsland", "targetTerritory", "evidenceChoreography", "evidenceSelections", "requestedDiscoveryNodeIds", "authoredVisualRoles", "antiRepetition", "visualVocabulary", "paletteDirection", "whyThisTurn", "preservedStrengths", "regressionRisk", "completionRecommendation", "completionRationale", "completionSummary", "visualThesis", "compositionStrategy", "hierarchyAndScale", "spacingRhythm", "relationshipLogic", "growthDirection", "remainingOpportunities", "nextMoves"],
+  required: ["completionAssessment", "visualDiagnosis", "materialMove", "currentSemanticJob", "deferredSemanticJobs", "spatialDirection", "targetIsland", "targetTerritory", "evidenceChoreography", "evidenceSelections", "requestedDiscoveryNodeIds", "authoredVisualRoles", "antiRepetition", "visualVocabulary", "paletteDirection", "whyThisTurn", "preservedStrengths", "regressionRisk", "completionRecommendation", "completionRationale", "completionSummary", "visualThesis", "compositionStrategy", "hierarchyAndScale", "spacingRhythm", "relationshipLogic", "growthDirection", "remainingOpportunities", "nextMoves"],
 } as const;
 
 /**
@@ -1207,6 +1219,11 @@ function parseCreativeDirectorBrief(
     whyThisTurn: String(value.whyThisTurn).slice(0, 1_000),
     preservedStrengths: value.preservedStrengths.slice(0, 4).map((item) => String(item).slice(0, 500)),
     regressionRisk: String(value.regressionRisk).slice(0, 1_000),
+    completionAssessment: value.completionAssessment && typeof value.completionAssessment === "object" ? (() => {
+      const assessment = value.completionAssessment as Record<string, unknown>;
+      if (!Array.isArray(assessment.satisfiedCriteria) || !Array.isArray(assessment.materialOpenRequirements) || typeof assessment.rationale !== "string") throw new Error("Completion assessment requires explicit criteria, open requirements and rationale.");
+      return { satisfiedCriteria: assessment.satisfiedCriteria.filter((item): item is string => typeof item === "string"), materialOpenRequirements: assessment.materialOpenRequirements.filter((item): item is string => typeof item === "string"), rationale: assessment.rationale };
+    })() : undefined,
     completionRecommendation,
     completionRationale: String(value.completionRationale).slice(0, 1_200),
     completionSummary,
@@ -3952,7 +3969,9 @@ export async function POST(request: NextRequest) {
         island.openRequirements.length ? `Open requirements: ${island.openRequirements.join("; ")}.` : "",
         island.missingRequiredEvidenceIds.length ? `Assigned evidence missing from the island: ${island.missingRequiredEvidenceIds.join(", ")}.` : "",
       ].filter(Boolean).join(" "));
+      const semanticallyAssessedState = assessCanvasV2DiscoveryCompletion(discoveryState, creativeCheckpointBrief.completionAssessment);
       const completionFailures = [
+        ...canvasV2DiscoveryCompletionFailures(semanticallyAssessedState),
         ...islandCompletionFailures,
         ...promptCoverageFailures,
         ...analysisEvidenceScaleFailures,
@@ -3975,11 +3994,10 @@ export async function POST(request: NextRequest) {
         if (completion.unresolved.length) throw new Error(`The visible canvas is not ready to complete. Ground the available required app${completion.unresolved.length === 1 ? "" : "s"}: ${completion.unresolved.join(", ")}.`);
         if (completion.unacknowledgedUnavailable.length) throw new Error(`The visible canvas is not ready to complete. Make the unavailable research explicit on the canvas: ${completion.unacknowledgedUnavailable.join(", ")}.`);
         const completedDiscoveryState = completeCanvasV2DiscoveryState({
-          state: discoveryState,
+          state: semanticallyAssessedState,
           summary: completion.summary,
           graphRevisionId: discoveryRevision.discoveryGraph?.revisionId,
           now: new Date().toISOString(),
-          runtimeVerified: true,
         });
         return NextResponse.json({
           decision: { ...proposedCompletion, summary: completion.summary },

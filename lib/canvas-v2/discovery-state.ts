@@ -1288,29 +1288,48 @@ export function buildCanvasV2SensemakingPresentationBrief(state: CanvasV2Discove
   };
 }
 
+export interface CanvasV2CompletionAssessment {
+  satisfiedCriteria: string[];
+  materialOpenRequirements: string[];
+  rationale: string;
+}
+
+/** A model's explicit semantic assessment, separate from render integrity. */
+export function assessCanvasV2DiscoveryCompletion(state: CanvasV2DiscoveryState, assessment?: CanvasV2CompletionAssessment): CanvasV2DiscoveryState {
+  if (!assessment) return state;
+  const next = cloneState(state);
+  next.completion = { ...next.completion, satisfiedCriteria: assessment.satisfiedCriteria.filter((criterion) => next.completion.criteria.includes(criterion)), materialOpenRequirements: [...assessment.materialOpenRequirements], rationale: assessment.rationale, readiness: assessment.materialOpenRequirements.length ? "not-ready" : "ready" };
+  return next;
+}
+
+export function canvasV2DiscoveryCompletionFailures(state: CanvasV2DiscoveryState): string[] {
+  const failures: string[] = [];
+  if (state.completion.materialOpenRequirements.length) failures.push(`The inquiry cannot complete while material requirements remain open: ${state.completion.materialOpenRequirements.join("; ")}.`);
+  if (state.completion.readiness === "not-ready") failures.push(`The inquiry cannot complete before its inquiry-specific readiness criteria are satisfied: ${state.completion.rationale}.`);
+  const missing = state.completion.criteria.filter((criterion) => !state.completion.satisfiedCriteria.includes(criterion));
+  if (missing.length) failures.push(`Inquiry criteria need an explicit semantic assessment: ${missing.join("; ")}.`);
+  return failures;
+}
+
 export function completeCanvasV2DiscoveryState(input: {
   state: CanvasV2DiscoveryState;
   summary: string;
   graphRevisionId?: string;
   now: string;
-  /** Set only after the runtime's render, evidence, prompt, and lifecycle gates pass. */
+  /** Render verification never overrides inquiry-specific semantic requirements. */
   runtimeVerified?: boolean;
 }): CanvasV2DiscoveryState {
   const next = cloneState(input.state);
   if (next.status === "complete" && next.completion.readiness === "complete") return next;
-  if (!input.runtimeVerified && next.evidenceNeed !== "irrelevant" && next.completion.materialOpenRequirements.length) {
-    throw new Error(`The inquiry cannot complete while material requirements remain open: ${next.completion.materialOpenRequirements.join("; ")}.`);
-  }
-  if (!input.runtimeVerified && next.completion.readiness === "not-ready") {
-    throw new Error(`The inquiry cannot complete before its inquiry-specific readiness criteria are satisfied: ${next.completion.rationale}.`);
-  }
+  const failures = canvasV2DiscoveryCompletionFailures(next);
+  if (failures.length) throw new Error(failures.join(" "));
   next.version += 1;
   next.status = "complete";
   next.latestUnderstanding = input.summary.trim().slice(0, 2_400) || next.latestUnderstanding;
   next.completion = {
     ...next.completion,
-    satisfiedCriteria: [...next.completion.criteria],
-    materialOpenRequirements: [],
+    satisfiedCriteria: [...next.completion.satisfiedCriteria],
+    materialOpenRequirements: [...next.completion.materialOpenRequirements],
     readiness: "complete",
     rationale: input.summary.trim().slice(0, 1_200),
   };

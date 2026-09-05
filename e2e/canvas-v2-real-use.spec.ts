@@ -1,3 +1,4 @@
+import { placeActivatedTool, fitAllCanvas } from "./canvas-v2-authoring-helpers";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { CANVAS_V2_WORKSPACE } from "../lib/canvas-v2/workspace-coordinate-space";
@@ -263,13 +264,14 @@ test("Northstar revises the exact selected human-authored object without rebuild
   test.setTimeout(90_000);
   await send(page, STANDARD_PROMPT);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
-  await page.getByTitle("Fit content").click();
+  await fitAllCanvas(page);
 
   const frame = canvasFrame(page);
   const workspace = page.getByRole("region", { name: "Canvas workspace" });
   const surface = workspace.getByTestId("canvas-v2-workspace-surface");
   const deck = frame.locator('[data-canvas-v2-node-id="editorial-deck"]');
   await canvasApp(page).getByTitle("Create Text").click();
+  await placeActivatedTool(page);
   const humanText = frame.locator('[data-canvas-v2-node-id^="manual-text-"]');
   await expect(humanText).toHaveCount(1);
   const humanTextId = await humanText.getAttribute("data-canvas-v2-node-id");
@@ -328,7 +330,7 @@ test("single and multi-selected canonical screenshots delete through toolbar and
   test.setTimeout(90_000);
   await send(page, STANDARD_PROMPT);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
-  await page.getByTitle("Fit content").click();
+  await fitAllCanvas(page);
 
   const frame = canvasFrame(page);
   const awinLane = frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"]');
@@ -372,6 +374,7 @@ test("AI authorship finds real open territory around an existing human object an
   test.setTimeout(90_000);
   const frame = canvasFrame(page);
   await canvasApp(page).getByTitle("Create Shape").click();
+  await placeActivatedTool(page);
   const humanShape = frame.locator('[data-canvas-v2-node-id^="manual-shape-"]');
   await expect(humanShape).toHaveCount(1);
   await expect(humanShape).toHaveAttribute("data-canvas-v2-last-author", "user");
@@ -454,7 +457,7 @@ test("moving authored text and text-bearing elements preserves their complete vi
   test.setTimeout(90_000);
   await send(page, STANDARD_PROMPT);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
-  await page.getByTitle("Fit content").click();
+  await fitAllCanvas(page);
 
   const frame = canvasFrame(page);
   const heading = frame.getByRole("heading", { name: "Confidence, built at two speeds." });
@@ -864,7 +867,7 @@ test("terminal Awin and Whop screenshots remain independently movable and resiza
   test.setTimeout(90_000);
   await send(page, STANDARD_PROMPT);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
-  await page.getByTitle("Fit content").click();
+  await fitAllCanvas(page);
 
   const frame = canvasFrame(page);
   const lateAwinInFlow = frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"] [data-canvas-v2-flow-index="46"]');
@@ -981,7 +984,7 @@ test("a later Awin screen remains editable after a non-adjacent predecessor deta
   test.setTimeout(90_000);
   await send(page, STANDARD_PROMPT);
   await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("completed", { timeout: 60_000 });
-  await page.getByTitle("Fit content").click();
+  await fitAllCanvas(page);
 
   const frame = canvasFrame(page);
   const screen15InFlow = frame.locator('[data-canvas-v2-canonical-flow="flow:awin:onboarding"] [data-canvas-v2-flow-index="14"]');
@@ -1067,6 +1070,7 @@ test("the production canvas route shares camera, singular selection, and mutatio
   const workspace = page.getByRole("region", { name: "Canvas workspace" });
   const productionSurface = workspace.getByTestId("canvas-v2-workspace-surface");
   await canvasApp(page).getByTitle("Create Text").click();
+  await placeActivatedTool(page);
   const productionHumanText = frame.locator('[data-canvas-v2-node-id^="manual-text-"]');
   await expect(productionHumanText).toHaveCount(1);
   await expect(productionHumanText).toHaveAttribute("data-canvas-v2-origin", "user");
@@ -1118,7 +1122,7 @@ test("the production canvas route shares camera, singular selection, and mutatio
   await expect(page.getByText("2 objects selected", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await page.getByTitle("Fit content").click();
+  await fitAllCanvas(page);
 
   const terminalInFlow = frame.locator('[data-canvas-v2-canonical-flow="flow:whop:onboarding"] [data-canvas-v2-flow-index="16"]');
   const terminalNodeId = await terminalInFlow.getAttribute("data-canvas-v2-node-id") ?? "";
@@ -1299,6 +1303,7 @@ test("a large two-dimensional discovery landscape grows, fits, remains selectabl
 
 test("manual creation and history remain usable on the same source-authority path", async ({ page }) => {
   await canvasApp(page).getByTitle("Create Text").click();
+  await placeActivatedTool(page);
   const frame = canvasFrame(page);
   const text = frame.getByText("New text", { exact: true });
   await expect(text).toBeVisible();
@@ -1454,6 +1459,8 @@ test("Patch 8A uses one finite workspace and preserves direct human manipulation
   await expect(page.getByLabel("Message North Star")).toHaveValue("Build a balanced executive comparison with representative flows, clear annotations, and a visible working surface so I can inspect how the solution came together.");
 
   await canvasApp(page).getByTitle("Create Shape").click();
+
+  await placeActivatedTool(page);
   const shape = frame.locator('[data-canvas-v2-node-id^="manual-shape-"]');
   await expect(shape).toHaveCount(1);
   await expect(shape).toHaveAttribute("data-canvas-v2-last-author", "user");
@@ -1551,6 +1558,7 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
   test.setTimeout(180_000);
   const frame = canvasFrame(page);
   await canvasApp(page).getByTitle("Create Text").click();
+  await placeActivatedTool(page);
   const text = frame.locator('[data-canvas-v2-node-id^="manual-text-"]');
   await expect(text).toHaveCount(1);
 
@@ -1575,6 +1583,8 @@ test("Patch 8B treats native objects as a coherent editable selection graph", as
   }).toBe(true);
 
   await canvasApp(page).getByTitle("Create Shape").click();
+
+  await placeActivatedTool(page);
   const shape = frame.locator('[data-canvas-v2-node-id^="manual-shape-"]');
   await expect(shape).toHaveCount(1);
   await page.keyboard.press("Escape");

@@ -36,13 +36,15 @@ import {
   type CanvasV2NativeSceneNode,
 } from "@/lib/canvas-v2/native-scene";
 import { canvasV2ObjectOrigin } from "@/lib/canvas-v2/working-context";
+import { canvasV2NativeTextMarkup, canvasV2RichTextStyle, canvasV2SafeTextLink, canvasV2TextStyleSummary, readCanvasV2RichText, sanitizeCanvasV2RichTextHtml } from "@/lib/canvas-v2/rich-text";
+import { CanvasV2RichTextToolbar } from "./rich-text-toolbar";
 import type { CanvasV2NativeTextContentUpdate } from "@/lib/canvas-v2/manual-mutations";
 import type { CanvasV2ArtifactRevision } from "@/lib/canvas-v2/types";
 import type {
   CanvasV2InspectableElement,
   CanvasV2SelectionIntent,
 } from "@/lib/canvas-v2/element-inspection";
-import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import { buildCanvasV2ConnectorGeometry, readCanvasV2ConnectorWaypoints, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, type CanvasV2ConnectorCap, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import type { CanvasV2TransientGeometry } from "@/components/canvas-v2/canvas-scene";
 
 export interface CanvasV2NativeCanvasSceneProps {
@@ -60,8 +62,11 @@ export interface CanvasV2NativeCanvasSceneProps {
   onSceneSnapshot?: (elements: CanvasV2InspectableElement[]) => void;
   onNativeScene?: (scene: CanvasV2NativeSceneDocument) => void;
   sceneOverride?: CanvasV2NativeSceneDocument;
+  onBeforeUserEdit?: () => void;
+  onTableAction?: (cellId: string, action: "next" | "previous" | "paste", text?: string) => void;
+  editTextRequest?: { nodeId: string; nonce: number; selectAll?: boolean };
   onElementDoubleClick?: (element: CanvasV2InspectableElement) => void;
-  onElementTextCommit?: (element: CanvasV2InspectableElement, text: string, nativeContent?: CanvasV2NativeTextContentUpdate[], layout?: { width?: number; height?: number }) => void;
+  onElementTextCommit?: (element: CanvasV2InspectableElement, text: string, nativeContent?: CanvasV2NativeTextContentUpdate[], layout?: { width?: number; height?: number }) => boolean | void;
   onWorkspaceWheel?: (event: { clientX: number; clientY: number; deltaX: number; deltaY: number; deltaMode?: number; ctrlKey: boolean; metaKey: boolean; shiftKey?: boolean }) => void;
   onWorkspacePointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => void;
   onElementPointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => void;
@@ -69,6 +74,7 @@ export interface CanvasV2NativeCanvasSceneProps {
 }
 
 export interface CanvasV2NativeCanvasSceneHandle {
+  finishTextEditing: () => boolean | void;
   applyTransientGeometry: (geometry?: Readonly<Record<string, CanvasV2TransientGeometry>>) => void;
   previewNodeRemoval: (nodeIds: readonly string[]) => void;
   restoreNodeRemovalPreview: () => void;
@@ -186,39 +192,6 @@ export function placeCanvasV2CaretAtPoint(editable: HTMLElement, clientX: number
   return Boolean(nearest || caretDocument.caretPositionFromPoint || caretDocument.caretRangeFromPoint);
 }
 
-function canvasV2NativeTextContent(editable: HTMLElement): CanvasV2NativeTextContentUpdate[] {
-  const elements = [editable, ...Array.from(editable.querySelectorAll<HTMLElement>("[data-canvas-v2-native-scene-id]"))];
-  const updates = new Map<string, CanvasV2NativeTextContentUpdate>();
-  const flattenedText = (element: Element): string => {
-    if (element.tagName === "BR") return "\n";
-    const value = Array.from(element.childNodes).map((child) => child.nodeType === Node.TEXT_NODE
-      ? child.textContent ?? ""
-      : child.nodeType === Node.ELEMENT_NODE ? flattenedText(child as Element) : "").join("");
-    return /^(DIV|P|LI)$/.test(element.tagName) ? `${value}\n` : value;
-  };
-  for (const element of elements) {
-    const sceneNodeId = element.dataset.canvasV2NativeSceneId;
-    if (!sceneNodeId || updates.has(sceneNodeId)) continue;
-    const content: CanvasV2NativeTextContentUpdate["content"] = [];
-    for (const child of Array.from(element.childNodes)) {
-      if (child.nodeType === Node.TEXT_NODE) {
-        if (child.textContent) content.push({ kind: "text", value: child.textContent });
-        continue;
-      }
-      if (child.nodeType !== Node.ELEMENT_NODE) continue;
-      const childElement = child as HTMLElement;
-      const childId = childElement.dataset.canvasV2NativeSceneId;
-      if (childId) content.push({ kind: "node", id: childId });
-      else {
-        const value = flattenedText(childElement);
-        if (value) content.push({ kind: "text", value });
-      }
-    }
-    updates.set(sceneNodeId, { sceneNodeId, content });
-  }
-  return Array.from(updates.values());
-}
-
 function roundSceneMetric(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -240,10 +213,9 @@ function reconcilePublicSceneGeometry(
   const scaleY = rootRect.height / scene.height;
   if (!Number.isFinite(scaleX) || scaleX <= 0 || !Number.isFinite(scaleY) || scaleY <= 0) return scene;
   const elements = new Map<string, HTMLElement>();
-  for (const node of scene.nodes) {
-    const selector = `[data-canvas-v2-native-scene-id="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(node.id) : node.id.replaceAll('"', '\\"')}"]`;
-    const element = root.querySelector<HTMLElement>(selector);
-    if (element) elements.set(node.id, element);
+  for (const element of root.querySelectorAll<HTMLElement>("[data-canvas-v2-native-scene-id]")) {
+    const id = element.dataset.canvasV2NativeSceneId;
+    if (id && !elements.has(id)) elements.set(id, element);
   }
   let changed = false;
   const nodes = scene.nodes.map((node) => {
@@ -252,8 +224,21 @@ function reconcilePublicSceneGeometry(
     // camera scale quantizes sub-pixel coordinates and silently moves an
     // untouched collaborator on every later AI commit. Reconciliation exists
     // only to materialize browser-owned normal-flow layout.
-    if (node.layoutMode === "absolute") return node;
     const element = elements.get(node.id);
+    const textMode = node.attributes["data-canvas-v2-text-mode"];
+    if (element && (textMode === "point" || textMode === "area") && !element.hasAttribute("data-canvas-v2-native-transient")) {
+      // Auto-sizing text owns intrinsic dimensions, while the human still
+      // owns its position. Measure unscaled CSS metrics so font, range and
+      // list changes cannot leave glyphs outside stale selection geometry.
+      const computed = getComputedStyle(element);
+      const width = textMode === "point" ? Math.ceil(parseFloat(computed.width)) + 1 : node.geometry.width;
+      const height = Math.ceil(parseFloat(computed.height));
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 && (width !== node.geometry.width || height !== node.geometry.height)) {
+        changed = true;
+        return { ...node, geometry: { ...node.geometry, width, height } };
+      }
+    }
+    if (node.layoutMode === "absolute") return node;
     if (!element || node.geometry.rotation !== 0) return node;
     const rect = element.getBoundingClientRect();
     const parentRect = node.parentId ? elements.get(node.parentId)?.getBoundingClientRect() : rootRect;
@@ -302,22 +287,25 @@ function inspectNativeNode(
     };
     const bounds = absoluteGeometry(node, byId);
     const variantValue = node.attributes["data-canvas-v2-connector-variant"];
-    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" ? variantValue : "arrow";
+    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" || variantValue === "bent" ? variantValue : "arrow";
     const from = { x: numberAttribute("data-canvas-v2-connector-from-x", bounds.x + 16), y: numberAttribute("data-canvas-v2-connector-from-y", bounds.y + bounds.height / 2) };
     const to = { x: numberAttribute("data-canvas-v2-connector-to-x", bounds.x + bounds.width - 16), y: numberAttribute("data-canvas-v2-connector-to-y", bounds.y + bounds.height / 2) };
     const bend = numberAttribute("data-canvas-v2-connector-bend", variant === "curve" ? 72 : 0);
     const controlX = Number(node.attributes["data-canvas-v2-connector-control-x"]);
     const controlY = Number(node.attributes["data-canvas-v2-connector-control-y"]);
     return {
+      color: element?.querySelector('[data-canvas-v2-connector-part="path"]') ? getComputedStyle(element.querySelector('[data-canvas-v2-connector-part="path"]')!).stroke : undefined,
       variant,
       from: { ...from, ...(node.attributes["data-canvas-v2-connector-from"] ? { attachedNodeId: node.attributes["data-canvas-v2-connector-from"] } : {}) },
       to: { ...to, ...(node.attributes["data-canvas-v2-connector-to"] ? { attachedNodeId: node.attributes["data-canvas-v2-connector-to"] } : {}) },
+      waypoints: readCanvasV2ConnectorWaypoints(node.attributes["data-canvas-v2-connector-waypoints"]),
       control: buildCanvasV2ConnectorGeometry({ start: from, end: to, variant, bend, ...(Number.isFinite(controlX) && Number.isFinite(controlY) ? { control: { x: controlX, y: controlY } } : {}) }).control,
       bend,
     };
   })() : undefined;
   return {
     nodeId: node.sourceNodeId ?? node.id,
+    sectionHeading: node.attributes["data-canvas-v2-section-title"] === "true" || node.sourceNodeId?.endsWith("-title") && byId.get(node.parentId ?? "")?.attributes["data-canvas-v2-section"] === "true",
     parentNodeId: node.parentId ? byId.get(node.parentId)?.sourceNodeId : undefined,
     tagName: node.tagName,
     kind: node.kind,
@@ -346,9 +334,9 @@ function inspectNativeNode(
       // Inspector state describes durable authored truth. The public DOM can
       // carry a reversible light/dark contrast override, which is what the
       // person sees but not what a paint-mode change should sample as its hue.
-      color: node.inlineStyle.color ?? computed?.color ?? "",
-      backgroundColor: node.inlineStyle["background-color"] ?? node.inlineStyle.background ?? computed?.backgroundColor ?? "",
-      borderColor: node.inlineStyle["border-color"] ?? computed?.borderColor ?? "",
+      color: node.inlineStyle.color?.includes("var(") ? computed?.color ?? "" : node.inlineStyle.color ?? computed?.color ?? "",
+      backgroundColor: (node.inlineStyle["background-color"] ?? node.inlineStyle.background)?.includes("var(") ? computed?.backgroundColor ?? "" : node.inlineStyle["background-color"] ?? node.inlineStyle.background ?? computed?.backgroundColor ?? "",
+      borderColor: node.inlineStyle["border-color"]?.includes("var(") ? computed?.borderColor ?? "" : node.inlineStyle["border-color"] ?? computed?.borderColor ?? "",
       borderStyle: node.inlineStyle["border-style"] ?? computed?.borderStyle ?? "",
       borderWidth: node.inlineStyle["border-width"] ?? computed?.borderWidth ?? "",
       borderRadius: node.inlineStyle["border-radius"] ?? computed?.borderRadius ?? "",
@@ -361,6 +349,7 @@ function inspectNativeNode(
       textDecoration: computed?.textDecorationLine ?? "",
       opacity: computed?.opacity ?? "1",
       objectFit: computed?.objectFit ?? "fill",
+      ...(element && canvasV2NativeSceneNodeSupportsTextEditing(node, byId) ? canvasV2TextStyleSummary(element) : {}),
     },
     bounds: absoluteGeometry(node, byId),
   };
@@ -449,6 +438,8 @@ const NativeNode = memo(function NativeNode({
   });
   const props: Record<string, unknown> = {
     ...reactAttributes(node),
+    "data-canvas-v2-native-runtime-node": "true",
+    "data-canvas-v2-native-scene-id": node.id,
     key: node.id,
     style: runtimeStyle,
     "data-canvas-v2-native-layout": node.layoutMode,
@@ -473,6 +464,7 @@ const NativeNode = memo(function NativeNode({
     suppressContentEditableWarning: true,
   };
   if (VOID_TAGS.has(node.tagName)) return createElement(node.tagName, props);
+  if (canvasV2NativeSceneNodeSupportsTextEditing(node, byId)) return createElement(node.tagName, { ...props, dangerouslySetInnerHTML: { __html: canvasV2NativeTextMarkup(node, byId) } });
   return createElement(node.tagName, props, ...content);
 });
 
@@ -491,6 +483,9 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   onSceneSnapshot,
   onNativeScene,
   sceneOverride,
+  onBeforeUserEdit,
+  onTableAction,
+  editTextRequest,
   onElementDoubleClick,
   onElementTextCommit,
   onWorkspaceWheel,
@@ -498,6 +493,8 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   onElementPointer,
   transientGeometry,
 }, imperativeRef) {
+  const [activeEditable, setActiveEditable] = useState<HTMLElement>();
+  const finishTextEditingRef = useRef<() => boolean | void>(() => undefined);
   const compilerRef = useRef<HTMLIFrameElement>(null);
   const publicSceneRef = useRef<HTMLDivElement>(null);
   const compileSequenceRef = useRef(0);
@@ -512,7 +509,12 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const [compiledRevisionId, setCompiledRevisionId] = useState<string>();
   const activePointerRef = useRef<{ pointerId: number; element?: CanvasV2InspectableElement } | undefined>(undefined);
   const hoveredPointerNodeRef = useRef<string | undefined>(undefined);
-  const runtimeDocument = useMemo(() => buildCanvasV2RuntimeDocument(revision), [revision]);
+  // Native edits/history already contain measured geometry. Rebuilding a second
+  // image-heavy canvas for them stalls the main thread without adding truth.
+  // New authored revisions still pass through compilation, and private model
+  // candidate observation remains in the separate capture-enabled scene.
+  const needsCompiler = sceneOverride?.revisionId !== revision.id && compiledRevisionId !== revision.id;
+  const runtimeDocument = useMemo(() => needsCompiler ? buildCanvasV2RuntimeDocument(revision) : "", [needsCompiler, revision]);
   const renderedScene = sceneOverride ?? scene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
   const bySourceId = useMemo(() => renderedScene ? canvasV2NativeSceneSourceNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
@@ -561,10 +563,14 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     // A committed scene is already the durable geometry that replaces the
     // preview. Never restore pre-gesture inline values over that new truth.
     if (transientSceneRef.current !== renderedScene) {
+      // The new revision replaces preview geometry, including its temporary
+      // sizing lock. Leaving this marker behind disables text auto-height.
+      for (const snapshot of snapshots.values()) snapshot.element.removeAttribute("data-canvas-v2-native-transient");
       snapshots.clear();
       transientSceneRef.current = renderedScene;
     }
     const activeIds = new Set(Object.keys(nextTransientGeometry ?? {}));
+    if (!nextTransientGeometry) root.querySelectorAll("[data-canvas-v2-native-transient]").forEach(element => element.removeAttribute("data-canvas-v2-native-transient"));
     for (const [nodeId, snapshot] of Array.from(snapshots.entries())) {
       if (activeIds.has(nodeId)) continue;
       restoreNativeTransientStyle(snapshot);
@@ -669,15 +675,16 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       const start = fromBounds ? canvasV2ConnectorBoundaryAnchor(fromBounds, toCenter) : freeStart;
       const end = toBounds ? canvasV2ConnectorBoundaryAnchor(toBounds, fromCenter) : freeEnd;
       const variantValue = connector.attributes["data-canvas-v2-connector-variant"];
-      const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" ? variantValue : "arrow";
+      const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" || variantValue === "bent" ? variantValue : "arrow";
       const controlX = Number(connector.attributes["data-canvas-v2-connector-control-x"]);
       const controlY = Number(connector.attributes["data-canvas-v2-connector-control-y"]);
       const geometry = buildCanvasV2ConnectorGeometry({
         start,
         end,
         variant,
+        waypoints: readCanvasV2ConnectorWaypoints(connector.attributes["data-canvas-v2-connector-waypoints"]),
         bend: numericAttribute(connector, "data-canvas-v2-connector-bend", 72),
-        ...(variant === "curve" && Number.isFinite(controlX) && Number.isFinite(controlY) ? { control: { x: controlX, y: controlY } } : {}),
+        ...((variant === "curve" || variant === "bent") && Number.isFinite(controlX) && Number.isFinite(controlY) ? { control: { x: controlX, y: controlY } } : {}),
       });
       const parentOrigin = connector.parentId && byId.get(connector.parentId) ? absoluteGeometry(byId.get(connector.parentId)!, byId) : { x: 0, y: 0 };
       element.style.setProperty("--canvas-v2-native-x", `${geometry.bounds.x - parentOrigin.x}px`);
@@ -689,14 +696,22 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       path?.setAttribute("d", geometry.path);
       const hitPath = element.querySelector<SVGPathElement>('[data-canvas-v2-connector-part="hit"]');
       hitPath?.setAttribute("d", geometry.path);
-      const startPart = element.querySelector<SVGCircleElement>('[data-canvas-v2-connector-part="start"]');
-      startPart?.setAttribute("cx", String(geometry.localStart.x));
-      startPart?.setAttribute("cy", String(geometry.localStart.y));
-      const endPart = element.querySelector<SVGElement>('[data-canvas-v2-connector-part="end"]');
-      if (endPart?.tagName.toLowerCase() === "polyline") endPart.setAttribute("points", geometry.arrowPoints);
-      else if (endPart) {
-        endPart.setAttribute("cx", String(geometry.localEnd.x));
-        endPart.setAttribute("cy", String(geometry.localEnd.y));
+      for (const endpoint of ["start", "end"] as const) {
+        const part = element.querySelector<SVGElement>(`[data-canvas-v2-connector-part="${endpoint}"]`);
+        if (!part) continue;
+        const cap = (connector.attributes[`data-canvas-v2-connector-${endpoint}-cap`] || (endpoint === "end" && variant === "arrow" ? "line-arrow" : "none")) as CanvasV2ConnectorCap;
+        for (const [key, value] of Object.entries(canvasV2ConnectorCapAttributes(geometry, endpoint, cap, variant))) part.setAttribute(key, value);
+      }
+      const label = element.querySelector<SVGTextElement>('text[data-canvas-v2-connector-part="label"]');
+      if (label) {
+        const point = canvasV2ConnectorLabelPoint(geometry, variant, Number(connector.attributes["data-canvas-v2-connector-label-position"] ?? 0.5));
+        label.setAttribute("x", String(point.x)); label.setAttribute("y", String(point.y - 12 - Math.max(0, label.children.length - 1) * 21.6));
+        label.querySelectorAll("tspan").forEach(line => line.setAttribute("x", String(point.x)));
+        const background = element.querySelector<SVGRectElement>('[data-canvas-v2-connector-part="label-background"]');
+        if (background) {
+          background.setAttribute("x", String(point.x - Number(background.getAttribute("width")) / 2));
+          background.setAttribute("y", String(Number(label.getAttribute("y")) - 19));
+        }
       }
     }
     transientConnectorIdsRef.current = affectedConnectorIds;
@@ -751,6 +766,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   useImperativeHandle(imperativeRef, () => ({
     applyTransientGeometry,
     previewNodeRemoval,
+    finishTextEditing: () => finishTextEditingRef.current(),
     restoreNodeRemovalPreview,
     commitNodeRemovalPreview,
   }), [applyTransientGeometry, commitNodeRemovalPreview, previewNodeRemoval, restoreNodeRemovalPreview]);
@@ -838,6 +854,13 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
+    if ((event.target as Element).closest('[data-canvas-v2-direct-editing="true"]')) {
+      // Once editing, the browser owns caret placement and drag selection.
+      // Do not start an object gesture or refocus the workspace on pointer-up.
+      activePointerRef.current = undefined;
+      event.stopPropagation();
+      return;
+    }
     const targetResult = inspectionEnabled ? targetNode(event.target) : undefined;
     const inspected = targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined;
     activePointerRef.current = { pointerId: event.pointerId, ...(inspected ? { element: inspected } : {}) };
@@ -881,10 +904,15 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     clientY: number,
   ) => {
     if (!inspected.textEditable || inspected.locked || targetResult.element.dataset.canvasV2DirectEditing === "true") return;
+    onBeforeUserEdit?.();
     onElementSelect?.(inspected, { additive: false, range: false, directEdit: true });
     onElementDoubleClick?.(inspected);
     const editable = targetResult.element;
-    const original = editable.textContent ?? "";
+    const original = editable.innerHTML;
+    const textStyle = () => JSON.stringify(canvasV2RichTextStyle(Object.fromEntries(Array.from(editable.style).map((key) => [key, editable.style.getPropertyValue(key)]))));
+    const originalTextStyle = textStyle();
+    const originalWidth = editable.style.getPropertyValue("--canvas-v2-native-width");
+    const originalHeight = editable.style.getPropertyValue("--canvas-v2-native-height");
     const originalAriaLabel = editable.getAttribute("aria-label");
     const originalOutline = editable.style.getPropertyValue("outline");
     const originalOutlinePriority = editable.style.getPropertyPriority("outline");
@@ -892,8 +920,20 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     const originalUserSelectPriority = editable.style.getPropertyPriority("user-select");
     const originalCursor = editable.style.getPropertyValue("cursor");
     const originalCursorPriority = editable.style.getPropertyPriority("cursor");
-    let cancelled = false;
-    const finish = () => {
+    const finish = (event?: FocusEvent) => {
+      if (event?.relatedTarget instanceof Element && event.relatedTarget.closest("[data-canvas-v2-rich-toolbar]")) return;
+      if (editable.innerHTML !== original || textStyle() !== originalTextStyle) {
+        grow();
+        const pointText = editable.dataset.canvasV2TextMode === "point";
+        const layout = { width: pointText ? Math.ceil(parseFloat(getComputedStyle(editable).width)) + 1 : inspected.bounds.width, height: Math.max(inspected.kind === "text" ? 1 : inspected.bounds.height, Math.ceil(editable.scrollHeight)) };
+        const accepted = onElementTextCommit?.(inspected, editable.textContent ?? "", readCanvasV2RichText(editable), layout);
+        if (accepted === false) { editable.focus({ preventScroll: true }); return false; }
+      }
+      finishTextEditingRef.current = () => undefined;
+      setActiveEditable(undefined);
+      document.removeEventListener("pointerdown", outside, true);
+      editable.removeEventListener("paste", paste);
+      editable.removeEventListener("input", grow);
       editable.removeEventListener("blur", finish);
       editable.removeEventListener("keydown", keydown);
       editable.removeAttribute("contenteditable");
@@ -907,48 +947,92 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       else editable.style.removeProperty("cursor");
       if (originalAriaLabel === null) editable.removeAttribute("aria-label");
       else editable.setAttribute("aria-label", originalAriaLabel);
-      if (cancelled) editable.textContent = original;
-      else if ((editable.textContent ?? "") !== original) {
-        // Empty writable surfaces keep their authored width and grow only
-        // when the human's copy genuinely needs more vertical room. The text
-        // and this geometry adjustment are one mutation/history entry.
-        const layout = inspected.writable
-          ? { height: Math.max(inspected.bounds.height, Math.ceil(editable.scrollHeight)) }
-          : undefined;
-        onElementTextCommit?.(inspected, editable.textContent ?? "", canvasV2NativeTextContent(editable), layout);
-      }
+      editable.style.setProperty("--canvas-v2-native-width", originalWidth);
+      editable.style.setProperty("--canvas-v2-native-height", originalHeight);
       // Leaving text-edit mode returns to object selection, matching the rest
       // of the canvas and making the next duplicate/move/style command apply
       // to the object the user just edited.
       onElementSelect?.(inspected, { additive: false, range: false, directEdit: false });
+      return true;
     };
     const keydown = (keyboardEvent: KeyboardEvent) => {
-      if (keyboardEvent.key === "Escape") {
+      const command = keyboardEvent.metaKey || keyboardEvent.ctrlKey;
+      const shortcut = keyboardEvent.code === "Digit7" ? "7" : keyboardEvent.code === "Digit8" ? "8" : keyboardEvent.key.toLowerCase();
+      if (command && keyboardEvent.shiftKey && ["x", "7", "8", "u"].includes(shortcut)) {
+        keyboardEvent.preventDefault(); keyboardEvent.stopPropagation();
+        const key = shortcut;
+        if (key === "u") editable.dispatchEvent(new Event("northstar-text-link"));
+        else document.execCommand(key === "x" ? "strikeThrough" : key === "7" ? "insertOrderedList" : "insertUnorderedList");
+      } else if (command && keyboardEvent.key.toLowerCase() === "k") {
+        keyboardEvent.preventDefault(); editable.dispatchEvent(new Event("northstar-text-link"));
+      } else if (["TD", "TH"].includes(editable.tagName) && keyboardEvent.key === "Tab") {
+        keyboardEvent.preventDefault(); keyboardEvent.stopPropagation(); if (finish() === false) return;
+        onTableAction?.(inspected.nodeId, keyboardEvent.shiftKey ? "previous" : "next");
+      } else if (keyboardEvent.key === "Tab" && editable.querySelector("li")) {
+        keyboardEvent.preventDefault(); document.execCommand(keyboardEvent.shiftKey ? "outdent" : "indent");
+      } else if (keyboardEvent.key === "Escape") {
         keyboardEvent.preventDefault();
-        cancelled = true;
+        keyboardEvent.stopPropagation();
         editable.blur();
       } else if (keyboardEvent.key === "Enter" && (keyboardEvent.metaKey || keyboardEvent.ctrlKey)) {
         keyboardEvent.preventDefault();
         editable.blur();
       }
     };
-    editable.contentEditable = "plaintext-only";
+    const grow = () => {
+      if (editable.dataset.canvasV2TextMode === "point") editable.style.setProperty("--canvas-v2-native-width", "max-content");
+      editable.style.setProperty("--canvas-v2-native-height", "auto");
+    };
+    const paste = (event: ClipboardEvent) => {
+      event.preventDefault();
+      const html = event.clipboardData?.getData("text/html");
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (["TD", "TH"].includes(editable.tagName) && (text.includes("\t") || text.includes("\n"))) { if (finish() !== false) onTableAction?.(inspected.nodeId, "paste", text); return; }
+      if (html) document.execCommand("insertHTML", false, sanitizeCanvasV2RichTextHtml(html));
+      else document.execCommand("insertText", false, text);
+    };
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Element;
+      if (!editable.contains(target) && !target.closest("[data-canvas-v2-rich-toolbar]") && finish() === false) { event.preventDefault(); event.stopImmediatePropagation(); }
+    };
+    finishTextEditingRef.current = finish;
+    setActiveEditable(editable);
+    document.addEventListener("pointerdown", outside, true);
+    editable.addEventListener("paste", paste);
+    editable.addEventListener("input", grow);
+    editable.contentEditable = "true";
     editable.dataset.canvasV2DirectEditing = "true";
     editable.setAttribute("role", "textbox");
     editable.setAttribute("aria-label", `Edit ${inspected.nodeId} on canvas`);
     editable.style.setProperty("outline", "none", "important");
     editable.style.setProperty("user-select", "text", "important");
     editable.style.setProperty("cursor", "text", "important");
-    editable.addEventListener("blur", finish, { once: true });
+    editable.addEventListener("blur", finish);
     editable.addEventListener("keydown", keydown);
     editable.focus({ preventScroll: true });
     placeCanvasV2CaretAtPoint(editable, clientX, clientY);
   };
 
+  useEffect(() => {
+    if (!editTextRequest || !renderedScene) return;
+    const element = publicSceneRef.current?.querySelector<HTMLElement>(`[data-canvas-v2-node-id="${CSS.escape(editTextRequest.nodeId)}"]`);
+    const node = bySourceId.get(editTextRequest.nodeId);
+    const inspected = element && node ? inspectNativeNode(node, byId, element) : undefined;
+    if (!element || !node || !inspected) return;
+    beginTextEditing({ node, element }, inspected, element.getBoundingClientRect().left + 4, element.getBoundingClientRect().top + 4);
+    if (editTextRequest.selectAll) {
+      const range = document.createRange(); range.selectNodeContents(element);
+      const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+    }
+    // A request is a user gesture; recompiles must not reopen a finished editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editTextRequest?.nonce, Boolean(renderedScene)]);
+
   const doubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!inspectionEnabled) return;
     const targetResult = targetNode(event.target);
     const inspected = targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined;
+    if ((inspected?.kind === "connector" || inspected?.kind === "image") && !inspected.locked) { event.preventDefault(); event.stopPropagation(); onElementDoubleClick?.(inspected); return; }
     if (!inspected?.textEditable || inspected.locked || !targetResult) return;
     event.preventDefault();
     event.stopPropagation();
@@ -982,6 +1066,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
         }
       }
     }
+    if (inspected?.kind === "connector" && !inspected.locked) { event.preventDefault(); event.stopPropagation(); onElementDoubleClick?.(inspected); return; }
     if (!editableTarget || !inspected?.textEditable || inspected.locked) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1024,6 +1109,11 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       white-space:pre-wrap!important;
       overflow-wrap:anywhere!important;
     }
+    [data-canvas-v2-direct-editing="true"] ol { list-style-type:decimal; padding-left:1.5em; }
+    [data-canvas-v2-direct-editing="true"] ul { list-style-type:disc; padding-left:1.5em; }
+    [data-canvas-v2-native-scene="true"] [data-canvas-v2-text-mode="point"] { white-space:pre!important; overflow-wrap:normal!important; }
+    [data-canvas-v2-native-scene="true"] [data-canvas-v2-text-mode="point"]:not([data-canvas-v2-native-transient]) { width:max-content!important; height:auto!important; }
+    [data-canvas-v2-native-scene="true"] [data-canvas-v2-text-mode="area"]:not([data-canvas-v2-native-transient]) { height:auto!important; white-space:pre-wrap!important; overflow-wrap:anywhere!important; }
     [data-canvas-v2-native-scene="true"] [data-canvas-v2-writable="true"]:not([data-canvas-v2-locked="true"]) {
       cursor:text!important;
     }
@@ -1079,7 +1169,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
 
   return (
     <div className="relative" style={{ width, height, pointerEvents: framePointerEvents }}>
-      {compiledRevisionId !== revision.id && <iframe
+      {needsCompiler && <iframe
         ref={compilerRef}
         title={`Canvas V2 ${revision.state} native scene compiler`}
         aria-hidden="true"
@@ -1128,7 +1218,21 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           hoveredPointerNodeRef.current = undefined;
           onElementHover?.(undefined);
         }}
-        onClickCapture={repeatedClick}
+        onClickCapture={(event) => {
+          const link = (event.target as Element).closest("a[href]");
+          if (link) {
+            // A canvas click selects; a double-click edits. Neither may unload
+            // the user's board. Command/Control-click explicitly opens a link
+            // in another tab, including links authored inside rich text.
+            event.preventDefault();
+            const href = canvasV2SafeTextLink(link.getAttribute("href") ?? "");
+            if (href && (event.metaKey || event.ctrlKey) && !activeEditable) {
+              window.open(href, "_blank", "noopener,noreferrer");
+              return;
+            }
+          }
+          repeatedClick(event);
+        }}
         // Capture before an authored descendant, browser word-selection, or
         // freshly mounted selection chrome can consume the second click. The
         // public native scene—not arbitrary model HTML—owns entry into edit
@@ -1148,6 +1252,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           return node ? <NativeNode key={node.id} node={node} byId={byId} /> : null;
         })}
       </div>
+      {activeEditable && <CanvasV2RichTextToolbar editable={activeEditable} finish={() => finishTextEditingRef.current()} />}
       {compileError && <div role="alert" className="absolute left-6 top-6 rounded-lg bg-red-950 px-4 py-3 text-sm text-white">Native scene compilation failed: {compileError}</div>}
     </div>
   );

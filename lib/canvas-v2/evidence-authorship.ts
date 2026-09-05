@@ -109,6 +109,7 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
   const failures: string[] = [];
   const approved = new Map(evidence.map((asset) => [asset.id, asset.url]));
   const previousFlows = readCanvasV2CanonicalFlowManifests(previous);
+  const previousFlowIds = new Set(previousFlows.map((flow) => flow.flowId));
   const nextFlows = readCanvasV2CanonicalFlowManifests(next);
 
   duplicates(nextFlows.map((flow) => flow.flowId)).forEach((flowId) => failures.push(`Canonical research flow must have exactly one lane: ${flowId}.`));
@@ -135,7 +136,10 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
   const canonicalSources = new Map<string, Set<string>>();
   for (const flow of nextFlows) {
     const indices = flow.items.flatMap((item) => item.flowIndex === undefined ? [] : [item.flowIndex]);
-    if (!options.allowUserEvidenceRemoval && indices.some((value, index) => value !== index)) failures.push(`Canonical flow screen indices must be complete and contiguous: ${flow.flowId}.`);
+    // Existing lanes must match their committed manifest above, including
+    // original sequence indices left intact by an authorized human removal.
+    // New lanes still require the complete contiguous capture on insertion.
+    if (!previousFlowIds.has(flow.flowId) && indices.some((value, index) => value !== index)) failures.push(`Canonical flow screen indices must be complete and contiguous: ${flow.flowId}.`);
     for (const item of flow.items) {
       if (!item.evidenceId || !item.nodeId || !item.url) failures.push(`Canonical flow ${flow.flowId} contains evidence without a stable identity or source.`);
       if (approved.get(item.evidenceId) !== item.url) failures.push(`Canonical evidence source is not approved: ${item.evidenceId || "unknown"}.`);

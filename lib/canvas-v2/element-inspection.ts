@@ -1,4 +1,4 @@
-import { buildCanvasV2ConnectorGeometry, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import { buildCanvasV2ConnectorGeometry, readCanvasV2ConnectorWaypoints, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import type { CanvasV2ShapeVariant } from "@/lib/canvas-v2/manual-mutations";
 
 export interface CanvasV2InspectableElement {
@@ -25,15 +25,19 @@ export interface CanvasV2InspectableElement {
   evidenceAuthority?: "observed" | "supplied" | "calculated" | "inferred";
   altText?: string;
   shapeVariant?: CanvasV2ShapeVariant;
+  sectionHeading?: boolean;
   connector?: {
+    color?: string;
     variant: CanvasV2ConnectorVariant;
     from: { x: number; y: number; attachedNodeId?: string };
     to: { x: number; y: number; attachedNodeId?: string };
     control: { x: number; y: number };
+    waypoints?: { x: number; y: number }[];
     bend: number;
   };
   visualStyle?: {
     color: string;
+    textColors?: string[];
     backgroundColor: string;
     borderColor: string;
     borderStyle: string;
@@ -122,7 +126,7 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
       return Number.isFinite(value) ? value : fallback;
     };
     const variantValue = element.getAttribute("data-canvas-v2-connector-variant");
-    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" ? variantValue : "arrow";
+    const variant: CanvasV2ConnectorVariant = variantValue === "straight" || variantValue === "curve" || variantValue === "bent" ? variantValue : "arrow";
     const from = { x: numberAttribute("data-canvas-v2-connector-from-x", rect.left), y: numberAttribute("data-canvas-v2-connector-from-y", rect.top + rect.height / 2) };
     const to = { x: numberAttribute("data-canvas-v2-connector-to-x", rect.right), y: numberAttribute("data-canvas-v2-connector-to-y", rect.top + rect.height / 2) };
     const bend = numberAttribute("data-canvas-v2-connector-bend", variant === "curve" ? 72 : 0);
@@ -134,11 +138,13 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
       from: { ...from, ...(element.getAttribute("data-canvas-v2-connector-from") ? { attachedNodeId: element.getAttribute("data-canvas-v2-connector-from")! } : {}) },
       to: { ...to, ...(element.getAttribute("data-canvas-v2-connector-to") ? { attachedNodeId: element.getAttribute("data-canvas-v2-connector-to")! } : {}) },
       control: geometry.control,
+      waypoints: readCanvasV2ConnectorWaypoints(element.getAttribute("data-canvas-v2-connector-waypoints")),
       bend,
     };
   })() : undefined;
   return {
     nodeId,
+    sectionHeading: element.hasAttribute("data-canvas-v2-section-title") || nodeId.endsWith("-title") && parent?.hasAttribute("data-canvas-v2-section") === true,
     parentNodeId: parent?.getAttribute("data-canvas-v2-node-id") ?? undefined,
     tagName: element.tagName.toLowerCase(),
     kind,

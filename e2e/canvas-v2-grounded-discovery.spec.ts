@@ -1,3 +1,4 @@
+import { fitAllCanvas } from "./canvas-v2-authoring-helpers";
 import { expect, test, type Page } from "@playwright/test";
 
 function app(page: Page) {
@@ -86,7 +87,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await expect(frame.locator('[data-canvas-v2-evidence-packet-id="packet:e2e:external:agentic-guidance"]')).toHaveCount(0);
     await expect.poll(() => observedPacketIds.some((ids) => ids.includes("packet:e2e:external:adaptive-discovery") && ids.includes("packet:e2e:external:agentic-guidance"))).toBe(true);
 
-    await page.getByTitle("Fit content").click();
+    await fitAllCanvas(page);
     await external.locator('[data-canvas-v2-evidence-metric-id="metric:e2e:external:research-cycles"]').click();
     const sourceSummary = page.getByText("Grounded source · Adaptive discovery field report", { exact: true });
     await expect(sourceSummary).toBeVisible();
@@ -175,7 +176,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     // Premium snapshot dossiers are intentionally deeper than the compact v1
     // packet strip. The camera remains human-owned after authorship, so use
     // the explicit Fit command before pointer-inspecting the lower metric.
-    await page.getByTitle("Fit content").click();
+    await fitAllCanvas(page);
     await metric.click();
     const sourceSummary = page.getByText("Grounded source · Awin marketing snapshot 1", { exact: true });
     await expect(sourceSummary).toBeVisible();
@@ -203,7 +204,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
       observedMessageBounds!.y + observedMessageBounds!.height / 2,
       { delay: 70 },
     );
-    await expect(observedMessage).toHaveAttribute("contenteditable", "plaintext-only");
+    await expect(observedMessage).toHaveAttribute("contenteditable", "true");
     await observedMessage.fill("Human note: confidence is the message to validate.");
     await observedMessage.press("ControlOrMeta+Enter");
     await expect(observedMessage).toHaveText("Human note: confidence is the message to validate.");

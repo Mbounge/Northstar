@@ -134,7 +134,7 @@ function ChatTurn({
           <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">Work was interrupted.</span> {turn.loop?.pauseReason ?? "North Star did not finish the requested work."} Your latest canvas is safe.</p>
           <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Resume the work</button>
         </div>}
-        {turn.status === "stopped" && <div className="mt-3 text-xs font-semibold text-[#777789]">Stopped. The latest committed canvas remains visible.</div>}
+        {turn.status === "stopped" && <div className="mt-3 text-xs font-semibold text-[#777789]">Paused for you. The latest canvas is ready to edit.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-2 rounded bg-[#6d59ed] px-3 py-2 text-white disabled:opacity-40">Resume the work</button>}</div>}
         {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
       </div>
     </div>
@@ -327,7 +327,7 @@ export function CanvasV2ChatPanel({
         onChange={(event) => chat.setDraft(event.target.value)}
         onPaste={paste}
         onKeyDown={keyDown}
-        disabled={chat.busy}
+        disabled={chat.routing}
         placeholder="Ask North Star anything…"
         rows={1}
         className="min-h-[52px] w-full resize-none overflow-hidden bg-transparent px-2 pt-1 text-[13px] leading-5 text-[#292834] outline-none placeholder:text-[#9d9ca8] disabled:opacity-60 dark:text-[#f3f1f7] dark:placeholder:text-[#777482]"
@@ -351,7 +351,7 @@ export function CanvasV2ChatPanel({
             <span className="truncate">{canvasV2ModelLabel(chat.modelSelection)}</span>
             <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition ${modelMenuOpen ? "rotate-180" : ""}`} />
           </button>
-          {chat.busy
+          {chat.busy && !chat.draft.trim()
             ? <button onClick={chat.stop} aria-label="Stop current response" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#ecebf0] text-[#4d4a59] transition hover:bg-[#e2e0e8]"><Square className="h-3.5 w-3.5 fill-current" /></button>
             : <button onClick={() => void chat.submit()} disabled={(!chat.draft.trim() && !chat.attachments.length) || preparingImages || !engine.ready || engine.applyingManualEdit} aria-label="Send message" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#6d59ed] text-white shadow-[0_7px_18px_rgba(86,68,195,.24)] transition hover:-translate-y-0.5 hover:bg-[#5d49dc] disabled:translate-y-0 disabled:bg-[#d7d5df] disabled:shadow-none"><ArrowUp className="h-4.5 w-4.5" /></button>}
         </div>

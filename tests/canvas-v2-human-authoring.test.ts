@@ -38,7 +38,7 @@ test("the native authoring vocabulary creates every object as an independent use
     ],
   });
 
-  const authored = scene.nodes.filter((node) => node.sourceNodeId);
+  const authored = scene.nodes.filter((node) => scene.rootIds.includes(node.id));
   assert.deepEqual(authored.map((node) => node.kind), ["text", "note", "frame", "shape", "line", "table", "drawing", "image"]);
   assert.equal(authored.every((node) => node.selectable && node.lastAuthor === "user" && node.attributes["data-canvas-v2-origin"] === "user"), true);
   assert.equal(scene.nodes.find((node) => node.sourceNodeId === "ellipse")?.attributes["data-canvas-v2-shape"], "ellipse");

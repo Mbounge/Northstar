@@ -353,7 +353,7 @@ function packetsFromOutput(output: WebResearchOutput, request: CanvasV2ExternalR
         unit: metric.unit,
         format: typeof metric.value === "number" ? "number" as const : "text" as const,
         definition: metric.definition,
-        authority: finding.authority === "calculated" ? "calculated" as const : "observed" as const,
+        authority: finding.authority,
         timeRange: metric.timeRangeLabel ? { label: metric.timeRangeLabel } : undefined,
       }))),
       limitations: Array.from(new Set([

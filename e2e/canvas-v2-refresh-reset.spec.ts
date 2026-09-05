@@ -1,3 +1,4 @@
+import { placeActivatedTool } from "./canvas-v2-authoring-helpers";
 import { expect, test, type Page } from "@playwright/test";
 
 const OBSOLETE_KEYS = [
@@ -29,6 +30,7 @@ test.beforeEach(async ({ page }) => {
 test("refresh discards committed canvas, chat, and undo history", async ({ page }) => {
   const frame = canvasFrame(page);
   await canvasApp(page).getByTitle("Create Text").click();
+  await placeActivatedTool(page);
   await expect(frame.locator('[data-canvas-v2-node-id^="manual-text-"]')).toHaveCount(1);
   await expect(canvasApp(page).getByRole("button", { name: "Undo" })).toBeEnabled();
 

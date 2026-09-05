@@ -258,7 +258,7 @@ function appendPacketContent(
       item.dataset.canvasV2EvidenceMetricId = metric.id;
       item.dataset.canvasV2EvidenceAuthority = metric.authority;
       item.dataset.canvasV2Origin = "research";
-      addText(parsed, item, "p", "canvas-v2-evidence-metric__label", `${item.dataset.canvasV2NodeId}-label`, metric.label);
+      addText(parsed, item, "p", "canvas-v2-evidence-metric__label", `${item.dataset.canvasV2NodeId}-label`, metric.authority === "inferred" ? `Estimate · ${metric.label}` : metric.label);
       addText(parsed, item, "p", "canvas-v2-evidence-metric__value", `${item.dataset.canvasV2NodeId}-value`, `${metric.value}${metric.unit ? ` ${metric.unit}` : ""}`);
       addText(parsed, item, "p", "canvas-v2-evidence-metric__definition", `${item.dataset.canvasV2NodeId}-definition`, metric.definition);
       metrics.append(item);

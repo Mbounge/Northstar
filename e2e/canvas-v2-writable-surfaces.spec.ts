@@ -76,7 +76,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
       copyBounds!.y + copyBounds!.height / 2,
       { delay: 70 },
     );
-    await expect(authoredCopy).toHaveAttribute("contenteditable", "plaintext-only");
+    await expect(authoredCopy).toHaveAttribute("contenteditable", "true");
     const caretOffset = await authoredCopy.evaluate(() => window.getSelection()?.anchorOffset ?? -1);
     expect(caretOffset).toBeGreaterThan(12);
     expect(caretOffset).toBeLessThan((await authoredCopy.textContent() ?? "").length);
@@ -93,7 +93,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
       fragmentBounds!.y + fragmentBounds!.height / 2,
       { delay: 70 },
     );
-    await expect(directFragment).toHaveAttribute("contenteditable", "plaintext-only");
+    await expect(directFragment).toHaveAttribute("contenteditable", "true");
     await directFragment.press("Escape");
 
     const boldMetric = mixedLabel.locator("b");
@@ -105,7 +105,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
       metricBounds!.y + metricBounds!.height / 2,
       { delay: 70 },
     );
-    await expect(boldMetric).toHaveAttribute("contenteditable", "plaintext-only");
+    await expect(boldMetric).toHaveAttribute("contenteditable", "true");
     await boldMetric.press("Escape");
 
     // Compact text must keep its glyph hit target clear even though resize
@@ -167,7 +167,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await field.dblclick({ position: { x: 40, y: 35 } });
     const editor = scene(page).getByRole("textbox", { name: "Edit priority-answer-field on canvas" });
     await expect(editor).toBeVisible();
-    await expect(editor).toHaveAttribute("contenteditable", "plaintext-only");
+    await expect(editor).toHaveAttribute("contenteditable", "true");
     await editor.fill("Validate the customer pain before choosing a solution.");
     await editor.press("ControlOrMeta+Enter");
     await expect(field).toHaveText("Validate the customer pain before choosing a solution.");

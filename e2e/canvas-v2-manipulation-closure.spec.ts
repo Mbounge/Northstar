@@ -1,3 +1,4 @@
+import { placeActivatedTool } from "./canvas-v2-authoring-helpers";
 import { expect, test, type Page } from "@playwright/test";
 
 function app(page: Page) {
@@ -31,6 +32,7 @@ test("deterministic deletion retires the object and every selection surface in t
   await openCleanCanvas(page, "/canvas-v2-e2e");
   const board = workspace(page);
   await app(page).getByTitle("Create Shape · drag to place").click();
+  await placeActivatedTool(page);
   const shape = scene(page).locator('[data-canvas-v2-primitive="shape"]');
   await expect(shape).toHaveCount(1);
   const nodeId = await shape.getAttribute("data-canvas-v2-node-id");
@@ -81,8 +83,11 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
 
     const createShape = app(page).getByTitle("Create Shape · drag to place");
     await createShape.click();
+    await placeActivatedTool(page);
     await createShape.click();
+    await placeActivatedTool(page);
     await createShape.click();
+    await placeActivatedTool(page);
     const shapes = scene(page).locator('[data-canvas-v2-primitive="shape"]');
     await expect(shapes).toHaveCount(3);
     const ids = await shapes.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-canvas-v2-node-id")!));
