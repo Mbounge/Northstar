@@ -107,12 +107,12 @@ function relevanceScore(value: unknown, terms: readonly string[]): number {
   return terms.reduce((score, term) => score + (source.includes(term) ? 1 : 0), 0);
 }
 
-function relevantRecords<T extends UnknownRecord>(items: readonly T[], instruction: string, limit: number): Array<{ item: T; sourceIndex: number }> {
+function relevantRecords<T extends UnknownRecord>(items: readonly T[], instruction: string, limit: number, offset = 0): Array<{ item: T; sourceIndex: number }> {
   const terms = relevanceTerms(instruction);
   return items
     .map((item, sourceIndex) => ({ item, sourceIndex, score: relevanceScore(item, terms) }))
     .sort((left, right) => right.score - left.score || left.sourceIndex - right.sourceIndex)
-    .slice(0, limit)
+    .slice(offset, offset + limit)
     .map(({ item, sourceIndex }) => ({ item, sourceIndex }));
 }
 
@@ -233,10 +233,10 @@ async function firstSnapshotPacket<T>(
   }
 }
 
-function marketingPacket(input: { app: AppDataApp; tenantId: string; snapshotId: string; instruction: string; raw: unknown; limit?: number }): CanvasV2EvidencePacket | undefined {
+function marketingPacket(input: { app: AppDataApp; tenantId: string; snapshotId: string; instruction: string; raw: unknown; limit?: number; offset?: number }): CanvasV2EvidencePacket | undefined {
   const posts = Array.isArray(input.raw) ? records(input.raw) : record(input.raw) ? records(input.raw.posts) : [];
   if (!posts.length) return undefined;
-  const selectedPosts = relevantRecords(posts, input.instruction, Math.min(Math.max(input.limit ?? 12, 1), 12));
+  const selectedPosts = relevantRecords(posts, input.instruction, Math.min(Math.max(input.limit ?? 12, 1), input.offset === undefined ? 12 : 60), input.offset ?? 0);
   const packetId = `packet:marketing:${input.app.id}:${token(input.snapshotId)}`;
   const feedUrl = publicDataUrl(input.tenantId, input.app.name, input.snapshotId, "marketing/master_feed.json");
   const packetSource = source({ tenantId: input.tenantId, app: input.app, snapshotId: input.snapshotId, sourceType: "marketing-feed", sourceId: `${input.app.id}:marketing:${input.snapshotId}`, label: `${input.app.name} marketing feed`, sourceUrl: feedUrl, query: input.instruction });
@@ -258,7 +258,7 @@ function marketingPacket(input: { app: AppDataApp; tenantId: string; snapshotId:
   return { schema: CANVAS_V2_EVIDENCE_PACKET_SCHEMA, id: packetId, kind: "marketing-signal", title: `${input.app.name} marketing signals`, summary: `${posts.length} connected marketing records from snapshot ${input.snapshotId}.`, authority: "observed", source: packetSource, assets, facts, metrics: [{ id: `${packetId}:record-count`, label: "Marketing records in snapshot", value: posts.length, format: "number", definition: "Count of records in the connected marketing feed snapshot.", authority: "calculated", timeRange: { label: input.snapshotId }, sourceAssetIds: assets.map((asset) => asset.id) }], limitations: ["Post content and dataset labels are observed records. They do not establish campaign performance, audience causality, or market-wide sentiment without corresponding measurement data."], tags: [input.app.name, "marketing", "snapshot"], createdAt: packetSource.retrievedAt, appId: input.app.id, appName: input.app.name, continuationKey: `marketing:${input.app.id}` };
 }
 
-function businessPacket(input: { app: AppDataApp; tenantId: string; snapshotId: string; instruction: string; manifest: unknown; roster: unknown }): CanvasV2EvidencePacket | undefined {
+function businessPacket(input: { app: AppDataApp; tenantId: string; snapshotId: string; instruction: string; manifest: unknown; roster: unknown; offset?: number; limit?: number }): CanvasV2EvidencePacket | undefined {
   const manifest = record(input.manifest) ? input.manifest : {};
   const jobs = records(manifest.jobs);
   const pages = records(manifest.pages);
@@ -268,15 +268,18 @@ function businessPacket(input: { app: AppDataApp; tenantId: string; snapshotId: 
   const manifestUrl = publicDataUrl(input.tenantId, input.app.name, input.snapshotId, "business/master_manifest.json");
   const packetSource = source({ tenantId: input.tenantId, app: input.app, snapshotId: input.snapshotId, sourceType: "business-manifest", sourceId: `${input.app.id}:business:${input.snapshotId}`, label: `${input.app.name} business manifest`, sourceUrl: manifestUrl, query: input.instruction });
   const screenshotRecords = [...pages, ...jobs].flatMap((entry) => records(entry.screenshots).length ? records(entry.screenshots).map((item) => text(item, ["path", "url", "name"])) : Array.isArray(entry.screenshots) ? entry.screenshots.filter((value): value is string => typeof value === "string") : []);
-  const assets = screenshotRecords.slice(0, 16).flatMap((value, index) => {
+  const offset = input.offset ?? 0;
+  const count = input.limit ?? 20;
+  const assets = screenshotRecords.slice(offset, offset + (input.offset === undefined ? 16 : count)).flatMap((value, position) => {
+    const index = offset + position;
     const url = absoluteAssetUrl(input.tenantId, input.app.name, input.snapshotId, "business/screenshots", value);
     return url ? [{ id: `${packetId}:capture:${index}`, url, label: `${input.app.name} business capture ${index + 1}`, app: input.app.name, kind: "image" as const, authority: "observed" as const, packetId, source: packetSource, sequenceIndex: index }] : [];
   });
   const facts: CanvasV2EvidenceFact[] = [
-    ...jobs.slice(0, 20).map((job, index) => ({ id: `${packetId}:job:${index}`, label: "Open role", value: text(job, ["title", "name"]) ?? `Role ${index + 1}`, authority: "observed" as const, description: text(job, ["url", "summary"]) })),
-    ...people.slice(0, 20).map((person, index) => ({ id: `${packetId}:person:${index}`, label: "Identified person", value: [text(person, ["name"]), text(person, ["role", "title"])].filter(Boolean).join(" · "), authority: "observed" as const })),
+    ...jobs.slice(offset, offset + count).map((job, position) => { const index = offset + position; return ({ id: `${packetId}:job:${index}`, label: "Open role", value: text(job, ["title", "name"]) ?? `Role ${index + 1}`, authority: "observed" as const, description: text(job, ["url", "summary"]) }); }),
+    ...people.slice(offset, offset + count).map((person, position) => { const index = offset + position; return ({ id: `${packetId}:person:${index}`, label: "Identified person", value: [text(person, ["name"]), text(person, ["role", "title"])].filter(Boolean).join(" · "), authority: "observed" as const }); }),
   ];
-  return { schema: CANVAS_V2_EVIDENCE_PACKET_SCHEMA, id: packetId, kind: "business-record", title: `${input.app.name} business signals`, summary: `${jobs.length} roles, ${people.length} people, and ${pages.length} captured business pages from snapshot ${input.snapshotId}.`, authority: "observed", source: packetSource, assets, facts, metrics: [{ id: `${packetId}:jobs`, label: "Captured open roles", value: jobs.length, format: "number", definition: "Count of job records in the connected business manifest snapshot.", authority: "calculated", timeRange: { label: input.snapshotId } }, { id: `${packetId}:people`, label: "Identified people", value: people.length, format: "number", definition: "Count of people records in the connected roster snapshot.", authority: "calculated", timeRange: { label: input.snapshotId } }], limitations: ["Hiring and roster records are point-in-time business signals. They do not independently prove company strategy, budget, performance, or organizational intent."], tags: [input.app.name, "business", "snapshot"], createdAt: packetSource.retrievedAt, appId: input.app.id, appName: input.app.name, continuationKey: `business:${input.app.id}` };
+  return { schema: CANVAS_V2_EVIDENCE_PACKET_SCHEMA, id: packetId, kind: "business-record", title: `${input.app.name} business signals`, summary: `${jobs.length} roles, ${people.length} people, and ${pages.length} captured business pages from snapshot ${input.snapshotId}.`, authority: "observed", source: packetSource, assets, facts, metrics: [...(input.offset === undefined ? [] : [{ id: `${packetId}:captures`, label: "Captured business screenshots", value: screenshotRecords.length, format: "number" as const, authority: "calculated" as const, definition: "Count of captured business page and job screenshots." }]), { id: `${packetId}:jobs`, label: "Captured open roles", value: jobs.length, format: "number", definition: "Count of job records in the connected business manifest snapshot.", authority: "calculated", timeRange: { label: input.snapshotId } }, { id: `${packetId}:people`, label: "Identified people", value: people.length, format: "number", definition: "Count of people records in the connected roster snapshot.", authority: "calculated", timeRange: { label: input.snapshotId } }], limitations: ["Hiring and roster records are point-in-time business signals. They do not independently prove company strategy, budget, performance, or organizational intent."], tags: [input.app.name, "business", "snapshot"], createdAt: packetSource.retrievedAt, appId: input.app.id, appName: input.app.name, continuationKey: `business:${input.app.id}` };
 }
 
 function catalogBusinessPacket(input: { app: AppDataApp; tenantId: string; instruction: string }): CanvasV2EvidencePacket | undefined {
@@ -390,7 +393,7 @@ export function createCanvasV2AccountEvidenceProvider(input: {
           domainTasks.push((async () => {
             const packet = await firstSnapshotPacket(availableSnapshotIds, async (snapshotId) => {
               const raw = await json(fetcher, publicDataUrl(input.tenantId, app.name, snapshotId, "marketing/master_feed.json"), freshnessTtlMs);
-              return marketingPacket({ app, tenantId: input.tenantId, snapshotId, instruction: request.instruction, raw, limit: request.limit });
+              return marketingPacket({ app, tenantId: input.tenantId, snapshotId, instruction: request.instruction, raw, limit: request.limit, offset: request.offset });
             });
             if (packet) packets.push(packet);
             else issues.push({ code: "unavailable", message: `${app.name} has no authorized marketing feed in its available snapshots.`, targetName: app.name });
@@ -403,7 +406,7 @@ export function createCanvasV2AccountEvidenceProvider(input: {
                 json(fetcher, publicDataUrl(input.tenantId, app.name, snapshotId, "business/master_manifest.json"), freshnessTtlMs),
                 json(fetcher, publicDataUrl(input.tenantId, app.name, snapshotId, `business/${app.name.toLowerCase()}_omni_roster.json`), freshnessTtlMs),
               ]);
-              return businessPacket({ app, tenantId: input.tenantId, snapshotId, instruction: request.instruction, manifest, roster });
+              return businessPacket({ app, tenantId: input.tenantId, snapshotId, instruction: request.instruction, manifest, roster, offset: request.offset, limit: request.limit });
             }) ?? catalogBusinessPacket({ app, tenantId: input.tenantId, instruction: request.instruction });
             if (packet) packets.push(packet);
             else issues.push({ code: "unavailable", message: `${app.name} has no authorized business manifest or roster in its available snapshots.`, targetName: app.name });
@@ -423,7 +426,11 @@ export function createCanvasV2AccountEvidenceProvider(input: {
         || (kindOrder.get(left.kind) ?? 99) - (kindOrder.get(right.kind) ?? 99)
         || left.id.localeCompare(right.id)
       ));
-      return { provider: PROVIDER, packets, sources: Array.from(new Map(packets.map((packet) => [`${packet.source.providerId}:${packet.source.sourceId}`, packet.source])).values()), issues };
+      const offset = request.offset ?? 0;
+      const total = Math.max(0, ...packets.flatMap(p => p.metrics.map(m => typeof m.value === "number" ? m.value : 0)));
+      const count = Math.min(request.limit ?? 20, 60);
+      const pagination = request.offset === undefined ? undefined : { offset, total, ...(offset + count < total ? { nextOffset: offset + count } : {}) };
+      return { pagination, provider: PROVIDER, packets, sources: Array.from(new Map(packets.map((packet) => [`${packet.source.providerId}:${packet.source.sourceId}`, packet.source])).values()), issues };
     },
   };
 }

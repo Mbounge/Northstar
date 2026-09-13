@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { parseCanvasV2AssetSourcePatch } from "../lib/canvas-v2/source-patch";
 
-import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange, normalizeCanvasV2SourcePatchHeadingHierarchy, repairCanvasV2RenderedRelationshipGeometry, retireCanvasV2BrokenAuthoredRelationships, retireCanvasV2CollidingRelationshipLabels } from "../lib/canvas-v2/source-patch";
+import { assertCanvasV2NativeRelationshipStaging, assertCanvasV2NativeRelationshipAuthorship, materializeCanvasV2ConnectorRequests, applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange, normalizeCanvasV2SourcePatchHeadingHierarchy, repairCanvasV2RenderedRelationshipGeometry, retireCanvasV2BrokenAuthoredRelationships, retireCanvasV2CollidingRelationshipLabels } from "../lib/canvas-v2/source-patch";
 import { validateCanvasV2EvidenceContinuity } from "../lib/canvas-v2/artifact-safety";
 import { compactCanvasV2IslandSourceForModel } from "../lib/canvas-v2/model-context";
 import type { CanvasV2WorkingContext } from "../lib/canvas-v2/working-context";
@@ -11,6 +13,29 @@ const previous = {
   html: '<main data-canvas-v2-node-id="canvas"><article data-canvas-v2-node-id="lane" data-canvas-v2-canonical-flow="flow:1"><div data-canvas-v2-node-id="nested"><img data-canvas-v2-node-id="canonical-1" data-canvas-v2-evidence-id="screen-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/screen-1.png"></div></article></main>',
   css: ".northstar-canvas { display:block; }",
 };
+
+test("registered image bytes are expanded after the authored patch size check", () => {
+  const bytes = readFileSync("evals/discovery/cases/ikea-breakfast/assets/original-post.png");
+  const asset = { id: "upload", url: `data:image/png;base64,${bytes.toString("base64")}`, label: "Original post", authority: "supplied" as const };
+  const patch = JSON.stringify({ operations: [{ op: "append-html", targetNodeId: "canvas", html: '<img data-canvas-v2-node-id="placed-image" data-canvas-v2-evidence-id="upload" src="northstar-asset:upload" alt="Original post">' }] });
+  assert.ok(patch.length < 1000); assert.ok(asset.url.length > 1_000_000);
+  const result = applyCanvasV2SourcePatch({ previous: { html: '<main data-canvas-v2-node-id="canvas"></main>', css: '' }, evidence: [asset], operations: parseCanvasV2AssetSourcePatch(patch, [asset]) });
+  assert.ok(result.html.includes(asset.url)); assert.ok(result.html.includes('data-canvas-v2-evidence-id="upload"'));
+  assert.throws(() => parseCanvasV2AssetSourcePatch(patch, []), /Unknown canvas asset/);
+  assert.throws(() => parseCanvasV2AssetSourcePatch(JSON.stringify({ operations: [{ op: 'append-html', targetNodeId: 'canvas', html: 'x'.repeat(32001) }] }), [asset]), /too large/);
+});
+
+test("approved public image copies retain exact pixels and source identity without an app journey", () => {
+  const document = { html: '<main data-canvas-v2-node-id="canvas"><img data-canvas-v2-node-id="public-image" data-canvas-v2-evidence-id="screen-1" src="https://evidence.test/screen-1.png"></main>', css: "" };
+  const result = applyCanvasV2SourcePatch({
+    previous: document, evidence,
+    operations: [{ op: "append-html", targetNodeId: "canvas", html: '<img data-canvas-v2-node-id="public-copy" data-canvas-v2-copy-evidence-handle="source-image-0">' }],
+  });
+  assert.match(result.html, /data-canvas-v2-source-node-id="public-image"/);
+  assert.match(result.html, /data-canvas-v2-scale-intent="peer"/);
+  assert.equal((result.html.match(/src="https:\/\/evidence.test\/screen-1.png"/g) ?? []).length, 2);
+  assert.throws(() => applyCanvasV2SourcePatch({ previous: document, evidence: [], operations: [{ op: "append-html", targetNodeId: "canvas", html: '<img data-canvas-v2-node-id="bad" data-canvas-v2-copy-evidence-handle="source-image-0">' }] }), /approved source/);
+});
 
 function selectionContext(policy: "modify" | "reference" = "modify"): CanvasV2WorkingContext {
   return {
@@ -240,7 +265,7 @@ test("bounded patches preserve canonical rails and bind evidence copies server-s
   assert.ok(next.css.indexOf("canvas-v2-canonical-evidence-geometry-guard") > next.css.indexOf("canvas-v2-model-layer:analysis"));
   assert.match(next.css, /width:max-content!important/);
   assert.match(next.css, /canvas-v2-canvas--evidence-wide\{[^}]*padding:0!important/);
-  assert.match(next.css, /canvas-v2-canvas--evidence-wide>\[data-canvas-v2-design-region\]\{[^}]*position:relative!important[^}]*inset:auto!important[^}]*max-width:8880px!important/);
+  assert.match(next.css, /canvas-v2-canvas--evidence-wide>\[data-canvas-v2-design-region\]:not\(\[data-canvas-v2-layout-owner="model"\]\)\{[^}]*position:relative!important[^}]*inset:auto!important[^}]*max-width:8880px!important/);
   assert.match(next.css, /data-canvas-v2-story-role="title"[^}]*grid-column:1\/-1!important[^}]*max-width:4200px!important[^}]*margin-bottom:192px!important/);
   assert.doesNotMatch(next.css, /data-canvas-v2-story-role="title"[^}]*(?:^|[;{])width:4200px!important/);
   assert.match(next.css, /\.canvas-v2-flow-lane\{[^}]*transform:none!important[^}]*grid-template-columns:170px max-content!important/);
@@ -443,4 +468,81 @@ test("focused island context uses short compiler handles instead of tenant URLs 
   assert.match(focused ?? "", /data-canvas-v2-copy-evidence-handle="lane-0-screen-0"/);
   assert.doesNotMatch(focused ?? "", /https:\/\/evidence\.test/);
   assert.doesNotMatch(focused ?? "", /data-canvas-v2-evidence-id="screen-1"/);
+});
+
+
+test("AI connector requests compile into the shared native primitive without model path data", () => {
+  const html = materializeCanvasV2ConnectorRequests('<div data-canvas-v2-node-id="test-link" data-canvas-v2-connector-request="true" data-from="left" data-to="right" data-x1="100" data-y1="120" data-x2="500" data-y2="120" data-variant="bent" data-label="informs"></div>');
+  assert.match(html, /<svg[^>]*data-canvas-v2-primitive="connector"/);
+  assert.match(html, /data-canvas-v2-connector-from="left"/);
+  assert.match(html, /data-canvas-v2-connector-to="right"/);
+  assert.match(html, /data-canvas-v2-connector-part="hit"/);
+  assert.match(html, /data-canvas-v2-connector-part="start"/);
+  assert.match(html, /data-canvas-v2-connector-part="end"/);
+  assert.match(html, /data-canvas-v2-connector-label="informs"/);
+  assert.doesNotMatch(html, /data-canvas-v2-user-edited|data-canvas-v2-connector-request/);
+  assert.throws(() => materializeCanvasV2ConnectorRequests('<div data-canvas-v2-connector-request="true"></div>'), /requires/);
+  assert.throws(() => materializeCanvasV2ConnectorRequests('<div data-canvas-v2-connector-request="true"><span>Custom line</span></div>'), /must be empty div/);
+  assert.throws(() => materializeCanvasV2ConnectorRequests('<span data-canvas-v2-connector-request="true"></span>'), /must be empty div/);
+  assert.throws(() => materializeCanvasV2ConnectorRequests('<div data-canvas-v2-node-id="bad-color" data-canvas-v2-connector-request="true" data-from="left" data-to="right" data-x1="0" data-y1="0" data-x2="50" data-y2="0" data-color="#12345"></div>'), /hex color/);
+});
+
+
+test("new custom relationship SVG is rejected while legacy artwork and data graphics are preserved", () => {
+  const custom = '<svg data-canvas-v2-node-id="legacy"><path data-canvas-v2-relationship-source="a" data-canvas-v2-relationship-target="b" d="M 0 0 L 20 20" /></svg>';
+  assert.throws(() => assertCanvasV2NativeRelationshipAuthorship(custom, ""), /native endpoint IDs/);
+  assert.doesNotThrow(() => assertCanvasV2NativeRelationshipAuthorship(custom, custom));
+  assert.doesNotThrow(() => assertCanvasV2NativeRelationshipAuthorship('<svg><path d="M 0 0 L 20 20" /></svg>', ""));
+});
+
+test("AI route corridors survive materialization as editable native waypoints", () => {
+  const request = (route: string, variant = "bent") => `<div data-canvas-v2-node-id="route" data-canvas-v2-connector-request="true" data-from="left" data-to="right" data-x1="100" data-y1="120" data-x2="500" data-y2="120" data-variant="${variant}" data-waypoints="${route}"></div>`;
+  const upper = materializeCanvasV2ConnectorRequests(request("100,200 500,200"));
+  const lower = materializeCanvasV2ConnectorRequests(request("100,300 500,300"));
+  assert.notEqual(upper, lower);
+  assert.match(upper, /data-canvas-v2-connector-waypoints=/);
+  assert.match(upper, /data-canvas-v2-connector-route-space="parent"/);
+  assert.match(upper, /data-canvas-v2-connector-part="hit"/);
+  assert.doesNotMatch(upper, /data-canvas-v2-user-edited/);
+  for (const route of ["", "100,", "100,NaN", "100,Infinity", "100,200,300", Array(13).fill("100,200").join(" ")]) {
+    assert.throws(() => materializeCanvasV2ConnectorRequests(request(route)), /waypoints/);
+  }
+  assert.throws(() => materializeCanvasV2ConnectorRequests(request("100,200", "arrow")), /waypoints/);
+});
+
+
+test("native connector integration requires a separately measured composition", () => {
+  const request = (id: string, to = "right") => materializeCanvasV2ConnectorRequests(`<div data-canvas-v2-node-id="${id}" data-canvas-v2-connector-request="true" data-from="left" data-to="${to}" data-x1="0" data-y1="0" data-x2="100" data-y2="0"></div>`);
+  const input = { previousHtml: "", candidateHtml: request("link"), observedNodeIds: ["left", "right"], relationshipGeometryAllowed: true, targetAction: "enrich" };
+  assert.throws(() => assertCanvasV2NativeRelationshipStaging({ ...input, relationshipGeometryAllowed: false }), /separate/);
+  assert.throws(() => assertCanvasV2NativeRelationshipStaging({ ...input, targetAction: "create" }), /separate/);
+  assert.throws(() => assertCanvasV2NativeRelationshipStaging({ ...input, observedNodeIds: ["left"] }), /measured/);
+  assert.doesNotThrow(() => assertCanvasV2NativeRelationshipStaging(input));
+  assert.throws(() => assertCanvasV2NativeRelationshipStaging({ ...input, eligibleEndpointNodeIds: ["left"] }), /ineligible endpoint IDs: right/);
+  assert.doesNotThrow(() => assertCanvasV2NativeRelationshipStaging({ ...input, previousHtml: input.candidateHtml, relationshipGeometryAllowed: false }));
+  assert.throws(() => assertCanvasV2NativeRelationshipStaging({ ...input, previousHtml: input.candidateHtml, candidateHtml: request("replacement", "unmeasured") }), /measured/);
+});
+
+
+test("AI connectors accept precise native interior attachments and reject invalid fractions", () => {
+  const request = (anchor: string) => `<div data-canvas-v2-node-id="link" data-canvas-v2-connector-request="true" data-from="left" data-to="right" data-x1="0" data-y1="0" data-x2="100" data-y2="0" data-from-anchor="${anchor}" data-to-anchor="0.75,0.25"></div>`;
+  const source = materializeCanvasV2ConnectorRequests(request("0.5,0.5"));
+  assert.match(source, /data-canvas-v2-connector-from-anchor="0.5,0.5"/);
+  assert.match(source, /data-canvas-v2-connector-to-anchor="0.75,0.25"/);
+  for (const bad of ["-1,0", "0,2", "NaN,0", "0,", "0,0,0"]) assert.throws(() => materializeCanvasV2ConnectorRequests(request(bad)), /normalized coordinates/);
+});
+
+test("a local CSS merge retains the first composition while explicit replacement remains available", () => {
+  const document = { html: '<main data-canvas-v2-node-id="canvas"><section data-canvas-v2-node-id="story"><p data-canvas-v2-node-id="caption">Keep the story</p></section></main>', css: '' };
+  const firstRules = '[data-canvas-v2-node-id="story"]{width:6200px;display:grid;gap:40px}[data-canvas-v2-node-id="caption"]{color:blue;font-size:32px}';
+  const correction = '[data-canvas-v2-node-id="caption"]{color:green}';
+  const first = applyCanvasV2SourcePatch({ previous: document, evidence: [], operations: [{ op:'upsert-css',layerId:'story',css:firstRules }] });
+  const patch = (mode: string) => parseCanvasV2AssetSourcePatch(JSON.stringify({operations:[{op:'upsert-css',layerId:'story',mode,css:correction}]}), []);
+  const repaired = applyCanvasV2SourcePatch({ previous:first, evidence:[], operations:patch('merge') });
+  assert.ok(repaired.css.includes(firstRules));
+  assert.ok(repaired.css.indexOf(correction) > repaired.css.indexOf(firstRules));
+  assert.equal(repaired.html, first.html);
+  const replaced = applyCanvasV2SourcePatch({ previous:first, evidence:[], operations:patch('replace') });
+  assert.ok(!replaced.css.includes(firstRules));
+  assert.ok(replaced.css.includes(correction));
 });

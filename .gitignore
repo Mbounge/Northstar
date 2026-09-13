@@ -49,3 +49,6 @@ next-env.d.ts
 
 # Local archives
 *.zip
+
+# Generated discovery evaluation bundles and receipts
+/artifacts/

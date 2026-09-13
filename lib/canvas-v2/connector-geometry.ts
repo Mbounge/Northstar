@@ -77,10 +77,14 @@ export function buildCanvasV2ConnectorGeometry(input: {
     }
   }
   const padding = 16;
-  const minX = Math.min(start.x, end.x, control.x, ...routePoints.map(p => p.x)) - padding;
-  const minY = Math.min(start.y, end.y, control.y, ...routePoints.map(p => p.y)) - padding;
-  const maxX = Math.max(start.x, end.x, control.x, ...routePoints.map(p => p.x)) + padding;
-  const maxY = Math.max(start.y, end.y, control.y, ...routePoints.map(p => p.y)) + padding;
+  // A waypoint route does not use the stored curve control. Including that
+  // unrelated point inflates selection bounds (especially after import).
+  const boundsPoints = variant === "curve" ? [start, end, control]
+    : variant === "bent" ? routePoints : [start, end];
+  const minX = Math.min(...boundsPoints.map(p => p.x)) - padding;
+  const minY = Math.min(...boundsPoints.map(p => p.y)) - padding;
+  const maxX = Math.max(...boundsPoints.map(p => p.x)) + padding;
+  const maxY = Math.max(...boundsPoints.map(p => p.y)) + padding;
   const bounds = { x: round(minX), y: round(minY), width: round(Math.max(32, maxX - minX)), height: round(Math.max(32, maxY - minY)) };
   const localStart = { x: round(start.x - bounds.x), y: round(start.y - bounds.y) };
   const localEnd = { x: round(end.x - bounds.x), y: round(end.y - bounds.y) };
@@ -175,4 +179,37 @@ export function canvasV2MoveConnectorSegment(points: CanvasV2ConnectorPoint[], i
   const prefix = index === 0 ? [result[0], movedA] : [...result.slice(0,index), movedA];
   const suffix = index+1 === result.length-1 ? [movedB, result.at(-1)!] : [movedB, ...result.slice(index+2)];
   return [...prefix,...suffix].slice(1,-1);
+}
+
+
+export function readCanvasV2ConnectorAnchor(value: string | undefined): CanvasV2ConnectorPoint | undefined {
+  if (!value) return undefined;
+  const parts = value.split(',').map(Number);
+  return parts.length === 2 && value.split(',').every(p => p.trim()) && parts.every(n => Number.isFinite(n) && n >= 0 && n <= 1)
+    ? { x: parts[0], y: parts[1] } : undefined;
+}
+
+type AttachmentBounds = { x: number; y: number; width: number; height: number; rotation?: number };
+export function canvasV2ConnectorAttachmentPoint(bounds: AttachmentBounds, toward: CanvasV2ConnectorPoint, anchor?: CanvasV2ConnectorPoint): CanvasV2ConnectorPoint {
+  if (!anchor) return canvasV2ConnectorBoundaryAnchor(bounds, toward);
+  const angle = (bounds.rotation ?? 0) * Math.PI / 180;
+  const dx = (anchor.x - .5) * bounds.width, dy = (anchor.y - .5) * bounds.height;
+  return { x: round(bounds.x + bounds.width / 2 + dx * Math.cos(angle) - dy * Math.sin(angle)), y: round(bounds.y + bounds.height / 2 + dx * Math.sin(angle) + dy * Math.cos(angle)) };
+}
+export function canvasV2ConnectorRelativeAnchor(bounds: AttachmentBounds, point: CanvasV2ConnectorPoint): CanvasV2ConnectorPoint {
+  const angle = -(bounds.rotation ?? 0) * Math.PI / 180;
+  const dx = point.x - bounds.x - bounds.width / 2, dy = point.y - bounds.y - bounds.height / 2;
+  const clamp = (n: number) => Math.max(0, Math.min(1, n));
+  return { x: clamp(.5 + (dx * Math.cos(angle) - dy * Math.sin(angle)) / Math.max(1, bounds.width)), y: clamp(.5 + (dx * Math.sin(angle) + dy * Math.cos(angle)) / Math.max(1, bounds.height)) };
+}
+
+
+/** A route that immediately reverses along its last segment paints an ambiguous spur. */
+export function canvasV2ConnectorRouteRetraces(points: readonly CanvasV2ConnectorPoint[]): boolean {
+  const distinct = points.filter((point, index) => index === 0 || Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y) > .01);
+  return distinct.slice(2).some((point, index) => {
+    const a = distinct[index], b = distinct[index + 1];
+    const u = { x: b.x - a.x, y: b.y - a.y }, v = { x: point.x - b.x, y: point.y - b.y };
+    return Math.abs(u.x * v.y - u.y * v.x) < .01 && u.x * v.x + u.y * v.y < -.01;
+  });
 }

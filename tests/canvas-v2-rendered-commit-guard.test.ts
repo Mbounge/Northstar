@@ -28,7 +28,7 @@ test("a visually unsafe candidate receives compiler repair before one bounded em
   assert.match(hook, /revision\.id !== commitParent\.id \|\| revision\.id !== committedRef\.current\.id/);
   assert.match(hook, /cannot complete from an uncommitted render candidate/);
   assert.match(hook, /parent: commitParent/);
-  assert.doesNotMatch(hook, /PRIVATE_DRAFT_PAUSE_MESSAGE/);
+  assert.doesNotMatch(hook, /pauseCanvasV2Loop|PRIVATE_DRAFT_PAUSE_MESSAGE/);
   assert.match(hook, /recoverCanvasV2LoopFromCommittedTruth/);
   assert.match(hook, /rejectedCandidateContext\(candidate\.document, factualObservation\)/);
   assert.match(hook, /const displayed = committed/);
@@ -36,7 +36,11 @@ test("a visually unsafe candidate receives compiler repair before one bounded em
   assert.match(workspace, /canvas-v2-candidate-inspection-surface/);
   assert.match(workspace, /revision=\{engine\.inspectionCandidate\}/);
   assert.match(workspace, /relocatablePlacementNodeIds=\{engine\.inspectionRelocatableNodeIds\}/);
-  assert.match(workspace, /left: -100_000/);
+  assert.match(workspace, /style=\{PRIVATE_RENDER_SURFACE_STYLE\}/);
+  const privateSurface = readFileSync("components/canvas-v2/private-render-surface.ts", "utf8");
+  assert.match(privateSurface, /left: -100_000/);
+  assert.match(privateSurface, /opacity: 0/);
+  assert.match(privateSurface, /clipPath: "inset\(50%\)"/);
 
   const route = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
   assert.match(route, /CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS/);

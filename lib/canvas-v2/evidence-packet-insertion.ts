@@ -111,6 +111,10 @@ export function canvasV2EvidencePacketsNeedingMaterialization(
   packets: readonly CanvasV2EvidencePacket[],
 ): CanvasV2EvidencePacket[] {
   return packets.filter((packet) => {
+    // Public research is source memory for the composition, including selected
+    // images. Promotion makes an asset eligible for authorship; it must not
+    // independently create a second, mandatory source-summary composition.
+    if (packet.source.providerId === "openai-web-search") return false;
     if (packet.presentation?.state === "graph-only") return false;
     // Ordered product capture packets are discovery memory plus canonical-rail
     // lineage. They never earn a second generic packet surface, even during the
@@ -128,7 +132,11 @@ export function canvasV2EvidencePacketsNeedingMaterialization(
     // own source-native visible treatment below.
     if (shellExists && packet.kind === "screenshot") return false;
     if (!shellExists) return true;
-    return packet.assets.some((asset) => !hasAttributeValue(document.html, "data-canvas-v2-evidence-id", asset.id))
+    const missingAssets = packet.assets.some((asset) => !hasAttributeValue(document.html, "data-canvas-v2-evidence-id", asset.id));
+    // A public visual witness is intentionally concise; its full facts and
+    // metrics stay in revision-owned evidence memory for the narrative author.
+    if (packet.source.providerId === "openai-web-search") return missingAssets;
+    return missingAssets
       || packet.facts.some((fact) => !hasAttributeValue(document.html, "data-canvas-v2-evidence-fact-id", fact.id))
       || packet.metrics.some((metric) => !hasAttributeValue(document.html, "data-canvas-v2-evidence-metric-id", metric.id));
   });
@@ -217,7 +225,8 @@ function appendPacketContent(
   canonicalSourceByEvidenceId: ReadonlyMap<string, string>,
 ): void {
   const articleNodeId = article.dataset.canvasV2NodeId!;
-  if (packet.facts.length) {
+  const publicVisual = packet.source.providerId === "openai-web-search";
+  if (packet.facts.length && !publicVisual) {
     let facts = article.querySelector<HTMLElement>(":scope > .canvas-v2-evidence-packet__facts");
     if (!facts) {
       facts = parsed.createElement("section");
@@ -240,7 +249,7 @@ function appendPacketContent(
       facts.append(item);
     }
   }
-  if (packet.metrics.length) {
+  if (packet.metrics.length && !publicVisual) {
     let metrics = article.querySelector<HTMLElement>(":scope > .canvas-v2-evidence-packet__metrics");
     if (!metrics) {
       metrics = parsed.createElement("section");
@@ -297,14 +306,14 @@ function appendPacketContent(
       caption.dataset.canvasV2NodeId = `${figure.dataset.canvasV2NodeId}-caption`;
       caption.dataset.canvasV2Origin = "research";
       addText(parsed, caption, "strong", "", `${figure.dataset.canvasV2NodeId}-label`, asset.label);
-      if (asset.description) addText(parsed, caption, "span", "", `${figure.dataset.canvasV2NodeId}-description`, asset.description);
+      if (asset.description && !publicVisual) addText(parsed, caption, "span", "", `${figure.dataset.canvasV2NodeId}-description`, asset.description);
       if (asset.capturedAt) addText(parsed, caption, "span", "", `${figure.dataset.canvasV2NodeId}-captured`, `Captured ${asset.capturedAt}`);
       figure.append(image, caption);
       media.append(figure);
     }
   }
   if (packet.limitations.length && !article.querySelector(":scope > .canvas-v2-evidence-packet__limits")) {
-    addText(parsed, article, "p", "canvas-v2-evidence-packet__limits", `${articleNodeId}-limitations`, `Boundary · ${packet.limitations.join(" ")}`);
+    addText(parsed, article, "p", "canvas-v2-evidence-packet__limits", `${articleNodeId}-limitations`, `Boundary · ${(publicVisual ? packet.limitations.slice(0, 2) : packet.limitations).join(" ")}`);
   }
 }
 

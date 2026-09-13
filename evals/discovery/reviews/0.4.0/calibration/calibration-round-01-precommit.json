@@ -1,0 +1,39 @@
+{
+  "caseId": "ikea-breakfast",
+  "round": 1,
+  "status": "assistant-precommitted-awaiting-human",
+  "kind": "authored-explanation-calibration-not-model-run",
+  "scope": "Explanation quality only. No source retrieval, rendered canvas, editability, continuity, or overall benchmark pass can be scored from these excerpts.",
+  "evidenceBrief": "The screenshot shows a $5.99 IKEA breakfast and the poster claims a $22 restaurant comparison. The restaurant is unidentified. Our reference research includes IKEA's historical account linking food to the wider shopping visit. We have no item-level breakfast costs or measured sales uplift.",
+  "answers": {
+    "A": "The post compares two prices, but we lack the restaurant's identity, portion sizes, costs and service details. IKEA and a brunch restaurant operate differently, so this is not a fair comparison yet. We should obtain both menus and their terms before deciding whether either offers better value. The breakfast photograph alone cannot establish profitability or explain the entire price difference.",
+    "B": "The useful question is what the meal does for each business. IKEA's historical account connects its food offering to the wider shopping visit: food can support the retail business as well as generate restaurant revenue. That gives us a reason to investigate the price gap beyond the eggs themselves. It does not establish that this breakfast loses money. Service format and offer terms could also contribute; identifying the $22 meal is the next step toward a fair comparison.",
+    "C": "IKEA sells breakfast at a deliberate loss because the furniture purchase pays for it. Cheap food keeps shoppers in the showroom longer and increases their spending. A brunch restaurant must make its money from the meal itself, so its higher price reflects a different business model. The mistake is comparing the price of a customer-acquisition tool with the price of the restaurant's main product."
+  },
+  "assistantJudgments": {
+    "A": {
+      "rating": "needs-work",
+      "reason": "Useful scope discipline, but does not explain a substantive supported business mechanism despite evidence available. Generic difference plus further research undershoots discovery.",
+      "business-role": "fail",
+      "meal-margin": "pass",
+      "comparison-scope": "pass"
+    },
+    "B": {
+      "rating": "good-enough-for-explanation-excerpt",
+      "reason": "Explains a source-grounded business mechanism, keeps item-level loss uncertain, considers complementary explanations as hypotheses, and proposes a discriminating next step. Source inspection and final board remain unassessed.",
+      "business-role": "pass",
+      "meal-margin": "pass",
+      "comparison-scope": "pass",
+      "alternatives": "pass"
+    },
+    "C": {
+      "rating": "unacceptable-as-written",
+      "reason": "Clear and insightful framing but asserts deliberate item-level loss and causal spending uplift without the evidence available in this exercise; overgeneralizes the unidentified restaurant's revenue model.",
+      "business-role": "partial-mechanism-present-but-unsupported-assertions",
+      "meal-margin": "fail",
+      "source-support": "fail"
+    }
+  },
+  "humanJudgments": null,
+  "independentHumanApproval": false
+}

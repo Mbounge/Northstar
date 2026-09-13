@@ -272,6 +272,7 @@ export function compileCanvasV2SceneTransaction(input: {
   previous: CanvasV2ArtifactDocument;
   next: CanvasV2ArtifactDocument;
   execution?: CanvasV2IslandExecutionContract;
+  focusIslandId?: string;
   workingContext?: CanvasV2WorkingContext;
 }): CanvasV2SceneTransaction {
   const before = readSourceObjects(input.previous);
@@ -326,7 +327,7 @@ export function compileCanvasV2SceneTransaction(input: {
     schema: CANVAS_V2_SCENE_TRANSACTION_SCHEMA,
     origin: input.origin,
     baseRevisionId: input.baseRevisionId,
-    targetIslandId: input.execution?.target.islandId,
+    targetIslandId: input.execution?.target.islandId ?? input.focusIslandId,
     mutations,
     protectedUserNodeIds,
     beforeObjectCount: before.length,

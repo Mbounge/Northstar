@@ -1,5 +1,21 @@
+import { canvasV2AuthoritativeUserRequest } from "@/lib/canvas-v2/interaction-router";
 import { findCanvasV2SourceNodeRange } from "@/lib/canvas-v2/source-patch";
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
+
+/** Distinguish a requested visual relationship from a constraint on optional edges. */
+export function canvasV2InstructionExplicitlyRequestsRelationshipGeometry(instruction: string): boolean {
+  const relationship = /\b(?:connectors?|endpoint-dependent|arrows?|curves?|(?:explicit|native|causal|dependency)\s+relationships?|relationship\s+geometry|(?:causal|dependency)\s+(?:paths?|lines?))\b/i;
+  return canvasV2AuthoritativeUserRequest(instruction).split(/[.!?;\n]+/).some((sentence) => {
+    if (!relationship.test(sentence)) return false;
+    // "Any relationships must use native connectors" specifies the primitive,
+    // not a requirement to draw edges. Keep a separate explicit request intact.
+    const withoutPrimitiveRule = sentence.replace(/\b(?:any|all|every|existing)\s+(?:relationships?|connectors?|arrows?)\b[^;.!?]*?\b(?:native\s+connectors?|native\s+primitives?|primitive\s+set)\b/gi, "");
+    if (!relationship.test(withoutPrimitiveRule)) return false;
+    if (/\b(?:optional|if\s+(?:useful|helpful|needed|necessary)|(?:only|just)\s+(?:if|when|where)|where\s+(?:useful|helpful|needed|necessary)|do(?:es)?\s+not\s+(?:always\s+)?need|don['’]t\s+(?:always\s+)?need)\b/i.test(withoutPrimitiveRule)) return false;
+    if (/\b(?:no|without)\s+(?:\w+\s+){0,2}(?:connectors?|arrows?|relationships?)\b|\b(?:do\s+not|don['’]t|avoid|omit)\s+(?:\w+\s+){0,3}(?:connectors?|arrows?|relationships?)\b/i.test(withoutPrimitiveRule)) return false;
+    return true;
+  });
+}
 
 interface CanvasV2NamedCoverageRequirement {
   id: string;
@@ -290,6 +306,7 @@ export function canvasV2CompletionContradictsMaterialMove(input: {
  */
 export function shouldCompleteCanvasV2ResolvedOptionalContinuation(input: {
   resolvedStory: boolean;
+  visualQualityReady: boolean;
   explicitWholeBoardRecompositionRequested: boolean;
   renderedIntegrityFailureCount: number;
   promptCoverageFailureCount: number;
@@ -302,6 +319,7 @@ export function shouldCompleteCanvasV2ResolvedOptionalContinuation(input: {
   prescribesOptionalRelationshipGeometry: boolean;
 }): boolean {
   if (!input.resolvedStory
+    || !input.visualQualityReady
     || input.explicitWholeBoardRecompositionRequested
     || input.renderedIntegrityFailureCount > 0
     || input.promptCoverageFailureCount > 0
@@ -481,4 +499,12 @@ export function validateCanvasV2RequestedCompositionCoverage(
   }
 
   return failures;
+}
+
+
+/** Relationships are integrated only after a separately observed composition. */
+export function canvasV2RelationshipGeometryIsAvailable(input: {
+  complexEvidenceSynthesis: boolean; hasRenderRepair: boolean; existingRelationshipCount: number; observedDesignTurns: number;
+}): boolean {
+  return input.existingRelationshipCount > 0 || input.observedDesignTurns >= (input.complexEvidenceSynthesis ? 2 : 1);
 }

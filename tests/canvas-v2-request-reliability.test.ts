@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { CanvasV2DiscoveryState } from "../lib/canvas-v2/discovery-state";
 
 import {
   CANVAS_V2_PROVIDER_OBSERVABILITY_THRESHOLDS,
   CanvasV2RequestError,
+  canvasV2PublicFailureMessage,
   canvasV2ProviderUsageSignals,
   canvasV2ProviderUsageFromAttempts,
   canvasV2RetryReason,
@@ -27,6 +29,21 @@ test("retry progress distinguishes policy correction from a network interruption
 const immediateWait = async (_delayMs: number, signal: AbortSignal) => {
   if (signal.aborted) throw new DOMException("Stopped", "AbortError");
 };
+
+test("a rejected visual draft preserves its completed investigation and prior provider receipts", async () => {
+  const state = { latestUnderstanding: "The inspected sources establish the mechanism." } as CanvasV2DiscoveryState;
+  const attempts = [{ model: "test", role: "explanation-reviewer" as const, outcome: "completed" as const, durationMs: 1 }];
+  await assert.rejects(requestCanvasV2Json({
+    endpoint: "/canvas-v2", body: {}, signal: new AbortController().signal,
+    requestId: "run:revision", policy: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    fetcher: async () => new Response(JSON.stringify({ error: "Invalid draft", code: "invalid-response", retryable: false, discoveryState: state, providerAttempts: attempts }), { status: 422 }),
+  }), (error: unknown) => {
+    assert.ok(error instanceof CanvasV2RequestError);
+    assert.deepEqual(error.discoveryState, state);
+    assert.deepEqual(error.providerAttempts, attempts);
+    return true;
+  });
+});
 
 test("a transient logical request retries with one stable identity and body", async () => {
   const attempts: Array<{ requestId: string | null; attempt: string | null; body: string }> = [];
@@ -526,3 +543,21 @@ test("a rejected primary request never escapes policy through fallback", async (
   }), (error) => error instanceof CanvasV2ProviderError && error.code === "provider-rejected");
   assert.equal(calls, 1);
 });
+
+for (const status of [401, 403]) {
+  test(`HTTP ${status} explains access failure without retrying or implying unsafe content`, async () => {
+    let requests = 0;
+    await assert.rejects(requestCanvasV2Json({
+      endpoint: "/test", body: {}, signal: new AbortController().signal, requestId: "access-test",
+      policy: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      fetcher: async () => { requests++; return new Response("Sign in", { status }); },
+    }), (error: unknown) => {
+      assert.ok(error instanceof CanvasV2RequestError);
+      assert.equal(error.httpStatus, status);
+      assert.match(canvasV2PublicFailureMessage(error), status === 401 ? /Sign in/ : /access/);
+      assert.doesNotMatch(canvasV2PublicFailureMessage(error), /safely/);
+      assert.equal(requests, 1);
+      return true;
+    });
+  });
+}

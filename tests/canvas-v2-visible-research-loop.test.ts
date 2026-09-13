@@ -178,7 +178,7 @@ test("production research is evidence-first and synthesis cannot complete on the
   const designLoop = readFileSync("components/canvas-v2/use-canvas-v2-design-loop.ts", "utf8");
   assert.match(route, /if \(groundingRequired && requiredResearch\)/);
   assert.match(route, /const discoveryDirectorRequired/);
-  assert.match(route, /mergeCanvasV2EvidencePackets\(\s*body\.revision\.evidencePackets,\s*retrievedEvidenceBridge\.packets/);
+  assert.match(route, /mergeCanvasV2EvidencePackets\(\s*suppliedEvidencePackets,\s*retrievedEvidenceBridge\.packets/);
   assert.match(route, /requiredVisualEvidenceForBrief\(creativeCheckpointBrief\)/);
   assert.match(route, /const synthesisTurn = decisionPolicy\.phase !== "ground-required-evidence"/);
   assert.doesNotMatch(route, /const synthesisTurn = researchMode !== "evidence"/);

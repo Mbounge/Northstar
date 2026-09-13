@@ -1,0 +1,28 @@
+{
+  "caseId": "slack-clips-design",
+  "round": 6,
+  "stage": "initial",
+  "status": "qualitative-human-feedback-recorded-later-events-pending",
+  "precommitFile": "calibration-round-06-slack-precommit.json",
+  "humanFeedbackVerbatim": "I think there fine -- but when it comes to design related work like this - there could be other companies with other apps to learn from not just slack - think Discord etc... and these other apps could uncover useful things to learn from aswell",
+  "humanNumericScores": null,
+  "humanQualitativeJudgments": {"A": "Fine", "B": "Fine"},
+  "assistantInterpretation": {
+    "missingDiscoveryStep": "The supplied Slack examples should be starting evidence, not the exclusive source of design principles. Seek relevant examples in other products when they may illuminate the review task or challenge an initial proposal.",
+    "userNamedLead": "Discord",
+    "leadStatus": "Suggested comparison source, not an inspected product or evidence of any particular feature.",
+    "crossCasePattern": "Consistent with Emio feedback: seed sources must not become the research boundary. Investigative initiative should produce consequential evidence rather than only careful reasoning over supplied material.",
+    "comparisonUnit": "Compare specific interactions and user tasks, including keeping context while responding, recovering a moment, and alternatives to audiovisual consumption; do not compare entire products as though their audiences and purposes were identical.",
+    "assessmentLimit": "The two authored excerpts are accepted as plausible proposals. They do not demonstrate actual cross-product investigation, multimedia inspection, implementation feasibility or native canvas quality."
+  },
+  "proposedCriteriaRefinement": [
+    "Select additional references because they address a relevant design uncertainty; no prescribed vendor or minimum source count.",
+    "Inspect and locate the actual interaction through screenshots, clips, documentation or accessible product behavior, recording source version/date and access limitations.",
+    "Explain what each comparison adds, contradicts or leaves unresolved and how differences in user goals or constraints affect transfer.",
+    "Show useful source media alongside a concise comparative explanation on the native canvas; avoid an unreasoned inspiration gallery.",
+    "Stop broadening the search when it no longer changes the focused proposal or next test; preserve promising unresolved leads for later work."
+  ],
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

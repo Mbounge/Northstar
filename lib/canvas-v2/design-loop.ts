@@ -1,3 +1,6 @@
+import type { CanvasV2EvidencePacket } from "./types";
+import type { CanvasV2Activity } from "./tool-activity";
+import { canvasV2PrivateFailureFingerprint } from "@/lib/canvas-v2/failure-authority";
 import type {
   CanvasV2CompositionState,
   CanvasV2CreativeDirection,
@@ -77,6 +80,12 @@ export interface CanvasV2LoopStep {
 
 export interface CanvasV2LoopState {
   id: string;
+  activity?: CanvasV2Activity[];
+  incorporatedInputIds?: string[];
+  inputSequence?: number;
+  attachmentsAwaitingCommit?: boolean;
+  retainedReadPackets?: CanvasV2EvidencePacket[];
+  readReceipts?: Array<{ question: string; sourceIds: string[]; issues: string[] }>;
   /** Stable undo transaction shared by every accepted revision in this user turn. */
   historyTransactionId: string;
   instruction: string;
@@ -96,6 +105,7 @@ export interface CanvasV2LoopState {
   retry?: CanvasV2RetryState;
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
+  deliveryMode?: "chat" | "canvas";
   researchStatus?: CanvasV2ResearchRequirement[];
   providerAttempts?: CanvasV2ProviderAttemptAudit[];
   /** Router work is part of the same user-triggered run and release receipt. */
@@ -149,6 +159,8 @@ export interface CanvasV2LoopState {
     kind: "phase-contract" | "render-integrity" | "capture";
     fingerprint: string;
     occurrence: number;
+    /** Consecutive rejected private attempts; reset by a successful commit. */
+    attemptsSinceCommit?: number;
     failures: string[];
     rejectedMove?: string;
     providerAttemptsBeforeRecovery?: CanvasV2ProviderAttemptAudit[];
@@ -163,6 +175,8 @@ export interface CanvasV2LoopState {
 }
 
 export interface CanvasV2LoopContinuation {
+  retainedReadPackets?: CanvasV2EvidencePacket[];
+  readReceipts?: CanvasV2LoopState["readReceipts"];
   previousRunId: string;
   /** A paused continuation remains part of the original undoable AI turn. */
   historyTransactionId?: string;
@@ -172,6 +186,7 @@ export interface CanvasV2LoopContinuation {
   compositionState?: CanvasV2CompositionState;
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
+  deliveryMode?: "chat" | "canvas";
   researchStatus?: CanvasV2ResearchRequirement[];
   modelSelection?: CanvasV2ModelSelection;
   workingContext?: CanvasV2WorkingContext;
@@ -193,9 +208,11 @@ export function canvasV2NewTurnContinuation(
     discoveryState?: CanvasV2DiscoveryState;
   } = {},
 ): CanvasV2LoopContinuation | undefined {
-  if (!previous?.compositionState) return undefined;
+  if (!previous) return undefined;
   return {
     previousRunId: previous.id,
+    retainedReadPackets: previous.retainedReadPackets,
+    readReceipts: previous.readReceipts,
     priorSteps: [...(previous.priorSteps ?? []), ...previous.steps].slice(-CANVAS_V2_MAX_CONTEXT_STEPS),
     creativeDirection: previous.creativeDirection,
     spatialStrategy: previous.spatialStrategy,
@@ -227,6 +244,7 @@ export function createCanvasV2Loop(input: {
   continuation?: CanvasV2LoopContinuation;
   researchTargets?: string[];
   researchMode?: CanvasV2ResearchMode;
+  deliveryMode?: "chat" | "canvas";
   modelSelection?: CanvasV2ModelSelection;
   workingContext?: CanvasV2WorkingContext;
   discoveryState?: CanvasV2DiscoveryState;
@@ -267,6 +285,9 @@ export function createCanvasV2Loop(input: {
     id: input.id,
     historyTransactionId: input.continuation?.historyTransactionId ?? input.id,
     instruction,
+    deliveryMode: input.deliveryMode ?? input.continuation?.deliveryMode ?? "canvas",
+    retainedReadPackets: input.continuation?.retainedReadPackets,
+    readReceipts: input.continuation?.readReceipts,
     ...(input.attachments?.length ? { attachments: input.attachments.slice(0, CANVAS_V2_MAX_CHAT_ATTACHMENTS) } : {}),
     status: "thinking",
     steps: [],
@@ -386,6 +407,14 @@ export function recordCanvasV2CommittedEdit(input: {
   delete next.renderRepair;
   delete next.privateRecovery;
   delete next.lastRenderIntegrityFailures;
+  // Stop a repeated repair run independently of the model's own readiness
+  // rating. Keep the last verified revision; a pause is not a completion claim.
+  const recentRepairs = steps.slice(-3);
+  const sameRepairTarget = recentRepairs.every((step) => step.islandExecution?.target.action === "repair"
+    && step.islandExecution.target.islandId === recentRepairs[0].islandExecution?.target.islandId);
+  if (recentRepairs.length === 3 && recentRepairs.every((step) => step.kind === "design") && sameRepairTarget) {
+    return pauseCanvasV2Loop(next, "I stopped because repeated adjustments to the same part of the board were not converging. Your latest canvas is preserved; this request is not marked complete.");
+  }
   return { ...next, summitReceipt: buildCanvasV2MountOlympusReceipt({ loop: next, routerAttempts: next.routerProviderAttempts }) };
 }
 
@@ -436,4 +465,51 @@ export function pauseCanvasV2Loop(loop: CanvasV2LoopState, reason: string): Canv
 export function failCanvasV2Loop(loop: CanvasV2LoopState, error: string): CanvasV2LoopState {
   const failed: CanvasV2LoopState = { ...withoutRetry(loop), status: "failed", error };
   return { ...failed, summitReceipt: buildCanvasV2MountOlympusReceipt({ loop: failed, routerAttempts: failed.routerProviderAttempts }) };
+}
+
+export function recoverCanvasV2LoopFromCommittedTruth(input: {
+  loop: CanvasV2LoopState;
+  kind: NonNullable<CanvasV2LoopState["privateRecovery"]>["kind"];
+  failures: readonly string[];
+  rejectedMove?: string;
+  providerAttempts?: readonly CanvasV2ProviderAttemptAudit[];
+}): CanvasV2LoopState {
+  if (input.loop.deliveryMode === "chat") {
+    const conversation = { ...input.loop };
+    delete conversation.renderRepair;
+    delete conversation.privateRecovery;
+    return pauseCanvasV2Loop(conversation, "I couldn’t finish this response. The conversation, findings and sources are retained so we can continue.");
+  }
+  const failures = input.failures.map((failure) => failure.trim()).filter(Boolean).slice(-12);
+  const fingerprint = canvasV2PrivateFailureFingerprint(input.kind, failures);
+  const occurrence = input.loop.privateRecovery?.fingerprint === fingerprint
+    ? input.loop.privateRecovery.occurrence + 1
+    : 1;
+  const attemptsSinceCommit = (input.loop.privateRecovery?.attemptsSinceCommit ?? input.loop.privateRecovery?.occurrence ?? 0) + 1;
+  const priorAttempts = [
+    ...(input.loop.privateRecovery?.providerAttemptsBeforeRecovery ?? []),
+    ...(input.loop.renderRepair?.providerAttemptsBeforeRepair ?? []),
+    ...(input.providerAttempts ?? input.loop.providerAttempts ?? []),
+  ];
+  const recovered: CanvasV2LoopState = {
+    ...input.loop,
+    status: "thinking",
+    retry: undefined,
+    privateRecovery: {
+      kind: input.kind,
+      fingerprint,
+      occurrence,
+      attemptsSinceCommit,
+      failures,
+      ...(input.rejectedMove ? { rejectedMove: input.rejectedMove } : {}),
+      ...(priorAttempts.length ? { providerAttemptsBeforeRecovery: priorAttempts } : {}),
+    },
+    lastRenderIntegrityFailures: failures,
+  };
+  delete recovered.renderRepair;
+  delete recovered.error;
+  delete recovered.pauseReason;
+  return attemptsSinceCommit >= 3
+    ? pauseCanvasV2Loop(recovered, "I stopped because repeated attempts could not produce a valid update. Your latest canvas is preserved; this request is not marked complete.")
+    : recovered;
 }

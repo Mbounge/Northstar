@@ -1,18 +1,18 @@
 "use client";
+import { CanvasV2MarkdownMessage } from "./canvas-v2-markdown-message";
 
 import {
   ArrowUp,
   Check,
   ChevronDown,
   Database,
-  Eye,
   FileText,
+  Globe2,
   Loader2,
   MousePointer2,
   LockKeyhole,
   Plus,
   RotateCw,
-  Search,
   Sparkles,
   Square,
   WandSparkles,
@@ -31,6 +31,7 @@ import {
   type CanvasV2ChatImageAttachment,
 } from "@/lib/canvas-v2/chat-attachments";
 import { canvasV2VisibleProgressSteps } from "@/lib/canvas-v2/design-loop";
+import { canvasV2HasConfirmedWebSearch, canvasV2ActivitySummary } from "@/lib/canvas-v2/tool-activity";
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import { canvasV2EvidenceSourceForSelection } from "@/lib/canvas-v2/evidence-packets";
 import { canvasV2DiscoveryMemoryForSelection } from "@/lib/canvas-v2/discovery-graph";
@@ -40,11 +41,87 @@ import {
   parseCanvasV2ModelSelection,
 } from "@/lib/canvas-v2/model-catalog";
 
+function SourceIcon({ href }: { href: string }) {
+  const [failed, setFailed] = useState(false);
+  let origin: string;
+  try { const url = new URL(href); if (!["https:", "http:"].includes(url.protocol)) return null; origin = url.origin; } catch { return null; }
+  return failed ? <Globe2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> :
+    // A site's icon identifies a source; it is never evidence for a claim.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={`${origin}/favicon.ico`} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="h-3.5 w-3.5 shrink-0 object-contain" />;
+}
+
+function ActivitySource({ source }: { source: { label: string; href: string } }) {
+  try { if (!["https:", "http:"].includes(new URL(source.href).protocol)) return null; } catch { return null; }
+  return <a href={source.href} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-1.5 text-[#6955e8] hover:underline dark:text-[#b3a8ff]">
+    <SourceIcon href={source.href} /><span className="truncate">{source.label}</span>
+  </a>;
+}
+
+function AccountAppIcon({ app }: { app: { name: string; iconUrl?: string } }) {
+  const [failed, setFailed] = useState(false);
+  return <span title={app.name} className="inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md bg-black/5 text-[10px] font-semibold dark:bg-white/10">
+    {app.iconUrl && !failed ?
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={app.iconUrl} alt={app.name} referrerPolicy="no-referrer" onError={() => setFailed(true)} className="h-full w-full object-contain" /> : app.name.slice(0, 1)}
+  </span>;
+}
+
+function ActivityFeed({ items, active }: { items: NonNullable<CanvasV2ChatTurn["activity"]>; active: boolean }) {
+  const currentId = active ? items.findLast(item => item.kind === "activity" && item.status === "started")?.id : undefined;
+  const groups: Array<{ id: string; message?: string; sources?: (typeof items)[number]["sources"]; actions: typeof items }> = [];
+  for (const item of items) {
+    if (item.kind === "progress") groups.push({ id: item.id, message: item.detail || item.label, sources: item.sources, actions: [] });
+    else {
+      const previous = groups.at(-1);
+      if (previous && !previous.message) previous.actions.push(item);
+      else groups.push({ id: item.id, actions: [item] });
+    }
+  }
+  return <div className="space-y-3 pb-3" aria-live="polite" data-testid="canvas-v2-live-activity">
+    {groups.map(group => {
+      if (group.message) return <div key={group.id}><div className="text-[13px] leading-[1.65] text-[#45404f] dark:text-[#d7d1df]"><CanvasV2MarkdownMessage content={group.message} /></div>
+        {group.sources?.length ? <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">{group.sources.map(source => <ActivitySource key={source.href} source={source} />)}</div> : null}</div>;
+      const tools = group.actions.filter(action => action.tool);
+      const phases = group.actions.filter(action => !action.tool);
+      const latest = group.actions.at(-1);
+      const recentSources = [...new Map(tools.flatMap(tool => tool.sources ?? []).flatMap(source => {
+        try { return [[new URL(source.href).origin, source] as const]; } catch { return []; }
+      })).values()].slice(-5);
+      const appBadges = [...new Map(group.actions.flatMap(action => action.apps ?? []).map(app => [app.name, app])).values()];
+      const compactActions = appBadges.length ? [...new Map(group.actions.map(action => [action.label, action])).values()] : group.actions;
+      const running = group.actions.some(action => action.id === currentId);
+      return <details key={group.id} className="group/activity text-[11px] leading-5 text-[#88818f] dark:text-[#a39baa]" data-testid="canvas-v2-tool-history">
+        <summary className="flex cursor-pointer list-none items-start gap-2 marker:hidden">
+          {running ? <Loader2 className="mt-1 h-3.5 w-3.5 shrink-0 animate-spin" /> : latest?.tool || group.actions.some(action => action.label === "Web research") ? <Globe2 className="mt-1 h-3.5 w-3.5 shrink-0" /> : <WandSparkles className="mt-1 h-3.5 w-3.5 shrink-0" />}
+          <span className="min-w-0 flex-1">{latest ? `${latest.label} · ${group.actions.length} action${group.actions.length === 1 ? "" : "s"}${running ? "…" : ""}` : canvasV2ActivitySummary(phases, active)}</span>
+          <span className="flex shrink-0 gap-1">{appBadges.map(app => <AccountAppIcon key={app.name} app={app} />)}</span>
+          <span className="mt-1 flex shrink-0 gap-1" aria-hidden="true">{recentSources.map(source => <span key={source.href} title={source.label}><SourceIcon href={source.href} /></span>)}</span>
+          <ChevronDown aria-hidden="true" className="mt-1 h-3 w-3 shrink-0 -rotate-90 transition-transform group-open/activity:rotate-0" />
+        </summary>
+        <ol className="ml-1.5 mt-2 space-y-2 border-l border-current/15 pl-4">
+          {compactActions.map(action => <li key={action.id}>
+            <p>{action.detail || canvasV2ActivitySummary([action], active)}</p>
+            {action.sources?.length ? action.tool === "web-search" ? <details className="mt-1">
+              <summary className="cursor-pointer text-[#a39baa]">{action.sources.length} search results · leads, not verified findings</summary>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{action.sources.map(source => <ActivitySource key={source.href} source={source} />)}</div>
+            </details> : <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{action.sources.map(source => <ActivitySource key={source.href} source={source} />)}</div> : null}
+          </li>)}
+        </ol>
+      </details>;
+    })}
+  </div>;
+}
+
 function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
   const loops = [...(turn.priorLoops ?? []), ...(turn.loop ? [turn.loop] : [])];
   const loop = turn.loop ?? loops.at(-1);
   const committedSteps = loops.flatMap((entry) => entry.steps);
   const steps = canvasV2VisibleProgressSteps(committedSteps);
+  const usedWebSearch = canvasV2HasConfirmedWebSearch(loops.flatMap(entry => [
+    ...(entry.providerAttempts ?? []),
+    ...entry.steps.flatMap(step => step.providerAttempts ?? []),
+  ]));
   const reportedProgress = loop?.discoveryProgress;
   const progress = loop?.status === "thinking" && committedSteps.at(-1)?.kind === "research" && reportedProgress?.stage === "investigating"
     ? {
@@ -63,12 +140,22 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
       ? JSON.stringify(loop.renderRepair?.failures ?? loop.lastRenderIntegrityFailures)
       : undefined}
     data-canvas-v2-mount-olympus-receipt={loop?.summitReceipt ? JSON.stringify(loop.summitReceipt) : undefined}
+    data-canvas-v2-discovery-review-audit={process.env.NODE_ENV !== "production" && loop?.discoveryState ? JSON.stringify({ state: loop.discoveryState, reads: loop.readReceipts, evidence: loop.retainedReadPackets?.map(packet => ({ id: packet.id, title: packet.title, summary: packet.summary, source: packet.source, sourceSnapshot: packet.sourceSnapshot, facts: packet.facts, metrics: packet.metrics, limitations: packet.limitations, media: packet.assets.map(asset => ({ id: asset.id, label: asset.label, mediaType: asset.mediaType ?? "image", originalUrl: asset.originalUrl ?? (asset.url.startsWith("data:") ? undefined : asset.url), captured: asset.url.startsWith("data:") })) })) }) : undefined}
   >
-    {progress && !loop?.finalSummary && <div className="pb-3">
+    {loop?.activity?.length ? <ActivityFeed items={loop.activity} active={turn.status === "running" || turn.status === "routing"} /> : null}
+    {usedWebSearch && <div data-testid="canvas-v2-web-search-used" className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-[#f0edf9] px-2.5 py-1 text-[11px] font-medium text-[#65568e] dark:bg-white/[.06] dark:text-[#bbb0db]">
+      <Globe2 aria-hidden="true" className="h-3.5 w-3.5" />Web search used
+    </div>}
+    {progress && !loop?.activity?.length && !loop?.finalSummary && <div className="pb-3">
       <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#7663e7] dark:text-[#aa9cff]">{progress.label}</div>
       <p className="mt-1 text-[12px] leading-[1.55] text-[#5d596a] dark:text-[#bcb7c5]">{progress.detail}</p>
     </div>}
-    {steps.length > 0 && <div className="pb-2 text-[9px] font-black uppercase tracking-[.14em] text-[#8b8796] dark:text-[#8f899a]">Committed to the canvas · {steps.length} move{steps.length === 1 ? "" : "s"}</div>}
+    {steps.length > 0 && <details className="group mb-2" data-testid="canvas-v2-activity-history">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-[10px] font-semibold text-[#797383] marker:hidden dark:text-[#aaa3b5]">
+        <ChevronDown aria-hidden="true" className="h-3 w-3 -rotate-90 transition-transform group-open:rotate-0" />
+        <span>Committed to the canvas · {steps.length} move{steps.length === 1 ? "" : "s"}</span>
+      </summary>
+      <div className="pt-2">
     {steps.map((step) => <div
       key={step.revisionId}
       className="relative flex gap-2.5 pb-2.5 last:pb-1"
@@ -81,7 +168,9 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
       <span className="-ml-[20px] mt-0.5 grid h-3 w-3 shrink-0 place-items-center rounded-full bg-white ring-1 ring-[#8778ef] dark:bg-[#201e27]"><Check className="h-2 w-2 text-[#6552df]" /></span>
       <p className="text-[12px] leading-[1.55] text-[#666172] dark:text-[#b8b3c0]">{step.summary}</p>
     </div>)}
-    {(turn.status === "running" || turn.status === "routing") && <div className="relative flex items-center gap-2 pb-1 text-[13px] text-[#747486]">
+      </div>
+    </details>}
+    {(turn.status === "running" || turn.status === "routing") && !loop?.activity?.some(item => item.kind === "activity" && item.status === "started") && <div className="relative flex items-center gap-2 pb-1 text-[13px] text-[#747486]">
       <Loader2 className="h-3.5 w-3.5 animate-spin text-[#745fff]" />
       {activeStatus}
     </div>}
@@ -105,7 +194,7 @@ function ChatTurn({
         {turn.attachments.map((attachment) => attachment.kind === "image"
           ? <button key={attachment.id} type="button" onClick={() => onOpenImage(attachment)} className="group block h-auto w-auto shrink-0 snap-start overflow-hidden rounded-[12px] focus:outline-none focus:ring-2 focus:ring-[#7561ed]" aria-label={`Expand ${attachment.name}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={attachment.dataUrl} alt={attachment.name} className="block h-auto max-h-32 w-auto max-w-[220px] object-contain transition duration-200 group-hover:scale-[1.01]" />
+              <img src={attachment.dataUrl} alt={attachment.name} width={attachment.width} height={attachment.height} style={{ display: "block", width: "auto", height: "auto", maxWidth: 220, maxHeight: 128 }} className="block h-auto max-h-32 w-auto max-w-[220px] object-contain transition duration-200 group-hover:scale-[1.01]" />
             </button>
           : <details key={attachment.id} className="h-32 w-48 shrink-0 snap-start overflow-hidden rounded-[14px] bg-white/55 p-3 dark:bg-black/20" data-testid="canvas-v2-sent-text">
               <summary className="flex cursor-pointer list-none items-start gap-2 marker:hidden">
@@ -120,22 +209,24 @@ function ChatTurn({
     <div className="flex items-start gap-3">
       <div className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-lg bg-[#171721] text-[10px] font-black text-white dark:bg-[#6d59ed]">N</div>
       <div className="min-w-0 flex-1 pt-0.5">
-        {turn.status === "routing" && <div className="flex items-center gap-2 text-[13px] text-[#727282]"><Loader2 className="h-3.5 w-3.5 animate-spin text-[#735fff]" />{turn.retry ? "Reconnecting…" : "Understanding what would be most useful…"}</div>}
-        {turn.answer && <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]">{turn.answer}</p>}
-        {turn.routeSummary && !turn.answer && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
+        {(turn.status === "routing" || (turn.status === "running" && !turn.loop)) && !turn.activity?.some(item => item.kind === "activity" && item.status === "started") && <div className="flex items-center gap-2 text-[13px] text-[#727282]"><Loader2 className="h-3.5 w-3.5 animate-spin text-[#735fff]" />{turn.retry ? "Reconnecting…" : turn.activity?.length ? "Working…" : "Starting…"}</div>}
+        {turn.feedbackState && <p className="text-[12px] text-[#777085]" data-testid="canvas-v2-feedback-state">{turn.feedbackState === "queued" ? "Sending feedback…" : turn.feedbackState === "accepted" ? "Feedback received" : turn.feedbackState === "incorporated" ? "Feedback incorporated" : "Feedback was not incorporated before stopping"}</p>}
+        {!turn.loop && turn.activity?.length ? <ActivityFeed items={turn.activity} active={turn.status === "routing" || turn.status === "running"} /> : null}
+        {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.answer} /></div>}
+        {turn.routeSummary && !turn.answer && !turn.loop?.finalSummary && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
         {turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}
         {turn.loop?.clarification && <div data-testid="canvas-v2-discovery-question" className="mt-4 border-t border-[#e9e5f7] pt-3 dark:border-white/[.09]">
           <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#7663e7] dark:text-[#aa9cff]">Your judgment matters here</div>
           <p className="mt-1.5 text-[13px] font-semibold leading-[1.6] text-[#3f3b4d] dark:text-[#e0dce7]">{turn.loop.clarification.question}</p>
           <p className="mt-1 text-[11px] leading-[1.55] text-[#7a7585] dark:text-[#9e99a6]">{turn.loop.clarification.whyItMatters}</p>
         </div>}
-        {turn.loop?.finalSummary && <div data-testid="canvas-v2-final-summary" className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d] dark:border-white/[.08] dark:text-[#d4d1da]">{turn.loop.finalSummary}</div>}
+        {turn.loop?.finalSummary && <div data-testid="canvas-v2-final-summary" className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d] dark:border-white/[.08] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.loop.finalSummary} /></div>}
         {turn.status === "incomplete" && <div data-testid="canvas-v2-turn-recovery" className="mt-3 rounded-xl border border-[#e3ddff] bg-[#f8f6ff] px-3.5 py-3 text-xs leading-5 text-[#5d5870] dark:border-[#504477] dark:bg-[#272331] dark:text-[#c9c3d3]">
-          <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">Work was interrupted.</span> {turn.loop?.pauseReason ?? "North Star did not finish the requested work."} Your latest canvas is safe.</p>
+          <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">Work was interrupted.</span> {turn.loop?.pauseReason ?? "North Star did not finish the requested work."}</p>
           <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Resume the work</button>
         </div>}
-        {turn.status === "stopped" && <div className="mt-3 text-xs font-semibold text-[#777789]">Paused for you. The latest canvas is ready to edit.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-2 rounded bg-[#6d59ed] px-3 py-2 text-white disabled:opacity-40">Resume the work</button>}</div>}
-        {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
+        {turn.status === "stopped" && <div data-testid="canvas-v2-turn-stopped" className="mt-3 text-xs text-[#777789]">Stopped.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-3 text-[#6d59ed] hover:underline disabled:opacity-40 dark:text-[#b3a8ff]">Continue</button>}</div>}
+        {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && turn.loop && turn.loop.deliveryMode !== "chat" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
       </div>
     </div>
   </article>;
@@ -260,17 +351,9 @@ export function CanvasV2ChatPanel({
         followingLatestRef.current = area.scrollHeight - area.scrollTop - area.clientHeight < 72;
       }}
     >
-      <div className="mb-4 flex items-center justify-between px-1 text-[9px] font-black uppercase tracking-[.16em] text-[#9a9aa8] dark:text-[#777482]"><span>North Star</span><span className="flex items-center gap-1.5 text-[#6553e8] dark:text-[#a99cff]"><span className="h-1.5 w-1.5 rounded-full bg-[#765fff]" />Board aware</span></div>
-      {!chat.turns.length && <div className="px-1 pb-2 pt-1">
-        <div className="flex items-center gap-3">
-          <div className="grid h-8 w-8 shrink-0 place-items-center text-[#6955e8]"><Sparkles className="h-4 w-4" /></div>
-          <div><h2 className="text-[15px] font-black tracking-[-.02em] text-[#252532] dark:text-[#f7f6fb]">Ask, inspect, or create.</h2><p className="mt-0.5 text-[11px] leading-4 text-[#7a7888] dark:text-[#9996a5]">One conversation, grounded in the board.</p></div>
-        </div>
-        <div className="mt-5 border-t border-[#ece9f3] dark:border-white/[.08]">
-          <button type="button" onClick={() => chat.setDraft("What stands out on this board?")} className="group flex w-full items-center gap-3 border-b border-[#f0edf5] px-1 py-3 text-left transition hover:pl-2 dark:border-white/[.06]"><Eye className="h-3.5 w-3.5 shrink-0 text-[#7661ee] dark:text-[#a99cff]" /><span className="min-w-0"><span className="block text-[11px] font-bold text-[#454351] dark:text-[#e8e6ef]">Inspect the board</span><span className="block truncate text-[10px] text-[#8a8796] dark:text-[#8f8b99]">Understand what is visible</span></span></button>
-          <button type="button" onClick={() => chat.setDraft("Research this problem and develop the board.")} className="group flex w-full items-center gap-3 border-b border-[#f0edf5] px-1 py-3 text-left transition hover:pl-2 dark:border-white/[.06]"><Search className="h-3.5 w-3.5 shrink-0 text-[#7661ee] dark:text-[#a99cff]" /><span className="min-w-0"><span className="block text-[11px] font-bold text-[#454351] dark:text-[#e8e6ef]">Research and develop</span><span className="block truncate text-[10px] text-[#8a8796] dark:text-[#8f8b99]">Bring grounded evidence into view</span></span></button>
-          <button type="button" onClick={() => chat.setDraft("Transform the selected part of the board.")} className="group flex w-full items-center gap-3 px-1 py-3 text-left transition hover:pl-2"><WandSparkles className="h-3.5 w-3.5 shrink-0 text-[#7661ee] dark:text-[#a99cff]" /><span className="min-w-0"><span className="block text-[11px] font-bold text-[#454351] dark:text-[#e8e6ef]">Design visibly</span><span className="block truncate text-[10px] text-[#8a8796] dark:text-[#8f8b99]">Create or transform the workspace</span></span></button>
-        </div>
+      {!chat.turns.length && <div className="flex min-h-[260px] h-full flex-col items-center justify-center px-3 pb-8 text-center">
+        <Sparkles aria-hidden="true" className="mb-5 h-7 w-7 text-[#aaa5b6] dark:text-[#66616f]" />
+        <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
       </div>}
       <div className="space-y-7">{chat.turns.map((turn) => <ChatTurn key={turn.id} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} />)}</div>
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Rendering the manual revision…</div>}
@@ -309,13 +392,13 @@ export function CanvasV2ChatPanel({
           {attachment.kind === "image" ? <>
             <button type="button" onClick={() => setExpandedImage(attachment)} aria-label={`Expand ${attachment.name}`} className="block h-full overflow-hidden rounded-[12px] focus:outline-none focus:ring-2 focus:ring-[#7561ed]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={attachment.dataUrl} alt={attachment.name} className="block h-full w-auto max-w-[156px] object-cover" />
+              <img src={attachment.dataUrl} alt={attachment.name} width={attachment.width} height={attachment.height} style={{ display: "block", height: 74, width: "auto", maxWidth: 156, objectFit: "contain" }} className="block h-full w-auto max-w-[156px] object-contain" />
             </button>
           </> : <div className="flex h-full gap-2 p-2.5 pr-6" data-testid="canvas-v2-pending-text">
             <FileText className="mt-0.5 h-4 w-4 shrink-0 text-[#6955e8] dark:text-[#b3a8ff]" />
             <div className="min-w-0"><div className="truncate text-[10px] font-bold text-[#4c465e] dark:text-[#e5e0ef]">{attachment.name}</div><div className="text-[8px] text-[#898294] dark:text-[#9d96a7]">{attachment.charCount.toLocaleString("en-US")} characters</div><div className="mt-1 line-clamp-2 text-[8px] leading-3 text-[#706a7b] dark:text-[#aca6b4]">{attachment.text}</div></div>
           </div>}
-          <button type="button" onClick={() => chat.removeAttachment(attachment.id)} disabled={chat.busy} aria-label={`Remove ${attachment.name}`} className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[#1d1b25]/85 text-white shadow transition hover:scale-105 disabled:opacity-50"><X className="h-3 w-3" /></button>
+          <button type="button" onClick={() => chat.removeAttachment(attachment.id)} aria-label={`Remove ${attachment.name}`} className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[#1d1b25]/85 text-white shadow transition hover:scale-105 disabled:opacity-50"><X className="h-3 w-3" /></button>
         </div>)}
       </div>}
       {chat.attachmentError && <p className="mb-2 px-1 text-[10px] font-semibold leading-4 text-[#a63a44] dark:text-red-300" role="status">{chat.attachmentError}</p>}
@@ -327,7 +410,6 @@ export function CanvasV2ChatPanel({
         onChange={(event) => chat.setDraft(event.target.value)}
         onPaste={paste}
         onKeyDown={keyDown}
-        disabled={chat.routing}
         placeholder="Ask North Star anything…"
         rows={1}
         className="min-h-[52px] w-full resize-none overflow-hidden bg-transparent px-2 pt-1 text-[13px] leading-5 text-[#292834] outline-none placeholder:text-[#9d9ca8] disabled:opacity-60 dark:text-[#f3f1f7] dark:placeholder:text-[#777482]"
@@ -335,11 +417,10 @@ export function CanvasV2ChatPanel({
       <div className="flex items-center justify-between pt-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <input ref={fileInputRef} type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseImages(event)} className="sr-only" tabIndex={-1} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={chat.busy || preparingImages || chat.attachments.length >= CANVAS_V2_MAX_CHAT_ATTACHMENTS} aria-label="Add attachments" title="Add images or paste long text" className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] border border-[#eceaf2] text-[#7160e8] transition hover:bg-[#f0eef8] disabled:opacity-40 dark:border-white/[.09] dark:text-[#a99cff] dark:hover:bg-white/[.06]">{preparingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}</button>
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={preparingImages || chat.attachments.length >= CANVAS_V2_MAX_CHAT_ATTACHMENTS} aria-label="Add attachments" title="Add images or paste long text" className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] border border-[#eceaf2] text-[#7160e8] transition hover:bg-[#f0eef8] disabled:opacity-40 dark:border-white/[.09] dark:text-[#a99cff] dark:hover:bg-white/[.06]">{preparingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}</button>
           <span className="hidden truncate text-[11px] font-medium text-[#92909e] 2xl:inline">{chat.attachments.length ? `${chat.attachments.length}/${CANVAS_V2_MAX_CHAT_ATTACHMENTS} attached` : "Images or long pasted text"}</span>
         </div>
         <div className="flex items-center gap-2">
-          {chat.busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-[#7160e8]" aria-label="North Star is working" />}
           <button
             type="button"
             onClick={() => setModelMenuOpen((open) => !open)}
@@ -351,7 +432,7 @@ export function CanvasV2ChatPanel({
             <span className="truncate">{canvasV2ModelLabel(chat.modelSelection)}</span>
             <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition ${modelMenuOpen ? "rotate-180" : ""}`} />
           </button>
-          {chat.busy && !chat.draft.trim()
+          {chat.busy && !chat.draft.trim() && !chat.attachments.length
             ? <button onClick={chat.stop} aria-label="Stop current response" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#ecebf0] text-[#4d4a59] transition hover:bg-[#e2e0e8]"><Square className="h-3.5 w-3.5 fill-current" /></button>
             : <button onClick={() => void chat.submit()} disabled={(!chat.draft.trim() && !chat.attachments.length) || preparingImages || !engine.ready || engine.applyingManualEdit} aria-label="Send message" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#6d59ed] text-white shadow-[0_7px_18px_rgba(86,68,195,.24)] transition hover:-translate-y-0.5 hover:bg-[#5d49dc] disabled:translate-y-0 disabled:bg-[#d7d5df] disabled:shadow-none"><ArrowUp className="h-4.5 w-4.5" /></button>}
         </div>
@@ -359,7 +440,7 @@ export function CanvasV2ChatPanel({
 
       {modelMenuOpen && <div role="menu" aria-label="North Star model" className="absolute bottom-[62px] right-[54px] z-30 w-[272px] overflow-hidden rounded-[20px] border border-[#dedce7] bg-[#25242a] p-2 text-white shadow-[0_22px_70px_rgba(22,20,35,.28)]">
         <div className="px-3 pb-2 pt-1 text-[9px] font-black uppercase tracking-[.16em] text-[#9995a5]">Model</div>
-        {CANVAS_V2_MODEL_CATALOG.map((entry) => {
+        {CANVAS_V2_MODEL_CATALOG.filter(entry => !chat.runtime || entry.id === "gpt-5.6-luna").map((entry) => {
           const selected = entry.id === chat.modelSelection;
           return <button
             type="button"

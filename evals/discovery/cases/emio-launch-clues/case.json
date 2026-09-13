@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "emio-launch-clues",
+  "family": "game-announcement-forensics",
+  "version": "0.4.0",
+  "status": "draft",
+  "title": "What could Nintendo’s mysterious teaser establish before the reveal?",
+  "asOf": "2024-07-10",
+  "input": {
+    "path": "cases/emio-launch-clues/input.md",
+    "sha256": "e9756a6746e57bc5e915e1644972e7c00a8de4b942ab6201785f709dab0d18d1"
+  },
+  "assets": [
+    {
+      "path": "cases/emio-launch-clues/assets/teaser-loop.mp4",
+      "sha256": "4ac3c59ab8acd93fbe11c035730eac5d2dd8b1b6e213572b99bd16fa86adc200"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/media.json",
+      "sha256": "be98f82c2907ffad037a63b6f915428384519cf6c249298d9fcce7a4816ac400"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/source-leads.json",
+      "sha256": "b42b8dd14d056a48e97ee180d3e9cc53b6f36219cdd34015caca7bfc4be73965"
+    }
+  ],
+  "initialCanvas": {
+    "path": "cases/emio-launch-clues/initial-canvas.json",
+    "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+  },
+  "episode": {
+    "path": "cases/emio-launch-clues/episode.json",
+    "sha256": "cd143cbba96616aa2931ced89193582804c6b72aa9108f72425c49e688c6f934"
+  },
+  "rubric": {
+    "path": "references/emio-launch-clues/rubric.json",
+    "sha256": "092ef50ca7e62d60f3bd1238de8b7b6645b6882dc50bf18f52a4c4ec7a55e729"
+  },
+  "evidence": {
+    "path": "references/emio-launch-clues/evidence.jsonl",
+    "sha256": "39bbf4dc1a9669053b7cdc6f1dbb19afdd6429ad8935eeb75db68dfee59d1ab1"
+  },
+  "referenceAssets": [],
+  "reviewedArtifacts": [
+    {
+      "path": "references/emio-launch-clues/reference.md",
+      "sha256": "df248ac5b59710379310f989bc5351e813339d657b32475640f02e137c3daf80"
+    },
+    {
+      "path": "references/emio-launch-clues/reviewer-guide.md",
+      "sha256": "34c74abd4cd947bcb13829ef9b29423cf236da9712c6ea9f0c0576a2d8122212"
+    },
+    {
+      "path": "SCORING.md",
+      "sha256": "be94b77879b0602211518dca7cd011a3e68e41d89b4d970fac81098536f3dc49"
+    },
+    {
+      "path": "calibration/discussion.md",
+      "sha256": "6a5a09da53a91c64f4a37169ae4cdf43b27540ff52fc0ceeec685e197ed4647e"
+    }
+  ],
+  "reviews": [],
+  "sourcePolicy": {
+    "mode": "open-web",
+    "referenceAccess": "excluded",
+    "independentDiscoveryCertified": false,
+    "notes": "Only initial assets and eligible event payloads are agent-visible. Source availability and temporal exclusions require operator review; no isolated search adapter is implemented."
+  },
+  "limitations": [
+    "Authored and source-reviewed; independent human rubric calibration and environment rehearsal remain outstanding.",
+    "No live Northstar run has been performed.",
+    "Known historical outcome may be in model memory; this case measures evidence discipline, not blind prediction.",
+    "Current web metadata can leak the later reveal; no isolated temporal retrieval adapter yet."
+  ]
+}

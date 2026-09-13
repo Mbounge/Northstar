@@ -1,5 +1,5 @@
 import type { CanvasV2DiscoveryGraph, CanvasV2DiscoveryNode } from "@/lib/canvas-v2/discovery-graph";
-import type { CanvasV2DiscoveryStateTransition } from "@/lib/canvas-v2/discovery-state";
+import type { CanvasV2DiscoveryState, CanvasV2DiscoveryStateTransition } from "@/lib/canvas-v2/discovery-state";
 
 const EVIDENCE_NODE_KINDS = new Set<CanvasV2DiscoveryNode["kind"]>([
   "source",
@@ -33,6 +33,7 @@ export function buildCanvasV2DiscoveryModelReferenceCodec(
   input: {
     evidenceAliases?: readonly { alias: string; evidenceId: string }[];
     currentHumanInputId?: string;
+    state?: CanvasV2DiscoveryState;
   } = {},
 ) {
   const nodes = (graph?.nodes ?? [])
@@ -45,6 +46,27 @@ export function buildCanvasV2DiscoveryModelReferenceCodec(
     handleByNodeId.set(node.id, handle);
     nodeIdByHandle.set(handle, node.id);
   });
+  const handleByStateId = new Map<string, string>();
+  const stateIdByHandle = new Map<string, string>();
+  for (const [prefix, records] of [
+    ["question", input.state?.questions], ["branch", input.state?.lines],
+    ["finding", input.state?.statements], ["tension", input.state?.contradictions],
+    ["option", input.state?.candidates], ["validation", input.state?.validationBacklog],
+    ["uncertainty", input.state?.sensemaking?.uncertainties],
+  ] as const) {
+    [...(records ?? [])].sort((a, b) => a.id.localeCompare(b.id)).forEach((record, index) => {
+      const handle = `${prefix}-${String(index + 1).padStart(3, "0")}`;
+      handleByStateId.set(record.id, handle);
+      stateIdByHandle.set(handle, record.id);
+    });
+  }
+  const stateReferenceKeys = new Set(["id", "questionId", "questionIds", "resolveQuestionIds", "supersedeStatementIds", "statementIds", "candidateIds", "linkedCandidateIds", "linkedUncertaintyIds", "validationId", "validationIds"]);
+  const decodeStateReferences = (value: unknown, key?: string): unknown => {
+    if (typeof value === "string") return key && stateReferenceKeys.has(key) ? stateIdByHandle.get(value) ?? value : value;
+    if (Array.isArray(value)) return value.map((item) => decodeStateReferences(item, key));
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([childKey, item]) => [childKey, decodeStateReferences(item, childKey)]));
+  };
 
   const aliasCandidates = new Map<string, Set<string>>();
   const addAlias = (alias: string | undefined, handle: string) => {
@@ -72,7 +94,7 @@ export function buildCanvasV2DiscoveryModelReferenceCodec(
   const handleByAlias = new Map(Array.from(aliasCandidates.entries()).flatMap(([alias, handles]) => (
     handles.size === 1 ? [[alias, Array.from(handles)[0]!] as const] : []
   )));
-  const encodeString = (value: string) => handleByNodeId.get(value) ?? handleByAlias.get(value) ?? value;
+  const encodeString = (value: string) => handleByStateId.get(value) ?? handleByNodeId.get(value) ?? handleByAlias.get(value) ?? value;
   const decodeIds = (ids: readonly string[]) => ids.map((id) => {
     const handle = nodeIdByHandle.has(id) ? id : handleByAlias.get(id);
     return handle ? nodeIdByHandle.get(handle) ?? id : id;
@@ -87,10 +109,14 @@ export function buildCanvasV2DiscoveryModelReferenceCodec(
       return mapExactStrings(value, encodeString);
     },
     decodeTransition(value: CanvasV2DiscoveryStateTransition): CanvasV2DiscoveryStateTransition {
-      const transition = structuredClone(value);
+      // Decode only identity fields. A literal handle in human prose is text,
+      // not permission to rewrite the person's words into an internal ID.
+      const transition = decodeStateReferences(value) as CanvasV2DiscoveryStateTransition;
       transition.move.evidenceNodeIds = decodeIds(transition.move.evidenceNodeIds);
       transition.statements = transition.statements.map((item) => ({ ...item, evidenceNodeIds: decodeIds(item.evidenceNodeIds) }));
       transition.contradictions = transition.contradictions.map((item) => ({ ...item, evidenceNodeIds: decodeIds(item.evidenceNodeIds) }));
+      transition.questionUpdates = transition.questionUpdates?.map((item) => ({ ...item, evidenceNodeIds: decodeIds(item.evidenceNodeIds) }));
+      transition.contradictionUpdates = transition.contradictionUpdates?.map((item) => ({ ...item, evidenceNodeIds: decodeIds(item.evidenceNodeIds) }));
       transition.candidates = transition.candidates.map((item) => ({ ...item, evidenceNodeIds: decodeIds(item.evidenceNodeIds) }));
       transition.validationPlans = transition.validationPlans?.map((item) => ({ ...item, evidenceNodeIds: decodeIds(item.evidenceNodeIds) }));
       transition.validationUpdates = transition.validationUpdates?.map((item) => ({
@@ -136,5 +162,6 @@ export function buildCanvasV2DiscoveryModelReferenceCodec(
     },
     handleByNodeId,
     nodeIdByHandle,
+    handleByStateId,
   };
 }

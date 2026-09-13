@@ -1,5 +1,13 @@
 "use client";
 
+import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
+
+import { useFloatingPanel } from "./use-floating-panel";
+import { canvasV2PanelAwareInsets } from "@/lib/canvas-v2/workspace-coordinate-space";
+import { CanvasV2MediaInsert } from "./media-insert";
+import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia, measureCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
+import { Play, Pause } from "lucide-react";
+
 import { useCanvasV2PopoverViewport } from "./use-popover-viewport";
 
 import { canvasV2TextColorSwatch, readCanvasV2RichText, sanitizeCanvasV2RichTextHtml } from "@/lib/canvas-v2/rich-text";
@@ -64,6 +72,7 @@ import {
   type CanvasV2GatewayHandoff,
 } from "@/lib/canvas-v2/gateway-handoff";
 import { CanvasV2ResearchPanel } from "@/components/canvas-v2/canvas-v2-research-panel";
+import { useNorthstarManagedChat } from "@/components/canvas-v2/use-northstar-managed-chat";
 import { useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
 import { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
 import { useTheme } from "@/components/theme-provider";
@@ -73,8 +82,8 @@ import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
 import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachments";
 import { CANVAS_V2_MIN_CANVAS, type CanvasV2CanvasGeometry } from "@/lib/canvas-v2/canvas-geometry";
-import type { CanvasV2InspectableElement, CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
-import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, canvasV2ConnectorNearestLabelPosition, canvasV2MoveConnectorSegment, type CanvasV2ConnectorCap, canvasV2ConnectorBoundaryAnchor, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
+import { canvasV2ConnectorTargetAtPoint, type CanvasV2InspectableElement, type CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
+import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorRelativeAnchor, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, canvasV2ConnectorNearestLabelPosition, canvasV2MoveConnectorSegment, type CanvasV2ConnectorCap, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { canvasV2OpaquePaintColor, canvasV2PaintMode, canvasV2PaintValue, type CanvasV2PaintMode } from "@/lib/canvas-v2/paint-style";
 import { readCanvasV2BoardObjectGraph, type CanvasV2BoardObject } from "@/lib/canvas-v2/board-object-graph";
 import { resolveCanvasV2ContextToolbarPosition } from "@/lib/canvas-v2/context-toolbar-placement";
@@ -115,6 +124,7 @@ import {
   CANVAS_V2_WORKSPACE,
   CANVAS_V2_EMPTY_INSETS,
   canvasV2FrameableSceneBounds,
+  canvasV2LatestCompositionBounds,
   canvasV2NavigationAtmosphere,
   canvasV2NormalizedWheelDelta,
   canvasV2TrackpadPanDelta,
@@ -585,15 +595,30 @@ const CANVAS_V2_DRAWING_CURSOR = canvasV2SvgCursor(`<svg xmlns="http://www.w3.or
 export function CanvasV2Workspace({
   designEndpoint = "/api/canvas-v2/design",
   researchEndpoint = "/api/canvas-v2/research",
+  accountEndpoint = "/api/canvas-v2/account",
   routerEndpoint = "/api/canvas-v2/route",
+  agentEndpoint,
 }: {
   designEndpoint?: string;
   researchEndpoint?: string;
+  accountEndpoint?: string;
   routerEndpoint?: string;
+  agentEndpoint?: string;
 } = {}) {
   const [gatewayHandoff, setGatewayHandoff] = useState<CanvasV2GatewayHandoff>();
   const [gatewayEntry, setGatewayEntry] = useState(false);
   const gatewayConsumedRef = useRef(false);
+  const mediaUrls = useRef<string[]>([]);
+  useEffect(() => () => mediaUrls.current.forEach(url => URL.revokeObjectURL(url)), []);
+  const [mediaPlaying, setMediaPlaying] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const { nodeId, playing } = (event as CustomEvent<{ nodeId: string; playing: boolean }>).detail;
+      setMediaPlaying(current => current[nodeId] === playing ? current : { ...current, [nodeId]: playing });
+    };
+    window.addEventListener(CANVAS_V2_MEDIA_STATE_EVENT, receive);
+    return () => window.removeEventListener(CANVAS_V2_MEDIA_STATE_EVENT, receive);
+  }, []);
 
   useEffect(() => {
     try {
@@ -624,6 +649,7 @@ export function CanvasV2Workspace({
   const engine = useCanvasV2DesignLoop(designEndpoint);
   const { theme, toggleTheme } = useTheme();
   const [panel, setPanel] = useState<Panel>("chat");
+  const floatingPanel = useFloatingPanel();
   const [authoringTab, setAuthoringTab] = useState<HumanAuthoringTab>("shapes");
   const [chatOpen, setChatOpen] = useState(true);
   const [northStarMenuOpen, setNorthStarMenuOpen] = useState(false);
@@ -670,6 +696,9 @@ export function CanvasV2Workspace({
   // to the person and AI commits never pan or zoom it.
   const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
   const viewportRef = useRef(viewport);
+  const cameraPinchActiveRef = useRef(false);
+  const nativePinchScaleRef = useRef<number | undefined>(undefined);
+  const nativePinchHandlerRef = useRef<(event: Event) => void>(() => undefined);
   const renderedViewportRef = useRef(viewport);
   const [workspaceSize, setWorkspaceSize] = useState({ width: 1_440, height: 900 });
   const workspaceSizeRef = useRef(workspaceSize);
@@ -907,28 +936,21 @@ export function CanvasV2Workspace({
     const menu = canvasMenuRef.current?.getBoundingClientRect();
     const status = statusPillRef.current?.getBoundingClientRect();
     const breathingRoom = 24;
-    return {
-      // The top menu and status pill share one shallow exclusion band; treating
-      // them as full-height left and right columns made wide evidence rails fit
-      // into a fictitious sliver and collapse to 4%. Only the open chat panel
-      // owns a vertical column.
-      left: chat ? Math.max(32, chat.right - workspace.left + breathingRoom) : 32,
-      top: Math.max(
-        32,
-        (menu?.bottom ?? workspace.top) - workspace.top + breathingRoom,
-        (status?.bottom ?? workspace.top) - workspace.top + breathingRoom,
-      ),
-      right: 32,
-      bottom: 92,
+    const base = {
+      left: 32, right: 32, bottom: 92,
+      top: Math.max(32, (menu?.bottom ?? workspace.top) - workspace.top + breathingRoom, (status?.bottom ?? workspace.top) - workspace.top + breathingRoom),
     };
-  }, [chatOpen]);
+    return canvasV2PanelAwareInsets({ width: workspace.width, height: workspace.height }, base,
+      chatOpen ? floatingPanel.rect ?? (chat ? { x: chat.left - workspace.left, y: chat.top - workspace.top, width: chat.width, height: chat.height } : undefined) : undefined);
 
-  const chat = useCanvasV2Chat({
+  }, [chatOpen, floatingPanel.rect]);
+
+  const legacyChat = useCanvasV2Chat({
     endpoint: routerEndpoint,
     engine,
     selection: selectedElement,
     selections: selectedElements,
-    gatewayHandoff,
+    gatewayHandoff: agentEndpoint ? undefined : gatewayHandoff,
     getWorkingContext: (selectionPolicy) => buildCanvasV2WorkingContext({
       scene: engine.readNativeScene(),
       selections: selectedElements,
@@ -937,6 +959,13 @@ export function CanvasV2Workspace({
       selectionPolicy,
     }),
   });
+
+  const managedChat = useNorthstarManagedChat({ enabled: Boolean(agentEndpoint), endpoint: agentEndpoint, accountEndpoint, gatewayHandoff, selectedNodeIds: selectedElements.map(element => element.nodeId), base: legacyChat, engine, getWorkingContext: (selectionPolicy) => buildCanvasV2WorkingContext({
+    scene: engine.readNativeScene(), selections: selectedElements,
+    visibleBounds: canvasV2VisibleWorkspaceBounds(viewportRef.current, workspaceSizeRef.current, contentInsets()),
+    viewport: viewportRef.current, selectionPolicy,
+  }) });
+  const chat = agentEndpoint ? managedChat : legacyChat;
 
   useEffect(() => {
     if (!gatewayHandoff || gatewayHandoff.autoSubmit || !engine.ready) return;
@@ -984,7 +1013,10 @@ export function CanvasV2Workspace({
       toolbar.style.visibility = "";
     }
     const atmosphereLayer = atmosphereLayerRef.current;
-    if (atmosphereLayer) {
+    if (atmosphereLayer && !cameraPinchActiveRef.current) {
+      // Pinch keeps the decorative gradients still while the content follows
+      // the fingers. Repainting three full-screen gradients every zoom frame
+      // adds raster work without helping navigation. Settle them once at end.
       // Camera preview is a hot path. Cached ResizeObserver geometry avoids a
       // DOM read after the surface write, which would force synchronous layout
       // on every trackpad frame. Keep these inherited custom properties on the
@@ -1045,6 +1077,7 @@ export function CanvasV2Workspace({
     wheelCommitTimerRef.current = undefined;
     wheelCommitDeadlineRef.current = 0;
     const next = viewportRef.current;
+    cameraPinchActiveRef.current = false;
     if (viewportPreviewFrameRef.current !== undefined) cancelAnimationFrame(viewportPreviewFrameRef.current);
     viewportPreviewFrameRef.current = undefined;
     pendingViewportRef.current = undefined;
@@ -1129,6 +1162,13 @@ export function CanvasV2Workspace({
     ));
   }, [cameraSize, commitViewport, contentInsets]);
 
+  const showLatestComposition = () => {
+    const transaction = engine.committed.sceneTransaction;
+    const bounds = canvasV2LatestCompositionBounds(sceneElementsRef.current, transaction?.mutations ?? [], transaction?.targetIslandId);
+    if (bounds) commitViewport(fitCanvasV2WorkspaceBounds(bounds, cameraSize(), contentInsets(), 48));
+    else fitContent();
+  };
+
   const receiveGeometry = useCallback((geometry: CanvasV2CanvasGeometry) => {
     geometryRef.current = geometry;
     setCanvasGeometry(geometry);
@@ -1142,7 +1182,7 @@ export function CanvasV2Workspace({
     viewport,
     workspaceSize,
     contentInsets(),
-    120,
+    24,
   ), [contentInsets, viewport, workspaceSize]);
 
   const navigationAtmosphere = useMemo(() => canvasV2NavigationAtmosphere(
@@ -1164,7 +1204,6 @@ export function CanvasV2Workspace({
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     lastCanvasPointerRef.current = workspacePoint(event.clientX, event.clientY);
     if (tool === "place" && placementTool && !spacePan && event.button === 0) {
-      chat.stop();
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
       const point = workspacePoint(event.clientX, event.clientY);
@@ -1661,7 +1700,6 @@ export function CanvasV2Workspace({
   }, []);
 
   const startDirectGesture = (kind: DirectGesture["kind"], pointerId: number, clientX: number, clientY: number, elements: CanvasV2InspectableElement[], handle?: CanvasV2ResizeHandle, clickSelection?: CanvasV2InspectableElement[]) => {
-    chat.stop();
     cancelDirectGesturePreview();
     const mutable = elements.filter((item) => item.nodeId !== "canvas" && !item.locked);
     const selectionBounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
@@ -1707,10 +1745,8 @@ export function CanvasV2Workspace({
     const selectedNodeIds = selectedElements.map((item) => item.nodeId);
     const currentNativeScene = engine.readNativeScene();
     const owningSelectionIds = selectedNodeIds.filter(id => currentNativeScene?.nodes.find(node => node.sourceNodeId === id)?.attributes["data-canvas-v2-section"] !== "true");
-    const selectionOwnsTarget = !additive && (
-      Boolean(event.element.parentNodeId && owningSelectionIds.includes(event.element.parentNodeId))
-      || canvasV2NativeSceneSelectionContainsTarget(currentNativeScene, owningSelectionIds, event.element.nodeId)
-    );
+    const selectionOwnsTarget = !additive
+      && canvasV2NativeSceneSelectionContainsTarget(currentNativeScene, owningSelectionIds, event.element.nodeId);
     const alreadySelected = selectedElements.some((item) => item.nodeId === event.element.nodeId);
     const nextSelection = selectionOwnsTarget
       ? selectedElements
@@ -1784,7 +1820,6 @@ export function CanvasV2Workspace({
   };
 
   const submitMutation = (mutation: CanvasV2ManualMutation) => {
-    chat.stop();
     const atomicMutations = mutation.kind === "batch" ? mutation.mutations : [mutation];
     const deletedNodeIds = atomicMutations.flatMap((item) => item.kind === "delete" ? [item.nodeId] : []);
     if (deletedNodeIds.length) previewDeletion(deletedNodeIds);
@@ -1848,6 +1883,13 @@ export function CanvasV2Workspace({
       if (mutation.kind === "group") {
         setSelectedElements([]);
         setSelectionTarget(mutation.groupNodeId);
+      }
+      if (mutation.kind === "batch" && createdSelection.length) {
+        // Toolbar duplication is a batch even for one object. Select the
+        // newly created copies just as a direct duplicate mutation does.
+        setSelectedElements([]);
+        setSelectionTarget(undefined);
+        setHistorySelectionRestore({ revisionId: engine.readCommittedRevision().id, nodeIds: createdSelection });
       }
       if (mutation.kind === "ungroup" || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete"))) selectElement(undefined);
       if (deletedNodeIds.length) commitDeletionPreview();
@@ -2026,23 +2068,9 @@ export function CanvasV2Workspace({
       paintConnectorGesture(gesture);
       return true;
     }
-    const other = gesture.endpoint === "from" ? gesture.end : gesture.start;
-    const threshold = 18 / viewportRef.current.scale;
-    const candidates = sceneElementsRef.current.filter((item) => item.nodeId !== gesture.nodeId
-      && item.nodeId !== "canvas"
-      && item.kind !== "root"
-      && item.kind !== "connector"
-      && !item.hidden
-      && point.x >= item.bounds.x - threshold
-      && point.x <= item.bounds.x + item.bounds.width + threshold
-      && point.y >= item.bounds.y - threshold
-      && point.y <= item.bounds.y + item.bounds.height + threshold);
-    const candidate = candidates.sort((a, b) => {
-      const distance = (item: CanvasV2InspectableElement) => Math.hypot(point.x - (item.bounds.x + item.bounds.width / 2), point.y - (item.bounds.y + item.bounds.height / 2));
-      return distance(a) - distance(b);
-    })[0];
+    const candidate = canvasV2ConnectorTargetAtPoint(sceneElementsRef.current, point, gesture.nodeId);
     gesture.attachNodeId = candidate?.nodeId;
-    gesture.draftPoint = candidate ? canvasV2ConnectorBoundaryAnchor(candidate.bounds, other) : point;
+    gesture.draftPoint = point;
     paintConnectorGesture(gesture);
     return true;
   };
@@ -2080,7 +2108,6 @@ export function CanvasV2Workspace({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    chat.stop();
     // Endpoint and curve controls own their pointer sequence exclusively. A
     // connector was initially selected through the scene's forwarded pointer
     // channel, whose terminal event can race the parent overlay becoming
@@ -2421,7 +2448,7 @@ export function CanvasV2Workspace({
     return applyCanvasV2NativeSceneMutation(engine.nativeScene, tidyDraft);
   }, [tidyDraft, engine.nativeScene]);
   const beginTidySpacing = (axis: "x" | "y", event: ReactPointerEvent<HTMLButtonElement>) => {
-    event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); chat.stop();
+    event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId);
     const columns = Math.ceil(Math.sqrt(tidyItems.length));
     const width = Math.max(...tidyItems.map(item => item.bounds.width)), height = Math.max(...tidyItems.map(item => item.bounds.height));
     tidyGestureRef.current = { pointerId: event.pointerId, axis, start: axis === "x" ? event.clientX : event.clientY, items: tidyItems, gapX: Math.max(0, tidyItems[1].bounds.x-tidyItems[0].bounds.x-width), gapY: tidyItems[columns] ? Math.max(0, tidyItems[columns].bounds.y-tidyItems[0].bounds.y-height) : 32 };
@@ -2440,7 +2467,6 @@ export function CanvasV2Workspace({
   };
 
   const beginImageCrop = (element = selectedElement) => {
-    chat.stop();
     if (!element || element.locked || element.kind !== "image") return;
     setConnectorLabelDraft(undefined);
     let source = engine.readNativeScene();
@@ -2525,7 +2551,6 @@ export function CanvasV2Workspace({
 
   const beginConnectorLabel = (element = selectedElement) => {
     if (!element || element.kind !== "connector" || element.locked) return;
-    chat.stop();
     const node = engine.readNativeScene()?.nodes.find(item => item.sourceNodeId === element.nodeId);
     let bounds = element.bounds;
     if (element.connector) { const c = element.connector; const geometry = buildCanvasV2ConnectorGeometry({ start: c.from, end: c.to, variant: c.variant, control: c.control, waypoints: c.waypoints }); const point = canvasV2ConnectorLabelPoint(geometry, c.variant, Number(node?.attributes["data-canvas-v2-connector-label-position"] ?? 0.5)); bounds = { x: geometry.bounds.x + point.x, y: geometry.bounds.y + point.y, width: 0, height: 0 }; }
@@ -2584,9 +2609,7 @@ export function CanvasV2Workspace({
     const connectorTargets = primitive === "connector"
       ? selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked).slice(-2)
       : [];
-    const attachmentAt = (point: { x: number; y: number }) => sceneElementsRef.current
-      .filter((item) => item.nodeId !== "canvas" && item.kind !== "root" && item.kind !== "connector" && !item.hidden && point.x >= item.bounds.x - 12 / viewportRef.current.scale && point.x <= item.bounds.x + item.bounds.width + 12 / viewportRef.current.scale && point.y >= item.bounds.y - 12 / viewportRef.current.scale && point.y <= item.bounds.y + item.bounds.height + 12 / viewportRef.current.scale)
-      .sort((a, b) => a.bounds.width * a.bounds.height - b.bounds.width * b.bounds.height)[0];
+    const attachmentAt = (point: { x: number; y: number }) => canvasV2ConnectorTargetAtPoint(sceneElementsRef.current, point);
     const fromTarget = primitive === "connector" && options.endpoints ? attachmentAt(options.endpoints.start) : connectorTargets.length === 2 ? connectorTargets[0] : undefined;
     const toTarget = primitive === "connector" && options.endpoints ? attachmentAt(options.endpoints.end) : connectorTargets.length === 2 ? connectorTargets[1] : undefined;
     const start = options.endpoints?.start ?? (connectorTargets.length === 2
@@ -2608,8 +2631,8 @@ export function CanvasV2Workspace({
       ...(primitive === "line" || primitive === "connector" ? { endX: end.x, endY: end.y } : {}),
       ...(options.shapeVariant ? { shapeVariant: options.shapeVariant } : {}),
       ...(options.connectorVariant ? { connectorVariant: options.connectorVariant } : {}),
-      ...(fromTarget ? { fromNodeId: fromTarget.nodeId } : {}),
-      ...(toTarget && toTarget.nodeId !== fromTarget?.nodeId ? { toNodeId: toTarget.nodeId } : {}),
+      ...(fromTarget ? { fromNodeId: fromTarget.nodeId, ...(options.endpoints ? { fromAnchor: canvasV2ConnectorRelativeAnchor({ ...fromTarget.bounds, rotation: fromTarget.rotation }, start) } : {}) } : {}),
+      ...(toTarget ? { toNodeId: toTarget.nodeId, ...(options.endpoints ? { toAnchor: canvasV2ConnectorRelativeAnchor({ ...toTarget.bounds, rotation: toTarget.rotation }, end) } : {}) } : {}),
       ...(options.src ? { src: options.src, alt: options.alt ?? "" } : {}),
     });
     if (accepted && options.autoEdit && (primitive === "text" || primitive === "note" || primitive === "shape")) setEditTextRequest({ nodeId, nonce: Date.now(), selectAll: true });
@@ -2722,8 +2745,46 @@ export function CanvasV2Workspace({
     return accepted;
   };
 
+  const addPlayableMediaBatch = async (items: Array<{ src: string; description: string; type: "video" | "gif"; mimeType?: string }>, origin?: { x: number; y: number }) => {
+    try {
+      items.forEach(item => parseCanvasV2PlayableMedia(JSON.stringify({ version: 1, ...item, evidenceId: "pending-upload" })));
+      const sizes = await Promise.all(items.map(item => measureCanvasV2PlayableMedia(item.src, item.type)));
+      const scene = engine.readNativeScene();
+      if (!scene) throw new Error("Wait for the canvas to be ready.");
+      const totalSize = { width: sizes.reduce((sum, size) => sum + size.width, 0) + Math.max(0, sizes.length - 1) * 36, height: Math.max(...sizes.map(size => size.height)) };
+      const position = origin ?? centeredCanvasV2WorkspaceOrigin(totalSize, viewport, cameraSize(), contentInsets());
+      const entries = items.map((item) => {
+        const nodeId = `media-${crypto.randomUUID()}`, evidenceId = `supplied-${nodeId}`;
+        return { ...item, nodeId, evidenceId, media: parseCanvasV2PlayableMedia(JSON.stringify({ version: 1, ...item, evidenceId })) };
+      });
+      const mutations: CanvasV2AtomicManualMutation[] = entries.flatMap((item, index) => [
+        { kind: "create" as const, primitive: "shape" as const, nodeId: item.nodeId, x: position.x + sizes.slice(0,index).reduce((sum,size) => sum + size.width + 36,0), y: position.y, width: sizes[index].width, height: sizes[index].height },
+        { kind: "attribute" as const, nodeId: item.nodeId, name: MEDIA_ATTRIBUTE, value: JSON.stringify(item.media) },
+      ]);
+      const native = applyCanvasV2NativeSceneMutation(scene, { kind: "batch", label: "Added playable media.", mutations });
+      const evidence = entries.map(item => ({ id: item.evidenceId, url: item.src, label: item.description, authority: "supplied" as const, mimeType: item.mimeType ?? (item.type === "gif" ? "image/gif" : "video/mp4"), description: "Human-supplied media. Playback is not model observation." }));
+      if (!engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Added playable media.", [...engine.readCommittedRevision().evidence, ...evidence], native, { selectionNodeIds: entries.map(item => item.nodeId) })) throw new Error(engine.readManualFailure() || "The media could not be added.");
+      mediaUrls.current.push(...items.filter(item => item.src.startsWith("blob:")).map(item => item.src));
+      cancelDrawingGesture(); setTool("select"); setSelectedElements([]); setSelectionTarget(entries.at(-1)?.nodeId); setMutationError(undefined); return true;
+    } catch (error) { setMutationError(error instanceof Error ? error.message : "The media could not be added."); return false; }
+  };
+  const addPlayableMedia = (src: string, description: string, type: "video" | "gif", origin?: { x: number; y: number }) => addPlayableMediaBatch([{ src, description, type }], origin);
+  const addPlayableFiles = async (files: readonly File[], origin?: { x: number; y: number }) => {
+    if (!files.length) return false;
+    if (files.some(file => !["video/mp4", "video/webm", "image/gif"].includes(file.type) || file.size > 100 * 1024 * 1024)) {
+      setMutationError("Choose MP4, WebM or GIF files up to 100 MB each."); return false;
+    }
+    const items = files.map(file => ({ src: URL.createObjectURL(file), description: file.name, type: file.type === "image/gif" ? "gif" as const : "video" as const, mimeType: file.type }));
+    const accepted = await addPlayableMediaBatch(items, origin);
+    if (!accepted) items.forEach(item => URL.revokeObjectURL(item.src));
+    return accepted;
+  };
+
   const addLocalImages = async (files: readonly File[], origin?: { x: number; y: number }, replaceNodeId?: string) => {
+    const mediaFiles = replaceNodeId ? [] : files.filter(file => ["video/mp4", "video/webm", "image/gif"].includes(file.type));
+    const mediaAdded = mediaFiles.length ? await addPlayableFiles(mediaFiles, origin) : false;
     const images = files.filter((file) => file.type === "image/png" || file.type === "image/jpeg" || file.type === "image/webp");
+    if (!images.length && mediaFiles.length) return mediaAdded;
     if (!images.length) {
       setMutationError("Choose a PNG, JPEG, or WebP image to add to the canvas.");
       return false;
@@ -2783,7 +2844,7 @@ export function CanvasV2Workspace({
     event.stopPropagation();
     if (!engine.ready || engine.applyingManualEdit) return;
     const origin = workspacePoint(event.clientX, event.clientY);
-    const imageFiles = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/"));
+    const imageFiles = Array.from(event.dataTransfer.files).filter((file) => (file.type.startsWith("image/") || file.type.startsWith("video/")));
     clearPrimitiveDrag();
     if (imageFiles.length) {
       void addLocalImages(imageFiles, origin);
@@ -2876,9 +2937,14 @@ export function CanvasV2Workspace({
     } : undefined);
   };
 
+  const selectedPlayableMedia = selectedElements.length === 1 && engine.nativeScene?.nodes.find(node => node.sourceNodeId === selectedElement?.nodeId)?.attributes[MEDIA_ATTRIBUTE];
+  const toggleSelectedMedia = () => {
+    if (!selectedElement || !selectedPlayableMedia) return;
+    workspaceRef.current?.querySelector(`[data-canvas-v2-node-id="${CSS.escape(selectedElement.nodeId)}"] [data-canvas-v2-playable-media]`)?.dispatchEvent(new CustomEvent(CANVAS_V2_MEDIA_TOGGLE_EVENT));
+  };
   workspaceKeydownHandlerRef.current = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+      if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
       const command = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (!command && event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
@@ -2897,8 +2963,11 @@ export function CanvasV2Workspace({
         if (key === "h" || key === "v" || key === "p") { selectElement(undefined); setTool(key === "h" ? "pan" : key === "p" ? "draw" : "select"); }
         else activatePrimitive(key === "t" ? "text" : key === "s" ? "note" : key === "l" ? "connector" : key === "f" ? "frame" : "shape", key === "o" ? { shapeVariant: "ellipse" } : key === "r" ? { shapeVariant: "rectangle" } : {});
       } else if (event.code === "Space") {
+        if (target?.closest('[data-canvas-v2-media-control], button')) return;
         event.preventDefault();
-        setSpacePan(true);
+        if (selectedPlayableMedia && !command && !event.altKey && !event.shiftKey) {
+          if (!event.repeat) toggleSelectedMedia();
+        } else setSpacePan(true);
       } else if (event.key === "Escape") {
         setCropDraft(undefined); setConnectorLabelDraft(undefined); setZoomMenuOpen(false);
         cancelDrawingGesture();
@@ -2961,11 +3030,11 @@ export function CanvasV2Workspace({
   };
   workspacePasteHandlerRef.current = (event: ClipboardEvent) => {
     const target = event.target as HTMLElement | null;
-    if (target?.closest('input, textarea, select, [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+    if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
     if (!engine.ready || engine.applyingManualEdit) return;
-    const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+    const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => (file.type.startsWith("image/") || file.type.startsWith("video/")));
     const itemFiles = directFiles.length ? [] : Array.from(event.clipboardData?.items ?? [])
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .filter((item) => item.kind === "file" && (item.type.startsWith("image/") || item.type.startsWith("video/")))
       .map((item) => item.getAsFile())
       .filter((file): file is File => Boolean(file));
     const images = directFiles.length ? directFiles : itemFiles;
@@ -3016,6 +3085,7 @@ export function CanvasV2Workspace({
     const deltaX = canvasV2NormalizedWheelDelta(event.deltaX, event.deltaMode, camera.width);
     const deltaY = canvasV2NormalizedWheelDelta(event.deltaY, event.deltaMode, camera.height);
     if (event.ctrlKey || event.metaKey) {
+      cameraPinchActiveRef.current = true;
       const rect = workspaceOriginRef.current;
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
@@ -3037,7 +3107,26 @@ export function CanvasV2Workspace({
   workspaceWheelHandlerRef.current = (event: globalThis.WheelEvent) => {
     event.preventDefault();
     event.stopPropagation();
+    if (nativePinchScaleRef.current !== undefined && (event.ctrlKey || event.metaKey)) return;
     navigateWorkspaceWheel(event);
+  };
+
+  nativePinchHandlerRef.current = (event: Event) => {
+    event.preventDefault(); event.stopPropagation();
+    const gesture = event as Event & { scale?: number; clientX?: number; clientY?: number };
+    if (event.type === "gesturestart") {
+      nativePinchScaleRef.current = 1; cameraPinchActiveRef.current = true; beginCameraPreview(); return;
+    }
+    if (event.type === "gestureend") {
+      nativePinchScaleRef.current = undefined; finishCameraPreview(); return;
+    }
+    if (!Number.isFinite(gesture.scale) || !gesture.scale || gesture.scale <= 0) return;
+    const previousScale = nativePinchScaleRef.current ?? 1;
+    nativePinchScaleRef.current = gesture.scale;
+    cameraPinchActiveRef.current = true;
+    const origin = workspaceOriginRef.current;
+    const anchor = { x: Number.isFinite(gesture.clientX) ? gesture.clientX! - origin.left : workspaceSizeRef.current.width / 2, y: Number.isFinite(gesture.clientY) ? gesture.clientY! - origin.top : workspaceSizeRef.current.height / 2 };
+    previewViewport(current => zoomViewportAtPoint(current, current.scale * gesture.scale! / previousScale, anchor));
   };
 
   useEffect(() => {
@@ -3046,18 +3135,19 @@ export function CanvasV2Workspace({
     // React's delegated wheel layer cannot guarantee cancellation of native
     // browser pinch zoom on macOS. Own the wheel at the DOM boundary with an
     // explicitly non-passive capture listener so a canvas pinch never scales
-    // the whole page. WebKit gesture events are suppressed for the same reason.
+    // the whole page. WebKit's native GestureEvent stream uses the same camera
+    // preview path; suppressing it without consuming its scale drops pinches.
     const wheel = (event: globalThis.WheelEvent) => workspaceWheelHandlerRef.current(event);
-    const suppressBrowserZoom = (event: Event) => event.preventDefault();
+    const nativePinch = (event: Event) => nativePinchHandlerRef.current(event);
     workspace.addEventListener("wheel", wheel, { capture: true, passive: false });
-    workspace.addEventListener("gesturestart", suppressBrowserZoom, { capture: true, passive: false });
-    workspace.addEventListener("gesturechange", suppressBrowserZoom, { capture: true, passive: false });
-    workspace.addEventListener("gestureend", suppressBrowserZoom, { capture: true, passive: false });
+    workspace.addEventListener("gesturestart", nativePinch, { capture: true, passive: false });
+    workspace.addEventListener("gesturechange", nativePinch, { capture: true, passive: false });
+    workspace.addEventListener("gestureend", nativePinch, { capture: true, passive: false });
     return () => {
       workspace.removeEventListener("wheel", wheel, true);
-      workspace.removeEventListener("gesturestart", suppressBrowserZoom, true);
-      workspace.removeEventListener("gesturechange", suppressBrowserZoom, true);
-      workspace.removeEventListener("gestureend", suppressBrowserZoom, true);
+      workspace.removeEventListener("gesturestart", nativePinch, true);
+      workspace.removeEventListener("gesturechange", nativePinch, true);
+      workspace.removeEventListener("gestureend", nativePinch, true);
     };
   }, []);
 
@@ -3281,15 +3371,16 @@ export function CanvasV2Workspace({
       )}
 
       <div ref={statusPillRef} className="absolute right-5 top-5 z-50 flex h-14 items-center gap-3 rounded-2xl border border-[#dedfea] bg-white px-2.5 shadow-[0_10px_32px_rgba(51,45,95,.13)] dark:border-white/[.1] dark:bg-[#1d1c24] dark:shadow-[0_14px_40px_rgba(0,0,0,.32)]">
-        <span className={`h-2 w-2 rounded-full ${chat.busy ? "animate-pulse bg-[#735dff]" : "bg-emerald-400"}`} />
-        <span data-testid="canvas-v2-loop-status" className="text-xs font-black capitalize text-[#343442] dark:text-[#f1eff6]">{chat.routing ? "understanding request" : engine.running ? "working" : engine.loop?.status.replaceAll("-", " ") ?? (chat.busy ? "working" : "ready")}</span>
-        <span className="h-6 w-px bg-[#e5e5ed] dark:bg-white/[.09]" />
-        <span data-testid="canvas-v2-committed-revision" className="max-w-[150px] truncate font-mono text-[10px] text-[#8b8b99]">{engine.committed.id}</span>
+        <span hidden aria-hidden="true" data-testid="canvas-v2-loop-status">{chat.routing ? "understanding request" : engine.running ? "working" : engine.loop?.status.replaceAll("-", " ") ?? (chat.busy ? "working" : "ready")}</span>
+        <span hidden aria-hidden="true" data-testid="canvas-v2-committed-revision">{engine.committed.id}</span>
+        {engine.committed.sceneTransaction?.origin === "northstar" && <button type="button" onClick={showLatestComposition} className="rounded-lg px-2 py-1 text-xs font-semibold text-[#6653e8] hover:bg-[#f0edff] dark:text-[#b9aeff] dark:hover:bg-white/[.07]">Show on canvas</button>}
         <button type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title="Toggle theme" className="grid h-9 w-9 place-items-center rounded-[11px] text-[#676573] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#aaa6b4] dark:hover:bg-white/[.07] dark:hover:text-[#c1b8ff]">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
       </div>
 
-      {chatOpen && <aside ref={chatPanelRef} data-testid="canvas-v2-floating-panel" className="absolute bottom-24 left-5 top-[90px] z-40 flex w-[390px] flex-col overflow-hidden rounded-[24px] border border-[#dedee8] bg-white shadow-[0_24px_80px_rgba(46,42,88,.14)] dark:border-white/[.1] dark:bg-[#191820] dark:shadow-[0_28px_85px_rgba(0,0,0,.38)] 2xl:bottom-5">
-        <div className="flex h-[58px] items-center border-b border-[#ececf2] px-3 dark:border-white/[.08]">
+      {chatOpen && <aside ref={chatPanelRef} style={floatingPanel.rect ? { left: floatingPanel.rect.x, top: floatingPanel.rect.y, width: floatingPanel.rect.width, height: floatingPanel.rect.height, bottom: "auto", ...(floatingPanel.active ? { userSelect: "none" as const } : {}) } : undefined} data-testid="canvas-v2-floating-panel" className="absolute bottom-24 left-5 top-[90px] z-40 flex w-[390px] flex-col overflow-hidden rounded-[24px] border border-[#dedee8] bg-white shadow-[0_24px_80px_rgba(46,42,88,.14)] dark:border-white/[.1] dark:bg-[#191820] dark:shadow-[0_28px_85px_rgba(0,0,0,.38)] 2xl:bottom-5">
+        {(["n", "ne", "e", "se", "s", "sw", "w", "nw"] as const).map(handle => <button key={handle} aria-label={`Resize North Star panel ${{n:"top",ne:"top right",e:"right",se:"bottom right",s:"bottom",sw:"bottom left",w:"left",nw:"top left"}[handle]}`} title="Drag to resize; arrow keys for precision" onPointerDown={floatingPanel.pointerDown(handle)} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown(handle)} className="group absolute z-50 touch-none rounded text-[#aaa4bb] hover:text-[#7560e8] focus-visible:text-[#7560e8] focus-visible:outline-none dark:text-[#777180] dark:hover:text-[#b9aeff] dark:focus-visible:text-[#b9aeff]" style={{ cursor: `${handle === 'n' || handle === 's' ? 'ns' : handle === 'e' || handle === 'w' ? 'ew' : handle === 'ne' || handle === 'sw' ? 'nesw' : 'nwse'}-resize`, ...(handle.includes('n') ? { top: 0 } : handle.includes('s') ? { bottom: 0 } : { top: 20, bottom: 20 }), ...(handle.includes('w') ? { left: 0 } : handle.includes('e') ? { right: 0 } : { left: 20, right: 20 }), width: handle === 'n' || handle === 's' ? undefined : handle.length === 2 ? 22 : 9, height: handle === 'e' || handle === 'w' ? undefined : handle.length === 2 ? 22 : 9 }}><span aria-hidden="true" className="pointer-events-none absolute rounded-sm bg-current opacity-0 transition-opacity duration-150 group-hover:opacity-70 group-focus-visible:opacity-70" style={handle.length === 2 ? { background: 'transparent', width: 10, height: 10, top: handle.includes('n') ? 7 : undefined, bottom: handle.includes('s') ? 7 : undefined, left: handle.includes('w') ? 7 : undefined, right: handle.includes('e') ? 7 : undefined, borderTop: handle.includes('n') ? '2px solid currentColor' : undefined, borderBottom: handle.includes('s') ? '2px solid currentColor' : undefined, borderLeft: handle.includes('w') ? '2px solid currentColor' : undefined, borderRight: handle.includes('e') ? '2px solid currentColor' : undefined } : handle === 'n' || handle === 's' ? { width: 28, height: 3, left: '50%', top: 3, transform:'translateX(-50%)' } : { width: 3, height: 28, top:'50%', left:3, transform:'translateY(-50%)' }} /></button>)}
+        <div className="flex h-[58px] shrink-0 items-center border-b border-[#ececf2] px-3 dark:border-white/[.08]">
+          <button aria-label="Move North Star panel" title="Drag to move; arrow keys for precision" onPointerDown={floatingPanel.pointerDown('move')} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown('move')} className="mr-1 grid h-9 w-5 shrink-0 touch-none cursor-grab place-items-center rounded text-[#898895] active:cursor-grabbing focus-visible:outline focus-visible:outline-[#8b79ff]"><span aria-hidden="true">⠿</span></button>
           <div className="grid flex-1 grid-cols-3 gap-1 rounded-[14px] bg-[#f6f6f9] p-1 dark:bg-white/[.045]">
             {(["chat", "shapes", "apps"] as Panel[]).map((item) => {
               const Icon = item === "chat" ? MessageSquare : item === "shapes" ? Shapes : AppWindow;
@@ -3313,6 +3404,7 @@ export function CanvasV2Workspace({
               return <button key={label} type="button" draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, shapeVariant, connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, { shapeVariant, connectorVariant })} disabled={!engine.ready || engine.applyingManualEdit} className={`group flex cursor-grab flex-col items-center justify-center bg-transparent text-center transition active:cursor-grabbing disabled:opacity-35 ${relationship ? "h-[132px]" : "h-[108px]"}`}><span className={`grid w-full place-items-center ${relationship ? "h-[92px]" : "h-[78px]"}`}><span className="block transition duration-200 group-hover:scale-110 group-active:scale-95" style={{ width: relationship ? 104 : Math.min(96, silhouette.width * 0.76), height: relationship ? 48 : Math.min(72, silhouette.height * 0.76) }}><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">{label}</span>{relationship && <span className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">{primitive === "connector" ? "2 attachable ends" : "Independent"}</span>}</button>;
             })}
             {authoringTab === "media" && <button type="button" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.applyingManualEdit} className="group flex h-[108px] flex-col items-center justify-center bg-transparent text-center disabled:opacity-35"><span className="grid h-[78px] w-full place-items-center"><span className="block h-[64px] w-[88px] transition duration-200 group-hover:scale-110"><CanvasV2PrimitiveThumbnail input={{ primitive: "image" }} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Image</span></button>}
+            {authoringTab === "media" && <CanvasV2MediaInsert disabled={!engine.ready || engine.applyingManualEdit} onFiles={files => addPlayableFiles(files)} onUrl={(url, type) => addPlayableMedia(url, type === "gif" ? "Linked GIF" : "Linked video", type)}/>}
           </div>
           <div className="flex items-center justify-center gap-2 pb-1 pt-2 text-[10px] text-[#94929f] dark:text-[#8f8b99]">{authoringTab === "media" ? <><Pencil className="h-3.5 w-3.5 text-[#7461ea]" />Select Drawing, then paint on canvas</> : <><MousePointer2 className="h-3.5 w-3.5 text-[#7461ea]" />Drag to preview and place precisely</>}</div>
         </div>}
@@ -3427,7 +3519,8 @@ export function CanvasV2Workspace({
               nativeSceneOverride={tidyPreviewScene ?? cropPreviewScene ?? engine.nativeScene}
               preferredPlacement={preferredAiPlacement}
               onElementDoubleClick={(element) => { if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
-              onBeforeUserEdit={chat.stop}
+              onBeforeUserEdit={engine.beginHumanEdit}
+              onAfterUserEdit={engine.endHumanEdit}
               editTextRequest={editTextRequest}
               onTableAction={tableAction}
               onElementTextCommit={(element, text, nativeContent, layout) => submitMutation({ kind: "text", nodeId: element.nodeId, text, nativeContent, layout })}
@@ -3587,7 +3680,7 @@ export function CanvasV2Workspace({
           aria-hidden="true"
           data-testid="canvas-v2-committed-observation-surface"
           className="pointer-events-none fixed overflow-hidden opacity-0"
-          style={{ left: -100_000, top: -100_000, width: 1, height: 1 }}
+          style={PRIVATE_RENDER_SURFACE_STYLE}
         >
           <CanvasV2CanvasScene
             revision={engine.displayed}
@@ -3606,7 +3699,7 @@ export function CanvasV2Workspace({
           aria-hidden="true"
           data-testid="canvas-v2-candidate-inspection-surface"
           className="pointer-events-none fixed overflow-hidden opacity-0"
-          style={{ left: -100_000, top: -100_000, width: 1, height: 1 }}
+          style={PRIVATE_RENDER_SURFACE_STYLE}
         >
           <CanvasV2CanvasScene
             revision={engine.inspectionCandidate}
@@ -3679,7 +3772,7 @@ export function CanvasV2Workspace({
           <button title="Align right" aria-label="Align text right" onClick={() => styleSelection("text-align", "right")} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><AlignRight className="h-4 w-4" /></button>
         </>}
 
-        {selectionCanFill && <>
+        {selectionCanFill && !selectedElements.some(item => engine.nativeScene?.nodes.find(node => node.sourceNodeId === item.nodeId)?.attributes[MEDIA_ATTRIBUTE]) && <>
           {selectionIsShape && <>
             <button title="Shape" aria-label="Change shape" onClick={() => setToolbarMenu((current) => current === "shape" ? undefined : "shape")} className="flex h-7 items-center gap-1.5 rounded-lg px-2 hover:bg-white/[.1]">
               <span className="block h-6 w-6"><CanvasV2PrimitiveThumbnail input={{ primitive: "shape", shapeVariant: selectedElement.shapeVariant }} /></span>
@@ -3725,6 +3818,7 @@ export function CanvasV2Workspace({
 
         {!cropDraft && selectedElement.kind !== "connector" && <div className="mx-1 h-7 w-px bg-white/[.12]" />}
         {!cropDraft && selectedElement.kind !== "connector" && <button title="Duplicate" aria-label="Duplicate selected elements" onClick={duplicateSelection} disabled={selectionPermanent || engine.applyingManualEdit} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] disabled:opacity-30"><Copy className="h-4 w-4" /></button>}
+        {selectedPlayableMedia && <button aria-label={mediaPlaying[selectedElement.nodeId] ? "Pause selected media" : "Play selected media"} title={mediaPlaying[selectedElement.nodeId] ? "Pause · Space" : "Play · Space"} onClick={toggleSelectedMedia} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/10">{mediaPlaying[selectedElement.nodeId] ? <Pause className="h-3.5 w-3.5"/> : <Play className="h-3.5 w-3.5"/>}</button>}
         {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
 
         {toolbarMenu === "shape" && <div data-canvas-v2-popover data-testid="canvas-v2-shape-palette" aria-label="Shape choices" className={`absolute left-1/2 grid w-[286px] max-w-[calc(100vw-20px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-[17px] border border-white/[.09] bg-[#1d1d1f] p-2 text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>

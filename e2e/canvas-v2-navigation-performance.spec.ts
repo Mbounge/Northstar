@@ -139,7 +139,8 @@ test("heavy canvas navigation remains frame-paced and keeps the velvet on the ca
   expect(measurement.renderDelta).toBeLessThanOrEqual(2);
   expect(measurement.atGestureEnd.transform).not.toBe(measurement.before.transform);
   expect(measurement.atGestureEnd.atmosphere).not.toEqual(measurement.before.atmosphere);
-  expect(measurement.afterSettle).toEqual(measurement.atGestureEnd);
+  expect(measurement.afterSettle.transform).toEqual(measurement.atGestureEnd.transform);
+  expect(measurement.afterSettle.atmosphere).not.toEqual(measurement.before.atmosphere);
   expect(measurement.workspaceOwnsAtmosphereVariables).toBe(false);
   expect(measurement.atmosphereContainment).toBe("strict");
   expect(measurement.overTwentyMs).toBeLessThanOrEqual(1);

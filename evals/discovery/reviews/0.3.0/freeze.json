@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "northstar-discovery",
+  "version": "0.3.0",
+  "status": "author-reviewed-draft-candidate",
+  "createdAt": "2026-09-08T00:09:57.357Z",
+  "benchmarkDigest": "63127d2bcb4b18fccd2f527211e5c74658809fd7f8aeb2f29854cab1a442eb96",
+  "counts": {
+    "cases": 4,
+    "criteria": 42,
+    "checkpoints": 21
+  },
+  "liveRuns": 0,
+  "independentHumanApproval": false,
+  "independentDiscoveryCertified": false,
+  "cases": [
+    {
+      "id": "ikea-breakfast",
+      "caseDigest": "80c0db7404552cae5431a4589b573d7533d7ecb470d345ee8641fe55b458d58d",
+      "reviewDigest": "ab66c74598b74b693c39146e157134633806c176e76cde5ac22d6d95dc6b34d0"
+    },
+    {
+      "id": "emio-launch-clues",
+      "caseDigest": "3f5fff3452d36f801f96062748968d298c4253f4d6cf6e5d57124e9c8987a46a",
+      "reviewDigest": "7571de600d7970e2dd7b41541931353b72e5a6a1258eec8363134b1a77e7f891"
+    },
+    {
+      "id": "gymshark-creator-strategy",
+      "caseDigest": "df71aae86029946a6c6c15614679886eadfadac82369c60f6c80669f68c2f4b5",
+      "reviewDigest": "7107fe3fbf9caf32fed003ac2733a7ac5c35d23d5e297984d4322cfd320553f8"
+    },
+    {
+      "id": "slack-clips-design",
+      "caseDigest": "0febb8635de985da38ebcb4abc87aabb98a813f160af95a7db15405568afca43",
+      "reviewDigest": "82e6ba418efd75690f193e0105a1b070948d942b4d36bba8aed7e1fe50d84efc"
+    }
+  ],
+  "files": [
+    {
+      "path": "CATALOG.md",
+      "sha256": "b3f450a8a917b19bdf1901b89d807df51790a558dc372ea53470be6988910924"
+    },
+    {
+      "path": "READINESS.md",
+      "sha256": "dc301bcac6d1f2cec94828a99923e148648a4773f189568b49e2125ab95a2bd6"
+    },
+    {
+      "path": "README.md",
+      "sha256": "8ab29e092b985116ec7e48494a0a7237b5a310bece952c5e2bfdb96571b92733"
+    },
+    {
+      "path": "baselines/README.md",
+      "sha256": "a075b0c5f94136843702fe1a874964261a05b77c3ced72641ee3db3b8ec975e5"
+    },
+    {
+      "path": "benchmark.json",
+      "sha256": "f07d35242c239cca4bb00ad4a5c133a2dc51e3d0ec2634d10126a0b819b688c7"
+    },
+    {
+      "path": "calibration/emio-launch-clues-examples.json",
+      "sha256": "142f6a8211244a795f2929e0e531ef84470131980a1315f26f069a9b89806646"
+    },
+    {
+      "path": "calibration/gymshark-creator-strategy-examples.json",
+      "sha256": "9116c2f2de54f574561ac40d849ccba477f5cbb598d29ec4f45dce35b7c06eaa"
+    },
+    {
+      "path": "calibration/ikea-examples.json",
+      "sha256": "0f3ea2300ce814c50a9ab649661439dd65f260a85dde04ad859057eb96187445"
+    },
+    {
+      "path": "calibration/slack-clips-design-examples.json",
+      "sha256": "db9b6b7d5814ad97cb613647875d089442019c566a34d898fd2c00df79dd321a"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/media.json",
+      "sha256": "be98f82c2907ffad037a63b6f915428384519cf6c249298d9fcce7a4816ac400"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/source-leads.json",
+      "sha256": "b42b8dd14d056a48e97ee180d3e9cc53b6f36219cdd34015caca7bfc4be73965"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/teaser-loop.mp4",
+      "sha256": "4ac3c59ab8acd93fbe11c035730eac5d2dd8b1b6e213572b99bd16fa86adc200"
+    },
+    {
+      "path": "cases/emio-launch-clues/case.json",
+      "sha256": "62c022c70c091c58020e371bbc7eab9f9691b115477a8ba1b070c25b604348c7"
+    },
+    {
+      "path": "cases/emio-launch-clues/episode.json",
+      "sha256": "cd143cbba96616aa2931ced89193582804c6b72aa9108f72425c49e688c6f934"
+    },
+    {
+      "path": "cases/emio-launch-clues/events/reveal/reveal-note.md",
+      "sha256": "a703090d73f7290ef7addc9fcec9b795c3040c2931a12219d2c4c069b087e104"
+    },
+    {
+      "path": "cases/emio-launch-clues/initial-canvas.json",
+      "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+    },
+    {
+      "path": "cases/emio-launch-clues/input.md",
+      "sha256": "e9756a6746e57bc5e915e1644972e7c00a8de4b942ab6201785f709dab0d18d1"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/brief.md",
+      "sha256": "c100e491dcb015c188f334aa181c0ba13a337ce7065ab7c3914e7b5d23be5c6e"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-frame-0010.jpg",
+      "sha256": "480b3fefadf1e688ebba0c5fb28363539bfecf754f6c08aa22df26b149ac991e"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-frame-0030.jpg",
+      "sha256": "e3557fb437f7188e082937c8db5a6c9827c90753f4e81336896e58da16e393cc"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-story.mp4",
+      "sha256": "fffebeea9ae24a2fcb2845a83a3d98fd622beba8b757230ff5c15bde45d46ebc"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-thumbnail.jpg",
+      "sha256": "1627224f6eaa5a7d4598b5d2c776ae936b10e8dea585334cbb79e31462668b04"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/media.json",
+      "sha256": "6b837c34450f278fc01b1e8bddf7a242eee4688a375b31d669fb94beab3d4d27"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/source-context.md",
+      "sha256": "2ad43bcdedbcbd537f95bbf5332bc52347ea844d4b8afe6d369e0fced8ebfe92"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/case.json",
+      "sha256": "93809a87a145f87b47b614bcf6df8fa67b93b27a7d30503a0fccb9eee27f3a43"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/episode.json",
+      "sha256": "6e8724f24d0a4aea94761c49fb5a3de7090d662bb684b0e9f8139272eb45181a"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/events/pilot/measurement-note.md",
+      "sha256": "9b30db16443924a934bcbc0d4cf63ba9a00f4cb366e35567a4155c7c5ab19aa9"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/events/pilot/pilot.csv",
+      "sha256": "2d88310bba38a0a106ffa6b44bd4a83776315a1cf7c9ac080cb6591c89d62cc0"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/initial-canvas.json",
+      "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/input.md",
+      "sha256": "11162cc50ebae1adb1d2340660eb4274dd27aa59cc0b26ee0d6b44e8de80f4a6"
+    },
+    {
+      "path": "cases/ikea-breakfast/assets/original-post.png",
+      "sha256": "afc626b45c2ff94dacce6b1475a3d97b6cfbf56b95392d5ac231ac55f9b3a7ac"
+    },
+    {
+      "path": "cases/ikea-breakfast/case.json",
+      "sha256": "e08845945e0327c476fd07d2af04463ad67aa4cc057ae21b3425bae62bcb4213"
+    },
+    {
+      "path": "cases/ikea-breakfast/episode.json",
+      "sha256": "b356c11a9830813cf26c2b735a4060a7c7f627bf5a9e75a2efed77a51099dcf9"
+    },
+    {
+      "path": "cases/ikea-breakfast/initial-canvas.json",
+      "sha256": "e8a30e8db30251bc8fb4af45032f148b897362f5f62b55b9f7d2eba79896227d"
+    },
+    {
+      "path": "cases/ikea-breakfast/input.md",
+      "sha256": "770bbd14324563fe60f85b50c54cb4621b2e9b74d1371e83b207884a22b88110"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/expanded-transcript.gif",
+      "sha256": "e3b496530cb5bcb44ca23ec41d49ec6439edab5a48b7fc6b8620054245ffa2e9"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/inline-player.gif",
+      "sha256": "779184bf635156a8fa627494ff8783794fc8938a5156c177bb7e84b58d9901ac"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/media.json",
+      "sha256": "61b3e2db953f472870298f9a6ab1d8d4f39cd62929b031ed5ff44fc954e80433"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/team-context.md",
+      "sha256": "04251d2f25f6db146f579e753e37fa21db532a8c619df231144a889857e95c30"
+    },
+    {
+      "path": "cases/slack-clips-design/case.json",
+      "sha256": "a79a172c160929b58d02e1dcb50de6e1b52267516f0f327a233c87ad0ece75c6"
+    },
+    {
+      "path": "cases/slack-clips-design/episode.json",
+      "sha256": "6b51c69dfd2326138e44399f7588e5188ebc84cd73cad90f94f5c61e58a9ccc5"
+    },
+    {
+      "path": "cases/slack-clips-design/events/research/research-notes.md",
+      "sha256": "4f07a796aba550885420f80ccf0159f9f9960b7b4e3278ce33862be43ddc5337"
+    },
+    {
+      "path": "cases/slack-clips-design/initial-canvas.json",
+      "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+    },
+    {
+      "path": "cases/slack-clips-design/input.md",
+      "sha256": "dbefd27843d6a8ae0f236fe85a02c0a53e510b2cedda8176e8fd7e72c85e9d8e"
+    },
+    {
+      "path": "graders/README.md",
+      "sha256": "6319ae20c9065573c7017fe62f5d39bd1b88c89708068ec6de3fd7aecb573dde"
+    },
+    {
+      "path": "references/emio-launch-clues/evidence.jsonl",
+      "sha256": "39bbf4dc1a9669053b7cdc6f1dbb19afdd6429ad8935eeb75db68dfee59d1ab1"
+    },
+    {
+      "path": "references/emio-launch-clues/reference.md",
+      "sha256": "df248ac5b59710379310f989bc5351e813339d657b32475640f02e137c3daf80"
+    },
+    {
+      "path": "references/emio-launch-clues/reviewer-guide.md",
+      "sha256": "5a2d647e2673f023b7cc2a3b1b9a79d713ff22e11cd9c7533893d3c8aef39c11"
+    },
+    {
+      "path": "references/emio-launch-clues/rubric.json",
+      "sha256": "956dc4f66a6a43644ef9593a785fe0522d53ec53d344846891cf3cd1fd49d248"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/evidence.jsonl",
+      "sha256": "5fdad347af801675c9a317991dfec617c4a0a433bbcf51fc74cc34f6a6931999"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/reference.md",
+      "sha256": "9c7d0ba0be4313edff5e60372a5e8dd71c9912f37536227570ac964d6a28f35f"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/reviewer-guide.md",
+      "sha256": "9d194207218add0b19cc49e4ee287dd0cf18a1a43cac97de95342f652a57b10a"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/rubric.json",
+      "sha256": "7a0a987f5c099e8f3eaaba13f9558492b7b422261bfe0102b6fd55b723821e9b"
+    },
+    {
+      "path": "references/ikea-breakfast/assets/comment-reference.png",
+      "sha256": "cb78c63a57939f7a665d8457358880f9474ffe81a7ab2febe27859aaf5c209a1"
+    },
+    {
+      "path": "references/ikea-breakfast/evidence.jsonl",
+      "sha256": "39c673edb0ecc913d17622a83aa865c81184c8a7c3fe319406a92e232fa5521d"
+    },
+    {
+      "path": "references/ikea-breakfast/reference.md",
+      "sha256": "9e3f0e709a9c0aef4daeac6bb34d39ad87bf99f4f0a6a82f07220b1a2e94d3be"
+    },
+    {
+      "path": "references/ikea-breakfast/reviewer-guide.md",
+      "sha256": "afca1db36164b22de66d7649bcddfb8fb558b97c069cf891a076f082ca549c95"
+    },
+    {
+      "path": "references/ikea-breakfast/rubric.json",
+      "sha256": "0f986c8b11f8f5a323693da20893f386df516b65270031da07d57335b93dcf74"
+    },
+    {
+      "path": "references/slack-clips-design/evidence.jsonl",
+      "sha256": "251c3f8f5e5c27df0949a88c544a056a31e78bc1c6433d95157fe0ff0f1beb9d"
+    },
+    {
+      "path": "references/slack-clips-design/reference.md",
+      "sha256": "b466285011fb4346e29b00cce2824bdf48af22e872ab7528dc4717daf4949b1c"
+    },
+    {
+      "path": "references/slack-clips-design/reviewer-guide.md",
+      "sha256": "8eff6e7ce9f348a5d9f26d33cd7cd25a5061cff2854aee77b5478bfdea9740be"
+    },
+    {
+      "path": "references/slack-clips-design/rubric.json",
+      "sha256": "2c9dfb3f6f0c549899e6bb6c3acd78d5d5fcf9df6a1d563eba76895bce2433d7"
+    },
+    {
+      "path": "runner/cli.mjs",
+      "sha256": "8b197c53727cc6457012a8a054a1d1718d9fd03411278f39694e3847dc796ce8"
+    },
+    {
+      "path": "runner/core.mjs",
+      "sha256": "057bc573c8f711a44dc88acd38849e64dff5b232e4c991596609a8631b4b3010"
+    },
+    {
+      "path": "schemas/benchmark.schema.json",
+      "sha256": "563ae4c053a605ab3a90fb115594f849ef7fc38d3e4ec619e8ee54fc34197267"
+    },
+    {
+      "path": "schemas/calibration.schema.json",
+      "sha256": "2d3f6358c760decda1bb479fcf05f6c65a2177cc1e69b383a5726a1af73cb89f"
+    },
+    {
+      "path": "schemas/case.schema.json",
+      "sha256": "e5b1dd1cd42940463c4b1ad1931f09ffe190dc3e838c95f2358ba5ce3b44fc5f"
+    },
+    {
+      "path": "schemas/checkpoint.schema.json",
+      "sha256": "b72a1eb589383b92525d1efea92461f38cf3e8fef42f97e982888dc0d2bca60e"
+    },
+    {
+      "path": "schemas/episode.schema.json",
+      "sha256": "e517cfaa78d487ccba0e8b4c7dead4a6259f4958dc31d6a0464b2e16deb51036"
+    },
+    {
+      "path": "schemas/evidence.schema.json",
+      "sha256": "fd81198f1c6ee0bb3901565ca6e2461a2b37e506384fe96b08f5a3aac87046cd"
+    },
+    {
+      "path": "schemas/judgments.schema.json",
+      "sha256": "416eb4e59a01d5dad8079af226fe51d2f5c7aa4a26293736690d8387f22bda92"
+    },
+    {
+      "path": "schemas/media.schema.json",
+      "sha256": "7cf05edbd17ec3f63a689e5d744b75ca63e1ee9bbb0ed610853b4dc2b98bf8c8"
+    },
+    {
+      "path": "schemas/rubric.schema.json",
+      "sha256": "a18e6f2acb42252990d9f6306d69507164fb502657169bc0faa86034cccca162"
+    },
+    {
+      "path": "schemas/runConfig.schema.json",
+      "sha256": "e975b899f67ee520c685187ed5b09c6a6f45988bd03b6f8e1a1ad0932aa6a71e"
+    },
+    {
+      "path": "schemas/split.schema.json",
+      "sha256": "bc7d13317a91d807bfd7cc1c2df28b0168148190f378af879568850ded787251"
+    },
+    {
+      "path": "splits/development.json",
+      "sha256": "0582185ec1fc3142bae64077efa1478b645081a8ecea5c19725da0ac9ec56bf7"
+    },
+    {
+      "path": "splits/holdout.json",
+      "sha256": "1aa9a1835dc571a6246c54e4af04238a36934cc9bdd008e4a3973585fac40a46"
+    },
+    {
+      "path": "splits/validation.json",
+      "sha256": "c0d9530ff6bcb17c65914a63ec855ccb4831db690a4caeed0be10a219240fdab"
+    },
+    {
+      "path": "tests/foundation.test.mjs",
+      "sha256": "63b17806c70d2632cb4925317541dd09a7f270c2c4905be07078f4b62a55048d"
+    }
+  ]
+}

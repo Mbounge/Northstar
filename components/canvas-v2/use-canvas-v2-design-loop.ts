@@ -1,5 +1,9 @@
 "use client";
 
+import { collectCodexCompositionFeedback, validateCodexCompositionContent } from "@/lib/canvas-v2/codex-composition";
+import { CanvasV2InputJournal, canvasV2SteeredInstruction, type CanvasV2LiveInput } from "@/lib/canvas-v2/live-input";
+import { mergeCanvasV2Activity } from "@/lib/canvas-v2/tool-activity";
+
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import {
@@ -10,6 +14,7 @@ import {
   createCanvasV2Loop,
   failCanvasV2Loop,
   recordCanvasV2CommittedEdit,
+  recoverCanvasV2LoopFromCommittedTruth,
   refreshCanvasV2MountOlympusReceipt,
   stopCanvasV2Loop,
   type CanvasV2LoopContinuation,
@@ -26,6 +31,7 @@ import {
   type CanvasV2ArtifactDocument,
   type CanvasV2ArtifactRevision,
   type CanvasV2CreativeMoveKind,
+  type CanvasV2IslandExecutionContract,
   type CanvasV2DesignDecision,
   type CanvasV2EditDecision,
   type CanvasV2EvidenceAsset,
@@ -74,15 +80,15 @@ import {
   type CanvasV2ResearchRequirement,
 } from "@/lib/canvas-v2/research-director";
 import type { CanvasV2ResearchMode } from "@/lib/canvas-v2/interaction-router";
-import type { CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
+import { buildCanvasV2WorkingContext, type CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 import type { CanvasV2ModelSelection } from "@/lib/canvas-v2/model-catalog";
 import type { CanvasV2DiscoveryState, CanvasV2DiscoveryStateTransition } from "@/lib/canvas-v2/discovery-state";
 import type { CanvasV2ChatAttachment } from "@/lib/canvas-v2/chat-attachments";
 import {
   canvasV2FailureAuthority,
-  canvasV2PrivateFailureFingerprint,
 } from "@/lib/canvas-v2/failure-authority";
-import { projectCanvasV2ObservationToNativeScene, type CanvasV2NativeSceneDocument } from "@/lib/canvas-v2/native-scene";
+import { canvasV2InstructionExplicitlyRequestsRelationshipGeometry } from "@/lib/canvas-v2/composition-requirements";
+import { reconcileCanvasV2NativeSceneMeasurement, projectCanvasV2ObservationToNativeScene, type CanvasV2NativeSceneDocument } from "@/lib/canvas-v2/native-scene";
 import { validateCanvasV2MultiplayerPlacement } from "@/lib/canvas-v2/multiplayer-placement";
 import {
   commitCanvasV2HistoryTransaction,
@@ -92,6 +98,10 @@ import {
 } from "@/lib/canvas-v2/transactional-history";
 
 interface PendingManualEdit {
+  workingContext?: CanvasV2WorkingContext;
+  onPrepared?: (id: string) => void;
+  execution?: CanvasV2IslandExecutionContract;
+  origin?: "user" | "northstar";
   summary: string;
   selectionNodeIds: string[];
 }
@@ -119,47 +129,6 @@ const STARTER_DOCUMENT = {
 // is a last-resort seatbelt for a private browser-render variance; it may not
 // cascade into a structural replan or another full discovery cycle.
 const MAX_EMERGENCY_RENDER_CORRECTIONS = 1;
-
-function recoverCanvasV2LoopFromCommittedTruth(input: {
-  loop: CanvasV2LoopState;
-  kind: NonNullable<CanvasV2LoopState["privateRecovery"]>["kind"];
-  failures: readonly string[];
-  rejectedMove?: string;
-  providerAttempts?: readonly CanvasV2ProviderAttemptAudit[];
-}): CanvasV2LoopState {
-  const failures = input.failures.map((failure) => failure.trim()).filter(Boolean).slice(-12);
-  const fingerprint = canvasV2PrivateFailureFingerprint(input.kind, failures);
-  const occurrence = input.loop.privateRecovery?.fingerprint === fingerprint
-    ? input.loop.privateRecovery.occurrence + 1
-    : 1;
-  const priorAttempts = [
-    ...(input.loop.privateRecovery?.providerAttemptsBeforeRecovery ?? []),
-    ...(input.loop.renderRepair?.providerAttemptsBeforeRepair ?? []),
-    ...(input.providerAttempts ?? input.loop.providerAttempts ?? []),
-  ];
-  const recovered: CanvasV2LoopState = {
-    ...input.loop,
-    status: "thinking",
-    retry: undefined,
-    privateRecovery: {
-      kind: input.kind,
-      fingerprint,
-      occurrence,
-      failures,
-      ...(input.rejectedMove ? { rejectedMove: input.rejectedMove } : {}),
-      ...(priorAttempts.length ? { providerAttemptsBeforeRecovery: priorAttempts } : {}),
-    },
-    lastRenderIntegrityFailures: failures,
-  };
-  delete recovered.renderRepair;
-  delete recovered.error;
-  delete recovered.pauseReason;
-  return recovered;
-}
-
-function instructionExplicitlyRequiresNativeRelationships(instruction: string): boolean {
-  return /\b(?:connectors?|endpoint(?:-dependent)?|svg|arrows?|curves?|(?:explicit|native|causal|dependency)\s+relationships?|relationship\s+geometry|(?:causal|dependency)\s+(?:paths?|lines?))\b/i.test(instruction);
-}
 
 function rejectedCandidateContext(
   document: CanvasV2ArtifactDocument,
@@ -249,6 +218,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const [pendingResearch, setPendingResearch] = useState<PendingResearch>();
   const [pendingManualEdit, setPendingManualEdit] = useState<PendingManualEdit>();
   const [manualError, setManualError] = useState<string>();
+  const compositionFeedbackRef = useRef<{ revisionId: string; advisory: string[] } | undefined>(undefined);
+  const rejectedCompositionRef = useRef<{ observation: CanvasV2RenderObservation; failures: string[] } | undefined>(undefined);
   const manualFailureRef = useRef<string | undefined>(undefined);
   const [manualNotice, setManualNotice] = useState<string>();
   const [observations, setObservations] = useState<Record<string, CanvasV2RenderObservation>>({});
@@ -268,6 +239,9 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   const [loop, setLoop] = useState<CanvasV2LoopState>();
   const loopRef = useRef<CanvasV2LoopState | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
+  const inputJournal = useRef(new CanvasV2InputJournal());
+  const candidateInputSequence = useRef(0);
+  const humanEditing = useRef(false);
   const requestController = useRef<AbortController | undefined>(undefined);
   // A discovery run is a sequence of observed transactions. Serialize model
   // requests so a repair, recovery, or late observer cannot race a newer
@@ -307,35 +281,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     // it may never replace the already-authoritative native coordinates.
     if (nativeSceneRef.current?.revisionId === next.revisionId) {
       const current = nativeSceneRef.current;
-      const nextById = new Map(next.nodes.map((node) => [node.id, node]));
-      let flowGeometryChanged = false;
-      const nodes = current.nodes.map((node) => {
-        const measured = nextById.get(node.id);
-        const textMode = node.attributes["data-canvas-v2-text-mode"];
-        if (measured && (textMode === "point" || textMode === "area") && measured.attributes["data-canvas-v2-text-mode"] === textMode) {
-          const width = textMode === "point" ? measured.geometry.width : node.geometry.width;
-          const height = measured.geometry.height;
-          if (width !== node.geometry.width || height !== node.geometry.height) {
-            flowGeometryChanged = true;
-            return { ...node, geometry: { ...node.geometry, width, height } };
-          }
-        }
-        // Public-font and normal-flow layout can settle after the hidden
-        // compiler has produced the candidate. Accept that one measured
-        // refinement for flow nodes only. Absolute objects—including every
-        // completed manual move/resize—remain transactionally immutable.
-        if (node.layoutMode !== "flow") return node;
-        if (!measured || measured.layoutMode !== "flow") return node;
-        const geometryChanged = measured.geometry.x !== node.geometry.x
-          || measured.geometry.y !== node.geometry.y
-          || measured.geometry.width !== node.geometry.width
-          || measured.geometry.height !== node.geometry.height;
-        if (!geometryChanged) return node;
-        flowGeometryChanged = true;
-        return { ...node, geometry: measured.geometry };
-      });
-      if (!flowGeometryChanged) return;
-      const reconciled = { ...current, nodes };
+      const reconciled = reconcileCanvasV2NativeSceneMeasurement(current, next);
+      if (reconciled === current) return;
       nativeSceneRef.current = reconciled;
       setNativeScene(reconciled);
       return;
@@ -377,6 +324,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   }, []);
 
   const publishLoop = (next: CanvasV2LoopState | undefined) => {
+    if (next && next.id === loopRef.current?.id) next = { ...next, activity: loopRef.current.activity };
     const refreshed = next ? refreshCanvasV2MountOlympusReceipt(next) : undefined;
     loopRef.current = refreshed;
     setLoop(refreshed);
@@ -411,12 +359,45 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     observation: CanvasV2RenderObservation,
     commitParent: CanvasV2ArtifactRevision = revision,
   ) => {
-    if (activeRunId.current !== activeLoop.id) return;
+    if (activeRunId.current !== activeLoop.id || !canvasV2LoopIsActive(activeLoop)) return;
+    const feedback = inputJournal.current.consume();
+    if (feedback.length) {
+      activeLoop = {
+        ...activeLoop,
+        instruction: canvasV2SteeredInstruction(activeLoop.instruction, feedback),
+        inputSequence: inputJournal.current.sequence,
+        attachmentsAwaitingCommit: feedback.some(item => item.attachments?.length) || activeLoop.attachmentsAwaitingCommit,
+        incorporatedInputIds: [...(activeLoop.incorporatedInputIds ?? []), ...feedback.map(item => item.id)],
+        attachments: [...(activeLoop.attachments ?? []), ...feedback.flatMap(item => item.attachments ?? [])],
+        workingContext: feedback.at(-1)?.workingContext ?? activeLoop.workingContext,
+        renderRepair: undefined, privateRecovery: undefined,
+      };
+    }
+    if (activeLoop.workingContext && nativeSceneRef.current?.revisionId === committedRef.current.id) {
+      const context = activeLoop.workingContext;
+      activeLoop = { ...activeLoop, workingContext: buildCanvasV2WorkingContext({
+        scene: nativeSceneRef.current,
+        selections: context.objects.filter(object => context.selectedNodeIds.includes(object.nodeId)).map(object => ({
+          nodeId: object.nodeId, tagName: "div", textEditable: object.kind === "text", locked: object.locked, hidden: object.hidden, bounds: object.bounds,
+        })),
+        visibleBounds: context.visibleBounds, viewport: { x: 0, y: 0, scale: context.viewportScale }, selectionPolicy: context.selectionPolicy,
+      }) };
+    }
+    const requestSequence = inputJournal.current.sequence;
+    activeLoop = { ...activeLoop, inputSequence: requestSequence };
+    if (activeLoop.retainedReadPackets?.length) revision = { ...revision, evidencePackets: mergeCanvasV2EvidencePackets(revision.evidencePackets ?? [], activeLoop.retainedReadPackets) };
+    const measuredScene = inspectionScenesRef.current.get(revision.id)
+      ?? (nativeSceneRef.current?.revisionId === revision.id ? nativeSceneRef.current : undefined);
+    if (measuredScene) observation = projectCanvasV2ObservationToNativeScene(observation, measuredScene);
     const controller = new AbortController();
     requestController.current = controller;
     publishLoop({ ...activeLoop, status: "thinking", retry: undefined });
     try {
       const payload = await requestCanvasV2Json<{
+        continueInvestigation?: boolean;
+        conversationAnswer?: string;
+        presentedValidationIds?: string[];
+        readReceipt?: { question: string; sourceIds: string[]; issues: string[] };
         decision?: CanvasV2DesignDecision;
         evidence?: CanvasV2EvidenceAsset[];
         snapshotEvidencePackets?: CanvasV2EvidencePacket[];
@@ -441,6 +422,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
           revision,
           observation,
           run: {
+            deliveryMode: activeLoop.deliveryMode,
+            readReceipts: activeLoop.readReceipts,
             turn: activeLoop.steps.length + 1,
             currentRunStepCount: activeLoop.steps.length,
             priorSteps: [...(activeLoop.priorSteps ?? []), ...activeLoop.steps].slice(-CANVAS_V2_MAX_CONTEXT_STEPS),
@@ -466,8 +449,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
             // available through any private first-turn repair). After the
             // first verified commit, revision-owned evidence packets carry
             // their exact source without duplicating the chat payload.
-            attachments: activeLoop.steps.length === 0 ? activeLoop.attachments : undefined,
+            attachments: activeLoop.steps.length === 0 || activeLoop.attachmentsAwaitingCommit ? activeLoop.attachments : undefined,
           },
+        },
+        onActivity: (event) => {
+          if (activeRunId.current !== activeLoop.id) return;
+          const current = loopRef.current ?? activeLoop;
+          current.activity = mergeCanvasV2Activity(current.activity ?? [], event);
+          publishLoop(current);
         },
         onRetry: (retry) => {
           if (activeRunId.current !== activeLoop.id) return;
@@ -475,6 +464,55 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         },
       });
       if (activeRunId.current !== activeLoop.id) return;
+      // Streaming activity may have advanced while this request was in flight.
+      activeLoop = { ...activeLoop, activity: loopRef.current?.activity ?? activeLoop.activity };
+      if (humanEditing.current || !inputJournal.current.canCommit(activeLoop.id, requestSequence, commitParent.id, committedRef.current.id)) {
+        // Reads can be reused. Never publish an authored candidate or completion based on superseded input.
+        const next = { ...activeLoop, status: "thinking" as const, renderRepair: undefined, privateRecovery: undefined,
+          retainedReadPackets: mergeCanvasV2EvidencePackets(activeLoop.retainedReadPackets ?? [], payload.evidencePackets ?? payload.retrievedEvidencePackets ?? []),
+          readReceipts: [...(activeLoop.readReceipts ?? []), ...(payload.readReceipt ? [payload.readReceipt] : [])],
+          providerUsage: mergeCanvasV2ProviderUsage(activeLoop.providerUsage, canvasV2ProviderUsageFromAttempts(payload.providerAttempts)),
+        };
+        publishLoop(next);
+        const latest = committedRef.current;
+        const measured = observationsRef.current[latest.id];
+        if (measured) enqueueModelRequest(next, latest, measured);
+        else pendingInitialRequest.current = { runId: next.id, revisionId: latest.id };
+        return;
+      }
+      // The same stale-input gate above protects chat conclusions and canvas commits.
+      if (activeLoop.deliveryMode === "chat" && (payload.decision || payload.snapshotEvidencePackets?.length)) {
+        throw new Error("A conversation response attempted to change the canvas.");
+      }
+      if (payload.conversationAnswer) {
+        if (activeLoop.deliveryMode !== "chat") throw new Error("A canvas request returned a chat-only result.");
+        const answeredState = payload.discoveryState ?? activeLoop.discoveryState;
+        const presentedPlans = (payload.presentedValidationIds ?? []).filter(id => answeredState?.validationBacklog.some(plan => plan.id === id));
+        publishLoop({ ...activeLoop, status: "completed", finalSummary: payload.conversationAnswer,
+          retainedReadPackets: mergeCanvasV2EvidencePackets(activeLoop.retainedReadPackets ?? [], payload.evidencePackets ?? []),
+          discoveryState: answeredState ? { ...answeredState, chatPresentedValidationIds: [...new Set([...(answeredState.chatPresentedValidationIds ?? []), ...presentedPlans])] } : undefined,
+          discoveryProgress: payload.discoveryProgress ?? activeLoop.discoveryProgress,
+          providerUsage: mergeCanvasV2ProviderUsage(activeLoop.providerUsage, canvasV2ProviderUsageFromAttempts(payload.providerAttempts)),
+          providerAttempts: [...(activeLoop.providerAttempts ?? []), ...(payload.providerAttempts ?? [])],
+          retry: undefined, error: undefined,
+        });
+        activeRunId.current = undefined;
+        return;
+      }
+      if (payload.continueInvestigation) {
+        const next: CanvasV2LoopState = { ...activeLoop, status: "thinking",
+          retainedReadPackets: mergeCanvasV2EvidencePackets(activeLoop.retainedReadPackets ?? [], payload.evidencePackets ?? []),
+          readReceipts: [...(activeLoop.readReceipts ?? []), ...(payload.readReceipt ? [payload.readReceipt] : [])],
+          discoveryState: payload.discoveryState ?? activeLoop.discoveryState,
+          discoveryProgress: payload.discoveryProgress ?? activeLoop.discoveryProgress,
+          providerUsage: mergeCanvasV2ProviderUsage(activeLoop.providerUsage, canvasV2ProviderUsageFromAttempts(payload.providerAttempts)),
+          providerAttempts: [...(activeLoop.providerAttempts ?? []), ...(payload.providerAttempts ?? [])],
+        };
+        publishLoop(next);
+        enqueueModelRequest(next, committedRef.current, observationsRef.current[committedRef.current.id] ?? observation);
+        return;
+      }
+      candidateInputSequence.current = requestSequence;
       const responseProviderUsage = canvasV2ProviderUsageFromAttempts(payload.providerAttempts);
       const cumulativeProviderUsage = mergeCanvasV2ProviderUsage(activeLoop.providerUsage, responseProviderUsage);
       const responseDiscoveryState = payload.discoveryState ?? activeLoop.discoveryState ?? revision.discoveryState;
@@ -738,22 +776,34 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       publishLoop({ ...loopWithProvider, status: "rendering", retry: undefined, researchStatus: payload.researchStatus ?? loopWithProvider.researchStatus });
     } catch (requestError) {
       if (controller.signal.aborted || activeRunId.current !== activeLoop.id) return;
+      if (inputJournal.current.pending || commitParent.id !== committedRef.current.id) {
+        const latest = committedRef.current;
+        const next = { ...activeLoop, status: "thinking" as const, renderRepair: undefined, privateRecovery: undefined };
+        publishLoop(next);
+        const measured = observationsRef.current[latest.id];
+        if (measured) enqueueModelRequest(next, latest, measured);
+        else pendingInitialRequest.current = { runId: next.id, revisionId: latest.id };
+        return;
+      }
       const authority = canvasV2FailureAuthority(requestError);
       if (authority === "silent-cancel") return;
       const message = canvasV2PublicFailureMessage(requestError);
       const failedProviderAttempts = requestError instanceof CanvasV2RequestError
         ? requestError.providerAttempts
         : undefined;
+      const retainedInquiryLoop = requestError instanceof CanvasV2RequestError && requestError.discoveryState
+        ? { ...activeLoop, discoveryState: requestError.discoveryState }
+        : activeLoop;
       const usageAwareLoop: CanvasV2LoopState = failedProviderAttempts?.length
         ? {
-            ...activeLoop,
-            providerAttempts: failedProviderAttempts,
+            ...retainedInquiryLoop,
+            providerAttempts: [...(activeLoop.providerAttempts ?? []), ...failedProviderAttempts],
             providerUsage: mergeCanvasV2ProviderUsage(
               activeLoop.providerUsage,
               canvasV2ProviderUsageFromAttempts(failedProviderAttempts),
             ),
           }
-        : activeLoop;
+        : retainedInquiryLoop;
       if (authority === "private-contract") {
         discardInspectionScene(candidate?.id);
         setCandidate(undefined);
@@ -771,6 +821,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
           providerAttempts: failedProviderAttempts,
         });
         publishLoop(recoveryLoop);
+        if (!canvasV2LoopIsActive(recoveryLoop)) activeRunId.current = undefined;
         const publicRevision = committedRef.current;
         const publicObservation = observationsRef.current[publicRevision.id];
         if (publicObservation) enqueueModelRequest(recoveryLoop, publicRevision, publicObservation);
@@ -790,8 +841,19 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     observation: CanvasV2RenderObservation,
     commitParent: CanvasV2ArtifactRevision = revision,
   ) => {
+    if (humanEditing.current) {
+      pendingInitialRequest.current = { runId: activeLoop.id, revisionId: committedRef.current.id };
+      return;
+    }
+    if (!canvasV2LoopIsActive(activeLoop)) {
+      if (activeRunId.current === activeLoop.id) activeRunId.current = undefined;
+      return;
+    }
     const requestKey = [
       activeLoop.id,
+      `input-${inputJournal.current.sequence}`,
+      `reads-${activeLoop.readReceipts?.length ?? 0}`,
+      `discovery-${activeLoop.discoveryState?.version ?? 0}`,
       revision.id,
       commitParent.id,
       `turn-${activeLoop.steps.length + 1}`,
@@ -804,7 +866,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       .catch(() => undefined)
       .then(async () => {
         if (activeRunId.current !== activeLoop.id) return;
-        await askModel(activeLoop, revision, observation, commitParent);
+        if (revision.id !== committedRef.current.id && commitParent.id !== committedRef.current.id) {
+          const latest = committedRef.current;
+          const measured = observationsRef.current[latest.id];
+          if (measured) await askModel(loopRef.current ?? activeLoop, latest, measured);
+          else pendingInitialRequest.current = { runId: activeLoop.id, revisionId: latest.id };
+        } else await askModel(activeLoop, revision, observation, commitParent);
       })
       .finally(() => {
         queuedModelRequestKeys.current.delete(requestKey);
@@ -824,6 +891,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     initialProviderUsage?: CanvasV2ProviderUsage,
     attachments?: CanvasV2ChatAttachment[],
     routerProviderAttempts?: CanvasV2ProviderAttemptAudit[],
+    deliveryMode?: "chat" | "canvas",
   ): string | undefined => {
     const objective = currentInstruction.trim();
     if (!objective || activeRunId.current || canvasV2LoopIsActive(loopRef.current)) return undefined;
@@ -838,9 +906,10 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       setPendingActionKind("design");
       setPendingResearch(undefined);
     }
-    const nextLoop = createCanvasV2Loop({ id: id("run"), instruction: objective, continuation, researchTargets, researchMode, modelSelection, workingContext, discoveryState, providerUsage: initialProviderUsage, routerProviderAttempts, attachments });
+    const nextLoop = createCanvasV2Loop({ id: id("run"), instruction: objective, continuation, researchTargets, researchMode, modelSelection, workingContext, discoveryState, providerUsage: initialProviderUsage, routerProviderAttempts, attachments, deliveryMode });
     activeStepStartedAt.current = Date.now();
     activeRunId.current = nextLoop.id;
+    inputJournal.current.begin(nextLoop.id);
     publishLoop(nextLoop);
     const currentCommitted = committedRef.current;
     const observation = currentObservation?.revisionId === currentCommitted.id
@@ -865,6 +934,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       return;
     }
     if (!activeLoop || !canvasV2LoopIsActive(activeLoop)) return;
+    inputJournal.current.stop();
     requestController.current?.abort();
     requestController.current = undefined;
     queuedModelRequestKeys.current.clear();
@@ -878,12 +948,30 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     publishLoop(stopCanvasV2Loop(activeLoop));
   };
 
+  const steer = (feedback: CanvasV2LiveInput): boolean => {
+    const current = loopRef.current;
+    if (!current || !canvasV2LoopIsActive(current) || activeRunId.current !== current.id) return false;
+    if (!inputJournal.current.accept(current.id, feedback)) return false;
+    if (current.status === "rendering") {
+      discardInspectionScene(candidate?.id);
+      setCandidate(undefined);
+      setPendingEdit(undefined);
+      const next = { ...current, status: "thinking" as const, renderRepair: undefined, privateRecovery: undefined };
+      publishLoop(next);
+      const latest = committedRef.current;
+      const measured = observationsRef.current[latest.id];
+      if (measured) enqueueModelRequest(next, latest, measured);
+      else pendingInitialRequest.current = { runId: current.id, revisionId: latest.id };
+    }
+    return true;
+  };
+
   const applyManualDocument = (
     document: CanvasV2ArtifactDocument,
     summary: string,
     evidence?: readonly CanvasV2EvidenceAsset[],
     nativeSceneRevision?: CanvasV2NativeSceneDocument,
-    options: { allowEvidenceRemoval?: boolean; selectionNodeIds?: readonly string[]; evidencePackets?: CanvasV2ArtifactRevision["evidencePackets"] } = {},
+    options: { focusIslandId?: string; execution?: CanvasV2IslandExecutionContract; workingContext?: CanvasV2WorkingContext; onPrepared?: (revisionId: string) => void; origin?: "user" | "northstar"; allowEvidenceRemoval?: boolean; selectionNodeIds?: readonly string[]; evidencePackets?: CanvasV2ArtifactRevision["evidencePackets"] } = {},
   ): boolean => {
     // Native object edits already carry measured, finite-canvas geometry. They
     // do not need to wait for the compatibility HTML compiler to rediscover
@@ -893,13 +981,15 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     // native truth synchronously; the off-screen compiler remains a verifier.
     const currentCommitted = committedRef.current;
     manualFailureRef.current = undefined;
-    // Human edits interrupt uncommitted AI work. Abort and invalidate its run
-    // synchronously so late responses cannot replace the human revision.
-    if (loopRef.current && canvasV2LoopIsActive(loopRef.current)) stop();
+    // Human edits are immediate. Invalidate stale authoring while preserving the investigation.
+    if (options.origin !== "northstar" && loopRef.current && canvasV2LoopIsActive(loopRef.current)) {
+      steer({ id: id("human-edit"), message: `The human directly changed the canvas: ${summary}. Inspect the latest object versions, preserve that change, and continue the objective.` });
+    }
     if (pendingManualEdit || (!nativeSceneRevision && !observationsRef.current[currentCommitted.id])) return false;
     if (nativeSceneRevision && nativeSceneRevision.revisionId !== currentCommitted.id) return false;
     try {
-      const safeDocument = assertCanvasV2ArtifactDocument(document);
+      const safeDocument = assertCanvasV2ArtifactDocument(options.origin === 'northstar'
+        ? reconcileCanvasV2ObjectAuthorship({ previous: currentCommitted.document, next: document, origin: 'northstar' }) : document);
       const nextEvidence = evidence ?? currentCommitted.evidence;
       const failures = [
         ...validateCanvasV2EvidenceBindings(safeDocument, nextEvidence),
@@ -916,12 +1006,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         evidencePackets: options.evidencePackets,
         createdAt: new Date().toISOString(),
         sceneTransaction: compileCanvasV2SceneTransaction({
-          origin: "user",
+          origin: options.origin ?? "user",
           baseRevisionId: currentCommitted.id,
           previous: currentCommitted.document,
           next: safeDocument,
+          execution: options.execution, focusIslandId: options.focusIslandId, workingContext: options.workingContext,
         }),
       });
+      options.onPrepared?.(nextCandidate.id);
       setManualError(undefined);
       setManualNotice(undefined);
       if (nativeSceneRevision) {
@@ -933,12 +1025,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         setManualNotice(summary);
         return true;
       }
-      setPendingManualEdit({ summary, selectionNodeIds: [...(options.selectionNodeIds ?? [])] });
+      setPendingManualEdit({ summary, origin: options.origin, workingContext: options.workingContext, onPrepared: options.onPrepared, execution: options.execution, selectionNodeIds: [...(options.selectionNodeIds ?? [])] });
       setCandidate(nextCandidate);
       return true;
     } catch (error) {
       manualFailureRef.current = error instanceof Error ? error.message : "The manual revision could not be validated.";
-      setManualError(manualFailureRef.current);
+      if (options.origin !== "northstar") setManualError(manualFailureRef.current);
       return false;
     }
   };
@@ -978,6 +1070,9 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       enqueueModelRequest(activeLoop, publicCommitted, factualObservation);
       return;
     }
+    if (candidate && !pendingManualEdit && humanEditing.current) return;
+    if (candidate && !pendingManualEdit && observation.revisionId === candidate.id && activeLoop
+      && !inputJournal.current.canCommit(activeLoop.id, candidateInputSequence.current, candidate.parentId ?? "", publicCommitted.id)) return;
     if (candidate && observation.revisionId === candidate.id) {
       if (!settleCandidateRevision(candidate.id)) return;
     }
@@ -993,11 +1088,33 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         // evidence remains protected from deletion, but its placement, size,
         // fit, rotation, and presentation belong to the user.
         try {
+          if (pendingManualEdit.origin === "northstar") {
+            // Editorial measurements remain advisory. Content collisions and
+            // placement conflicts still protect what the person can read.
+            const advisory = collectCodexCompositionFeedback(candidate.document, factualObservation);
+            const previousContentFailures = new Set(previousObservation ? validateCodexCompositionContent(previousObservation) : []);
+            const contentFailures = validateCodexCompositionContent(factualObservation).filter(failure => !previousContentFailures.has(failure));
+            const protectionFailures = candidate.sceneTransaction && previousObservation
+              ? validateCanvasV2MultiplayerPlacement({ previous: previousObservation, candidate: factualObservation,
+                  transaction: candidate.sceneTransaction }) : [];
+            protectionFailures.push(...contentFailures);
+            if (protectionFailures.length) {
+              rejectedCompositionRef.current = { observation: factualObservation, failures: protectionFailures };
+              throw new Error(protectionFailures.join(" "));
+            }
+            compositionFeedbackRef.current = { revisionId: candidate.id, advisory };
+            rejectedCompositionRef.current = undefined;
+          }
           const nextCommitted = commitCanvasV2Candidate({ candidate, expectedParentId: committedRef.current.id });
-          acceptCommittedRevision(nextCommitted, `user:${nextCommitted.id}`, pendingManualEdit.selectionNodeIds);
-          setManualNotice(pendingManualEdit.summary);
+          // Promote the exact validated geometry, including viewport placement
+          // and collision avoidance, just as the original authoring path does.
+          const acceptedScene = inspectionScenesRef.current.get(candidate.id);
+          if (acceptedScene) { nativeSceneRef.current = acceptedScene; setNativeScene(acceptedScene); }
+          acceptCommittedRevision(nextCommitted, `${pendingManualEdit.origin ?? "user"}:${nextCommitted.id}`, pendingManualEdit.selectionNodeIds);
+          if (pendingManualEdit.origin !== "northstar") setManualNotice(pendingManualEdit.summary);
         } catch (error) {
-          setManualError(error instanceof Error ? error.message : "The manual revision could not be committed.");
+          manualFailureRef.current = error instanceof Error ? error.message : "The revision could not be committed.";
+          if (pendingManualEdit.origin !== "northstar") setManualError(manualFailureRef.current);
         }
         discardInspectionScene(candidate.id);
         setCandidate(undefined);
@@ -1144,7 +1261,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
         if (activeLoop?.status === "rendering") {
           if (!nonRelationshipIntegrityFailures.length
             && pendingEdit
-            && !instructionExplicitlyRequiresNativeRelationships(activeLoop.instruction)) {
+            && !canvasV2InstructionExplicitlyRequestsRelationshipGeometry(activeLoop.instruction)) {
             const invalidRelationshipNodeIds = invalidCanvasV2RenderedRelationshipNodeIds(factualObservation);
             const recoveredDocument = retireCanvasV2BrokenAuthoredRelationships(candidate.document, invalidRelationshipNodeIds);
             if (recoveredDocument !== candidate.document) {
@@ -1221,6 +1338,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
             rejectedMove: [pendingEdit?.summary, pendingEdit?.expectedVisualResult].filter(Boolean).join(" — ").slice(0, 1_600),
           });
           publishLoop(recoveryLoop);
+        if (!canvasV2LoopIsActive(recoveryLoop)) activeRunId.current = undefined;
           const publicObservation = observationsRef.current[publicCommitted.id];
           if (publicObservation) enqueueModelRequest(recoveryLoop, publicCommitted, publicObservation);
           else pendingInitialRequest.current = { runId: recoveryLoop.id, revisionId: publicCommitted.id };
@@ -1235,6 +1353,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     // superseded and must be a no-op—not a user-visible stale-parent failure.
     // The active render owns its own newer callback and will settle normally.
     if (candidate.parentId !== commitParent.id) return;
+    if (!inputJournal.current.canCommit(activeLoop.id, candidateInputSequence.current, candidate.parentId ?? "", commitParent.id)) return;
     const nextCommitted = commitCanvasV2Candidate({ candidate, expectedParentId: commitParent.id });
     // The candidate itself is authoritative. React state can still contain the
     // previous turn's action kind when a fast deterministic research render is
@@ -1281,7 +1400,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     setPendingEdit(undefined);
     setPendingActionKind("design");
     setPendingResearch(undefined);
-    publishLoop(nextLoop);
+    publishLoop({ ...nextLoop, attachmentsAwaitingCommit: false });
     activeStepStartedAt.current = Date.now();
     if (nextLoop.status === "thinking") enqueueModelRequest(nextLoop, nextCommitted, factualObservation);
     else activeRunId.current = undefined;
@@ -1294,7 +1413,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       setCandidate(undefined);
       setPendingManualEdit(undefined);
       setManualNotice(undefined);
-      setManualError(message);
+      manualFailureRef.current = message;
+      if (pendingManualEdit.origin !== "northstar") setManualError(message);
       return;
     }
     if (activeRunId.current !== activeLoop?.id) return;
@@ -1314,6 +1434,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
       rejectedMove: [pendingEdit?.summary, pendingEdit?.expectedVisualResult].filter(Boolean).join(" — ").slice(0, 1_600),
     });
     publishLoop(recoveryLoop);
+        if (!canvasV2LoopIsActive(recoveryLoop)) activeRunId.current = undefined;
     const publicRevision = committedRef.current;
     const publicObservation = observationsRef.current[publicRevision.id];
     if (publicObservation) enqueueModelRequest(recoveryLoop, publicRevision, publicObservation);
@@ -1321,9 +1442,10 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
   };
 
   const travelHistory = (direction: -1 | 1) => {
-    if (running || candidate) return;
+    if (pendingManualEdit) return;
     const nextHistory = travelCanvasV2History(transactionalHistoryRef.current, direction);
     if (nextHistory.index === transactionalHistoryRef.current.index) return;
+    if (running) steer({ id: id("human-history"), message: `The human used ${direction < 0 ? "undo" : "redo"}. Preserve the restored canvas and continue from its current version.` });
     transactionalHistoryRef.current = nextHistory;
     const revision = nextHistory.revisions[nextHistory.index];
     const restoredNativeScene = nextHistory.nativeScenes[nextHistory.index]
@@ -1334,7 +1456,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     nativeSceneRef.current = restoredNativeScene;
     setNativeScene(restoredNativeScene);
     setCommitted(revision);
-    publishLoop(undefined);
+    if (!running) publishLoop(undefined);
     setManualError(undefined);
     setManualNotice(undefined);
     return {
@@ -1348,7 +1470,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     displayed,
     inspectionCandidate: candidate,
     inspectionRelocatableNodeIds: (() => {
-      const execution = pendingEdit?.islandExecution;
+      const execution = pendingEdit?.islandExecution ?? pendingManualEdit?.execution;
       if (!execution) return [];
       const wholeBoard = execution.target.action === "recompose";
       const exactPlacementRepair = execution.target.action === "repair"
@@ -1375,16 +1497,34 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     manualNotice,
     history,
     historyIndex,
-    canUndo: historyIndex > 0 && !running && !candidate,
-    canRedo: historyIndex < history.length - 1 && !running && !candidate,
+    canUndo: historyIndex > 0 && !pendingManualEdit,
+    canRedo: historyIndex < history.length - 1 && !pendingManualEdit,
     ready: Boolean(observations[committed.id]),
     displayedObservation: observations[displayed.id],
+    beginHumanEdit: () => {
+      humanEditing.current = true;
+      steer({ id: id("human-edit-start"), message: "The human is directly editing an object. Preserve its final wording and styling when continuing." });
+    },
+    endHumanEdit: () => {
+      humanEditing.current = false;
+      const current = loopRef.current;
+      if (!current || activeRunId.current !== current.id || !canvasV2LoopIsActive(current) || requestController.current) return;
+      const revision = committedRef.current;
+      const observation = observationsRef.current[revision.id];
+      if (observation) { pendingInitialRequest.current = undefined; enqueueModelRequest(current, revision, observation); }
+      else pendingInitialRequest.current = { runId: current.id, revisionId: revision.id };
+    },
     start,
+    steer,
     stop,
     applyManualDocument,
+    readCompositionFeedback: () => compositionFeedbackRef.current?.revisionId === committedRef.current.id
+      ? compositionFeedbackRef.current : undefined,
+    readRejectedComposition: () => rejectedCompositionRef.current,
     readManualFailure: () => manualFailureRef.current,
     nativeScene: nativeScene?.revisionId === committed.id ? nativeScene : undefined,
     readNativeScene,
+    readCommittedRevision: () => committedRef.current,
     receiveNativeScene,
     undo: () => travelHistory(-1),
     redo: () => travelHistory(1),

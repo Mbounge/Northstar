@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   canonicalizeCanvasV2ExternalUrl,
+  canvasV2RetainedResearchContext,
   createCanvasV2OpenAIWebEvidenceProvider,
 } from "../lib/canvas-v2/external-evidence-provider";
 import { canvasV2EvidencePacketsNeedingMaterialization } from "../lib/canvas-v2/evidence-packet-insertion";
@@ -118,6 +119,9 @@ function webPayload() {
               statement: "The official report records a material current change.",
               sourceUrl: report,
               sourceTitle: "Official market report",
+              sourceSubject: "A regional sample of customer firms, not the publishing institute",
+              documentContext: "Survey findings about customers in one market",
+              supportingPassage: "The regional customer sample grew this quarter.",
               sourceClass: "official",
               publisher: "Example Institute",
               author: null,
@@ -185,6 +189,25 @@ test("external URLs receive tracking-free stable identity", () => {
   assert.equal(canonicalizeCanvasV2ExternalUrl("javascript:alert(1)"), undefined);
 });
 
+test("using external evidence for synthesis does not manufacture another research request", () => {
+  for (const kind of ["compose", "compare", "revise-hypothesis", "summarize-boundary"] as const) {
+    for (const request of [null, researchRequest]) {
+      const input = transition(request, ["external", "canvas"]);
+      input.move.kind = kind;
+      input.move.visibleAction = "compose";
+      const parsed = parseCanvasV2DiscoveryTransition({ ...input, sensemaking: {
+        mode: "investigating", synthesis: "Compare the retained source findings.", operators: [], triangulations: [], uncertainties: [], materialEvidenceNodeIds: [], backgroundEvidenceNodeIds: [],
+      } }, state());
+      assert.deepEqual(parsed.move.sourceCategories, ["external", "canvas"]);
+      assert.equal(parsed.move.externalResearchRequest, undefined, kind);
+      assert.equal(canvasV2DiscoveryMoveNeedsRetrieval(parsed.move), false, kind);
+    }
+  }
+  const followup = transition(researchRequest);
+  followup.move.kind = "inspect-evidence";
+  assert.equal(parseCanvasV2DiscoveryTransition(followup, state()).move.externalResearchRequest?.question, researchRequest.question);
+});
+
 test("OpenAI web evidence preserves all sources in memory, promotes one material witness, records conflict, and caches an identical resume", async () => {
   const previousKey = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = "test-openai-key";
@@ -211,12 +234,15 @@ test("OpenAI web evidence preserves all sources in memory, promotes one material
     assert.equal(promoted?.assets[0]?.url, "https://example.com/chart.png?utm_campaign=launch");
     assert.equal(promoted?.source.sourceUrl, "https://example.com/report");
     assert.equal(promoted?.source.sourceType, "web-page");
+    assert.match(promoted!.facts[0].description!, /regional sample of customer firms, not the publishing institute/);
+    assert.match(promoted!.facts[0].description!, /Survey findings about customers/);
+    assert.match(promoted!.facts[0].description!, /extracted passage.*regional customer sample grew/);
     assert.equal(first.packets.some((packet) => packet.metrics.some((metric) => metric.value === 18)), true);
     assert.equal(first.issues.some((issue) => issue.code === "conflict"), true);
     const graph = syncCanvasV2DiscoveryGraph({ revisionId: "external-research", updatedAt: NOW, document: { html: "<main></main>", css: "" }, evidencePackets: first.packets });
     assert.equal(graph.index.contradictionGroupIds.length, 1);
     assert.equal(graph.edges.some((edge) => edge.kind === "challenges"), true);
-    assert.equal(canvasV2EvidencePacketsNeedingMaterialization({ html: "<main></main>", css: "" }, first.packets).length, 1);
+    assert.equal(canvasV2EvidencePacketsNeedingMaterialization({ html: "<main></main>", css: "" }, first.packets).length, 0);
     assert.equal(mergeCanvasV2EvidencePackets(first.packets, second.packets).length, 2);
     assert.deepEqual(first.packets.map((packet) => packet.id), second.packets.map((packet) => packet.id));
   } finally {
@@ -225,7 +251,7 @@ test("OpenAI web evidence preserves all sources in memory, promotes one material
   }
 });
 
-test("a model cannot launder a fabricated URL into external evidence", async () => {
+test("a fabricated finding is excluded without rerunning valid research", async () => {
   const previousKey = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = "test-openai-key";
   const payload = webPayload();
@@ -240,8 +266,11 @@ test("a model cannot launder a fabricated URL into external evidence", async () 
   };
   try {
     const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal, fetcher });
-    await assert.rejects(() => provider.retrieve({ ...request(), externalResearchRequest: { ...researchRequest, question: "Unique fabricated URL test" } }), /did not accept the private model draft|cited a source URL/);
-    assert.equal(calls, 2, "external research may use only one bounded emergency correction");
+    const result = await provider.retrieve({ ...request(), externalResearchRequest: { ...researchRequest, question: "Unique fabricated URL test" } });
+    assert.equal(calls, 1);
+    assert.equal(result.packets.length, 1);
+    assert.equal(result.packets[0].source.sourceUrl, "https://news.example.org/coverage");
+    assert.ok(result.issues.some(issue => /excluded/.test(issue.message)));
   } finally {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
@@ -259,7 +288,10 @@ test("an image result cannot be laundered into a page citation", async () => {
   const fetcher: typeof fetch = async () => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   try {
     const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal, fetcher });
-    await assert.rejects(() => provider.retrieve({ ...request(), instruction: "Unique image laundering test" }), /did not accept the private model draft|cited a source URL/);
+    const result = await provider.retrieve({ ...request(), instruction: "Unique image laundering test" });
+    assert.equal(result.packets.length, 1);
+    assert.equal(result.packets[0].source.sourceUrl, "https://news.example.org/coverage");
+    assert.ok(result.issues.some(issue => /excluded/.test(issue.message)));
   } finally {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
@@ -338,4 +370,174 @@ test("external estimates retain inferred authority through packets and discovery
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
   }
+});
+
+test("text findings stay available for synthesis without an automatic source-summary board", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "fixture-key";
+  try {
+    const payload = webPayload();
+    const item = payload.output.find(item => item.type === "message")!.content![0];
+    const report = JSON.parse(item.text);
+    for (const finding of report.findings) { finding.visualUrl = null; finding.canvasCandidate = true; finding.materiality = 0.95; }
+    item.text = JSON.stringify(report);
+    const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal,
+      fetcher: async () => new Response(JSON.stringify(payload), { status: 200 }) });
+    const result = await provider.retrieve({ ...request(), instruction: "Text witnesses should become an explanation" });
+    assert.equal(result.packets.length, 2);
+    assert.ok(result.packets.every(packet => packet.presentation?.state === "graph-only"));
+    assert.equal(canvasV2EvidencePacketsNeedingMaterialization({ html: "<main></main>", css: "" }, result.packets).length, 0);
+    assert.ok(compactCanvasV2EvidencePacketsForModel(result.packets).length > 0);
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
+});
+
+test("a relevant visual is retained when another finding on the same page leads the packet", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "fixture-key";
+  try {
+    const payload = webPayload();
+    const item = payload.output.find(item => item.type === "message")!.content![0];
+    const report = JSON.parse(item.text);
+    report.findings.unshift({ ...report.findings[0], title: "Leading text finding", visualUrl: null, materiality: 0.99 });
+    item.text = JSON.stringify(report);
+    const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal,
+      fetcher: async () => new Response(JSON.stringify(payload), { status: 200 }) });
+    const result = await provider.retrieve({ ...request(), instruction: "Retain non-leading visual regression" });
+    const visualPacket = result.packets.find(packet => packet.presentation?.state === "promoted")!;
+    assert.equal(visualPacket.title, "Leading text finding");
+    assert.equal(visualPacket.assets[0].url, "https://example.com/chart.png?utm_campaign=launch");
+    assert.equal(visualPacket.assets[0].description, "The official report records a material current change.");
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
+});
+
+test("an entirely ungrounded research report is still rejected", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "fixture-key";
+  try {
+    const payload = webPayload();
+    const item = payload.output.find(item => item.type === "message")!.content![0];
+    const report = JSON.parse(item.text);
+    for (const finding of report.findings) finding.sourceUrl = "https://fabricated.example/not-returned";
+    item.text = JSON.stringify(report);
+    const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal,
+      fetcher: async () => new Response(JSON.stringify(payload), { status: 200 }) });
+    await assert.rejects(() => provider.retrieve({ ...request(), instruction: "All sources invalid regression" }), /no valid findings remain|did not accept/);
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
+});
+
+
+test("text-only research still collects source media when its destination is a composition", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  const readUrls: string[] = [];
+  try {
+    const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal,
+      collectCompositionMedia: true,
+      fetcher: async () => new Response(JSON.stringify(webPayload()), { status: 200 }),
+      readSourceMedia: async url => {
+        readUrls.push(url);
+        return { url, mimeType: "text/html", bytes: Buffer.from('<iframe src="https://www.youtube.com/embed/abcdefghijk"></iframe>') };
+      },
+    });
+    const result = await provider.retrieve({ ...request(), externalResearchRequest: { ...researchRequest, visualEvidence: "unnecessary", question: "Text facts with optional composition media" } });
+    assert.ok(readUrls.length > 0);
+    assert.ok(result.packets.some(packet => packet.assets.some(asset => asset.mediaType === "video")));
+    assert.ok(result.packets.some(packet => packet.facts.length));
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
+});
+
+test("different source scopes remain limitations without manufacturing disputed facts", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  try {
+    const payload = webPayload();
+    const message = payload.output.find(item => item.type === "message")!;
+    const content = message.content![0];
+    const report = JSON.parse(content.text!);
+    report.sourceComparisons = report.conflicts.map((item: { summary: string; sourceUrls: string[] }) => ({ ...item, kind: "scope-difference", summary: "The sources cover different periods; this does not establish a disagreement." }));
+    delete report.conflicts;
+    content.text = JSON.stringify(report);
+    const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal,
+      fetcher: async () => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }) });
+    const result = await runCanvasV2EvidenceBridge({ providers: [provider], request: { ...request(), externalResearchRequest: { ...researchRequest, question: "Do these two reports cover the same period?" } } });
+    assert.ok(result.packets.some(packet => packet.limitations.some(limit => limit.startsWith("Scope difference:"))));
+    assert.ok(result.packets.every(packet => packet.facts.every(fact => !fact.id.startsWith("external-conflict-position:"))));
+    assert.equal(result.issues.filter(issue => issue.code === "conflict").length, 0);
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
+});
+
+test("research receives supplied pixels and its cache cannot reuse a report for different pixels", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  const requests: Array<{ input: Array<{ content: Array<{ type: string; image_url?: string; detail?: string; text?: string }> }> }> = [];
+  const asset = (data: string) => ({ id: "upload:context", url: `data:image/png;base64,${data}`, label: "Original interface capture", kind: "image" as const,
+    source: { providerId: "northstar-chat-upload", providerLabel: "Supplied", sourceId: "context", sourceType: "uploaded" as const, label: "Original interface capture", retrievedAt: NOW, permission: "authorized" as const } });
+  const fetcher: typeof fetch = async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify(webPayload()), { status: 200 });
+  };
+  const query = { ...request(), externalResearchRequest: { ...researchRequest, question: "Investigate the interaction in the original interface capture" } };
+  try {
+    const first = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal, suppliedAssets: [asset("YQ==")], fetcher });
+    await first.retrieve(query);
+    await first.retrieve(query);
+    const changed = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal, suppliedAssets: [asset("Yg==")], fetcher });
+    await changed.retrieve(query);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests.map(body => body.input[0].content.filter(part => part.type === "input_image").map(part => part.image_url)),
+      [["data:image/png;base64,YQ=="], ["data:image/png;base64,Yg=="]]);
+    assert.ok(requests.every(body => body.input[0].content.find(part => part.type === "input_image")?.detail === "high"));
+    assert.match(requests[0].input[0].content.map(part => part.text ?? "").join(" "), /never attribute its contents to a web page/);
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
+});
+
+test("unapproved or remote assets do not masquerade as inspected supplied images", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  try {
+    const provider = createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal,
+      suppliedAssets: [{ id: "unapproved", url: "data:image/png;base64,YQ==", kind: "image", label: "Unapproved" }],
+      fetcher: async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        assert.equal(body.input[0].content.some((part: { type: string }) => part.type === "input_image"), false);
+        assert.match(JSON.stringify(body.input), /No supplied image pixels/);
+        return new Response(JSON.stringify(webPayload()), { status: 200 });
+      } });
+    await provider.retrieve({ ...request(), externalResearchRequest: { ...researchRequest, question: "Inspect missing image context boundary" } });
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
+});
+
+test("follow-up research receives retained public passages and invalidates cached conclusions when they change", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  const contexts: Array<{ retainedResearch: ReturnType<typeof canvasV2RetainedResearchContext> }> = [];
+  const fetcher: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    const part = body.input[0].content.find((item: { text?: string }) => item.text?.startsWith('{"instruction"'));
+    contexts.push(JSON.parse(part.text));
+    return new Response(JSON.stringify(webPayload()), { status: 200 });
+  };
+  const query = { ...request(), externalResearchRequest: { ...researchRequest, question: "What does the workshop's new enrollment evidence change?" } };
+  try {
+    const initial = await createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal, fetcher }).retrieve(query);
+    const packet = { ...initial.packets[0], sourceSnapshot: { text: "The workshop has 80 enrolled students.", sha256: "first", retrievedAt: NOW, url: "https://example.com/workshop", scope: "Literal text", truncated: false } };
+    const make = (text: string, question = "How many students enrolled?") => createCanvasV2OpenAIWebEvidenceProvider({ model: "gpt-5.6-luna", requestSignal: new AbortController().signal, fetcher,
+      retainedEvidence: [{ ...packet, sourceSnapshot: { ...packet.sourceSnapshot, text } }], researchHistory: [{ question }] });
+    const retained = make(packet.sourceSnapshot.text);
+    await retained.retrieve(query);
+    await retained.retrieve(query);
+    await make("The workshop has 40 enrolled students.").retrieve(query);
+    await make("The workshop has 40 enrolled students.", "Which applicants returned?").retrieve(query);
+    assert.equal(contexts.length, 4, "identical context is cached; changed passages or questions require a new investigation");
+    assert.equal(contexts[1].retainedResearch.sources[0].sourceSnapshot?.text, packet.sourceSnapshot.text);
+    assert.deepEqual(contexts[1].retainedResearch.priorQuestions, ["How many students enrolled?"]);
+    const privatePacket = { ...packet, source: { ...packet.source, providerId: "private-account-provider" } };
+    const limitedPacket = { ...packet, source: { ...packet.source, permission: "limited" as const } };
+    const context = canvasV2RetainedResearchContext([privatePacket, limitedPacket, ...Array.from({ length: 16 }, () => ({ ...packet, sourceSnapshot: { ...packet.sourceSnapshot, text: "A".repeat(20_000) } }))], []);
+    assert.equal(context.sources.length, 12);
+    assert.equal(context.omittedSourceCount, 4);
+    assert.equal(context.sources.reduce((sum, source) => sum + (source.sourceSnapshot?.text.length ?? 0), 0), 32_000);
+    assert.ok(context.sources.every(source => source.sourceSnapshot?.truncated));
+    assert.ok(context.sources.every(source => !("assets" in source)));
+  } finally { if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey; }
 });

@@ -1,3 +1,4 @@
+import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { assertCanvasV2ArtifactDocument } from "@/lib/canvas-v2/artifact-safety";
 import { buildCanvasV2ConnectorGeometry, type CanvasV2ConnectorVariant, type CanvasV2ConnectorAppearance } from "@/lib/canvas-v2/connector-geometry";
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
@@ -27,7 +28,7 @@ export type CanvasV2AtomicManualMutation =
   | { kind: "text"; nodeId: string; text: string; nativeContent?: CanvasV2NativeTextContentUpdate[]; layout?: { width?: number; height?: number } }
   | { kind: "style"; nodeId: string; property: CanvasV2EditableStyleProperty; value: string }
   | { kind: "shape-variant"; nodeId: string; variant: CanvasV2ShapeVariant }
-  | { kind: "attribute"; nodeId: string; name: "alt"; value: string }
+  | { kind: "attribute"; nodeId: string; name: "alt" | "data-canvas-v2-media"; value: string }
   | { kind: "image-source"; nodeId: string; src: string; alt?: string }
   | { kind: "connector-endpoint"; nodeId: string; endpoint: "from" | "to"; x: number; y: number; attachNodeId?: string }
   | { kind: "connector-curve"; nodeId: string; x: number; y: number }
@@ -53,6 +54,8 @@ export type CanvasV2AtomicManualMutation =
       endY?: number;
       shapeVariant?: CanvasV2ShapeVariant;
       connectorVariant?: CanvasV2ConnectorVariant;
+      fromAnchor?: CanvasV2ManualPoint;
+      toAnchor?: CanvasV2ManualPoint;
       fromNodeId?: string;
       toNodeId?: string;
       src?: string;
@@ -271,6 +274,7 @@ export function applyCanvasV2ManualMutation(
     const lineRotation = Math.atan2(endY - y, endX - x) * 180 / Math.PI;
     const lineX = x + (endX - x) / 2 - lineWidth / 2;
     const lineY = y + (endY - y) / 2 - 2;
+    const connectorAnchors = ([['from', mutation.fromAnchor], ['to', mutation.toAnchor]] as const).map(([end, anchor]) => anchor ? ` data-canvas-v2-connector-${end}-anchor="${finite(anchor.x, 'Anchor X')},${finite(anchor.y, 'Anchor Y')}"` : '').join('');
     const connectorBindings = `${mutation.fromNodeId ? ` data-canvas-v2-connector-from="${escapeAttribute(mutation.fromNodeId)}"` : ""}${mutation.toNodeId ? ` data-canvas-v2-connector-to="${escapeAttribute(mutation.toNodeId)}"` : ""}`;
     const connectorVariant = mutation.connectorVariant ?? "arrow";
     const connectorGeometry = buildCanvasV2ConnectorGeometry({ start: { x, y }, end: { x: endX, y: endY }, variant: connectorVariant });
@@ -288,7 +292,7 @@ export function applyCanvasV2ManualMutation(
         : mutation.primitive === "shape"
           ? `<div data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} data-canvas-v2-shape="${shapeVariant}" data-canvas-v2-writable="true" aria-label="${shapeVariant} shape" style="position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;${shapeStyle};display:flex;align-items:center;justify-content:center;padding:16px;text-align:center;font:600 18px/1.3 Inter,system-ui,sans-serif;color:var(--northstar-ink);background:var(--northstar-violet)"></div>`
           : mutation.primitive === "connector"
-            ? `<svg data-canvas-v2-node-id="${mutation.nodeId}" ${provenance}${connectorBindings} data-canvas-v2-connector-variant="${connectorVariant}" data-canvas-v2-connector-from-x="${x}" data-canvas-v2-connector-from-y="${y}" data-canvas-v2-connector-to-x="${endX}" data-canvas-v2-connector-to-y="${endY}" data-canvas-v2-connector-bend="${connectorVariant === "curve" ? 72 : 0}" data-canvas-v2-connector-control-x="${connectorGeometry.control.x}" data-canvas-v2-connector-control-y="${connectorGeometry.control.y}" aria-label="${connectorVariant} connector" viewBox="0 0 ${connectorGeometry.bounds.width} ${connectorGeometry.bounds.height}" style="position:absolute;left:${connectorGeometry.bounds.x}px;top:${connectorGeometry.bounds.y}px;width:${connectorGeometry.bounds.width}px;height:${connectorGeometry.bounds.height}px;${mutation.fromNodeId && mutation.toNodeId ? "z-index:-1;" : ""}overflow:visible"><path data-canvas-v2-connector-part="path" d="${connectorGeometry.path}" fill="none" stroke="var(--northstar-violet)" stroke-width="4" stroke-linecap="round"></path><path data-canvas-v2-connector-part="hit" d="${connectorGeometry.path}" fill="none" stroke="transparent" stroke-width="20" stroke-linecap="round" vector-effect="non-scaling-stroke" pointer-events="stroke"></path><circle data-canvas-v2-connector-part="start" cx="${connectorGeometry.localStart.x}" cy="${connectorGeometry.localStart.y}" r="5.5" fill="var(--northstar-surface)" stroke="var(--northstar-violet)" stroke-width="2.5"></circle>${connectorEnd}</svg>`
+            ? `<svg data-canvas-v2-node-id="${mutation.nodeId}" ${provenance}${connectorBindings}${connectorAnchors} data-canvas-v2-connector-variant="${connectorVariant}" data-canvas-v2-connector-from-x="${x}" data-canvas-v2-connector-from-y="${y}" data-canvas-v2-connector-to-x="${endX}" data-canvas-v2-connector-to-y="${endY}" data-canvas-v2-connector-bend="${connectorVariant === "curve" ? 72 : 0}" data-canvas-v2-connector-control-x="${connectorGeometry.control.x}" data-canvas-v2-connector-control-y="${connectorGeometry.control.y}" aria-label="${connectorVariant} connector" viewBox="0 0 ${connectorGeometry.bounds.width} ${connectorGeometry.bounds.height}" style="position:absolute;left:${connectorGeometry.bounds.x}px;top:${connectorGeometry.bounds.y}px;width:${connectorGeometry.bounds.width}px;height:${connectorGeometry.bounds.height}px;${mutation.fromAnchor || mutation.toAnchor ? "z-index:1;" : mutation.fromNodeId && mutation.toNodeId ? "z-index:-1;" : ""}overflow:visible"><path data-canvas-v2-connector-part="path" d="${connectorGeometry.path}" fill="none" stroke="var(--northstar-violet)" stroke-width="4" stroke-linecap="round"></path><path data-canvas-v2-connector-part="hit" d="${connectorGeometry.path}" fill="none" stroke="transparent" stroke-width="20" stroke-linecap="round" vector-effect="non-scaling-stroke" pointer-events="stroke"></path><circle data-canvas-v2-connector-part="start" cx="${connectorGeometry.localStart.x}" cy="${connectorGeometry.localStart.y}" r="5.5" fill="var(--northstar-surface)" stroke="var(--northstar-violet)" stroke-width="2.5"></circle>${connectorEnd}</svg>`
             : mutation.primitive === "line"
               ? `<div data-canvas-v2-node-id="${mutation.nodeId}" ${provenance} aria-label="Line" style="position:absolute;left:${lineX}px;top:${lineY}px;width:${lineWidth}px;height:4px;background:var(--northstar-violet);transform-origin:center;rotate:${lineRotation}deg"></div>`
             : mutation.primitive === "image"
@@ -380,8 +384,14 @@ export function applyCanvasV2ManualMutation(
     element.style.setProperty("clip-path", style["clip-path"], "important");
     markUserEdit(element, mutation.kind);
   } else if (mutation.kind === "attribute") {
+    if (mutation.name === MEDIA_ATTRIBUTE) {
+      const media = parseCanvasV2PlayableMedia(mutation.value);
+      element.setAttribute(MEDIA_ATTRIBUTE, JSON.stringify(media));
+      element.textContent = `${media.type === "gif" ? "GIF" : "Video"}: ${media.description}. Playback is available on the canvas; the model has not watched this media.`;
+    } else {
     if (mutation.name !== "alt" || element.tagName !== "IMG") throw new Error("Alt text is available only for an image object.");
     element.setAttribute("alt", mutation.value.trim().slice(0, 500));
+    }
     markUserEdit(element, mutation.kind);
   } else if (mutation.kind === "image-source") {
     if (element.tagName !== "IMG" || element.dataset.canvasV2LocalImage !== "true") throw new Error("Replace is available only for a user image object.");
@@ -394,6 +404,8 @@ export function applyCanvasV2ManualMutation(
     element.dataset[`${prefix}X`] = String(finite(mutation.x, "Connector endpoint X"));
     element.dataset[`${prefix}Y`] = String(finite(mutation.y, "Connector endpoint Y"));
     const binding = mutation.endpoint === "from" ? "canvasV2ConnectorFrom" : "canvasV2ConnectorTo";
+    // A rebound endpoint must never retain a fractional anchor belonging to its old target.
+    delete element.dataset[`${binding}Anchor`];
     if (mutation.attachNodeId) element.dataset[binding] = mutation.attachNodeId;
     else delete element.dataset[binding];
     markUserEdit(element, mutation.kind);

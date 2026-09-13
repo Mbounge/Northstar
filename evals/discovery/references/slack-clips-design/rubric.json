@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "caseId": "slack-clips-design",
+  "criteria": [
+    {
+      "id": "observe-motion",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Ground at least two observations in visible controls or states with file/frame/time locators. Do not invent keyboard behavior or unseen transitions.",
+      "evidenceIds": [
+        "inline-media",
+        "expanded-media"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "mechanism-transfer",
+      "checkpoint": "initial",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Connect an observed interaction to a specific user need in the review workflow and explain why it might help. Distinguish the transferable principle from the source product's styling and audience. Use relevant comparisons to challenge assumptions; competitor adoption is not proof of benefit.",
+      "evidenceIds": [
+        "design-account"
+      ],
+      "acceptableAlternatives": "Accept co-location, moment references, text access or another supported principle. No required Slack layout, Discord feature or comparison vendor."
+    },
+    {
+      "id": "historical-scope",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Separate historical examples from current help behavior; do not turn an old prototype limit into a current universal rule.",
+      "evidenceIds": [
+        "current-help",
+        "design-account"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "focused-proposal",
+      "checkpoint": "initial",
+      "dimension": "decision",
+      "required": true,
+      "instruction": "Choose one coherent improvement for the two-week window, with an observable success or failure signal and a reason it addresses the supplied workflow. State important feasibility assumptions; a broad redesign without prioritization fails.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Different design directions or a bounded prototype can pass. Do not assume two-week feasibility has been verified or require one predetermined feature."
+    },
+    {
+      "id": "inspectable-media",
+      "checkpoint": "initial",
+      "dimension": "canvas",
+      "required": true,
+      "instruction": "Both actual GIF examples are playable and individually selectable on the canvas, with provenance and annotations that do not obscure controls.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "research-revision",
+      "checkpoint": "revised",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Use the three supplied observations to refine the proposal; distinguish qualitative evidence from prevalence or invented numerical uplift.",
+      "evidenceIds": [
+        "research-notes"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "human-constraint",
+      "checkpoint": "constrained",
+      "dimension": "canvas",
+      "required": true,
+      "instruction": "Compare the annotated human-note snapshot with the constrained board. Preserve its identity, exact text-only requirement and independent editability; apply that requirement when revising transcript storage.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "privacy-change",
+      "checkpoint": "constrained",
+      "dimension": "decision",
+      "required": true,
+      "instruction": "Adapt to the internal ban on automatic transcript storage while preserving a useful text-only path. If transcripts are used, creation and retention must be explicit choices and deletion available. A separate written brief is an alternative, but its completeness and author burden must be considered. Identify unresolved trade-offs rather than claim an implemented or universally accessible solution.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept other feasible text-access approaches or a justified no-change proposal already meeting the constraint. This is a product requirement, not a law or statement about Slack."
+    },
+    {
+      "id": "evaluate-tradeoff",
+      "checkpoint": "planned",
+      "dimension": "decision",
+      "required": true,
+      "instruction": "Define an observable small-group test of the revised interaction, with a concrete review task, success/failure signal and competing explanation. Examine relevant burdens such as author effort or omitted detail as well as reviewer comprehension/context recovery. Do not turn exploratory observations into population-level or causal improvement claims.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "No prescribed method or sample size. A written brief cannot be assumed to substitute for every visual decision; failure can justify narrowing or changing the proposal."
+    },
+    {
+      "id": "no-universal-copy",
+      "checkpoint": "planned",
+      "dimension": "uncertainty",
+      "required": true,
+      "instruction": "Explain where the proposed pattern may fail, such as small-screen crowding or preference for text. Do not claim competitor adoption proves success for this team.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "investigation-value",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Actually investigate a material design uncertainty through source context or a relevant interaction comparison. Seek other products when their approaches could challenge or improve the proposed principle; explain what the inspected example adds and whether its user goals differ. A list of apps or inspiration images without comparative reasoning fails.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "No prescribed source, source count, platform, layout or search sequence. A focused inspection of seed material, a supported no-change result, or a bounded stop can pass when it addresses the material uncertainty. Judge actual trace evidence, not promises; missing trace is cannot-assess. Record demonstrated access limitations separately from reasoning quality."
+    },
+    {
+      "id": "narrative-clarity",
+      "checkpoint": "initial",
+      "dimension": "clarity",
+      "required": true,
+      "instruction": "On the initial rendered board, communicate a central question, substantive insight, decisive evidence and useful implication or next question in a coherent, engaging reading path. The explanation must be understandable without hidden chat reasoning. A source inventory or attractive layout without an argument fails. Judge observed delivery here and factual support separately; absent board artifacts are cannot-assess.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Any legible native composition or writing style can pass; no fixed headings, chronology, metaphor, connectors or persuasive tone is required. A genuinely unresolved conclusion can still be insightful. Preserve inspectable evidence without forcing every research step into the main story."
+    }
+  ],
+  "gates": [
+    {
+      "id": "no-fabrication",
+      "instruction": "No fabricated material evidence, source access, quotes, observations or measured effects."
+    },
+    {
+      "id": "native-usability",
+      "instruction": "Meaningful text and media individually selectable and editable; source context inspectable; no obstructive overlap; only useful native connectors."
+    },
+    {
+      "id": "preserve-human",
+      "instruction": "Preserve human edits and their meaning through subsequent updates; no unauthorized replacement."
+    },
+    {
+      "id": "clean-completion",
+      "instruction": "No false completion or product failure hidden by the final view. Retain first-render evidence and all repairs."
+    }
+  ]
+}

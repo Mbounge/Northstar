@@ -1,3 +1,4 @@
+import { emitCanvasV2Activity } from "./activity-stream.server";
 import type {
   CanvasV2FailureCode,
   CanvasV2FailurePayload,
@@ -20,6 +21,11 @@ import { canvasV2ProviderForModelIfKnown } from "@/lib/canvas-v2/model-catalog";
  * must opt into this constant explicitly.
  */
 export const CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS = 2;
+
+/** A valid request for additional context, distinct from a rejected draft. */
+export class CanvasV2ProviderContextRequest extends Error {
+  constructor(message: string) { super(message); this.name = "CanvasV2ProviderContextRequest"; }
+}
 
 export class CanvasV2ProviderError extends Error {
   readonly code: CanvasV2FailureCode;
@@ -113,12 +119,54 @@ export function canvasV2ProviderSupportsFallback(error: unknown): error is Canva
     && (error.code === "provider-unavailable" || error.code === "rate-limited" || error.code === "timeout" || error.code === "transport" || error.code === "invalid-response");
 }
 
+/** Consume Responses SSE without exposing partial JSON or private reasoning.
+ * Only a terminal response can enter the existing validation/usage pipeline. */
+export async function readCanvasV2ProviderEventStream<T>(response: Response, onEvent?: (event: Record<string, unknown>) => void): Promise<T> {
+  const reader = response.body?.getReader();
+  if (!reader) throw invalidCanvasV2ProviderResponse("The model stream had no response body.");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let data: string[] = [];
+  let terminal: T | undefined;
+  const dispatch = () => {
+    const payload = data.join("\n"); data = [];
+    if (!payload || payload === "[DONE]") return;
+    const event = JSON.parse(payload) as Record<string, unknown>;
+    if (event.type === "error" || event.type === "response.failed") throw invalidCanvasV2ProviderResponse("The model stream ended with a provider error.");
+    onEvent?.(event);
+    if (event.type === "response.completed" || event.type === "response.incomplete") terminal = event.response as T;
+  };
+  try {
+    while (terminal === undefined) {
+      const chunk = await reader.read();
+      buffer += chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newline).replace(/\r$/, ""); buffer = buffer.slice(newline + 1);
+        if (!line) dispatch();
+        else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (chunk.done) {
+        if (buffer.startsWith("data:")) data.push(buffer.slice(5).trimStart());
+        dispatch();
+        break;
+      }
+    }
+    if (terminal === undefined) throw invalidCanvasV2ProviderResponse("The model stream ended before a complete response arrived.");
+    return terminal;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
 export async function fetchCanvasV2ProviderJson<T>(input: {
   url: string;
   init: RequestInit;
   requestSignal: AbortSignal;
   timeoutMs?: number;
   fetcher?: typeof fetch;
+  onStreamEvent?: (event: Record<string, unknown>) => void;
 }): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
@@ -141,9 +189,11 @@ export async function fetchCanvasV2ProviderJson<T>(input: {
       throw providerFailure(response.status, parseRetryAfterMs(response.headers.get("retry-after")));
     }
     try {
-      return await response.json() as T;
+      return response.headers.get("content-type")?.includes("text/event-stream")
+        ? await readCanvasV2ProviderEventStream<T>(response, input.onStreamEvent)
+        : await response.json() as T;
     } catch (cause) {
-      if (timedOut || input.requestSignal.aborted) throw cause;
+      if (cause instanceof CanvasV2ProviderError || timedOut || input.requestSignal.aborted) throw cause;
       throw invalidCanvasV2ProviderResponse("North Star’s model provider returned unreadable JSON.");
     }
   } catch (cause) {
@@ -189,6 +239,9 @@ export interface CanvasV2ProviderModelChainInput<T> {
   primaryTimeoutMs?: number;
   requestForModel: (model: string, correction?: string) => { url: string; init: RequestInit; audit?: CanvasV2ProviderRequestAudit };
   attemptRole?: CanvasV2ProviderAttemptAudit["role"];
+  /** Public task context and a receipt derived only from the validated result. */
+  activity?: { label: string; detail?: string; completed?: (payload: T, model: string) => { label?: string; detail: string } };
+  onStreamEvent?: (event: Record<string, unknown>) => void;
   validatePayload?: (payload: T, model: string) => void;
   /** Caller-owned authoritative context revealed progressively across repairs. */
   repairContextForAttempt?: (input: {
@@ -271,6 +324,27 @@ function providerErrorWithAttempts(error: CanvasV2ProviderError, providerAttempt
  * the request advances to another provider model.
  */
 export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2ProviderModelChainInput<T>): Promise<CanvasV2ProviderFallbackOutcome<T>> {
+  // Activity describes the logical operation. Private attempts remain in the
+  // audit and must not appear as contradictory failed/completed user steps.
+  const operationId = crypto.randomUUID();
+  const label = input.activity?.label ?? (input.attemptRole === "external-researcher" ? "Web research"
+    : input.attemptRole === "explanation-reviewer" ? "Checking the explanation against sources"
+    : input.attemptRole === "discovery-director" ? "Investigating the next question"
+    : input.attemptRole === "visual-director" ? "Planning the composition"
+    : input.attemptRole === "source-author" ? "Composing the canvas" : "Preparing the response");
+  emitCanvasV2Activity({ id: operationId, operationId, kind: "activity", status: "started", label, detail: input.activity?.detail });
+  try {
+    const result = await runCanvasV2ProviderModelChain(input);
+    const receipt = input.activity?.completed?.(result.payload, result.model);
+    emitCanvasV2Activity({ id: operationId, operationId, kind: "activity", status: "completed", label: receipt?.label ?? label, detail: receipt?.detail ?? input.activity?.detail });
+    return result;
+  } catch (error) {
+    emitCanvasV2Activity({ id: operationId, operationId, kind: "activity", status: input.requestSignal.aborted ? "cancelled" : "failed", label });
+    throw error;
+  }
+}
+
+async function runCanvasV2ProviderModelChain<T>(input: CanvasV2ProviderModelChainInput<T>): Promise<CanvasV2ProviderFallbackOutcome<T>> {
   const models = [...new Set(input.models.filter(Boolean))];
   if (!models.length) throw new Error("Canvas V2 requires at least one provider model.");
   const attempts: CanvasV2ProviderAttemptAudit[] = [];
@@ -285,11 +359,21 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
         requestSignal: input.requestSignal,
         timeoutMs,
         fetcher: input.fetcher,
+        onStreamEvent: input.onStreamEvent,
       });
       observedUsage = providerUsage(payload, model);
+      // An incomplete provider response is not malformed authored JSON. Keep its
+      // usage and cause, and never let even parseable partial content validate.
+      const envelope = payload as { status?: string; incomplete_details?: { reason?: string } } | null;
+      if (envelope?.status === "incomplete") {
+        const reason = envelope.incomplete_details?.reason ?? "unspecified";
+        throw invalidCanvasV2ProviderResponse(`The provider response was incomplete (${reason}).`, undefined,
+          "The provider ended the preceding response before completion. Return a concise complete report; preserve consequential findings and omit repetitive metadata. Do not treat partial output as accepted evidence.");
+      }
       try {
         input.validatePayload?.(payload, model);
       } catch (error) {
+        if (error instanceof CanvasV2ProviderContextRequest) throw error;
         const message = error instanceof Error ? error.message : "North Star’s model returned invalid output.";
         throw invalidCanvasV2ProviderResponse(message, undefined, [
           `Your preceding structured draft failed deterministic validation: ${message}`,
@@ -308,6 +392,14 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
       });
       return payload;
       } catch (error) {
+        if (error instanceof CanvasV2ProviderContextRequest) {
+          attempts.push({ model, ...(input.attemptRole ? { role: input.attemptRole } : {}), attempt: modelAttempt,
+            outcome: "completed", durationMs: Date.now() - attemptStartedAt, detail: "Requested retained source details",
+            ...(observedUsage ? { usage: observedUsage } : {}), ...(request.audit ? { request: request.audit } : {}),
+          });
+          emitCanvasV2Activity({ id: crypto.randomUUID(), kind: "activity", status: "completed", label: "Inspected source details" });
+          throw error;
+        }
         if (error instanceof CanvasV2ProviderError) attempts.push({
         model,
         ...(canvasV2ProviderForModelIfKnown(model) ? { provider: canvasV2ProviderForModelIfKnown(model) } : {}),
@@ -324,7 +416,9 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
         if (process.env.NODE_ENV !== "production" && error instanceof CanvasV2ProviderError && error.code === "invalid-response") {
           console.warn("[canvas-v2] model output failed deterministic validation", {
             model,
+            role: input.attemptRole,
             attempt: modelAttempt,
+            usage: observedUsage,
             detail: error.message.slice(0, 1_200),
           });
         }
@@ -338,6 +432,7 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
   for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
     const model = models[modelIndex];
     let correction: string | undefined;
+    let contextRequests = 0;
     const correctionFailures: string[] = [];
     for (let invalidAttempt = 1; invalidAttempt <= maxInvalidResponses; invalidAttempt += 1) {
       try {
@@ -348,6 +443,12 @@ export async function fetchCanvasV2ProviderJsonWithModelChain<T>(input: CanvasV2
           attempts,
         };
       } catch (failure) {
+        if (failure instanceof CanvasV2ProviderContextRequest) {
+          if (++contextRequests > 1) throw invalidCanvasV2ProviderResponse("The retained source details are already available; repeated context expansion did not produce a decision.", attempts);
+          correction = failure.message;
+          invalidAttempt -= 1;
+          continue;
+        }
         if (!(failure instanceof CanvasV2ProviderError)) throw failure;
         lastFailure = failure;
         retryAfterMs = failure.retryAfterMs ?? retryAfterMs;

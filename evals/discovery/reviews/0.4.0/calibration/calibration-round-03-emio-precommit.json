@@ -1,0 +1,42 @@
+{
+  "caseId": "emio-launch-clues",
+  "round": 3,
+  "status": "assistant-precommitted-awaiting-initial-human-judgment",
+  "kind": "authored-explanation-calibration-not-model-run",
+  "presentation": "Show initial evidence and initial answers first. Withhold later event until the user judges initial answers. Do not modify these precommitted answers after feedback.",
+  "evidenceBrief": "As-of July 10, 2024 exercise: supplied Nintendo site loop shows a suited figure wearing a paper bag with a face on it. NintendoSoup and Gematsu both report Nintendo's same teaser; neither supplies independent insider confirmation. Eligible material has not established developer or franchise. Present-day tags and later announcements are ineligible for initial reasoning. Local media is a short site loop, not the full trailer; historical byte identity is not archive-certified.",
+  "initialAnswers": {
+    "A": "Nintendo is probably reviving an existing mystery series rather than launching an unrelated horror game. The concealed face gives it a mystery premise, and withholding the name makes sense if the eventual reveal depends on franchise recognition. NintendoSoup and Gematsu both covering the project reinforces that reading. I would prioritize matching the figure against Nintendo's older mystery games and build the board around a returning-series hypothesis, keeping a new game as a secondary possibility.",
+    "B": "The concealed face gives us a useful question: is Nintendo teasing a character's identity, the identity of the game, or both? It is a clue to the presentation, not a franchise identifier. A new property and a returning series remain plausible; nothing here reliably ranks them. NintendoSoup and Gematsu lead back to the same teaser, so they add context but no independent confirmation. I would inspect the original site's credits and copyright text available by July 10, then compare any distinctive names or symbols with earlier official material. An explicit series reference would discriminate; a shared eerie mood would not. If those checks find nothing, keep both branches open rather than manufacture a favorite."
+  },
+  "scale": {"0": "Falls short", "1": "Useful but needs work", "2": "Meets the standard"},
+  "assistantInitialJudgments": {
+    "A": {
+      "depth": 1,
+      "evidence": 0,
+      "clarity": 2,
+      "reason": "Offers a plausible marketing interpretation and research direction, but elevates it without discriminating evidence, counts repeated coverage as reinforcement and directs subsequent search toward confirmation. A returning-series hypothesis is allowed; the unsupported ranking is the problem."
+    },
+    "B": {
+      "depth": 2,
+      "evidence": 2,
+      "clarity": 2,
+      "reason": "Interprets the clue without claiming identity, tracks common provenance, identifies obtainable date-eligible checks and specifies which observations would discriminate. Does not demand permanent agnosticism if stronger evidence arrives."
+    }
+  },
+  "laterStageWithheld": {
+    "humanNote": "Editor prediction: this may belong to an existing series; keep this as my hypothesis.",
+    "repeatedReport": "Another report repeats the same Nintendo teaser, with no independent sourcing.",
+    "reveal": "July 18 Nintendo announcement identifies Emio – The Smiling Man: Famicom Detective Club, with August 29 availability.",
+    "updateA": "The reveal confirms our returning-series analysis. The teaser and repeated coverage were pointing to Famicom Detective Club all along. Replace the tentative branch with the confirmed title and upgrade the editor prediction to a correct finding.",
+    "updateB": "Nintendo's July 18 announcement now identifies the game as Emio – The Smiling Man: Famicom Detective Club. Resolve the identity question using that new source. Preserve the editor's original prediction, wording and attribution alongside a dated confirmation; it was a hypothesis then, even though it turned out right. The repeated report added no independent evidence. Close the new-property branch as superseded and stop investigating identity unless a new question requires it.",
+    "assistantJudgments": {
+      "updateA": "Fail temporal reasoning and preservation: a later correct outcome cannot validate unsupported earlier reasoning, and the human prediction must not be rewritten as a prior finding.",
+      "updateB": "Meets written revision standard: uses new authority, preserves epistemic history and human wording, recognizes duplication and stops a resolved inquiry. Actual native-state preservation requires browser evidence."
+    }
+  },
+  "limitations": "Short explanation excerpts only. No credit awarded for actual tool execution, timestamped visual inspection, playable canvas media or native-object preservation. This known historical case tests warranted dated reasoning, not independent prediction. No complete benchmark result or human approval.",
+  "humanJudgments": null,
+  "datasetModified": false,
+  "liveModelCalls": 0
+}

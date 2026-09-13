@@ -1,6 +1,7 @@
+import { readCanvasV2Request } from "@/lib/canvas-v2/media-transport";
 import { NextRequest, NextResponse } from "next/server";
 
-import { CANVAS_V2_INTERACTION_SCHEMA, canvasV2RouteMutatesCanvas, type CanvasV2InteractionDecision } from "@/lib/canvas-v2/interaction-router";
+import { CANVAS_V2_INTERACTION_SCHEMA, canvasV2RouteUsesDiscovery, type CanvasV2InteractionDecision } from "@/lib/canvas-v2/interaction-router";
 import type { CanvasV2ArtifactRevision } from "@/lib/canvas-v2/types";
 import { createCanvasV2DiscoveryState, type CanvasV2DiscoveryState, type CanvasV2InquiryInterpretation } from "@/lib/canvas-v2/discovery-state";
 
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
   if (process.env.NODE_ENV === "production" || process.env.NORTHSTAR_E2E !== "1") return NextResponse.json({ error: "Not found" }, { status: 404 });
   let body: { message?: string; selection?: { nodeId?: string }; revision?: CanvasV2ArtifactRevision; discoveryState?: CanvasV2DiscoveryState };
   try {
-    body = await request.json() as typeof body;
+    body = await readCanvasV2Request(request) as typeof body;
   } catch {
     return new NextResponse(null, { status: 499 });
   }
@@ -69,7 +70,9 @@ export async function POST(request: NextRequest) {
   }
   if (message === "Keep routing until I stop") await new Promise((resolve) => setTimeout(resolve, 700));
   let decision: CanvasV2InteractionDecision;
-  if (message === "Retry routing once") {
+  if (message.startsWith("Exercise live steering") || message === "Exercise wrapped inline comparison" || message === "Exercise research progress" || message === "Exercise research media" || message === "Exercise large research media") {
+    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "transform", summary: "Checking feedback during active work.", canvasInstruction: message };
+  } else if (message === "Retry routing once") {
     decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "conversation", summary: "Recovered the routing request without changing the canvas.", answer: "The routing request recovered safely on its second attempt." };
   } else if (message === "What is currently visible on this canvas?") {
     decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "inspect", summary: "Inspected the committed canvas without changing it.", answer: inspectAnswer(body.revision) };
@@ -88,7 +91,13 @@ export async function POST(request: NextRequest) {
       ? { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "research-design", summary: "I’ll retrieve the relevant evidence visibly, compose the answer, and inspect each revision.", canvasInstruction: message, researchTargets, researchMode: "synthesis" }
       : { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "transform", summary: "I’ll develop the requested visual answer directly on the living canvas and inspect the rendered result.", canvasInstruction: message };
   }
-  if (canvasV2RouteMutatesCanvas(decision.route)) {
+  if (message === "Investigate coordination in chat" || message === "Continue the coordination discussion" || message === "Exercise chat review continuation" || message === "Exercise chat execution failure") {
+    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "research-conversation", summary: "I’ll examine how recordings change coordination.", canvasInstruction: message, researchMode: "synthesis", researchTargets: [] };
+  }
+  if (message === "Put that explanation on the canvas") {
+    decision = { schema: CANVAS_V2_INTERACTION_SCHEMA, route: "transform", summary: "I’ll use the evidence from our discussion to build the visual explanation.", canvasInstruction: message };
+  }
+  if (canvasV2RouteUsesDiscovery(decision.route)) {
     const sourceCategories = requestedDiscoverySources(message, decision.route === "research-design");
     const inquiry: CanvasV2InquiryInterpretation = {
       relationship: body.discoveryState ?? body.revision?.discoveryState ? "continue" : "new",
@@ -116,6 +125,11 @@ export async function POST(request: NextRequest) {
       inquiry.materialUnknowns = ["Does asking for an account before explaining its value create trust or premature commitment?"];
       inquiry.completionCriteria = ["The highest-value human check is practical and specific.", "Returned findings update the recommendation without restarting the inquiry."];
       inquiry.rationale = "The current hypothesis can be narrowed most efficiently through a small human-guided check.";
+    }
+    if (decision.route === "research-conversation") {
+      inquiry.inquiryKind = "exploratory-discovery";
+      inquiry.evidenceNeed = "useful";
+      inquiry.completionCriteria = ["Explain coordination in chat."];
     }
     decision.inquiry = inquiry;
     decision.discoveryState = createCanvasV2DiscoveryState({ interpretation: inquiry, previous: body.discoveryState ?? body.revision?.discoveryState, revisionId: body.revision?.id, humanInput: message, now: new Date().toISOString() });

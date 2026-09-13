@@ -49,6 +49,33 @@ export function mergeCanvasV2EvidenceAssets(
   return uniqueBy([...current, ...packets.flatMap((packet) => packet.assets)], (asset) => asset.id);
 }
 
+/** Research memory makes authorized media available without creating canvas nodes. */
+export function canvasV2CompositionEvidence(current: readonly CanvasV2EvidenceAsset[], packets: readonly CanvasV2EvidencePacket[]): CanvasV2EvidenceAsset[] {
+  return mergeCanvasV2EvidenceAssets(current, packets.filter(packet => packet.source.permission === "authorized"
+    && (packet.source.sourceType === "uploaded" || packet.source.providerId === "openai-web-search")));
+}
+
+/** Spread a bounded visual inspection across sources before showing variants. */
+export function canvasV2ResearchImagePreviews(assets: readonly CanvasV2EvidenceAsset[], budget: number): CanvasV2EvidenceAsset[] {
+  const groups = new Map<string, CanvasV2EvidenceAsset[]>();
+  for (const asset of assets) {
+    if (asset.source?.providerId !== "openai-web-search" || (asset.mediaType && asset.mediaType !== "image") || !/^data:image\/(png|jpeg|webp);base64,/.test(asset.url)) continue;
+    let key = asset.source.sourceUrl ?? asset.source.sourceId;
+    try { key = new URL(key).hostname; } catch { /* Keep exact source identity. */ }
+    groups.set(key, [...(groups.get(key) ?? []), asset]);
+  }
+  const result: CanvasV2EvidenceAsset[] = [];
+  const seen = new Set<string>();
+  while (result.length < budget && [...groups.values()].some(group => group.length)) {
+    for (const group of groups.values()) {
+      const asset = group.shift();
+      if (asset && !seen.has(asset.url)) { result.push(asset); seen.add(asset.url); }
+      if (result.length === budget) break;
+    }
+  }
+  return result;
+}
+
 export function compactCanvasV2EvidencePacketsForModel(packets: readonly CanvasV2EvidencePacket[] | undefined) {
   return (packets ?? []).slice(-24).map((packet) => ({
     id: packet.id,
@@ -90,6 +117,7 @@ export function compactCanvasV2EvidencePacketsForModel(packets: readonly CanvasV
     assets: packet.assets.slice(0, 12).map((asset) => ({
       label: asset.label,
       kind: asset.kind,
+      mediaType: asset.mediaType,
       authority: asset.authority,
       app: asset.app,
       flow: asset.flow,

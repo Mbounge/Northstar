@@ -173,6 +173,13 @@ test("multi-source sensemaking preserves relationships, changed understanding, a
   assert.equal(brief?.whatChanged[0]?.now, "The divergence favors a bounded pilot until retention becomes durable.");
   assert.equal(brief?.honestBoundaries.find((item) => item.question.includes("same customer cohort"))?.boundary, "The snapshots do not establish cohort comparability.");
 
+  const duplicateImportance = structuredClone(transition);
+  duplicateImportance.sensemaking!.backgroundEvidenceNodeIds = [...evidenceNodeIds];
+  const normalized = applyCanvasV2DiscoveryTransition({ state, transition: duplicateImportance, graph: revision.discoveryGraph, now: NOW });
+  assert.deepEqual(normalized.sensemaking?.materialEvidenceNodeIds, evidenceNodeIds);
+  assert.deepEqual(normalized.sensemaking?.backgroundEvidenceNodeIds, []);
+  assert.deepEqual(normalized.sensemaking?.triangulations, evolved.sensemaking?.triangulations);
+
   const invalid = structuredClone(transition);
   invalid.sensemaking!.triangulations[0]!.evidenceNodeIds = [evidenceNodeIds[0]!];
   const singleSource = applyCanvasV2DiscoveryTransition({ state, transition: invalid, graph: revision.discoveryGraph, now: NOW });
@@ -181,11 +188,12 @@ test("multi-source sensemaking preserves relationships, changed understanding, a
   assert.match(singleSource.sensemaking?.triangulations.at(-1)?.limitations.at(-1) ?? "", /not multi-source triangulation/);
 
   const causal = structuredClone(transition);
-  causal.sensemaking!.triangulations[0]!.synthesis = "The adoption campaign caused retention to decline.";
+  causal.sensemaking!.triangulations[0]!.kind = "interpretation";
+  causal.sensemaking!.triangulations[0]!.synthesis = "The observed divergence does not show that the adoption campaign caused retention to decline.";
   const bounded = applyCanvasV2DiscoveryTransition({ state, transition: causal, graph: revision.discoveryGraph, now: NOW });
-  assert.equal(bounded.sensemaking?.triangulations.at(-1)?.relationship, "insufficient");
-  assert.equal(bounded.sensemaking?.triangulations.at(-1)?.confidence, "unknown");
-  assert.match(bounded.sensemaking?.triangulations.at(-1)?.synthesis ?? "", /cannot determine why/);
+  assert.equal(bounded.sensemaking?.triangulations.at(-1)?.relationship, "conflicting");
+  assert.equal(bounded.sensemaking?.triangulations.at(-1)?.kind, "interpretation");
+  assert.equal(bounded.sensemaking?.triangulations.at(-1)?.synthesis, causal.sensemaking!.triangulations[0].synthesis);
 });
 
 test("private orchestration vocabulary is rejected from progress and authored canvas copy unless explicitly requested", () => {

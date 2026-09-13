@@ -40,7 +40,7 @@ test("design and research routes carry a self-contained canvas instruction", () 
   for (const route of ["transform", "research-design"] as const) {
     const decision = parseCanvasV2InteractionDecision({ route, summary: "Begin visible work.", canvasInstruction: "Compose the requested board." }, "Make a board");
     assert.equal(canvasV2RouteMutatesCanvas(decision.route), true);
-    assert.equal(decision.canvasInstruction, "Compose the requested board.");
+    assert.equal(decision.canvasInstruction, "Make a board");
   }
   const research = parseCanvasV2InteractionDecision({
     route: "research-design",
@@ -128,23 +128,36 @@ test("selection transformation requires and preserves the exact stable target", 
   assert.match(reference.canvasInstruction || "", /immutable evidence|Preserve every selected object exactly/);
 });
 
-test("the chat controller delegates only mutating routes to the observed design loop", () => {
+test("the chat controller delegates substantive discovery to the shared loop and keeps simple replies local", () => {
   const hook = readFileSync("components/canvas-v2/use-canvas-v2-chat.ts", "utf8");
   const route = readFileSync("app/api/canvas-v2/route/route.ts", "utf8");
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
-  assert.match(hook, /canvasV2RouteMutatesCanvas/);
-  assert.match(hook, /if \(!canvasV2RouteMutatesCanvas\(decision\.route\)\)/);
+  assert.match(hook, /canvasV2RouteUsesDiscovery/);
+  assert.match(hook, /if \(!canvasV2RouteUsesDiscovery\(decision\.route\)\)/);
   assert.match(hook, /canvasV2AuthoritativeCanvasInstruction/);
   assert.match(hook, /input\.engine\.start\(canvasInstruction/);
-  assert.match(route, /Route by semantic intent, not by word matching/);
-  assert.match(route, /Evidence is optional/);
-  assert.match(route, /creative construction, planning, facilitation, organization, speculative exploration/);
-  assert.match(route, /A prompt can produce a complete premium canvas without research/);
-  assert.match(route, /journey\/session type/);
   assert.match(route, /discoveryModelContext: modelContext\.discoveryModelContext/);
   assert.doesNotMatch(route, /discoveryWorkingSet: modelContext\.discoveryWorkingSet/);
   assert.match(route, /evidenceSummary:/);
   for (const interaction of ["conversation", "inspect", "transform", "research-design", "selection-transform"]) assert.match(route, new RegExp(interaction));
   assert.match(workspace, /routerEndpoint="\/api\/canvas-v2\/route"|routerEndpoint = "\/api\/canvas-v2\/route"/);
   assert.doesNotMatch(`${hook}\n${route}\n${workspace}`, /@\/lib\/canvas-ai\//);
+});
+
+
+test('routing preserves the question without installing its own explanation or invented research branches', () => {
+  for (const message of ['Why do people adopt this messaging feature? Show me on the canvas.', 'What could these launch clues mean? Investigate and explain visually.', 'What should we learn from this creator campaign?']) {
+    const decision = parseCanvasV2InteractionDecision({ route: 'research-design', summary: 'I will investigate and explain it.', canvasInstruction: 'Explain that lower costs cause adoption.', inquiry: { relationship: 'new', objective: 'Prove lower costs', framing: 'Costs explain adoption', inquiryKind: 'exploratory-discovery', evidenceNeed: 'useful', sourceCategories: ['external'], materialUnknowns: ['What are their costs?'], completionCriteria: ['Explain the question on the canvas'] } }, message);
+    assert.equal(decision.canvasInstruction, message);
+    assert.equal(decision.inquiry?.objective, message);
+    assert.equal(decision.inquiry?.framing, message);
+    assert.deepEqual(decision.inquiry?.materialUnknowns, []);
+  }
+});
+
+test('explicit human questions remain available to inquiry continuity', () => {
+  const message = 'Track this question: Does it work offline?';
+  const decision = parseCanvasV2InteractionDecision({ route: 'transform', summary: 'I will track that question.', inquiry: { relationship: 'continue', inquiryKind: 'exploratory-discovery', evidenceNeed: 'useful', materialUnknowns: ['Does it work offline?', 'What is the acquisition cost?'] } }, message);
+  assert.deepEqual(decision.inquiry?.materialUnknowns, ['Does it work offline?']);
+  assert.equal(decision.inquiry?.relationship, 'continue');
 });

@@ -1,0 +1,28 @@
+{
+  "caseId": "slack-clips-design",
+  "round": 7,
+  "status": "assistant-precommitted-awaiting-human-feedback",
+  "kind": "authored-revision-calibration-not-model-run",
+  "scope": "Combined qualitative-research, changed-constraint and test-planning exercise, not an actual ordered harness run. No implementation or complete benchmark certification.",
+  "evidence": {
+    "source": "Three fictional exploratory prototype sessions; not real Slack findings or a representative sample.",
+    "observations": ["P1 watched without sound while commuting and missed a spoken detail without a text equivalent.", "P2 closed video to write feedback, then reopened it to recover a moment.", "P3 preferred a written summary and did not want to record a video response."],
+    "humanNote": "Product constraint: a text-only path must always remain available.",
+    "newInternalConstraint": "Transcripts cannot be stored automatically. Users must explicitly choose whether to create and retain them and must be able to delete them. This is a fictional product requirement, not a legal or Slack policy claim.",
+    "timeWindow": "Two weeks for one focused improvement."
+  },
+  "proposedResponse": "These sessions point to a shared need: reviewers must be able to understand the request and respond even when video or sound is inconvenient. I would prototype a text-first review brief containing the decision requested and the details needed to make it, with written feedback beside it and video available as supporting context. For this first version, the author supplies the brief; it must stand on its own rather than merely say 'watch the video.' Automatic transcription is not required. If transcripts are added later, creation and retention must be explicit choices, with deletion available; deleting a transcript must not remove the independently maintained review brief. This preserves the text-only requirement, but shifts work to the author and risks omitting important detail. It also leaves precise return-to-moment navigation unresolved. Keep that earlier proposal visible as a separate follow-up rather than pretending this change solves it.",
+  "testProposal": "Use matched review tasks in the current workflow and the prototype, alternating order across a small exploratory group. Include sound-off and text-only conditions. Check whether reviewers identify a planted decision-relevant detail and produce actionable feedback, whether authors can provide an adequate brief without excessive rework, and when people reopen video or request clarification. Missing essential information, unclear requests or burdensome authoring would challenge the proposal. Separate a poor example brief from a recurring limitation of the format. These sessions identify failure patterns, not population-level improvement rates.",
+  "assistantJudgment": {
+    "depth": 2,
+    "evidence": 2,
+    "clarity": 2,
+    "constraintAdaptation": 2,
+    "reason": "Synthesizes a relevant information-access need, preserves an independent text path without mandatory transcript storage, narrows the prototype and explicitly retains a still-unresolved navigation problem. Names author burden, content adequacy and an operational test. Written adequacy, implementation feasibility and native object preservation remain unverified. Not the only acceptable design."
+  },
+  "canvasExpectationsForLaterRun": "Preserve the exact human-note object, reference media and prior proposals. Distinguish current recommendation, superseded assumptions and unresolved follow-up. Native-state and visual checks must establish this; prose cannot.",
+  "humanJudgments": null,
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

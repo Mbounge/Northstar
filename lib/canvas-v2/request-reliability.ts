@@ -1,8 +1,12 @@
+import { serializeCanvasV2Request } from "./media-transport";
+import type { CanvasV2Activity } from "./tool-activity";
+import type { CanvasV2DiscoveryState } from "./discovery-state";
 export type CanvasV2FailureCode =
   | "cancelled"
   | "configuration"
   | "invalid-request"
   | "invalid-response"
+  | "execution-failed"
   | "rate-limited"
   | "timeout"
   | "transport"
@@ -15,7 +19,9 @@ export interface CanvasV2FailurePayload {
   code: CanvasV2FailureCode;
   retryable: boolean;
   retryAfterMs?: number;
+  httpStatus?: number;
   providerAttempts?: CanvasV2ProviderAttemptAudit[];
+  discoveryState?: CanvasV2DiscoveryState;
 }
 
 export interface CanvasV2ProviderUsage {
@@ -46,7 +52,7 @@ export interface CanvasV2ProviderRequestAudit {
 export interface CanvasV2ProviderAttemptAudit {
   model: string;
   provider?: "openai" | "google";
-  role?: "router" | "discovery-director" | "external-researcher" | "visual-director" | "source-author";
+  role?: "router" | "explanation-reviewer" | "discovery-director" | "external-researcher" | "visual-director" | "source-author";
   attempt?: number;
   outcome: "completed" | "provider-unavailable" | "rate-limited" | "timeout" | "invalid-response" | "rejected" | "cancelled" | "transport";
   durationMs: number;
@@ -163,6 +169,8 @@ export interface CanvasV2RetryState {
 
 export function canvasV2RetryReason(code: CanvasV2FailureCode): string {
   switch (code) {
+    case "execution-failed":
+      return "The request could not be completed";
     case "invalid-response":
       return "North Star is correcting its response";
     case "rate-limited":
@@ -187,13 +195,17 @@ export function canvasV2RetryReason(code: CanvasV2FailureCode): string {
 
 export function canvasV2PublicFailureMessage(error: unknown): string {
   if (!(error instanceof CanvasV2RequestError)) {
-    return "North Star couldn’t finish that safely. Your latest canvas is unchanged.";
+    return "North Star couldn’t finish that request. Your latest canvas is unchanged.";
   }
+  if (error.httpStatus === 401) return "Sign in to continue with North Star. Your canvas is unchanged.";
+  if (error.httpStatus === 403) return "You don’t have access to this workspace. Your canvas is unchanged.";
   switch (error.code) {
     case "configuration":
       return "North Star isn’t available in this workspace yet. Your canvas is unchanged.";
     case "invalid-request":
-      return "North Star needs a little more context before it can continue safely. Your canvas is unchanged.";
+      return "North Star couldn’t process that request. Try rephrasing it. Your canvas is unchanged.";
+    case "execution-failed":
+      return "I couldn’t finish this request. Your conversation and last accepted canvas are preserved.";
     case "invalid-response":
       return "North Star couldn’t form a reliable next step. Your latest canvas is unchanged, so you can try again.";
     case "rate-limited":
@@ -204,7 +216,7 @@ export function canvasV2PublicFailureMessage(error: unknown): string {
     case "transport":
       return "The connection was interrupted. Your latest canvas is safe, and you can continue from it.";
     case "provider-rejected":
-      return "North Star couldn’t complete that request safely. Your latest canvas is unchanged.";
+      return "North Star couldn’t complete that request. Your latest canvas is unchanged.";
     case "cancelled":
       return "Stopped. Your latest canvas remains visible.";
   }
@@ -226,8 +238,10 @@ export class CanvasV2RequestError extends Error {
   readonly code: CanvasV2FailureCode;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
+  readonly httpStatus?: number;
   readonly attempts: number;
   readonly providerAttempts?: CanvasV2ProviderAttemptAudit[];
+  readonly discoveryState?: CanvasV2DiscoveryState;
 
   constructor(input: CanvasV2FailurePayload & { attempts: number }) {
     super(input.error);
@@ -235,8 +249,10 @@ export class CanvasV2RequestError extends Error {
     this.code = input.code;
     this.retryable = input.retryable;
     this.retryAfterMs = input.retryAfterMs;
+    this.httpStatus = input.httpStatus;
     this.attempts = input.attempts;
     this.providerAttempts = input.providerAttempts;
+    this.discoveryState = input.discoveryState;
   }
 }
 
@@ -276,7 +292,9 @@ function failureFromResponse(response: Response, payload: unknown, attempt: numb
     retryable,
     retryAfterMs,
     providerAttempts: Array.isArray(record.providerAttempts) ? record.providerAttempts : undefined,
+    discoveryState: record.discoveryState,
     attempts: attempt,
+    httpStatus: response.status,
   });
 }
 
@@ -304,12 +322,18 @@ export async function requestCanvasV2Json<T>(input: {
   requestId: string;
   policy: CanvasV2RequestPolicy;
   onRetry?: (state: CanvasV2RetryState) => void;
+  onActivity?: (event: CanvasV2Activity) => void;
   fetcher?: typeof fetch;
   wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
 }): Promise<T> {
   const fetcher = input.fetcher ?? fetch;
   const wait = input.wait ?? waitForRetry;
-  const serializedBody = JSON.stringify(input.body);
+  let serializedBody: string;
+  try { serializedBody = serializeCanvasV2Request(input.body); }
+  catch (error) {
+    throw new CanvasV2RequestError({ code: "invalid-request", retryable: false, attempts: 0,
+      error: error instanceof Error ? error.message : "The canvas request could not be encoded." });
+  }
   let lastFailure: CanvasV2RequestError | undefined;
   let correction: string | undefined;
 
@@ -325,10 +349,11 @@ export async function requestCanvasV2Json<T>(input: {
     }, input.policy.timeoutMs);
 
     try {
-      const response = await fetcher(input.endpoint, {
+      let response = await fetcher(input.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(input.onActivity ? { Accept: "application/x-ndjson" } : {}),
           "X-Canvas-V2-Request-ID": input.requestId,
           "X-Canvas-V2-Attempt": String(attempt),
           ...(correction ? { "X-Canvas-V2-Previous-Failure": encodeURIComponent(correction.slice(0, 1_200)) } : {}),
@@ -336,7 +361,37 @@ export async function requestCanvasV2Json<T>(input: {
         signal: attemptController.signal,
         body: serializedBody,
       });
-      const raw = await response.text();
+      let raw: string;
+      if (response.headers.get("content-type")?.includes("application/x-ndjson") && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let terminal: { status: number; body: unknown } | undefined;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (input.signal.aborted) throw abortError();
+            buffer += decoder.decode(value, { stream: !done });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            if (done && buffer.trim()) lines.push(buffer);
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              const frame = JSON.parse(line);
+              if (frame.type === "event" && !terminal && frame.event?.requestId === input.requestId) input.onActivity?.(frame.event);
+              if (frame.type === "result") {
+                if (terminal) throw new Error("Duplicate terminal result.");
+                terminal = frame;
+              }
+            }
+            if (done) break;
+            if (buffer.length > 30_000_000) throw new Error("Activity frame exceeded its size limit.");
+          }
+        } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+        if (!terminal) throw new CanvasV2RequestError({ error: "The activity stream ended before the result arrived.", code: "provider-unavailable", retryable: false, attempts: attempt });
+        response = new Response(null, { status: terminal.status });
+        raw = JSON.stringify(terminal.body);
+      } else raw = await response.text();
       let payload: unknown;
       try {
         payload = raw ? JSON.parse(raw) : undefined;
@@ -404,9 +459,11 @@ export async function requestCanvasV2Json<T>(input: {
       ? `${lastFailure.message} The request stopped after ${lastFailure.attempts} attempts.`
       : lastFailure.message,
     code: lastFailure.code,
+    httpStatus: lastFailure.httpStatus,
     retryable: lastFailure.retryable,
     retryAfterMs: lastFailure.retryAfterMs,
     providerAttempts: lastFailure.providerAttempts,
+    discoveryState: lastFailure.discoveryState,
     attempts: lastFailure.attempts,
   });
 }

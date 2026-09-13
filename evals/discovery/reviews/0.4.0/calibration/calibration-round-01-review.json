@@ -1,0 +1,26 @@
+{
+  "caseId": "ikea-breakfast",
+  "round": 1,
+  "status": "human-feedback-recorded-disagreements-open",
+  "precommitFile": "calibration-round-01-precommit.json",
+  "humanFeedbackVerbatim": "A: good enough -- but think your misunderstanding margins and markets here -- IKEA general sells things which can sbsidize the cost of the meals -- for restaurant theres different types - yes - but restaurants have a different cost structure than IKEA and profitablity in the restaurant business industry is very low across the board -- generally a bad sector for most people wanting to set one up -- at core IKEA is stealing market share from restaurants and making them spend more money on their business that would otherwise have gone potentially to restaurants (because food eating) --- B seems good -- but think theres overlap with what i said earlier with A --- C is good - generally think i answered all this in A - lol",
+  "humanRatings": {"A": "good enough", "B": "seems good", "C": "good"},
+  "assistantPrecommittedRatings": {"A": "needs-work", "B": "good-enough-for-explanation-excerpt", "C": "unacceptable-as-written"},
+  "interpretation": {
+    "userPriority": "Explain business economics and competitive consequences: capacity to subsidize food, cost structure, margins, substitution of customer spending, and possible wider retail spend.",
+    "agreement": "B is a useful explanation excerpt, but the user's feedback calls for deeper commercial reasoning.",
+    "disagreementA": "User accepts A and supplies mechanisms not present in A itself. Assistant precommit judged the written answer insufficient on business-role. Do not credit the answer with mechanisms contributed by the evaluator.",
+    "disagreementC": "User accepts C's commercial explanation. Assistant precommit rejects certainty about this meal's deliberate loss and causal spending effects without supporting evidence. Separate explanatory insight from evidential support rather than forcing one global label."
+  },
+  "proposedCalibrationChanges": [
+    "Use separate judgments for explanatory depth, evidential support, and clarity.",
+    "Reward supported competitive or second-order implications when relevant; accept clearly labeled hypotheses that identify what would distinguish them.",
+    "Do not require market-share displacement as an IKEA gold fact: diversion from restaurant spending, substitution from home eating, incremental visits, and attribution to furniture purchases require investigation.",
+    "Distinguish capacity to subsidize from evidence of actual item-level loss, and sector aggregates from every establishment.",
+    "Score what the answer itself communicates; evaluator-supplied explanations cannot fill missing reasoning."
+  ],
+  "scope": "Authored excerpt calibration only; no actual Northstar run or rendered canvas assessed.",
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

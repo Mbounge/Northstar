@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { parseCanvasV2DesignDecision } from "@/lib/canvas-v2/model-response";
 import { validateCanvasV2EvidenceContinuity } from "@/lib/canvas-v2/artifact-safety";
+import { canvasV2ChatAttachmentEvidence, canvasV2ChatAttachmentHandle } from "@/lib/canvas-v2/chat-attachments";
 
 const creativeDirection = {
   designIntent: "Make the comparison clear.",
@@ -37,6 +38,24 @@ const spatialStrategy = {
 };
 
 const emptyDocument = { html: '<main data-canvas-v2-node-id="canvas"></main>', css: "" };
+
+test("decision validation retains approved upload handles on first canvas placement", () => {
+  const { assets } = canvasV2ChatAttachmentEvidence([{
+    id: "supplied-post", kind: "image", name: "post.png", mimeType: "image/png",
+    dataUrl: `data:image/png;base64,${Buffer.alloc(220_000, 1).toString("base64")}`,
+    byteSize: 220_000, width: 800, height: 900, createdAt: "2026-09-08T12:00:00.000Z",
+  }]);
+  const handle = canvasV2ChatAttachmentHandle(assets[0].id, 0);
+  const payload = {
+    decision: "edit", moveKind: "composition", creativeDirection, spatialStrategy, reflection,
+    summary: "Placed the original post.", expectedVisualResult: "An inspectable original beside its explanation.",
+    patch: { operations: [{ op: "append-html", targetNodeId: "canvas", html: `<img data-canvas-v2-node-id="post" data-canvas-v2-copy-evidence-handle="${handle}">` }] },
+  };
+  const decision = parseCanvasV2DesignDecision(payload, assets, emptyDocument, new Map(), new Map([[handle, assets[0].id]]));
+  assert.equal(decision.decision, "edit");
+  if (decision.decision === "edit") assert.ok(decision.document.html.includes(assets[0].url));
+  assert.throws(() => parseCanvasV2DesignDecision(payload, assets, emptyDocument), /handle is not grounded/);
+});
 
 test("parses a bounded source-patch edit", () => {
   const decision = parseCanvasV2DesignDecision({

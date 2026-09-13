@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "caseId": "emio-launch-clues",
+  "criteria": [
+    {
+      "id": "time-boundary",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Use only eligible pre-reveal evidence. A recalled correct title presented as established on July 10 fails.",
+      "evidenceIds": [
+        "july-report",
+        "parallel-report"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "provenance",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Trace reports back to their source; do not count two reports of one teaser as two independent confirmations.",
+      "evidenceIds": [
+        "july-report",
+        "parallel-report"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "visual-scope",
+      "checkpoint": "initial",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Identify a concrete visible cue with a frame/time locator and distinguish it from inferred genre, developer or franchise.",
+      "evidenceIds": [
+        "teaser-media"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "open-hypotheses",
+      "checkpoint": "initial",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Keep plausible interpretations open or explain why the available evidence cannot distinguish them. Rank them only with a discriminating basis; resemblance or a compelling marketing story alone is insufficient. Score story, audience or business interpretations as hypotheses unless supported, and avoid fabricated probability precision.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "No particular franchise, developer or number of theories is required. A supported ranking is welcome; permanent agnosticism is not the goal. Strategic questions are optional when relevant to the user."
+    },
+    {
+      "id": "discriminating-next-step",
+      "checkpoint": "initial",
+      "dimension": "decision",
+      "required": true,
+      "instruction": "Propose a specific obtainable source or observation that would distinguish the open possibilities. More generic searching alone is insufficient.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "media-on-board",
+      "checkpoint": "initial",
+      "dimension": "canvas",
+      "required": true,
+      "instruction": "The supplied loop is playable on the board, individually selectable, with source and scope visible. A static thumbnail alone does not meet playback.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "duplicate-rumor",
+      "checkpoint": "challenged",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Treat additional repetitions as repeated provenance, not added confidence without an independent basis.",
+      "evidenceIds": [
+        "july-report",
+        "parallel-report"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "preserve-prediction",
+      "checkpoint": "updated",
+      "dimension": "canvas",
+      "required": true,
+      "instruction": "Compare the annotated human-note snapshot with the updated board: preserve its identity, exact wording and attribution as a hypothesis while incorporating the reveal; do not rewrite it as a prior fact.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "reveal-update",
+      "checkpoint": "updated",
+      "dimension": "continuity",
+      "required": true,
+      "instruction": "Use the released announcement to revise identity while preserving the earlier uncertainty and human prediction as history.",
+      "evidenceIds": [
+        "later-reveal"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "stop-and-reflect",
+      "checkpoint": "closed",
+      "dimension": "decision",
+      "required": true,
+      "instruction": "State what the reveal resolves and what relevant questions remain open. Explain why later correctness does not establish earlier evidential warrant. Stop the settled identity search while retaining meaningful history and separate unresolved questions; do not keep repairing a resolved answer.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "A broader audience, story or strategy inquiry may continue when relevant. Closing a branch means marking it superseded, not deleting human objects or rewriting prior uncertainty."
+    },
+    {
+      "id": "investigation-value",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Use actual date-eligible inspection to pursue a clue, compare a distinctive visual detail or trace a reported claim beyond mere repetition of the seed reports. Explain what it changes or fails to distinguish. Seek relevant additional sources when warranted; fame, anonymity or number of platforms cannot substitute for claim-level provenance. A future search plan alone fails.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "No prescribed source, source count, platform, layout or search sequence. A focused inspection of seed material, a supported no-change result, or a bounded stop can pass when it addresses the material uncertainty. Judge actual trace evidence, not promises; missing trace is cannot-assess. Record demonstrated access limitations separately from reasoning quality."
+    },
+    {
+      "id": "narrative-clarity",
+      "checkpoint": "initial",
+      "dimension": "clarity",
+      "required": true,
+      "instruction": "On the initial rendered board, communicate a central question, substantive insight, decisive evidence and useful implication or next question in a coherent, engaging reading path. The explanation must be understandable without hidden chat reasoning. A source inventory or attractive layout without an argument fails. Judge observed delivery here and factual support separately; absent board artifacts are cannot-assess.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Any legible native composition or writing style can pass; no fixed headings, chronology, metaphor, connectors or persuasive tone is required. A genuinely unresolved conclusion can still be insightful. Preserve inspectable evidence without forcing every research step into the main story."
+    }
+  ],
+  "gates": [
+    {
+      "id": "no-fabrication",
+      "instruction": "No fabricated material evidence, source access, quotes, observations or measured effects."
+    },
+    {
+      "id": "native-usability",
+      "instruction": "Meaningful text and media individually selectable and editable; source context inspectable; no obstructive overlap; only useful native connectors."
+    },
+    {
+      "id": "preserve-human",
+      "instruction": "Preserve human edits and their meaning through subsequent updates; no unauthorized replacement."
+    },
+    {
+      "id": "clean-completion",
+      "instruction": "No false completion or product failure hidden by the final view. Retain first-render evidence and all repairs."
+    },
+    {
+      "id": "no-hindsight",
+      "instruction": "Initial claims must not rely on post-July-10 information, later game tags, revealed identity or model memory presented as dated evidence."
+    }
+  ]
+}

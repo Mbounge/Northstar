@@ -1,0 +1,29 @@
+{
+  "caseId": "ikea-breakfast",
+  "round": 2,
+  "status": "qualitative-human-feedback-recorded-calibration-open",
+  "precommitFile": "calibration-round-02-precommit.json",
+  "humanFeedbackVerbatim": "A - its hard for this one - because we dont know the actual customers - their earning bracket in society - financial situations - spending habits - its entirely true some customers may find the cheap food offered from IKEA good spend of the their money - and not go to restaurants - whilst some customers may do both -- but think the premise for IKEA doing this is to keep people in IKEA stores for as long as possible as that could have a higher correlation to spending more in IKEA and not else where - which is great customer retention/acquisition model ---- I agree with answer B - would be dumb for restaurants to try match costs with IKEA even for competititve reasons - these are 2 different markets the businesses operate in and value proposition -- restaurants are primary a service business - sure food is the product -- but it really is a service - especially high end ones - the edge restaurants really have is when it comes to the service, food, environment etc... -- generally 2 different things -- very hard to actually compare IKEA to restaurants as restaurants still have lots of social value and different use cases for consumers",
+  "humanNumericScores": null,
+  "humanQualitativeJudgments": {
+    "A": "Hard to judge. Customer financial situations and spending habits are unknown, substitution may vary, and some customers may use both. User proposes longer visits and potential greater IKEA spend as the business rationale.",
+    "B": "Agrees with strategic differentiation: restaurant service, food, environment, social value and consumer use cases make simple price matching an inadequate comparison."
+  },
+  "assistantInterpretation": {
+    "newInsight": "A strong explanation should inspect the comparison's premise: customers may be purchasing different experiences despite the common meal category. Connect customer purpose and service model with business economics.",
+    "evidenceBoundary": "User endorsement of B's strategic framing does not independently verify B's asserted customer displacement, margin recovery or inevitable profitability loss. Dwell time, acquisition, retention and spend effects remain hypotheses unless supported; they are distinct outcomes.",
+    "avoidOvergeneralizing": "Do not treat all restaurants as one segment, require demographic data for every useful conclusion, infer income from venue choice, or assume different value propositions eliminate all competition.",
+    "assessmentScope": "No numeric scores inferred. No actual model run, canvas artifacts, complete rubric agreement or independent case approval established."
+  },
+  "proposedStandard": [
+    "Explain a supported business mechanism beyond the observed price difference.",
+    "Assess whether the comparison matches customer purpose, service format, offer terms and relevant restaurant segment.",
+    "Develop competitive consequences as supported findings or explicitly conditional hypotheses; do not assume universal customer substitution.",
+    "Distinguish capacity to subsidize from actual meal losses, business rationale from measured causal effects, and sector aggregates from individual establishments.",
+    "Prioritize missing evidence that could change the explanation or decision, rather than produce an exhaustive list of unknowns.",
+    "Communicate the useful conclusion clearly without relying on the evaluator to supply the missing reasoning."
+  ],
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

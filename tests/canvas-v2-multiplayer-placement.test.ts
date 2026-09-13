@@ -173,3 +173,19 @@ test("two objects created by the same AI turn must not stack over each other", (
   }).join(" ");
   assert.match(failures, /new-title and new-analysis overlap/);
 });
+
+
+test("Codex protection mode permits intentional AI overlap but preserves human and reference geometry", () => {
+  const a = occupant("a", "northstar", 1000, 1000);
+  const b = occupant("b", "northstar", 1050, 1050);
+  const previous = observation("before", [a]);
+  const candidate = observation("candidate", [a, b]);
+  const change = transaction([{kind:"create",nodeId:"b"}] as CanvasV2SceneTransaction["mutations"]);
+  assert.ok(validateCanvasV2MultiplayerPlacement({previous, candidate, transaction:change}).length);
+  assert.deepEqual(validateCanvasV2MultiplayerPlacement({previous, candidate, transaction:change, protectedOnly:true}), []);
+  const human = occupant("human", "user", 1000, 1000);
+  assert.match(validateCanvasV2MultiplayerPlacement({previous:observation("before",[human]), candidate:observation("candidate",[human,b]),transaction:change,protectedOnly:true}).join(" "),/overlaps existing user-owned/);
+  assert.match(validateCanvasV2MultiplayerPlacement({previous:observation("before",[human]), candidate:observation("candidate",[occupant("human","user",1100,1000)]),transaction:change,protectedOnly:true}).join(" "),/changed rendered geometry/);
+  const reference = {...change,targeting:{scope:"selection",selectionPolicy:"reference",selectedNodeIds:["a"],editableNodeIds:[],protectedNodeIds:["a"],visibleBounds:{x:0,y:0,width:1600,height:900}}} as CanvasV2SceneTransaction;
+  assert.match(validateCanvasV2MultiplayerPlacement({previous,candidate:observation("candidate",[occupant("a","northstar",1100,1000)]),transaction:reference,protectedOnly:true}).join(" "),/Selected reference a changed/);
+});

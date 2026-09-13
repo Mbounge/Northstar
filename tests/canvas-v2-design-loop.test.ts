@@ -9,6 +9,7 @@ import {
   failCanvasV2Loop,
   pauseCanvasV2Loop,
   recordCanvasV2CommittedEdit,
+  recoverCanvasV2LoopFromCommittedTruth,
   stopCanvasV2Loop,
 } from "@/lib/canvas-v2/design-loop";
 import type { CanvasV2CompositionState } from "@/lib/canvas-v2/types";
@@ -394,4 +395,43 @@ test("completion, stop, and failure are terminal without synthetic repair", () =
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "Provider unavailable");
   assert.equal(failed.summitReceipt?.status, "failed");
+});
+
+test("repeated repairs of one island pause before another paid request, without claiming completion", () => {
+  const commit = (loop: ReturnType<typeof createCanvasV2Loop>, islandId: string) => recordCanvasV2CommittedEdit({
+    loop: { ...loop, status: "rendering" }, revisionId: `revision-${loop.steps.length}`,
+    moveKind: "composition", summary: "Separate the connector tracks.", expectedVisualResult: "Independent paths.",
+    creativeDirection, spatialStrategy, reflection,
+    islandExecution: { ...islandExecution, target: { ...islandExecution.target, action: "repair", islandId } },
+  });
+  let loop = createCanvasV2Loop({ id: "bounded-repair", instruction: "Create an investigation board" });
+  loop = commit(loop, "board"); loop = commit(loop, "board");
+  assert.equal(loop.status, "thinking");
+  const paused = commit(loop, "board");
+  assert.equal(paused.status, "paused");
+  assert.equal(paused.steps.length, 3);
+  assert.equal(paused.steps.at(-1)?.revisionId, "revision-2");
+  assert.match(paused.pauseReason ?? "", /not marked complete/);
+  assert.equal(commit(loop, "different-board").status, "thinking");
+  const fresh = createCanvasV2Loop({ id: "human-followup", instruction: "Use a different layout", continuation: { previousRunId: paused.id, priorSteps: paused.steps } });
+  assert.equal(commit(fresh, "board").status, "thinking");
+});
+
+
+test("rejected private updates stop without progress even when failure wording changes, and reset after a commit", () => {
+  let loop = createCanvasV2Loop({ id: "bounded-private", instruction: "Compose a clear board" });
+  const reject = (current: typeof loop, detail: string) => recoverCanvasV2LoopFromCommittedTruth({ loop: current, kind: "render-integrity", failures: [detail] });
+  loop = reject(loop, "Label overlaps copy");
+  loop = reject(loop, "Connector crosses heading");
+  assert.equal(loop.status, "thinking");
+  const stopped = reject(loop, "Label overlaps another copy block");
+  assert.equal(stopped.status, "paused");
+  assert.equal(stopped.steps.length, 0);
+  assert.equal(stopped.privateRecovery?.attemptsSinceCommit, 3);
+  assert.match(stopped.pauseReason ?? "", /not marked complete/);
+  const committed = recordCanvasV2CommittedEdit({ loop: { ...loop, status: "rendering" }, revisionId: "valid-board", moveKind: "composition", summary: "Created a clear board", expectedVisualResult: "Readable copy", creativeDirection, spatialStrategy, reflection });
+  const retry = reject(committed, "Label overlaps copy");
+  assert.equal(retry.status, "thinking");
+  assert.equal(retry.privateRecovery?.attemptsSinceCommit, 1);
+  assert.equal(retry.steps[0].revisionId, "valid-board");
 });

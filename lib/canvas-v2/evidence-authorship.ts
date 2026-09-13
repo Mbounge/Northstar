@@ -393,6 +393,23 @@ export function validateCanvasV2RenderedDesignRegionLegibility(
     const examples = items.slice(0, 6).map((item) => `${item.nodeId}=\"${item.text}\" (${item.lines} lines; about ${item.averageCharactersPerLine.toFixed(1)} characters per line)`).join(", ");
     return `Authored design region ${regionId} collapses ${items.length} prose object${items.length === 1 ? "" : "s"} into unreadable sliver columns: ${examples}. Restore a useful measure by giving the prose real grid or flex width, preventing sibling shrink, and removing runaway internal margins; do not accept a technically visible word stack as a readable workshop or analytical surface.`;
   });
+  const textCollisions = validateCanvasV2RenderedTextCollisions(observation);
+  return [...undersized, ...oversized, ...wrappedLabels, ...compressedMultiline, ...collapsedProse, ...textCollisions];
+}
+
+/** Painted text collisions are integrity failures, independent of font-size preferences. */
+export function validateCanvasV2RenderedTextCollisions(observation: CanvasV2RenderObservation): string[] {
+  const nodeById = new Map((observation.spatial.nodes ?? []).map(node => [node.nodeId, node]));
+  const regionIds = new Set((observation.spatial.designRegions ?? []).map(region => region.nodeId));
+  const owningRegion = (nodeId: string): string | undefined => {
+    let node = nodeById.get(nodeId);
+    const visited = new Set<string>();
+    while (node && !visited.has(node.nodeId)) {
+      visited.add(node.nodeId);
+      if (regionIds.has(node.nodeId)) return node.nodeId;
+      node = node.parentNodeId ? nodeById.get(node.parentNodeId) : undefined;
+    }
+  };
   const textCollisions = (observation.spatial.textCollisions ?? []).flatMap((collision) => {
     const first = nodeById.get(collision.firstNodeId);
     const second = nodeById.get(collision.secondNodeId);
@@ -434,7 +451,7 @@ export function validateCanvasV2RenderedDesignRegionLegibility(
     }
     return [`Authored design region ${firstRegion} renders overlapping readable text: ${first.nodeId}=\"${firstText}\" collides with ${second.nodeId}=\"${secondText}\" across ${Math.round(collision.intersection.width)}×${Math.round(collision.intersection.height)}px. Preserve both reading units and create a real gap by widening, spacing, or recomposing their rail before commit; text may never rely on visual overlap.${relationshipLabelRepair}`];
   });
-  return [...undersized, ...oversized, ...wrappedLabels, ...compressedMultiline, ...collapsedProse, ...textCollisions];
+  return textCollisions;
 }
 
 function cssAttributeString(value: string): string {
@@ -450,6 +467,7 @@ function cssAttributeString(value: string): string {
 export function repairCanvasV2RenderedDesignRegionTypeFloors(
   document: CanvasV2ArtifactDocument,
   observation: CanvasV2RenderObservation,
+  eligibleNodeIds?: ReadonlySet<string>,
 ): CanvasV2ArtifactDocument {
   const nodes = observation.spatial.nodes ?? [];
   const regionIds = new Set((observation.spatial.designRegions ?? []).map((region) => region.nodeId));
@@ -471,6 +489,7 @@ export function repairCanvasV2RenderedDesignRegionTypeFloors(
     return false;
   };
   const rules = nodes.flatMap((node) => {
+    if (eligibleNodeIds && !eligibleNodeIds.has(node.nodeId)) return [];
     const text = node.textPreview?.trim() ?? "";
     if (!/[a-z0-9]{2}/i.test(text)
       || (childrenByParent.get(node.nodeId)?.length ?? 0) > 0
@@ -481,13 +500,18 @@ export function repairCanvasV2RenderedDesignRegionTypeFloors(
         : 24;
     if (size >= minimum - 0.5) return [];
     const marker = `canvas-v2-type-floor:${node.nodeId}:${minimum}`;
-    if (document.css.includes(marker)) return [];
-    return [`/* ${marker} */\n[data-canvas-v2-node-id="${cssAttributeString(node.nodeId)}"] { font-size: ${minimum}px !important; }`];
+    const rule = `/* ${marker} */\n[data-canvas-v2-node-id="${cssAttributeString(node.nodeId)}"] { font-size: ${minimum}px !important; }`;
+    const existing = document.css.lastIndexOf(rule);
+    // Reassert the compiler rule after a later model style override. Keep an
+    // unchanged repair idempotent even when passed the pre-repair observation.
+    if (existing >= 0 && !document.css.slice(existing + rule.length)
+      .replace(/\/\* canvas-v2-type-floor:[^*]+\*\/\s*\[data-canvas-v2-node-id="[^"\n]+"\]\s*\{[^}]+\}/g, "").trim()) return [];
+    return [rule];
   });
   if (!rules.length) return document;
   return {
     ...document,
-    css: `${document.css.trimEnd()}\n\n/* canvas-v2-compiler-type-floor-recovery */\n${rules.join("\n")}`,
+    css: `${rules.reduce((css, rule) => css.replaceAll(rule, ""), document.css).trimEnd()}\n\n/* canvas-v2-compiler-type-floor-recovery */\n${rules.join("\n")}`,
   };
 }
 
@@ -593,6 +617,13 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
 ): string[] {
   const regions = observation.spatial.designRegions ?? [];
   if (!regions.length) return [];
+  const narratives = new Set(regions.map(region => region.narrativeId ?? 'legacy'));
+  if (narratives.size > 1) {
+    const scopedFailures = [...narratives].flatMap(narrativeId => validateCanvasV2RenderedIslandNarrativeIntegrity({
+      ...observation, spatial: {...observation.spatial, designRegions: regions.filter(region => (region.narrativeId ?? 'legacy') === narrativeId)},
+    }, instruction));
+    return Array.from(new Set([...scopedFailures, ...overlappingCanvasV2NarrativeIslands(regions)]));
+  }
   const failures: string[] = [];
   const titles = regions.filter((region) => region.storyRole === "title");
   if (titles.length > 1) {
@@ -799,18 +830,7 @@ export function validateCanvasV2RenderedIslandNarrativeIntegrity(
       }
     }
   }
-  for (let leftIndex = 0; leftIndex < regions.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < regions.length; rightIndex += 1) {
-      const left = regions[leftIndex];
-      const right = regions[rightIndex];
-      const intersection = renderedIntersectionArea(left.bounds, right.bounds);
-      if (intersection < 576) continue;
-      const leftCoverage = intersection / Math.max(1, left.bounds.width * left.bounds.height);
-      const rightCoverage = intersection / Math.max(1, right.bounds.width * right.bounds.height);
-      if (leftCoverage < 0.02 && rightCoverage < 0.02) continue;
-      failures.push(`Narrative islands ${left.nodeId} and ${right.nodeId} materially overlap (${Math.round(leftCoverage * 100)}% / ${Math.round(rightCoverage * 100)}%). Recompose them into distinct readable territories so their story order and complete contents remain inspectable.`);
-    }
-  }
+  failures.push(...overlappingCanvasV2NarrativeIslands(regions));
   return Array.from(new Set(failures));
 }
 
@@ -889,6 +909,10 @@ export function validateCanvasV2RenderedRelationshipGeometry(
 ): string[] {
   const failures: string[] = [];
   for (const relationship of observation.spatial.authoredRelationships ?? []) {
+    // Human free endpoints and deliberate routing are valid board state.
+    if (relationship.userAuthored) continue;
+    if (relationship.routeRetraces) failures.push(`Authored relationship ${relationship.nodeId} doubles back over its own route. Remove the retraced segment; an endpoint-to-endpoint relationship must not paint an ambiguous spur.`);
+    if (relationship.nativeConnector && (!relationship.sourceNodeIds.length || !relationship.targetNodeIds.length)) continue;
     if (!relationship.sourceNodeIds.length || !relationship.targetNodeIds.length) {
       failures.push(`Authored relationship ${relationship.nodeId} must declare both source and target node identities.`);
       continue;
@@ -915,7 +939,7 @@ export function validateCanvasV2RenderedRelationshipGeometry(
         : "";
       failures.push(`Authored relationship ${relationship.nodeId} is detached from target ${relationship.targetAnchorNodeId ?? relationship.targetNodeIds[0]} by ${relationship.targetAnchorDistance.toFixed(1)}px (tolerance ${relationship.targetAnchorTolerance.toFixed(1)}px). Rebuild its geometry against the current composition.${exactGeometry}`);
     }
-    if (relationship.targetAnchorInteriorDepth !== undefined
+    if (!relationship.targetAttachmentExplicit && relationship.targetAnchorInteriorDepth !== undefined
       && relationship.targetAnchorTolerance !== undefined
       && relationship.targetAnchorInteriorDepth > relationship.targetAnchorTolerance) {
       const endpoint = relationship.geometryOrientation === "reversed" ? relationship.geometryStartPoint : relationship.geometryEndPoint;
@@ -937,6 +961,7 @@ export function invalidCanvasV2RenderedRelationshipNodeIds(
   observation: CanvasV2RenderObservation,
 ): string[] {
   return Array.from(new Set((observation.spatial.authoredRelationships ?? []).flatMap((relationship) => {
+    if (relationship.userAuthored || (relationship.nativeConnector && (!relationship.sourceNodeIds.length || !relationship.targetNodeIds.length))) return [];
     const missingEndpoint = !relationship.sourceNodeIds.length
       || !relationship.targetNodeIds.length
       || Boolean(relationship.missingSourceNodeIds?.length)
@@ -947,9 +972,26 @@ export function invalidCanvasV2RenderedRelationshipNodeIds(
     const detachedTarget = relationship.targetAnchorDistance !== undefined
       && relationship.targetAnchorTolerance !== undefined
       && relationship.targetAnchorDistance > relationship.targetAnchorTolerance;
-    const penetratesTarget = relationship.targetAnchorInteriorDepth !== undefined
+    const penetratesTarget = !relationship.targetAttachmentExplicit && relationship.targetAnchorInteriorDepth !== undefined
       && relationship.targetAnchorTolerance !== undefined
       && relationship.targetAnchorInteriorDepth > relationship.targetAnchorTolerance;
-    return missingEndpoint || detachedSource || detachedTarget || penetratesTarget ? [relationship.nodeId] : [];
+    return missingEndpoint || detachedSource || detachedTarget || penetratesTarget || relationship.routeRetraces ? [relationship.nodeId] : [];
   })));
+}
+
+function overlappingCanvasV2NarrativeIslands(regions: NonNullable<CanvasV2RenderObservation['spatial']['designRegions']>): string[] {
+  const failures: string[] = [];
+  for (let leftIndex = 0; leftIndex < regions.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < regions.length; rightIndex += 1) {
+      const left = regions[leftIndex];
+      const right = regions[rightIndex];
+      const intersection = renderedIntersectionArea(left.bounds, right.bounds);
+      if (intersection < 576) continue;
+      const leftCoverage = intersection / Math.max(1, left.bounds.width * left.bounds.height);
+      const rightCoverage = intersection / Math.max(1, right.bounds.width * right.bounds.height);
+      if (leftCoverage < 0.02 && rightCoverage < 0.02) continue;
+      failures.push(`Narrative islands ${left.nodeId} and ${right.nodeId} materially overlap (${Math.round(leftCoverage * 100)}% / ${Math.round(rightCoverage * 100)}%). Recompose them into distinct readable territories so their story order and complete contents remain inspectable.`);
+    }
+  }
+  return failures;
 }

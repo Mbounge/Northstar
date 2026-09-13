@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "id": "gymshark-creator-strategy",
+  "family": "creator-campaign-discovery",
+  "version": "0.4.0",
+  "status": "draft",
+  "title": "What can a small brand learn from Gymshark’s creator campaign?",
+  "asOf": "2026-09-07",
+  "input": {
+    "path": "cases/gymshark-creator-strategy/input.md",
+    "sha256": "11162cc50ebae1adb1d2340660eb4274dd27aa59cc0b26ee0d6b44e8de80f4a6"
+  },
+  "assets": [
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-thumbnail.jpg",
+      "sha256": "1627224f6eaa5a7d4598b5d2c776ae936b10e8dea585334cbb79e31462668b04"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/media.json",
+      "sha256": "6b837c34450f278fc01b1e8bddf7a242eee4688a375b31d669fb94beab3d4d27"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/brief.md",
+      "sha256": "c100e491dcb015c188f334aa181c0ba13a337ce7065ab7c3914e7b5d23be5c6e"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-story.mp4",
+      "sha256": "fffebeea9ae24a2fcb2845a83a3d98fd622beba8b757230ff5c15bde45d46ebc"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-frame-0010.jpg",
+      "sha256": "480b3fefadf1e688ebba0c5fb28363539bfecf754f6c08aa22df26b149ac991e"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-frame-0030.jpg",
+      "sha256": "e3557fb437f7188e082937c8db5a6c9827c90753f4e81336896e58da16e393cc"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/source-context.md",
+      "sha256": "2ad43bcdedbcbd537f95bbf5332bc52347ea844d4b8afe6d369e0fced8ebfe92"
+    }
+  ],
+  "initialCanvas": {
+    "path": "cases/gymshark-creator-strategy/initial-canvas.json",
+    "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+  },
+  "episode": {
+    "path": "cases/gymshark-creator-strategy/episode.json",
+    "sha256": "6e8724f24d0a4aea94761c49fb5a3de7090d662bb684b0e9f8139272eb45181a"
+  },
+  "rubric": {
+    "path": "references/gymshark-creator-strategy/rubric.json",
+    "sha256": "620ac72350bb8a3804a48744da499ddea7e2869c1834d2b6bc3d14ede9d0b1b4"
+  },
+  "evidence": {
+    "path": "references/gymshark-creator-strategy/evidence.jsonl",
+    "sha256": "5fdad347af801675c9a317991dfec617c4a0a433bbcf51fc74cc34f6a6931999"
+  },
+  "referenceAssets": [],
+  "reviewedArtifacts": [
+    {
+      "path": "references/gymshark-creator-strategy/reference.md",
+      "sha256": "9c7d0ba0be4313edff5e60372a5e8dd71c9912f37536227570ac964d6a28f35f"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/reviewer-guide.md",
+      "sha256": "11ec7153182e1dca0b786e24b339aef9a3a3b976acd05897d6332c2ec51dcb7b"
+    },
+    {
+      "path": "SCORING.md",
+      "sha256": "be94b77879b0602211518dca7cd011a3e68e41d89b4d970fac81098536f3dc49"
+    },
+    {
+      "path": "calibration/discussion.md",
+      "sha256": "6a5a09da53a91c64f4a37169ae4cdf43b27540ff52fc0ceeec685e197ed4647e"
+    }
+  ],
+  "reviews": [],
+  "sourcePolicy": {
+    "mode": "open-web",
+    "referenceAccess": "excluded",
+    "independentDiscoveryCertified": false,
+    "notes": "Only initial assets and eligible event payloads are agent-visible. Source availability and temporal exclusions require operator review; no isolated search adapter is implemented."
+  },
+  "limitations": [
+    "Sampled media inspection, not exhaustive video or audio verification. A full 360p MP4 and two exact stills are pinned.",
+    "No live Northstar run; independent human calibration and application preflight remain outstanding.",
+    "Creator account is not a confirmed paid advertisement. Pilot results are synthetic.",
+    "The 700-second source need not be watched end to end within the proposed 600-second active-execution budget."
+  ]
+}

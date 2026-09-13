@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "name": "development",
+  "caseIds": [
+    "ikea-breakfast",
+    "emio-launch-clues",
+    "gymshark-creator-strategy",
+    "slack-clips-design"
+  ]
+}

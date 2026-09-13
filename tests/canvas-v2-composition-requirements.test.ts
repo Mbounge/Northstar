@@ -8,6 +8,8 @@ import {
   canvasV2NonTitleDesignText,
   canvasV2RequiredIndependentTerritoryCount,
   shouldCompleteCanvasV2ResolvedOptionalContinuation,
+  canvasV2RelationshipGeometryIsAvailable,
+  canvasV2InstructionExplicitlyRequestsRelationshipGeometry,
   validateCanvasV2AtomicTerritoryPlan,
   validateCanvasV2DeferredSemanticJobIsolation,
   validateCanvasV2RequestedCompositionCoverage,
@@ -145,6 +147,7 @@ test("three positioning territories may use natural creative-direction labels", 
 test("resolved requested islands close optional title or recompose work but preserve explicit authorship", () => {
   const resolved = {
     resolvedStory: true,
+    visualQualityReady: true,
     explicitWholeBoardRecompositionRequested: false,
     renderedIntegrityFailureCount: 0,
     promptCoverageFailureCount: 0,
@@ -300,4 +303,49 @@ test("8E.3 named deliverables are checked semantically without prescribing geome
     documentWith("<p>Customer emotion</p><p>Visible product moment</p><p>Operational handoff</p>", "Recovery"),
     "Create a service-recovery blueprint with emotional state, visible product moments, behind-the-scenes actions, and handoffs.",
   ).length, 1);
+});
+
+test("structural completeness cannot stop a concrete visual-quality correction", () => {
+  assert.equal(shouldCompleteCanvasV2ResolvedOptionalContinuation({
+    resolvedStory: true, visualQualityReady: false, explicitWholeBoardRecompositionRequested: false,
+    renderedIntegrityFailureCount: 0, promptCoverageFailureCount: 0, hasRenderRepair: false,
+    completionRecommendation: "continue", targetAction: "recompose", targetStoryRole: "whole-board",
+    instructionRequestsTitleAuthorship: false, explicitRelationshipGeometryRequested: false, prescribesOptionalRelationshipGeometry: false,
+  }), false);
+});
+
+
+test("all diagrams stage native relationships after their endpoint composition", () => {
+  const initial = { complexEvidenceSynthesis: false, hasRenderRepair: false, existingRelationshipCount: 0, observedDesignTurns: 0 };
+  assert.equal(canvasV2RelationshipGeometryIsAvailable(initial), false);
+  assert.equal(canvasV2RelationshipGeometryIsAvailable({ ...initial, observedDesignTurns: 1 }), true);
+  assert.equal(canvasV2RelationshipGeometryIsAvailable({ ...initial, complexEvidenceSynthesis: true }), false);
+  assert.equal(canvasV2RelationshipGeometryIsAvailable({ ...initial, complexEvidenceSynthesis: true, observedDesignTurns: 2 }), true);
+  assert.equal(canvasV2RelationshipGeometryIsAvailable({ ...initial, complexEvidenceSynthesis: true, hasRenderRepair: true }), false);
+});
+
+
+test("native-only and optional relationship rules do not force connectors", () => {
+  for (const instruction of [
+    "Keep every meaningful object individually editable and any relationships as native connectors.",
+    "All relationships must use the primitive set.",
+    "Use native connectors only if they improve clarity.",
+    "Connectors are optional. Compare the two explanations.",
+    "Do not add arrows. Keep the comparison clear.",
+    "A comparison without connectors.",
+  ]) assert.equal(canvasV2InstructionExplicitlyRequestsRelationshipGeometry(instruction), false, instruction);
+  for (const instruction of [
+    "Draw arrows from the two clues to the hypotheses.",
+    "Add native connectors between the existing objects.",
+    "Draw arrows. Any relationships must use native connectors.",
+  ]) assert.equal(canvasV2InstructionExplicitlyRequestsRelationshipGeometry(instruction), true, instruction);
+});
+
+
+test("router paraphrases cannot turn the human's optional relationship rule into mandatory wiring", async () => {
+  const { canvasV2AuthoritativeCanvasInstruction } = await import("../lib/canvas-v2/interaction-router");
+  const original = "Create two parallel explanations. Keep every meaningful object individually editable and any relationships as native connectors.";
+  const routed = canvasV2AuthoritativeCanvasInstruction(original, "Create an editable board with two explanations, separate branches, and native connectors.");
+  assert.equal(canvasV2InstructionExplicitlyRequestsRelationshipGeometry(routed), false);
+  assert.equal(canvasV2InstructionExplicitlyRequestsRelationshipGeometry(canvasV2AuthoritativeCanvasInstruction("Draw arrows between the stages.", "Create a comparison.")), true);
 });

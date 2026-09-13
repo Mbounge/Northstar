@@ -1,9 +1,21 @@
+import { largeMediaFixture } from "@/app/canvas-v2-e2e/large-media-fixture";
+import { readCanvasV2Request } from "@/lib/canvas-v2/media-transport";
+import { reconcileCanvasV2WitnessOwnership, validateCanvasV2WitnessOwnershipContract } from "@/lib/canvas-v2/stage-evidence-contract";
+import { canvasV2CompositionEvidence } from "@/lib/canvas-v2/evidence-packets";
+import { applyCanvasV2SourcePatch } from "@/lib/canvas-v2/source-patch";
+import { buildCanvasV2EvidenceCopyHandles } from "@/lib/canvas-v2/evidence-handles";
+import { streamCanvasV2Response, emitCanvasV2Activity } from "@/lib/canvas-v2/activity-stream.server";
+import { bindCanvasV2SourceCitations, identifyCanvasV2SourceLabels, normalizeCanvasV2ProvenanceBadges } from "@/lib/canvas-v2/source-presentation";
+import { discoveryFoundationFixture } from "@/app/canvas-v2-e2e/discovery-foundation-fixture";
+import { materializeCanvasV2ConnectorRequests, assertCanvasV2NativeRelationshipStaging } from "@/lib/canvas-v2/source-patch";
+import { canvasV2MeasuredConnectorDirectory } from "@/lib/canvas-v2/model-context";
 import { NextRequest, NextResponse } from "next/server";
 
 import { canvasV2ResearchResultForFlow } from "@/lib/canvas-v2/research-adapter";
 import {
   CANVAS_V2_DECISION_SCHEMA,
   type CanvasV2ArtifactRevision,
+  type CanvasV2EvidencePacket,
   type CanvasV2CompositionState,
   type CanvasV2CreativeDirection,
   type CanvasV2RenderedReflection,
@@ -424,9 +436,9 @@ const BASE_CSS = `
 
 export async function POST(request: NextRequest) {
   if (process.env.NODE_ENV === "production" || process.env.NORTHSTAR_E2E !== "1") return NextResponse.json({ error: "Not found" }, { status: 404 });
-  let body: { revision?: CanvasV2ArtifactRevision; observation?: CanvasV2RenderObservation; instruction?: string; run?: { researchTargets?: string[]; workingContext?: unknown; discoveryState?: CanvasV2DiscoveryState; compositionState?: CanvasV2CompositionState } };
+  let body: { renderRepair?: unknown; revision?: CanvasV2ArtifactRevision; observation?: CanvasV2RenderObservation; instruction?: string; run?: { deliveryMode?: string; readReceipts?: Array<{question:string;sourceIds:string[];issues:string[]}>; renderRepair?: unknown; researchTargets?: string[]; workingContext?: unknown; discoveryState?: CanvasV2DiscoveryState; compositionState?: CanvasV2CompositionState } };
   try {
-    body = await request.json() as typeof body;
+    body = await readCanvasV2Request(request) as typeof body;
   } catch {
     return new NextResponse(null, { status: 499 });
   }
@@ -434,6 +446,106 @@ export async function POST(request: NextRequest) {
   if (!revision) return NextResponse.json({ error: "Missing revision" }, { status: 400 });
   if (!body.observation?.spatial || body.observation.spatial.reportedNodeCount !== body.observation.spatial.nodes.length) {
     return NextResponse.json({ error: "Missing exact spatial observation" }, { status: 400 });
+  }
+  if (body.run?.deliveryMode === "chat" && body.instruction === "Exercise chat review continuation") {
+    if (body.run.renderRepair || (body.run as Record<string, unknown>).privateRecovery) throw new Error("Chat review entered canvas recovery");
+    const state = body.run.discoveryState!;
+    if (!body.run.readReceipts?.length) return NextResponse.json({ continueInvestigation: true,
+      discoveryState: state,
+      evidencePackets: [CANVAS_V2_E2E_EXTERNAL_EVIDENCE_PACKETS[0]],
+      readReceipt: { question: "What changes coordination?", sourceIds: [CANVAS_V2_E2E_EXTERNAL_EVIDENCE_PACKETS[0].source.sourceId], issues: [] },
+      discoveryProgress: { stage: "investigating", label: "Checking a remaining question", detail: "I’m checking whether the timing benefit also changes participation." },
+    });
+    if (!state.latestUnderstanding.startsWith("Fixture review considered:")) return NextResponse.json({ continueInvestigation: true,
+      discoveryState: { ...state, version: state.version + 1, latestUnderstanding: "Fixture review considered: timing differs from participation." }, evidencePackets: revision.evidencePackets,
+      discoveryProgress: { stage: "investigating", label: "Checking a remaining question", detail: "I’m checking what follows from the evidence already gathered." },
+    });
+    if (!revision.evidencePackets?.length || !body.run.readReceipts?.length) throw new Error("Review continuation lost its evidence");
+    return NextResponse.json({ conversationAnswer: "**Timing and participation are different.** The revised explanation keeps that distinction clear.", discoveryState: state, evidencePackets: revision.evidencePackets });
+  }
+  if (body.run?.deliveryMode === "chat" && body.instruction === "Exercise chat execution failure") return NextResponse.json({error:"Synthetic execution failure",code:"execution-failed",retryable:false});
+  if (body.run?.deliveryMode === "chat") {
+    return streamCanvasV2Response(request, async () => {
+      const retained = revision.evidencePackets?.some(packet => packet.id === CANVAS_V2_E2E_EXTERNAL_EVIDENCE_PACKETS[0].id);
+      emitCanvasV2Activity({ id: retained ? "chat-findings" : "chat-investigation", kind: "progress", label: "Checking coordination", detail: retained ? "The feature changes when people can respond; it does not prove they respond better." : "I’m checking whether recordings remove the need to be available at the same time." });
+      if (!retained) return NextResponse.json({ continueInvestigation: true, evidencePackets: [CANVAS_V2_E2E_EXTERNAL_EVIDENCE_PACKETS[0]], readReceipt: {question:"What changes when people can reply later?",sourceIds:[CANVAS_V2_E2E_EXTERNAL_EVIDENCE_PACKETS[0].source.sourceId],issues:[]}, discoveryState: body.run?.discoveryState });
+      if (!body.run?.readReceipts?.length) throw new Error("The chat follow-up lost its read history.");
+      return NextResponse.json({ conversationAnswer: "**Recordings separate participation from scheduling.**\n\nA team can contribute without finding a shared meeting time. The trade-off is slower clarification.\n\n| Option | Benefit | Trade-off |\n| --- | --- | --- |\n| Recording | Flexible timing | Delayed questions |\n| Meeting | Immediate clarification | Shared availability |\n\n[Inspect the source](https://example.com/coordination)\n\nI can map these trade-offs on the canvas if useful.", evidencePackets: revision.evidencePackets, discoveryState: body.run?.discoveryState });
+    });
+  }
+  if (body.instruction?.includes("Put that explanation on the canvas")) {
+    if (!revision.evidencePackets?.some(packet => packet.id === CANVAS_V2_E2E_EXTERNAL_EVIDENCE_PACKETS[0].id) || !body.run?.readReceipts?.length) throw new Error("The visual follow-up lost its conversation evidence.");
+    body.instruction = "Create a render-safe title composition.";
+  }
+  if (body.instruction?.includes("Exercise measured stage connectors")) {
+    const exists = revision.document.html.includes('data-canvas-v2-node-id="measured-handoff"');
+    const done = revision.document.html.includes('data-canvas-v2-node-id="measured-link-1"');
+    let html = revision.document.html;
+    if (!exists) html += '<section data-canvas-v2-node-id="measured-handoff" data-canvas-v2-design-region="true">' + ["Draft", "Review", "Approved"].map((label, i) => `<div data-canvas-v2-node-id="measured-stage-${i}" class="measured-stage"><span data-canvas-v2-node-id="measured-label-${i}">${label}</span></div>`).join("") + '</section>';
+    else if (!done) {
+      const directory = canvasV2MeasuredConnectorDirectory(body.observation.spatial.nodes, "measured-handoff");
+      const surfaces = [0, 1, 2].map((i) => directory.endpoints.find((node) => node.surfaceOwnerNodeId === `measured-stage-${i}`));
+      if (surfaces.some((node) => !node?.localBounds)) return NextResponse.json({ error: "Measured stage surfaces are missing from the source-author endpoint directory." }, { status: 500 });
+      const links = [0, 1].map((i) => {
+        const from = surfaces[i]!; const to = surfaces[i + 1]!;
+        return materializeCanvasV2ConnectorRequests(`<div data-canvas-v2-node-id="measured-link-${i}" data-canvas-v2-connector-request="true" data-from="${from.nodeId}" data-to="${to.nodeId}" data-x1="${from.localBounds!.x + from.localBounds!.width}" data-y1="${from.localBounds!.y + from.localBounds!.height / 2}" data-x2="${to.localBounds!.x}" data-y2="${to.localBounds!.y + to.localBounds!.height / 2}" data-variant="arrow"></div>`);
+      }).join("");
+      const range = findCanvasV2SourceNodeRange(html, "measured-handoff")!;
+      html = html.slice(0, range.closeStart) + links + html.slice(range.closeStart);
+      assertCanvasV2NativeRelationshipStaging({ previousHtml: revision.document.html, candidateHtml: html, observedNodeIds: body.observation.spatial.nodes.map((node) => node.nodeId), eligibleEndpointNodeIds: directory.endpoints.map((node) => node.nodeId), relationshipGeometryAllowed: true, targetAction: "develop" });
+    }
+    return NextResponse.json({ decision: {
+      schema: CANVAS_V2_DECISION_SCHEMA, decision: done ? "complete" : "edit", moveKind: "composition",
+      creativeDirection: direction("Make the handoff immediately readable.", []), spatialStrategy: spatial("Connect measured independent stage surfaces.", "stable"), reflection: reflection("Check the visible stage boundaries.", "none", "Verify native arrows."), summary: "Verify the measured stage endpoint contract.",
+      ...(done ? {} : { expectedVisualResult: "Three independent stages joined by two native arrows.", document: { html, css: revision.document.css + (!exists ? '[data-canvas-v2-node-id="measured-handoff"]{position:relative;display:flex;gap:160px;padding:80px;width:1240px;height:340px;color:var(--northstar-ink)}.measured-stage{position:relative;display:flex;align-items:center;justify-content:center;width:280px;height:180px;background:rgba(100,90,220,.16);border:2px solid #999;border-radius:12px;font:600 40px/1.3 sans-serif}' : "") } }),
+    }, evidence: revision.evidence });
+  }
+  if (body.instruction?.includes("Exercise text paint bounds")) {
+    const exists = revision.document.html.includes('data-canvas-v2-node-id="paint-bounds-region"');
+    const repaired = Boolean(body.run?.renderRepair);
+    const linked = revision.document.html.includes('data-canvas-v2-node-id="paint-bounds-link"');
+    const done = exists && linked && !repaired;
+    if (done && !body.observation.spatial.authoredRelationships?.some((edge) => edge.nodeId === "paint-bounds-link" && edge.nativeConnector && edge.targetAttachmentExplicit)) {
+      return NextResponse.json({ error: "The native relationship was not observed with its explicit interior attachment." }, { status: 500 });
+    }
+    const relationshipTurn = exists && !linked && !repaired;
+    return NextResponse.json({ decision: {
+      schema: CANVAS_V2_DECISION_SCHEMA, decision: done ? "complete" : "edit", moveKind: "composition",
+      creativeDirection: direction("Keep labels and explanations legible.", []), spatialStrategy: spatial("Use a measured gap between the label and its explanation.", "stable"),
+      reflection: reflection("Verify painted glyph bounds and independent text selection.", "none", "Inspect the actual label width."),
+      summary: "Verify readable text and exact selection bounds.",
+      ...(done ? {} : { expectedVisualResult: "The full label is selectable and clear of its explanation.", document: {
+        html: (relationshipTurn ? revision.document.html.replace(/<\/section>(?![\s\S]*<\/section>)/, materializeCanvasV2ConnectorRequests('<div data-canvas-v2-node-id="paint-bounds-link" data-canvas-v2-connector-request="true" data-from="paint-target-a" data-to="paint-target-b" data-x1="90" data-y1="325" data-x2="900" data-y2="275" data-from-anchor="0.25,0.75" data-to-anchor="0.5,0.25" data-variant="straight"></div>') + '</section>') : revision.document.html) + (exists ? "" : '<section data-canvas-v2-node-id="paint-bounds-region" data-canvas-v2-design-region="true"><strong data-canvas-v2-node-id="paint-bounds-label">REMAINS UNKNOWN</strong><p data-canvas-v2-node-id="paint-bounds-copy">Whether the teaser refers to a separate game.</p><div data-canvas-v2-node-id="paint-target-a" data-canvas-v2-primitive="shape" data-canvas-v2-shape="rectangle"></div><div data-canvas-v2-node-id="paint-target-b" data-canvas-v2-primitive="shape" data-canvas-v2-shape="rectangle"></div></section>'),
+        css: revision.document.css + `[data-canvas-v2-node-id="paint-bounds-region"]{position:relative;width:1800px;height:400px;color:var(--northstar-ink)}[data-canvas-v2-node-id="paint-bounds-label"]{position:absolute;left:40px;top:120px;width:260px;height:48px;white-space:nowrap;font:700 28px/1.5 Inter,sans-serif;letter-spacing:3px}[data-canvas-v2-node-id="paint-bounds-copy"]{position:absolute;left:${repaired ? 500 : 332}px;top:120px;width:1100px;height:80px;margin:0;font:400 35px/1.4 Inter,sans-serif}[data-canvas-v2-node-id="paint-target-a"],[data-canvas-v2-node-id="paint-target-b"]{position:absolute;top:250px;width:200px;height:100px;background:#6f55ed}[data-canvas-v2-node-id="paint-target-a"]{left:40px}[data-canvas-v2-node-id="paint-target-b"]{left:800px}`,
+      } }),
+    }, evidence: revision.evidence });
+  }
+  const foundation = discoveryFoundationFixture(body.instruction ?? "", revision, body.run?.discoveryState ?? revision.discoveryState);
+  if (foundation) return NextResponse.json({
+    decision: {
+      schema: CANVAS_V2_DECISION_SCHEMA, decision: foundation.done ? "complete" : "edit", moveKind: "composition",
+      creativeDirection: direction("Keep both investigation paths inspectable.", []),
+      spatialStrategy: spatial("Preserve individually editable findings and native relationships.", "stable"),
+      reflection: reflection("The branch update is visible alongside the retained work.", "none", "Verify the focused update."),
+      summary: foundation.summary,
+      ...(foundation.done ? {} : { expectedVisualResult: foundation.summary, document: foundation.document }),
+    },
+    discoveryState: foundation.discoveryState,
+    evidence: revision.evidence, evidencePackets: revision.evidencePackets,
+  });
+  if (body.instruction?.includes("Exercise independent AI objects")) {
+    const done = revision.document.html.includes('data-independent-ai-fixture="true"');
+    return NextResponse.json({ decision: {
+      schema: CANVAS_V2_DECISION_SCHEMA, decision: done ? "complete" : "edit", moveKind: "composition",
+      creativeDirection: direction("Verify individual canvas object ownership.", []),
+      spatialStrategy: spatial("Keep every painted object independently editable.", "stable"),
+      reflection: reflection("Inspect background, text, rules and native connector independently.", "none", "Complete the fixture."),
+      summary: "Created independent AI objects for native editing verification.",
+      ...(done ? {} : { expectedVisualResult: "Two independently editable metrics over a separate background, connected by a native arrow.", document: {
+        html: appendCanvasObject(revision.document.html, materializeCanvasV2ConnectorRequests('<section data-independent-ai-fixture="true" data-canvas-v2-node-id="independent-fixture" data-canvas-v2-design-region><h2 data-canvas-v2-node-id="fixture-heading">Independent canvas objects</h2><div data-canvas-v2-node-id="fixture-card"><p data-canvas-v2-node-id="fixture-left">35%</p><p data-canvas-v2-node-id="fixture-right">8 of 20</p></div><div data-canvas-v2-node-id="fixture-rules"><p data-canvas-v2-node-id="fixture-caption">Evidence remains editable</p></div><div data-canvas-v2-node-id="fixture-link" data-canvas-v2-connector-request="true" data-from="fixture-left" data-to="fixture-right" data-x1="400" data-y1="380" data-x2="1200" data-y2="380" data-variant="arrow"></div></section>')),
+        css: revision.document.css + '\n[data-independent-ai-fixture]{position:relative;width:1800px;padding:80px;color:var(--northstar-ink)}[data-canvas-v2-node-id="fixture-heading"]{font:600 100px/1.2 Georgia;margin:0 0 80px}[data-canvas-v2-node-id="fixture-card"]{position:relative;display:flex;justify-content:space-between;padding:100px 80px;height:400px;background:var(--northstar-surface-subtle);border:2px solid var(--northstar-line);border-radius:24px}[data-canvas-v2-node-id="fixture-left"],[data-canvas-v2-node-id="fixture-right"]{margin:0;font:600 100px/1.2 Inter,sans-serif}[data-canvas-v2-node-id="fixture-rules"]{border-top:2px solid var(--northstar-line);border-bottom:2px solid var(--northstar-line);padding:40px 0;margin-top:80px}[data-canvas-v2-node-id="fixture-caption"]{font:400 64px/1.4 Inter,sans-serif;margin:0}',
+      } }),
+    }, evidence: revision.evidence });
   }
   const intermediateResearchCommit = revision.id.startsWith("research-fast-revision-");
   if (
@@ -1135,6 +1247,30 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  if (body.instruction?.includes("Exercise wrapped inline comparison")) {
+    const committed = revision.document.html.includes('data-e2e-wrapped-inline');
+    return NextResponse.json({ decision: {
+      schema: CANVAS_V2_DECISION_SCHEMA,
+      decision: committed ? "complete" : "edit",
+      moveKind: "composition",
+      creativeDirection: direction("Explain the measured difference in one readable paragraph.", []),
+      spatialStrategy: spatial("Preserve readable inline emphasis and a compact paragraph.", "stable"),
+      reflection: reflection("Checking wrapped text.", "Bold values must not collide with adjacent words.", "Preserve the complete sentence."),
+      summary: "The paragraph preserves inline emphasis without a false collision.",
+      ...(!committed ? {
+        expectedVisualResult: "A wrapped paragraph with two independently editable bold values.",
+        document: bindCanvasV2SourceCitations({
+          directory: [{ handle: "source-1", label: "Reference example", href: "https://example.com/reference" }],
+          citations: [{ sourceHandle: "source-1", nodeId: "inline-source" }],
+          authoredHtml: '<span data-canvas-v2-node-id="inline-source">Reference example</span>',
+          document: {
+          html: normalizeCanvasV2ProvenanceBadges(appendCanvasObject(revision.document.html, `<section data-canvas-v2-node-id="inline-check" data-canvas-v2-design-region data-e2e-wrapped-inline><p data-canvas-v2-node-id="inline-provenance">STARTING CLAIM · HUMAN-PROVIDED</p><h2 data-canvas-v2-node-id="inline-title">A readable comparison</h2><p data-canvas-v2-node-id="inline-copy">The supplied figures show a <strong data-canvas-v2-node-id="inline-value">$16.01 CAD</strong> difference, or <strong data-canvas-v2-node-id="inline-ratio">3.67×</strong>. The next question is what explains the difference and what would change that explanation.</p><span data-canvas-v2-node-id="inline-source">Reference example</span></section>`)),
+          css: `${revision.document.css}\n[data-e2e-wrapped-inline]{width:1000px;padding:60px;color:var(--northstar-ink);font:32px/1.5 Georgia,serif}[data-e2e-wrapped-inline] h2{font-size:56px}[data-e2e-wrapped-inline] p{width:760px;line-height:1.5}`,
+        } }),
+      } : {}),
+    }, evidence: revision.evidence });
+  }
+
   if (body.instruction?.includes("Exercise writable surface closure")
     || /60-minute founder workshop/i.test(body.instruction ?? "")) {
     if (revision.document.html.includes("data-e2e-writable-surface")) return NextResponse.json({
@@ -1398,6 +1534,79 @@ export async function POST(request: NextRequest) {
       evidence: revision.evidence,
       researchStatus: canvasV2ResearchStatusForDecision(researchIndex),
     });
+  }
+
+  if (body.instruction === "Exercise research media" || body.instruction === "Exercise large research media") {
+    const source = { providerId: "openai-web-search", providerLabel: "Fixture", sourceId: "fixture-media-source", sourceType: "fixture" as const,
+      label: "Deterministic media fixture", sourceUrl: "https://example.com/fixture", retrievedAt: new Date().toISOString(), permission: "authorized" as const };
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="800" height="400" fill="#DDE7FC"/><rect x="100" y="90" width="600" height="220" fill="#37307C"/><text x="400" y="215" fill="white" font-family="sans-serif" font-size="40" text-anchor="middle">Relevant source detail</text><text x="400" y="365" font-family="sans-serif" font-size="22" text-anchor="middle">Illustrated fixture · original context retained</text></svg>`;
+    const imageUrl = body.instruction === "Exercise large research media"
+      ? largeMediaFixture()
+      : `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    const assets = [
+      { id: "fixture-research-image", url: imageUrl, label: "Illustrated fixture, not research evidence", kind: "image" as const, mediaType: "image" as const, source },
+      { id: "fixture-research-video", url: `${request.nextUrl.origin}/canvas-v2-e2e/media?type=mp4`, label: "Video playback fixture", kind: "image" as const, mediaType: "video" as const, source },
+      { id: "fixture-research-gif", url: `${request.nextUrl.origin}/canvas-v2-e2e/media?type=gif`, label: "GIF playback fixture", kind: "image" as const, mediaType: "gif" as const, source },
+    ];
+    if (body.instruction === "Exercise large research media") {
+      // Six distinct images exceed 10 MB even after request interning.
+      for (let index = 2; index <= 6; index++) assets.push({ id: `fixture-research-image-${index}`, url: largeMediaFixture(`independent-${index}`), label: `Independent media fixture ${index}`, kind: "image", mediaType: "image", source });
+    }
+    const retained = revision.evidencePackets?.find(packet => packet.id === "fixture-retained-media");
+    if (!retained) {
+      const packet: CanvasV2EvidencePacket = { schema: "canvas-v2.evidence-packet.v1", id: "fixture-retained-media", kind: "statement", source,
+        title: "Retained media fixture", summary: "Useful media retained before first composition", authority: "observed", assets, facts: [], metrics: [], limitations: [], tags: [], createdAt: source.retrievedAt };
+      return NextResponse.json({ continueInvestigation: true, readReceipt: { question: "Inspect source media", sourceIds: [source.sourceId], issues: [] }, evidencePackets: [packet],
+        researchSummary: "The source media is retained. I’m placing the useful evidence next." });
+    }
+    const available = canvasV2CompositionEvidence(revision.evidence, [retained]);
+    const done = revision.document.html.includes('data-canvas-v2-node-id="research-media-fixture"');
+    const handles = buildCanvasV2EvidenceCopyHandles(revision.document, available);
+    const authoredHtml = identifyCanvasV2SourceLabels(`<section data-canvas-v2-node-id="research-media-fixture" data-canvas-v2-design-region style="width:1100px;padding:40px"><h2 data-canvas-v2-node-id="media-fixture-heading" style="font:40px sans-serif">Source media · zero-credit fixture</h2><article data-canvas-v2-node-id="media-fixture-cell"><h3 data-canvas-v2-node-id="media-fixture-subheading" style="font:28px sans-serif">Inspect the source detail and motion</h3><div data-canvas-v2-node-id="media-fixture-layout" style="display:flex;gap:30px;flex-wrap:wrap">${handles.map((item, index) => `<img data-canvas-v2-node-id="fixture-media-${index}" data-canvas-v2-copy-evidence-handle="${item.handle}"${index === 0 ? ' data-canvas-v2-evidence-treatment="detail-crop" style="width:480px;height:180px;object-position:50% 35%"' : ""}>`).join("")}</div><p data-canvas-v2-node-id="media-fixture-caption" style="font:24px sans-serif">Native image crop, linked video and GIF. No model calls.</p><span data-canvas-v2-source-handle="source-1" style="font:24px sans-serif">Fixture source</span></article></section>`, new Set());
+    let document = done ? revision.document : applyCanvasV2SourcePatch({ previous: revision.document, evidence: available,
+      operations: [{ op: "append-html", targetNodeId: /data-canvas-v2-node-id=["']([^"']+)/.exec(revision.document.html)![1], html: authoredHtml }] });
+    if (!done) {
+      document = bindCanvasV2SourceCitations({ document, authoredHtml, citations: [], directory: [{ handle: "source-1", label: "Fixture source", href: "https://example.com/fixture" }] });
+      const ownership = { document, targetIslandId: "research-media-fixture", evidenceAssignments: handles.map(item => ({ evidenceId: item.evidenceId, witnessGroup: "source-detail" })) };
+      document = reconcileCanvasV2WitnessOwnership(ownership);
+      const failures = validateCanvasV2WitnessOwnershipContract({ ...ownership, document });
+      if (failures.length) throw new Error(failures.join(" "));
+    }
+    return NextResponse.json({ decision: { schema: CANVAS_V2_DECISION_SCHEMA, decision: done ? "complete" : "edit", moveKind: "composition",
+      creativeDirection: direction("Verify research media first placement and native playback.", []), spatialStrategy: spatial("Keep media independent and inspectable.", "stable"),
+      reflection: reflection("Inspect the original source crop and both native players.", "none", "Verify without model calls."), summary: done && body.instruction === "Exercise large research media"
+        ? `Media round trip verified: ${JSON.stringify(body).length} expanded bytes; ${request.headers.get("content-length")} wire bytes.`
+        : "Research media fixture is ready.",
+      ...(done ? {} : { expectedVisualResult: "One native image crop and two independently editable native players.", document }) }, evidence: available, evidencePackets: [retained] });
+  }
+
+  if (body.instruction === "Exercise research progress") {
+    return streamCanvasV2Response(request, async () => {
+      emitCanvasV2Activity({ id: "fixture-search", kind: "activity", status: "started", label: "Web research" });
+      emitCanvasV2Activity({ id: "fixture-search-progress", kind: "progress", label: "Checking sources", detail: "Checking the documented workflow before drawing a conclusion." });
+      emitCanvasV2Activity({ id: "fixture-query", kind: "activity", tool: "web-search", status: "completed", label: "Searched the web", detail: "Searched for asynchronous collaboration workflows", sources: [{ label: "Workflow documentation", href: "https://example.com/workflow" }] });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      emitCanvasV2Activity({ id: "fixture-page", kind: "activity", tool: "web-page", status: "completed", label: "Checked a source", detail: "Checked the documented recording workflow", sources: [{ label: "Recording reference", href: "https://example.org/recording" }] });
+      emitCanvasV2Activity({ id: "fixture-finding", kind: "progress", label: "What the research found", detail: "The documentation confirms recording is available. Whether it reduces coordination effort still needs evidence.", sources: [{ label: "Workflow documentation", href: "https://example.com/workflow" }] });
+      await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); request.signal.removeEventListener("abort", done); resolve(); };
+        const timer = setTimeout(done, 10_000);
+        request.signal.addEventListener("abort", done, { once: true });
+      });
+      emitCanvasV2Activity({ id: "fixture-search", kind: "activity", status: "completed", label: "Web research" });
+      return NextResponse.json({ discoveryState: body.run?.discoveryState ?? revision.discoveryState, discoveryQuestion: { question: "Research progress fixture finished.", whyItMatters: "No model API was called." } });
+    });
+  }
+
+  if (body.instruction?.startsWith("Exercise live steering")) {
+    if (!body.instruction.includes("Human feedback received")) await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, 20_000);
+      request.signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    return NextResponse.json({ discoveryState: body.run?.discoveryState ?? revision.discoveryState, discoveryProgress: { stage: "waiting", label: "Feedback checked", detail: "The investigation retained the original objective and your feedback." }, discoveryQuestion: {
+      question: body.instruction.includes("Human feedback received") ? "Your feedback is incorporated in the same investigation." : "Original request reached its checkpoint.",
+      whyItMatters: body.instruction,
+    } });
   }
 
   if (body.instruction === "Fail design without mutation" || (body.instruction === "Retry design once" && attempt === 1)) {

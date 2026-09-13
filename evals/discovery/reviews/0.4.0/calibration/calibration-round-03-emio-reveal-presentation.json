@@ -1,0 +1,14 @@
+{
+  "caseId": "emio-launch-clues",
+  "round": 3,
+  "stage": "later-evidence",
+  "status": "presented-awaiting-human-feedback",
+  "precommitFile": "calibration-round-03-emio-precommit.json",
+  "prerequisite": "Initial qualitative feedback recorded in calibration-round-03-emio-review.json.",
+  "presentedContent": ["laterStageWithheld.humanNote", "laterStageWithheld.repeatedReport", "laterStageWithheld.reveal", "laterStageWithheld.updateA", "laterStageWithheld.updateB"],
+  "clarification": "The human note and repeated report are hypothetical episode events for this calibration, not actions the user actually performed on a canvas. The official reveal is from the stored research packet. Closing a branch means retaining its history as superseded, not deleting user objects. Resolving identity does not automatically end a broader audience or strategy investigation.",
+  "humanJudgments": null,
+  "actualNorthstarRun": false,
+  "liveModelCalls": 0,
+  "datasetModified": false
+}

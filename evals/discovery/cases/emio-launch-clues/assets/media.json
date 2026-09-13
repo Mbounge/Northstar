@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "items": [
+    {
+      "file": "teaser-loop.mp4",
+      "sha256": "4ac3c59ab8acd93fbe11c035730eac5d2dd8b1b6e213572b99bd16fa86adc200",
+      "kind": "video",
+      "sourceUrl": "https://www.nintendo.com/jp/switch/emio/assets/video/m_02.mp4",
+      "sourcePage": "https://www.nintendo.com/jp/switch/emio/",
+      "retrievedOn": "2026-09-07",
+      "scope": "Nintendo teaser-site background loop; not the full YouTube trailer. Retrieved now, historically associated via contemporaneous reporting.",
+      "rights": "Publisher-owned media; retained for private benchmark analysis, no public redistribution permission.",
+      "durationSeconds": 8.216542
+    }
+  ]
+}

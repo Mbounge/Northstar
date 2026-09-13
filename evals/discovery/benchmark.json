@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "northstar-discovery",
+  "version": "0.4.0",
+  "cases": [
+    "cases/ikea-breakfast/case.json",
+    "cases/emio-launch-clues/case.json",
+    "cases/gymshark-creator-strategy/case.json",
+    "cases/slack-clips-design/case.json"
+  ],
+  "splitFiles": [
+    "splits/development.json",
+    "splits/validation.json",
+    "splits/holdout.json"
+  ],
+  "route": "/canvas",
+  "defaultBudget": {
+    "maxSeconds": 600,
+    "maxUsd": 5
+  }
+}

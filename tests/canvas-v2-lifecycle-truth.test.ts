@@ -46,10 +46,10 @@ test("the chat exposes a natural resume only for genuinely interrupted work", ()
 test("a new chat turn carries the committed composition ledger into a new undo transaction", () => {
   const chat = readFileSync("components/canvas-v2/use-canvas-v2-chat.ts", "utf8");
   const loop = readFileSync("lib/canvas-v2/design-loop.ts", "utf8");
-  assert.match(chat, /const previousLoop = \[\.\.\.turns\]\.reverse\(\)\.find\(\(item\) => item\.loop\?\.compositionState\)\?\.loop/);
+  assert.match(chat, /const previousLoop = \[\.\.\.turns\]\.reverse\(\)\.find\(\(item\) => item\.loop\)\?\.loop/);
   assert.match(chat, /canvasV2NewTurnContinuation\(previousLoop/);
   assert.match(chat, /input\.engine\.start\(canvasInstruction, input\.engine\.displayedObservation, newTurnContinuation/);
-  assert.match(loop, /if \(!previous\?\.compositionState\) return undefined/);
+  assert.match(loop, /if \(!previous\) return undefined/);
   assert.match(loop, /historyTransactionId: input\.continuation\?\.historyTransactionId \?\? input\.id/);
 });
 

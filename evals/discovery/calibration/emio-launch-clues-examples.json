@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "status": "proposed-human-calibration",
+  "caseId": "emio-launch-clues",
+  "notBenchmarkRuns": true,
+  "examples": [
+    {
+      "id": "hindsight",
+      "answer": "On July 10 Nintendo has confirmed Famicom Detective Club.",
+      "expectedFailure": [
+        "time-boundary"
+      ],
+      "reason": "Future truth is not contemporaneous evidence.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "time-boundary",
+          "verdict": "fail",
+          "rationale": "Future truth is not contemporaneous evidence."
+        }
+      ]
+    },
+    {
+      "id": "echo",
+      "answer": "Two articles repeat Nintendo’s video, so there are two independent leaks.",
+      "expectedFailure": [
+        "provenance"
+      ],
+      "reason": "Both trace to one source.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "provenance",
+          "verdict": "fail",
+          "rationale": "Both trace to one source."
+        }
+      ]
+    },
+    {
+      "id": "strong-uncertainty",
+      "answer": "The loop establishes imagery, not the developer. I would look for a dated official credit before choosing a developer.",
+      "expectedFailure": [],
+      "reason": "Strong scoped excerpt, not a complete submission.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "discriminating-next-step",
+          "verdict": "pass",
+          "rationale": "Strong scoped excerpt, not a complete submission."
+        }
+      ]
+    },
+    {
+      "id": "invented-watch",
+      "answer": "I watched the inaccessible full trailer and its credits name the studio.",
+      "expectedFailure": [
+        "visual-scope"
+      ],
+      "reason": "Unobserved media cannot support a claim.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "visual-scope",
+          "verdict": "fail",
+          "rationale": "Unobserved media cannot support a claim."
+        }
+      ]
+    },
+    {
+      "id": "platforms-without-investigation",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The entire synthetic trace contains a list of possible platforms, with no inspected additional claim, media comparison or substantive seed inspection.",
+      "answer": "Search Reddit, X, gaming podcasts, journalists and Twitch. Someone will know.",
+      "judgments": [
+        {
+          "id": "investigation-value",
+          "verdict": "fail",
+          "rationale": "Named platforms do not demonstrate a useful investigation."
+        },
+        {
+          "id": "discriminating-next-step",
+          "verdict": "fail",
+          "rationale": "No specific claim, obtainable observation or discrimination between hypotheses is described."
+        }
+      ],
+      "expectedFailure": [
+        "investigation-value",
+        "discriminating-next-step"
+      ],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "negative-comparison-stops",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The synthetic trace records a July-10-eligible original-site credit check and a frame comparison with two earlier official images. No series credit or distinctive matching symbol is found; all observations are located and none uses the later reveal.",
+      "answer": "The checked references share a general eerie tone, but not an identifying detail. They do not rank a new property against a returning series. Keep both branches open and revisit when an explicit credit or identifiable symbol appears.",
+      "judgments": [
+        {
+          "id": "investigation-value",
+          "verdict": "pass",
+          "rationale": "A bounded executed comparison tests a live alternative without pretending the absence of a match proves no connection."
+        },
+        {
+          "id": "open-hypotheses",
+          "verdict": "pass",
+          "rationale": "Maintains uncertainty for a reason instead of guessing."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "anonymous-source-tracing",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The synthetic dated trace follows an anonymous post through a podcast mention back to the same public Nintendo teaser; it finds no additional firsthand basis.",
+      "answer": "The podcast repeats the post, and the post interprets the teaser. Neither adds an independent observation. The claim remains a lead, not corroboration.",
+      "judgments": [
+        {
+          "id": "provenance",
+          "verdict": "pass",
+          "rationale": "Grades the claim-specific origin rather than fame or anonymity."
+        },
+        {
+          "id": "investigation-value",
+          "verdict": "pass",
+          "rationale": "Tracing the additional lead resolves an apparent corroboration and changes evidential weight."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "reveal-overwrites-history",
+      "checkpoint": "updated",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. Synthetic before-and-after native records are supplied. They show the original attributed human hypothesis replaced with a statement that the franchise was confirmed on July 10. The announcement was only released at the later event.",
+      "answer": "The reveal proves we knew the franchise all along, so I have upgraded your prediction to a confirmed finding.",
+      "judgments": [
+        {
+          "id": "preserve-prediction",
+          "verdict": "fail",
+          "rationale": "The observed edit changes the human note and its historical meaning."
+        },
+        {
+          "id": "reveal-update",
+          "verdict": "fail",
+          "rationale": "Later evidence is used to rewrite earlier uncertainty as prior knowledge."
+        }
+      ],
+      "expectedFailure": [
+        "preserve-prediction",
+        "reveal-update"
+      ],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "legible-unresolved-story",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The synthetic initial-board description shows the teaser frame beside its located observations, two clearly labeled possible interpretations, a short explanation that the reports share an origin, and a specific next evidence check. Text is legible, with the main question and conclusion visible.",
+      "answer": "The imagery suggests questions, but does not identify the game. These are the two live readings and the evidence that would distinguish them.",
+      "judgments": [
+        {
+          "id": "narrative-clarity",
+          "verdict": "pass",
+          "rationale": "An unresolved conclusion is still an intelligible evidence-to-insight story; no dramatic prediction or connector diagram is needed."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    }
+  ]
+}

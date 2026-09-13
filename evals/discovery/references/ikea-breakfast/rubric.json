@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "caseId": "ikea-breakfast",
+  "criteria": [
+    {
+      "id": "business-role",
+      "checkpoint": "initial",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Explain a substantive business mechanism behind the comparison, including relevant incentives or consequences beyond the two prices. Do not merely repeat a loss-leader slogan or list unknowns. Score the presence and usefulness of the mechanism here; assess its evidential support in source-support and meal-margin. A later hint cannot earn initial discovery credit.",
+      "evidenceIds": [
+        "ikea-history"
+      ],
+      "acceptableAlternatives": "Accept different relevant mechanisms. Customer spending, food service or wider retail value may be useful; no specific subsidy, market-share effect or commercial outcome is required."
+    },
+    {
+      "id": "source-support",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Support material claims with inspected sources and correct scope. A citation list without support fails; company narrative must not be presented as measured causal uplift.",
+      "evidenceIds": [
+        "ikea-history",
+        "ikea-promotion",
+        "canada-operating-margin"
+      ],
+      "acceptableAlternatives": "Accept a different well-supported explanation. Do not demand the reference wording, every listed source, a fixed layout, or a prescribed tool sequence."
+    },
+    {
+      "id": "meal-margin",
+      "checkpoint": "initial",
+      "dimension": "uncertainty",
+      "required": true,
+      "instruction": "Do not assert that this specific breakfast loses money without item-level evidence; clearly distinguish a plausible subsidy mechanism from a verified loss.",
+      "evidenceIds": [
+        "post",
+        "ikea-history"
+      ],
+      "acceptableAlternatives": "Accept a different well-supported explanation. Do not demand the reference wording, every listed source, a fixed layout, or a prescribed tool sequence."
+    },
+    {
+      "id": "comparison-scope",
+      "checkpoint": "initial",
+      "dimension": "framing",
+      "required": true,
+      "instruction": "Assess whether the compared offers serve the same customer purpose and include comparable food, service or experience. Recognize missing restaurant/menu/store/date context. Do not infer income, universal restaurant economics, customer displacement or value from price alone.",
+      "evidenceIds": [
+        "post"
+      ],
+      "acceptableAlternatives": "Accept other material comparison boundaries. Do not demand demographic research or proof of every unknown; prioritize what could change the explanation."
+    },
+    {
+      "id": "alternatives",
+      "checkpoint": "initial",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Consider a relevant alternative or complementary explanation such as service format or promotion terms, with evidence or an explicit hypothesis label.",
+      "evidenceIds": [
+        "ikea-promotion"
+      ],
+      "acceptableAlternatives": "Accept a different well-supported explanation. Do not demand the reference wording, every listed source, a fixed layout, or a prescribed tool sequence."
+    },
+    {
+      "id": "readable-explanation",
+      "checkpoint": "initial",
+      "dimension": "clarity",
+      "required": true,
+      "instruction": "On the initial rendered board, communicate a central question, substantive insight, decisive evidence and useful implication or next question in a coherent, engaging reading path. The explanation must be understandable without hidden chat reasoning. A source inventory or attractive layout without an argument fails. Judge observed delivery here and factual support separately; absent board artifacts are cannot-assess.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Any legible native composition or writing style can pass; no fixed headings, chronology, metaphor, connectors or persuasive tone is required. A genuinely unresolved conclusion can still be insightful. Preserve inspectable evidence without forcing every research step into the main story."
+    },
+    {
+      "id": "deferral",
+      "checkpoint": "deferred",
+      "dimension": "continuity",
+      "required": true,
+      "instruction": "Set aside the item-level margin question without deleting it, resolving it, or losing the broader investigation.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept a different well-supported explanation. Do not demand the reference wording, every listed source, a fixed layout, or a prescribed tool sequence."
+    },
+    {
+      "id": "native-note",
+      "checkpoint": "human-edit",
+      "dimension": "canvas",
+      "required": true,
+      "instruction": "The exact operator note is an independently editable native object with captured identity and geometry.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept a different well-supported explanation. Do not demand the reference wording, every listed source, a fixed layout, or a prescribed tool sequence."
+    },
+    {
+      "id": "persistence",
+      "checkpoint": "restarted",
+      "dimension": "continuity",
+      "required": true,
+      "instruction": "Restore the same persisted investigation and human note after session restart, without reconstruction from the reference.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept a different well-supported explanation. Do not demand the reference wording, every listed source, a fixed layout, or a prescribed tool sequence."
+    },
+    {
+      "id": "revisit",
+      "checkpoint": "resumed",
+      "dimension": "continuity",
+      "required": true,
+      "instruction": "Return to the same unresolved question, assess existing evidence, preserve the human note and prior board, and avoid duplicate inquiries or invented new facts.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept a different well-supported explanation. Do not demand the reference wording, every listed source, a fixed layout, or a prescribed tool sequence."
+    },
+    {
+      "id": "dated-update",
+      "checkpoint": "updated",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Distinguish the dated February member-only charity promotion from the screenshot; do not equate prices or infer margins. Integrate the source if new, or explain why existing conclusions remain valid.",
+      "evidenceIds": [
+        "ikea-promotion",
+        "post"
+      ],
+      "acceptableAlternatives": "A justified no-change conclusion is valid when the source was already known."
+    },
+    {
+      "id": "investigation-value",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Inspect sources that test the economic explanation or fairness of the comparison. Pursue a material unresolved factor such as customer purpose, service format, offer terms or wider retail rationale when it could change the answer. Explain what the inspection adds, leaves unresolved or warrants setting aside. A source list or promised research alone fails.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "No prescribed source, source count, platform, layout or search sequence. A focused inspection of seed material, a supported no-change result, or a bounded stop can pass when it addresses the material uncertainty. Judge actual trace evidence, not promises; missing trace is cannot-assess. Record demonstrated access limitations separately from reasoning quality."
+    }
+  ],
+  "gates": [
+    {
+      "id": "no-fabrication",
+      "instruction": "No fabricated material evidence, sources, quotes or measured effects."
+    },
+    {
+      "id": "native-usability",
+      "instruction": "Meaningful elements independently selectable/editable; no obstructive text overlap; native relationships only if useful."
+    },
+    {
+      "id": "preserve-human",
+      "instruction": "No unauthorized loss or replacement of human edits."
+    },
+    {
+      "id": "clean-completion",
+      "instruction": "No product failure, false completion or user-visible recovery interrupting the episode."
+    }
+  ]
+}

@@ -1,8 +1,10 @@
+import { readCanvasV2Request } from "@/lib/canvas-v2/media-transport";
+import { streamCanvasV2Response } from "@/lib/canvas-v2/activity-stream.server";
 import { NextRequest, NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
-import { canvasV2RouteMutatesCanvas, parseCanvasV2InteractionDecision } from "@/lib/canvas-v2/interaction-router";
+import { canvasV2RouteUsesDiscovery, parseCanvasV2InteractionDecision } from "@/lib/canvas-v2/interaction-router";
 import {
   CANVAS_V2_MODEL_PHASE_MAX_ATTEMPTS,
   CanvasV2ProviderError,
@@ -39,33 +41,29 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SYSTEM = `You are the interaction router and conversational voice for North Star Canvas V2.
-Choose exactly one route based on what the user is asking to happen now:
-- conversation: answer normally; the user is not asking to read or change the canvas.
-- inspect: answer from the visible canvas without changing it.
-- transform: the user wants the canvas created, edited, arranged, annotated, explained visually, or otherwise transformed without account research.
-- research-design: the requested visual artifact needs product/app evidence, flows, screenshots, icons, account research, or bounded public-web evidence before or during design.
-- selection-transform: the user explicitly wants the currently selected element changed.
-Route by semantic intent, not by word matching. Mentioning an app or the canvas does not by itself request a visual mutation. Questions that can be answered in chat stay in chat. Never claim to have changed or researched anything in this routing response.
-Evidence is optional. Route creative construction, planning, facilitation, organization, speculative exploration, and synthesis of facts already supplied by the user to transform. Do not route to research-design merely because external evidence could make an answer richer, because the prompt concerns a business decision, or because North Star could invent an evidence framework. Use research-design only when the user explicitly asks North Star to retrieve or inspect evidence, or when the requested claims and deliverable materially depend on product, account, current-market, competitor, or other public facts that are not already supplied. A prompt can produce a complete premium canvas without research.
-A request to turn a hypothesis, evidence gap, or uncertain decision into interview questions, an experiment, a measurement plan, a research brief, comparison criteria, or a decision gate is human-guided validation—not automatic account research. Normally route it to transform, classify the inquiry as hypothesis-work or decision-support with evidenceNeed=useful, and use canvas as the source category unless the person also explicitly asks North Star to retrieve outside evidence. This activates the discovery director so it can choose the single highest-value learning action while leaving execution to the person.
-For research-design, identify every app or product the user explicitly asks North Star to research or compare in researchTargets. Preserve the user's names without inventing catalog availability. Return an empty array when no specific product is named. For every other route return an empty array.
-For research-design, set researchMode to evidence only when the requested deliverable is the evidence itself—for example, showing or adding a flow or screenshots without interpretation. Set it to synthesis when the user wants comparison, analysis, explanation, insights, strategy, an executive artifact, or any designed argument grounded in the evidence. For every other route use none.
-For conversation and inspect, provide the final concise answer in answer. Inspection must be grounded only in supplied source, evidence, and render context; acknowledge uncertainty when appropriate.
-Attachments in the current message are first-class human-supplied evidence. Inspect actual image pixels, read exact supplied text, synthesize both with the person's prompt, and never invent unreadable or absent detail. An attachment alone does not force a canvas mutation: use conversation when the person only wants an answer. Use transform when they ask for a visual artifact, want the evidence integrated into the board, or when the active inquiry is being continued with a requested visual result. The design loop decides whether an exact supplied image or text excerpt materially deserves canvas space; never promise that every attachment will be placed.
-For mutating routes, provide a concise summary of what you will do and a self-contained canvasInstruction that preserves the user's material intent. Product names, requested journey/session type (for example onboarding versus browsing), platform, taxonomy path, and requested evidence scope are authoritative and may never be generalized, substituted, or dropped during paraphrase. Do not design the artifact in this response; the observed design loop owns that work.
-For selection-transform, set selectionPolicy to modify only when the user explicitly asks to rewrite, restyle, move, resize, replace, delete, or otherwise change the selected objects themselves. Set it to reference when the selected objects are evidence or anchors for new work such as comparison, annotation, an alternative beside them, or a derived matrix; reference means preserve the selected objects exactly. For every other route set selectionPolicy to none.
+const SYSTEM = `You route North Star requests and answer simple conversation. Choose what the person wants now, using the message and conversation history:
+- conversation: a simple answer or social exchange needing no investigation.
+- inspect: a read-only answer about the existing canvas from supplied observations.
+- research-conversation: discovery, explanation, analysis, comparison, planning or investigation in chat. This runs the full investigator, with optional tools. It never writes to the canvas.
+- transform: create or edit something on the canvas when the person asks for visual work, using available material.
+- research-design: an explicitly requested canvas artifact that also needs retrieved evidence.
+- selection-transform: an explicitly requested edit to selected objects, or new visual work using those selections as references.
 
-For every mutating route, also interpret the inquiry before execution. Return inquiry.relationship as new for a materially new objective, continue when this is another step in the active inquiry, or reframe when the user's correction changes the problem definition. Classify the work without forcing one methodology. Decide whether evidence is required, useful, optional, or irrelevant; name only the relevant source categories among product, marketing, business, external, and canvas; state the material unknowns; and provide inquiry-specific completion criteria. External means public-web knowledge that is not available from authorized account snapshots. A direct creative or editing request normally has evidenceNeed=irrelevant and must not be turned into ceremonial discovery. Do not expose this taxonomy in the summary or canvasInstruction.
-When the supplied discovery state is awaiting the person's judgment, recognize whether the new message answers the visible question, accepts/rejects/defers the proposed work, or returns requested findings. Such a response continues the existing inquiry through a mutating route—normally transform—so the answer can update the same canvas and understanding. Preserve the person's words in canvasInstruction. Do not misroute a short answer such as “defer it,” “go ahead,” or a supplied result into conversation merely because it does not restate the original task. An unrelated new request remains a new inquiry.
-For conversation and inspect, still return a schema-complete inquiry object with inquiryKind=direct-creation, evidenceNeed=irrelevant, sourceCategories=["canvas"], no material unknowns, and a concise objective; it is ignored and never shown to the user.
-Return JSON only.`;
+Conversation is the default workspace. A substantive question, an attachment, a topic suitable for a diagram, or an existing board does not authorize new canvas work. Use research-conversation for substantive discovery even when you could answer from memory: the investigator owns the reasoning, research decisions and final answer. Do not produce that answer in this routing step. A suggestion to visualize something is only a suggestion. A user's acceptance of a specific visual suggestion, including a short 'yes' in that context, authorizes the corresponding canvas work. Continuing discussion of a board does not itself authorize changes. A correction or answer to a pending inquiry continues that inquiry in chat unless it also requests a visual update. Never claim to have researched or changed anything in this response.
+
+For conversation and inspect, supply a concise answer in ordinary language and Markdown where useful. For all other routes, supply a short acknowledgment in summary and a self-contained canvasInstruction (the shared execution instruction, including for research-conversation). Preserve the person's exact intent, exclusions and requested scope. For a new task copy their request into canvasInstruction, objective and framing. Do not choose an explanation, investigation questions, number of compositions or visual layout here.
+
+For research-conversation and research-design, identify explicitly named products in researchTargets, otherwise []. Set researchMode=synthesis for investigation or explanation; evidence only when the person wants raw evidence. For other routes use none. EvidenceNeed describes necessity, not output destination: required for claims materially dependent on retrieved facts, useful or optional for investigation using supplied material, irrelevant for direct creation. Do not manufacture a research requirement when the model can reason from available information. Respect requests not to browse. Attachments are evidence to inspect, not a command to place them on the canvas.
+
+For every discovery route (including research-conversation), return inquiry.relationship=new for a new objective, continue for another step, reframe for a changed problem. Return only explicit user questions as exact excerpts in materialUnknowns, otherwise []. Completion criteria describe the requested answer or artifact, not an assumed explanation. Preserve the why-question: checking an example alone does not answer why the phenomenon happens. Do not require a canvas for chat completion. Distinguish product captures, marketing/business account data, public external evidence, and retained canvas/supplied material. Do not invent access. Preserve human decisions and supplied validation findings. Returning results or deferring a branch continues inquiry through research-conversation unless visual work is requested. For conversation/inspect return a schema-complete ignored inquiry with direct-creation, evidenceNeed=irrelevant, sourceCategories=["canvas"].
+
+For selection-transform set selectionPolicy=modify for an edit to those objects; reference for new visual work using them while preserving them. Otherwise none. Conditional visual constraints are not requests to add visuals. Use plain language: say what you will examine or explain, never internal roles, evidence taxonomies or implementation vocabulary. Return JSON only.`;
 
 const RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    route: { type: "string", enum: ["conversation", "inspect", "transform", "research-design", "selection-transform"] },
+    route: { type: "string", enum: ["conversation", "research-conversation", "inspect", "transform", "research-design", "selection-transform"] },
     summary: { type: "string" },
     answer: { type: "string" },
     canvasInstruction: { type: "string" },
@@ -114,11 +112,15 @@ function routingEvidencePolicy(message: string, selectedEvidence: boolean): "ava
 }
 
 export async function POST(request: NextRequest) {
+  return streamCanvasV2Response(request, () => handlePost(request));
+}
+
+async function handlePost(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user && !canvasV2LocalEvaluationEnabled()) return NextResponse.json({ error: "You must be signed in to use North Star.", code: "invalid-request", retryable: false }, { status: 401 });
   try {
-    const body = await request.json() as {
+    const body = await readCanvasV2Request(request) as {
       message?: unknown;
       revision?: CanvasV2ArtifactRevision;
       observation?: CanvasV2RenderObservation;
@@ -262,7 +264,7 @@ export async function POST(request: NextRequest) {
       const text = extractCanvasV2StructuredText(payload, provider.model);
       if (!text) throw new Error("North Star router returned no decision.");
       const decision = parseCanvasV2InteractionDecision(JSON.parse(text), message, body.selection, body.selections);
-      if (canvasV2RouteMutatesCanvas(decision.route) && decision.inquiry) {
+      if (canvasV2RouteUsesDiscovery(decision.route) && decision.inquiry) {
         decision.discoveryState = createCanvasV2DiscoveryState({
           interpretation: decision.inquiry,
           previous: suppliedDiscoveryState,

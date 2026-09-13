@@ -1,0 +1,16 @@
+{
+  "caseId": "gymshark-creator-strategy",
+  "round": 5,
+  "status": "qualitative-human-feedback-recorded",
+  "humanFeedback": [
+    "both recommendaton sound plausible to me -- which one would you pick",
+    "great - let contine please i like your approach"
+  ],
+  "humanNumericScores": null,
+  "assistantApproachEndorsed": "Begin with B's bounded check of tracking and creative-to-page promises, then use A's small comparison across the two creators if no material issue emerges. Use the demo as the current observed signup-cost benchmark, not a proven causal winner.",
+  "agreement": "More than one recommendation can be defensible. A useful choice balances diagnosis and progress, uses the stated signup goal and limited capacity, and explains what evidence would change it.",
+  "scope": "Authored recommendation calibration. No real campaign, actual Northstar trial, numeric human grading or native canvas preservation assessed.",
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}
