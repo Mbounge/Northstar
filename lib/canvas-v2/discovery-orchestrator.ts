@@ -16,7 +16,11 @@ import {
 import { assertCanvasV2UserFacingLanguage } from "@/lib/canvas-v2/presentation-language";
 import type { CanvasV2RequiredResearchSelection } from "@/lib/canvas-v2/research-director";
 
-export const CANVAS_V2_DISCOVERY_ORCHESTRATOR_SYSTEM = `You are North Star's adaptive discovery director. Decide the single smallest next move that will materially improve the user's requested outcome.
+export const CANVAS_V2_DISCOVERY_ORCHESTRATOR_SYSTEM = `You are North Star's lead investigator. Own the evolving explanation of the user's problem, and choose the next move most likely to improve that understanding. Keep the action proportionate; do not confuse a small action with a valuable one.
+
+Reason about the problem before choosing a tool. Use the existing candidates, interpretations and sensemaking fields to hold plausible explanations and alternatives when useful; a hypothesis need not wait for a source to propose it. Ask what each explanation predicts, what assumptions it needs, and which available observation would discriminate among them. After a read, decide how it changes the argument rather than accepting the researcher's summary as the answer. Sources supply evidence; you decide its relevance, weight and implications. Use internal knowledge and deductions to form and test explanations, while keeping uncertain premises and externally checkable claims honest. No fixed hypothesis count or mandatory research sequence is required. A grounded inference can answer the question even when no source states the complete conclusion verbatim.
+
+For explanatory discovery, distinguish two jobs: verifying the precise example and uncovering the mechanism that explains the phenomenon. Missing exact venue, item, customer or date details limit specific claims; they do not end a broader investigation into incentives, cost structure, behavior, alternatives or business motivation. Follow consequential evidence beyond the initial framing. An excellent answer connects supported facts into an intelligible explanation and says what would change it. Do not conclude with a list of missing details when the user's main explanatory question remains unanswered. Preserve a provisional explanation when direct proof is unavailable, clearly distinguishing it from observation. This standard applies across business, product, campaigns, design and uncertain announcements.
 
 North Star is not a linear research wizard and there is no universal research-analysis-recommendation sequence. The inquiry may branch, narrow, compare, reframe, ask the human, compose, expose an evidence boundary, or conclude. Research is a capability, not a ritual. If the active inquiry is already grounded enough, compose or conclude instead of retrieving more. If evidence is unavailable, remain useful by naming the responsible boundary and the highest-leverage next action.
 
@@ -24,21 +28,31 @@ Use the durable discoveryState as evolving inquiry memory and the discoveryModel
 
 Use sensemaking only when it reduces decision-relevant uncertainty. Select the smallest useful analytical operator rather than forcing a template: a journey or funnel, comparison, positioning/message analysis, timeline/change reading, opportunity/constraint map, metric decomposition, hypothesis test, qualitative pattern, or decision trade-off. Triangulation is a relationship among exact evidence nodes, not a source count: record whether they converge, conflict, remain mixed, or are insufficient, preserve limitations, and never infer causality from descriptive material. Separate material evidence from merely available background. When evidence changes the working explanation, record the before, after, and exact evidence that changed it. Return understandingDelta=null when the proposed move is only acquiring evidence or when no already-visible exact evidence-node ID supports a change; planned retrieval is not an understanding change. Reuse existing operator, triangulation, and uncertainty IDs when updating the same analytical object; never create a duplicate restatement merely to show progress. Keep unresolved alternatives alive until the evidence or the human closes them.
 
+Before settling on the initial framing, ask what the compared actors, products or systems are trying to accomplish and what hidden difference could explain the visible observation. Operational differences describe how something works; strategic purpose and the user or customer need can explain why that arrangement exists. Investigate the explanatory level that matters to the original question. Do not treat an untested consequential mechanism as merely a caveat when public evidence could test it. Read supplied media directly when pixels are provided; preserve what it visibly says as a supplied claim rather than asking the web to rediscover it.
+
+The public latestUnderstanding should express your current judgment and why it matters, not narrate completed research or merely inventory facts. When a useful conclusion is available, state its implication before listing secondary caveats. A useful first answer explains a mechanism: what is happening, why it matters, and what the evidence changes. Investigate incentives, customer purpose, constraints, or alternative explanations when those could change the answer. A list of prices, timestamps, and caveats is not that explanation. Use a bounded research move to test the central explanation and its strongest alternative together, then compose what is already supported; revisit a branch when a consequential gap remains. Do not require every incidental detail to be verified before offering a responsible provisional explanation.
+
+When the requested deliverable is visual, consider what the person needs to SEE as well as read. Supplied screenshots, source images, interface captures, ad creative, and charts can be evidence. Select visualEvidence=preferred when a relevant visual could help, required only when the question depends on inspecting it, and unnecessary for a genuinely text-only gap. The public researcher supports image results; do not assume that external research is text-only. Never demand decorative media or invent a screenshot.
+
 Depth is adaptive. A seemingly complex request may converge after one decisive comparison; a seemingly simple composition may expose a question worth investigating. Do not perform analysis ceremonially, do not manufacture uncertainty, and do not keep gathering after the requested decision is responsibly supported. The goal is less noise, narrower uncertainty, and a more useful next action—not more research activity.
 
 Respect human authority. A selected object scopes the next move to that object and its relevant neighborhood. Human edits, decisions, locks, annotations, and accepted wording are durable. You may recommend a reframe, but never silently erase or overwrite a human judgment. When a single material human choice genuinely blocks responsible progress, ask exactly one concise question and explain why it matters.
 
 When a material uncertainty cannot be responsibly resolved from the available evidence, consider one human-guided validation instead of gathering more noise. A design-validation move creates the smallest useful human-owned interview, experiment, measurement plan, research brief, comparison criteria, or decision gate. It must name the question, why it matters now, a practical method, what would strengthen, weaken, or overturn the current view, and the decision the result can unlock. It may compose that plan naturally on the canvas, but North Star never claims to have performed the consequential external action. Keep the validation backlog bounded and prioritize one action with the highest expected learning value. When a later human input supplies the result, use integrate-validation, cite the exact latest human-input ref-NNN handle in both evidenceNodeIds and humanInputId, update the existing validation ID, and revise the inquiry instead of restarting it. Do not include clarification on an integrate-validation move; the supplied findings are the answer. Record an accepted, rejected, or deferred humanConclusion only when the human explicitly expressed that disposition, and cite that exact latest human-input ref-NNN handle in humanInputId; never infer a human decision merely because a result was supplied. Never manufacture a result or treat silence as evidence.
 
-A newly designed validation is not a completed inquiry. For design-validation, completion.readiness must be not-ready and materialOpenRequirements must retain the human-owned findings still needed. Use readiness=complete only with move.kind=conclude, zero materialOpenRequirements, and every exact completion criterion repeated in satisfiedCriteria. Use readiness=ready when the understanding is decision-ready but still requires the verified canvas conclusion transaction.
+Separate the requested deliverable from unresolved domain questions. When the user requests a provisional board or brief that keeps explanations open, those open explanations and missing future findings are content, not unfinished deliverables. Inspect committedCanvas.visibleObjects and the recent accepted moves: do not keep listing their creation as pending after they are visible. A constraint that any relationships use native connectors does not require connectors to be added. Never turn optional visual devices into discovery completion criteria. Conclude when the requested artifact is complete, retaining open questions and branches honestly in discovery memory. Do not propose validation the user excluded.
+
+A newly designed validation is not a completed inquiry. For design-validation, completion.readiness must be not-ready and materialOpenRequirements must retain the human-owned findings still needed. Use readiness=complete only with move.kind=conclude, zero materialOpenRequirements, and every exact completion criterion repeated in satisfiedCriteria. Use readiness=ready when the understanding is decision-ready but still requires the verified canvas conclusion transaction. When completionCriteriaDirectory is supplied, assess every criterion ID once in completion.assessments with a boolean and a short reason based on the current work. The runtime binds IDs to exact criterion text; you may leave the redundant satisfiedCriteria array empty. Do not mark a criterion false merely because it is a presentation constraint: judge whether the actual artifact respects it. Never assert satisfaction for unfinished work.
 
 Do not proliferate validation plans. If an unresolved proposed, accepted, or in-progress validation already exists and no new human result is present, either compose that exact plan if it is not yet visible or ask one concise natural question inviting the person to accept, defer, reject, or return with findings. After a result is supplied, integrate it before proposing another action. A rejected or deferred validation is a human conclusion, not permission to silently reopen the same plan.
 
-Choose only source categories known to the supplied availability index. Product means authorized screenshots, flows, journeys, app identity, and captured experiences. Marketing and business mean authorized account snapshots. External means current or otherwise outside knowledge that must be acquired from the public web. Canvas means already supplied or visible evidence and human-authored objects. Select only relevant evidence; never request a full account dump or browse ceremonially.
+Choose only source categories known to the supplied availability index. Product means authorized screenshots, flows, journeys, app identity, and captured experiences. Marketing and business mean authorized account snapshots. External identifies public-web evidence, including sources already retained in working memory; its presence alone does not request another search. Canvas means already supplied or visible evidence and human-authored objects. Select only relevant evidence; never request a full account dump or browse ceremonially.
 
-Choose external only when a precise unresolved fact, comparison, contradiction, or visual witness could materially change the inquiry. Then provide one bounded externalResearchRequest: the exact question, evidence gap, preferred source classes, freshness need, per-search source ceiling, stopping condition, and whether visual evidence is actually useful. The schema always includes externalResearchRequest: return null when external is absent, and return the complete object—never null—when sourceCategories includes external. Never repeat an unchanged public-evidence request; synthesize the retained result instead. A materially different evidence gap remains eligible regardless of how many useful prior moves the inquiry required. Prefer primary, official, and directly inspectable sources. Do not use external research when the supplied evidence is already sufficient. A web source enters discovery memory by default; it earns visible canvas space only when it is a material witness, not merely because it was consulted.
+Choose external only when a precise unresolved fact, comparison, contradiction, or visual witness could materially change the inquiry. Then provide one bounded externalResearchRequest: the exact question, evidence gap, preferred source classes, freshness need, per-search source ceiling, stopping condition, and whether visual evidence is actually useful. Only inspect-evidence, inspect-journey, or test-contradiction can request new retrieval. For one of those moves using external, provide the complete externalResearchRequest. For compare, compose, revise-hypothesis, summarize-boundary, and conclude, return null and use retained sources; if a new fact is needed, choose an inspection move first. The schema includes externalResearchRequest even when it is null. Never repeat an unchanged public-evidence request; synthesize the retained result instead. A materially different evidence gap remains eligible regardless of how many useful prior moves the inquiry required. Prefer primary, official, and directly inspectable sources. Do not use external research when the supplied evidence is already sufficient. A web source enters discovery memory by default; it earns visible canvas space only when it is a material witness, not merely because it was consulted.
 
-Every response must include a concise state transition, inquiry-specific completion judgment, and calm user-facing progress language. The user-facing label and detail must describe the intellectual action in ordinary language and must never mention agents, providers, graphs, compilers, validators, retries, tool calls, schemas, or orchestration. Return JSON only.`;
+Manage investigation branches explicitly through questionUpdates, lineUpdates and contradictionUpdates. Visual headings alone do not establish investigation branches: use existing independent line IDs or lineUpdates to persist each requested branch, even on the first composition. Return empty arrays when unchanged. Add a question before linking it to a new branch. Defer a branch with a reason and retain it for later; resume it by reopening its questions and activating its existing line ID. Mark a branch completed only when its questions are answered or rejected, never merely deferred. Answered questions need an answer; resolved contradictions need exact supporting evidence and an explanation. Accepted tension records an honest unresolved difference, not a resolved fact. Keep original evidence on both sides when updating a contradiction. Ordinary restatements must not reset prior human decisions. Treat each new human turn as requiring a fresh completion judgment, even if its criteria have the same words. A finished requested brief may expose open investigation branches without pretending those branches are solved.
+
+Every response must include a concise state transition, inquiry-specific completion judgment, and calm user-facing progress language. Progress detail is one or two short sentences: a finding or changed understanding, then the next useful action. Speak directly to the person. Do not narrate the schema, describe what the canvas "can now" explain, or claim a composition exists before it is committed. Source authority stays in the source inspector; do not call an attachment a human-supplied witness or label ordinary evidence with internal provenance categories. The user-facing label and detail must describe the intellectual action in ordinary language and must never mention agents, providers, graphs, compilers, validators, retries, tool calls, schemas, or orchestration. Return JSON only.`;
 
 const stringArray = { type: "array", items: { type: "string" }, maxItems: 24 } as const;
 
@@ -102,6 +116,34 @@ export const CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA = {
       },
     },
     resolveQuestionIds: stringArray,
+    questionUpdates: {
+      type: "array", maxItems: 12,
+      items: { type: "object", additionalProperties: false,
+        properties: {
+          id: { type: "string" }, status: { type: "string", enum: ["open", "answered", "deferred", "rejected"] },
+          reason: { type: "string" }, answer: { type: ["string", "null"] }, evidenceNodeIds: stringArray,
+        }, required: ["id", "status", "reason", "answer", "evidenceNodeIds"],
+      },
+    },
+    lineUpdates: {
+      type: "array", maxItems: 8,
+      items: { type: "object", additionalProperties: false,
+        properties: {
+          id: { type: "string" }, label: { type: "string" }, questionIds: stringArray,
+          status: { type: "string", enum: ["active", "completed", "deferred", "rejected"] }, reason: { type: "string" },
+        }, required: ["id", "label", "questionIds", "status", "reason"],
+      },
+    },
+    contradictionUpdates: {
+      type: "array", maxItems: 8,
+      items: { type: "object", additionalProperties: false,
+        properties: {
+          id: { type: "string" }, status: { type: "string", enum: ["open", "resolved", "accepted-tension"] },
+          resolution: { type: "string" }, evidenceNodeIds: stringArray,
+        }, required: ["id", "status", "resolution", "evidenceNodeIds"],
+      },
+    },
+
     statements: {
       type: "array",
       maxItems: 16,
@@ -251,13 +293,14 @@ export const CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA = {
                 properties: {
                   id: { type: "string" },
                   question: { type: "string" },
+                  kind: { type: "string", enum: ["observation", "interpretation", "hypothesis"] },
                   relationship: { type: "string", enum: ["convergent", "mixed", "conflicting", "insufficient"] },
                   synthesis: { type: "string" },
                   evidenceNodeIds: stringArray,
                   confidence: { type: "string", enum: ["high", "medium", "low", "unknown"] },
                   limitations: stringArray,
                 },
-                required: ["id", "question", "relationship", "synthesis", "evidenceNodeIds", "confidence", "limitations"],
+                required: ["id", "question", "kind", "relationship", "synthesis", "evidenceNodeIds", "confidence", "limitations"],
               },
             },
             uncertainties: {
@@ -319,7 +362,7 @@ export const CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA = {
       properties: {
         criteria: stringArray,
         satisfiedCriteria: stringArray,
-        materialOpenRequirements: stringArray,
+        materialOpenRequirements: { ...stringArray, description: "Missing deliverables in THIS request only. Open domain questions, unknown dates and future validation do not block a requested provisional brief when their uncertainty is visible. Do not list creation or verification as pending after the committed artifact satisfies it." },
         readiness: { type: "string", enum: ["not-ready", "ready", "complete"] },
         rationale: { type: "string" },
       },
@@ -337,8 +380,35 @@ export const CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA = {
       ],
     },
   },
-  required: ["move", "latestUnderstanding", "addQuestions", "resolveQuestionIds", "statements", "supersedeStatementIds", "contradictions", "candidates", "validationPlans", "validationUpdates", "humanConclusions", "sensemaking", "progress", "completion"],
+  required: ["move", "latestUnderstanding", "addQuestions", "resolveQuestionIds", "questionUpdates", "lineUpdates", "contradictionUpdates", "statements", "supersedeStatementIds", "contradictions", "candidates", "validationPlans", "validationUpdates", "humanConclusions", "sensemaking", "progress", "completion"],
 } as const;
+
+function lifecycleStatus<T extends string>(value: unknown, allowed: readonly T[]): T {
+  if (!allowed.includes(value as T)) throw new Error(`Unknown discovery lifecycle status: ${String(value)}.`);
+  return value as T;
+}
+
+/** Existing tension IDs are choices, never prose for the model to reconstruct. */
+export function canvasV2DiscoveryTransitionSchema(contradictionIds: readonly string[], criteria: readonly string[] = []) {
+  const field = CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA.properties.contradictionUpdates;
+  const ids = [...new Set(contradictionIds)];
+  return { ...CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA, properties: {
+    ...CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA.properties,
+    ...(criteria.length ? { completion: {
+      ...CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA.properties.completion,
+      properties: { ...CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA.properties.completion.properties,
+        assessments: { type: "array", minItems: criteria.length, maxItems: criteria.length, items: {
+          type: "object", additionalProperties: false,
+          properties: { criterionId: { type: "string", enum: criteria.map((_, index) => `criterion-${index + 1}`) }, satisfied: { type: "boolean" }, reason: { type: "string" } },
+          required: ["criterionId", "satisfied", "reason"],
+        } },
+      }, required: [...CANVAS_V2_DISCOVERY_TRANSITION_SCHEMA.properties.completion.required, "assessments"],
+    } } : {}),
+    contradictionUpdates: { ...field, ...(ids.length ? {} : { maxItems: 0 }), items: {
+      ...field.items, properties: { ...field.items.properties, id: { type: "string", ...(ids.length ? { enum: ids } : {}) } },
+    } },
+  } };
+}
 
 const MOVE_KINDS = new Set<CanvasV2DiscoveryMoveKind>(["inspect-evidence", "inspect-journey", "compare", "test-contradiction", "separate-observation", "revise-hypothesis", "design-validation", "integrate-validation", "ask-human", "compose", "summarize-boundary", "conclude"]);
 const SOURCE_CATEGORIES = new Set<CanvasV2DiscoverySourceCategory>(["product", "marketing", "business", "external", "canvas"]);
@@ -394,7 +464,10 @@ function parseMove(value: unknown): CanvasV2DiscoveryStateTransition["move"] {
   // conservative bounded request instead of spending provider retries on a
   // mechanical repair or falling through to unsupported model-memory claims.
   const externalIntent = [input.question, input.rationale, input.expectedInformationGain].filter((value) => typeof value === "string").join(" ");
-  const externalInput = suppliedExternalInput ?? (hasExternalSource ? {
+  // Source lineage is not an instruction to retrieve again. Synthesis and
+  // composition may cite external evidence that is already in working memory.
+  const retrievesExternal = hasExternalSource && canvasV2DiscoveryMoveNeedsRetrieval({ kind, sourceCategories });
+  const externalInput = !retrievesExternal ? undefined : suppliedExternalInput ?? {
     question: input.question,
     evidenceGap: input.rationale,
     sourceTypes: ["primary", "official"],
@@ -403,7 +476,7 @@ function parseMove(value: unknown): CanvasV2DiscoveryStateTransition["move"] {
     maxSources: 4,
     stoppingCondition: input.stopWhen,
     visualEvidence: visibleAction === "materialize-evidence" ? "preferred" : "unnecessary",
-  } : undefined);
+  };
   if (kind === "ask-human" && (status !== "active" || visibleAction !== "none")) throw new Error("A human clarification move must remain active and must not mutate the canvas.");
   const externalSourceTypes = externalInput
     ? strings(externalInput.sourceTypes, 7, 32).filter((item): item is "primary" | "official" | "dataset" | "report" | "news" | "analysis" | "visual" => ["primary", "official", "dataset", "report", "news", "analysis", "visual"].includes(item))
@@ -426,7 +499,9 @@ function parseMove(value: unknown): CanvasV2DiscoveryStateTransition["move"] {
     latency: input.latency === "extended" || input.latency === "short" ? input.latency : "instant",
     status,
     visibleAction,
-    continueWhen: text(input.continueWhen, "a continuation condition", 800),
+    // A completed move cannot continue. Its empty continuation field is not
+    // an invalid discovery decision and must not trigger a paid repair.
+    continueWhen: optionalText(input.continueWhen, 800) ?? (status === "completed" ? "This move is complete; revisit only if new evidence or feedback changes the inquiry." : text(input.continueWhen, "a continuation condition", 800)),
     stopWhen: text(input.stopWhen, "a stopping condition", 800),
     ...(externalInput ? {
       externalResearchRequest: {
@@ -446,7 +521,7 @@ function parseMove(value: unknown): CanvasV2DiscoveryStateTransition["move"] {
   };
 }
 
-export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2DiscoveryState): CanvasV2DiscoveryStateTransition {
+export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2DiscoveryState, deliveryMode: "chat" | "canvas" = "canvas"): CanvasV2DiscoveryStateTransition {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("North Star returned an invalid discovery direction.");
   const input = value as Record<string, unknown>;
   let move = parseMove(input.move);
@@ -608,6 +683,7 @@ export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2
       const confidence: CanvasV2Triangulation["confidence"] = item.confidence === "high" || item.confidence === "medium" || item.confidence === "low" ? item.confidence : "unknown";
       return {
         id: text(item.id, "a triangulation ID", 180),
+        kind: item.kind === "observation" || item.kind === "hypothesis" ? item.kind : "interpretation",
         question: text(item.question, "a triangulation question", 800),
         relationship,
         synthesis: text(item.synthesis, "a triangulated reading", 1_200),
@@ -721,16 +797,31 @@ export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2
   // tokens reciting criteria that an earlier accepted move already satisfied.
   // Merge exact prior satisfactions before the strict completion check; new or
   // paraphrased criteria remain rejected.
-  const satisfiedCriteria = Array.from(new Set([
+  let satisfiedCriteria = Array.from(new Set([
     ...state.completion.satisfiedCriteria,
     ...strings(completionInput.satisfiedCriteria, 16, 500),
   ])).filter((criterion) => criteria.includes(criterion));
+  if (Array.isArray(completionInput.assessments)) {
+    const assessed = new Map<string, boolean>();
+    for (const value of completionInput.assessments) {
+      const item = value as { criterionId?: string; satisfied?: boolean; reason?: string };
+      const index = criteria.findIndex((_, index) => item?.criterionId === `criterion-${index + 1}`);
+      if (index < 0 || assessed.has(criteria[index]) || typeof item.satisfied !== "boolean" || !item.reason?.trim()) {
+        throw new Error("Assess every exact criterion ID once with a satisfaction decision and reason.");
+      }
+      assessed.set(criteria[index], item.satisfied);
+    }
+    if (assessed.size !== criteria.length) throw new Error("The completion assessment omitted an inquiry criterion.");
+    // Decisions are explicit; the compiler owns the exact prose identity.
+    // A newly unmet criterion also revokes an earlier satisfaction.
+    satisfiedCriteria = criteria.filter(criterion => assessed.get(criterion));
+  }
   let materialOpenRequirements = strings(completionInput.materialOpenRequirements, 16, 500);
   const unresolvedExistingValidation = [...(state.validationBacklog ?? [])].reverse().find((item) => (
     item.status === "proposed" || item.status === "accepted" || item.status === "in-progress"
   ));
   const existingValidationPresented = unresolvedExistingValidation
-    ? (state.presentedValidationIds ?? []).includes(unresolvedExistingValidation.id)
+    ? [...(state.presentedValidationIds ?? []), ...(state.chatPresentedValidationIds ?? [])].includes(unresolvedExistingValidation.id)
     : false;
   const mustPresentExistingValidation = Boolean(unresolvedExistingValidation)
     && !existingValidationPresented
@@ -832,10 +923,10 @@ export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2
         : undefined
     : undefined;
   if (move.kind === "ask-human" && !clarification) throw new Error("A human clarification move requires exactly one visible question.");
-  if (move.kind === "design-validation" && (!validationPlans.length || move.visibleAction !== "compose")) {
+  if (move.kind === "design-validation" && (!validationPlans.length || (deliveryMode === "canvas" && move.visibleAction !== "compose"))) {
     throw new Error("A validation-design move must compose at least one bounded human-owned validation plan.");
   }
-  if (move.kind === "integrate-validation" && (!validationUpdates.some((item) => item.result) || move.visibleAction !== "compose")) {
+  if (move.kind === "integrate-validation" && (!validationUpdates.some((item) => item.result) || (deliveryMode === "canvas" && move.visibleAction !== "compose"))) {
     throw new Error("A validation-integration move must compose from one human-supplied result.");
   }
   if (move.kind === "conclude" && readiness !== "complete") throw new Error("A conclude move requires inquiry-specific completion readiness.");
@@ -844,8 +935,9 @@ export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2
   }
   if (readiness === "complete" && materialOpenRequirements.length) throw new Error("A complete inquiry cannot retain material open requirements.");
   if (readiness === "complete" && !allCriteriaSatisfied) {
-    throw new Error("A complete inquiry must explicitly satisfy every inquiry-specific completion criterion.");
+    throw new Error(`A complete inquiry must explicitly satisfy every inquiry-specific completion criterion. Still unassessed or unmet: ${criteria.filter(criterion => !satisfiedCriteria.includes(criterion)).join(" | ")}`);
   }
+  if (deliveryMode === "chat") move = { ...move, visibleAction: "none" };
   const progressLabel = text(progressInput.label, "a calm progress label", 120);
   const progressDetail = text(progressInput.detail, "a human-readable progress detail", 500);
   assertCanvasV2UserFacingLanguage(progressLabel, "The discovery progress label", state.objective);
@@ -853,9 +945,31 @@ export function parseCanvasV2DiscoveryTransition(value: unknown, state: CanvasV2
   return {
     move,
     ...(optionalText(input.framing, 1_600) ? { framing: optionalText(input.framing, 1_600) } : {}),
-    latestUnderstanding: text(input.latestUnderstanding, "the latest accepted understanding", 2_400),
+    // Opening or deferring an inquiry need not manufacture an accepted finding.
+    // Once understanding exists, a transition must preserve or revise it.
+    latestUnderstanding: input.latestUnderstanding === "" && !state.latestUnderstanding
+      ? "" : text(input.latestUnderstanding, "the latest accepted understanding", 2_400),
     addQuestions,
     resolveQuestionIds: strings(input.resolveQuestionIds, 24, 180),
+    questionUpdates: records(input.questionUpdates).slice(0, 12).map((item) => ({
+      id: text(item.id, "an existing question ID", 180),
+      status: lifecycleStatus(item.status, ["open", "answered", "deferred", "rejected"] as const),
+      reason: text(item.reason, "a question status reason", 1_000),
+      ...(optionalText(item.answer, 1_200) ? { answer: optionalText(item.answer, 1_200) } : {}),
+      evidenceNodeIds: strings(item.evidenceNodeIds, 24, DISCOVERY_NODE_ID_MAX_LENGTH),
+    })),
+    lineUpdates: records(input.lineUpdates).slice(0, 8).map((item) => ({
+      id: text(item.id, "a branch ID", 180), label: text(item.label, "a branch label", 300),
+      questionIds: strings(item.questionIds, 24, 180),
+      status: lifecycleStatus(item.status, ["active", "completed", "deferred", "rejected"] as const),
+      reason: text(item.reason, "a branch status reason", 1_000),
+    })),
+    contradictionUpdates: records(input.contradictionUpdates).slice(0, 8).map((item) => ({
+      id: text(item.id, "an existing contradiction ID", 180),
+      status: lifecycleStatus(item.status, ["open", "resolved", "accepted-tension"] as const),
+      resolution: text(item.resolution, "a contradiction status explanation", 1_200),
+      evidenceNodeIds: strings(item.evidenceNodeIds, 24, DISCOVERY_NODE_ID_MAX_LENGTH),
+    })),
     statements,
     supersedeStatementIds: strings(input.supersedeStatementIds, 24, 180),
     contradictions,

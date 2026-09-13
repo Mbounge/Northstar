@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "caseId": "slack-clips-design",
+  "checkpoints": [
+    {
+      "id": "initial",
+      "description": "Media-grounded design recommendation"
+    },
+    {
+      "id": "revised",
+      "description": "Qualitative research incorporated"
+    },
+    {
+      "id": "annotated",
+      "description": "Human constraint preserved"
+    },
+    {
+      "id": "constrained",
+      "description": "New storage constraint addressed"
+    },
+    {
+      "id": "planned",
+      "description": "Test and trade-off made explicit"
+    }
+  ],
+  "events": [
+    {
+      "id": "research",
+      "after": [
+        "initial"
+      ],
+      "kind": "evidence-update",
+      "delivery": "message",
+      "payload": "Here are three hypothetical moderator notes from our prototype. What should change in your recommendation?",
+      "checkpoint": "revised",
+      "instructions": "Attach only these notes; do not report them as real Slack findings.",
+      "assets": [
+        {
+          "path": "cases/slack-clips-design/events/research/research-notes.md",
+          "sha256": "4f07a796aba550885420f80ccf0159f9f9960b7b4e3278ce33862be43ddc5337"
+        }
+      ]
+    },
+    {
+      "id": "text-first",
+      "after": [
+        "initial"
+      ],
+      "kind": "human-edit",
+      "delivery": "operator",
+      "payload": "Product constraint: a text-only path must always remain available.",
+      "checkpoint": "annotated",
+      "instructions": "Add a native note and capture its identity and geometry."
+    },
+    {
+      "id": "storage-change",
+      "after": [
+        "revised",
+        "annotated"
+      ],
+      "kind": "user-message",
+      "delivery": "message",
+      "payload": "A new internal product constraint: we cannot store transcripts automatically. Users must explicitly choose whether to create and retain them and must be able to delete them. Adapt the proposal while preserving my text-only requirement.",
+      "checkpoint": "constrained",
+      "instructions": "This is an authored product constraint, not a statement about law or Slack behavior."
+    },
+    {
+      "id": "test-plan",
+      "after": [
+        "constrained"
+      ],
+      "kind": "user-message",
+      "delivery": "message",
+      "payload": "How would we test this revised interaction with a small group before building more? Tell me what failure would look like and what could explain it. Keep the examples and prior reasoning available.",
+      "checkpoint": "planned",
+      "instructions": "Judge operational test design and trade-offs, not a prescribed UI template."
+    }
+  ]
+}

@@ -16,6 +16,8 @@ export interface CanvasV2EvidenceProviderRequest {
   domains: CanvasV2EvidenceDomain[];
   continuationKeys?: string[];
   limit?: number;
+  /** Page through account records without imposing a total collection limit. */
+  offset?: number;
   externalResearchRequest?: CanvasV2ExternalResearchRequest;
 }
 
@@ -29,6 +31,7 @@ export interface CanvasV2EvidenceProviderResult {
     targetName?: string;
   }>;
   providerAttempts?: CanvasV2ProviderAttemptAudit[];
+  pagination?: { offset: number; total: number; nextOffset?: number };
 }
 
 export interface CanvasV2EvidenceProvider {
@@ -82,6 +85,8 @@ export async function runCanvasV2EvidenceBridge(input: {
     sources: uniqueBy(successful.flatMap((result) => result.sources), (source) => `${source.providerId}:${source.sourceId}`),
     providers: selected.map((provider) => ({ ...provider.descriptor, domains: [...provider.descriptor.domains], kinds: [...provider.descriptor.kinds] })),
     issues: [...successful.flatMap((result) => result.issues), ...failures],
-    providerAttempts: successful.flatMap((result) => result.providerAttempts ?? []),
+    providerAttempts: settled.flatMap(result => result.status === "fulfilled"
+      ? result.value.providerAttempts ?? []
+      : Array.isArray(result.reason?.providerAttempts) ? result.reason.providerAttempts as CanvasV2ProviderAttemptAudit[] : []),
   };
 }

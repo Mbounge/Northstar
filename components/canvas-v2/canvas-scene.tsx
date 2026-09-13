@@ -65,6 +65,7 @@ export interface CanvasV2CanvasSceneProps {
   relocatablePlacementNodeIds?: readonly string[];
   preferredPlacement?: { x: number; y: number };
   onBeforeUserEdit?: () => void;
+  onAfterUserEdit?: () => void;
   onTableAction?: (cellId: string, action: "next" | "previous" | "paste", text?: string) => void;
   editTextRequest?: { nodeId: string; nonce: number; selectAll?: boolean };
   onElementDoubleClick?: (element: CanvasV2InspectableElement) => void;
@@ -942,6 +943,7 @@ export const CanvasV2CanvasScene = forwardRef<CanvasV2CanvasSceneHandle, CanvasV
         onNativeScene={props.onNativeScene}
         sceneOverride={props.nativeSceneOverride}
         onBeforeUserEdit={props.onBeforeUserEdit}
+        onAfterUserEdit={props.onAfterUserEdit}
         editTextRequest={props.editTextRequest}
         onTableAction={props.onTableAction}
         onElementDoubleClick={props.onElementDoubleClick}

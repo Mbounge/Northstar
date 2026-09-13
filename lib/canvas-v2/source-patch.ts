@@ -1,3 +1,5 @@
+import { readCanvasV2ConnectorAnchor } from "./connector-geometry";
+import { createCanvasV2NativeConnectorSource } from "@/lib/canvas-v2/native-scene";
 import { assertCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from "@/lib/canvas-v2/artifact-safety";
 import { readCanvasV2CanonicalFlowManifests } from "@/lib/canvas-v2/evidence-authorship";
 import { normalizeCanvasV2ModelSource } from "@/lib/canvas-v2/model-source-normalization";
@@ -10,7 +12,7 @@ import type { CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
 export type CanvasV2SourcePatchOperation =
   | { op: "insert-before" | "insert-after" | "append-html" | "replace-node"; targetNodeId: string; html: string }
   | { op: "remove-node"; targetNodeId: string }
-  | { op: "upsert-css"; layerId: string; css: string };
+  | { op: "upsert-css"; layerId: string; css: string; mode?: "merge" | "replace" };
 
 export type CanvasV2EvidenceScaleIntent = "identity-mark" | "peer" | "bounded-emphasis";
 
@@ -42,12 +44,12 @@ const EVIDENCE_GEOMETRY_GUARD = `${EVIDENCE_GEOMETRY_GUARD_START}
    edge-clinging candidates before the browser ever observes them. The model
    can still author genuinely two-dimensional compositions with parent grid
    areas, columns, normal-flow order, alignment, and deliberate margins. */
-.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region]{box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;float:none!important;max-width:${CANVAS_V2_AI_COMPOSITION_WIDTH}px!important}
+.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region]:not([data-canvas-v2-layout-owner="model"]){box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;float:none!important;max-width:${CANVAS_V2_AI_COMPOSITION_WIDTH}px!important}
 /* The narrative opener participates in normal flow but does not reserve the
    entire authorship strip. A forced full-width object prevented Northstar from
    composing around a collaborator already using part of the upper canvas.
    Model-authored width remains intact and the hard max keeps it finite. */
-.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region][data-canvas-v2-story-role="title"]{grid-column:1/-1!important;align-self:start!important;justify-self:start!important;min-width:0!important;max-width:${CANVAS_V2_WORKSPACE.titleMaxWidth}px!important;margin-top:0!important;margin-bottom:${CANVAS_V2_WORKSPACE.documentMargin}px!important}
+.northstar-canvas.canvas-v2-canvas--evidence-wide>[data-canvas-v2-design-region][data-canvas-v2-story-role="title"]:not([data-canvas-v2-layout-owner="model"]){grid-column:1/-1!important;align-self:start!important;justify-self:start!important;min-width:0!important;max-width:${CANVAS_V2_WORKSPACE.titleMaxWidth}px!important;margin-top:0!important;margin-bottom:${CANVAS_V2_WORKSPACE.documentMargin}px!important}
 /* Canonical evidence is immutable source geometry. Analytical authorship may
    place the atlas as one whole story chapter, but may never transform,
    position, shrink, wrap, or restyle its internal lanes and screens. */
@@ -64,15 +66,15 @@ const EVIDENCE_GEOMETRY_GUARD = `${EVIDENCE_GEOMETRY_GUARD_START}
 /* Grounded analysis copies are composition material, not unconstrained
    canvases. The visual director chooses the scale class; the compiler owns
    its hard geometry envelope before the candidate can ever render. */
-.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]{display:block;width:auto!important;height:auto!important;inline-size:auto!important;block-size:auto!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-inline-size:100%!important;object-fit:contain!important}
-.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="identity-mark"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important}
-.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="peer"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important}
-.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"][data-canvas-v2-scale-intent="bounded-emphasis"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-evidence-treatment="detail-crop"]){display:block;width:auto!important;height:auto!important;inline-size:auto!important;block-size:auto!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-inline-size:100%!important;object-fit:contain!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-evidence-treatment="detail-crop"])[data-canvas-v2-scale-intent="identity-mark"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["identity-mark"]}px!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-evidence-treatment="detail-crop"])[data-canvas-v2-scale-intent="peer"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT.peer}px!important}
+.northstar-canvas img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-evidence-treatment="detail-crop"])[data-canvas-v2-scale-intent="bounded-emphasis"]{max-height:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important;max-block-size:${ANALYSIS_COPY_MAX_HEIGHT["bounded-emphasis"]}px!important}
 /* The compiler's evidence inbox is a durable island subregion. Model CSS can
    give it a more expressive layout, while this intrinsic fallback prevents a
    newly bound screen from becoming a detached or page-sized orphan. */
 .northstar-canvas .canvas-v2-evidence-inbox{box-sizing:border-box!important;display:grid!important;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))!important;align-items:start!important;gap:20px!important;width:100%!important;max-width:100%!important;margin:24px 0 0!important;padding:20px 0 0!important;border-top:1px solid color-mix(in srgb,currentColor 16%,transparent)!important;overflow:visible!important}
-.northstar-canvas .canvas-v2-evidence-inbox>img[data-canvas-v2-evidence-role="analysis-copy"]{box-sizing:border-box!important;display:block!important;justify-self:start!important;width:100%!important;height:auto!important;max-width:420px!important;object-fit:contain!important}
+.northstar-canvas .canvas-v2-evidence-inbox>img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-evidence-treatment="detail-crop"]){box-sizing:border-box!important;display:block!important;justify-self:start!important;width:100%!important;height:auto!important;max-width:420px!important;object-fit:contain!important}
 .northstar-canvas .canvas-v2-evidence-inbox>img[data-canvas-v2-scale-intent="identity-mark"]{width:auto!important;max-width:96px!important}
 ${EVIDENCE_GEOMETRY_GUARD_END}`;
 
@@ -300,12 +302,14 @@ export function parseCanvasV2SourcePatch(value: unknown): CanvasV2SourcePatchOpe
     const operation = raw as Record<string, unknown>;
     const op = operation.op;
     if (op === "upsert-css") {
+      if (operation.mode !== undefined && operation.mode !== "merge" && operation.mode !== "replace") throw new Error("CSS mode must be merge or replace.");
       const css = requiredText(operation.css, `Patch CSS ${index + 1}`, MAX_CSS_LAYER_LENGTH);
       const suppliedLayerId = typeof operation.layerId === "string" ? operation.layerId.trim() : "";
       return {
         op,
         layerId: (suppliedLayerId || `authored-layer-${index + 1}`).replace(/[^a-zA-Z0-9_-]/g, "-"),
         css,
+        ...(operation.mode ? { mode: operation.mode as "merge" | "replace" } : {}),
       };
     }
     const targetNodeId = requiredText(operation.targetNodeId, `Patch target ${index + 1}`, 240);
@@ -316,6 +320,20 @@ export function parseCanvasV2SourcePatch(value: unknown): CanvasV2SourcePatchOpe
       html: requiredText(operation.html, `Patch HTML ${index + 1}`, MAX_FRAGMENT_LENGTH),
     };
     throw new Error(`Patch operation ${index + 1} has an unsupported op.`);
+  });
+}
+
+/** Validate authored markup before expanding registered media bytes into it. */
+export function parseCanvasV2AssetSourcePatch(serialized: string, evidence: readonly CanvasV2EvidenceAsset[]): CanvasV2SourcePatchOperation[] {
+  const operations = parseCanvasV2SourcePatch(JSON.parse(serialized));
+  const assets = new Map(evidence.map(asset => [asset.id, asset.url]));
+  return operations.map(operation => {
+    if (!("html" in operation)) return operation;
+    return { ...operation, html: operation.html.replace(/northstar-asset:([^\s"'<>&]+)/g, (_handle, id: string) => {
+      const url = assets.get(id);
+      if (!url) throw new Error(`Unknown canvas asset ${id}. Read the current canvas for available assets.`);
+      return url;
+    }) };
   });
 }
 
@@ -386,11 +404,13 @@ function expandEvidenceCopies(
   suppliedEvidenceIdByHandle: ReadonlyMap<string, string>,
 ): string {
   const approved = new Map(evidence.map((asset) => [asset.id, asset]));
+  const visibleHandles = buildCanvasV2EvidenceCopyHandles(previous, evidence);
   const evidenceIdByHandle = new Map([
-    ...buildCanvasV2EvidenceCopyHandles(previous).map((item) => [item.handle, item.evidenceId] as const),
+    ...visibleHandles.map((item) => [item.handle, item.evidenceId] as const),
     ...suppliedEvidenceIdByHandle,
   ]);
   const canonicalItem = new Map(readCanvasV2CanonicalFlowManifests(previous).flatMap((flow) => flow.items.map((item) => [item.evidenceId, item] as const)));
+  const visibleSourceNodeByEvidenceId = new Map(visibleHandles.map(item => [item.evidenceId, item.nodeId] as const));
   const usedNodeIds = new Set([
     ...Array.from(currentHtml.matchAll(/\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]),
     ...Array.from(html.matchAll(/\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]),
@@ -404,8 +424,9 @@ function expandEvidenceCopies(
     const asset = approved.get(evidenceId);
     const source = canonicalItem.get(evidenceId);
     const uploaded = asset?.source?.sourceType === "uploaded" && asset.authority === "supplied";
-    const sourceNodeId = source?.nodeId;
-    if (!asset || (!sourceNodeId && !uploaded)) throw new Error(`Evidence copy is not grounded on an approved source: ${evidenceId}.`);
+    const discovered = asset?.source?.providerId === "openai-web-search" && asset.source.permission === "authorized";
+    const sourceNodeId = source?.nodeId ?? visibleSourceNodeByEvidenceId.get(evidenceId);
+    if (!asset || (!sourceNodeId && !uploaded && !discovered)) throw new Error(`Evidence copy is not grounded on an approved source: ${evidenceId}.`);
     let nodeId = attribute(attributes, "data-canvas-v2-node-id");
     if (!nodeId) {
       const stem = `analysis-copy-${(copyHandle ?? evidenceId).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 72) || "evidence"}`;
@@ -416,8 +437,24 @@ function expandEvidenceCopies(
       usedNodeIds.add(nodeId);
       attributes = ` data-canvas-v2-node-id="${nodeId}"${attributes}`;
     }
-    const scaleIntent = scaleIntentByEvidenceId.get(evidenceId) ?? (uploaded ? "bounded-emphasis" : source?.flowIndex === undefined ? "identity-mark" : "peer");
-    const style = compilerEvidenceStyle(attribute(attributes, "style"), scaleIntent);
+    const scaleIntent = scaleIntentByEvidenceId.get(evidenceId) ?? (uploaded || discovered ? "bounded-emphasis" : source && source.flowIndex === undefined ? "identity-mark" : "peer");
+    let style = compilerEvidenceStyle(attribute(attributes, "style"), scaleIntent);
+    // A deliberate detail crop is presentation of the same approved pixels.
+    // Fixed author-selected dimensions describe the crop, never the workspace camera.
+    if (attribute(attributes, "data-canvas-v2-evidence-treatment") === "detail-crop") {
+      const authored = attribute(attributes, "style") ?? "";
+      const width = Number(/(?:^|;)\s*width\s*:\s*([\d.]+)px\s*(?:;|$)/i.exec(authored)?.[1]);
+      const height = Number(/(?:^|;)\s*height\s*:\s*([\d.]+)px\s*(?:;|$)/i.exec(authored)?.[1]);
+      const position = /(?:^|;)\s*object-position\s*:\s*([\d.]+)%\s+([\d.]+)%\s*(?:;|$)/i.exec(authored);
+      if (!(width > 0 && width <= 1600 && height > 0 && height <= 1200)) throw new Error("A detail crop needs bounded pixel width and height.");
+      if (position && position.slice(1).some(value => Number(value) > 100)) throw new Error("Crop position must stay inside the original image.");
+      style = `width:${width}px;height:${height}px;max-width:100%;object-fit:cover;object-position:${position ? `${position[1]}% ${position[2]}%` : "50% 50%"}`;
+    }
+    if (asset.mediaType === "video" || asset.mediaType === "gif") {
+      const media = { version: 1, type: asset.mediaType, src: asset.url, evidenceId, description: asset.label };
+      const group = attribute(attributes, "data-canvas-v2-witness-group");
+      return `<div data-canvas-v2-node-id="${escapedHtmlAttribute(nodeId)}" data-canvas-v2-evidence-id="${escapedHtmlAttribute(evidenceId)}" data-canvas-v2-evidence-role="analysis-copy"${group ? ` data-canvas-v2-witness-group="${escapedHtmlAttribute(group)}"` : ""} data-canvas-v2-media="${escapedHtmlAttribute(JSON.stringify(media))}" style="width:480px;height:270px;max-width:100%;position:relative">${escapedHtmlAttribute(asset.label)}</div>`;
+    }
     const retained = attributes
       .replace(/\s*data-canvas-v2-copy-evidence-id\s*=\s*["'][^"']+["']/ig, "")
       .replace(/\s*data-canvas-v2-copy-evidence-handle\s*=\s*["'][^"']+["']/ig, "")
@@ -496,6 +533,78 @@ function enforceDesignIslandTopology(html: string): string {
   return normalized;
 }
 
+/** Preserve historical artwork, but do not accept newly authored custom
+ * relationship paths alongside the native connector system. */
+export function assertCanvasV2NativeRelationshipAuthorship(fragment: string, previousHtml: string): void {
+  for (const match of fragment.matchAll(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi)) {
+    const svg = match[0];
+    if (/\bdata-canvas-v2-primitive=["']connector["']/i.test(svg) || previousHtml.includes(svg)) continue;
+    if (/data-canvas-v2-relationship-(?:source|target)|marker-end|<marker\b/i.test(svg)) {
+      throw new Error("New relationships must use data-canvas-v2-connector-request and native endpoint IDs. Do not author custom SVG relationship paths or arrow markers.");
+    }
+  }
+}
+
+/** A compact declarative request instantiates the native connector primitive.
+ * Coordinates are an initial local placement; stable endpoint IDs own attachment. */
+/** New relationships must bind objects measured on a prior committed turn. */
+export function assertCanvasV2NativeRelationshipStaging(input: {
+  previousHtml: string; candidateHtml: string; observedNodeIds: readonly string[];
+  relationshipGeometryAllowed: boolean; targetAction?: string; eligibleEndpointNodeIds?: readonly string[];
+}): void {
+  const bindings = (html: string) => Array.from(html.matchAll(/<svg\b[^>]*>/gi)).flatMap(([tag]) => {
+    const read = (name: string) => new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i").exec(tag)?.[1];
+    const from = read("data-canvas-v2-connector-from"); const to = read("data-canvas-v2-connector-to");
+    return from && to ? [{ id: read("data-canvas-v2-node-id"), from, to }] : [];
+  });
+  const previous = bindings(input.previousHtml);
+  const observed = new Set(input.observedNodeIds);
+  const eligible = input.eligibleEndpointNodeIds ? new Set(input.eligibleEndpointNodeIds) : undefined;
+  for (const link of bindings(input.candidateHtml)) {
+    if (previous.some((old) => old.id === link.id && old.from === link.from && old.to === link.to)) continue;
+    if (!input.relationshipGeometryAllowed || input.targetAction === "create") {
+      throw new Error("Compose and measure the island first. Add native relationships in a separate observed turn; do not create endpoints and their connectors together.");
+    }
+    if (eligible && (!eligible.has(link.from) || !eligible.has(link.to))) {
+      const invalidIds = [link.from, link.to].filter((id) => !eligible.has(id));
+      throw new Error(`Native relationship ${link.id} targets ineligible endpoint IDs: ${invalidIds.join(", ")}. Choose the exact visible individual object IDs in render.connectorDirectory.endpoints, including a background-surface ID when connecting stages. Do not use their layout container IDs.`);
+    }
+    if (!observed.has(link.from) || !observed.has(link.to)) {
+      throw new Error(`Native relationship ${link.id} must connect two existing measured objects from the committed composition. New endpoints require a separate composition turn.`);
+    }
+  }
+}
+
+export function materializeCanvasV2ConnectorRequests(html: string): string {
+  const materialized = html.replace(/<div\b([^>]*\bdata-canvas-v2-connector-request\s*=\s*["']true["'][^>]*)>\s*<\/div>/gi, (_tag, attributes: string) => {
+    const read = (name: string) => new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i").exec(attributes)?.[1];
+    const required = (name: string) => { const value = read(name); if (!value?.trim()) throw new Error(`Native connector requires ${name}.`); return value; };
+    const number = (name: string) => { const value = Number(required(name)); if (!Number.isFinite(value) || Math.abs(value) > 131072) throw new Error(`Native connector ${name} must be a finite canvas coordinate.`); return value; };
+    const variant = read("data-variant") ?? "arrow";
+    if (!["straight", "arrow", "curve", "bent"].includes(variant)) throw new Error("Choose a native connector variant: straight, arrow, curve or bent.");
+    const route = read("data-waypoints");
+    const waypoints = route?.trim().split(/\s+/).map((pair) => {
+      const parts = pair.split(",");
+      const point = { x: Number(parts[0]), y: Number(parts[1]) };
+      if (parts.length !== 2 || parts.some((part) => !part.trim()) || !Number.isFinite(point.x) || !Number.isFinite(point.y) || Math.abs(point.x) > 131072 || Math.abs(point.y) > 131072) throw new Error("Native connector waypoints must be finite x,y coordinate pairs.");
+      return point;
+    });
+    if (route !== undefined && (!waypoints?.length || waypoints.length > 12 || variant !== "bent")) throw new Error("Native connector waypoints require a bent route and between 1 and 12 points.");
+    const anchor = (name: string) => {
+      const raw = read(name); const point = readCanvasV2ConnectorAnchor(raw);
+      if (raw !== undefined && !point) throw new Error(`Native connector ${name} must be two normalized coordinates between 0 and 1.`);
+      return point;
+    };
+    const color = read("data-color");
+    if (color && !/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color)) throw new Error("Native connector color must be a hex color.");
+    return createCanvasV2NativeConnectorSource({ nodeId: required("data-canvas-v2-node-id"), fromNodeId: required("data-from"), toNodeId: required("data-to"), x: number("data-x1"), y: number("data-y1"), endX: number("data-x2"), endY: number("data-y2"), variant: variant as "straight" | "arrow" | "curve" | "bent", color, label: read("data-label"), waypoints, fromAnchor: anchor("data-from-anchor"), toAnchor: anchor("data-to-anchor") });
+  });
+  if (/<[^>]*\bdata-canvas-v2-connector-request\b/i.test(materialized)) {
+    throw new Error("Native connector requests must be empty div elements with data-canvas-v2-connector-request=\"true\" and native endpoint IDs.");
+  }
+  return materialized;
+}
+
 export function applyCanvasV2SourcePatch(input: {
   previous: CanvasV2ArtifactDocument;
   operations: readonly CanvasV2SourcePatchOperation[];
@@ -536,7 +645,7 @@ export function applyCanvasV2SourcePatch(input: {
           assertCanvasV2SelectionScopedCss(operation.css, referenceCreatedNodeIds, "A reference-derived");
         }
       }
-      css = upsertCssLayer(css, operation.layerId, operation.css, input.mergeExistingCssLayers);
+      css = upsertCssLayer(css, operation.layerId, operation.css, input.mergeExistingCssLayers || operation.mode === "merge");
       continue;
     }
     const range = findCanvasV2SourceNodeRange(html, operation.targetNodeId);
@@ -565,8 +674,9 @@ export function applyCanvasV2SourcePatch(input: {
       });
       if (protectedDescendant) throw new Error(`Human-authored node ${protectedDescendant} is protected. Compose around it or target an unedited sibling.`);
     }
+    if ("html" in operation) assertCanvasV2NativeRelationshipAuthorship(operation.html, input.previous.html);
     const fragment = "html" in operation
-      ? expandEvidenceCopies(operation.html, input.previous, html, input.evidence, input.scaleIntentByEvidenceId ?? new Map(), input.evidenceIdByHandle ?? new Map())
+      ? materializeCanvasV2ConnectorRequests(expandEvidenceCopies(operation.html, input.previous, html, input.evidence, input.scaleIntentByEvidenceId ?? new Map(), input.evidenceIdByHandle ?? new Map()))
       : "";
     if (operation.op === "insert-before") html = `${html.slice(0, range.start)}${fragment}${html.slice(range.start)}`;
     else if (operation.op === "insert-after") html = `${html.slice(0, range.end)}${fragment}${html.slice(range.end)}`;
@@ -594,4 +704,17 @@ export function applyCanvasV2SourcePatch(input: {
   const evidenceFailures = validateCanvasV2EvidenceBindings(document, input.evidence);
   if (evidenceFailures.length) throw new Error(evidenceFailures.join(" "));
   return document;
+}
+
+/** Resolve a rendered native fragment through observed parentage to writable
+ * source. Never guess by trimming generated IDs or accept an invented target. */
+export function canvasV2ObservedSourceNodeId(html: string, nodes: readonly { nodeId: string; parentNodeId?: string }[], nodeId: string): string | undefined {
+  const parents = new Map(nodes.map(node => [node.nodeId, node.parentNodeId]));
+  const seen = new Set<string>();
+  let current: string | undefined = nodeId;
+  while (current && !seen.has(current)) {
+    if (findCanvasV2SourceNodeRange(html, current)) return current;
+    seen.add(current);
+    current = parents.get(current);
+  }
 }

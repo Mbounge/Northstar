@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "id": "slack-clips-design",
+  "family": "multimedia-product-discovery",
+  "version": "0.4.0",
+  "status": "draft",
+  "title": "What should our review tool learn from Slack’s media interactions?",
+  "asOf": "2026-09-07",
+  "input": {
+    "path": "cases/slack-clips-design/input.md",
+    "sha256": "dbefd27843d6a8ae0f236fe85a02c0a53e510b2cedda8176e8fd7e72c85e9d8e"
+  },
+  "assets": [
+    {
+      "path": "cases/slack-clips-design/assets/inline-player.gif",
+      "sha256": "779184bf635156a8fa627494ff8783794fc8938a5156c177bb7e84b58d9901ac"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/expanded-transcript.gif",
+      "sha256": "e3b496530cb5bcb44ca23ec41d49ec6439edab5a48b7fc6b8620054245ffa2e9"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/media.json",
+      "sha256": "61b3e2db953f472870298f9a6ab1d8d4f39cd62929b031ed5ff44fc954e80433"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/team-context.md",
+      "sha256": "04251d2f25f6db146f579e753e37fa21db532a8c619df231144a889857e95c30"
+    }
+  ],
+  "initialCanvas": {
+    "path": "cases/slack-clips-design/initial-canvas.json",
+    "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+  },
+  "episode": {
+    "path": "cases/slack-clips-design/episode.json",
+    "sha256": "6b51c69dfd2326138e44399f7588e5188ebc84cd73cad90f94f5c61e58a9ccc5"
+  },
+  "rubric": {
+    "path": "references/slack-clips-design/rubric.json",
+    "sha256": "61c0b701e97ca709e4847b5e1be20e3c936527e80a571271792114c164095572"
+  },
+  "evidence": {
+    "path": "references/slack-clips-design/evidence.jsonl",
+    "sha256": "251c3f8f5e5c27df0949a88c544a056a31e78bc1c6433d95157fe0ff0f1beb9d"
+  },
+  "referenceAssets": [],
+  "reviewedArtifacts": [
+    {
+      "path": "references/slack-clips-design/reference.md",
+      "sha256": "b466285011fb4346e29b00cce2824bdf48af22e872ab7528dc4717daf4949b1c"
+    },
+    {
+      "path": "references/slack-clips-design/reviewer-guide.md",
+      "sha256": "3bdf9a595d7f50eb37c6691bc1e10b052528b62a99403ccb48c0b088f5348329"
+    },
+    {
+      "path": "SCORING.md",
+      "sha256": "be94b77879b0602211518dca7cd011a3e68e41d89b4d970fac81098536f3dc49"
+    },
+    {
+      "path": "calibration/discussion.md",
+      "sha256": "6a5a09da53a91c64f4a37169ae4cdf43b27540ff52fc0ceeec685e197ed4647e"
+    }
+  ],
+  "reviews": [],
+  "sourcePolicy": {
+    "mode": "open-web",
+    "referenceAccess": "excluded",
+    "independentDiscoveryCertified": false,
+    "notes": "Only initial assets and eligible event payloads are agent-visible. Source availability and temporal exclusions require operator review; no isolated search adapter is implemented."
+  },
+  "limitations": [
+    "Authored and source-reviewed; independent human rubric calibration and environment rehearsal remain outstanding.",
+    "No live Northstar run has been performed.",
+    "Historical GIFs do not establish all current Slack interactions.",
+    "Team context and moderator observations are authored scenarios, not field-study findings."
+  ]
+}

@@ -1,0 +1,442 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "northstar-discovery",
+  "version": "0.4.0",
+  "status": "author-reviewed-draft-candidate",
+  "createdAt": "2026-09-08T16:41:40.476Z",
+  "benchmarkDigest": "08f2c42c12a9125281a288dcdf80a5b53566b3dc138d07f003f86629f19a295a",
+  "counts": {
+    "cases": 4,
+    "criteria": 49,
+    "checkpoints": 21,
+    "calibrationExamples": 40
+  },
+  "liveRuns": 0,
+  "independentHumanApproval": false,
+  "independentDiscoveryCertified": false,
+  "calibrationStatus": "qualitative-discussion-recorded-not-independent-numeric-calibration",
+  "cases": [
+    {
+      "id": "ikea-breakfast",
+      "caseDigest": "bb2e441a849d130df0fcf1e80028099d1adab5f9d632ae1986be3ef351ea831e",
+      "reviewDigest": "10d0ce4037cde4deb1096432d38fb0a5fb7d838561e4b3062918ae5d7e09c4f7"
+    },
+    {
+      "id": "emio-launch-clues",
+      "caseDigest": "a760a1c6e8bef54f451a07ccc6ab166f9ef8d4020f19cc8604bcfc4822fbb401",
+      "reviewDigest": "c98df4fc1d8330b5009d0e1803303539effb91d374257ae99c73f43c5cb57010"
+    },
+    {
+      "id": "gymshark-creator-strategy",
+      "caseDigest": "c62b9e2623ef39af4c4c1f9f1dcfd11691d5c5847de353f36001acb594a88e76",
+      "reviewDigest": "3d887f308efc7c55b6bf7616431f6abc1cc3fc527f9a600a58fb8aabc02dd717"
+    },
+    {
+      "id": "slack-clips-design",
+      "caseDigest": "0f1ada1315fbc2096d25ce6f1a3ea061f2b2cce5fe84355416f84ed5a0f296df",
+      "reviewDigest": "bb3b4cb9c83b6ef4d90cf21d63a56c102518002b6f6b77f34036b99c748f2973"
+    }
+  ],
+  "files": [
+    {
+      "path": "CATALOG.md",
+      "sha256": "d68cbe8ec883da8d354aaf5c96f770bed666b612788fbbb95dfe7fed04835159"
+    },
+    {
+      "path": "READINESS.md",
+      "sha256": "513416a7f2ad170b0319f46e8a8a1cf83639e24b70e8ea1eb3220a7fdf4cbf8b"
+    },
+    {
+      "path": "README.md",
+      "sha256": "4e1e99f0ee1b5b972343c3747db848e95a3a15dc85975c33d12da4c5c4c3f806"
+    },
+    {
+      "path": "SCORING.md",
+      "sha256": "be94b77879b0602211518dca7cd011a3e68e41d89b4d970fac81098536f3dc49"
+    },
+    {
+      "path": "baselines/README.md",
+      "sha256": "a075b0c5f94136843702fe1a874964261a05b77c3ced72641ee3db3b8ec975e5"
+    },
+    {
+      "path": "benchmark.json",
+      "sha256": "1713ca92ac16f6294a40415752a1db2c3df6cd470c2c929c2a7b0ff680e72666"
+    },
+    {
+      "path": "calibration/discussion.md",
+      "sha256": "6a5a09da53a91c64f4a37169ae4cdf43b27540ff52fc0ceeec685e197ed4647e"
+    },
+    {
+      "path": "calibration/emio-launch-clues-examples.json",
+      "sha256": "4e9d17a2ea0b884afaad56479698bdc9b3919c4b0d1fbec2d8556e20a96b25e2"
+    },
+    {
+      "path": "calibration/gymshark-creator-strategy-examples.json",
+      "sha256": "4e164d4083ee0896f18f81ff1eba7b63338629b54ff0ae810d8477fb9dae90cb"
+    },
+    {
+      "path": "calibration/ikea-examples.json",
+      "sha256": "d40ec6a760b2c643d8bfcba5de373c9f56942a4fbbfb75ce11a3fea9828d9d5c"
+    },
+    {
+      "path": "calibration/slack-clips-design-examples.json",
+      "sha256": "831f7dca458982c7c00e93e8048ff6927401a58eef0f81fc5d8764e96abc1145"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/media.json",
+      "sha256": "be98f82c2907ffad037a63b6f915428384519cf6c249298d9fcce7a4816ac400"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/source-leads.json",
+      "sha256": "b42b8dd14d056a48e97ee180d3e9cc53b6f36219cdd34015caca7bfc4be73965"
+    },
+    {
+      "path": "cases/emio-launch-clues/assets/teaser-loop.mp4",
+      "sha256": "4ac3c59ab8acd93fbe11c035730eac5d2dd8b1b6e213572b99bd16fa86adc200"
+    },
+    {
+      "path": "cases/emio-launch-clues/case.json",
+      "sha256": "5d98c52afed077a051cf986128b4cfb0777ad555bd56a92ac188053e54c8f5bf"
+    },
+    {
+      "path": "cases/emio-launch-clues/episode.json",
+      "sha256": "cd143cbba96616aa2931ced89193582804c6b72aa9108f72425c49e688c6f934"
+    },
+    {
+      "path": "cases/emio-launch-clues/events/reveal/reveal-note.md",
+      "sha256": "a703090d73f7290ef7addc9fcec9b795c3040c2931a12219d2c4c069b087e104"
+    },
+    {
+      "path": "cases/emio-launch-clues/initial-canvas.json",
+      "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+    },
+    {
+      "path": "cases/emio-launch-clues/input.md",
+      "sha256": "e9756a6746e57bc5e915e1644972e7c00a8de4b942ab6201785f709dab0d18d1"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/brief.md",
+      "sha256": "c100e491dcb015c188f334aa181c0ba13a337ce7065ab7c3914e7b5d23be5c6e"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-frame-0010.jpg",
+      "sha256": "480b3fefadf1e688ebba0c5fb28363539bfecf754f6c08aa22df26b149ac991e"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-frame-0030.jpg",
+      "sha256": "e3557fb437f7188e082937c8db5a6c9827c90753f4e81336896e58da16e393cc"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-story.mp4",
+      "sha256": "fffebeea9ae24a2fcb2845a83a3d98fd622beba8b757230ff5c15bde45d46ebc"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/creator-thumbnail.jpg",
+      "sha256": "1627224f6eaa5a7d4598b5d2c776ae936b10e8dea585334cbb79e31462668b04"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/media.json",
+      "sha256": "6b837c34450f278fc01b1e8bddf7a242eee4688a375b31d669fb94beab3d4d27"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/assets/source-context.md",
+      "sha256": "2ad43bcdedbcbd537f95bbf5332bc52347ea844d4b8afe6d369e0fced8ebfe92"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/case.json",
+      "sha256": "6af031cc86dee757cbdf3d854621bb966ade3e1cb82c8e966db1e61a5395bfc2"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/episode.json",
+      "sha256": "6e8724f24d0a4aea94761c49fb5a3de7090d662bb684b0e9f8139272eb45181a"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/events/pilot/measurement-note.md",
+      "sha256": "9b30db16443924a934bcbc0d4cf63ba9a00f4cb366e35567a4155c7c5ab19aa9"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/events/pilot/pilot.csv",
+      "sha256": "2d88310bba38a0a106ffa6b44bd4a83776315a1cf7c9ac080cb6591c89d62cc0"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/initial-canvas.json",
+      "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+    },
+    {
+      "path": "cases/gymshark-creator-strategy/input.md",
+      "sha256": "11162cc50ebae1adb1d2340660eb4274dd27aa59cc0b26ee0d6b44e8de80f4a6"
+    },
+    {
+      "path": "cases/ikea-breakfast/assets/original-post.png",
+      "sha256": "afc626b45c2ff94dacce6b1475a3d97b6cfbf56b95392d5ac231ac55f9b3a7ac"
+    },
+    {
+      "path": "cases/ikea-breakfast/case.json",
+      "sha256": "2d9ffa1e55918ef1f2a6d0aa29088683d4fe0c968ad819bec827ad17bd59edd6"
+    },
+    {
+      "path": "cases/ikea-breakfast/episode.json",
+      "sha256": "b356c11a9830813cf26c2b735a4060a7c7f627bf5a9e75a2efed77a51099dcf9"
+    },
+    {
+      "path": "cases/ikea-breakfast/initial-canvas.json",
+      "sha256": "e8a30e8db30251bc8fb4af45032f148b897362f5f62b55b9f7d2eba79896227d"
+    },
+    {
+      "path": "cases/ikea-breakfast/input.md",
+      "sha256": "770bbd14324563fe60f85b50c54cb4621b2e9b74d1371e83b207884a22b88110"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/expanded-transcript.gif",
+      "sha256": "e3b496530cb5bcb44ca23ec41d49ec6439edab5a48b7fc6b8620054245ffa2e9"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/inline-player.gif",
+      "sha256": "779184bf635156a8fa627494ff8783794fc8938a5156c177bb7e84b58d9901ac"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/media.json",
+      "sha256": "61b3e2db953f472870298f9a6ab1d8d4f39cd62929b031ed5ff44fc954e80433"
+    },
+    {
+      "path": "cases/slack-clips-design/assets/team-context.md",
+      "sha256": "04251d2f25f6db146f579e753e37fa21db532a8c619df231144a889857e95c30"
+    },
+    {
+      "path": "cases/slack-clips-design/case.json",
+      "sha256": "0dde06e4d2b96b542f23a500ee81b4b1b7c6b8091a7994154569450255892bc7"
+    },
+    {
+      "path": "cases/slack-clips-design/episode.json",
+      "sha256": "6b51c69dfd2326138e44399f7588e5188ebc84cd73cad90f94f5c61e58a9ccc5"
+    },
+    {
+      "path": "cases/slack-clips-design/events/research/research-notes.md",
+      "sha256": "4f07a796aba550885420f80ccf0159f9f9960b7b4e3278ce33862be43ddc5337"
+    },
+    {
+      "path": "cases/slack-clips-design/initial-canvas.json",
+      "sha256": "097ca33e741a70ab97868952bcaa5c80f963d570dd0b5312e00add26e2c89922"
+    },
+    {
+      "path": "cases/slack-clips-design/input.md",
+      "sha256": "dbefd27843d6a8ae0f236fe85a02c0a53e510b2cedda8176e8fd7e72c85e9d8e"
+    },
+    {
+      "path": "graders/README.md",
+      "sha256": "6319ae20c9065573c7017fe62f5d39bd1b88c89708068ec6de3fd7aecb573dde"
+    },
+    {
+      "path": "references/emio-launch-clues/evidence.jsonl",
+      "sha256": "39bbf4dc1a9669053b7cdc6f1dbb19afdd6429ad8935eeb75db68dfee59d1ab1"
+    },
+    {
+      "path": "references/emio-launch-clues/reference.md",
+      "sha256": "df248ac5b59710379310f989bc5351e813339d657b32475640f02e137c3daf80"
+    },
+    {
+      "path": "references/emio-launch-clues/reviewer-guide.md",
+      "sha256": "34c74abd4cd947bcb13829ef9b29423cf236da9712c6ea9f0c0576a2d8122212"
+    },
+    {
+      "path": "references/emio-launch-clues/rubric.json",
+      "sha256": "092ef50ca7e62d60f3bd1238de8b7b6645b6882dc50bf18f52a4c4ec7a55e729"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/evidence.jsonl",
+      "sha256": "5fdad347af801675c9a317991dfec617c4a0a433bbcf51fc74cc34f6a6931999"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/reference.md",
+      "sha256": "9c7d0ba0be4313edff5e60372a5e8dd71c9912f37536227570ac964d6a28f35f"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/reviewer-guide.md",
+      "sha256": "11ec7153182e1dca0b786e24b339aef9a3a3b976acd05897d6332c2ec51dcb7b"
+    },
+    {
+      "path": "references/gymshark-creator-strategy/rubric.json",
+      "sha256": "620ac72350bb8a3804a48744da499ddea7e2869c1834d2b6bc3d14ede9d0b1b4"
+    },
+    {
+      "path": "references/ikea-breakfast/assets/comment-reference.png",
+      "sha256": "cb78c63a57939f7a665d8457358880f9474ffe81a7ab2febe27859aaf5c209a1"
+    },
+    {
+      "path": "references/ikea-breakfast/evidence.jsonl",
+      "sha256": "39c673edb0ecc913d17622a83aa865c81184c8a7c3fe319406a92e232fa5521d"
+    },
+    {
+      "path": "references/ikea-breakfast/reference.md",
+      "sha256": "9e3f0e709a9c0aef4daeac6bb34d39ad87bf99f4f0a6a82f07220b1a2e94d3be"
+    },
+    {
+      "path": "references/ikea-breakfast/reviewer-guide.md",
+      "sha256": "446905617fbab176cbdbe936e0dd72c50a0a12d0e7448f38da49fb5c27964435"
+    },
+    {
+      "path": "references/ikea-breakfast/rubric.json",
+      "sha256": "3cfdaecbf97b58086a23bafce5e82ec1fad0f3090ad0e9e5d4e325d6911a3c29"
+    },
+    {
+      "path": "references/slack-clips-design/evidence.jsonl",
+      "sha256": "251c3f8f5e5c27df0949a88c544a056a31e78bc1c6433d95157fe0ff0f1beb9d"
+    },
+    {
+      "path": "references/slack-clips-design/reference.md",
+      "sha256": "b466285011fb4346e29b00cce2824bdf48af22e872ab7528dc4717daf4949b1c"
+    },
+    {
+      "path": "references/slack-clips-design/reviewer-guide.md",
+      "sha256": "3bdf9a595d7f50eb37c6691bc1e10b052528b62a99403ccb48c0b088f5348329"
+    },
+    {
+      "path": "references/slack-clips-design/rubric.json",
+      "sha256": "61c0b701e97ca709e4847b5e1be20e3c936527e80a571271792114c164095572"
+    },
+    {
+      "path": "reviews/0.3.0/freeze.json",
+      "sha256": "817e7edc3cec0b2b82a57cafcac0434b706f8687d4d757cf57f34ae813fadbe2"
+    },
+    {
+      "path": "reviews/0.3.0/readiness.md",
+      "sha256": "dc301bcac6d1f2cec94828a99923e148648a4773f189568b49e2125ab95a2bd6"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-01-precommit.json",
+      "sha256": "9377dab85a4ea6aee59ae4ecd94e31e6998e3d8486d8ccb77158751d63ec52b5"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-01-review.json",
+      "sha256": "77e21c8e0285610ab9d6503b478889dd93e356f0de27fce04f4a1b0ebf4cfdbf"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-02-precommit.json",
+      "sha256": "b483a66ec8b0903aa466adaaf504a2d74a73b415128873ac418aec5f9445d370"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-02-review.json",
+      "sha256": "a104ebe33cf98e44d6ccb9191cd32ee712a0b639f8f166f4f706141786096e7c"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-03-emio-precommit.json",
+      "sha256": "807273eb509876ee370e5459b9f610df4bce86788a28962612f5d2d5c0a53cd0"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-03-emio-reveal-presentation.json",
+      "sha256": "e08e7daf7876dd599782d8a47ba430190c1bd04f712ca1425ab681256b8fd932"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-03-emio-reveal-review.json",
+      "sha256": "b60beffc5fb98eb5a932087a30f935b61c0d2711f80501a33ec30e79d5a59719"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-03-emio-review.json",
+      "sha256": "b0144084344e385ba3e343cdcf2420c124bb8114765d7766dc680437ce46cc81"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-04-gymshark-precommit.json",
+      "sha256": "d4a46e1d6e71b0ac2e497f25c9f8330b9d21df474c833c2a9a2260835cbefbd3"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-04-gymshark-review.json",
+      "sha256": "a6c04a248ff69975d947ce70513110a74304e79344b88f1b113f97aa134e0010"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-05-gymshark-pilot-precommit.json",
+      "sha256": "d8df786d1f4e856a6bd247dada40a0238b2da9668cf0ae11ebbe9ca662069cde"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-05-gymshark-pilot-review.json",
+      "sha256": "19a96c4a49016ee83e20e3603c9b4330e4d0271c5dde23e4242495a5d8d4958e"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-06-slack-precommit.json",
+      "sha256": "3702c749389623c4a13bc07cfa44186ea633362bc91f19abbfb3993bf33c2b83"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-06-slack-review.json",
+      "sha256": "b144c01ce4360ad73a7c5e86ccd8a9676f43c82622faf1e58f4037b986ee2c70"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-07-slack-revision-precommit.json",
+      "sha256": "04c10a75145f4da8abde699665b135a2a62655dec5104e46ead836cf0db9df5d"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/calibration-round-07-slack-revision-review.json",
+      "sha256": "9342e2bd8afc5c444967f12f1aa2eaf789a13b7709f3bab2f236da3f87e5bb9c"
+    },
+    {
+      "path": "reviews/0.4.0/calibration/discussion-summary.md",
+      "sha256": "7a150b2e312df1fdc409425a54b8a4495fa0874555b008f8ed2746d07e83b7be"
+    },
+    {
+      "path": "runner/cli.mjs",
+      "sha256": "8b197c53727cc6457012a8a054a1d1718d9fd03411278f39694e3847dc796ce8"
+    },
+    {
+      "path": "runner/core.mjs",
+      "sha256": "758c6e579a05ab99e039d3ea58bb8d789a376c0921bfc804ac627b33acb2aa8d"
+    },
+    {
+      "path": "schemas/benchmark.schema.json",
+      "sha256": "563ae4c053a605ab3a90fb115594f849ef7fc38d3e4ec619e8ee54fc34197267"
+    },
+    {
+      "path": "schemas/calibration.schema.json",
+      "sha256": "b21fce499599ae5a0da4517d9d37b1bcbc3a55dbe18edae06350ddda1639bea5"
+    },
+    {
+      "path": "schemas/case.schema.json",
+      "sha256": "e5b1dd1cd42940463c4b1ad1931f09ffe190dc3e838c95f2358ba5ce3b44fc5f"
+    },
+    {
+      "path": "schemas/checkpoint.schema.json",
+      "sha256": "b72a1eb589383b92525d1efea92461f38cf3e8fef42f97e982888dc0d2bca60e"
+    },
+    {
+      "path": "schemas/episode.schema.json",
+      "sha256": "e517cfaa78d487ccba0e8b4c7dead4a6259f4958dc31d6a0464b2e16deb51036"
+    },
+    {
+      "path": "schemas/evidence.schema.json",
+      "sha256": "fd81198f1c6ee0bb3901565ca6e2461a2b37e506384fe96b08f5a3aac87046cd"
+    },
+    {
+      "path": "schemas/judgments.schema.json",
+      "sha256": "416eb4e59a01d5dad8079af226fe51d2f5c7aa4a26293736690d8387f22bda92"
+    },
+    {
+      "path": "schemas/media.schema.json",
+      "sha256": "7cf05edbd17ec3f63a689e5d744b75ca63e1ee9bbb0ed610853b4dc2b98bf8c8"
+    },
+    {
+      "path": "schemas/rubric.schema.json",
+      "sha256": "a18e6f2acb42252990d9f6306d69507164fb502657169bc0faa86034cccca162"
+    },
+    {
+      "path": "schemas/runConfig.schema.json",
+      "sha256": "e975b899f67ee520c685187ed5b09c6a6f45988bd03b6f8e1a1ad0932aa6a71e"
+    },
+    {
+      "path": "schemas/split.schema.json",
+      "sha256": "bc7d13317a91d807bfd7cc1c2df28b0168148190f378af879568850ded787251"
+    },
+    {
+      "path": "splits/development.json",
+      "sha256": "0582185ec1fc3142bae64077efa1478b645081a8ecea5c19725da0ac9ec56bf7"
+    },
+    {
+      "path": "splits/holdout.json",
+      "sha256": "1aa9a1835dc571a6246c54e4af04238a36934cc9bdd008e4a3973585fac40a46"
+    },
+    {
+      "path": "splits/validation.json",
+      "sha256": "c0d9530ff6bcb17c65914a63ec855ccb4831db690a4caeed0be10a219240fdab"
+    },
+    {
+      "path": "tests/foundation.test.mjs",
+      "sha256": "4e6756488b843d2def302e598ae249124e478a961eb3bc89e9eac305e39fc220"
+    }
+  ]
+}

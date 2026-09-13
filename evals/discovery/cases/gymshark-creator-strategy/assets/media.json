@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "items": [
+    {
+      "file": "creator-thumbnail.jpg",
+      "sha256": "1627224f6eaa5a7d4598b5d2c776ae936b10e8dea585334cbb79e31462668b04",
+      "kind": "image",
+      "sourceUrl": "https://img.youtube.com/vi/eyp6R8FCdPg/maxresdefault.jpg",
+      "sourcePage": "https://www.gymshark.com/blog/article/how-to-become-a-gymshark-athlete",
+      "retrievedOn": "2026-09-07",
+      "scope": "Thumbnail for Sophie Reid’s creator upload linked from the Gymshark athlete article; not a paid-ad record.",
+      "rights": "Publisher-owned media; retained for private benchmark analysis, no public redistribution permission."
+    },
+    {
+      "file": "creator-story.mp4",
+      "sha256": "fffebeea9ae24a2fcb2845a83a3d98fd622beba8b757230ff5c15bde45d46ebc",
+      "kind": "video",
+      "sourceUrl": "https://www.youtube.com/watch?v=eyp6R8FCdPg",
+      "sourcePage": "https://www.youtube.com/watch?v=eyp6R8FCdPg",
+      "retrievedOn": "2026-09-07",
+      "scope": "Complete creator upload, 640×360 H.264 video with original English AAC audio; downloaded streams muxed without editorial cuts. Not an official brand upload or a confirmed paid ad.",
+      "rights": "Creator-owned media retained for private benchmark analysis; public redistribution permission has not been obtained.",
+      "durationSeconds": 700.569252
+    },
+    {
+      "file": "creator-frame-0010.jpg",
+      "sha256": "480b3fefadf1e688ebba0c5fb28363539bfecf754f6c08aa22df26b149ac991e",
+      "kind": "image",
+      "sourceUrl": "https://www.youtube.com/watch?v=eyp6R8FCdPg",
+      "sourcePage": "https://www.youtube.com/watch?v=eyp6R8FCdPg",
+      "retrievedOn": "2026-09-07",
+      "scope": "Frame extracted at 00:10 from the pinned creator-story.mp4; selected by benchmark authors. A still does not establish audio or continuous motion.",
+      "rights": "Creator-owned media retained for private benchmark analysis; public redistribution permission has not been obtained."
+    },
+    {
+      "file": "creator-frame-0030.jpg",
+      "sha256": "e3557fb437f7188e082937c8db5a6c9827c90753f4e81336896e58da16e393cc",
+      "kind": "image",
+      "sourceUrl": "https://www.youtube.com/watch?v=eyp6R8FCdPg",
+      "sourcePage": "https://www.youtube.com/watch?v=eyp6R8FCdPg",
+      "retrievedOn": "2026-09-07",
+      "scope": "Frame extracted at 00:30 from the pinned creator-story.mp4; selected by benchmark authors. A still does not establish audio or continuous motion.",
+      "rights": "Creator-owned media retained for private benchmark analysis; public redistribution permission has not been obtained."
+    }
+  ]
+}

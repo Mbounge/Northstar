@@ -136,7 +136,7 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
     /* Research-only revisions intentionally keep native objects directly on
        the body. Give those objects the same compiler-owned normal-flow and
        safe-area rules as descendants of the legacy compatibility root. */
-    body > [data-canvas-v2-design-region] {
+    body > [data-canvas-v2-design-region]:not([data-canvas-v2-layout-owner="model"]) {
       box-sizing:border-box!important;
       position:relative!important;
       inset:auto!important;
@@ -144,7 +144,7 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
       float:none!important;
       max-width:${compositionWidth}px!important;
     }
-    body > [data-canvas-v2-design-region][data-canvas-v2-story-role="title"] {
+    body > [data-canvas-v2-design-region][data-canvas-v2-story-role="title"]:not([data-canvas-v2-layout-owner="model"]) {
       grid-column:1/-1!important;
       align-self:start!important;
       justify-self:start!important;

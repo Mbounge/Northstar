@@ -18,6 +18,7 @@ export interface CanvasV2InspectableElement {
   lastAuthor?: "user" | "northstar";
   editVersion?: number;
   rotation?: number;
+  zIndex?: number;
   canonicalEvidence?: boolean;
   evidenceId?: string;
   evidencePacketId?: string;
@@ -199,4 +200,23 @@ export function inspectCanvasV2Element(element: Element): CanvasV2InspectableEle
       height: rect.height,
     },
   };
+}
+
+
+/** Exact object hit testing for a dragged endpoint: no magnet radius outside it. */
+export function canvasV2ConnectorTargetAtPoint(elements: readonly CanvasV2InspectableElement[], point: { x: number; y: number }, excludedNodeId?: string): CanvasV2InspectableElement | undefined {
+  return elements.filter((item) => {
+    if (item.nodeId === excludedNodeId || item.nodeId === "canvas" || item.kind === "root" || item.kind === "island" || item.kind === "connector" || item.hidden) return false;
+    const { x, y, width, height } = item.bounds;
+    if (width <= 0 || height <= 0) return false;
+    const angle = -(item.rotation ?? 0) * Math.PI / 180;
+    const dx = point.x - x - width / 2, dy = point.y - y - height / 2;
+    const localX = dx * Math.cos(angle) - dy * Math.sin(angle), localY = dx * Math.sin(angle) + dy * Math.cos(angle);
+    if (Math.abs(localX) > width / 2 || Math.abs(localY) > height / 2) return false;
+    if (item.shapeVariant === "ellipse") return (localX / (width / 2)) ** 2 + (localY / (height / 2)) ** 2 <= 1;
+    if (item.shapeVariant === "diamond") return Math.abs(localX / (width / 2)) + Math.abs(localY / (height / 2)) <= 1;
+    return true;
+  }).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0)
+    || a.bounds.width * a.bounds.height - b.bounds.width * b.bounds.height
+    || elements.indexOf(b) - elements.indexOf(a))[0];
 }

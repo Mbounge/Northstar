@@ -97,6 +97,9 @@ export interface CanvasV2EvidenceAsset {
   capturedAt?: string;
   sequenceIndex?: number;
   mimeType?: string;
+  /** Native playback is distinct from still-image evidence and model observation. */
+  mediaType?: "image" | "gif" | "video";
+  originalUrl?: string;
   tags?: string[];
   limitations?: string[];
 }
@@ -129,6 +132,7 @@ export interface CanvasV2EvidencePacket {
    * external sources remain graph-only; only a bounded material witness earns
    * visible canvas space.
    */
+  sourceSnapshot?: { url: string; retrievedAt: string; text: string; truncated: boolean; sha256: string; scope: string };
   presentation?: {
     state: "graph-only" | "candidate" | "promoted";
     materiality: number;
@@ -180,12 +184,18 @@ export interface CanvasV2ElementBounds {
 }
 
 export interface CanvasV2SpatialNodeObservation {
+  /** True for a visible individual object, false for a structural wrapper. */
+  connectorEndpoint?: boolean;
+  /** The layout owner whose independent background this object paints. */
+  surfaceOwnerNodeId?: string;
   nodeId: string;
   parentNodeId?: string;
   tagName: string;
   textPreview?: string;
   /** Number of distinct rendered text lines for a leaf text node. */
   textLineCount?: number;
+  /** Actual painted line fragments; excludes empty space in a wrapped inline box. */
+  textPaintRects?: CanvasV2ElementBounds[];
   bounds: CanvasV2ElementBounds;
   contentBox: {
     clientWidth: number;
@@ -264,6 +274,10 @@ export interface CanvasV2EvidenceRenderObservation {
 }
 
 export interface CanvasV2AuthoredRelationshipObservation {
+  nativeConnector?: boolean;
+  userAuthored?: boolean;
+  targetAttachmentExplicit?: boolean;
+  routeRetraces?: boolean;
   nodeId: string;
   tagName: string;
   sourceNodeIds: string[];
@@ -309,6 +323,8 @@ export interface CanvasV2AuthoredAnnotationObservation {
 /** Factual placement of one top-level model-authored analytical region. */
 export interface CanvasV2DesignRegionObservation {
   nodeId: string;
+  /** Related islands share a narrative; independent compositions may have their own title/order. */
+  narrativeId?: string;
   /** Compiler-owned stable identity for this independently editable island. */
   islandId?: string;
   /** Stable narrative function of this island in the whole-board story. */

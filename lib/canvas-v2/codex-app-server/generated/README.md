@@ -1,0 +1,1 @@
+Protocol types generated from codex-cli 0.153.4 using `codex app-server generate-ts --experimental`. Only the types used by Northstar and their dependencies are included. Generated files are unmodified. Upstream: https://github.com/openai/codex (Apache-2.0; license alongside). Regenerate and verify adapter contracts before changing the pinned binary version.

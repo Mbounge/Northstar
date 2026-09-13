@@ -189,7 +189,9 @@ export function insertCanvasV2CanonicalFlow(input: {
   });
   lane.append(identity, sequence);
   region.append(lane);
-  region.dataset.canvasV2Origin = "research";
+  // An existing region may have been created by Northstar or edited by the user.
+  // Appending a second source lane must not rewrite that region’s authorship.
+  region.dataset.canvasV2Origin ||= "research";
   for (const element of Array.from(region.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))) {
     if (!element.dataset.canvasV2Origin) element.dataset.canvasV2Origin = "research";
   }

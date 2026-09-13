@@ -122,7 +122,7 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(contextualToolbar, /navigateWorkspaceWheel\(event\)/, "screen-space controls must forward navigation outside the capture surface");
   assert.match(viewportPreview, /toolbar\.style\.transform = `translate3d/, "camera previews move contextual controls in real time");
   assert.doesNotMatch(viewportPreview, /toolbar\.style\.translate/, "camera previews preserve Tailwind's centering translate");
-  assert.match(workspace, /addEventListener\("gesturechange", suppressBrowserZoom/);
+  assert.match(workspace, /addEventListener\("gesturechange", nativePinch/);
   assert.match(workspace, /touchAction: "none"/);
   assert.match(workspace, /workspaceKeydownHandlerRef/);
   assert.match(workspace, /data-canvas-v2-render-count/);
@@ -136,7 +136,7 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(nativeScene, /transientStyleSnapshotsRef/);
   assert.match(nativeScene, /setCompiledRevisionId\(revision\.id\)/);
   assert.match(nativeScene, /sceneOverride\?\.revisionId !== revision\.id && compiledRevisionId !== revision\.id/);
-  assert.match(nativeScene, /needsCompiler && <iframe/);
+  assert.match(nativeScene, /needsCompiler && <div[^>]*style=\{PRIVATE_RENDER_SURFACE_STYLE\}><iframe/);
   assert.match(nativeScene, /querySelectorAll<HTMLElement>\("\[data-canvas-v2-node-id\]"\)/);
   assert.match(nativeScene, /contentVisibility: "auto"/);
   assert.match(nativeScene, /node\.canonicalEvidence \|\| node\.attributes\["data-canvas-v2-evidence-role"\] === "canonical"/);

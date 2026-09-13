@@ -1,0 +1,37 @@
+{
+  "caseId": "gymshark-creator-strategy",
+  "round": 4,
+  "status": "assistant-precommitted-awaiting-initial-human-judgment",
+  "kind": "authored-explanation-calibration-not-model-run",
+  "scope": "Campaign mechanism, creative interpretation and experiment transfer excerpts only. No complete case pass, actual research execution, native playback or rendered composition assessed.",
+  "scenario": "A small fitness brand has three creators and one landing page and wants to learn from Gymshark's creator strategy without assuming the same resources or results.",
+  "evidenceBrief": [
+    "Stored research packet: campaign material encourages recurring public participation and highlights an athlete opportunity. This describes the documented competition, not a claim that entry is currently open.",
+    "Gymshark links Sophie Reid's April 2025 retrospective athlete video. The creator labels the upload not sponsored and separately discloses affiliate links; neither is an independent payment audit.",
+    "Supplied extracted frames at 00:10 show the creator seated at a laptop and at 00:30 show close direct-to-camera framing. These frames were inspected this turn; audio, full sequence, and the nature of the laptop call were not independently verified this turn.",
+    "No competitor spend, targeting, conversion performance, or causal effects supplied."
+  ],
+  "answers": {
+    "A": "The athlete opportunity gives people an outcome to aspire to; repeated progress posts keep that aspiration visible. Linking a winner's personal story makes the opportunity feel achievable. The laptop scene at 00:10 and close framing at 00:30 give the creative a personal, everyday setting rather than a polished product showcase. The lesson for a small brand is to make customers imagine their own progress. Have three creators tell their journeys and invite viewers to join a shared challenge through one landing page. Measure verified signups and total cost per signup. Start with the journey format because it is the engine of Gymshark's success: people join for the transformation and stay for the community.",
+    "B": "Gymshark gives participants something to work toward and a reason to keep contributing publicly. The possible business mechanism is broader than a creator endorsement: each progress post can become another encounter with the brand, while an athlete story makes the opportunity tangible. The laptop scene at 00:10 and close framing at 00:30 offer personal context; they do not establish which part persuades viewers. A winner's story also leaves out people who participated without winning. For our team, test whether progress stories attract people who actually want the offer, rather than only the creator's story. Have each of three creators make a progress-story version and a product-demonstration version, with the same offer and landing page. Compare verified signups and total cost per signup, recording differences in audience and distribution. That tests a transferable idea without assuming our brand can reproduce Gymshark's status or its results."
+  },
+  "assistantJudgments": {
+    "A": {
+      "depth": 1,
+      "evidence": 0,
+      "clarity": 2,
+      "reason": "Identifies a plausible aspiration and participation mechanism, locates visible creative features, and provides feasible activity with a useful metric. However asserts the engine of actual success and retention without performance evidence; a story-only pilot cannot distinguish the preferred format from an alternative."
+    },
+    "B": {
+      "depth": 2,
+      "evidence": 2,
+      "clarity": 2,
+      "reason": "Connects incentives, repeated public participation and curated success stories to a conditional business mechanism; recognizes selection bias and transfer limits. Offers a within-creator contrast with an outcome measure. Audience and distribution differences still limit causal inference absent controlled assignment; actual results and implementation must be assessed later."
+    }
+  },
+  "presentationNotes": "Both answers contain substantive mechanisms; evaluate commercial usefulness and explanatory delivery separately from evidential discipline. Do not tell the user the precommitted ratings before their feedback. Keep pilot results, app-change event and two-creator constraint withheld until a later stage.",
+  "humanJudgments": null,
+  "independentHumanApproval": false,
+  "datasetModified": false,
+  "liveModelCalls": 0
+}

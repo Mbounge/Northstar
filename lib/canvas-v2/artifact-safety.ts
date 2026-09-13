@@ -1,8 +1,9 @@
+import { readCanvasV2PlayableMedia } from "./canvas-media";
 import {
   readCanvasV2CanonicalFlowManifests,
   validateCanvasV2EvidenceAuthorshipTransition,
 } from "@/lib/canvas-v2/evidence-authorship";
-import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
+import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset, CanvasV2EvidencePacket } from "@/lib/canvas-v2/types";
 
 const FORBIDDEN_HTML = /<(?:script|iframe|object|embed|base|form|link|meta|video|audio)\b|\son[a-z]+\s*=|javascript\s*:/i;
 const FORBIDDEN_CSS = /@import|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|url\s*\(/i;
@@ -26,18 +27,24 @@ function inspectCanvasV2LocalImages(html: string): { structuralHtml: string; fai
   const failures: string[] = [];
   let totalBytes = 0;
   const structuralHtml = html.replace(/<img\b[^>]*>/gi, (tag) => {
-    if (!LOCAL_USER_IMAGE.test(tag) || !USER_ORIGIN.test(tag)) return tag;
+    const localUserImage = LOCAL_USER_IMAGE.test(tag) && USER_ORIGIN.test(tag);
+    // Evidence images are resolved from approved asset handles before this
+    // check. Pixel bytes are not markup regardless of who placed the object.
+    // Exact source approval is still enforced by validateCanvasV2EvidenceBindings.
+    const boundEvidenceImage = /\bdata-canvas-v2-evidence-id\s*=\s*["'][^"']+["']/i.test(tag);
+    if (!localUserImage && !boundEvidenceImage) return tag;
     const sourceMatch = IMAGE_SOURCE.exec(tag);
     const source = sourceMatch?.[2] ?? "";
     if (/^blob:[^\s"'<>]+$/i.test(source)) return tag;
     const dataUrl = LOCAL_IMAGE_DATA_URL.exec(source);
     if (!dataUrl) {
+      if (!localUserImage) return tag;
       failures.push("A local user image has an invalid source.");
       return tag;
     }
     const byteSize = decodedBase64Bytes(dataUrl[1]);
     totalBytes += byteSize;
-    if (byteSize < 1 || byteSize > CANVAS_V2_MAX_LOCAL_IMAGE_BYTES) failures.push("A local user image is too large.");
+    if (byteSize < 1 || byteSize > CANVAS_V2_MAX_LOCAL_IMAGE_BYTES) failures.push(localUserImage ? "A local user image is too large." : "An evidence image is too large.");
     // Inline pixels are durable artifact data, not executable or structural
     // markup. Count a fixed source sentinel toward the 180 KB HTML safety rail
     // while enforcing their decoded payload through a separate byte budget.
@@ -60,6 +67,13 @@ export function validateCanvasV2ArtifactDocument(
   if (FORBIDDEN_CSS.test(document.css)) failures.push("Artifact CSS contains a prohibited construct.");
   if (document.javascript?.trim()) failures.push("Canvas V2 Phase 2 does not execute model-authored JavaScript.");
   const nodeIds = Array.from(document.html.matchAll(/\bdata-canvas-v2-node-id\s*=\s*["']([^"']*)["']/gi), (match) => match[1]);
+  try {
+    readCanvasV2PlayableMedia(document.html);
+    for (const match of document.html.matchAll(/<[^>]+\bdata-canvas-v2-media\s*=[^>]*>/gi)) {
+      if (!/\bdata-canvas-v2-node-id\s*=\s*["'][^"']+["']/i.test(match[0])) failures.push("Every playable media object must have a unique stable node identity.");
+      if (!/^<div\b/i.test(match[0])) failures.push("Playable media must use an ordinary div object.");
+    }
+  } catch (error) { failures.push(error instanceof Error ? error.message : "Invalid playable media."); }
   const seen = new Set<string>();
   for (const nodeId of nodeIds) {
     if (!nodeId.trim()) failures.push("Stable node identities cannot be empty.");
@@ -78,6 +92,14 @@ export function validateCanvasV2EvidenceBindings(
 ): string[] {
   const failures: string[] = [];
   const approved = new Map(evidence.map((asset) => [asset.id, asset.url]));
+  try { for (const media of readCanvasV2PlayableMedia(document.html)) {
+    const asset = evidence.find(item => item.id === media.evidenceId);
+    // Inspected GIF pixels are retained as data for model/image placement;
+    // native playback uses only that same asset's registered source URL.
+    const inspectedGif = media.type === "gif" && asset?.mediaType === "gif" && asset.mimeType === "image/gif" && asset.originalUrl === media.src;
+    if (approved.get(media.evidenceId) !== media.src && !inspectedGif) failures.push(`Playable media binding is not approved: ${media.evidenceId}.`);
+  } }
+  catch (error) { failures.push(error instanceof Error ? error.message : "Invalid media."); }
   const images = document.html.matchAll(/<img\b([^>]*)>/gi);
   for (const image of images) {
     const attributes = image[1];
@@ -98,7 +120,7 @@ export function validateCanvasV2EvidenceBindings(
 
 /** Known sources can outlive their visible objects after a human removal. */
 export function canvasV2VisibleEvidenceIds(document: CanvasV2ArtifactDocument): Set<string> {
-  return new Set(Array.from(document.html.matchAll(/\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]));
+  return new Set([...Array.from(document.html.matchAll(/\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]), ...readCanvasV2PlayableMedia(document.html).map(media => media.evidenceId)]);
 }
 
 export function validateCanvasV2EvidenceContinuity(
@@ -344,11 +366,20 @@ export function validateCanvasV2QuantitativeClaimLabels(
   document: CanvasV2ArtifactDocument,
   evidence: readonly CanvasV2EvidenceAsset[],
   instruction: string,
+  packets: readonly CanvasV2EvidencePacket[] = [],
 ): string[] {
   const text = document.html.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ");
   const groundedText = [
     instruction,
     ...evidence.flatMap((asset) => [asset.label, asset.description, asset.screen, asset.flow].filter((value): value is string => Boolean(value))),
+    // The author receives retained research, not just image descriptions. Use
+    // that same authority here. Inferred figures still need visible qualification;
+    // a number's existence is not proof of its applicability to another claim.
+    ...packets.flatMap(packet => [
+      ...packet.facts.filter(fact => fact.authority !== "inferred").map(fact => fact.value),
+      ...packet.metrics.filter(metric => metric.authority !== "inferred").map(metric =>
+        `${metric.value}${metric.unit === "%" || metric.format === "percent" ? "%" : ""}`),
+    ]),
   ].join(" ");
   const groundedPercentages = new Set(Array.from(groundedText.matchAll(/\b\d+(?:\.\d+)?%/g), (match) => match[0]));
   const groundedFractions = new Set([

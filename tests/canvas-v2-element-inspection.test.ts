@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { normalizeCanvasV2NodeId } from "../lib/canvas-v2/element-inspection";
+import { normalizeCanvasV2NodeId, canvasV2ConnectorTargetAtPoint, type CanvasV2InspectableElement } from "../lib/canvas-v2/element-inspection";
 
 test("stable canvas node identities reject empty values without rewriting valid ids", () => {
   assert.equal(normalizeCanvasV2NodeId("  analysis-card  "), "analysis-card");
@@ -51,4 +51,18 @@ test("selection geometry feeds the single manual candidate pipeline", () => {
   assert.match(preview, /canvasV2NativeSelectionGuard/);
   assert.match(preview, /frameDocument\.getSelection\(\)\?\.removeAllRanges\(\)/);
   assert.match(preview, /item\.kind !== "root"/);
+});
+
+
+test("one continuous endpoint drag attaches inside, detaches immediately outside, and transfers to another object", () => {
+  const target = (nodeId: string, x: number): CanvasV2InspectableElement => ({ nodeId, kind: "shape", tagName: "div", bounds: { x, y: 100, width: 100, height: 100 }, locked: false, hidden: false, textEditable: false });
+  const a = target("a", 100), b = target("b", 300);
+  const island = { ...target("layout", 0), kind: "island" as const, bounds: { x: 0, y: 0, width: 1000, height: 1000 } };
+  const points = [{ x: 150, y: 150 }, { x: 199, y: 150 }, { x: 200.01, y: 150 }, { x: 299.99, y: 150 }, { x: 350, y: 150 }, { x: 401, y: 150 }, { x: 150, y: 150 }];
+  assert.deepEqual(points.map(point => canvasV2ConnectorTargetAtPoint([island, a, b], point)?.nodeId), ["a", "a", undefined, undefined, "b", undefined, "a"]);
+  assert.equal(canvasV2ConnectorTargetAtPoint([a, { ...b, bounds: a.bounds, zIndex: 2 }], { x: 150, y: 150 })?.nodeId, "b");
+  assert.equal(canvasV2ConnectorTargetAtPoint([{ ...a, hidden: true }], { x: 150, y: 150 }), undefined);
+  const rotated = { ...a, rotation: 45 };
+  assert.equal(canvasV2ConnectorTargetAtPoint([rotated], { x: 150, y: 150 })?.nodeId, "a");
+  assert.equal(canvasV2ConnectorTargetAtPoint([rotated], { x: 100, y: 100 }), undefined);
 });

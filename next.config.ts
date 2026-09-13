@@ -6,7 +6,9 @@ const developmentPort = process.env.NODE_ENV === "development"
   : undefined;
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Distinct research images can exceed the proxy's 10 MB default even after
+  // request-local deduplication. Match the bounded canvas wire contract.
+  experimental: { middlewareClientMaxBodySize: "64mb" },
   // Browser proof runs beside a developer's live Canvas session. Give the
   // isolated E2E server its own compiler state so it never contends for the
   // active `.next/dev/lock` or requires stopping the app under inspection.

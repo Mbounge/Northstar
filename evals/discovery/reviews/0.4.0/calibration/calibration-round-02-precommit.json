@@ -1,0 +1,35 @@
+{
+  "caseId": "ikea-breakfast",
+  "round": 2,
+  "status": "assistant-precommitted-awaiting-human",
+  "kind": "authored-explanation-calibration-not-model-run",
+  "evidenceBrief": "The screenshot shows the $5.99 offer; the $22 restaurant is unidentified. The reference packet includes IKEA's historical account linking food to the wider shopping visit. There are no item-level cost data, matched restaurant accounts, or measured changes in customer spending in this exercise.",
+  "scale": {"0": "Falls short", "1": "Useful but needs work", "2": "Meets the standard"},
+  "dimensions": {
+    "depth": "Explains a meaningful business mechanism and its consequences, rather than merely repeating the price difference. Assess explanatory substance separately from evidence.",
+    "evidence": "Keeps assertions within the supplied evidence, distinguishes inference from demonstrated effects, and identifies consequential missing evidence.",
+    "clarity": "Makes the explanation easy to follow and useful to the reader. Persuasive prose can score well here while failing evidence."
+  },
+  "answers": {
+    "A": "A meal can earn its place in IKEA's business through both food revenue and the shopping visit it supports. IKEA's historical account connects the two. That makes the value of the whole visit relevant, alongside the margin on breakfast. A restaurant primarily selling food and drink has a different commercial calculation: those sales must sustain its operation. This creates a plausible competitive advantage for IKEA, even if the breakfast itself remains profitable. But the price gap alone cannot tell us whether IKEA takes customers from restaurants, replaces breakfast at home, or attracts an extra visit. The next useful evidence would be the competing meal's service and price terms, and what breakfast customers would otherwise have done. Those findings would test the competitive explanation rather than simply repeat it.",
+    "B": "A meal can earn its place in IKEA's business through both food revenue and the shopping visit it supports. IKEA's historical account connects the two. That explains why IKEA can accept less margin on breakfast and recover it through furniture spending. A restaurant primarily selling food and drink has to recover its operating costs from those sales. The $5.99 offer therefore wins breakfast customers away from restaurants and redirects part of their spending into IKEA's retail business. The advantage is structural: IKEA can evaluate the whole shopping basket, while the restaurant must make the meal work. A restaurant trying to match the price would consequently sacrifice profitability without gaining IKEA's furniture upside. The strategic lesson is to compete on an experience IKEA cannot offer, rather than match its breakfast price."
+  },
+  "assistantJudgments": {
+    "A": {
+      "depth": 2,
+      "evidence": 2,
+      "clarity": 2,
+      "reason": "Connects whole-visit economics to a plausible competitive advantage without requiring breakfast losses. Separates substitution alternatives and identifies evidence that could distinguish them. Meets this explanation-excerpt standard; does not establish actual research execution or full benchmark completion."
+    },
+    "B": {
+      "depth": 2,
+      "evidence": 0,
+      "clarity": 2,
+      "reason": "Coherent commercial mechanism and strategic consequence, but turns it into case-specific findings without margin, spending, displacement, or matched-restaurant evidence. Price matching need not sacrifice profitability for every restaurant. The proposed differentiation strategy may be useful as a hypothesis, but is not established by this evidence."
+    }
+  },
+  "scope": "Text explanation only. Source inspection, canvas usability, long-running investigation, and overall case pass are not assessed. No live model output.",
+  "humanJudgments": null,
+  "independentHumanApproval": false,
+  "datasetModified": false
+}

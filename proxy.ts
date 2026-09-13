@@ -1,3 +1,4 @@
+import { canvasV2LocalCodexEvaluationAllowed } from '@/e2e/canvas-v2-deterministic-evaluation'
 //middleware.ts
 
 import { createServerClient } from '@supabase/ssr'
@@ -14,6 +15,7 @@ export async function proxy(request: NextRequest) {
     (request.nextUrl.pathname.startsWith("/__northstar-e2e") ||
       request.nextUrl.pathname.startsWith("/canvas-v2-e2e") ||
       request.nextUrl.pathname === "/canvas" ||
+      (request.nextUrl.pathname === "/api/canvas-v2/codex" && canvasV2LocalCodexEvaluationAllowed(request)) ||
       (canvasV2LocalEvaluationEnabled() && request.nextUrl.pathname.startsWith("/api/canvas-v2/")) ||
       request.nextUrl.pathname === "/api/canvas-ai/artifact-ack")
   ) {

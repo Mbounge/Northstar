@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CANVAS_V2_WORKSPACE,
   canvasV2FrameableSceneBounds,
+  canvasV2LatestCompositionBounds,
   canvasV2NavigationAtmosphere,
   canvasV2NormalizedWheelDelta,
   canvasV2ScreenToWorkspace,
@@ -158,8 +159,8 @@ test("trackpad pinch zoom is smooth, multiplicative, and bounded", () => {
   const zoomedOut = canvasV2TrackpadZoomScale(scale, 40);
   assert.ok(zoomedIn > scale);
   assert.ok(zoomedOut < scale);
-  assert.ok(zoomedIn / scale > 1.12);
-  assert.ok(zoomedOut / scale < 0.89);
+  assert.ok(zoomedIn / scale > 1.48);
+  assert.ok(zoomedOut / scale < 0.68);
   assert.ok(Math.abs((zoomedIn / scale) * (zoomedOut / scale) - 1) < 0.000_001);
   assert.equal(canvasV2TrackpadZoomScale(CANVAS_V2_WORKSPACE.maxScale, -100_000), CANVAS_V2_WORKSPACE.maxScale);
   assert.equal(canvasV2TrackpadZoomScale(CANVAS_V2_WORKSPACE.minScale, 100_000), CANVAS_V2_WORKSPACE.minScale);
@@ -230,4 +231,53 @@ test("a fresh 24% camera opens on the center of the large canvas", () => {
     { left: 0, top: 0, right: 0, bottom: 0 },
   );
   assert.deepEqual(legacyOffset, { x: 0, y: 0, scale: 0.24 });
+});
+
+
+test("pinch accumulation is independent of event frequency and returns to its starting scale", () => {
+  const start = 0.8;
+  const combined = canvasV2TrackpadZoomScale(start, -30);
+  let sampled = start;
+  for (let i=0;i<30;i++) sampled = canvasV2TrackpadZoomScale(sampled,-1);
+  assert.ok(Math.abs(sampled-combined)<1e-10);
+  assert.ok(Math.abs(canvasV2TrackpadZoomScale(combined,30)-start)<1e-10);
+});
+
+
+test('show latest frames the whole edited island after a one-line correction', () => {
+  const elements = [
+    {nodeId:'canvas',kind:'root',bounds:{x:0,y:0,width:12000,height:8000}},
+    {nodeId:'island',parentNodeId:'canvas',bounds:{x:1000,y:1000,width:2000,height:3000}},
+    {nodeId:'title',parentNodeId:'island',bounds:{x:1100,y:1100,width:1000,height:100}},
+    {nodeId:'line',parentNodeId:'island',bounds:{x:1100,y:2000,width:1000,height:80}},
+    {nodeId:'source',parentNodeId:'island',bounds:{x:1100,y:3000,width:1000,height:100}},
+    {nodeId:'unrelated',parentNodeId:'canvas',bounds:{x:10000,y:10000,width:1000,height:1000}},
+  ];
+  const bounds = canvasV2LatestCompositionBounds(elements,[{kind:'update',nodeId:'canvas'},{kind:'update',nodeId:'island',islandId:'island'},{kind:'update',nodeId:'line',islandId:'island'}]);
+  assert.deepEqual(bounds,{x:1100,y:1100,width:1000,height:2000});
+  assert.equal(canvasV2LatestCompositionBounds(elements,[{kind:'preserve',nodeId:'island'}]),undefined);
+});
+
+
+test('composition framing works when native selection projection omits layout wrappers', () => {
+  const elements = [
+    {nodeId:'title',bounds:{x:1000,y:1000,width:800,height:100}},
+    {nodeId:'copy',bounds:{x:1000,y:1200,width:800,height:100}},
+    {nodeId:'other-title',bounds:{x:1000,y:3000,width:800,height:100}},
+  ];
+  assert.deepEqual(canvasV2LatestCompositionBounds(elements,[
+    {kind:'update',nodeId:'canvas'}, {kind:'update',nodeId:'island',islandId:'island'},
+    {kind:'update',nodeId:'copy',islandId:'island'}, {kind:'preserve',nodeId:'title',islandId:'island'},
+    {kind:'preserve',nodeId:'other-title',islandId:'other'},
+  ]),{x:1000,y:1000,width:800,height:300});
+});
+
+
+test('an explicit local edit focus takes precedence over broad source wrapper changes', () => {
+  const nodes = [
+    {nodeId:'title',bounds:{x:1000,y:1000,width:800,height:100}},
+    {nodeId:'other-title',bounds:{x:1000,y:3000,width:800,height:100}},
+  ];
+  const mutations = [{kind:'update',nodeId:'title',islandId:'first'},{kind:'update',nodeId:'other-title',islandId:'other'}];
+  assert.deepEqual(canvasV2LatestCompositionBounds(nodes,mutations,'first'),nodes[0].bounds);
 });

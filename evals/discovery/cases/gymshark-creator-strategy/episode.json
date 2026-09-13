@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "caseId": "gymshark-creator-strategy",
+  "checkpoints": [
+    {
+      "id": "initial",
+      "description": "Public creative and strategy analysis"
+    },
+    {
+      "id": "updated",
+      "description": "Source conflict reconciled"
+    },
+    {
+      "id": "annotated",
+      "description": "Human goal retained"
+    },
+    {
+      "id": "measured",
+      "description": "Pilot compared with correct scope"
+    },
+    {
+      "id": "decided",
+      "description": "Next experiment chosen"
+    }
+  ],
+  "events": [
+    {
+      "id": "app-update",
+      "after": [
+        "initial"
+      ],
+      "kind": "evidence-update",
+      "delivery": "message",
+      "payload": "Check the opening app-availability notice here: https://www.gymshark.com/blog/article/what-is-the-gymshark-66-challenge . Does it change the funnel you described? Preserve any reasoning that still holds.",
+      "checkpoint": "updated",
+      "instructions": "No need to pretend the source is novel if already found."
+    },
+    {
+      "id": "signup-goal",
+      "after": [
+        "initial"
+      ],
+      "kind": "human-edit",
+      "delivery": "operator",
+      "payload": "Team decision: optimize for verified signups, not views.",
+      "checkpoint": "annotated",
+      "instructions": "Add a separate native note; capture identity, wording and geometry."
+    },
+    {
+      "id": "pilot",
+      "after": [
+        "updated",
+        "annotated"
+      ],
+      "kind": "evidence-update",
+      "delivery": "message",
+      "payload": "Our hypothetical pilot results are attached. Compare the arms and tell us what we can and cannot conclude. Keep the existing strategy and my goal visible.",
+      "checkpoint": "measured",
+      "instructions": "These are labelled synthetic team observations, never actual Gymshark results.",
+      "assets": [
+        {
+          "path": "cases/gymshark-creator-strategy/events/pilot/pilot.csv",
+          "sha256": "2d88310bba38a0a106ffa6b44bd4a83776315a1cf7c9ac080cb6591c89d62cc0"
+        },
+        {
+          "path": "cases/gymshark-creator-strategy/events/pilot/measurement-note.md",
+          "sha256": "9b30db16443924a934bcbc0d4cf63ba9a00f4cb366e35567a4155c7c5ab19aa9"
+        }
+      ]
+    },
+    {
+      "id": "budget-change",
+      "after": [
+        "measured"
+      ],
+      "kind": "user-message",
+      "delivery": "message",
+      "payload": "We can now support only two creators. What should we test next, and what evidence would make us change that choice? Do not launch anything.",
+      "checkpoint": "decided",
+      "instructions": "Evaluate adaptation to the new constraint; no ad publishing or messaging is authorized."
+    }
+  ]
+}

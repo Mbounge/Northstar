@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   applyCanvasV2DiscoveryTransition,
+  buildCanvasV2SensemakingPresentationBrief,
   assessCanvasV2DiscoveryCompletion,
   completeCanvasV2DiscoveryState,
   createCanvasV2DiscoveryState,
@@ -124,7 +125,7 @@ test("inquiry interpretation keeps direct creation evidence-free and avoids cere
   }, "fallback");
   const state = createCanvasV2DiscoveryState({ interpretation: parsed, now: NOW });
   assert.deepEqual(parsed.materialUnknowns, []);
-  assert.deepEqual(state.completion.materialOpenRequirements, []);
+  assert.deepEqual(state.completion.materialOpenRequirements, parsed.completionCriteria);
   const first = directCanvasV2CreationTransition(state);
   assert.equal(first.move.kind, "compose");
   assert.equal(canvasV2DiscoveryMoveNeedsRetrieval(first.move), false);
@@ -454,7 +455,7 @@ test("visual evidence handles share the exact discovery reference namespace", ()
   assert.deepEqual(evolved.statements.at(-1)?.evidenceNodeIds, [assetNode.id]);
 });
 
-test("unsupported causal triangulation becomes an honest boundary without a provider retry", () => {
+test("a qualified explanatory hypothesis survives state application without being rewritten by causal keywords", () => {
   const state = createCanvasV2DiscoveryState({ interpretation: interpretation(), now: NOW });
   const firstPacket = packet("awin-current", "retention up");
   const secondPacket = packet("whop-current", "retention flat");
@@ -478,7 +479,8 @@ test("unsupported causal triangulation becomes an honest boundary without a prov
       id: "triangulation:unsupported-cause",
       question: "Why do the signals differ?",
       relationship: "convergent",
-      synthesis: "The onboarding sequence drives the difference.",
+      kind: "hypothesis",
+      synthesis: "The onboarding sequence could drive the difference by reducing setup friction; the snapshots do not measure that effect.",
       evidenceNodeIds: packetIds,
       confidence: "high",
       limitations: [],
@@ -494,9 +496,18 @@ test("unsupported causal triangulation becomes an honest boundary without a prov
     now: NOW,
   });
   const triangulation = evolved.sensemaking!.triangulations.at(-1)!;
-  assert.equal(triangulation.relationship, "insufficient");
-  assert.equal(triangulation.confidence, "unknown");
-  assert.match(triangulation.synthesis, /cannot determine why/);
+  assert.equal(triangulation.relationship, "convergent");
+  assert.equal(triangulation.kind, "hypothesis");
+  assert.equal(triangulation.synthesis, proposed.sensemaking!.triangulations[0].synthesis);
+  assert.equal(buildCanvasV2SensemakingPresentationBrief(evolved)?.evidenceRelationships.at(-1)?.kind, "hypothesis");
+  const first = revision.discoveryGraph!.nodes.find(node => node.id === packetIds[0])!;
+  const sameSource = revision.discoveryGraph!.nodes.filter(node => node.sourceId === first.sourceId).slice(0, 2).map(node => node.id);
+  assert.equal(sameSource.length, 2);
+  const repeated = structuredClone(proposed);
+  repeated.sensemaking!.triangulations[0].evidenceNodeIds = sameSource;
+  const bounded = applyCanvasV2DiscoveryTransition({ state: revision.discoveryState!, transition: repeated, graph: revision.discoveryGraph, now: NOW });
+  assert.equal(bounded.sensemaking!.triangulations.at(-1)!.relationship, "insufficient");
+  assert.equal(bounded.sensemaking!.triangulations.at(-1)!.synthesis, proposed.sensemaking!.triangulations[0].synthesis);
 });
 
 test("packet-backed visible flow containers retain inherited discovery lineage", () => {
@@ -779,6 +790,11 @@ test("a validation plan normalizes contradictory completion metadata without a p
   assert.equal(parsed.move.kind, "design-validation");
   assert.equal(parsed.completion.readiness, "not-ready");
   assert.deepEqual(parsed.completion.materialOpenRequirements, ["Human validation findings are still required."]);
+  const chatPlan = parseCanvasV2DiscoveryTransition({ ...proposed, move: { ...proposed.move, visibleAction: "none" } }, state, "chat");
+  assert.equal(chatPlan.move.visibleAction, "none");
+  assert.equal(chatPlan.move.kind, "design-validation");
+  assert.equal(chatPlan.completion.readiness, "not-ready");
+
 });
 
 test("a later conclusion retains already-satisfied exact completion criteria", () => {
@@ -808,7 +824,7 @@ test("production orchestration keeps discovery direction distinct from visual au
   const designRoute = readFileSync("app/api/canvas-v2/design/route.ts", "utf8");
   const router = readFileSync("app/api/canvas-v2/route/route.ts", "utf8");
   const panel = readFileSync("components/canvas-v2/canvas-v2-chat-panel.tsx", "utf8");
-  assert.match(router, /For every mutating route, also interpret the inquiry before execution/);
+  assert.match(router, /parseCanvasV2InteractionDecision/);
   assert.match(designRoute, /attemptRole: "discovery-director"/);
   assert.match(designRoute, /attemptRole: "visual-director"/);
   assert.match(designRoute, /attemptRole: "source-author"/);

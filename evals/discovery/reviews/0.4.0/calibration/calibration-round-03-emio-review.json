@@ -1,0 +1,54 @@
+{
+  "caseId": "emio-launch-clues",
+  "round": 3,
+  "status": "initial-qualitative-feedback-recorded-later-stage-pending",
+  "precommitFile": "calibration-round-03-emio-precommit.json",
+  "humanFeedbackVerbatim": "For A - you see i'm not too familiar with this game -- but I would say it sounds good -- at this point we don't know whether this is a IP revival or a new IP horror themed game introduced  -- so the approach makes total sense for investigation to happen, looking only at NintendoSoup and Gematsu may be good -- but I find that there could also be independent leakers, journalists (I often think of someone like **Jason Schreier, although might not be a specialist in this industry, but you get what i mean), there also anon cracked people in forums like reddit, discussions online, X/twitter, gaming podcast discussions, twitch streams - like we live in a infomation rich world than ever before for gathering data -- i'm not saying NintendoSoup and Gematsu arent good sources - i'm just saying there may be people who have reputable leaks/info on whats happening boots on the ground - i do like answer A but be open building the investigative muscle to uncovering the mystery objectively -- for B the approach seems good too --- the character being teased is like going to play a very important role in the entire game - from all of nintendos games to date -- is there any similar looking character - if so that will be huge to uncovering this -- theres also underlying things we can likely learn or even try to predict about the potential story of the game that will interest buyers - like how many horror games does nintendo have - whats the angle here -- which player base from their fanbase are they trying to cater to and grow a potentially new player base along side it -- because all of this can lead to back to business motivations afterall",
+  "humanFeedbackNote": "Transport HTML space entities normalized; substantive wording retained.",
+  "humanNumericScores": null,
+  "humanQualitativeJudgments": {
+    "A": "Sounds good as an investigation direction, but user explicitly keeps revival and new IP open and calls for broader, objective investigation.",
+    "B": "Approach seems good; expand into character comparisons, story hypotheses, audience and business motivations."
+  },
+  "assistantAssessment": {
+    "agreement": "Source leads should seed discovery, not define its ceiling. Reward resourceful investigation that produces consequential evidence across relevant channels and returns to earlier hypotheses.",
+    "remainingDisagreement": "A's claim that two reports of the same teaser reinforce a franchise interpretation remains unsupported. User's positive view of the investigative direction does not establish independent provenance or a justified initial ranking.",
+    "benchmarkGap": "The current authored excerpt exercise chiefly tests handling supplied evidence. It cannot demonstrate actual independent discovery, media analysis execution, search breadth or tool competence. Initial B scores remain preserved under their original scope, not promoted into comprehensive discovery excellence.",
+    "interpretationBoundaries": "Character prominence, story, intended audience and business motives are questions or hypotheses to investigate, not facts inferred solely from teaser prominence. Do not require a particular franchise, journalist or platform, or assume named sources have relevant information."
+  },
+  "proposedCriteria": [
+    {
+      "name": "Adaptive source discovery",
+      "success": "Seek sources likely to distinguish live hypotheses beyond the initial leads; follow productive references and document negative or inaccessible leads when consequential.",
+      "avoid": "Counting platforms, queries or tool calls as quality; demanding every listed channel."
+    },
+    {
+      "name": "Claim-level provenance",
+      "success": "Trace a specific claim to its earliest accessible source, date, firsthand basis and corroboration; distinguish independent information from repeated speculation regardless of source fame or anonymity.",
+      "avoid": "Treating popularity, anonymity, reputation or repeated reporting as sufficient proof."
+    },
+    {
+      "name": "Discriminating visual comparison",
+      "success": "Compare identifiable details in inspected frames with dated candidate references, include mismatches and plausible counterexamples, and show why a resemblance does or does not distinguish candidates.",
+      "avoid": "Treating generic horror imagery or a similar silhouette as franchise identification, or claiming footage was inspected when only a thumbnail was available."
+    },
+    {
+      "name": "Relevant strategic synthesis",
+      "success": "When useful to the user's question, connect sourced catalog, audience and positioning evidence to clearly labeled story or commercial hypotheses, with alternatives and evidence that could change the interpretation.",
+      "avoid": "Mandatory business speculation on every task, invented buyer data, or presenting inferred corporate intent as an announcement."
+    },
+    {
+      "name": "Productive nonlinear continuation",
+      "success": "A new clue can reopen or redirect a branch; revisions preserve human notes and prior uncertainty. Pause when marginal evidence is weak and resume when a specified informative source becomes available.",
+      "avoid": "Endless search, forced guesses, or rewriting earlier hypotheses as established facts."
+    }
+  ],
+  "benchmarkDesignFollowup": {
+    "historicalCase": "Do not claim independent historical discovery from unrestricted current web search: later reveal contamination and model memory remain known limitations. A broader historical retrieval corpus would need date-eligible documents, provenance, distractors and legitimate alternate investigation paths.",
+    "generalization": "Pair historical reasoning calibration with a contemporary open investigation for actual source-finding assessment. Do not silently replace or expand the frozen case during comparison.",
+    "canvasAssessment": "Later browser evaluation should show inspected media, specific comparison details, attributed claims and revisable hypotheses as individual native objects. Explanatory text alone cannot establish this."
+  },
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

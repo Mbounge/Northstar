@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildCanvasV2ConnectorGeometry,
+  canvasV2ConnectorRouteRetraces,
   canvasV2ConnectorBendFromPoint,
   canvasV2ConnectorBoundaryAnchor,
 } from "../lib/canvas-v2/connector-geometry";
@@ -60,4 +61,22 @@ test("each bent segment can move while endpoints remain fixed and the path remai
     assert.notEqual(changed.path, initial.path);
     changed.routePoints.slice(1).forEach((point,i) => assert.ok(point.x === changed.routePoints[i].x || point.y === changed.routePoints[i].y));
   }
+});
+
+test("a native waypoint route ignores an unused control from another coordinate space", () => {
+  const geometry = buildCanvasV2ConnectorGeometry({
+    start: { x: 66500, y: 66000 }, end: { x: 68000, y: 66300 }, variant: "bent",
+    control: { x: 620, y: 720 }, waypoints: [{ x: 66600, y: 66200 }, { x: 67900, y: 66200 }],
+  });
+  assert.equal(geometry.bounds.width, 1532);
+  assert.equal(geometry.bounds.height, 332);
+  assert.ok(geometry.localStart.x >= 0 && geometry.localStart.x <= geometry.bounds.width);
+  assert.ok(geometry.localEnd.y >= 0 && geometry.localEnd.y <= geometry.bounds.height);
+});
+
+
+test("a bent relationship with a reversed segment is distinguishable from a clear elbow", () => {
+  assert.equal(canvasV2ConnectorRouteRetraces([{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }]), true);
+  assert.equal(canvasV2ConnectorRouteRetraces([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 200, y: 100 }]), false);
+  assert.equal(canvasV2ConnectorRouteRetraces([{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 100, y: 0 }]), false);
 });

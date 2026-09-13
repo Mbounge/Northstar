@@ -438,6 +438,15 @@ test("authored island copy remains readable at whole-board canvas scale", () => 
   assert.match(typeFloorRepair.css, /canvas-v2-type-floor:analysis-copy:28[\s\S]*font-size: 28px !important/);
   assert.match(typeFloorRepair.css, /canvas-v2-type-floor:analysis-status:24[\s\S]*font-size: 24px !important/);
   assert.equal(repairCanvasV2RenderedDesignRegionTypeFloors(typeFloorRepair, rendered), typeFloorRepair);
+  const overridden = { ...typeFloorRepair, css: typeFloorRepair.css + '\n[data-canvas-v2-node-id="analysis-copy"] { font-size: 4px !important; }' };
+  const recovered = repairCanvasV2RenderedDesignRegionTypeFloors(overridden, rendered, new Set(['analysis-copy']));
+  assert.ok(recovered.css.lastIndexOf('font-size: 28px !important') > recovered.css.lastIndexOf('font-size: 4px !important'));
+  assert.equal(recovered.css.split('canvas-v2-type-floor:analysis-copy:28').length, 2);
+  assert.equal(repairCanvasV2RenderedDesignRegionTypeFloors(recovered, rendered, new Set(['analysis-copy'])), recovered);
+  const scopedRepair = repairCanvasV2RenderedDesignRegionTypeFloors({ html: '<section data-canvas-v2-node-id="analysis"></section>', css: '' }, rendered, new Set(['analysis-copy']));
+  assert.match(scopedRepair.css, /canvas-v2-type-floor:analysis-copy:28/);
+  assert.doesNotMatch(scopedRepair.css, /analysis-heading|analysis-status|analysis-default-copy/);
+  assert.equal(repairCanvasV2RenderedDesignRegionTypeFloors(typeFloorRepair, rendered, new Set()), typeFloorRepair);
   rendered.spatial.nodes = rendered.spatial.nodes.map((node) => ({
     ...node,
     layout: {
@@ -1227,4 +1236,46 @@ test("human evidence removal remains valid across subsequent manual and model do
   const empty = { html: "<main></main>", css: "" };
   assert.deepEqual(validateCanvasV2EvidenceContinuity(canonical, empty, evidence, { allowUserEvidenceRemoval: true }), []);
   assert.deepEqual(validateCanvasV2EvidenceContinuity(empty, { html: "<main>A new idea</main>", css: "" }, evidence), []);
+});
+
+
+test("native interior attachments are valid, retraced AI routes are rejected, and human routes stay under human control", () => {
+  const rendered = observation();
+  rendered.spatial.authoredRelationships = [{ nodeId: "native-link", tagName: "svg", nativeConnector: true, targetAttachmentExplicit: true, sourceNodeIds: ["a"], targetNodeIds: ["b"], bounds: { x: 0, y: 0, width: 500, height: 100 }, targetAnchorInteriorDepth: 60, targetAnchorTolerance: 18, sourceAnchorDistance: 0, targetAnchorDistance: 0 }];
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+  assert.deepEqual(invalidCanvasV2RenderedRelationshipNodeIds(rendered), []);
+  rendered.spatial.authoredRelationships[0].routeRetraces = true;
+  assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(' '), /doubles back/);
+  assert.deepEqual(invalidCanvasV2RenderedRelationshipNodeIds(rendered), ["native-link"]);
+  rendered.spatial.authoredRelationships[0].userAuthored = true;
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+  assert.deepEqual(invalidCanvasV2RenderedRelationshipNodeIds(rendered), []);
+});
+
+
+test('independent compositions have separate title order but still cannot overlap', () => {
+  const rendered = observation();
+  const region = (nodeId: string, x: number, y: number, narrativeId: string) => ({nodeId,narrativeId,storyRole:'title' as const,bounds:{x,y,width:1000,height:400},canvasWidthShare:.1,canvasHeightShare:.05,canvasAreaShare:.005,centerXShare:.2,centerYShare:.2,edgeSpace:{left:1000,top:1000,right:1000,bottom:1000},contentOverflowX:0,contentOverflowY:0,clipsOverflow:false});
+  rendered.spatial.evidence = [];
+  rendered.spatial.authoredSurface = undefined;
+  rendered.spatial.designRegions = [region('original',1000,2000,'first'),region('independent',5000,1000,'second')];
+  assert.deepEqual(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered),[]);
+  rendered.spatial.designRegions[1].narrativeId = 'first';
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(' '),/at most one title/);
+  rendered.spatial.designRegions[1] = region('independent',1000,2000,'second');
+  assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(' '),/materially overlap/);
+});
+
+test('collapsed native arrows report the missing layout corridor without restricting composition size', () => {
+  const rendered = observation();
+  rendered.spatial.authoredRelationships = [{ nodeId: 'collapsed', tagName: 'svg', nativeConnector: true, sourceNodeIds: ['a'], targetNodeIds: ['b'], bounds: { x: 0, y: 0, width: 32, height: 32 }, geometrySpan: 0 }];
+  assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(' '), /gap or padding/);
+  rendered.spatial.authoredRelationships[0].geometrySpan = 80;
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+  rendered.spatial.authoredRelationships[0].geometrySpan = 0;
+  rendered.spatial.authoredRelationships[0].bounds.height = 300; // A deliberate curved loop has visible geometry.
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+  rendered.spatial.authoredRelationships[0].bounds.height = 32;
+  rendered.spatial.authoredRelationships[0].userAuthored = true;
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
 });

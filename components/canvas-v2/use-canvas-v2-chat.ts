@@ -1,5 +1,8 @@
 "use client";
 
+import { canvasV2IsStatusQuestion, canvasV2SteeredInstruction, type CanvasV2LiveInput } from "@/lib/canvas-v2/live-input";
+import { mergeCanvasV2Activity, type CanvasV2Activity } from "@/lib/canvas-v2/tool-activity";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { canvasV2ChatStatusForLoop, type CanvasV2ChatStatus } from "@/lib/canvas-v2/chat-lifecycle";
@@ -12,7 +15,7 @@ import {
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import {
   canvasV2AuthoritativeCanvasInstruction,
-  canvasV2RouteMutatesCanvas,
+  canvasV2RouteUsesDiscovery,
   type CanvasV2InteractionDecision,
   type CanvasV2InteractionRoute,
   type CanvasV2ResearchMode,
@@ -43,6 +46,9 @@ import type { CanvasV2GatewayHandoff } from "@/lib/canvas-v2/gateway-handoff";
 
 export interface CanvasV2ChatTurn {
   id: string;
+  activity?: CanvasV2Activity[];
+  feedbackFor?: string;
+  feedbackState?: "queued" | "accepted" | "incorporated" | "cancelled";
   message: string;
   attachments?: CanvasV2ChatAttachment[];
   createdAt: string;
@@ -69,7 +75,8 @@ interface DesignEngine {
   loop?: CanvasV2LoopState;
   running: boolean;
   applyingManualEdit: boolean;
-  start: (instruction: string, observation?: CanvasV2RenderObservation, continuation?: CanvasV2LoopContinuation, researchTargets?: string[], researchMode?: CanvasV2ResearchMode, modelSelection?: CanvasV2ModelSelection, workingContext?: CanvasV2WorkingContext, discoveryState?: CanvasV2DiscoveryState, initialProviderUsage?: CanvasV2ProviderUsage, attachments?: CanvasV2ChatAttachment[], routerProviderAttempts?: CanvasV2ProviderAttemptAudit[]) => string | undefined;
+  start: (instruction: string, observation?: CanvasV2RenderObservation, continuation?: CanvasV2LoopContinuation, researchTargets?: string[], researchMode?: CanvasV2ResearchMode, modelSelection?: CanvasV2ModelSelection, workingContext?: CanvasV2WorkingContext, discoveryState?: CanvasV2DiscoveryState, initialProviderUsage?: CanvasV2ProviderUsage, attachments?: CanvasV2ChatAttachment[], routerProviderAttempts?: CanvasV2ProviderAttemptAudit[], deliveryMode?: "chat" | "canvas") => string | undefined;
+  steer: (input: CanvasV2LiveInput) => boolean;
   stop: () => void;
 }
 
@@ -93,6 +100,7 @@ export function useCanvasV2Chat(input: {
   const activeRoutingTurnId = useRef<string | undefined>(undefined);
   const activeDesignTurnId = useRef<string | undefined>(undefined);
   const routingSequence = useRef(0);
+  const routingFeedback = useRef<CanvasV2LiveInput[]>([]);
   const controller = useRef<{ sequence: number; turnId: string; abortController: AbortController } | undefined>(undefined);
   const submittedGatewayHandoffId = useRef<string | undefined>(undefined);
   const gatewaySubmit = useRef<(message: string) => void>(() => undefined);
@@ -106,7 +114,7 @@ export function useCanvasV2Chat(input: {
     if (!loop || !turnId) return;
     setTurns((current) => current.map((turn) => turn.id === turnId && turn.runId === loop.id
       ? { ...turn, loop, status: canvasV2ChatStatusForLoop(loop), error: loop.error }
-      : turn));
+      : loop.incorporatedInputIds?.includes(turn.id) ? { ...turn, feedbackState: "incorporated" } : turn));
     if (canvasV2ChatStatusForLoop(loop) !== "running") activeDesignTurnId.current = undefined;
   }, [input.engine.loop]);
 
@@ -123,9 +131,24 @@ export function useCanvasV2Chat(input: {
   const submit = async (messageOverride?: string) => {
     const requestedMessage = typeof messageOverride === "string" ? messageOverride : draft;
     const message = requestedMessage.trim() || (attachments.length ? "Review the attached supplied evidence." : "");
-    if (!message || routing || input.engine.applyingManualEdit) return;
-    if (busy) stop();
-    const submittedAttachments = attachments;
+    if (!message || input.engine.applyingManualEdit) return;
+    const feedbackId = id();
+    const feedback: CanvasV2LiveInput = { id: feedbackId, message, attachments, workingContext: input.getWorkingContext?.("none") };
+    const parent = activeRoutingTurnId.current ?? activeDesignTurnId.current;
+    if (parent && canvasV2IsStatusQuestion(message) && !attachments.length) {
+      const latest = input.engine.loop?.activity?.at(-1);
+      setTurns(current => [...current, { id: feedbackId, message, createdAt: new Date().toISOString(), status: "responded", answer: latest ? `${latest.label}${latest.status === "completed" ? " finished" : " is in progress"}. ${input.engine.loop?.discoveryProgress?.detail ?? "The investigation is continuing."}` : "Your request is active. I’m preparing the next step; your original task is continuing." }]);
+      setDraft("");
+      return;
+    }
+    if (activeRoutingTurnId.current || input.engine.steer(feedback)) {
+      if (activeRoutingTurnId.current) routingFeedback.current.push(feedback);
+      setTurns(current => [...current, { id: feedbackId, message, attachments, createdAt: new Date().toISOString(), status: "responded", feedbackFor: parent, feedbackState: "accepted" }]);
+      setDraft(""); setAttachments([]); setAttachmentError(undefined);
+      return;
+    }
+    let submittedAttachments = attachments;
+    let effectiveMessage = message;
     const turnId = id();
     const sequence = routingSequence.current + 1;
     routingSequence.current = sequence;
@@ -138,13 +161,22 @@ export function useCanvasV2Chat(input: {
     const abort = new AbortController();
     controller.current = { sequence, turnId, abortController: abort };
     try {
-      const payload = await requestCanvasV2Json<{ decision?: CanvasV2InteractionDecision; providerAttempts?: CanvasV2ProviderAttemptAudit[]; error?: string }>({
+      let payload: { decision?: CanvasV2InteractionDecision; providerAttempts?: CanvasV2ProviderAttemptAudit[]; error?: string };
+      const routingAttempts: CanvasV2ProviderAttemptAudit[] = [];
+      do {
+      const pending = routingFeedback.current.splice(0);
+      if (pending.length) {
+        effectiveMessage = canvasV2SteeredInstruction(effectiveMessage, pending);
+        submittedAttachments = [...submittedAttachments, ...pending.flatMap(item => item.attachments ?? [])];
+        setTurns(current => current.map(item => pending.some(entry => entry.id === item.id) ? { ...item, feedbackState: "incorporated" } : item));
+      }
+      payload = await requestCanvasV2Json<{ decision?: CanvasV2InteractionDecision; providerAttempts?: CanvasV2ProviderAttemptAudit[]; error?: string }>({
         endpoint: input.endpoint,
         signal: abort.signal,
         requestId: turnId,
         policy: CANVAS_V2_ROUTING_REQUEST_POLICY,
         body: {
-          message,
+          message: effectiveMessage,
           revision: input.engine.committed,
           observation: input.engine.displayedObservation,
           selection: input.selection,
@@ -155,15 +187,22 @@ export function useCanvasV2Chat(input: {
           discoveryState: latestDiscoveryState,
           attachments: submittedAttachments,
         },
+        onActivity: (event) => {
+          if (routingSequence.current !== sequence || activeRoutingTurnId.current !== turnId) return;
+          setTurns(current => current.map(item => item.id === turnId ? { ...item, activity: mergeCanvasV2Activity(item.activity ?? [], event) } : item));
+        },
         onRetry: (retry) => {
           if (routingSequence.current !== sequence || activeRoutingTurnId.current !== turnId) return;
           setTurns((current) => current.map((item) => item.id === turnId ? { ...item, retry } : item));
         },
       });
+      routingAttempts.push(...(payload.providerAttempts ?? []));
       if (abort.signal.aborted || routingSequence.current !== sequence || activeRoutingTurnId.current !== turnId) return;
+      } while (routingFeedback.current.length);
+      payload.providerAttempts = routingAttempts;
       if (!payload.decision) throw new Error(payload.error || "North Star could not route that message.");
       const decision = payload.decision;
-      if (!canvasV2RouteMutatesCanvas(decision.route)) {
+      if (!canvasV2RouteUsesDiscovery(decision.route)) {
         activeRoutingTurnId.current = undefined;
         setTurns((current) => current.map((item) => item.id === turnId ? {
           ...item,
@@ -177,15 +216,15 @@ export function useCanvasV2Chat(input: {
         return;
       }
       if (!decision.canvasInstruction) throw new Error("North Star returned no canvas instruction.");
-      const canvasInstruction = canvasV2AuthoritativeCanvasInstruction(message, decision.canvasInstruction);
+      const canvasInstruction = canvasV2AuthoritativeCanvasInstruction(effectiveMessage, decision.canvasInstruction);
       const workingContext = input.getWorkingContext?.(decision.selectionPolicy ?? "none");
-      const previousLoop = [...turns].reverse().find((item) => item.loop?.compositionState)?.loop;
+      const previousLoop = [...turns].reverse().find((item) => item.loop)?.loop;
       const newTurnContinuation = canvasV2NewTurnContinuation(previousLoop, {
         modelSelection,
         workingContext,
         discoveryState: decision.discoveryState ?? latestDiscoveryState,
       });
-      const runId = input.engine.start(canvasInstruction, input.engine.displayedObservation, newTurnContinuation, decision.researchTargets, decision.researchMode, modelSelection, workingContext, decision.discoveryState ?? latestDiscoveryState, canvasV2ProviderUsageFromAttempts(payload.providerAttempts), submittedAttachments, payload.providerAttempts);
+      const runId = input.engine.start(canvasInstruction, input.engine.displayedObservation, newTurnContinuation, decision.researchTargets, decision.researchMode, modelSelection, workingContext, decision.discoveryState ?? latestDiscoveryState, canvasV2ProviderUsageFromAttempts(payload.providerAttempts), submittedAttachments, payload.providerAttempts, decision.route === "research-conversation" ? "chat" : "canvas");
       if (!runId) throw new Error("The canvas is not ready to begin another design run.");
       activeRoutingTurnId.current = undefined;
       activeDesignTurnId.current = turnId;
@@ -229,7 +268,7 @@ export function useCanvasV2Chat(input: {
   }, [busy, input.engine.ready, input.gatewayHandoff]);
 
   const addAttachments = (next: readonly CanvasV2ChatAttachment[]) => {
-    if (!next.length || busy) return;
+    if (!next.length) return;
     const accepted = [...attachments];
     let imageBytes = accepted.reduce((sum, attachment) => sum + (attachment.kind === "image" ? attachment.byteSize : 0), 0);
     let textCharacters = accepted.reduce((sum, attachment) => sum + (attachment.kind === "text" ? attachment.charCount : 0), 0);
@@ -262,12 +301,13 @@ export function useCanvasV2Chat(input: {
   };
 
   const removeAttachment = (attachmentId: string) => {
-    if (busy) return;
     setAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
     setAttachmentError(undefined);
   };
 
   const stop = () => {
+    const pendingIds = new Set(routingFeedback.current.splice(0).map(item => item.id));
+    setTurns(current => current.map(item => pendingIds.has(item.id) || item.feedbackState === "accepted" ? { ...item, feedbackState: "cancelled" } : item));
     routingSequence.current += 1;
     controller.current?.abortController.abort();
     controller.current = undefined;
@@ -292,6 +332,9 @@ export function useCanvasV2Chat(input: {
       : priorWorkingContext;
     const continuation: CanvasV2LoopContinuation = {
       previousRunId: turn.loop.id,
+      deliveryMode: turn.loop.deliveryMode,
+      retainedReadPackets: turn.loop.retainedReadPackets,
+      readReceipts: turn.loop.readReceipts,
       historyTransactionId: turn.loop.historyTransactionId,
       priorSteps: [...(turn.loop.priorSteps ?? []), ...turn.loop.steps],
       creativeDirection: turn.loop.creativeDirection,
@@ -322,5 +365,5 @@ export function useCanvasV2Chat(input: {
     } : candidate));
   };
 
-  return { draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
+  return { runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
 }

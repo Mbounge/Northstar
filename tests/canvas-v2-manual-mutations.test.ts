@@ -61,7 +61,7 @@ test("direct canvas image ingestion accepts clipboard and multi-file drops as du
   assert.match(workspace, /type="file" multiple accept="image\/png,image\/jpeg,image\/webp"/);
   assert.match(workspace, /src: image\.dataUrl/);
   assert.match(workspace, /kind: "batch", label: `Added \$\{images\.length\} image/);
-  assert.doesNotMatch(workspace, /URL\.createObjectURL/);
+  assert.doesNotMatch(workspace.slice(workspace.indexOf("const addPreparedCanvasImages"), workspace.indexOf("const addPlayableMedia")), /URL\.createObjectURL/);
   assert.match(canvasPreparation, /Promise\.all\(\[\.\.\.files\]\.map\(prepareCanvasV2ImageFile\)\)/);
   assert.doesNotMatch(canvasPreparation.split("export function prepareCanvasV2PastedText")[0], /slice\(/);
 });

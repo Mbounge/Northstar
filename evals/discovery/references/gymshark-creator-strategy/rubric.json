@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "caseId": "gymshark-creator-strategy",
+  "criteria": [
+    {
+      "id": "campaign-mechanism",
+      "checkpoint": "initial",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Explain how participation incentives and repeated contributions could create value for the brand, creator or viewer, tied to inspected campaign or creative evidence. Connect a concrete choice to a plausible business mechanism; listing channels or calling content authentic is insufficient. Assess measured-effects claims separately from the presence of useful reasoning.",
+      "evidenceIds": [
+        "athlete-program",
+        "competition-terms"
+      ],
+      "acceptableAlternatives": "Accept different supported readings of aspiration, attention, product understanding or community. No required value-exchange diagram, paid-ad theory or proven acquisition result."
+    },
+    {
+      "id": "distribution-boundary",
+      "checkpoint": "initial",
+      "dimension": "uncertainty",
+      "required": true,
+      "instruction": "Separate promotional function, brand-owned material, participant content and confirmed paid distribution. Attribute the not-sponsored disclosure to this upload. It does not establish zero cost, no other brand relationship, paid amplification, purchases or retention. Unknown spend/targeting/ROAS remain unknown without making a useful marketing explanation impossible.",
+      "evidenceIds": [
+        "athlete-program",
+        "creator-video"
+      ],
+      "acceptableAlternatives": "Content can have plausible promotional value without verified sponsorship. No particular commercial relationship or payment arrangement is required."
+    },
+    {
+      "id": "creative-reading",
+      "checkpoint": "initial",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Explain a concrete visual choice and plausible communication purpose using at least two locatable observations from the supplied video or extracted stills. Distinguish visual evidence, creator testimony and interpretation; do not claim to hear audio or watch motion from stills.",
+      "evidenceIds": [
+        "thumbnail",
+        "creator-video"
+      ],
+      "acceptableAlternatives": "Any supported reading of framing, sequence or presentation is valid. The two supplied stills are sufficient visual access; no prescribed hook, soundtrack, identity inference or full-video viewing is required."
+    },
+    {
+      "id": "source-scope",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Record relevant dates and conditions; do not promote the closed competition or use the PDF filename as its operative deadline.",
+      "evidenceIds": [
+        "competition-terms"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "transfer-to-team",
+      "checkpoint": "initial",
+      "dimension": "decision",
+      "required": true,
+      "instruction": "Propose a focused, testable next step within three creators and one page, tied to a reason the mechanism might transfer, an outcome or failure signal and the decision it serves. A feasibility pilot or bounded diagnostic check is valid when its purpose is explicit. Do not promise competitor-like outcomes or let a general research wish list replace a useful proposal.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "No required story-versus-demo comparison, randomized trial or exact creative format. A diagnostic step should lead to a testable decision; a justified resource-aware hold may pass if it explains what evidence is needed to resume."
+    },
+    {
+      "id": "visible-evidence",
+      "checkpoint": "initial",
+      "dimension": "canvas",
+      "required": true,
+      "instruction": "Make the supplied full MP4 playable and individually selectable on the canvas with source context and a legible explanation. A supplied still can ground a visual observation but cannot substitute for the playable media object. Full-length playback is not required.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "app-conflict",
+      "checkpoint": "updated",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Reconcile the unavailable-app notice with older app instructions. Revise only affected funnel assumptions; do not assume the whole challenge is discontinued.",
+      "evidenceIds": [
+        "challenge-page"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "human-constraint",
+      "checkpoint": "decided",
+      "dimension": "canvas",
+      "required": true,
+      "instruction": "Compare the annotated human-note snapshot with the measured and decided boards. Preserve the exact signup goal as an attributed independent editable object; use it in the next-test decision.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "pilot-arithmetic",
+      "checkpoint": "measured",
+      "dimension": "analysis",
+      "required": true,
+      "instruction": "Compute creator CTR 3%, signup/click 4%, CPA $50; demo CTR 2%, signup/click 8%, CPA $25. Use the right denominators and retain higher engagement versus cheaper observed signup as distinct outcomes.",
+      "evidenceIds": [
+        "pilot"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "causal-boundary",
+      "checkpoint": "measured",
+      "dimension": "uncertainty",
+      "required": true,
+      "instruction": "Recognize non-random assignment and missing customer value. Report an observed comparison, not proof of incremental profit or causal superiority.",
+      "evidenceIds": [
+        "pilot"
+      ],
+      "acceptableAlternatives": "Accept equivalent supported reasoning and any legible native layout. Do not require exact wording, a named source, or a fixed tool sequence."
+    },
+    {
+      "id": "next-budget-choice",
+      "checkpoint": "decided",
+      "dimension": "decision",
+      "required": true,
+      "instruction": "Use the observed pilot and signup goal to recommend a proportionate next step under the two-creator limit, with a rationale and evidence that would change the choice. Keep diagnosis bounded and do not infer causal profitability or force the observed leader to be the only valid recommendation.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Demo-first, bounded diagnosis followed by testing, another scoped experiment or a justified hold can pass. Judge the decision against its purpose and available evidence, not a preferred template."
+    },
+    {
+      "id": "investigation-value",
+      "checkpoint": "initial",
+      "dimension": "evidence",
+      "required": true,
+      "instruction": "Actually inspect relevant creative, participation conditions or other sources to test a material mechanism or transfer assumption. Explain what the investigation adds, contradicts or leaves unresolved. Look beyond the supplied leads when a consequential question warrants it; channel inventories and promises of research do not demonstrate discovery.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "No prescribed source, source count, platform, layout or search sequence. A focused inspection of seed material, a supported no-change result, or a bounded stop can pass when it addresses the material uncertainty. Judge actual trace evidence, not promises; missing trace is cannot-assess. Record demonstrated access limitations separately from reasoning quality."
+    },
+    {
+      "id": "narrative-clarity",
+      "checkpoint": "initial",
+      "dimension": "clarity",
+      "required": true,
+      "instruction": "On the initial rendered board, communicate a central question, substantive insight, decisive evidence and useful implication or next question in a coherent, engaging reading path. The explanation must be understandable without hidden chat reasoning. A source inventory or attractive layout without an argument fails. Judge observed delivery here and factual support separately; absent board artifacts are cannot-assess.",
+      "evidenceIds": [],
+      "acceptableAlternatives": "Any legible native composition or writing style can pass; no fixed headings, chronology, metaphor, connectors or persuasive tone is required. A genuinely unresolved conclusion can still be insightful. Preserve inspectable evidence without forcing every research step into the main story."
+    }
+  ],
+  "gates": [
+    {
+      "id": "no-fabrication",
+      "instruction": "No fabricated material evidence, source access, quotes, observations or measured effects."
+    },
+    {
+      "id": "native-usability",
+      "instruction": "Meaningful text and media individually selectable and editable; source context inspectable; no obstructive overlap; only useful native connectors."
+    },
+    {
+      "id": "preserve-human",
+      "instruction": "Preserve human edits and their meaning through subsequent updates; no unauthorized replacement."
+    },
+    {
+      "id": "clean-completion",
+      "instruction": "No false completion or product failure hidden by the final view. Retain first-render evidence and all repairs."
+    }
+  ]
+}

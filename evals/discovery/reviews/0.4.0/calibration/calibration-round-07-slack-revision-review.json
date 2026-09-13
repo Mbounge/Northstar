@@ -1,0 +1,21 @@
+{
+  "caseId": "slack-clips-design",
+  "round": 7,
+  "stage": "research-and-constraint-revision",
+  "status": "assistant-selected-provisional-direction-on-user-delegation",
+  "precommitFile": "calibration-round-07-slack-revision-precommit.json",
+  "humanFeedbackVerbatim": "I would go with what you think is best here",
+  "humanNumericScores": null,
+  "decisionAuthority": "User delegated the choice. This is not an independent human score or independent approval of the case.",
+  "assistantDecision": "Use a self-contained author-written review brief with ordinary written feedback and optional video context as the provisional focused prototype. Do not require automatic transcripts; preserve the user's text-only requirement. Retain return-to-moment navigation as a visible unresolved follow-up.",
+  "reason": "Addresses access to essential information under the new constraint without making transcript infrastructure a prerequisite. Author burden and brief completeness remain hypotheses to test rather than solved problems.",
+  "limits": [
+    "A short written brief cannot be assumed to replace every visual review task. Test whether the particular requested decision can be supported adequately in text; narrow or revise the proposal if essential visual details cannot be represented.",
+    "Two-week implementation feasibility is not established by this exercise.",
+    "Precise moment navigation is deferred, not resolved.",
+    "A prototype is not evidence of actual accessibility, usability improvement or native canvas preservation."
+  ],
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

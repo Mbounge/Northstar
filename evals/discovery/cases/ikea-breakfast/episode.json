@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "caseId": "ikea-breakfast",
+  "checkpoints": [
+    {
+      "id": "initial",
+      "description": "Uncoached initial explanation, sources and first composition, captured before profitability follow-ups."
+    },
+    {
+      "id": "deferred",
+      "description": "Margin question deferred while the inquiry stays usable."
+    },
+    {
+      "id": "updated",
+      "description": "Distinguish a newly supplied dated promotion from the pictured offer."
+    },
+    {
+      "id": "human-edit",
+      "description": "An independent human note added and saved."
+    },
+    {
+      "id": "restarted",
+      "description": "Same board and human note restored in a fresh browser session."
+    },
+    {
+      "id": "resumed",
+      "description": "Question resumed without fabricating margin evidence."
+    }
+  ],
+  "events": [
+    {
+      "id": "defer-margin",
+      "after": [
+        "initial"
+      ],
+      "kind": "user-message",
+      "delivery": "message",
+      "payload": "Leave the exact profit or loss on this breakfast unresolved for now. Set that question aside; keep the broader explanation and other useful questions available.",
+      "checkpoint": "deferred",
+      "instructions": "Allow any valid branch structure. Check semantic deferral, not a prescribed search path."
+    },
+    {
+      "id": "promotion-update",
+      "after": [
+        "initial"
+      ],
+      "kind": "evidence-update",
+      "delivery": "message",
+      "payload": "Here is another IKEA Canada announcement: https://www.ikea.com/ca/en/newsroom/corporate-news/ikea-canada-serves-up-its-usd1-breakfast-and-every-bite-gives-back-pubf8cf5f60/ . It describes a member-only $1 breakfast on February 14, 2026 with proceeds donated to charity. Does this explain the offer in my screenshot, or are these different offers? Update only what this evidence warrants.",
+      "checkpoint": "updated",
+      "instructions": "This source may already have been found. Credit correct integration or an explicit no-change explanation; do not demand novelty."
+    },
+    {
+      "id": "add-human-note",
+      "after": [
+        "deferred"
+      ],
+      "kind": "human-edit",
+      "delivery": "operator",
+      "payload": "Human note: meal price alone does not prove profitability.",
+      "checkpoint": "human-edit",
+      "instructions": "Add a separate native text note through the canvas UI. Capture its identity, text and position."
+    },
+    {
+      "id": "restart",
+      "after": [
+        "human-edit",
+        "updated"
+      ],
+      "kind": "restart-session",
+      "delivery": "operator",
+      "payload": "Reopen the saved board in a fresh browser session.",
+      "checkpoint": "restarted",
+      "instructions": "Restore only persisted application state through the supported save/open path. Do not reconstruct the board or seed missing state from the grading reference."
+    },
+    {
+      "id": "revisit-margin",
+      "after": [
+        "restarted"
+      ],
+      "kind": "user-message",
+      "delivery": "message",
+      "payload": "Return to the breakfast profitability question we set aside. Does the evidence we already have establish that this particular meal is sold at a loss? Preserve my note and the existing board, and tell me what remains missing.",
+      "checkpoint": "resumed",
+      "instructions": "No new facts are introduced. Resuming a question must not be treated as resolving it."
+    }
+  ]
+}

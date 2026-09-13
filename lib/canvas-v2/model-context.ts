@@ -1,7 +1,8 @@
+import { readCanvasV2PlayableMedia } from "./canvas-media";
 import { readCanvasV2CanonicalFlowManifests } from "@/lib/canvas-v2/evidence-authorship";
 import { findCanvasV2SourceNodeRange } from "@/lib/canvas-v2/source-patch";
 import { buildCanvasV2EvidenceCopyHandles } from "@/lib/canvas-v2/evidence-handles";
-import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation } from "@/lib/canvas-v2/types";
+import type { CanvasV2ArtifactRevision, CanvasV2RenderObservation, CanvasV2SpatialNodeObservation } from "@/lib/canvas-v2/types";
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { buildCanvasV2SceneObjectInventory } from "@/lib/canvas-v2/scene-transaction";
 import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
@@ -23,6 +24,51 @@ const MAX_SOURCE_OUTLINE = 42_000;
 const MAX_CSS_CONTEXT = 32_000;
 const MAX_SPATIAL_NODES = 90;
 const MAX_USER_EDITS = 40;
+
+/** Keep endpoint authority when compacting render context for either authoring stage. */
+export function canvasV2MeasuredConnectorDirectory(
+  nodes: readonly CanvasV2SpatialNodeObservation[],
+  targetIslandNodeId?: string,
+) {
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+  const island = targetIslandNodeId ? byId.get(targetIslandNodeId) : undefined;
+  const belongsToIsland = (node: CanvasV2SpatialNodeObservation) => {
+    if (!targetIslandNodeId) return true;
+    const visited = new Set<string>();
+    let current: CanvasV2SpatialNodeObservation | undefined = node;
+    while (current && !visited.has(current.nodeId)) {
+      if (current.nodeId === targetIslandNodeId) return true;
+      visited.add(current.nodeId);
+      current = current.parentNodeId ? byId.get(current.parentNodeId) : undefined;
+    }
+    return false;
+  };
+  const eligible = nodes.filter((node) => node.connectorEndpoint === true
+    && node.bounds.width > 0 && node.bounds.height > 0
+    && [node.bounds.x, node.bounds.y, node.bounds.width, node.bounds.height].every(Number.isFinite)
+    && belongsToIsland(node));
+  return {
+    contract: "Only endpoints listed here are measured visible individual objects. Use their exact nodeId for data-from/data-to; layout container IDs are not endpoints. Background surfaces and their labels are separate objects: connect the surface when the relationship is between stages. worldBounds are canvas coordinates. When localBounds are supplied, append the connector request directly inside targetIslandNodeId and use those island-local coordinates for route placement. Omit explicit anchors for ordinary perimeter attachment; normalized anchors are available when an interior point is meaningful. Endpoint references do not authorize editing the endpoint or its siblings.",
+    targetIslandNodeId,
+    islandWorldBounds: island?.bounds,
+    totalEligibleEndpoints: eligible.length,
+    omittedEndpointCount: Math.max(0, eligible.length - 180),
+    endpoints: eligible.slice(0, 180).map((node) => ({
+      nodeId: node.nodeId,
+      parentNodeId: node.parentNodeId,
+      ...(node.surfaceOwnerNodeId ? { surfaceOwnerNodeId: node.surfaceOwnerNodeId } : {}),
+      label: (node.textPreview || (node.surfaceOwnerNodeId ? byId.get(node.surfaceOwnerNodeId)?.textPreview : undefined))?.slice(0, 100),
+      kind: node.surfaceOwnerNodeId ? "background-surface" : node.textPreview ? "text" : node.tagName === "img" ? "image" : "object",
+      worldBounds: node.bounds,
+      ...(island ? { localBounds: {
+        x: node.bounds.x - island.bounds.x,
+        y: node.bounds.y - island.bounds.y,
+        width: node.bounds.width,
+        height: node.bounds.height,
+      } } : {}),
+    })),
+  };
+}
 
 function compositionRelativeShares(bounds: { width: number; height: number }) {
   return {
@@ -279,6 +325,7 @@ export function buildCanvasV2BoundedModelContext(
       recommendedOpenTerritories,
       contract: "The board is one large centered world-space coordinate system, not an artboard or slide. workspace.bounds are host navigation safety rails only: NEVER use them to choose CSS widths, heights, font sizes, viewport units, percentages, or spacing. aiAuthoringBounds are the complete local measuring surface for this authored composition; keep the same compact editorial scale as an 8880 × 8000 composition and let the compiler translate it near the person. All canvasWidthShare, canvasHeightShare, canvasAreaShare, and authoredAreaShare values are deliberately normalized to aiAuthoringBounds—not the distant 131072-unit navigation world—so never enlarge a healthy composition merely because its absolute world coordinates are large. Inspect placementOccupants before every turn; select genuinely open territory near the person's visible working area and never overlap, cover, move, resize, or restyle an existing user, research, or unchanged Northstar object. recommendedOpenTerritories are collision-free starting footprints, not mandatory templates: choose the one suited to the composition or derive another verified free footprint from the complete occupant map. Preserve user-authored geometry and content unless the user explicitly asks you to change it.",
       userEdits: canvasV2UserEditLedger(revision.document.html),
+      playableMedia: readCanvasV2PlayableMedia(revision.document.html).map(media => ({ version: media.version, type: media.type, evidenceId: media.evidenceId, description: media.description, context: "Human description and source metadata only; playback is not model observation. No video/GIF frames are ingested." })),
       objectGraph: buildCanvasV2SceneObjectInventory(revision.document).slice(0, 220),
       lastSceneTransaction: revision.sceneTransaction ? {
         origin: revision.sceneTransaction.origin,

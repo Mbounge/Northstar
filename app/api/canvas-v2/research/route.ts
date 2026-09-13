@@ -1,3 +1,5 @@
+import { readCanvasV2Request } from "@/lib/canvas-v2/media-transport";
+import { streamCanvasV2Response } from "@/lib/canvas-v2/activity-stream.server";
 import { NextRequest, NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
@@ -18,6 +20,10 @@ function string(value: unknown, maximum = 240): string | undefined {
 }
 
 export async function POST(request: NextRequest) {
+  return streamCanvasV2Response(request, () => handlePost(request));
+}
+
+async function handlePost(request: NextRequest) {
   const localEvaluation = canvasV2LocalEvaluationEnabled();
   const supabase = localEvaluation ? undefined : await createClient();
   const { data: { user } } = supabase
@@ -25,7 +31,7 @@ export async function POST(request: NextRequest) {
     : { data: { user: null } };
   if (!user && !localEvaluation) return NextResponse.json({ error: "You must be signed in to research account evidence." }, { status: 401 });
   try {
-    const body = await request.json() as Record<string, unknown>;
+    const body = await readCanvasV2Request(request) as Record<string, unknown>;
     const operation = string(body.operation) as CanvasV2ResearchOperation | undefined;
     if (!operation || !OPERATIONS.has(operation)) throw new Error("A valid Canvas V2 research operation is required.");
     const query: CanvasV2ResearchQuery = {

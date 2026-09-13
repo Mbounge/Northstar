@@ -1,0 +1,32 @@
+{
+  "caseId": "emio-launch-clues",
+  "round": 3,
+  "stage": "later-evidence",
+  "status": "human-preference-recorded-agreement-on-update-b",
+  "precommitFile": "calibration-round-03-emio-precommit.json",
+  "humanFeedbackVerbatim": "B matches my expectations -- generally I expect all things on the board to be laid out in an easy to understand format with the compositions, and that tell me a story to the conclusion -- story needs to be compelling to read and engage with - must be very insightful and --- just alway remember that comment from the IKEA case -- that was beautiful for me as a human to read -- especially in its delivery",
+  "humanPreference": "B",
+  "humanNumericScores": null,
+  "agreement": "The proposed B update uses the new announcement, preserves the user's earlier hypothesis and its meaning, and resolves identity without rewriting the past.",
+  "presentationStandard": {
+    "userExpectation": "An easy-to-understand native canvas composition that tells a compelling, engaging, insightful story to its conclusion; the IKEA comment's explanatory delivery is an inspiration.",
+    "proposedObservableCriteria": [
+      "The reader can identify the central question, main insight and current conclusion from the canvas itself.",
+      "The explanation connects evidence to a mechanism or interpretation and explains why the conclusion matters; it does not merely display a source inventory or summarize each source independently.",
+      "Visual hierarchy, wording, spacing and relevant media create a legible reading path without requiring every investigative step to be narrated chronologically.",
+      "Decisive evidence is easy to inspect near the claims it supports; unresolved questions and meaningful earlier hypotheses remain accessible without obscuring the main explanation.",
+      "Writing is specific, engaging and economical. A memorable formulation earns credit only when it accurately captures the reasoning.",
+      "Meaningful objects remain individually selectable and editable. Relationships use native connectors only when these improve clarity."
+    ],
+    "avoid": [
+      "Mandating a fixed layout, a connector diagram, a particular writing style, or a falsely resolved conclusion.",
+      "Treating the IKEA commenter as factual gold or requiring its wording.",
+      "Equating accurate but generic cautious prose with an insightful explanation.",
+      "Claiming rendered-canvas narrative quality from a prose excerpt alone."
+    ]
+  },
+  "remainingWork": "Gymshark and Slack calibration, consolidation of proposed rubric refinements, and actual rendered-canvas evaluation remain outstanding. Agreement on this update is not whole-case or benchmark approval.",
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

@@ -49,3 +49,10 @@ next-env.d.ts
 
 # Local archives
 *.zip
+
+# Generated discovery evaluation bundles and receipts
+/artifacts/
+
+# Independently packaged discovery worker
+/worker/node_modules/
+/worker/dist/

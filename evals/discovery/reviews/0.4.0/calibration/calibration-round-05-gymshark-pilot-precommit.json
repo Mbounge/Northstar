@@ -1,0 +1,34 @@
+{
+  "caseId": "gymshark-creator-strategy",
+  "round": 5,
+  "status": "assistant-precommitted-awaiting-human-feedback",
+  "kind": "authored-decision-calibration-not-model-run",
+  "scope": "Focused pilot interpretation and changed-resource decision exercise. Not a complete ordered execution of the case episode; app-conflict, native-note preservation and actual research execution are not assessed here.",
+  "scenario": {
+    "humanGoal": "Team decision: optimize for verified signups, not views.",
+    "creatorLimit": 2,
+    "dataOrigin": "Synthetic hypothetical small-team pilot, never actual Gymshark performance.",
+    "durationDays": 7,
+    "spendIncludes": "Media and creator fees",
+    "attribution": "Same window for both arms",
+    "assignment": "Not randomized; audience composition not recorded",
+    "missing": ["Purchases", "Profit", "Retention"],
+    "results": {
+      "creator_story": {"impressions":10000,"clicks":300,"verifiedSignups":12,"spendUSD":600,"ctrPercent":3,"signupPerClickPercent":4,"costPerSignupUSD":50},
+      "product_demo": {"impressions":10000,"clicks":200,"verifiedSignups":16,"spendUSD":400,"ctrPercent":2,"signupPerClickPercent":8,"costPerSignupUSD":25}
+    }
+  },
+  "answers": {
+    "A": "The story attracted more clicks; the demo produced more verified signups at half the observed cost per signup. Since signups are our goal, I would give the demo priority in the next small test, while retaining a story comparison. With two creators, have each produce both formats using the same offer and page; distribute them to comparable audiences, using randomized allocation where feasible. Include all creator and media costs. I would change direction if that comparison reverses the signup-cost advantage, or shows the advantage came from audience or distribution differences. This pilot gives us a direction to test, not proof that demos caused better results.",
+    "B": "The most useful clue is what happened after the click: 4% signed up from the story's clicks, versus 8% from the demo's. One explanation is that the story attracted curiosity while the demo clarified the offer; different audiences or a mismatch between creative and landing page could also explain it. Before committing the two creators to more production, check the tracking and compare each creative's promise with the page people reached. Then run a small follow-up addressing the strongest explanation, judged by verified signups and total cost per signup. If no fixable mismatch emerges, the demo's lower observed cost gives us a reasonable starting point."
+  },
+  "assistantJudgments": {
+    "A": {"commercialUsefulness":2,"evidence":2,"clarity":2,"reason":"Proportionate action consistent with stated goal and two-creator limit, retains comparison and acknowledges confounding. No promised significance or sales/profit inference. Actual test budget, allocation and decision thresholds would need specifying before execution."},
+    "B": {"commercialUsefulness":2,"evidence":2,"clarity":2,"reason":"Uses correct conditional signup rate to formulate competing mechanisms and proposes bounded diagnosis before production. Does not claim missing audience composition can be reconstructed from absent records. Diagnosis should not turn into indefinite deferral; a follow-up would require an explicit budget and operational stop rule."}
+  },
+  "calibrationPurpose": "Test acceptance of multiple defensible decisions, useful interpretation of metrics, causal scope and adaptation. Do not prescribe demo-first or diagnosis-first as the single gold recommendation.",
+  "humanJudgments": null,
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}

@@ -10,6 +10,7 @@ import { assertCanvasV2UserFacingLanguage } from "@/lib/canvas-v2/presentation-l
 export const CANVAS_V2_INTERACTION_SCHEMA = "canvas-v2.interaction.v1" as const;
 
 export type CanvasV2InteractionRoute =
+  | "research-conversation"
   | "conversation"
   | "inspect"
   | "transform"
@@ -32,6 +33,7 @@ export interface CanvasV2InteractionDecision {
 }
 
 const ROUTES = new Set<CanvasV2InteractionRoute>([
+  "research-conversation",
   "conversation",
   "inspect",
   "transform",
@@ -112,8 +114,16 @@ export function parseCanvasV2InteractionDecision(
       answer: requiredString(input.answer, "a chat answer", 8_000),
     };
   }
-  const inquiry = parseCanvasV2InquiryInterpretation(input.inquiry, userMessage);
-  const normalizedInquiry = route === "research-design" && canvasV2ExplicitExternalResearchRequested(userMessage)
+  const parsedInquiry = parseCanvasV2InquiryInterpretation(input.inquiry, userMessage);
+  // Routing determines execution scope, not an analytical agenda. Only questions
+  // actually supplied by the person may seed the initial inquiry; the investigator
+  // can open its own questions once it has considered the problem.
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+  const inquiry = { ...parsedInquiry,
+    ...(parsedInquiry.relationship === "new" ? { objective: userMessage.trim().slice(0, 8_000), framing: userMessage.trim().slice(0, 8_000) } : {}),
+    materialUnknowns: parsedInquiry.materialUnknowns.filter(question => normalize(userMessage).includes(normalize(question))),
+  };
+  const normalizedInquiry = (route === "research-design" || route === "research-conversation") && canvasV2ExplicitExternalResearchRequested(userMessage)
     ? {
         ...inquiry,
         evidenceNeed: "required" as const,
@@ -123,6 +133,7 @@ export function parseCanvasV2InteractionDecision(
   let canvasInstruction = typeof input.canvasInstruction === "string" && input.canvasInstruction.trim()
     ? input.canvasInstruction.trim().slice(0, 8_000)
     : userMessage.trim().slice(0, 8_000);
+  if (inquiry.relationship === "new" && route !== "selection-transform") canvasInstruction = userMessage.trim().slice(0, 8_000);
   if (!canvasInstruction) throw new Error("Canvas V2 router requires a canvas instruction.");
   assertCanvasV2UserFacingLanguage(canvasInstruction, "The routed canvas instruction", userMessage);
   if (route === "selection-transform" && selection) {
@@ -147,11 +158,15 @@ export function parseCanvasV2InteractionDecision(
     canvasInstruction,
     selectionPolicy: "none",
     inquiry: normalizedInquiry,
-    ...(route === "research-design" ? {
+    ...((route === "research-design" || route === "research-conversation") ? {
       researchTargets: researchTargets(input.researchTargets, userMessage),
       researchMode: input.researchMode === "evidence" ? "evidence" : "synthesis",
     } : {}),
   };
+}
+
+export function canvasV2RouteUsesDiscovery(route: CanvasV2InteractionRoute): boolean {
+  return route === "research-conversation" || canvasV2RouteMutatesCanvas(route);
 }
 
 export function canvasV2RouteMutatesCanvas(route: CanvasV2InteractionRoute): boolean {

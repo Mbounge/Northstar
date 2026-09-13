@@ -41,7 +41,9 @@ const MEDIA_TAGS = new Set(["IMG", "VIDEO", "CANVAS", "PICTURE", "SOURCE"]);
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const HOST_BACKGROUND: Record<CanvasV2ArtifactTheme, CanvasV2Color> = {
   light: { red: 250, green: 251, blue: 255, alpha: 1 },
-  dark: { red: 13, green: 14, blue: 22, alpha: 1 },
+  // The canvas is a gradient. Use its bright purple area so readable ink
+  // stays readable when a person pans an object across the background.
+  dark: { red: 52, green: 48, blue: 82, alpha: 1 },
 };
 const HOST_INK: Record<CanvasV2ArtifactTheme, CanvasV2Color> = {
   light: { red: 21, green: 22, blue: 32, alpha: 1 },
@@ -348,7 +350,7 @@ function themedValue(
     if (element.namespaceURI !== SVG_NAMESPACE) return undefined;
     // Connector-label strokes are a background halo, not a foreground rule.
     // Applying text contrast to the halo paints over the readable glyphs.
-    if (property === "stroke" && element.getAttribute("data-canvas-v2-connector-part") === "label" && element.getAttribute("data-canvas-v2-label-background") !== "true") return serializeColor(HOST_BACKGROUND[theme]);
+    if (property === "stroke" && element.getAttribute("data-canvas-v2-connector-part") === "label" && element.getAttribute("data-canvas-v2-label-background") !== "true") return theme === "dark" ? "#0d0e16" : serializeColor(HOST_BACKGROUND[theme]);
     const textVector = element.tagName === "text" || element.tagName === "tspan";
     const semanticVector = theme === "dark" ? darkVector(value) : lightVector(value);
     const candidate = semanticVector ?? value;

@@ -116,6 +116,41 @@ export function canvasV2FrameableSceneBounds(
   };
 }
 
+/** Frame whole affected islands after a local edit, while excluding unrelated work. */
+export function canvasV2LatestCompositionBounds(
+  elements: readonly CanvasV2FrameableSceneElement[],
+  mutations: readonly { kind: string; nodeId: string; islandId?: string }[],
+  targetIslandId?: string,
+): CanvasV2WorkspaceBounds | undefined {
+  const membership = new Map(mutations.map(item => [item.nodeId, item.islandId]));
+  const changed = mutations.filter(item => item.kind === "create" || item.kind === "update");
+  const byId = new Map(elements.map(item => [item.nodeId, item]));
+  const changedAncestors = new Set<string>();
+  for (const item of changed) {
+    let parent = byId.get(item.nodeId)?.parentNodeId;
+    const visited = new Set<string>();
+    while (parent && !visited.has(parent)) {
+      visited.add(parent); changedAncestors.add(parent);
+      parent = byId.get(parent)?.parentNodeId;
+    }
+  }
+  // Source fingerprints also mark containing layout wrappers as updated.
+  // They must not expand a one-island correction into a whole-board fit.
+  const roots = targetIslandId ? new Set([targetIslandId]) : new Set(changed.filter(item => item.islandId || !changedAncestors.has(item.nodeId)).map(item => item.islandId ?? item.nodeId));
+  return canvasV2FrameableSceneBounds(elements.filter(element => {
+    const islandId = membership.get(element.nodeId);
+    if (islandId && roots.has(islandId)) return true;
+    let current: CanvasV2FrameableSceneElement | undefined = element;
+    const visited = new Set<string>();
+    while (current && !visited.has(current.nodeId)) {
+      if (roots.has(current.nodeId)) return true;
+      visited.add(current.nodeId);
+      current = current.parentNodeId ? byId.get(current.parentNodeId) : undefined;
+    }
+    return false;
+  }));
+}
+
 export const CANVAS_V2_EMPTY_INSETS: CanvasV2WorkspaceInsets = Object.freeze({ left: 0, top: 0, right: 0, bottom: 0 });
 
 function finite(value: number, fallback = 0): number {
@@ -148,7 +183,7 @@ export function canvasV2TrackpadPanDelta(normalizedDelta: number): number {
 /** Pointer-anchored pinch zoom uses a responsive continuous curve. */
 export function canvasV2TrackpadZoomScale(currentScale: number, normalizedDeltaY: number): number {
   return clampCanvasV2WorkspaceScale(
-    clampCanvasV2WorkspaceScale(currentScale) * Math.exp(-finite(normalizedDeltaY) * 0.003),
+    clampCanvasV2WorkspaceScale(currentScale) * Math.exp(Math.max(-20, Math.min(20, -finite(normalizedDeltaY) * 0.01))),
   );
 }
 
@@ -433,4 +468,19 @@ export function centeredCanvasV2WorkspaceOrigin(
     ...size,
   }, { x: 0, y: 0 });
   return { x: clamped.x, y: clamped.y };
+}
+
+/** Largest unobscured rectangular workspace beside a freely positioned panel. */
+export function canvasV2PanelAwareInsets(size: CanvasV2WorkspaceSize, base: CanvasV2WorkspaceInsets, panel?: CanvasV2WorkspaceBounds): CanvasV2WorkspaceInsets {
+  if (!panel) return base;
+  const x = base.left, y = base.top, right = size.width - base.right, bottom = size.height - base.bottom;
+  if (panel.x >= right || panel.y >= bottom || panel.x + panel.width <= x || panel.y + panel.height <= y) return base;
+  const candidates = [
+    { ...base, right: Math.max(base.right, size.width - panel.x + 24) },
+    { ...base, left: Math.max(base.left, panel.x + panel.width + 24) },
+    { ...base, bottom: Math.max(base.bottom, size.height - panel.y + 24) },
+    { ...base, top: Math.max(base.top, panel.y + panel.height + 24) },
+  ];
+  const area = (v: CanvasV2WorkspaceInsets) => Math.max(0, size.width-v.left-v.right) * Math.max(0, size.height-v.top-v.bottom);
+  return candidates.sort((a,b) => area(b)-area(a))[0];
 }

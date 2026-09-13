@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "id": "ikea-breakfast",
+  "family": "retail-meal-economics",
+  "version": "0.4.0",
+  "status": "draft",
+  "title": "Explain the breakfast price comparison",
+  "asOf": "2026-09-06",
+  "input": {
+    "path": "cases/ikea-breakfast/input.md",
+    "sha256": "770bbd14324563fe60f85b50c54cb4621b2e9b74d1371e83b207884a22b88110"
+  },
+  "assets": [
+    {
+      "path": "cases/ikea-breakfast/assets/original-post.png",
+      "sha256": "afc626b45c2ff94dacce6b1475a3d97b6cfbf56b95392d5ac231ac55f9b3a7ac"
+    }
+  ],
+  "initialCanvas": {
+    "path": "cases/ikea-breakfast/initial-canvas.json",
+    "sha256": "e8a30e8db30251bc8fb4af45032f148b897362f5f62b55b9f7d2eba79896227d"
+  },
+  "episode": {
+    "path": "cases/ikea-breakfast/episode.json",
+    "sha256": "b356c11a9830813cf26c2b735a4060a7c7f627bf5a9e75a2efed77a51099dcf9"
+  },
+  "rubric": {
+    "path": "references/ikea-breakfast/rubric.json",
+    "sha256": "3cfdaecbf97b58086a23bafce5e82ec1fad0f3090ad0e9e5d4e325d6911a3c29"
+  },
+  "evidence": {
+    "path": "references/ikea-breakfast/evidence.jsonl",
+    "sha256": "39c673edb0ecc913d17622a83aa865c81184c8a7c3fe319406a92e232fa5521d"
+  },
+  "referenceAssets": [
+    {
+      "path": "references/ikea-breakfast/assets/comment-reference.png",
+      "sha256": "cb78c63a57939f7a665d8457358880f9474ffe81a7ab2febe27859aaf5c209a1"
+    }
+  ],
+  "reviewedArtifacts": [
+    {
+      "path": "references/ikea-breakfast/reference.md",
+      "sha256": "9e3f0e709a9c0aef4daeac6bb34d39ad87bf99f4f0a6a82f07220b1a2e94d3be"
+    },
+    {
+      "path": "references/ikea-breakfast/reviewer-guide.md",
+      "sha256": "446905617fbab176cbdbe936e0dd72c50a0a12d0e7448f38da49fb5c27964435"
+    },
+    {
+      "path": "SCORING.md",
+      "sha256": "be94b77879b0602211518dca7cd011a3e68e41d89b4d970fac81098536f3dc49"
+    },
+    {
+      "path": "calibration/discussion.md",
+      "sha256": "6a5a09da53a91c64f4a37169ae4cdf43b27540ff52fc0ceeec685e197ed4647e"
+    }
+  ],
+  "reviews": [],
+  "sourcePolicy": {
+    "mode": "open-web",
+    "referenceAccess": "excluded",
+    "independentDiscoveryCertified": false,
+    "notes": "Agent bundle excludes local references. No live search blocklist has yet been validated, so do not claim independent discovery if the model finds the public comment or derivative answers."
+  },
+  "limitations": [
+    "No independent human rubric review yet.",
+    "Original prices/store/restaurant and item margins are unverified.",
+    "No frozen searchable source collection or live browser adapter is included in this foundation."
+  ]
+}

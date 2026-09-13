@@ -1,3 +1,6 @@
+import { canvasV2TextPaintRects, canvasV2TextPaintIntersection } from "./text-paint-bounds";
+import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorRouteRetraces, readCanvasV2ConnectorWaypoints } from "./connector-geometry";
+import { canvasV2ElementPaintBounds } from "./text-paint-bounds";
 import type {
   CanvasV2AuthoredAnnotationObservation,
   CanvasV2AuthoredRelationshipObservation,
@@ -282,12 +285,20 @@ function observeAuthoredRelationships(document: Document, view: Window): CanvasV
     const nodeId = identifiedNodeId(element);
     return nodeId ? [[nodeId, element] as const] : [];
   }));
-  return Array.from(document.querySelectorAll<Element>("[data-canvas-v2-relationship-source],[data-canvas-v2-relationship-target]"))
+  return Array.from(document.querySelectorAll<Element>('[data-canvas-v2-relationship-source],[data-canvas-v2-relationship-target],[data-canvas-v2-primitive="connector"]'))
     .filter((element) => Boolean(identifiedNodeId(element)) && visibleElement(element, view))
     .map((element) => {
       const nodeId = element.getAttribute("data-canvas-v2-node-id")!;
-      const sourceNodeIds = referencedNodeIds(element.getAttribute("data-canvas-v2-relationship-source"));
-      const targetNodeIds = referencedNodeIds(element.getAttribute("data-canvas-v2-relationship-target"));
+      const nativeConnector = element.getAttribute("data-canvas-v2-primitive") === "connector";
+      const sourceNodeIds = referencedNodeIds(element.getAttribute(nativeConnector ? "data-canvas-v2-connector-from" : "data-canvas-v2-relationship-source"));
+      const targetNodeIds = referencedNodeIds(element.getAttribute(nativeConnector ? "data-canvas-v2-connector-to" : "data-canvas-v2-relationship-target"));
+      const routeRetraces = nativeConnector && element.getAttribute("data-canvas-v2-connector-variant") === "bent"
+        ? canvasV2ConnectorRouteRetraces(buildCanvasV2ConnectorGeometry({
+            start: { x: Number(element.getAttribute("data-canvas-v2-connector-from-x")), y: Number(element.getAttribute("data-canvas-v2-connector-from-y")) },
+            end: { x: Number(element.getAttribute("data-canvas-v2-connector-to-x")), y: Number(element.getAttribute("data-canvas-v2-connector-to-y")) },
+            variant: "bent", waypoints: readCanvasV2ConnectorWaypoints(element.getAttribute("data-canvas-v2-connector-waypoints") ?? undefined),
+            control: { x: Number(element.getAttribute("data-canvas-v2-connector-control-x")), y: Number(element.getAttribute("data-canvas-v2-connector-control-y")) },
+          }).routePoints) : false;
       const missingSourceNodeIds = sourceNodeIds.filter((targetId) => !byNodeId.has(targetId));
       const missingTargetNodeIds = targetNodeIds.filter((targetId) => !byNodeId.has(targetId));
       const endpoints = relationshipGeometryEndpoints(element);
@@ -341,6 +352,10 @@ function observeAuthoredRelationships(document: Document, view: Window): CanvasV
       }
       return {
         nodeId,
+        nativeConnector,
+        userAuthored: element.getAttribute("data-canvas-v2-last-author") === "user" || element.getAttribute("data-canvas-v2-origin") === "user",
+        targetAttachmentExplicit: nativeConnector && element.hasAttribute("data-canvas-v2-connector-to-anchor"),
+        routeRetraces,
         tagName: element.tagName.toLowerCase(),
         sourceNodeIds,
         targetNodeIds,
@@ -424,6 +439,7 @@ function observeDesignRegions(document: Document, view: Window): CanvasV2DesignR
         ...(["attached", "evidence-relative-island", "interleaved", "recompose"].includes(element.getAttribute("data-canvas-v2-placement-mode") ?? "")
           ? { placementMode: element.getAttribute("data-canvas-v2-placement-mode") as CanvasV2DesignRegionObservation["placementMode"] }
           : {}),
+        ...(element.getAttribute("data-canvas-v2-narrative-id") ? { narrativeId: element.getAttribute("data-canvas-v2-narrative-id")! } : {}),
         ...(["within", "above", "below", "left", "right", "span", "interleave", "offset", "recompose", "none"].includes(element.getAttribute("data-canvas-v2-territory-relation") ?? "")
           ? { territoryRelation: element.getAttribute("data-canvas-v2-territory-relation") as CanvasV2DesignRegionObservation["territoryRelation"] }
           : {}),
@@ -566,10 +582,13 @@ function observeNode(element: HTMLElement, view: Window): CanvasV2SpatialNodeObs
   return {
     nodeId: element.dataset.canvasV2NodeId || "unknown",
     parentNodeId: parentNodeId(element),
+    ...(element.dataset.canvasV2SurfaceOwner ? { surfaceOwnerNodeId: element.dataset.canvasV2SurfaceOwner } : {}),
     tagName: element.tagName.toLowerCase(),
     ...(text ? { textPreview: text.slice(0, 180) } : {}),
     ...(textLineCount ? { textLineCount } : {}),
-    bounds: elementBounds(element),
+    textPaintRects: canvasV2TextPaintRects(element),
+    bounds: (() => { const rect = canvasV2ElementPaintBounds(element); return { nodeId: element.dataset.canvasV2NodeId, x: precision(rect.x), y: precision(rect.y), width: precision(rect.width), height: precision(rect.height) }; })(),
+    connectorEndpoint: !hasIdentifiedDescendant(element) && !structuralCanvasRoot(element) && !element.hasAttribute("data-canvas-v2-design-region") && !element.closest('[data-canvas-v2-primitive="connector"]'),
     contentBox: {
       clientWidth: precision(element.clientWidth),
       clientHeight: precision(element.clientHeight),
@@ -649,12 +668,11 @@ function renderedTextCollisions(elements: HTMLElement[], nodes: CanvasV2SpatialN
       if (!firstRegion || firstRegion !== secondRegion) continue;
       const first = nodes[firstIndex];
       const second = nodes[secondIndex];
-      const overlap = intersection(first.bounds, second.bounds);
+      const overlap = canvasV2TextPaintIntersection(first, second);
       if (!overlap || overlap.width < 2 || overlap.height < 2) continue;
       const overlapArea = overlap.width * overlap.height;
       const firstArea = Math.max(1, first.bounds.width * first.bounds.height);
       const secondArea = Math.max(1, second.bounds.width * second.bounds.height);
-      if (overlapArea / Math.min(firstArea, secondArea) < 0.025) continue;
       collisions.push({
         firstNodeId: first.nodeId,
         secondNodeId: second.nodeId,

@@ -1,0 +1,10 @@
+**
+!worker/
+!worker/package.json
+!worker/package-lock.json
+!worker/main.ts
+!worker/build.mjs
+!lib/
+!lib/canvas-v2/
+!lib/canvas-v2/**
+!tsconfig.json

@@ -171,6 +171,7 @@ export function parseCanvasV2DesignDecision(
   approvedEvidence: readonly CanvasV2EvidenceAsset[] = [],
   previousDocument?: CanvasV2ArtifactDocument,
   scaleIntentByEvidenceId: ReadonlyMap<string, CanvasV2EvidenceScaleIntent> = new Map(),
+  evidenceIdByHandle: ReadonlyMap<string, string> = new Map(),
 ): CanvasV2DesignDecision {
   const input = record(value);
   if (!input) throw new Error("Canvas V2 model response must be an object.");
@@ -214,6 +215,7 @@ export function parseCanvasV2DesignDecision(
     operations: parseCanvasV2SourcePatch(input.patch),
     evidence: approvedEvidence,
     scaleIntentByEvidenceId,
+    evidenceIdByHandle,
   });
   const reconciledComposition = reconcileCanvasV2CompositionState(composition, document);
 

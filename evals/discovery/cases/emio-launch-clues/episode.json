@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "caseId": "emio-launch-clues",
+  "checkpoints": [
+    {
+      "id": "initial",
+      "description": "Pre-reveal claim map and playable source"
+    },
+    {
+      "id": "challenged",
+      "description": "Repetition challenge assessed"
+    },
+    {
+      "id": "annotated",
+      "description": "Human prediction preserved"
+    },
+    {
+      "id": "updated",
+      "description": "Later announcement integrated"
+    },
+    {
+      "id": "closed",
+      "description": "Investigation scope and stopping decision"
+    }
+  ],
+  "events": [
+    {
+      "id": "repeated-report",
+      "after": [
+        "initial"
+      ],
+      "kind": "user-message",
+      "delivery": "message",
+      "payload": "Another person sent me a second article about the same teaser. Does that make the developer theory more certain? Trace whether these are actually independent clues.",
+      "checkpoint": "challenged",
+      "instructions": "Do not add invented rumors; evaluate provenance among existing reports."
+    },
+    {
+      "id": "prediction",
+      "after": [
+        "initial"
+      ],
+      "kind": "human-edit",
+      "delivery": "operator",
+      "payload": "Editor prediction: this may belong to an existing series; keep this as my hypothesis.",
+      "checkpoint": "annotated",
+      "instructions": "Add an independent text note and capture its identity and position."
+    },
+    {
+      "id": "reveal",
+      "after": [
+        "challenged",
+        "annotated"
+      ],
+      "kind": "evidence-update",
+      "delivery": "message",
+      "payload": "The date has advanced to July 18. Read the attached official-announcement note and update the existing board.",
+      "checkpoint": "updated",
+      "instructions": "Release only this event asset now. No earlier checkpoint may receive its contents.",
+      "assets": [
+        {
+          "path": "cases/emio-launch-clues/events/reveal/reveal-note.md",
+          "sha256": "a703090d73f7290ef7addc9fcec9b795c3040c2931a12219d2c4c069b087e104"
+        }
+      ]
+    },
+    {
+      "id": "close-inquiry",
+      "after": [
+        "updated"
+      ],
+      "kind": "user-message",
+      "delivery": "message",
+      "payload": "Which parts of our earlier reasoning held up? What is now settled, what remains unknown, and should we stop investigating the identity question?",
+      "checkpoint": "closed",
+      "instructions": "Do not reward clairvoyance retroactively."
+    }
+  ]
+}

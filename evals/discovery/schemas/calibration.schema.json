@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "status": {
+      "const": "proposed-human-calibration"
+    },
+    "caseId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "notBenchmarkRuns": {
+      "const": true
+    },
+    "examples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "answer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expectedFailure": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "uniqueItems": true
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "checkpoint": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "context": {
+            "type": "string",
+            "minLength": 1
+          },
+          "judgments": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "verdict": {
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "cannot-assess"
+                  ]
+                },
+                "rationale": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "id",
+                "verdict",
+                "rationale"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "answer",
+          "expectedFailure",
+          "reason",
+          "checkpoint",
+          "context",
+          "judgments"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "status",
+    "caseId",
+    "notBenchmarkRuns",
+    "examples"
+  ]
+}

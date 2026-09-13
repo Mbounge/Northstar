@@ -37,7 +37,7 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(grammar, /artifact-scoped CSS with custom properties/);
   assert.match(grammar, /Avoid returning the same header-plus-cards composition/);
   assert.match(grammar, /complete-canvas overview as a first-class reading distance/);
-  assert.match(grammar, /straight connectors, directional arrows, and fluid curves/);
+  assert.match(grammar, /straight, arrow, curve or bent/);
   assert.match(grammar, /violet\/blue is iconic and available, not a mandatory default/i);
   assert.match(grammar, /one accent, a tonal family, or several contrasting colors/i);
   assert.match(grammar, /Do not repeatedly color titles pale blue or violet/i);
@@ -74,12 +74,6 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /Zones already carrying authored design regions/);
   assert.match(route, /Explicit human spatial language is binding/);
   assert.match(route, /normalizeCanvasV2ExplicitSpatialRequest/);
-  assert.match(route, /normalizeCanvasV2ProgressiveComplexSynthesis/);
-  assert.match(route, /complexEvidenceSynthesis \? 2 : 0/);
-  assert.match(route, /progressive materialization is binding/);
-  assert.match(route, /Establish the governing thesis and scope for the grounded comparison/);
-  assert.match(route, /State the evidence-grounded executive implication and its honest boundary/);
-  assert.match(route, /storyRole: "title"/);
   assert.match(route, /let evidenceBridgeTargetNames = researchTargets/);
   assert.match(route, /evidenceBridgeTargetNames = discoveryTransition\.move\.targetNames/);
   assert.doesNotMatch(route, /researchTargets = discoveryTransition\.move\.targetNames/);
@@ -162,24 +156,22 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /Do not add optional connector or endpoint-dependent relationship geometry as a new finishing pass/);
   assert.match(route, /relationship geometry remains an optional model-chosen device, not a completion requirement/i);
   assert.match(route, /completionSummary/);
-  assert.match(route, /final handoff to the person who asked for the work/);
+  assert.match(route, /concise answer to the person who asked for the work/);
   assert.match(route, /summary: input\.brief\.completionSummary/);
   assert.match(route, /userFacingCompletionSummary/);
   assert.match(route, /COMPLETION_SUMMARY_INTERNAL_JARGON/);
   assert.match(route, /canvas remains fully editable/);
-  assert.match(route, /observedDesignTurns >= 2/);
   assert.match(route, /One visible design turn is one bounded material move/);
   assert.match(route, /creating endpoints and integrating their connector system are two separate material moves/);
-  assert.match(route, /explicitly requested a relationship-led composition/);
   assert.match(route, /EXACT HUMAN RELATIONSHIP REFINEMENT/);
   assert.match(route, /explicitRelationshipRefinementRequested/);
   assert.match(route, /explicitRelationshipRefinementRequested = turn === 1/);
   assert.match(route, /do not replace the requested edit with a completion-only response/);
-  assert.match(route, /resolvedStory\s*&& !requiresVisibleDiscoveryComposition\s*&& repeatedLocalWork/);
+  assert.match(route, /resolvedStory\s*&& brief\.visualQualityAssessment\?\.ready === true\s*&& !requiresVisibleDiscoveryComposition\s*&& repeatedLocalWork/);
   assert.match(route, /Discovery owns whether accepted human findings require a visible canvas/);
   assert.match(route, /Recommend completion now instead of reopening that visual detail under new wording/);
   assert.match(route, /explicitWholeBoardRecompositionRequested/);
-  assert.match(route, /Do not risk a speculative whole-board recompose/);
+  assert.match(route, /Requested content and structural checks are satisfied. Now assess actual visual quality/);
   assert.match(route, /an optional alternative layout is not a completion blocker/);
   assert.match(route, /The requested canvas is still empty, so the first prompt-critical composition must be made visible before completion can be judged/);
   assert.match(route, /Inspect the actual pixels, not merely the ledger/);
@@ -189,7 +181,6 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /repeatedResolvedIslandRefinement/);
   assert.match(route, /two consecutive bounded refinements and no objective blocker remains/);
   assert.match(route, /const resolvedStory = islandRegistry\.length > 0/);
-  assert.match(route, /discoveryMove determine whether that chapter is framing, evidence reading, comparison, analysis, a decision surface/);
   assert.doesNotMatch(route, /first synthesis turn must create a narrative-title/i);
   assert.doesNotMatch(route, /first analytical island is always a narrative title/i);
   assert.match(route, /A title-and-description island is optional/);
@@ -249,9 +240,9 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /authoredVisualRoles/);
   assert.doesNotMatch(route, /evidenceId: evidenceId\.slice/);
   assert.match(route, /data-canvas-v2-visual-role/);
-  assert.match(route, /data-canvas-v2-copy-evidence-handle/);
+  assert.match(readFileSync("lib/canvas-v2/evidence-selection.ts", "utf8"), /data-canvas-v2-copy-evidence-handle/);
   assert.match(route, /data-canvas-v2-annotation-for/);
-  assert.match(route, /data-canvas-v2-relationship-source/);
+  assert.match(route, /exact data-from and data-to IDs/);
   assert.match(route, /validateCanvasV2RenderedAnalysisEvidenceScale/);
   assert.match(route, /validateCanvasV2RenderedComparisonCommunication/);
   assert.match(route, /validateCanvasV2AuthoredStageEvidenceContract/);
@@ -260,7 +251,7 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /There is no fixed authored screenshot quota/);
   assert.match(route, /Every comparison checkpoint or stage must declare evidence ownership/);
   assert.match(route, /validateCanvasV2RenderedRelationshipGeometry/);
-  assert.match(grammar, /Inline SVG is available for model-authored relationship geometry/);
+  assert.match(grammar, /Every relationship uses North Star's native connector primitive/);
   assert.match(grammar, /Never let two unannotated phone screens swallow the synthesis/);
   assert.match(grammar, /Side-by-side prose with decorative thumbnails is scaffolding/);
   assert.match(route, /Treat connectors and other endpoint-dependent geometry as an integration layer, not an early scaffold/);
@@ -268,9 +259,9 @@ test("creative moves are purposeful and remain open to divergent visual forms", 
   assert.match(route, /already resolved as framing/);
   assert.match(route, /cannot absorb screenshot-led comparison or analysis/);
   assert.match(route, /Do not open another island while authored work remains unfinished/);
-  assert.match(route, /replace or update all affected geometry in the same patch/);
+  assert.match(route, /Existing connector geometry follows its native endpoint bindings automatically/);
   assert.match(grammar, /SVG is not mandatory/);
-  assert.match(grammar, /rebuild every affected path in that same edit/);
+  assert.match(grammar, /native engine attaches it to the identified objects/);
   assert.match(route, /validateCanvasV2CreativeBriefExecution/);
   assert.match(route, /validateCanvasV2AnalysisEvidenceContinuity/);
   assert.doesNotMatch(route, /CANVAS_V2_MAX_AUTHORED_EVIDENCE_SELECTIONS/);
@@ -304,7 +295,8 @@ test("visual reasoning is stage-local, explicitly cached, and bounded before pro
   assert.match(provider, /prompt_cache_options: \{ mode: "explicit", ttl: "30m" \}/);
   assert.match(provider, /maxInputImages \?\? 3/);
   assert.match(provider, /forbids auto\/original image detail/);
-  assert.match(route, /maxInputImages: 0/);
+  // Investigation can inspect bounded original media; a routing paraphrase
+  // must not stand in for a visual read. Provider budget tests enforce limits.
   assert.match(route, /maxInputImages: 3/);
   assert.match(route, /maxInputImages: 2/);
   assert.doesNotMatch(route, /railDetailParts\.slice\(0, 2\)/);

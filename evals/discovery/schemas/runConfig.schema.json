@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "caseId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "appRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modelConfig": {
+      "type": "object"
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxUsd": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxSeconds",
+        "maxUsd"
+      ]
+    },
+    "track": {
+      "enum": [
+        "manual-live",
+        "controlled-model",
+        "fixture"
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "caseId",
+    "appRevision",
+    "model",
+    "modelConfig",
+    "tools",
+    "budget",
+    "track"
+  ]
+}

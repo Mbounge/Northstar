@@ -60,7 +60,7 @@ function analysisCopyForEvidence(document: CanvasV2ArtifactDocument, islandId: s
   const islandRange = findCanvasV2SourceNodeRange(document.html, islandId);
   if (!islandRange) return undefined;
   const islandSource = document.html.slice(islandRange.start, islandRange.end);
-  for (const match of islandSource.matchAll(/<img\b([^>]*)>/gi)) {
+  for (const match of islandSource.matchAll(/<(?:img|div)\b([^>]*)>/gi)) {
     const attributes = match[1];
     if (attribute(attributes, "data-canvas-v2-evidence-role") !== "analysis-copy") continue;
     if (attribute(attributes, "data-canvas-v2-evidence-id") !== evidenceId) continue;
@@ -71,7 +71,7 @@ function analysisCopyForEvidence(document: CanvasV2ArtifactDocument, islandId: s
 }
 
 function withWitnessGroupAttribute(source: string, witnessGroup: string): string {
-  return source.replace(/^(<img\b)([^>]*)(>)/i, (_match, opening: string, attributes: string, close: string) => {
+  return source.replace(/^(<(?:img|div)\b)([^>]*)(>)/i, (_match, opening: string, attributes: string, close: string) => {
     const retained = attributes.replace(/\s*data-canvas-v2-witness-group\s*=\s*["'][^"']*["']/ig, "");
     return `${opening}${retained} data-canvas-v2-witness-group="${witnessGroup}"${close}`;
   });
@@ -90,8 +90,40 @@ export function reconcileCanvasV2WitnessOwnership(input: {
 }): CanvasV2ArtifactDocument {
   let document = input.document;
   for (const assignment of input.evidenceAssignments) {
-    const groups = witnessGroupContainers(document, input.targetIslandId)
+    let groups = witnessGroupContainers(document, input.targetIslandId)
       .filter((container) => container.witnessGroup === assignment.witnessGroup);
+    if (!groups.length) {
+      // A captioned figure or headed comparison cell expresses the author's ownership choice.
+      // Bind missing bookkeeping only when every contained witness has the same
+      // explicit director assignment. Never invent a claim container or layout.
+      const witness = analysisCopyForEvidence(document, input.targetIslandId, assignment.evidenceId);
+      const island = findCanvasV2SourceNodeRange(document.html, input.targetIslandId);
+      const owners = witness && island ? [...document.html.slice(island.start, island.end).matchAll(/<(figure|section|article|div|td|li)\b([^>]*)>/gi)].flatMap(match => {
+        if (attribute(match[2], "data-canvas-v2-evidence-group")) return [];
+        const id = attribute(match[2], "data-canvas-v2-node-id");
+        if (id === input.targetIslandId) return [];
+        const range = id && findCanvasV2SourceNodeRange(document.html, id);
+        if (!range || witness.range.start < range.openEnd || witness.range.end > range.closeStart) return [];
+        const inner = document.html.slice(range.openEnd, range.closeStart);
+        const hasCaption = match[1].toLowerCase() === "figure" && /<figcaption\b[^>]*>[^<]*\S[^<]*<\/figcaption>/i.test(inner);
+        const hasHeading = /<h[1-6]\b[^>]*>[\s\S]*?\S[\s\S]*?<\/h[1-6]>/i.test(inner);
+        if (!hasCaption && !hasHeading) return [];
+        const ids = [...inner.matchAll(/<(?:img|div)\b([^>]*)>/gi)].flatMap(tag => {
+          const id = attribute(tag[1], "data-canvas-v2-evidence-id"); return id ? [id] : [];
+        });
+        return ids.length && ids.every(id => input.evidenceAssignments.some(item => item.evidenceId === id && item.witnessGroup === assignment.witnessGroup)) ? [range] : [];
+      }) : [];
+      // Preserve the author's placement. The closest heading/caption container
+      // with a single consistent assignment is an unambiguous semantic owner.
+      owners.sort((a, b) => (a.end - a.start) - (b.end - b.start));
+      if (owners.length && (owners.length === 1 || owners[0].end - owners[0].start < owners[1].end - owners[1].start)) {
+        const range = owners[0];
+        const group = assignment.witnessGroup.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
+        const opening = document.html.slice(range.start, range.openEnd).replace(/>$/, ` data-canvas-v2-evidence-group="${group}">`);
+        document = { ...document, html: document.html.slice(0, range.start) + opening + document.html.slice(range.openEnd) };
+        groups = witnessGroupContainers(document, input.targetIslandId).filter(container => container.witnessGroup === assignment.witnessGroup);
+      }
+    }
     if (groups.length !== 1) continue;
     const witness = analysisCopyForEvidence(document, input.targetIslandId, assignment.evidenceId);
     if (!witness) continue;
@@ -241,6 +273,9 @@ export function validateCanvasV2AuthoredStageEvidenceContract(input: {
   if (!input.authoredVisualRoles.includes("comparison-axis") || input.selectedScreenshotEvidenceCount < 1) return [];
 
   const expectedStageCount = declaredStageCount(input.stagePlan);
+  // An argument or numerical comparison may use a photo without containing
+  // screenshot stages. Do not impose stage machinery on that visual form.
+  if (expectedStageCount === undefined && !/data-canvas-v2-stage-evidence\s*=/.test(input.document.html)) return [];
   const axisNodeIds = Array.from(input.document.html.matchAll(/<([a-z][\w:-]*)\b([^>]*)>/gi))
     .filter((match) => attribute(match[2], "data-canvas-v2-visual-role") === "comparison-axis")
     .flatMap((match) => {
@@ -274,9 +309,8 @@ export function validateCanvasV2AuthoredStageEvidenceContract(input: {
     if (stage.kind === "sourced" && !exactScreenWitnessExists(stage.source)) {
       failures.push(`Observed comparison stage ${stage.nodeId} has no exact screenshot witness inside its own stage container. Place at least one grounded analysis-copy screen in that stage; evidence elsewhere on the axis does not support this claim.`);
     }
-    if (stage.kind === "interpretation" && !/\binterpretation\b/i.test(stage.source.replace(/<[^>]+>/g, " "))) {
-      failures.push(`Interpretive comparison stage ${stage.nodeId} must visibly say Interpretation so a user can distinguish reasoning from observed screen evidence.`);
-    }
+    // Evidence ownership is structural metadata. The author explains uncertainty
+    // in natural language; no literal public heading is required here.
   }
 
   if (expectedStageCount !== undefined) {

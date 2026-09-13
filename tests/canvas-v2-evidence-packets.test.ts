@@ -124,6 +124,22 @@ test("canonical product journeys keep packet metadata internal instead of append
   assert.deepEqual(canvasV2EvidencePacketsNeedingMaterialization({ html: "<main></main>", css: "" }, [productPacket]), []);
 });
 
+test("public research retains facts and visual assets without forcing a separate source panel", () => {
+  const packet: CanvasV2EvidencePacket = {
+    ...first,
+    source: { ...first.source, providerId: "openai-web-search" },
+  };
+  const document = {
+    html: `<article data-canvas-v2-evidence-packet-id="${packet.id}"><img data-canvas-v2-evidence-id="marketing-image-1" /></article>`,
+    css: "",
+  };
+  assert.deepEqual(canvasV2EvidencePacketsNeedingMaterialization(document, [packet]), []);
+  assert.deepEqual(canvasV2EvidencePacketsNeedingMaterialization({ html: `<article data-canvas-v2-evidence-packet-id="${packet.id}"></article>`, css: "" }, [packet]), []);
+  assert.deepEqual(canvasV2EvidencePacketsNeedingMaterialization({ html: "<main></main>", css: "" }, [packet]), []);
+  assert.equal(packet.facts.length, 1);
+  assert.equal(packet.metrics.length, 1);
+});
+
 test("a packet copy of canonical evidence is source-linked instead of becoming a second canonical identity", () => {
   const canonical = new Map([["icon:app:awin", "flow-awin-onboarding-icon"]]);
   assert.deepEqual(canvasV2EvidencePacketAssetBinding("icon:app:awin", canonical), {

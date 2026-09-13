@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "checkpointId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "terminalStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "interrupted",
+        "unexecuted"
+      ]
+    },
+    "artifactFiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ]
+      },
+      "minItems": 1
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1
+    },
+    "privateRepairs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "costUsd": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "elapsedSeconds": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "runId",
+    "checkpointId",
+    "terminalStatus",
+    "artifactFiles",
+    "observedAt",
+    "note",
+    "privateRepairs",
+    "costUsd",
+    "elapsedSeconds"
+  ]
+}

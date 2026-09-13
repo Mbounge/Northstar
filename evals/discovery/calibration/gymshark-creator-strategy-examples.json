@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "status": "proposed-human-calibration",
+  "caseId": "gymshark-creator-strategy",
+  "notBenchmarkRuns": true,
+  "examples": [
+    {
+      "id": "fake-roas",
+      "answer": "Gymshark pays this person $10,000 and gets 8x ROAS.",
+      "expectedFailure": [
+        "distribution-boundary"
+      ],
+      "reason": "No public evidence supplied establishes these facts.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "distribution-boundary",
+          "verdict": "fail",
+          "rationale": "No public evidence supplied establishes these facts."
+        }
+      ]
+    },
+    {
+      "id": "engagement-wins",
+      "answer": "The story has 3% CTR versus 2%; this proves the story causally produces more profitable customers.",
+      "expectedFailure": [
+        "causal-boundary"
+      ],
+      "reason": "CTR arithmetic is correct; causal profitability is unsupported. Do not label correct arithmetic wrong.",
+      "checkpoint": "measured",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "causal-boundary",
+          "verdict": "fail",
+          "rationale": "CTR arithmetic is correct; causal profitability is unsupported. Do not label correct arithmetic wrong."
+        }
+      ]
+    },
+    {
+      "id": "fake-video",
+      "answer": "I inspected only the two stills; they prove the video soundtrack uses upbeat music.",
+      "expectedFailure": [
+        "creative-reading"
+      ],
+      "reason": "Stills do not establish a soundtrack even when a full video is available.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "creative-reading",
+          "verdict": "fail",
+          "rationale": "Stills do not establish a soundtrack even when a full video is available."
+        }
+      ]
+    },
+    {
+      "id": "good-scope",
+      "answer": "The demo had cheaper observed signups; I would test that direction with matched assignment before scaling.",
+      "expectedFailure": [],
+      "reason": "A defensible scoped excerpt, not a complete case pass.",
+      "checkpoint": "decided",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied. A surrounding supplied decision states that both remaining creators can support the matched follow-up within the budget; this excerpt explains the decision and what evidence would warrant scaling.",
+      "judgments": [
+        {
+          "id": "next-budget-choice",
+          "verdict": "pass",
+          "rationale": "A defensible scoped excerpt, not a complete case pass."
+        }
+      ]
+    },
+    {
+      "id": "wrong-denominator",
+      "checkpoint": "measured",
+      "answer": "Story signup conversion per click is 12/10000 = 0.12%.",
+      "expectedFailure": [
+        "pilot-arithmetic"
+      ],
+      "reason": "Uses impressions instead of clicks for the stated conversion metric.",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "pilot-arithmetic",
+          "verdict": "fail",
+          "rationale": "Uses impressions instead of clicks for the stated conversion metric."
+        }
+      ]
+    },
+    {
+      "id": "overgeneralized-disclosure",
+      "checkpoint": "initial",
+      "answer": "The creator says this video is not sponsored, so Gymshark never pays creators or amplifies their posts.",
+      "expectedFailure": [
+        "distribution-boundary"
+      ],
+      "reason": "A disclosure about one upload cannot establish campaign-wide distribution.",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "distribution-boundary",
+          "verdict": "fail",
+          "rationale": "A disclosure about one upload cannot establish campaign-wide distribution."
+        }
+      ]
+    },
+    {
+      "id": "promotional-value-not-free",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The supplied excerpt has the case participation terms and creator disclosure available, but no cost or conversion records.",
+      "answer": "The athlete opportunity can give people a reason to participate, and their posts can bring the brand attention while creators gain recognition. Since this upload is not sponsored, all that acquisition costs Gymshark nothing.",
+      "judgments": [
+        {
+          "id": "campaign-mechanism",
+          "verdict": "pass",
+          "rationale": "Explains a plausible exchange of value and participation mechanism."
+        },
+        {
+          "id": "distribution-boundary",
+          "verdict": "fail",
+          "rationale": "The upload disclosure does not establish zero cost or measured acquisition."
+        }
+      ],
+      "expectedFailure": [
+        "distribution-boundary"
+      ],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "bounded-feasibility-pilot",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The fictional team can support three creators and one page. This is a planning excerpt, not an executed investigation.",
+      "answer": "Use three creators to learn whether they can produce credible progress stories within our budget and whether viewers understand the invitation on the shared page. Record production burden, understanding and verified signups. This pilot answers feasibility; it will not prove the format beats a demo. Stop or revise if the invitation is misunderstood or production is unaffordable.",
+      "judgments": [
+        {
+          "id": "transfer-to-team",
+          "verdict": "pass",
+          "rationale": "A testable feasibility question, constraints and failure signals are sufficient; a comparative causal trial is not mandatory."
+        },
+        {
+          "id": "investigation-value",
+          "verdict": "cannot-assess",
+          "rationale": "No source-access trace is supplied with this planning excerpt."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "diagnose-then-test",
+      "checkpoint": "decided",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The full synthetic decision text follows the pilot and uses the two-creator limit and verified-signup goal. Native note artifacts are not supplied.",
+      "answer": "The demo delivered $25 observed cost per signup versus $50 for the story. Briefly check tracking and whether each creative promised what the landing page offered. If no material mismatch emerges, use the two creators for a small comparison with the demo as the current benchmark. Change direction if comparable exposure reverses the advantage. We do not yet know causal superiority or customer value.",
+      "judgments": [
+        {
+          "id": "next-budget-choice",
+          "verdict": "pass",
+          "rationale": "Makes bounded progress with an explicit contingent decision and reversal condition."
+        },
+        {
+          "id": "human-constraint",
+          "verdict": "cannot-assess",
+          "rationale": "Using the goal in prose does not prove preservation of the independent human-note object."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "demo-first-alternative",
+      "checkpoint": "decided",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The full synthetic decision follows the same pilot, two-creator limit and signup goal. No publishing is requested.",
+      "answer": "Prioritize the demo in the next small test while retaining a story comparison across both creators, using the same offer and comparable distribution. Compare verified signups with all costs included. Reverse the preference if the difference disappears or changes under the comparison; this is a provisional allocation, not proof of profit.",
+      "judgments": [
+        {
+          "id": "next-budget-choice",
+          "verdict": "pass",
+          "rationale": "Another proportionate decision can pass; the grader must not require diagnosis-first merely because it was preferred in discussion."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "creative-source-scope-check",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The synthetic trace records inspection of the creator disclosure, two located stills and the competition terms. It distinguishes the older upload from the later competition period and records how that changes the proposed small-team transfer.",
+      "answer": "The personal creator account can illustrate the opportunity, but cannot supply current competition instructions or paid-ad performance. We can test its communication idea with our own offer rather than reproduce the competition conditions.",
+      "judgments": [
+        {
+          "id": "investigation-value",
+          "verdict": "pass",
+          "rationale": "Focused source reconciliation changes a material transfer assumption; a Meta Ad Library search is not automatically required."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    }
+  ]
+}

@@ -17,6 +17,39 @@ export function CanvasPerformanceProbe() {
     document.querySelector<HTMLElement>('[aria-label="Canvas workspace"]')?.focus();
     document.querySelector('[aria-label="Canvas workspace"]')?.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
   };
+  const runPinchCheck = async () => {
+    const workspace = document.querySelector<HTMLElement>('[aria-label="Canvas workspace"]');
+    const surface = workspace?.querySelector<HTMLElement>('[data-canvas-v2-workspace-surface]');
+    const atmosphere = workspace?.querySelector<HTMLElement>('[data-testid="canvas-v2-atmosphere"]');
+    if (!workspace || !surface || !atmosphere) return;
+    const origin = workspace.getBoundingClientRect();
+    const point = { x: origin.width * .6, y: origin.height * .45 };
+    const before = new DOMMatrix(surface.style.transform);
+    const anchor = { x: (point.x-before.e)/before.a, y: (point.y-before.f)/before.d };
+    const renderCount = Number(workspace.dataset.canvasV2RenderCount ?? 0);
+    const background = atmosphere.style.cssText;
+    let last = 0, backgroundWrites = 0;
+    const frames: number[] = [];
+    for (let i=0;i<72;i++) {
+      const time = await new Promise<number>(resolve=>requestAnimationFrame(resolve));
+      if (last) frames.push(time-last); last=time;
+      workspace.dispatchEvent(new WheelEvent("wheel", {bubbles:true,cancelable:true,ctrlKey:true,deltaY:i<36 ? -1 : 1,clientX:origin.left+point.x,clientY:origin.top+point.y}));
+      if (atmosphere.style.cssText !== background) backgroundWrites++;
+    }
+    await new Promise(resolve=>setTimeout(resolve,160));
+    const after = new DOMMatrix(surface.style.transform);
+    const afterWheel = {scale:after.a,anchorDrift:Math.hypot(after.e+anchor.x*after.a-point.x,after.f+anchor.y*after.d-point.y)};
+    const sendGesture = (type: string, scale: number) => {
+      const event = new Event(type,{bubbles:true,cancelable:true});
+      Object.assign(event,{scale,clientX:origin.left+point.x,clientY:origin.top+point.y}); workspace.dispatchEvent(event);
+    };
+    sendGesture("gesturestart",1); sendGesture("gesturechange",1.25);
+    await new Promise(resolve=>requestAnimationFrame(resolve));
+    const nativeScale = new DOMMatrix(surface.style.transform).a;
+    sendGesture("gestureend",1.25);
+    const sorted = [...frames].sort((a,b)=>a-b);
+    setReport(JSON.stringify({scope:"Synthetic pinch through real DOM handlers; not physical trackpad latency",images:workspace.querySelectorAll("img").length,samples:frames.length,frameP95Ms:sorted[Math.floor(sorted.length*.95)],frameMaxMs:Math.max(...frames),renders:Number(workspace.dataset.canvasV2RenderCount??0)-renderCount,gradientWritesDuringPinch:backgroundWrites,returnScaleError:Math.abs(afterWheel.scale-before.a),anchorDriftPx:afterWheel.anchorDrift,nativeGestureScaleRatio:nativeScale/after.a},null,2));
+  };
   const [recording, setRecording] = useState(false);
   const [report, setReport] = useState("");
   const finish = useRef<() => void>(() => {});
@@ -60,6 +93,7 @@ export function CanvasPerformanceProbe() {
     };
   }, [recording]);
   return <div className="fixed bottom-20 left-3 z-[150] rounded-lg bg-black/85 p-2 text-xs text-white">
+    <button type="button" className="mr-3" onClick={() => void runPinchCheck()}>Run pinch check</button>
     <button type="button" className="mr-3" onClick={loadBoard}>Load 100 reference images</button>
     <button type="button" aria-label={recording ? "Stop canvas measurement" : "Start canvas measurement"} onClick={() => recording ? finish.current() : (setReport(""),setRecording(true))}>{recording ? "Stop measurement" : "Measure canvas"}</button>
     {report && <details><summary>Measurement</summary><pre data-testid="canvas-performance-report" className="max-h-64 max-w-sm overflow-auto whitespace-pre-wrap">{report}</pre></details>}

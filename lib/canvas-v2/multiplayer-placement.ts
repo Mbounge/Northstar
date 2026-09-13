@@ -95,6 +95,8 @@ function intersectionArea(first: CanvasV2ElementBounds, second: CanvasV2ElementB
  * territory from being placed on top of any existing canvas object.
  */
 export function validateCanvasV2MultiplayerPlacement(input: {
+  /** Preserve human/reference objects without enforcing AI-to-AI design geometry. */
+  protectedOnly?: boolean;
   previous: CanvasV2RenderObservation;
   candidate: CanvasV2RenderObservation;
   transaction: CanvasV2SceneTransaction;
@@ -144,11 +146,17 @@ export function validateCanvasV2MultiplayerPlacement(input: {
   for (const authored of changedOccupants) {
     for (const existing of previousOccupants) {
       if (existing.nodeId === authored.nodeId) continue;
-      const overlap = intersectionArea(authored.bounds, existing.bounds);
+      if (input.protectedOnly && existing.owner !== "user" && !immutableReferenceNodeIds.has(existing.nodeId)) continue;
+      if (input.protectedOnly && explicitlyEditableUserNodeIds.has(existing.nodeId)) continue;
+      const renderedExisting = candidateById.get(existing.nodeId);
+      if (!renderedExisting) continue;
+      const overlap = intersectionArea(authored.bounds, renderedExisting.bounds);
       if (overlap < MIN_COLLISION_AREA) continue;
       failures.push(`Northstar placement ${authored.nodeId} overlaps existing ${existing.owner}-owned object ${existing.nodeId} by ${Math.round(overlap)}px². Inspect the complete placementOccupants map and move or recompose the AI territory into genuinely open world-space.`);
     }
   }
+
+  if (input.protectedOnly) return Array.from(new Set(failures));
 
   // Two newly created or recomposed top-level objects may not hide each other
   // merely because neither existed in the previous observation.

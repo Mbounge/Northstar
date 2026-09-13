@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "status": "proposed-human-calibration",
+  "caseId": "slack-clips-design",
+  "notBenchmarkRuns": true,
+  "examples": [
+    {
+      "id": "style-copy",
+      "answer": "Copy Slack’s purple sidebar; that will solve our review friction.",
+      "expectedFailure": [
+        "mechanism-transfer",
+        "focused-proposal"
+      ],
+      "reason": "Visual imitation without a supported mechanism.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "mechanism-transfer",
+          "verdict": "fail",
+          "rationale": "Visual imitation without a supported mechanism."
+        },
+        {
+          "id": "focused-proposal",
+          "verdict": "fail",
+          "rationale": "Visual imitation without a supported mechanism."
+        }
+      ]
+    },
+    {
+      "id": "fake-uplift",
+      "answer": "These three sessions prove a 40% reduction in review time.",
+      "expectedFailure": [
+        "research-revision"
+      ],
+      "reason": "No times or causal design are provided.",
+      "checkpoint": "revised",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "research-revision",
+          "verdict": "fail",
+          "rationale": "No times or causal design are provided."
+        }
+      ]
+    },
+    {
+      "id": "mandatory-video",
+      "answer": "Require video replies from everyone and save every transcript automatically.",
+      "expectedFailure": [
+        "privacy-change"
+      ],
+      "reason": "Violates the explicit product constraints.",
+      "checkpoint": "constrained",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "privacy-change",
+          "verdict": "fail",
+          "rationale": "Violates the explicit product constraints."
+        }
+      ]
+    },
+    {
+      "id": "grounded-transfer",
+      "answer": "Keeping the relevant moment and feedback context together may reduce reopening; test context recovery against the current workflow.",
+      "expectedFailure": [],
+      "reason": "A defensible hypothesis, not a measured result.",
+      "checkpoint": "initial",
+      "context": "Authored text excerpt at the declared checkpoint with the case evidence and constraints available by that checkpoint. No candidate browser, source-access trace or native-state artifacts are supplied. Only the listed judgments are assessed; no other criterion or whole-case pass is implied.",
+      "judgments": [
+        {
+          "id": "mechanism-transfer",
+          "verdict": "pass",
+          "rationale": "A defensible hypothesis, not a measured result."
+        }
+      ]
+    },
+    {
+      "id": "app-inventory",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The complete synthetic trace lists app names and screenshots but records no inspected interaction, comparison or connection to the review task.",
+      "answer": "Look at Slack, Discord and other collaboration apps for inspiration.",
+      "judgments": [
+        {
+          "id": "investigation-value",
+          "verdict": "fail",
+          "rationale": "A list of products is not design discovery; no particular named app would rescue this omission."
+        }
+      ],
+      "expectedFailure": [
+        "investigation-value"
+      ],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "cross-product-mechanism",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The synthetic trace includes located Slack examples and an inspected recording of a fictional Reference App Q. Q keeps written feedback beside a paused video. The comparison notes Q is a dedicated review tool, while Slack is conversation-oriented. This is not a claim about a real additional product.",
+      "answer": "Both approaches keep the reference available while someone responds. In our tool, that could reduce the need to remember the video after closing it. Q is the closer task match, but its side-by-side layout may crowd small screens. Prototype the principle and test it with our review task.",
+      "judgments": [
+        {
+          "id": "investigation-value",
+          "verdict": "pass",
+          "rationale": "An executed relevant comparison adds both a transferable principle and a boundary."
+        },
+        {
+          "id": "mechanism-transfer",
+          "verdict": "pass",
+          "rationale": "Connects media observations to the actual workflow rather than copying styling."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "written-brief-with-tradeoff",
+      "checkpoint": "constrained",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. The supplied excerpt follows the research notes and transcript-storage constraint. No before-and-after native object records are supplied.",
+      "answer": "Use an independently maintained written brief with the requested decision and essential details, plus ordinary text feedback and optional video. No automatic transcript is needed. Test author burden and whether text adequately supports the specific review decision; do not assume it replaces all visual review. Keep moment navigation as an unresolved follow-up. Any later transcript feature must honor explicit creation, retention and deletion choices.",
+      "judgments": [
+        {
+          "id": "privacy-change",
+          "verdict": "pass",
+          "rationale": "Provides a possible text-access route with limits under the constraint; it is not the only accepted design."
+        },
+        {
+          "id": "human-constraint",
+          "verdict": "cannot-assess",
+          "rationale": "The proposal respects the requirement semantically, but no artifact proves human-object preservation."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "all-problems-declared-solved",
+      "checkpoint": "planned",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. This is the complete synthetic test-plan answer after choosing a written-summary proposal. No observed user outcomes are supplied.",
+      "answer": "The summary solves silent viewing, visual comprehension and moment navigation for everyone. No further test is needed.",
+      "judgments": [
+        {
+          "id": "evaluate-tradeoff",
+          "verdict": "fail",
+          "rationale": "Omits an operational test and the potential burden or information loss."
+        },
+        {
+          "id": "no-universal-copy",
+          "verdict": "fail",
+          "rationale": "Claims a universal solution without testing, including a navigation problem the proposal does not solve."
+        }
+      ],
+      "expectedFailure": [
+        "evaluate-tradeoff",
+        "no-universal-copy"
+      ],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    },
+    {
+      "id": "design-story-on-board",
+      "checkpoint": "initial",
+      "context": "Synthetic calibration scenario, not an actual Northstar run. A synthetic board observation describes both supplied GIFs beside locatable annotations, the review-friction explanation, one focused proposal, and its trade-off and test. A separate research list does not interrupt the main reading path. No interaction recording is provided.",
+      "answer": "Keep the relevant moment available while feedback is written; test whether this improves specific comments without crowding the workspace.",
+      "judgments": [
+        {
+          "id": "narrative-clarity",
+          "verdict": "pass",
+          "rationale": "The observed layout tells an evidence-to-principle-to-test story without imposing a template."
+        },
+        {
+          "id": "inspectable-media",
+          "verdict": "cannot-assess",
+          "rationale": "The layout description alone does not prove GIF playback or independent selection."
+        }
+      ],
+      "expectedFailure": [],
+      "reason": "Assess only these explicit judgments in the supplied context. Unlisted criteria and whole-case performance are unassessed."
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+# Preview foundation: one persistent instance until durable session routing is added.
+services:
+  - type: web
+    name: northstar-discovery-worker
+    runtime: docker
+    dockerfilePath: ./worker/Dockerfile
+    dockerContext: .
+    plan: 1c-2g
+    numInstances: 1
+    region: virginia
+    healthCheckPath: /readyz
+    autoDeployTrigger: off
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: NORTHSTAR_WORKER_SECRET
+        generateValue: true
+      - key: NORTHSTAR_ALLOWED_ORIGINS
+        sync: false
+      - key: NORTHSTAR_MAX_SESSIONS
+        value: "4"
+      - key: NORTHSTAR_MAX_SESSIONS_PER_USER
+        value: "2"

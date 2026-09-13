@@ -64,6 +64,8 @@ export interface CanvasV2AnalyticalOperator {
 
 export interface CanvasV2Triangulation {
   id: string;
+  /** Meaning of the synthesis, not a keyword-based verdict on its truth. */
+  kind?: "observation" | "interpretation" | "hypothesis";
   question: string;
   relationship: "convergent" | "mixed" | "conflicting" | "insufficient";
   synthesis: string;
@@ -189,6 +191,8 @@ export interface CanvasV2DiscoveryQuestion {
   answer?: string;
   openedAt: string;
   resolvedAt?: string;
+  statusReason?: string;
+  evidenceNodeIds?: string[];
 }
 
 export interface CanvasV2DiscoveryStatement {
@@ -227,6 +231,7 @@ export interface CanvasV2DiscoveryLine {
   id: string;
   label: string;
   questionIds: string[];
+  statusReason?: string;
   status: "active" | "completed" | "deferred" | "rejected";
   openedAt: string;
   updatedAt: string;
@@ -286,6 +291,7 @@ export interface CanvasV2DiscoveryState {
   id: string;
   version: number;
   status: "active" | "awaiting-human" | "complete";
+  awaitingQuestionId?: string;
   objective: string;
   desiredOutcome: string;
   framing: string;
@@ -302,12 +308,17 @@ export interface CanvasV2DiscoveryState {
   validationBacklog: CanvasV2ValidationPlan[];
   /** Validation plans that survived a verified native-canvas commit. */
   presentedValidationIds?: string[];
+  /** Plans actually returned in chat, independent of canvas undo/redo. */
+  chatPresentedValidationIds?: string[];
   humanConclusions: CanvasV2HumanConclusion[];
   lines: CanvasV2DiscoveryLine[];
   moves: CanvasV2DiscoveryMove[];
   humanInputs: CanvasV2DiscoveryHumanInput[];
   latestUnderstanding: string;
   sensemaking?: CanvasV2SensemakingState;
+  explanationReview?: import("./explanation-review").CanvasV2ExplanationReview;
+  explanationChallenge?: import("./discovery-investigator").CanvasV2ExplanationChallenge;
+  explanationChallengeResponse?: import("./discovery-investigator").CanvasV2ChallengeResponse;
   completion: {
     criteria: string[];
     satisfiedCriteria: string[];
@@ -330,6 +341,26 @@ export interface CanvasV2DiscoveryStateTransition {
   latestUnderstanding: string;
   addQuestions: Array<Pick<CanvasV2DiscoveryQuestion, "id" | "question" | "whyItMatters" | "priority">>;
   resolveQuestionIds: string[];
+  questionUpdates?: Array<{
+    id: string;
+    status: CanvasV2DiscoveryQuestion["status"];
+    reason: string;
+    answer?: string;
+    evidenceNodeIds: string[];
+  }>;
+  lineUpdates?: Array<{
+    id: string;
+    label: string;
+    questionIds: string[];
+    status: CanvasV2DiscoveryLine["status"];
+    reason: string;
+  }>;
+  contradictionUpdates?: Array<{
+    id: string;
+    status: CanvasV2DiscoveryContradiction["status"];
+    resolution: string;
+    evidenceNodeIds: string[];
+  }>;
   statements: Array<Pick<CanvasV2DiscoveryStatement, "id" | "kind" | "statement" | "evidenceNodeIds" | "confidence">>;
   supersedeStatementIds: string[];
   contradictions: Array<Pick<CanvasV2DiscoveryContradiction, "id" | "summary" | "evidenceNodeIds">>;
@@ -446,6 +477,18 @@ export function createCanvasV2DiscoveryState(input: {
   const continuing = input.previous && input.interpretation.relationship !== "new";
   if (continuing) {
     const previous = cloneState(input.previous!);
+    // Older initial inquiries collapsed unrelated questions into one generated
+    // branch. Split only that untouched default; explicit human/model groupings
+    // and their dispositions remain authoritative.
+    const legacyLine = previous.lines.find((line) => line.id === `${previous.id}:line:primary`
+      && line.status === "active" && !line.statusReason && line.label === previous.framing && line.questionIds.length > 1);
+    if (legacyLine) {
+      previous.lines = previous.lines.flatMap((line) => line !== legacyLine ? [line] : line.questionIds.map((questionId, index) => ({
+        ...line, id: index === 0 ? line.id : `${previous.id}:line:legacy:${index + 1}`,
+        label: previous.questions.find((question) => question.id === questionId)?.question ?? line.label,
+        questionIds: [questionId],
+      })));
+    }
     previous.validationBacklog = previous.validationBacklog ?? [];
     previous.humanConclusions = previous.humanConclusions ?? [];
     const wasAwaitingHuman = previous.status === "awaiting-human";
@@ -460,13 +503,17 @@ export function createCanvasV2DiscoveryState(input: {
     const resolvingHumanQuestion = Boolean(input.humanInput?.trim())
       && input.interpretation.relationship === "continue"
       && (wasAwaitingHuman || Boolean(awaitingValidation));
-    const framingChanged = !resolvingHumanQuestion && previous.framing !== input.interpretation.framing;
+    const framingChanged = !resolvingHumanQuestion && input.interpretation.relationship === "reframe" && previous.framing !== input.interpretation.framing;
     previous.version += 1;
     previous.status = "active";
     if (!resolvingHumanQuestion) {
-      previous.objective = input.interpretation.objective;
+      // A continuation may add a deliverable, but cannot replace the inquiry's
+      // question with a newly guessed router explanation.
+      if (input.interpretation.relationship === "reframe") {
+        previous.objective = input.interpretation.objective;
+        previous.framing = input.interpretation.framing;
+      }
       previous.desiredOutcome = input.interpretation.desiredOutcome;
-      previous.framing = input.interpretation.framing;
       previous.inquiryKind = input.interpretation.inquiryKind;
       previous.evidenceNeed = input.interpretation.evidenceNeed;
       previous.sourceCategories = [...input.interpretation.sourceCategories];
@@ -474,14 +521,21 @@ export function createCanvasV2DiscoveryState(input: {
         ? [...input.interpretation.completionCriteria]
         : previous.completion.criteria;
     }
+    // A new human turn changes the review context, even when the wording of
+    // the criteria is unchanged. Prior satisfactions are not a fresh review.
+    previous.completion.satisfiedCriteria = [];
+    // The prior explanation remains useful memory, but its delivery judgement
+    // belongs to the previous human request, not a newly scoped edit.
+    if (previous.explanationReview) previous.explanationReview = { ...previous.explanationReview, fingerprint: "", delivery: null };
     previous.completion.readiness = "not-ready";
     previous.completion.rationale = resolvingHumanQuestion
       ? "The material human judgment is now available for the next discovery move."
       : input.interpretation.rationale;
-    previous.completion.materialOpenRequirements = [...input.interpretation.materialUnknowns];
+    previous.completion.materialOpenRequirements = [...previous.completion.criteria];
     if (resolvingHumanQuestion && input.humanInput?.trim()) {
       const answer = input.humanInput.trim().slice(0, 1_200);
-      const question = [...previous.questions].reverse().find((item) => item.status === "open");
+      const question = !awaitingValidation ? previous.questions.find((item) => item.id === previous.awaitingQuestionId)
+        ?? [...previous.questions].reverse().find((item) => item.status === "open") : undefined;
       if (question) {
         previous.questions = previous.questions.map((item) => item.id === question.id
           ? { ...item, status: "answered", answer, resolvedAt: input.now }
@@ -497,10 +551,21 @@ export function createCanvasV2DiscoveryState(input: {
       });
       previous.humanInputs = previous.humanInputs.slice(-80);
       previous.lines = previous.lines.map((line) => line.status === "active" && line.questionIds.length
-        && line.questionIds.every((questionId) => previous.questions.some((item) => item.id === questionId && item.status !== "open"))
+        && line.questionIds.every((questionId) => previous.questions.some((item) => item.id === questionId && (item.status === "answered" || item.status === "rejected")))
         ? { ...line, status: "completed", updatedAt: input.now }
         : line);
     }
+    if (!resolvingHumanQuestion && input.humanInput?.trim()) {
+      previous.humanInputs.push({
+        id: `${previous.id}:human:annotation:${previous.version}`,
+        kind: "annotation",
+        summary: input.humanInput.trim().slice(0, 1_200),
+        canvasNodeIds: [...previous.selectedCanvasNodeIds],
+        createdAt: input.now,
+      });
+      previous.humanInputs = previous.humanInputs.slice(-80);
+    }
+    delete previous.awaitingQuestionId;
     previous.history.push({
       version: previous.version,
       trigger: input.interpretation.relationship === "reframe" ? "human" : "inquiry",
@@ -521,8 +586,8 @@ export function createCanvasV2DiscoveryState(input: {
   const questions = input.interpretation.materialUnknowns.map((question, index): CanvasV2DiscoveryQuestion => ({
     id: `${inquiryId}:question:${index + 1}`,
     question,
-    whyItMatters: "Resolving this uncertainty may materially change the requested outcome.",
-    priority: index === 0 ? "high" : "medium",
+    whyItMatters: "Assess how resolving this question would change the requested outcome before prioritizing it.",
+    priority: "medium",
     status: "open",
     openedAt: input.now,
   }));
@@ -547,13 +612,16 @@ export function createCanvasV2DiscoveryState(input: {
     validationBacklog: [],
     presentedValidationIds: [],
     humanConclusions: [],
-    lines: questions.length ? [{ id: `${inquiryId}:line:primary`, label: input.interpretation.framing, questionIds: questions.map((question) => question.id), status: "active", openedAt: input.now, updatedAt: input.now }] : [],
+    lines: questions.map((question, index) => ({ id: `${inquiryId}:line:${index + 1}`, label: question.question, questionIds: [question.id], status: "active", openedAt: input.now, updatedAt: input.now })),
     moves: [],
-    humanInputs: [],
-    latestUnderstanding: input.interpretation.framing,
+    humanInputs: input.humanInput?.trim() ? [{
+      id: `${inquiryId}:human:annotation:1`, kind: "annotation",
+      summary: input.humanInput.trim().slice(0, 1_200), canvasNodeIds: [], createdAt: input.now,
+    }] : [],
+    latestUnderstanding: "",
     sensemaking: {
       mode: input.interpretation.evidenceNeed === "irrelevant" ? "direct" : "investigating",
-      synthesis: input.interpretation.framing,
+      synthesis: "",
       operators: [],
       triangulations: [],
       uncertainties: questions.map((question) => ({
@@ -572,7 +640,8 @@ export function createCanvasV2DiscoveryState(input: {
     completion: {
       criteria: input.interpretation.completionCriteria,
       satisfiedCriteria: [],
-      materialOpenRequirements: input.interpretation.materialUnknowns,
+      // Open domain questions are not automatically missing deliverables.
+      materialOpenRequirements: [...input.interpretation.completionCriteria],
       readiness: "not-ready",
       rationale: input.interpretation.rationale,
     },
@@ -693,17 +762,6 @@ function validateEvidenceNodeIds(ids: readonly string[], known: ReadonlySet<stri
   if (invalid.length) throw new Error(`${label} references unknown discovery-node IDs: ${invalid.join(", ")}.`);
 }
 
-function evidenceSupportsCausalLanguage(graph: CanvasV2DiscoveryGraph | undefined, ids: readonly string[]): boolean {
-  const causalSupport = /\b(?:causal|causality|experiment|experimental|randomi[sz]ed|controlled trial|quasi-experiment)\b/i;
-  return (graph?.nodes ?? []).some((node) => ids.includes(node.id) && causalSupport.test([
-    node.label,
-    node.summary,
-    node.definition,
-    node.sourceClass,
-    ...node.tags,
-  ].filter(Boolean).join(" ")));
-}
-
 function mergeById<T extends { id: string }>(previous: readonly T[], incoming: readonly T[], maximum: number): T[] {
   const merged = new Map(previous.map((item) => [item.id, structuredClone(item)]));
   for (const item of incoming) merged.set(item.id, structuredClone(item));
@@ -723,6 +781,8 @@ export function applyCanvasV2DiscoveryTransition(input: {
   transition.move.evidenceNodeIds = canonicalEvidenceNodeIds(transition.move.evidenceNodeIds, input.graph);
   transition.statements = transition.statements.map((item) => ({ ...item, evidenceNodeIds: canonicalEvidenceNodeIds(item.evidenceNodeIds, input.graph) }));
   transition.contradictions = transition.contradictions.map((item) => ({ ...item, evidenceNodeIds: canonicalEvidenceNodeIds(item.evidenceNodeIds, input.graph) }));
+  transition.questionUpdates = (transition.questionUpdates ?? []).map((item) => ({ ...item, evidenceNodeIds: canonicalEvidenceNodeIds(item.evidenceNodeIds, input.graph) }));
+  transition.contradictionUpdates = (transition.contradictionUpdates ?? []).map((item) => ({ ...item, evidenceNodeIds: canonicalEvidenceNodeIds(item.evidenceNodeIds, input.graph) }));
   transition.candidates = transition.candidates.map((item) => ({ ...item, evidenceNodeIds: canonicalEvidenceNodeIds(item.evidenceNodeIds, input.graph) }));
   transition.validationPlans = (transition.validationPlans ?? []).map((item) => ({
     ...item,
@@ -748,29 +808,19 @@ export function applyCanvasV2DiscoveryTransition(input: {
       transition.sensemaking.understandingDelta.evidenceNodeIds = canonicalEvidenceNodeIds(transition.sensemaking.understandingDelta.evidenceNodeIds, input.graph);
     }
     transition.sensemaking.triangulations = transition.sensemaking.triangulations.map((item) => {
-      const unsupportedCause = /\b(?:caus(?:e|es|ed|ing|al|ality)|drives?|led to|results? in|because of)\b/i.test(item.synthesis)
-        && !evidenceSupportsCausalLanguage(input.graph, item.evidenceNodeIds);
-      const hasSeveralEvidenceNodes = new Set(item.evidenceNodeIds).size >= 2;
-      if (!unsupportedCause && (item.relationship === "insufficient" || hasSeveralEvidenceNodes)) return item;
-      // A causal overreach has one safe deterministic meaning: the supplied
-      // descriptive record cannot resolve why the patterns differ. Preserve
-      // the evidence lineage and analytical question. The same normalization
-      // applies when a model calls one human record a triangulation: one exact
-      // result is a valid finding, but it is not multiple-source convergence.
-      // Never spend another provider call merely to restate either boundary.
+      // Validate independence by source identity, not by counting excerpts.
+      // Preserve the argument: code cannot decide whether a qualified mechanism
+      // is sound by matching causal words or words in a source's title.
+      const representedSources = new Set((input.graph?.nodes ?? [])
+        .filter(node => item.evidenceNodeIds.includes(node.id))
+        .map(node => node.sourceId ?? node.packetId ?? node.id));
+      const independent = input.graph ? representedSources.size >= 2 : new Set(item.evidenceNodeIds).size >= 2;
+      const kind = item.kind ?? "interpretation";
+      if (independent) return { ...item, kind };
       return {
-        ...item,
-        relationship: "insufficient" as const,
-        confidence: "unknown" as const,
-        synthesis: unsupportedCause
-          ? "The supplied descriptive evidence cannot determine why the observed patterns differ; the proposed relationship remains unresolved."
-          : item.synthesis,
-        limitations: Array.from(new Set([
-          ...item.limitations,
-          unsupportedCause
-            ? "The available evidence is descriptive and cannot establish cause and effect."
-            : "This reading comes from one human-supplied result and is not multi-source triangulation.",
-        ])),
+        ...item, kind, relationship: "insufficient" as const, confidence: "unknown" as const,
+        limitations: Array.from(new Set([...item.limitations,
+          "This reading does not contain two independent sources and is not multi-source triangulation."])),
       };
     });
     // Analytical-operator IDs describe how evidence is being read; they are
@@ -915,8 +965,9 @@ export function applyCanvasV2DiscoveryTransition(input: {
   }
   if (transition.sensemaking) {
     const material = new Set(transition.sensemaking.materialEvidenceNodeIds);
-    const repeated = transition.sensemaking.backgroundEvidenceNodeIds.filter((id) => material.has(id));
-    if (repeated.length) throw new Error(`Sensemaking evidence cannot be both material and background: ${repeated.join(", ")}.`);
+    // Importance labels are bookkeeping, not competing factual claims. Keep a
+    // source marked material there once, retaining its provenance and all claims.
+    transition.sensemaking.backgroundEvidenceNodeIds = transition.sensemaking.backgroundEvidenceNodeIds.filter(id => !material.has(id));
     validateEvidenceNodeIds(transition.sensemaking.materialEvidenceNodeIds, known, "Material sensemaking evidence", false);
     validateEvidenceNodeIds(transition.sensemaking.backgroundEvidenceNodeIds, known, "Background sensemaking evidence", false);
     for (const operator of transition.sensemaking.operators) {
@@ -938,10 +989,6 @@ export function applyCanvasV2DiscoveryTransition(input: {
       if (triangulation.confidence === "high" && new Set(triangulation.evidenceNodeIds).size < 2) {
         throw new Error(`High-confidence triangulation ${triangulation.id} requires at least two distinct evidence nodes.`);
       }
-      if (/\b(?:caus(?:e|es|ed|ing|al|ality)|drives?|led to|results? in|because of)\b/i.test(triangulation.synthesis)
-        && !evidenceSupportsCausalLanguage(input.graph, triangulation.evidenceNodeIds)) {
-        throw new Error(`The triangulation ${triangulation.id} makes a causal claim without causal evidence.`);
-      }
     }
     for (const uncertainty of transition.sensemaking.uncertainties) {
       validateEvidenceNodeIds(uncertainty.evidenceNodeIds, known, `The uncertainty ${uncertainty.id}`, false);
@@ -949,6 +996,28 @@ export function applyCanvasV2DiscoveryTransition(input: {
     if (transition.sensemaking.understandingDelta) {
       validateEvidenceNodeIds(transition.sensemaking.understandingDelta.evidenceNodeIds, known, "The understanding change", true);
     }
+  }
+
+  const knownQuestions = new Set([...next.questions, ...transition.addQuestions].map((item) => item.id));
+  for (const id of transition.resolveQuestionIds) {
+    if (!knownQuestions.has(id)) throw new Error(`Cannot resolve unknown discovery question: ${id}.`);
+  }
+  for (const update of transition.questionUpdates ?? []) {
+    if (!knownQuestions.has(update.id)) throw new Error(`Unknown discovery question: ${update.id}.`);
+    if (!update.reason.trim()) throw new Error(`Question ${update.id} needs a reason for its status change.`);
+    if (update.status === "answered" && !update.answer?.trim()) throw new Error(`Answered question ${update.id} needs its answer.`);
+    if (update.status !== "answered" && transition.resolveQuestionIds.includes(update.id)) throw new Error(`Conflicting question updates: ${update.id}.`);
+    validateEvidenceNodeIds(update.evidenceNodeIds, known, `The question update ${update.id}`, false);
+  }
+  for (const line of transition.lineUpdates ?? []) {
+    if (!line.reason.trim() || !line.label.trim() || !line.questionIds.length) throw new Error(`Investigation branch ${line.id} requires a label, questions and a reason.`);
+    if (line.questionIds.some((id) => !knownQuestions.has(id))) throw new Error(`Investigation branch ${line.id} references an unknown question.`);
+  }
+  const knownContradictions = new Set([...next.contradictions, ...transition.contradictions].map((item) => item.id));
+  for (const update of transition.contradictionUpdates ?? []) {
+    if (!knownContradictions.has(update.id)) throw new Error(`Unknown contradiction: ${update.id}.`);
+    if (!update.resolution.trim()) throw new Error(`Contradiction ${update.id} needs an explanation for its status change.`);
+    validateEvidenceNodeIds(update.evidenceNodeIds, known, `The contradiction update ${update.id}`, update.status === "resolved");
   }
 
   const previousFraming = next.framing;
@@ -975,28 +1044,70 @@ export function applyCanvasV2DiscoveryTransition(input: {
     if (next.questions.some((item) => item.id === question.id)) continue;
     next.questions.push({ ...question, status: "open", openedAt: input.now });
   }
+  if (transition.clarification) {
+    const matching = next.questions.find((question) => question.status === "open" && question.question === transition.clarification!.question)
+      ?? (transition.addQuestions.length === 1 ? next.questions.find((question) => question.id === transition.addQuestions[0].id) : undefined);
+    const id = matching?.id ?? `${next.id}:human-question:${next.version}`;
+    if (!matching) next.questions.push({ id, question: transition.clarification.question, whyItMatters: transition.clarification.whyItMatters, priority: "high", status: "open", openedAt: input.now });
+    next.awaitingQuestionId = id;
+  } else delete next.awaitingQuestionId;
   const resolvedQuestionIds = new Set(transition.resolveQuestionIds);
   next.questions = next.questions.map((question) => resolvedQuestionIds.has(question.id)
     ? { ...question, status: "answered", resolvedAt: input.now }
     : question);
+  for (const update of transition.questionUpdates ?? []) {
+    next.questions = next.questions.map((question) => question.id !== update.id ? question : {
+      ...question, status: update.status, statusReason: update.reason,
+      ...(update.answer ? { answer: update.answer } : {}),
+      evidenceNodeIds: Array.from(new Set([...(question.evidenceNodeIds ?? []), ...update.evidenceNodeIds])),
+      resolvedAt: update.status === "answered" ? input.now : undefined,
+    });
+  }
+  for (const update of transition.lineUpdates ?? []) {
+    const existing = next.lines.find((line) => line.id === update.id);
+    if (update.status === "completed" && update.questionIds.some((id) => next.questions.find((question) => question.id === id)?.status !== "answered"
+      && next.questions.find((question) => question.id === id)?.status !== "rejected")) throw new Error(`Investigation branch ${update.id} still has unanswered questions.`);
+    next.lines = [...next.lines.filter((line) => line.id !== update.id), {
+      id: update.id, label: update.label, questionIds: [...update.questionIds], status: update.status, statusReason: update.reason,
+      openedAt: existing?.openedAt ?? input.now, updatedAt: input.now,
+    }];
+  }
+  // New questions are real branches, not orphaned state the next turn cannot find.
+  const linked = new Set(next.lines.flatMap((line) => line.questionIds));
+  for (const question of next.questions.filter((item) => item.status === "open" && !linked.has(item.id))) {
+    let lineIndex = next.lines.length + 1;
+    while (next.lines.some((line) => line.id === `${next.id}:line:${lineIndex}`)) lineIndex += 1;
+    next.lines.push({ id: `${next.id}:line:${lineIndex}`, label: question.question, questionIds: [question.id], status: "active", openedAt: input.now, updatedAt: input.now });
+  }
   next.lines = next.lines.map((line) => line.status === "active" && line.questionIds.length
-    && line.questionIds.every((questionId) => next.questions.some((question) => question.id === questionId && question.status !== "open"))
+    && line.questionIds.every((questionId) => next.questions.some((question) => question.id === questionId && (question.status === "answered" || question.status === "rejected")))
     ? { ...line, status: "completed", updatedAt: input.now }
     : line);
   const superseded = new Set(transition.supersedeStatementIds);
-  next.statements = next.statements.map((statement) => superseded.has(statement.id)
+  next.statements = next.statements.map((statement) => superseded.has(statement.id) && statement.status === "active"
     ? { ...statement, status: "superseded", updatedAt: input.now }
     : statement);
   for (const statement of transition.statements) {
-    const item: CanvasV2DiscoveryStatement = { ...structuredClone(statement), status: "active", createdAt: input.now, updatedAt: input.now };
+    const existing = next.statements.find((item) => item.id === statement.id);
+    if (existing?.status === "rejected") continue;
+    const item: CanvasV2DiscoveryStatement = { ...structuredClone(statement), status: existing?.status ?? "active", createdAt: existing?.createdAt ?? input.now, updatedAt: input.now };
     next.statements = [...next.statements.filter((current) => current.id !== item.id), item];
   }
   for (const contradiction of transition.contradictions) {
-    const item: CanvasV2DiscoveryContradiction = { ...structuredClone(contradiction), status: "open", createdAt: input.now, updatedAt: input.now };
+    const existing = next.contradictions.find((item) => item.id === contradiction.id);
+    const item: CanvasV2DiscoveryContradiction = { ...existing, ...structuredClone(contradiction), evidenceNodeIds: Array.from(new Set([...(existing?.evidenceNodeIds ?? []), ...contradiction.evidenceNodeIds])), status: existing?.status ?? "open", createdAt: existing?.createdAt ?? input.now, updatedAt: input.now };
     next.contradictions = [...next.contradictions.filter((current) => current.id !== item.id), item];
   }
+  for (const update of transition.contradictionUpdates ?? []) {
+    next.contradictions = next.contradictions.map((item) => item.id !== update.id ? item : {
+      ...item, status: update.status, resolution: update.resolution,
+      evidenceNodeIds: Array.from(new Set([...item.evidenceNodeIds, ...update.evidenceNodeIds])), updatedAt: input.now,
+    });
+  }
   for (const candidate of acceptedCandidates) {
-    const item: CanvasV2DiscoveryCandidate = { ...structuredClone(candidate), status: "active", createdAt: input.now, updatedAt: input.now };
+    const existing = next.candidates.find((item) => item.id === candidate.id);
+    if (existing && existing.status !== "active") continue;
+    const item: CanvasV2DiscoveryCandidate = { ...structuredClone(candidate), status: "active", createdAt: existing?.createdAt ?? input.now, updatedAt: input.now };
     next.candidates = [...next.candidates.filter((current) => current.id !== item.id), item];
   }
   for (const validation of transition.validationPlans) {
@@ -1073,7 +1184,11 @@ export function applyCanvasV2DiscoveryTransition(input: {
   next.history.push({
     version: next.version,
     trigger: "model",
-    summary: transition.progress.detail,
+    summary: [transition.progress.detail,
+      ...(transition.questionUpdates ?? []).map((item) => `${item.id} → ${item.status}: ${item.reason}`),
+      ...(transition.lineUpdates ?? []).map((item) => `${item.id} → ${item.status}: ${item.reason}`),
+      ...(transition.contradictionUpdates ?? []).map((item) => `${item.id} → ${item.status}: ${item.resolution}`),
+    ].join("\n"),
     ...(previousFraming !== next.framing ? { previousFraming } : {}),
     createdAt: input.now,
   });
@@ -1168,9 +1283,6 @@ export function parseCanvasV2EmergentDepthSignal(value: unknown): CanvasV2Emerge
   const sourceCategories = strings(input.sourceCategories, 5, 32)
     .filter((entry): entry is CanvasV2DiscoverySourceCategory => SOURCE_CATEGORIES.has(entry as CanvasV2DiscoverySourceCategory));
   const materialQuestion = text(input.materialQuestion, 800);
-  if (recommendation === "stay-direct" && evidenceNeed !== "irrelevant") {
-    throw new Error("A stay-direct depth judgment must keep evidence irrelevant.");
-  }
   if (recommendation === "deepen" && (!materialQuestion || evidenceNeed === "irrelevant")) {
     throw new Error("A deepen judgment requires one material question and a non-irrelevant evidence need.");
   }
@@ -1179,9 +1291,11 @@ export function parseCanvasV2EmergentDepthSignal(value: unknown): CanvasV2Emerge
     rationale: text(input.rationale, 1_000) || (recommendation === "deepen"
       ? "The first composition exposed a question that could materially change the requested outcome."
       : "The requested result can be completed responsibly from the supplied context."),
-    ...(materialQuestion ? { materialQuestion } : {}),
-    evidenceNeed,
-    sourceCategories: sourceCategories.length ? sourceCategories : ["canvas"],
+    ...(recommendation === "deepen" && materialQuestion ? { materialQuestion } : {}),
+    // This describes a need for ADDITIONAL investigation. Retained evidence
+    // may be relevant while the author correctly chooses no further search.
+    evidenceNeed: recommendation === "stay-direct" ? "irrelevant" : evidenceNeed,
+    sourceCategories: recommendation === "stay-direct" ? ["canvas"] : sourceCategories.length ? sourceCategories : ["canvas"],
   };
 }
 
@@ -1236,6 +1350,7 @@ export function buildCanvasV2SensemakingPresentationBrief(state: CanvasV2Discove
     currentReading: sensemaking.synthesis || state.latestUnderstanding,
     evidenceRelationships: sensemaking.triangulations.slice(-8).map((item) => ({
       question: item.question,
+      kind: item.kind ?? "interpretation",
       relationship: item.relationship,
       synthesis: item.synthesis,
       confidence: item.confidence,
@@ -1304,11 +1419,46 @@ export function assessCanvasV2DiscoveryCompletion(state: CanvasV2DiscoveryState,
 
 export function canvasV2DiscoveryCompletionFailures(state: CanvasV2DiscoveryState): string[] {
   const failures: string[] = [];
+  if (state.explanationReview?.delivery?.status === "revise") failures.push(`The observed explanation still requires revision: ${state.explanationReview.delivery.gap}.`);
   if (state.completion.materialOpenRequirements.length) failures.push(`The inquiry cannot complete while material requirements remain open: ${state.completion.materialOpenRequirements.join("; ")}.`);
   if (state.completion.readiness === "not-ready") failures.push(`The inquiry cannot complete before its inquiry-specific readiness criteria are satisfied: ${state.completion.rationale}.`);
   const missing = state.completion.criteria.filter((criterion) => !state.completion.satisfiedCriteria.includes(criterion));
   if (missing.length) failures.push(`Inquiry criteria need an explicit semantic assessment: ${missing.join("; ")}.`);
   return failures;
+}
+
+/** Bind review choices to the exact inquiry without treating them as satisfied. */
+export function canvasV2CompletionAssessmentSchema(criteria: readonly string[]) {
+  return {
+    type: "object", additionalProperties: false,
+    properties: {
+      satisfiedCriteria: { type: "array", maxItems: criteria.length, items: criteria.length ? { type: "string", enum: [...criteria] } : { type: "string" } },
+      materialOpenRequirements: { type: "array", description: "Missing requirements of THIS requested deliverable only. Use [] when the requested artifact is complete. Domain uncertainties, proposed future research and unconfirmed recommendations may remain honestly visible without blocking a request to compose a brief or plan. They block only if the user asked to resolve them or return actual validation findings.", items: { type: "string" } },
+      rationale: { type: "string" },
+    },
+    required: ["satisfiedCriteria", "materialOpenRequirements", "rationale"],
+  };
+}
+
+/** This review is private control state, never a visible canvas deliverable. */
+export function canvasV2CompletionReviewContract(state: CanvasV2DiscoveryState) {
+  return {
+    criteria: [...state.completion.criteria],
+    previouslySatisfiedCriteria: [...state.completion.satisfiedCriteria],
+    explanationDelivery: state.explanationReview?.delivery,
+    materialOpenRequirements: [...state.completion.materialOpenRequirements],
+    rationale: state.completion.rationale,
+    rule: "Assess these exact criteria against the committed render and supplied evidence. Return completionAssessment in JSON; never add assessment labels, completion cues, criteria checklists or verification prose to the board. Keep real missing user requirements open. Distinguish finishing the requested artifact from resolving the problem it describes: a requested decision brief can be complete with visible uncertainty and a provisional recommendation; a requested validation plan can be complete before anyone executes it. Do not list proposed future work as a missing deliverable unless the user actually requested its execution or findings. Human findings and acceptance require human evidence, not a clean render.",
+  };
+}
+
+/** Reject a deficient review inside the bounded reviewer retry, before any
+ * source-author call. A missing assessment cannot become an artwork repair. */
+export function requireCanvasV2CompletionAssessment(state: CanvasV2DiscoveryState, assessment?: CanvasV2CompletionAssessment): CanvasV2DiscoveryState {
+  const assessed = assessCanvasV2DiscoveryCompletion(state, assessment);
+  const failures = assessment ? canvasV2DiscoveryCompletionFailures(assessed) : ["The completionAssessment field is missing."];
+  if (failures.length) throw new Error(`Internal completion review requires correction: ${failures.join(" ")} Exact criteria: ${JSON.stringify(state.completion.criteria)}. Correct completionAssessment in this JSON response without requesting or creating visible assessment notes. materialOpenRequirements means missing deliverables in THIS request, not uncertainties or proposed future actions already communicated on the board. A request to compose a provisional brief or validation plan does not require executing its future work. If the requested deliverable is complete, return the exact satisfiedCriteria and an empty materialOpenRequirements array while preserving honest uncertainty in the artifact. If the user explicitly requested actual validation findings or a concrete requirement is still missing, continue and name that specific missing result instead.`);
+  return assessed;
 }
 
 export function completeCanvasV2DiscoveryState(input: {
@@ -1353,21 +1503,28 @@ export function compactCanvasV2DiscoveryStateForModel(state: CanvasV2DiscoverySt
     inquiryKind: state.inquiryKind,
     evidenceNeed: state.evidenceNeed,
     sourceCategories: state.sourceCategories,
-    questions: state.questions.filter((item) => item.status === "open").slice(0, 12),
+    questions: state.questions.filter((item) => item.status === "open").slice(-12),
+    deferredQuestions: state.questions.filter((item) => item.status === "deferred").slice(-12),
+    answeredQuestions: state.questions.filter((item) => item.status === "answered").slice(-8),
     statements: state.statements.filter((item) => item.status === "active").slice(-24),
     contradictions: state.contradictions.filter((item) => item.status === "open").slice(-12),
     candidates: state.candidates.filter((item) => item.status === "active").slice(-12),
+    decidedCandidates: state.candidates.filter((item) => item.status !== "active").slice(-12),
+    settledContradictions: state.contradictions.filter((item) => item.status !== "open").slice(-8),
     validationBacklog: (state.validationBacklog ?? []).filter((item) => item.status !== "rejected").slice(-12),
-    presentedValidationIds: [...(state.presentedValidationIds ?? [])],
+    presentedValidationIds: [...new Set([...(state.presentedValidationIds ?? []), ...(state.chatPresentedValidationIds ?? [])])],
     humanConclusions: (state.humanConclusions ?? []).slice(-12),
     lines: state.lines.filter((item) => item.status === "active").slice(-8),
+    deferredLines: state.lines.filter((item) => item.status === "deferred").slice(-8),
+    awaitingQuestionId: state.awaitingQuestionId,
     recentMoves: state.moves.slice(-8),
     recentHumanInputs: state.humanInputs.slice(-12),
     latestUnderstanding: state.latestUnderstanding,
     sensemaking: state.sensemaking,
+    explanationReview: state.explanationReview,
     completion: state.completion,
     selectedCanvasNodeIds: state.selectedCanvasNodeIds,
     graphRevisionId: state.graphRevisionId,
-    contract: "This is evolving inquiry memory, not a fixed workflow. Preserve human inputs, validation results, human conclusions, and exact evidence-node lineage. Reframe when warranted, take the smallest material next move, and stop according to the inquiry-specific completion criteria. Validation is human-owned: design the work but never claim to have executed a consequential external action.",
+    contract: "This is evolving inquiry memory, not a fixed workflow. Preserve human inputs, validation results, human conclusions, and exact evidence-node lineage. Use questionUpdates, lineUpdates and contradictionUpdates to defer, resume or resolve existing records by ID with reasons. Deferred work remains available; accepted tension is not resolved evidence. Never revive a human-rejected finding by restating its ID. Reframe when warranted, take the smallest material next move, and stop according to the inquiry-specific completion criteria. Validation is human-owned: design the work but never claim to have executed a consequential external action.",
   };
 }

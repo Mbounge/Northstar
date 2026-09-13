@@ -19,10 +19,12 @@ import {
   canvasV2FollowerYAfterRootGrowth,
   canvasV2PreferredRootPlacement,
   materializeCanvasV2NativeScenePaintedEdges,
+  materializeCanvasV2NativeSceneSurfaces,
   normalizeCanvasV2ReactInlineStyle,
   promoteCanvasV2AuthoredRelationships,
   projectCanvasV2ObservationToNativeScene,
   reconcileCanvasV2NativeConnectors,
+  reconcileCanvasV2NativeSceneMeasurement,
   serializeCanvasV2NativeScene,
   type CanvasV2NativeSceneDocument,
 } from "../lib/canvas-v2/native-scene";
@@ -584,6 +586,45 @@ function scene(): CanvasV2NativeSceneDocument {
   };
 }
 
+test("duplicating a flow child preserves siblings and makes an independently positioned copy", () => {
+  const source = scene();
+  const child = source.nodes[0];
+  child.parentId = "rail";
+  child.layoutMode = "flow";
+  child.geometry.x = 40;
+  child.geometry.y = 20;
+  child.resolvedStyle = { "font-family": "Georgia", "font-size": "40px", color: "rgb(10, 20, 30)" };
+  const sibling = structuredClone(child);
+  sibling.id = sibling.sourceNodeId = "neighbor";
+  sibling.attributes["data-canvas-v2-node-id"] = "neighbor";
+  sibling.geometry.x = 600;
+  const rail = structuredClone(child);
+  rail.id = rail.sourceNodeId = "rail";
+  rail.parentId = undefined;
+  rail.tagName = "div";
+  rail.kind = "object";
+  rail.selectable = false;
+  rail.attributes = { "data-canvas-v2-node-id": "rail" };
+  rail.inlineStyle = { display: "flex", "justify-content": "space-between" };
+  rail.geometry = { x: 1000, y: 800, width: 1000, height: 200, rotation: 0, zIndex: 0 };
+  rail.childIds = ["note", "neighbor"];
+  rail.content = rail.childIds.map(id => ({ kind: "node" as const, id }));
+  source.nodes.push(sibling, rail);
+  source.nodes.forEach((node, index) => { node.order = index; });
+  source.rootIds = ["rail"];
+  const original = structuredClone(source);
+  const result = applyCanvasV2NativeSceneMutation(source, { kind: "duplicate", nodeId: "note", newNodeId: "copy" });
+  assert.deepEqual(source, original);
+  for (const originalNode of original.nodes) assert.deepEqual(result.nodes.find(n => n.id === originalNode.id), originalNode);
+  const copy = result.nodes.find(n => n.id === "copy")!;
+  assert.equal(copy.parentId, undefined);
+  assert.equal(copy.layoutMode, "absolute");
+  assert.equal(copy.geometry.x, 1076);
+  assert.equal(copy.geometry.y, 856);
+  assert.equal(copy.inlineStyle["font-family"], "Georgia");
+  assert.ok(result.rootIds.includes("copy"));
+});
+
 test("native scene mutations own durable geometry and authorship", () => {
   const next = applyCanvasV2NativeSceneMutation(scene(), {
     kind: "batch",
@@ -855,6 +896,16 @@ test("native projection detects readable text collisions introduced by final pub
     firstCoverage: 0.13,
     secondCoverage: 0.31,
   });
+  orientation.textPaint = { width: 420, height: 80, text: orientationText, rects: [
+    { x: 0, y: 0, width: 420, height: 25 }, { x: 320, y: 60, width: 100, height: 20 },
+  ] };
+  thesis.textPaint = { width: 420, height: 32, text: thesisText, rects: [{ x: 0, y: 0, width: 120, height: 25 }] };
+  assert.equal(projectCanvasV2ObservationToNativeScene(observation, source).spatial.textCollisions?.length, 0, 'disjoint line fragments survive native projection');
+  thesis.geometry.x += 320;
+  assert.equal(projectCanvasV2ObservationToNativeScene(observation, source).spatial.textCollisions?.length, 1, 'moving the text into painted glyphs is detected');
+  thesis.geometry.x -= 320;
+  thesis.directText = 'Edited text needs remeasurement';
+  assert.equal(projectCanvasV2ObservationToNativeScene(observation, source).spatial.textCollisions?.length, 1, 'stale glyph measurements cannot mask an edit');
 });
 
 test("native projection removes detached cards from their former region's overflow and collision facts", () => {
@@ -1366,7 +1417,11 @@ test("the public workspace renders native nodes while iframes are isolated compi
   assert.match(sceneBoundary, /CanvasV2NativeCanvasScene/);
   assert.match(nativeRenderer, /data-testid="canvas-v2-native-scene"/);
   assert.match(nativeRenderer, /data-testid="canvas-v2-native-compiler"/);
-  assert.match(nativeRenderer, /left: -100_000/);
+  assert.match(nativeRenderer, /style=\{PRIVATE_RENDER_SURFACE_STYLE\}/);
+  const privateSurface = readFileSync("components/canvas-v2/private-render-surface.ts", "utf8");
+  assert.match(privateSurface, /left: -100_000/);
+  assert.match(privateSurface, /opacity: 0/);
+  assert.match(privateSurface, /clipPath: "inset\(50%\)"/);
   assert.match(workspace, /onNativeScene=\{engine\.receiveNativeScene\}/);
   assert.match(workspace, /applyCanvasV2NativeSceneMutation/);
   assert.match(workspace, /engine\.readNativeScene\(\)/);
@@ -1595,6 +1650,20 @@ test("multiline connector labels stay centered on their routed path", () => {
   assert.match(serializeCanvasV2NativeScene(source).html, /<tspan[^>]*>leads to<\/tspan>/);
 });
 
+test("recompiled connector label decoration remains conflict-free through strike changes", () => {
+  let board = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "connector", nodeId: "labelled", x: 100, y: 100, endX: 500, endY: 300 });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "connector-label", nodeId: "labelled", text: "Evidence" });
+  const compiledLabel = board.nodes.find(n => n.parentId === "labelled" && n.tagName === "text")!;
+  Object.assign(compiledLabel.inlineStyle, { "text-decoration": "none", "text-decoration-line": "none", "text-decoration-style": "solid", "text-decoration-color": "rgb(255, 255, 255)" });
+  for (const labelStrike of [true, false]) {
+    board = applyCanvasV2NativeSceneMutation(board, { kind: "connector-style", nodeId: "labelled", style: { labelStrike } });
+    const label = board.nodes.find(n => n.parentId === "labelled" && n.tagName === "text")!;
+    assert.equal(label.inlineStyle["text-decoration"], undefined);
+    assert.equal(label.inlineStyle["text-decoration-line"], labelStrike ? "line-through" : "none");
+    assert.equal(label.inlineStyle["text-decoration-color"], "rgb(255, 255, 255)");
+  }
+});
+
 test("dragging crop edges retains image scale and source pixels", () => {
   const source = scene();
   Object.assign(source.nodes[0], { kind: "image", tagName: "img" });
@@ -1670,4 +1739,233 @@ test("AI-authored text uses the same wrapping contract after a human resize", ()
   assert.equal(text.geometry.width,100);
   assert.deepEqual(text.content,authored.nodes[0].content);
   assert.equal(text.sourceNodeId,"note");
+});
+
+
+test("a selected painted AI layout does not capture clicks on its individual objects", () => {
+  const source = scene();
+  const leaf = source.nodes[0];
+  const surface = structuredClone(leaf);
+  surface.id = surface.sourceNodeId = "comparison-axis";
+  surface.kind = "object";
+  surface.childIds = [leaf.id];
+  surface.content = [{ kind: "node", id: leaf.id }];
+  leaf.parentId = surface.id;
+  source.nodes.push(surface);
+  source.rootIds = [surface.id];
+  assert.equal(canvasV2NativeSceneSelectionContainsTarget(source, [surface.id], leaf.id), false);
+  assert.equal(canvasV2NativeSceneSelectionContainsTarget(source, [leaf.id], leaf.id), true);
+  surface.kind = "group";
+  assert.equal(canvasV2NativeSceneSelectionContainsTarget(source, [surface.id], leaf.id), true);
+  const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
+  assert.doesNotMatch(workspace, /owningSelectionIds.includes\(event.element.parentNodeId\)/);
+});
+
+test("opposed editorial rules become separate lines instead of one giant selectable row", () => {
+  const source = scene(); const owner = source.nodes[0];
+  owner.kind = "object"; owner.selectable = false;
+  owner.geometry = { x: 0, y: 0, width: 800, height: 240, rotation: 0, zIndex: 0 };
+  owner.resolvedStyle = { "background-color": "transparent", "border-top-width": "2px", "border-top-style": "solid", "border-top-color": "white", "border-bottom-width": "2px", "border-bottom-style": "solid", "border-bottom-color": "white" };
+  assert.equal(canvasV2NativeSceneNodeOwnsVisibleSurface(owner), false);
+  const compiled = materializeCanvasV2NativeScenePaintedEdges(source);
+  const lines = compiled.nodes.filter(n => n.attributes["data-canvas-v2-painted-edge"]);
+  assert.equal(lines.length, 2);
+  assert.deepEqual(lines.map(n => [n.geometry.width, n.geometry.height]), [[800, 2], [800, 2]]);
+  assert.equal(compiled.nodes.find(n => n.id === owner.id)?.selectable, false);
+  const bottomBefore = { ...lines[1].geometry };
+  const moved = applyCanvasV2NativeSceneMutation(compiled, { kind: "move", nodeId: lines[0].sourceNodeId!, deltaX: 40, deltaY: 20 });
+  assert.deepEqual(moved.nodes.find(n => n.id === lines[1].id)?.geometry, bottomBefore);
+  assert.equal(moved.nodes.find(n => n.id === lines[0].id)?.parentId, undefined);
+});
+
+
+test("moving or deleting an AI background preserves independently owned content", () => {
+  const source = scene(); const copy = source.nodes[0];
+  const owner = structuredClone(copy);
+  owner.id = owner.sourceNodeId = "ai-card"; owner.kind = "object"; owner.tagName = "div";
+  owner.attributes = { "data-canvas-v2-node-id": "ai-card" }; owner.inlineStyle = {};
+  owner.resolvedStyle = { "background-color": "rgb(30, 30, 40)", "border-radius": "24px" };
+  owner.geometry = { x: 100, y: 100, width: 800, height: 240, rotation: 0, zIndex: 0 };
+  owner.childIds = [copy.id]; owner.content = [{ kind: "node", id: copy.id }];
+  copy.parentId = owner.id; source.nodes.push(owner); source.rootIds = [owner.id];
+  const compiled = materializeCanvasV2NativeSceneSurfaces(source);
+  const background = compiled.nodes.find(n => n.attributes["data-canvas-v2-surface-owner"] === owner.id)!;
+  assert.ok(background);
+  assert.equal(compiled.nodes.find(n => n.id === owner.id)?.selectable, false);
+  assert.deepEqual(background.childIds, []);
+  assert.equal(background.inlineStyle["background-color"], "rgb(30, 30, 40)");
+  assert.equal(compiled.nodes.find(n => n.id === owner.id)?.inlineStyle["background-color"], "transparent");
+  assert.match(serializeCanvasV2NativeScene(compiled).html, /--canvas-v2-scene-width:100%;--canvas-v2-scene-height:100%/);
+  const grown = structuredClone(compiled);
+  grown.nodes.find(n => n.id === owner.id)!.geometry.height = 480;
+  assert.equal(materializeCanvasV2NativeSceneSurfaces(grown).nodes.find(n => n.id === background.id)!.geometry.height, 480);
+  const edited = structuredClone(grown);
+  edited.nodes.find(n => n.id === background.id)!.userEdited = true;
+  assert.equal(materializeCanvasV2NativeSceneSurfaces(edited).nodes.find(n => n.id === background.id)!.geometry.height, 240);
+  assert.doesNotMatch(serializeCanvasV2NativeScene(edited).html, /--canvas-v2-scene-height:100%/);
+  const originalCopy = structuredClone(compiled.nodes.find(n => n.id === copy.id)!);
+  const moved = applyCanvasV2NativeSceneMutation(compiled, { kind: "move", nodeId: background.sourceNodeId!, deltaX: 60, deltaY: -80 });
+  assert.deepEqual(moved.nodes.find(n => n.id === copy.id), originalCopy);
+  const deleted = applyCanvasV2NativeSceneMutation(compiled, { kind: "delete", nodeId: background.sourceNodeId! });
+  assert.deepEqual(deleted.nodes.find(n => n.id === copy.id), originalCopy);
+  assert.ok(deleted.nodes.some(n => n.id === owner.id));
+  assert.equal(deleted.nodes.some(n => n.id === background.id), false);
+  assert.equal(materializeCanvasV2NativeSceneSurfaces(compiled).nodes.length, compiled.nodes.length);
+  assert.ok(compiled.nodes.some(n => n.id === background.id), "undo snapshot is untouched");
+  assert.match(serializeCanvasV2NativeScene(deleted).html, /data-canvas-v2-node-id="note"/);
+});
+
+test("projected observation includes compiler-created surfaces and actual native attachment geometry", () => {
+  let source = scene();
+  source.nodes[0].resolvedStyle = { "font-size": "36px", "line-height": "48px" };
+  const surface = structuredClone(source.nodes[0]);
+  surface.id = surface.sourceNodeId = "card-surface"; surface.kind = "shape"; surface.tagName = "div";
+  surface.directText = undefined; surface.content = []; surface.attributes = { "data-canvas-v2-node-id": "card-surface", "data-canvas-v2-surface-owner": "card" };
+  surface.geometry = { x: 1700, y: 1200, width: 300, height: 160, rotation: 0, zIndex: 0 };
+  source.nodes.push(surface); source.rootIds.push(surface.id);
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "create", primitive: "connector", nodeId: "native-link", x: 1420, y: 1224, endX: 1700, endY: 1280, fromNodeId: "note", toNodeId: "card-surface", connectorVariant: "arrow" });
+  const observation = { schema: "canvas-v2.observation.v1", screenshotDataUrl: "data:image/png;base64,AA==", viewport: { width: 1200, height: 800, deviceScaleFactor: 1 }, contentBounds: { x: 0, y: 0, width: 12000, height: 8000 }, runtimeErrors: [], missingEvidenceIds: [], capturedAt: "2026-09-06T12:00:00.000Z", revisionId: source.revisionId, spatial: { nodes: [], measuredNodeCount: 0, reportedNodeCount: 0, notableIntersections: [], contentOverflowNodeIds: [], evidence: [], authoredRelationships: [{ nodeId: "native-link", tagName: "svg", nativeConnector: true, sourceNodeIds: ["note"], targetNodeIds: ["card-surface"], missingTargetNodeIds: ["card-surface"], bounds: { x: 0, y: 0, width: 1, height: 1 }, geometryStartPoint: { x: 0, y: 0 }, geometryEndPoint: { x: 1, y: 1 } }] } } as CanvasV2RenderObservation;
+  const projected = projectCanvasV2ObservationToNativeScene(observation, source);
+  const measuredSurface = projected.spatial.nodes.find(node => node.nodeId === "card-surface")!;
+  assert.equal(projected.spatial.nodes.find(node => node.nodeId === "note")?.layout.fontSize, "36px");
+  assert.equal(measuredSurface.connectorEndpoint, true);
+  assert.equal(measuredSurface.surfaceOwnerNodeId, "card");
+  assert.deepEqual(measuredSurface.bounds, { nodeId: "card-surface", x: 1700, y: 1200, width: 300, height: 160 });
+  const link = projected.spatial.authoredRelationships![0];
+  assert.deepEqual(link.missingTargetNodeIds, []);
+  assert.equal(link.sourceAnchorDistance, 0);
+  assert.equal(link.targetAnchorDistance, 0);
+  assert.equal(link.geometryEndPoint!.x, 1700);
+  const repeated = projectCanvasV2ObservationToNativeScene(projected, source);
+  assert.deepEqual(repeated.spatial.nodes, projected.spatial.nodes);
+  assert.equal(repeated.spatial.reportedNodeCount, projected.spatial.nodes.length);
+  assert.equal(repeated.spatial.measuredNodeCount, projected.spatial.measuredNodeCount);
+});
+
+test("AI routing coordinates convert once and remain editable after endpoint movement", () => {
+  let source = scene();
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "create", primitive: "connector", nodeId: "routed", x: 10, y: 20, endX: 300, endY: 20, connectorVariant: "bent" });
+  const parent = structuredClone(source.nodes.find((node) => node.id === "note")!);
+  parent.id = parent.sourceNodeId = "layout";
+  parent.attributes = { "data-canvas-v2-node-id": "layout" };
+  parent.kind = "object"; parent.tagName = "div";
+  parent.geometry = { x: 65536, y: 65536, width: 900, height: 500, rotation: 0, zIndex: 0 };
+  parent.childIds = ["routed"]; parent.content = [{ kind: "node", id: "routed" }]; parent.directText = undefined;
+  source.nodes.push(parent);
+  source.rootIds = ["note", "layout"];
+  const connector = source.nodes.find((node) => node.id === "routed")!;
+  connector.parentId = "layout";
+  connector.attributes["data-canvas-v2-connector-route-space"] = "parent";
+  connector.attributes["data-canvas-v2-connector-waypoints"] = JSON.stringify([{ x: 100, y: 200 }, { x: 400, y: 200 }]);
+  connector.attributes["data-canvas-v2-connector-from"] = "note";
+  reconcileCanvasV2NativeConnectors(source);
+  const expected = [{ x: 65636, y: 65736 }, { x: 65936, y: 65736 }];
+  assert.deepEqual(JSON.parse(connector.attributes["data-canvas-v2-connector-waypoints"]), expected);
+  assert.equal(connector.attributes["data-canvas-v2-connector-route-space"], undefined);
+  assert.ok(Number(connector.attributes["data-canvas-v2-connector-control-x"]) > 65000);
+  assert.ok(connector.geometry.width < 66000);
+  const startBefore = connector.attributes["data-canvas-v2-connector-from-x"];
+  source.nodes.find((node) => node.id === "note")!.geometry.x += 100;
+  reconcileCanvasV2NativeConnectors(source);
+  assert.notEqual(connector.attributes["data-canvas-v2-connector-from-x"], startBefore);
+  assert.deepEqual(JSON.parse(connector.attributes["data-canvas-v2-connector-waypoints"]), expected);
+  const edited = applyCanvasV2NativeSceneMutation(source, { kind: "connector-path", nodeId: "routed", waypoints: [{ x: 650, y: 950 }, { x: 950, y: 950 }] });
+  assert.equal(edited.nodes.find((node) => node.id === "routed")?.userEdited, true);
+  assert.equal(edited.nodes.find((node) => node.id === "routed")?.attributes["data-canvas-v2-connector-from"], "note");
+});
+
+
+test("routed connectors attach toward the corridor and follow endpoint movement", () => {
+  let source = scene();
+  const from = source.nodes.find(n => n.id === "note")!;
+  from.geometry = { x: 0, y: 0, width: 400, height: 100, rotation: 0, zIndex: 0 };
+  const to = structuredClone(from); to.id = to.sourceNodeId = "other";
+  to.attributes = { "data-canvas-v2-node-id": "other" };
+  to.geometry = { ...from.geometry, x: 1000, y: 300 };
+  source.nodes.push(to); source.rootIds.push(to.id);
+  source = applyCanvasV2NativeSceneMutation(source, { kind: "create", primitive: "connector", nodeId: "routed-port", x: 200, y: 100, endX: 1200, endY: 300, connectorVariant: "bent" });
+  const edge = source.nodes.find(n => n.id === "routed-port")!;
+  edge.attributes["data-canvas-v2-connector-from"] = "note";
+  edge.attributes["data-canvas-v2-connector-to"] = "other";
+  edge.attributes["data-canvas-v2-connector-waypoints"] = JSON.stringify([{ x: 200, y: 200 }, { x: 1200, y: 200 }]);
+  reconcileCanvasV2NativeConnectors(source);
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-from-x"]), 200);
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-from-y"]), 100);
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-to-x"]), 1200);
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-to-y"]), 300);
+  const moved = applyCanvasV2NativeSceneMutation(source, { kind: "move", nodeId: "other", deltaX: 100, deltaY: 0 });
+  const updated = moved.nodes.find(n => n.id === "routed-port")!;
+  assert.equal(Number(updated.attributes["data-canvas-v2-connector-to-y"]), 300);
+  assert.notEqual(updated.attributes["data-canvas-v2-connector-to-x"], edge.attributes["data-canvas-v2-connector-to-x"]);
+});
+
+
+test("an interior connector attachment remains exact through move, resize, serialization and undo snapshot", () => {
+  let board = scene();
+  board.nodes[0].geometry = { x: 100, y: 100, width: 200, height: 100, rotation: 0, zIndex: 0 };
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "create", primitive: "connector", nodeId: "inside", x: 0, y: 0, endX: 500, endY: 400, connectorVariant: "straight" });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "connector-endpoint", nodeId: "inside", endpoint: "from", x: 150, y: 175, attachNodeId: "note" });
+  const edge = (s: typeof board) => s.nodes.find(n => n.id === "inside")!;
+  assert.equal(edge(board).attributes["data-canvas-v2-connector-from-anchor"], "0.25,0.75");
+  assert.equal(Number(edge(board).attributes["data-canvas-v2-connector-from-x"]), 150);
+  const before = board;
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "move", nodeId: "note", deltaX: 50, deltaY: 20 });
+  assert.equal(Number(edge(board).attributes["data-canvas-v2-connector-from-x"]), 200);
+  assert.equal(Number(edge(board).attributes["data-canvas-v2-connector-from-y"]), 195);
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "resize", nodeId: "note", width: 400, height: 200 });
+  assert.equal(Number(edge(board).attributes["data-canvas-v2-connector-from-x"]), 250);
+  assert.equal(Number(edge(board).attributes["data-canvas-v2-connector-from-y"]), 270);
+  assert.match(serializeCanvasV2NativeScene(board).html, /data-canvas-v2-connector-from-anchor="0.25,0.75"/);
+  assert.equal(Number(edge(before).attributes["data-canvas-v2-connector-from-x"]), 150);
+  const free = applyCanvasV2NativeSceneMutation(board, { kind: "connector-endpoint", nodeId: "inside", endpoint: "from", x: 20, y: 30 });
+  assert.equal(edge(free).attributes["data-canvas-v2-connector-from-anchor"], undefined);
+  assert.equal(Number(edge(free).attributes["data-canvas-v2-connector-from-x"]), 20);
+});
+
+
+test("a newly drawn connector preserves both interior pointer positions above the target surfaces", () => {
+  let board = scene();
+  board.nodes[0].geometry = { x: 100, y: 100, width: 200, height: 100, rotation: 0, zIndex: 2 };
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "create", primitive: "shape", nodeId: "target-b", x: 500, y: 100, width: 200, height: 100 });
+  board = applyCanvasV2NativeSceneMutation(board, { kind: "create", primitive: "connector", nodeId: "drawn", x: 150, y: 175, endX: 600, endY: 150, fromNodeId: "note", toNodeId: "target-b", fromAnchor: { x: .25, y: .75 }, toAnchor: { x: .5, y: .5 }, connectorVariant: "straight" });
+  const edge = board.nodes.find(n => n.id === "drawn")!;
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-from-x"]), 150);
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-from-y"]), 175);
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-to-x"]), 600);
+  assert.equal(Number(edge.attributes["data-canvas-v2-connector-to-y"]), 150);
+  assert.equal(edge.geometry.zIndex, 3);
+});
+
+
+test("a public geometry measurement retains its identity and does not trigger a render echo", () => {
+  const source = scene();
+  source.nodes[0].layoutMode = "flow";
+  const measured = { ...source, nodes: source.nodes.map(node => ({ ...node, geometry: { ...node.geometry, width: 270, height: 52 } })) };
+  assert.equal(reconcileCanvasV2NativeSceneMeasurement(source, measured), measured);
+  assert.equal(reconcileCanvasV2NativeSceneMeasurement(measured, measured), measured);
+  const absolute = scene();
+  const stale = { ...absolute, nodes: absolute.nodes.map(node => ({ ...node, geometry: { ...node.geometry, x: 800, width: 240 }, directText: "Stale copy" })) };
+  const accepted = reconcileCanvasV2NativeSceneMeasurement(absolute, stale);
+  assert.equal(accepted.nodes[0].geometry.x, 1200);
+  assert.equal(accepted.nodes[0].geometry.width, 240);
+  assert.equal(accepted.nodes[0].directText, "A finding");
+  assert.notEqual(accepted, stale);
+});
+
+
+test("cropping a moved island image serializes its pixel child exactly once", () => {
+  const source = scene();
+  const image = source.nodes[0];
+  const parent = { ...image, id: "island", sourceNodeId: "island", tagName: "section", kind: "group" as const, content: [], childIds: [], attributes: { "data-canvas-v2-node-id": "island" } };
+  source.nodes.push(parent); source.rootIds.push(parent.id);
+  Object.assign(image, { kind: "image", tagName: "img", content: [], detachedFromParentId: parent.id, detachedFromParentIndex: 0 });
+  Object.assign(image.attributes, { src: "https://evidence.test/photo.png", "data-canvas-v2-detached": "true", "data-canvas-v2-detached-from": parent.id });
+  let cropped = applyCanvasV2NativeSceneMutation(source, { kind: "image-crop", nodeId: "note", x: 50, y: 50, zoom: 1.05 });
+  cropped = applyCanvasV2NativeSceneMutation(cropped, { kind: "image-crop", nodeId: "note", x: 25, y: 75, zoom: 2 });
+  const pixels = cropped.nodes.find(node => node.attributes["data-canvas-v2-crop-source"] === "true")!;
+  assert.equal(pixels.parentId, "note"); assert.equal(pixels.detachedFromParentId, undefined);
+  assert.equal(cropped.nodes.find(node => node.id === "note")!.detachedFromParentId, "island");
+  const html = serializeCanvasV2NativeScene(cropped).html;
+  assert.equal((html.match(/data-canvas-v2-node-id="note-crop-source"/g) ?? []).length, 1);
+  assert.equal((html.match(/src="https:\/\/evidence.test\/photo.png"/g) ?? []).length, 1);
 });

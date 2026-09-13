@@ -108,3 +108,45 @@ test("witness ownership has no fixed sixteen-screenshot composition ceiling", ()
   const evidenceAssignments = Array.from({ length: count }, (_, index) => ({ evidenceId: `screen:${index}`, witnessGroup: `claim-${index}` }));
   assert.deepEqual(validateCanvasV2WitnessOwnershipContract({ document, targetIslandId: "comparison", evidenceAssignments }), []);
 });
+
+test("a price comparison with an accompanying photo does not require screenshot-stage ownership", () => {
+  assert.deepEqual(validateCanvasV2AuthoredStageEvidenceContract({
+    document: { html: '<section data-canvas-v2-node-id="comparison" data-canvas-v2-visual-role="thesis-anchor"><p data-canvas-v2-node-id="prices">A price contrast</p><img data-canvas-v2-node-id="photo" src="https://evidence.test/photo.png"></section>', css: '' },
+    authoredVisualRoles: ["comparison-axis", "thesis-anchor"], selectedScreenshotEvidenceCount: 1,
+    stagePlan: "Use a price contrast and explanatory branches with the original photo.",
+  }), []);
+});
+
+
+test("a captioned figure binds its explicit selected witness without inventing semantic ownership", () => {
+  const evidenceAssignments = [{ evidenceId: "screen:entry", witnessGroup: "entry" }];
+  const image = '<img data-canvas-v2-node-id="image" data-canvas-v2-evidence-id="screen:entry" data-canvas-v2-evidence-role="analysis-copy" src="https://evidence.test/entry.png">';
+  const document = { html: `<section data-canvas-v2-node-id="island"><figure data-canvas-v2-node-id="figure">${image}<figcaption data-canvas-v2-node-id="caption">The entry screen exposes the recording action.</figcaption></figure></section>`, css: "" };
+  const input = { document, targetIslandId: "island", evidenceAssignments };
+  const result = reconcileCanvasV2WitnessOwnership(input);
+  assert.deepEqual(validateCanvasV2WitnessOwnershipContract({ ...input, document: result }), []);
+  assert.equal(result.html.match(/<img/g)?.length, 1);
+  const unowned = { ...document, html: document.html.replaceAll("figure", "div").replaceAll("figcaption", "p") };
+  const untouched = reconcileCanvasV2WitnessOwnership({ ...input, document: unowned });
+  assert.equal(untouched.html, unowned.html, "A generic wrapper is not an inferred semantic owner");
+});
+
+test("an authored headed comparison cell binds its contained media without moving it", () => {
+  const image = '<img data-canvas-v2-node-id="photo" data-canvas-v2-evidence-id="photo:one" data-canvas-v2-evidence-role="analysis-copy" src="https://evidence.test/photo.png">';
+  const html = `<section data-canvas-v2-node-id="island"><div data-canvas-v2-node-id="comparison"><h2 data-canvas-v2-node-id="title">Two ways to share a recording</h2><article data-canvas-v2-node-id="cell"><h3 data-canvas-v2-node-id="claim">Review on your own schedule</h3>${image}<p data-canvas-v2-node-id="explanation">Playback is available after the meeting.</p></article></div></section>`;
+  const input = { document: { html, css: "" }, targetIslandId: "island", evidenceAssignments: [{ evidenceId: "photo:one", witnessGroup: "asynchronous" }] };
+  const result = reconcileCanvasV2WitnessOwnership(input);
+  assert.deepEqual(validateCanvasV2WitnessOwnershipContract({ ...input, document: result }), []);
+  assert.match(result.html, /<article data-canvas-v2-node-id="cell" data-canvas-v2-evidence-group="asynchronous">/);
+  assert.equal(result.html.match(/<img/g)?.length, 1);
+  const mixed = { ...input, document: { ...input.document, html: html.replace('</article>', '<img data-canvas-v2-node-id="other" data-canvas-v2-evidence-id="photo:other" data-canvas-v2-evidence-role="analysis-copy" src="https://evidence.test/other.png"></article>') }, evidenceAssignments: [...input.evidenceAssignments, { evidenceId: "photo:other", witnessGroup: "different" }] };
+  assert.equal(reconcileCanvasV2WitnessOwnership(mixed).html, mixed.document.html);
+});
+
+
+test("reasoned comparison copy does not require an academic heading while sourced stages retain their ownership requirement", () => {
+  const inferred = '<article data-canvas-v2-node-id="async" data-canvas-v2-stage-evidence="interpretation"><h2>Reply when you have time</h2><p>A recorded message could reduce the need to find a shared meeting time.</p></article>';
+  const validate = (stages: string) => validateCanvasV2AuthoredStageEvidenceContract({ document: documentWithStages(stages), authoredVisualRoles: ['comparison-axis'], stagePlan: 'Compare the interactions and explain their implications.', selectedScreenshotEvidenceCount: 1 });
+  assert.deepEqual(validate(sourcedStage(1) + inferred), []);
+  assert.match(validate(sourcedStage(1, false) + inferred).join(' '), /no exact screenshot witness/);
+});

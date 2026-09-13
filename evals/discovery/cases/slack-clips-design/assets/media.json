@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "items": [
+    {
+      "file": "inline-player.gif",
+      "sha256": "779184bf635156a8fa627494ff8783794fc8938a5156c177bb7e84b58d9901ac",
+      "kind": "gif",
+      "sourceUrl": "https://paper-attachments.dropbox.com/s_5CE70F853580DE1B257F437B750090DE836B33645754588D3871F73917844848_1632412376673_CleanShot+2021-09-23+at+11.51.09.gif",
+      "sourcePage": "https://slack.design/articles/the-story-of-slack-clips/",
+      "retrievedOn": "2026-09-07",
+      "scope": "Historical Slack design-publication media; not a current live-product capture.",
+      "rights": "Publisher-owned media; retained for private benchmark analysis, no public redistribution permission.",
+      "durationSeconds": 2.73
+    },
+    {
+      "file": "expanded-transcript.gif",
+      "sha256": "e3b496530cb5bcb44ca23ec41d49ec6439edab5a48b7fc6b8620054245ffa2e9",
+      "kind": "gif",
+      "sourceUrl": "https://paper-attachments.dropbox.com/s_5CE70F853580DE1B257F437B750090DE836B33645754588D3871F73917844848_1632427969174_CleanShot+2021-09-23+at+16.10.31.gif",
+      "sourcePage": "https://slack.design/articles/the-story-of-slack-clips/",
+      "retrievedOn": "2026-09-07",
+      "scope": "Historical Slack design-publication media; not a current live-product capture.",
+      "rights": "Publisher-owned media; retained for private benchmark analysis, no public redistribution permission.",
+      "durationSeconds": 2.94
+    }
+  ]
+}

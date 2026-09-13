@@ -1,14 +1,15 @@
 {
   "schema": "northstar.canvas-v2-current-proof.v1",
-  "observedAt": "2026-09-05",
-  "sourceSha256": "3cbeefa2ba211c7643876b0ecad9d02c2d74bb8985b4abcc6bf1588ead80acb7",
-  "sourceFileCount": 90,
-  "evidenceKind": "deterministic",
+  "observedAt": "2026-09-06",
+  "sourceSha256": "19421b6faf1912316ccb076f0ac5366ad66ef599dce9c2fa9c70420345b41325",
+  "sourceFileCount": 95,
+  "evidenceKind": "live-provider",
   "productionCertified": false,
   "productionRoute": "/canvas",
+  "scope": "Discovery foundation Patch 1, native connector handoff, text bounds, continuous endpoint control, and bounded recovery.",
   "checks": {
     "activeUnitTests": {
-      "passed": 524,
+      "passed": 587,
       "failed": 0
     },
     "typecheck": "passed",
@@ -17,61 +18,55 @@
       "warnings": 174
     },
     "productionBuild": "passed",
-    "canonicalCutover": "passed"
+    "canonicalCutover": "passed",
+    "productionBuildEnvironment": "Isolated source copy with placeholder local Supabase configuration; no deployment."
   },
   "browserVerification": {
-    "status": "manual-partial",
-    "productionRoute": "/canvas",
+    "status": "Targeted in-app checks passed; standalone suite did not launch.",
+    "mode": "Deterministic fixtures and separately authorized live providers on /canvas.",
     "manualChecks": [
-      "native character selection without moving the object",
-      "mixed text colors and compact shared palettes",
-      "wrapped text bounds and unchanged font on side resize",
-      "immediate deletion cleanup and undo",
-      "native object clipboard after source cut/deletion",
-      "table cell editing and toolbar placement",
-      "direct crop edges, repositioning, Enter completion, Escape cancellation and undo",
-      "connector paint, caps, routing, draggable label, segment shaping and undo",
-      "section membership, heading-safe tidy and direct spacing handles",
-      "shape fill retained during editing and theme changes",
-      "top-edge object and range menus remain fully inside the viewport",
-      "repeated italic, numbered-list and link edits with undo/redo and safe double-click reopening",
-      "attached connector label background follows object movement",
-      "100-image local browser pan/zoom and selected-image drag/undo measurement"
+      "Independent text and connector selection.",
+      "Painted text bounds and spacing.",
+      "Native interior attachment; immediate detachment just outside an object; reattachment; movement, resize and undo.",
+      "Compiler-created backgrounds are measured and connected on a second composition turn.",
+      "Deterministic discovery deferral/resumption preserved a human note and other branch, including undo/redo."
     ],
-    "automated": {
-      "status": "blocked-at-browser-startup",
-      "discoveredCases": 14,
-      "executedCases": 0,
-      "reason": "Standalone Chromium exits at startup (SIGTRAP/EPERM) before application assertions; the in-app browser works and was used for manual verification."
-    },
-    "remaining": [
-      "automated production-route browser suite (Chromium still exits before assertions)",
-      "cross-platform and larger-board stress acceptance beyond the sampled 100-image local board",
-      "final user visual acceptance"
-    ],
-    "oneToOneFigJamCertified": false,
-    "largeBoard": {
-      "status": "local-sampled",
-      "imageObjects": 100,
-      "uniqueLocalReferences": 12,
-      "decodedImages": 100,
-      "panZoom": {
-        "longTasks": 0,
-        "activeFrameP95Ms": 33.7
-      },
-      "dragUndoBefore": {
-        "longestTaskMs": 1747
-      },
-      "dragUndoAfter": {
-        "longestTaskMs": 56,
-        "activeFrameP95Ms": 33.4
-      },
-      "limits": "Local development in-app browser, repeated references, separate short samples; not a controlled cross-platform benchmark or presentation-latency certification."
-    }
+    "limitations": [
+      "Standalone Chromium terminates with SIGTRAP before assertions; the full Playwright suite is not passed.",
+      "The uninterrupted multi-point mouse-down scenario is in the spec but was not executed by the in-app two-point drag API.",
+      "In-app browser history contains a startup MutationObserver error whose attribution remains unresolved.",
+      "Broad cross-browser and general composition-quality certification remain unverified."
+    ]
   },
   "liveProviderVerification": {
-    "status": "not-run",
-    "reason": "User prohibited AI prompts/account usage. No paid provider calls were made. Broader AI composition quality belongs to a later patch."
-  },
-  "scope": "Cumulative audit implementation and browser-driven UX fixes in the shared production canvas path, including AI-authored objects. Deterministic checks and partial manual browser evidence do not certify full FigJam parity, live-model quality or cross-platform performance."
+    "status": "Targeted cases verified; not a zero-error or full-release claim.",
+    "cases": [
+      {
+        "case": "Optional native relationships",
+        "result": "Comparison completed without forced connectors after original-request authority fix."
+      },
+      {
+        "case": "Previously interrupted handoff",
+        "result": "Resumed with two arrows attached to independent stage surfaces; connector turn and completion review succeeded without rejection."
+      },
+      {
+        "case": "Fresh explicit handoff",
+        "result": "Completed without rejected provider responses; three moves: stages, arrows, spacing refinement."
+      },
+      {
+        "case": "Stable final inquiry creation",
+        "result": "Provisional board completed with open questions and separate durable branches; a private completion-direction retry occurred for an omitted continuation condition."
+      },
+      {
+        "case": "Stable final deferral and resumption",
+        "result": "Both completed without retries; same inquiry, question and branch identities; question deferred then open, branch deferred then active; hiring remained active; all 35 observed nodes retained exact text and inline styles after the human note edit."
+      }
+    ],
+    "historicalFailures": [
+      "Earlier tangled relationship runs failed visual review.",
+      "Earlier handoff runs rejected layout-container endpoints.",
+      "A lifecycle continuation needed retries for mistyped long question IDs before the short-reference codec was added.",
+      "A development reload cleared the test boards; the replay against the empty board was excluded from continuity proof. The final three-request sequence ran without server edits."
+    ]
+  }
 }

@@ -1,0 +1,22 @@
+{
+  "caseId": "slack-clips-design",
+  "round": 6,
+  "status": "assistant-precommitted-awaiting-human-feedback",
+  "kind": "authored-design-calibration-not-model-run",
+  "scenario": "A fictional distributed design team's internal tool requires opening a video modal, watching, closing it, then writing feedback in a separate panel. One focused improvement in two weeks; abandonment and comprehension not yet measured.",
+  "sourceScope": "Two stored historical Slack Design GIFs: inline playback and expanded video beside timestamped transcript. They demonstrate interface examples, not measured effects in our fictional product or every behavior of current Slack. This turn's static view of expanded GIF confirms co-located video, text and timestamps; no new claim of full motion or keyboard inspection.",
+  "answers": {
+    "A": "Our workflow asks reviewers to carry the video in their heads while writing about it. Slack's inline example keeps media in the conversation; the expanded example places video beside its transcript. The transferable idea is to keep relevant context available while someone responds. For our two-week change, let reviewers keep the player beside the feedback composer, preserving playback position while they type. Keep text feedback as ordinary text; no need to reproduce Slack's whole interface. Test whether reviewers can make an accurate, specific comment about a moment without repeatedly closing and reopening the video. Also check whether the split view makes either the video or the writing space too cramped.",
+    "B": "Keeping video visible helps, but useful feedback also needs a stable reference: which moment is this comment about? Slack's expanded example pairs the video with timestamped text. That suggests a principle we can apply without building a full transcript system. For our two-week change, let a reviewer attach the current playback time to a written comment, then return to that moment from the comment. Keep untimed comments available for overall feedback. Test whether another teammate can locate the intended moment and act on the comment without asking for clarification. Watch for misleading timestamps or comments about a whole sequence that a single point cannot represent."
+  },
+  "assistantJudgments": {
+    "A": {"depth":2,"evidence":2,"clarity":2,"reason":"Connects observable co-location to a specific context-switching burden as a testable hypothesis, not a measured improvement. Bounded feature with accuracy and cramped-layout failure criteria. Media playback, feasibility and actual user outcomes remain unassessed."},
+    "B": {"depth":2,"evidence":2,"clarity":2,"reason":"Extracts reference preservation from visible timestamps and translates it into a focused original workflow change. Does not claim the supplied GIF proves timestamp click behavior or our proposed feature. Identifies a distinct downstream task and limits of point timestamps. Does not solve every context-switching issue, which is acceptable for a focused proposal."}
+  },
+  "presentationNotes": "Invite qualitative feedback on explanatory insight and useful design reasoning, not preference for copying Slack. Preserve these answers before introducing hypothetical research notes and text/transcript-storage constraints. Different focused proposals are valid.",
+  "humanJudgments": null,
+  "scope": "Excerpt quality only; no full rubric pass, native media interaction, user behavior results or live model run.",
+  "datasetModified": false,
+  "independentHumanApproval": false,
+  "liveModelCalls": 0
+}
