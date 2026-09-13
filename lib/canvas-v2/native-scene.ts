@@ -1107,7 +1107,7 @@ export function compileCanvasV2NativeScene(input: {
   // all share the same dimensions. Human frames and deliberate crops remain.
   for (const image of input.document.querySelectorAll<HTMLImageElement>('img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-user-edited]):not([data-canvas-v2-evidence-treatment="detail-crop"]):not([data-canvas-v2-crop-source])')) {
     const style = input.document.defaultView?.getComputedStyle(image);
-    if (style?.objectFit !== "contain" || !image.naturalWidth || !image.naturalHeight) continue;
+    // Evidence copies show the complete source unless a detail crop is explicit.  // Normalize before measuring so paint, observation and selection share the  // visible raster footprint. Human frames and deliberate crops remain.
     const box = image.getBoundingClientRect();
     const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
     if (!Number.isFinite(scale) || scale <= 0) continue;
