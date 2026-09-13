@@ -28,11 +28,11 @@ export class CodexSessionHost {
   private creations = new Map<string, { fingerprint: string; work: Promise<Session> }>();
   private starting = new Map<string, number>();
   private reaper: ReturnType<typeof setInterval>;
-  constructor(private factory: () => Promise<CodexTransport>, private sourceReader: typeof readNorthstarSource = readNorthstarSource) {
+  constructor(private factory: () => Promise<CodexTransport>, private sourceReader: typeof readNorthstarSource = readNorthstarSource, private limits = { sessions: 20, perOwner: 2 }) {
     this.reaper = setInterval(() => {
       const now = Date.now();
       for (const s of this.sessions.values()) {
-        if (now - s.lastUse > 30 * 60_000 || (s.disconnectedAt && now - s.disconnectedAt > 30_000 && s.turn.status === 'in_progress')) this.close(s);
+        if ((s.turn.status !== 'in_progress' && !s.listeners.size && now - s.lastUse > 30 * 60_000) || (s.disconnectedAt && now - s.disconnectedAt > 30_000 && s.turn.status === 'in_progress')) this.close(s);
       }
     }, 5000); this.reaper.unref();
   }
@@ -62,7 +62,7 @@ export class CodexSessionHost {
     const configuration = this.configuration;
     const toolNames = new Set(configuration.tools.flatMap(tool => tool.type === 'function' ? [tool.name] : []));
     if (body.model !== 'gpt-5.6-luna') throw new Error('This preview supports GPT-5.6 Luna only. No model substitution was made.');
-    if ([...this.sessions.values()].filter(s => s.owner === owner).length + (this.starting.get(owner) || 0) >= 2 || this.sessions.size + [...this.starting.values()].reduce((a, b) => a + b, 0) >= 20) throw new Error('Close an existing discovery conversation before starting another.');
+    if ([...this.sessions.values()].filter(s => s.owner === owner).length + (this.starting.get(owner) || 0) >= this.limits.perOwner || this.sessions.size + [...this.starting.values()].reduce((a, b) => a + b, 0) >= this.limits.sessions) throw new Error('Close an existing discovery conversation before starting another.');
     this.starting.set(owner, (this.starting.get(owner) || 0) + 1);
     let rpc: CodexTransport;
     try { rpc = await this.factory(); } finally { const left = (this.starting.get(owner) || 1) - 1; if (left) this.starting.set(owner, left); else this.starting.delete(owner); }
@@ -147,7 +147,7 @@ export class CodexSessionHost {
       let entry = this.creations.get(id);
       if (entry && entry.fingerprint !== fingerprint) throw new Error('Creation identity was reused with different input.');
       if (!entry && this.creations.size >= 2000) throw new Error('This server has reached its session startup limit. Restart the discovery worker.');
-      if (!entry) { entry = { fingerprint, work: this.create(owner, key, body) }; this.creations.set(id, entry); }
+      if (!entry) { entry = { fingerprint, work: this.create(owner, key, body) }; this.creations.set(id, entry); const created = entry; void entry.work.catch(() => { if (this.creations.get(id) === created) this.creations.delete(id); }); }
       const s = await entry.work;
       if (signal.aborted) { this.close(s); throw new Error('Session startup was cancelled.'); }
       const response = this.stream(s, true, signal);
@@ -183,12 +183,17 @@ export class CodexSessionHost {
     throw new Error('Unknown Codex operation.');
   }
 }
+const configuredLimit = (value: string | undefined, fallback: number) => {
+  if (!value) return fallback; const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('Configure a session capacity between 1 and 200.');
+  return limit;
+};
 const globalHost = globalThis as typeof globalThis & { northstarCodexHost?: CodexSessionHost };
 export function productionCodexHost() {
   if (globalHost.northstarCodexHost && typeof globalHost.northstarCodexHost.configure !== 'function') {
     globalHost.northstarCodexHost.dispose(); globalHost.northstarCodexHost = undefined;
   }
-  const host = globalHost.northstarCodexHost ??= new CodexSessionHost(() => spawnCodex(process.env.NORTHSTAR_CODEX_BINARY || 'codex'));
+  const host = globalHost.northstarCodexHost ??= new CodexSessionHost(() => spawnCodex(process.env.NORTHSTAR_CODEX_BINARY || 'codex'), readNorthstarSource, { sessions: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS, 20), perOwner: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS_PER_USER, 2) });
   host.configure(NORTHSTAR_AGENT_INSTRUCTIONS, tools);
   return host;
 }

@@ -94,3 +94,13 @@ The subsequent correction restores hard checks for painted text collisions, text
 Attachment previews now have inline size bounds, and private renderer frames sit in clipped, transparent, one-pixel hosts with inline isolation from their first mount. An upload/send browser check kept the supplied image bounded at 74px in the composer and 128px in history without opening a preview dialog. The intermittent reported flash was not reliably reproduced, so this is hardening rather than proof that every flash mechanism is eliminated.
 
 Runtime delivery remains a persistent Node host with the configured Codex binary and server-side API key. Workspace state is currently held in memory: this patch does not implement durable refresh/restart recovery or a serverless Codex worker deployment.
+
+## Separate worker transport — 2026-09-13
+
+The Vercel deployment path is now packaged in `worker/`, with setup and limits in
+[northstar-worker-deployment.md](./northstar-worker-deployment.md). Set the server-side
+worker URL and signing secret in Vercel; its authenticated connection endpoint issues
+short-lived user grants. The browser streams directly from the persistent worker while
+retaining the existing Northstar canvas and Apps tools. Embedded local development
+continues to work when no worker URL is configured. Production persistence and
+restart recovery remain a subsequent step; this connection does not establish them.

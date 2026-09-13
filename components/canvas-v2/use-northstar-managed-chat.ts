@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { useCanvasV2Chat, CanvasV2ChatTurn } from './use-canvas-v2-chat';
 import type { useCanvasV2DesignLoop } from './use-canvas-v2-design-loop';
+import { codexWorkerFetch } from '@/lib/canvas-v2/worker/transport';
 import { ManagedAgentClient } from '@/lib/canvas-v2/managed-agent/client';
 import { object, string, type AgentView } from '@/lib/canvas-v2/managed-agent/protocol';
 import { applyCanvasV2SourcePatch, parseCanvasV2AssetSourcePatch, findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
@@ -49,7 +50,7 @@ export function useNorthstarManagedChat(input: { enabled: boolean; endpoint?: st
   };
   const getClient = () => {
     if (client.current) return client.current;
-    const runtime = new ManagedAgentClient({ endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
+    const runtime = new ManagedAgentClient({ fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const output = await (async () => {
       const args = object(accountHandles.current.decode(action.arguments)); const engine = current.current.engine;
       if (action.name === 'account_read') {
