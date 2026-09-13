@@ -177,7 +177,8 @@ test('composition planning follows the actual panned viewport and retains source
   const context = {visibleBounds:{x:64000,y:62000,width:2400,height:2000},viewportScale:0.25} as import('../lib/canvas-v2/working-context').CanvasV2WorkingContext;
   const view = codexCompositionViewport(context);
   assert.deepEqual(view.suggestedOrigin,{x:64096,y:62096});
-  assert.equal(view.suggestedWidth,2208);
+  assert.equal("suggestedWidth" in view,false);
+  assert.equal("suggestedWidth" in codexCompositionViewport({...context,viewportScale:0.1,visibleBounds:{...context.visibleBounds,width:6000}}),false);
   assert.deepEqual(view.visibleScreenSize,{width:600,height:500});
   assert.equal(codexCompositionViewport({...context,visibleBounds:{...context.visibleBounds,x:90000}}).suggestedOrigin?.x,90096);
   const pages=rememberCodexSourcePages([], '[One](https://source.example/article) [Two](https://second.example/page) [Private](https://user:secret@example.com/)');

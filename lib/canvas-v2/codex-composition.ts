@@ -202,9 +202,8 @@ export function codexCompositionViewport(context: CanvasV2WorkingContext | undef
   return { available: true, viewportScale: scale,
     visibleBounds: visible,
     suggestedOrigin: {x:visible.x+padding,y:visible.y+padding},
-    suggestedWidth: Math.max(1,visible.width-padding*2),
     visibleScreenSize: {width:Math.round(visible.width*scale),height:Math.round(visible.height*scale)},
-    note: 'Start the composition in this visible area. Suggested width is a starting point, not a limit; choose the narrative and number of islands. Place the opening here; let a large composition extend beyond the viewport. Assess readability in a detail view at the intended reading scale, not by requiring the whole work to fit.' };
+    note: 'This is available placement territory, not an island size or a reading-scale target. Place new work near the suggested origin. Choose each island width from its content and keep screenshot, typography, and spacing scales consistent with neighboring work. Neither a zoomed-out viewport nor a long source rail determines the island width. Choose the narrative and number of islands freely; large work may extend beyond the viewport. Review details at the intended reading scale.' };
 }
 
 /** Keep cited pages available for a later visual turn without fetching every search result. */
