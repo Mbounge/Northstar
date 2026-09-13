@@ -1102,12 +1102,13 @@ export function compileCanvasV2NativeScene(input: {
   /** Current unobscured world-space anchor for genuinely new AI work. */
   preferredPlacement?: CanvasV2WorkspacePoint;
 }): CanvasV2NativeSceneDocument {
-  // Untouched contain images are their visible raster footprint, not a wide
-  // flex/grid cell. Normalize privately so observation, paint and selection
-  // all share the same dimensions. Human frames and deliberate crops remain.
+  // Evidence copies show the complete source unless a detail crop is explicit.
+  // Normalize before measuring so paint, observation and selection share the
+  // visible raster footprint. Human frames and deliberate crops remain.
   for (const image of input.document.querySelectorAll<HTMLImageElement>('img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-user-edited]):not([data-canvas-v2-evidence-treatment="detail-crop"]):not([data-canvas-v2-crop-source])')) {
     const style = input.document.defaultView?.getComputedStyle(image);
-    // Evidence copies show the complete source unless a detail crop is explicit.  // Normalize before measuring so paint, observation and selection share the  // visible raster footprint. Human frames and deliberate crops remain.
+    if (!style || !image.naturalWidth || !image.naturalHeight) continue;
+    image.style.setProperty("object-fit", "contain", "important");
     const box = image.getBoundingClientRect();
     const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
     if (!Number.isFinite(scale) || scale <= 0) continue;
