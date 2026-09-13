@@ -911,6 +911,9 @@ export function validateCanvasV2RenderedRelationshipGeometry(
   for (const relationship of observation.spatial.authoredRelationships ?? []) {
     // Human free endpoints and deliberate routing are valid board state.
     if (relationship.userAuthored) continue;
+    if (relationship.nativeConnector && relationship.sourceNodeIds.length && relationship.targetNodeIds.length && relationship.geometrySpan !== undefined && relationship.geometrySpan < 1 && relationship.bounds.width <= 32 && relationship.bounds.height <= 32) {
+      failures.push(`Native relationship ${relationship.nodeId} has coincident endpoints and no visible span. Its endpoint objects touch. Reserve space using gap or padding on their layout, then reconnect the same objects; native connectors are absolute and do not create layout spacing.`);
+    }
     if (relationship.routeRetraces) failures.push(`Authored relationship ${relationship.nodeId} doubles back over its own route. Remove the retraced segment; an endpoint-to-endpoint relationship must not paint an ambiguous spur.`);
     if (relationship.nativeConnector && (!relationship.sourceNodeIds.length || !relationship.targetNodeIds.length)) continue;
     if (!relationship.sourceNodeIds.length || !relationship.targetNodeIds.length) {

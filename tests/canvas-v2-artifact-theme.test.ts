@@ -69,3 +69,11 @@ test("a new native authored color cannot be overwritten by the previous theme pa
   assert.doesNotMatch(nativeScene, /applyCanvasV2ArtifactTheme\(document/);
   assert.match(nativeScene, /applyCanvasV2ArtifactThemeToElement\(root/);
 });
+
+
+test("authored heading ink stays readable on the canvas atmosphere, not only its darkest pixel", () => {
+  const background = "#343052";
+  const ink = resolved("#173247", canvasV2ThemeForegroundColor("#173247", background, "dark"));
+  assert.ok((canvasV2ContrastRatio(ink, background) ?? 0) >= 4.5);
+  assert.ok((canvasV2ContrastRatio(ink, "#0d0e16") ?? 0) >= 4.5);
+});

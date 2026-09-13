@@ -157,6 +157,7 @@ export class CodexSessionHost {
     const s = this.sessions.get(string(body.token));
     if (!s || s.owner !== owner || s.closed) throw new Error('This Codex session is unavailable. Start a new conversation.');
     s.lastUse = Date.now();
+    if (body.op === 'heartbeat') return Response.json({ accepted: true });
     if (body.op === 'close') { this.close(s, 'Conversation closed.'); return Response.json({ accepted: true }); }
     if (body.op === 'stream') return this.stream(s, false, signal);
     if (body.op === 'snapshot') return Response.json({ session: { required_actions: [...s.pending.values()].map(v => v.action) }, turn: s.turn, items: [...s.items.values()] });

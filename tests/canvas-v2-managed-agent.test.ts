@@ -177,3 +177,46 @@ test('creation lost before session identity fails without silently creating anot
   await assert.rejects(client.send('first', [], 'gpt-5.6-luna', 'r1'), /without a session identity/);
   assert.equal(requests, 1); assert.equal(client.view.status, 'failed'); client.dispose();
 });
+
+test('an open idle Codex page renews its lease without another model turn and stops on disposal', async () => {
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); calls.push(body.op);
+    if (body.op === 'create') return creation(c => {
+      c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event('turn.created', { turn: { id: 't1' } }))}\n\ndata: ${JSON.stringify(event('turn.completed', { turn: { id: 't1' } }))}\n\n`));
+    });
+    return Response.json({ accepted: true });
+  };
+  const client = new ManagedAgentClient({ endpoint: '/codex', fetcher, closeOnDispose: true, keepAliveMs: 5, onView: () => undefined, execute: async () => null });
+  await client.send('First turn', [], 'gpt-5.6-luna', 'r1');
+  await new Promise(r => setTimeout(r, 30));
+  assert.ok(calls.includes('heartbeat'));
+  assert.equal(calls.filter(op => op === 'create').length, 1);
+  assert.equal(calls.includes('send'), false);
+  assert.equal(client.view.status, 'completed');
+  client.dispose();
+  const count = calls.length;
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(calls.length, count);
+  assert.equal(calls.at(-1), 'close');
+  const fresh = new ManagedAgentClient({ endpoint: '/codex', fetcher, closeOnDispose: true, onView: () => undefined, execute: async () => null });
+  assert.equal(fresh.token, undefined); assert.equal(fresh.view.texts.length, 0);
+  fresh.dispose();
+});
+
+test('leaving during startup closes the late Codex session instead of retaining an orphan', async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const calls: string[] = [];
+  const client = new ManagedAgentClient({ endpoint: '/codex', closeOnDispose: true, onView: () => undefined, execute: async () => null, fetcher: async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); calls.push(body.op);
+    if (body.op === 'create') return new Response(new ReadableStream({ start(c) { stream = c; } }));
+    return Response.json({ accepted: true });
+  } });
+  const sending = client.send('First turn', [], 'gpt-5.6-luna', 'r1');
+  await new Promise(r => setTimeout(r, 5));
+  client.dispose();
+  // A response already queued by the network can arrive during page teardown.
+  stream.enqueue(new TextEncoder().encode('data: {"type":"northstar.session","sessionId":"s1","token":"late-token"}\n\n'));
+  await sending;
+  assert.equal(calls.at(-1), 'close');
+});

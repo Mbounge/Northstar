@@ -62,9 +62,9 @@ docker build -f worker/Dockerfile -t northstar-worker .
 
 ## Capacity and current limits
 
-The Render template starts with four resident conversations per worker and two per user. `NORTHSTAR_MAX_SESSIONS` and `NORTHSTAR_MAX_SESSIONS_PER_USER` tune admission without changing model behavior or setting a limit on app/screen counts. Benchmark CPU/memory before raising capacity. An actively connected turn no longer expires simply because it has run for 30 minutes. Active work disconnected from all streams still stops after the existing 30-second grace period; idle sessions expire after 30 minutes.
+The Render template starts with four resident conversations per worker and two per user. `NORTHSTAR_MAX_SESSIONS` and `NORTHSTAR_MAX_SESSIONS_PER_USER` tune admission without changing model behavior or setting a limit on app/screen counts. Benchmark CPU/memory before raising capacity. An actively connected turn no longer expires simply because it has run for 30 minutes. Active work disconnected from all streams still stops after the existing 30-second grace period; idle sessions expire after 30 minutes without activity. An open Codex page renews its idle lease once per minute without calling the model. Page refresh deliberately closes the old session and starts with an empty canvas and chat.
 
-This step does **not** add durable conversations, saved canvas/media, restart recovery, multi-instance routing or unattended browser-side canvas execution. Keep one worker instance. Worker restarts/redeploys end in-memory conversations; the UI reports failure instead of claiming recovery or completion. Manual deploys prevent an ordinary Git push from automatically interrupting the preview worker. Durable storage and run recovery must be implemented and tested before production promotion or horizontal scaling. Health checks establish process readiness, not model-account entitlement or benchmark quality.
+This step does **not** add durable conversations, saved canvas/media, restart recovery, multi-instance routing or unattended browser-side canvas execution. Keep one worker instance. Worker restarts/redeploys end in-memory conversations; the UI reports failure instead of claiming recovery or completion. Manual deploys prevent an ordinary Git push from automatically interrupting the preview worker. Durable storage and restart recovery are explicitly deferred to a later patch. This release is an ephemeral workspace: continuation and brief connection recovery work while the page remains open; refresh starts fresh. Do not horizontally scale this in-memory session host. Health checks establish process readiness, not model-account entitlement or benchmark quality.
 
 ## Verification
 
@@ -74,6 +74,6 @@ This step does **not** add durable conversations, saved canvas/media, restart re
 - Signed-in Chrome `/canvas` on one local process connected to a separate worker process: chat response, two-island native composition and rendered-pixel tool responses. The Codex peer was deterministic; no model API credits were consumed.
 - Production Next.js build with `VERCEL=1` and an isolated output directory; standalone worker bundle build.
 
-A Linux Docker image and deployed Render/Vercel preview still require execution in their target environments; Docker is not installed on this workstation.
+The pinned Linux image built and started successfully on Render on September 13, 2026. The authenticated Vercel branch preview completed live chat, same-conversation follow-up and native canvas composition through that worker. Production remains unchanged until the scoped rollout acceptance checks pass.
 
 References: [OpenAI App Server](https://learn.chatgpt.com/docs/app-server), [Render Docker](https://render.com/docs/docker), [Render compute plans](https://render.com/docs/compute-plans), [Render Blueprint fields](https://render.com/docs/blueprint-spec).

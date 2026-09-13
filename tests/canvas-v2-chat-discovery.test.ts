@@ -43,3 +43,11 @@ test('a chat contract failure retains research without creating a canvas repair 
   assert.deepEqual(recovered.readReceipts,loop.readReceipts);
   assert.ok(!recovered.pauseReason?.includes('canvas'));
 });
+
+
+test('loose ordered lists retain one sequence and independent lists retain their starting number', () => {
+  const html = renderToStaticMarkup(createElement(CanvasV2MarkdownMessage, { content: '1. Map the journeys\n\n2. Compare the experience\n\n3. Recommend changes\n\nA separate sequence:\n\n5. Fifth step\n6. Sixth step' }));
+  assert.equal((html.match(/<ol /g) ?? []).length, 2);
+  for (const n of [1, 2, 3, 5, 6]) assert.ok(html.includes(`>${n}.</span>`));
+  assert.ok(html.includes('<ol start="5"'));
+});

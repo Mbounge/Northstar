@@ -1265,3 +1265,17 @@ test('independent compositions have separate title order but still cannot overla
   rendered.spatial.designRegions[1] = region('independent',1000,2000,'second');
   assert.match(validateCanvasV2RenderedIslandNarrativeIntegrity(rendered).join(' '),/materially overlap/);
 });
+
+test('collapsed native arrows report the missing layout corridor without restricting composition size', () => {
+  const rendered = observation();
+  rendered.spatial.authoredRelationships = [{ nodeId: 'collapsed', tagName: 'svg', nativeConnector: true, sourceNodeIds: ['a'], targetNodeIds: ['b'], bounds: { x: 0, y: 0, width: 32, height: 32 }, geometrySpan: 0 }];
+  assert.match(validateCanvasV2RenderedRelationshipGeometry(rendered).join(' '), /gap or padding/);
+  rendered.spatial.authoredRelationships[0].geometrySpan = 80;
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+  rendered.spatial.authoredRelationships[0].geometrySpan = 0;
+  rendered.spatial.authoredRelationships[0].bounds.height = 300; // A deliberate curved loop has visible geometry.
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+  rendered.spatial.authoredRelationships[0].bounds.height = 32;
+  rendered.spatial.authoredRelationships[0].userAuthored = true;
+  assert.deepEqual(validateCanvasV2RenderedRelationshipGeometry(rendered), []);
+});

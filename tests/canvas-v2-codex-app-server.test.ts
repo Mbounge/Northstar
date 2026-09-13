@@ -210,3 +210,18 @@ test('new conversations take refreshed harness configuration without changing an
     assert.equal(t.peers[0].calls.filter(c => c.method === 'thread/start').length, 1);
   } finally { t.close(); }
 });
+
+test('idle lease renewal is owner-bound and never calls the Codex model', async () => {
+  const t = await setup();
+  try {
+    await t.client.send('Explain', [], 'gpt-5.6-luna', 'lease'); await tick();
+    const before = t.peers[0].calls.length;
+    const signal = new AbortController().signal;
+    const body = { op: 'heartbeat', token: t.client.token };
+    await assert.rejects(t.host.handle(body, { owner: 'bob', key: 'fake', signal }), /unavailable/);
+    assert.equal((await t.host.handle(body, { owner: 'alice', key: 'fake', signal })).status, 200);
+    assert.equal(t.peers[0].calls.length, before);
+    await t.client.send('Continue that explanation', [], 'gpt-5.6-luna', 'after-lease'); await tick();
+    assert.match(t.client.view.texts.at(-1)!.text, /received 2 turns/);
+  } finally { t.close(); }
+});

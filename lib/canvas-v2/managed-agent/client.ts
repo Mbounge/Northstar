@@ -9,6 +9,8 @@ export class ManagedAgentClient {
   private tools = new Map<string, Promise<void>>();
   private results = new Map<string, { success: boolean; output?: unknown; error?: string }>();
   private disposed = false;
+  private heartbeat?: ReturnType<typeof setInterval>;
+  private heartbeatPending = false;
   private cancelling = false;
   private selectedModel?: string;
   private recoveries = 0;
@@ -16,7 +18,7 @@ export class ManagedAgentClient {
   private buffered?: JsonObject[];
   private actions = new AbortController();
   private accountApps = new Map<string, { name: string; iconUrl?: string }>();
-  constructor(private options: { endpoint: string; closeOnDispose?: boolean; fetcher?: typeof fetch; onView: (view: AgentView) => void; execute: (action: JsonObject, signal: AbortSignal) => Promise<unknown> }) {}
+  constructor(private options: { endpoint: string; closeOnDispose?: boolean; keepAliveMs?: number; fetcher?: typeof fetch; onView: (view: AgentView) => void; execute: (action: JsonObject, signal: AbortSignal) => Promise<unknown> }) {}
   async request(body: JsonObject, signal?: AbortSignal) {
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(new Error('The agent connection timed out.')), 30_000);
@@ -25,6 +27,19 @@ export class ManagedAgentClient {
     finally { clearTimeout(timer); }
     if (!response.ok) { const error = object(await response.json()); throw new Error(string(error.error) || 'The agent connection failed.'); }
     return response;
+  }
+  private startHeartbeat() {
+    if (!this.options.closeOnDispose || this.heartbeat || this.disposed) return;
+    // Keep the open page's idle conversation alive without a model call or SSE stream.
+    this.heartbeat = setInterval(() => {
+      if (this.disposed || !this.token || this.stream || this.heartbeatPending) return;
+      this.heartbeatPending = true;
+      void this.request({ op: 'heartbeat' }).catch(() => {
+        // A temporary network failure does not erase the completed answer.
+        // The next user action reports an expired session if it cannot reconnect.
+      }).finally(() => { this.heartbeatPending = false; });
+    }, this.options.keepAliveMs ?? 60_000);
+    this.heartbeat.unref?.();
   }
   private publish(view: AgentView) { this.view = view; if (!this.disposed) this.options.onView(this.pendingInputs && view.status === 'completed' ? { ...view, status: 'running' } : view); }
   private fail(error: unknown) { this.stream?.abort(); this.stream = undefined; this.publish({ ...this.view, status: 'failed', error: error instanceof Error ? error.message : 'The agent connection failed.' }); }
@@ -60,7 +75,8 @@ export class ManagedAgentClient {
           if (!this.token || !this.sessionId) { reject(new Error('Invalid session identity.')); return; }
           clearTimeout(timer);
           this.publish({ ...this.view, sessionId: this.sessionId });
-          if (this.disposed) void this.request({ op: 'cancel', requestId: crypto.randomUUID() }).catch(() => undefined);
+          this.startHeartbeat();
+          if (this.disposed) void this.request({ op: this.options.closeOnDispose ? 'close' : 'cancel', requestId: crypto.randomUUID() }).catch(() => undefined);
           resolve();
         }, error => reject(error));
       });
@@ -195,7 +211,7 @@ export class ManagedAgentClient {
     finally { this.cancelling = false; }
   }
   dispose() {
-    this.disposed = true; this.actions.abort(); this.stream?.abort(); this.stream = undefined;
+    this.disposed = true; clearInterval(this.heartbeat); this.heartbeat = undefined; this.actions.abort(); this.stream?.abort(); this.stream = undefined;
     // This workspace has no reload persistence. Do not leave paid work orphaned on unmount.
     if (this.token && (this.options.closeOnDispose || this.view.status === 'running')) void this.request({ op: this.options.closeOnDispose ? 'close' : 'cancel', requestId: crypto.randomUUID() }).catch(() => undefined);
   }

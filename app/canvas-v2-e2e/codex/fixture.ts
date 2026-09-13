@@ -39,6 +39,7 @@ export class FixtureCodex implements CodexTransport {
       this.emit('item/completed', { turnId: this.turn, item: { id: `search-${this.turn}`, type: 'webSearch', query: 'Compare the evidence', action: { type: 'search', query: 'Compare the evidence' }, results: [{ title: 'Example evidence', url: 'https://example.com/evidence' }] } });
       this.followupRepair = /repair parity/i.test(message); this.sourcePhoto = /research photo parity/i.test(message); this.mediaParity = /media parity/i.test(message) || this.sourcePhoto; this.mediaStep = 0; this.selectionEdit = /selection parity/i.test(message); this.oversized = /oversize parity/i.test(message); this.overlapParity = /overlap parity/i.test(message); this.parity = /composition parity|oversize parity|overlap parity/i.test(message); this.chapter = 0; this.repair = false; this.rejected = false;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
+      if (/three-step plan/i.test(message)) { this.finish('1. Map the journeys.\n\n2. Compare the experience.\n\n3. Recommend changes.'); return { turn: { id: this.turn } }; }
       if (this.appsScenario) { this.appsScenario.start(); return { turn: { id: this.turn } }; }
       if (this.mediaParity) this.tool('read_source', {url: this.sourcePhoto ? 'https://www.abrielle.ca/menus' : this.origin + '/canvas-v2-e2e/codex/media/article', focus: this.sourcePhoto ? 'breakfast restaurant' : 'reference'});
       else if (/canvas|composition parity|oversize parity|overlap parity|selection parity|repair parity/i.test(message)) this.tool('canvas_read', {});
@@ -80,7 +81,7 @@ export class FixtureCodex implements CodexTransport {
     if (String(id).endsWith(':canvas_read')) {
       const part = object((r.contentItems as unknown[])[0]); const canvas = object(JSON.parse(string(part.text)));
       const target = /data-canvas-v2-node-id="([^"]+)"/.exec(string(object(canvas.document).html))?.[1];
-      this.tool('canvas_edit', { baseRevisionId: canvas.baseRevisionId, summary: 'Created a native comparison', patch: JSON.stringify({ operations: [{ op: 'append-html', targetNodeId: target, html: '<section data-canvas-v2-node-id="codex-comparison" style="width:720px;padding:32px;background:#fff;color:#171721"><h2 data-canvas-v2-node-id="codex-title">A useful comparison</h2><p data-canvas-v2-node-id="codex-finding">The evidence changes the explanation.</p></section>' }] }) });
+      this.tool('canvas_edit', { baseRevisionId: canvas.baseRevisionId, summary: 'Created a native comparison', patch: JSON.stringify({ operations: [{ op: 'append-html', targetNodeId: target, html: '<section data-canvas-v2-node-id="codex-comparison" style="width:720px;padding:32px;background:#fff;color:#171721"><h2 data-canvas-v2-node-id="codex-title" style="color:#173247">A useful comparison</h2><p data-canvas-v2-node-id="codex-finding">The evidence changes the explanation.</p></section>' }] }) });
     } else if (String(id).endsWith(':canvas_edit')) this.finish(r.success ? 'Created the comparison on the canvas. Each part is editable.' : 'The edit could not be committed.');
   }
   private mediaReply(id: string, r: JsonObject) {

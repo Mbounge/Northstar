@@ -116,16 +116,21 @@ export function CanvasV2MarkdownMessage({ content }: { content: string }) {
     }
 
     if (/^\d+\.\s+/.test(line)) {
+      const start = Number(line.match(/^\d+/)![0]);
       const items: string[] = [];
       while (index < lines.length && /^\d+\.\s+/.test(lines[index])) {
         items.push(lines[index].replace(/^\d+\.\s+/, ""));
         index += 1;
+        // Blank lines make a loose list, not a fresh list starting at one.
+        let next = index;
+        while (next < lines.length && !lines[next].trim()) next++;
+        if (/^\d+\.\s+/.test(lines[next] ?? "")) index = next;
       }
       blocks.push(
-        <ol key={`ol-${blocks.length}`} className="my-2 space-y-1.5">
+        <ol start={start} key={`ol-${blocks.length}`} className="my-2 space-y-1.5">
           {items.map((item, itemIndex) => (
             <li key={itemIndex} className="grid grid-cols-[18px_1fr] gap-1.5">
-              <span className="font-[800] text-[#6B5CFF] dark:text-[#BDB6FF]">{itemIndex + 1}.</span>
+              <span className="font-[800] text-[#6B5CFF] dark:text-[#BDB6FF]">{start + itemIndex}.</span>
               <span>{renderInlineMarkdown(item, `ol-${blocks.length}-${itemIndex}`)}</span>
             </li>
           ))}
