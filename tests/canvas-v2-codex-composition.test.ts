@@ -208,3 +208,19 @@ test('source media pagination exposes every portrait without treating small avat
   assert.equal(seen.length,47);assert.equal(new Set(seen).size,47);
   assert.ok(seen.includes('https://company.example/avatar-46.jpg'));
 });
+
+
+test('Codex local CSS edits preserve layout and typography unless replacement is explicit', async () => {
+  const { parseCodexCanvasPatch } = await import('../lib/canvas-v2/codex-composition');
+  const { applyCanvasV2SourcePatch } = await import('../lib/canvas-v2/source-patch');
+  const edit = (css: string, mode?: 'merge' | 'replace') => parseCodexCanvasPatch(JSON.stringify({ operations: [{ op: 'upsert-css', layerId: 'board', css, ...(mode ? { mode } : {}) }] }), []);
+  const layout = '.board{display:grid;grid-template-columns:1fr 1fr}.headline{font-size:68px}';
+  const base = applyCanvasV2SourcePatch({ previous, operations: edit(layout), evidence: [] });
+  const next = applyCanvasV2SourcePatch({ previous: base, operations: edit('.photo{width:600px}'), evidence: [] });
+  assert.ok(next.css.includes(layout));
+  assert.match(next.css, /\.photo\{width:600px\}/);
+  assert.equal(next.html, base.html);
+  const replaced = applyCanvasV2SourcePatch({ previous: base, operations: edit('.photo{width:600px}', 'replace'), evidence: [] });
+  assert.ok(!replaced.css.includes(layout));
+  assert.match(replaced.css, /\.photo\{width:600px\}/);
+});

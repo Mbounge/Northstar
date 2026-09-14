@@ -104,6 +104,13 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
       color:var(--northstar-ink);
       font-family:Inter,ui-sans-serif,system-ui,sans-serif;
     }
+    /* A model-owned island is an object, not the world-width measuring layer.
+       Intrinsic sizing keeps an unstyled wrapper around a sized composition
+       honest for selection, collision detection and viewport placement. Zero
+       specificity lets any authored width win, including deliberately large work. */
+    :where([data-canvas-v2-design-region][data-canvas-v2-layout-owner="model"]) {
+      width:fit-content;
+    }
     ${escapeStyleEnd(document.css)}
     /* Reassert the compiler coordinate perimeter after model CSS. Source
        authors are allowed to style their composition, never the world-sized

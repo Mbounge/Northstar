@@ -7,9 +7,16 @@ import {
 import type { CanvasV2ArtifactDocument, CanvasV2CreativeDirection, CanvasV2EvidenceAsset, CanvasV2IslandExecutionContract, CanvasV2RenderObservation } from './types';
 import { buildCanvasV2IslandRegistry, canvasV2AllocatedIslandId, validateCanvasV2IslandExecution } from './island-registry';
 import { buildCanvasV2SceneObjectInventory, normalizeCanvasV2SceneObjectIdentities } from './scene-transaction';
-import { findCanvasV2SourceNodeRange } from './source-patch';
+import { findCanvasV2SourceNodeRange, parseCanvasV2AssetSourcePatch } from './source-patch';
 import { object, string } from './managed-agent/protocol';
 import type { CanvasV2WorkingContext } from './working-context';
+
+/** A local edit preserves its stylesheet unless the author explicitly replaces it. */
+export function parseCodexCanvasPatch(serialized: string, evidence: readonly CanvasV2EvidenceAsset[]) {
+  return parseCanvasV2AssetSourcePatch(serialized, evidence).map(operation =>
+    operation.op === 'upsert-css' ? { ...operation, mode: operation.mode ?? 'merge' as const } : operation,
+  );
+}
 
 export interface CodexCompositionPlan {
   baseRevisionId: string;

@@ -79,6 +79,8 @@ export interface CanvasV2NativeSceneNode {
   geometry: CanvasV2NativeSceneGeometry;
   attributes: Record<string, string>;
   inlineStyle: Record<string, string>;
+  /** Authored image sizing before the compiler fits its visible raster. */
+  authoredImageLayout?: Record<string, string>;
   /**
    * Browser-resolved visual style captured by the isolated compiler. It is
    * deliberately separate from authored inline style until an object leaves
@@ -1102,12 +1104,17 @@ export function compileCanvasV2NativeScene(input: {
   /** Current unobscured world-space anchor for genuinely new AI work. */
   preferredPlacement?: CanvasV2WorkspacePoint;
 }): CanvasV2NativeSceneDocument {
+  const authoredImageLayouts = new Map<Element, Record<string, string>>();
   // Evidence copies show the complete source unless a detail crop is explicit.
   // Normalize before measuring so paint, observation and selection share the
   // visible raster footprint. Human frames and deliberate crops remain.
   for (const image of input.document.querySelectorAll<HTMLImageElement>('img[data-canvas-v2-evidence-role="analysis-copy"]:not([data-canvas-v2-user-edited]):not([data-canvas-v2-evidence-treatment="detail-crop"]):not([data-canvas-v2-crop-source])')) {
     const style = input.document.defaultView?.getComputedStyle(image);
     if (!style || !image.naturalWidth || !image.naturalHeight) continue;
+    authoredImageLayouts.set(image, Object.fromEntries(
+      ["width", "height", "inline-size", "block-size", "object-fit"].map(property => [property,
+        image.style.getPropertyValue(property) + (image.style.getPropertyPriority(property) ? "!important" : "")]),
+    ));
     image.style.setProperty("object-fit", "contain", "important");
     const box = image.getBoundingClientRect();
     const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
@@ -1226,7 +1233,8 @@ export function compileCanvasV2NativeScene(input: {
       // geometry, so reading and rounding it again would make untouched
       // collaborator objects drift by a hundredth of a pixel on every AI
       // revision.
-      if (!html.dataset?.canvasV2SceneLayout) return round(fallback);
+      if (!html.dataset?.canvasV2SceneLayout
+        || (html.dataset.canvasV2SceneLayout === "flow" && authoredImageLayouts.has(element))) return round(fallback);
       const value = Number.parseFloat(html.style.getPropertyValue(property));
       return Number.isFinite(value) ? value : round(fallback);
     };
@@ -1275,6 +1283,7 @@ export function compileCanvasV2NativeScene(input: {
       })() : {}),
       attributes,
       inlineStyle: inlineStyle(element),
+      ...(authoredImageLayouts.has(element) ? { authoredImageLayout: authoredImageLayouts.get(element) } : {}),
       resolvedStyle: resolvedDetachmentStyle(computed),
       ...(directText(element) !== undefined ? { directText: directText(element) } : {}),
       content: Array.from(element.childNodes).reduce<CanvasV2NativeSceneNode["content"]>((content, child) => {
@@ -3479,8 +3488,18 @@ function serializeAttributes(node: CanvasV2NativeSceneNode, followSurfaceOwner =
   if (node.sourceNodeId && !entries.some((entry) => entry.startsWith("data-canvas-v2-node-id="))) {
     entries.push(`data-canvas-v2-node-id="${escapeHtml(node.sourceNodeId)}"`);
   }
+  const authoredStyle = { ...node.inlineStyle };
+  // The public scene uses the measured footprint for paint and selection.
+  // On the next authoring turn, CSS must be able to size the image again;
+  // compiler-generated pixel dimensions must not become authored overrides.
+  if (node.authoredImageLayout && node.layoutMode === "flow" && !node.userEdited) {
+    for (const [property, value] of Object.entries(node.authoredImageLayout)) {
+      if (value) authoredStyle[property] = value;
+      else delete authoredStyle[property];
+    }
+  }
   const style = {
-    ...node.inlineStyle,
+    ...authoredStyle,
     "--canvas-v2-scene-x": `${node.geometry.x}px`,
     "--canvas-v2-scene-y": `${node.geometry.y}px`,
     "--canvas-v2-scene-width": followSurfaceOwner ? "100%" : `${node.geometry.width}px`,

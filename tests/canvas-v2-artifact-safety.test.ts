@@ -5,9 +5,10 @@ import {
   CANVAS_V2_MAX_LOCAL_IMAGE_BYTES,
   validateCanvasV2ArtifactDocument,
   validateCanvasV2EvidenceBindings,
+  validateCanvasV2EvidenceContinuity,
   validateCanvasV2QuantitativeClaimLabels,
 } from "../lib/canvas-v2/artifact-safety";
-import type { CanvasV2EvidencePacket } from "../lib/canvas-v2/types";
+import type { CanvasV2EvidenceAsset, CanvasV2EvidencePacket } from "../lib/canvas-v2/types";
 
 test("retained researched figures survive composition validation without accepting invented or inferred precision", () => {
   const packet = { facts: [{ id: "fact", label: "Sample", value: "7 of 9", authority: "observed" }],
@@ -61,4 +62,18 @@ test("AI placement of approved attachment pixels does not consume the HTML marku
 test("bound evidence images still have a strict per-image pixel limit", () => {
   const src = `data:image/png;base64,${Buffer.alloc(CANVAS_V2_MAX_LOCAL_IMAGE_BYTES + 1, 7).toString("base64")}`;
   assert.match(validateCanvasV2ArtifactDocument({ html: `<img data-canvas-v2-node-id="image" data-canvas-v2-evidence-id="e" src="${src}">`, css: "" }).join(" "), /evidence image is too large/);
+});
+
+
+test("a researched composition image can be replaced without forcing a duplicate onto the canvas", () => {
+  const asset = { id: "research-image", url: "https://example.com/source.png", label: "Research image", source: { sourceType: "web-image" } } as CanvasV2EvidenceAsset;
+  const previous = { html: `<img data-canvas-v2-node-id="reference" data-canvas-v2-origin="northstar" data-canvas-v2-evidence-id="research-image" src="${asset.url}">`, css: "" };
+  const next = { html: '<p data-canvas-v2-node-id="explanation">Revised explanation</p>', css: "" };
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(previous, next, [asset]), []);
+  const edited = { ...previous, html: previous.html.replace('<img ', '<img data-canvas-v2-last-author="user" ') };
+  assert.match(validateCanvasV2EvidenceContinuity(edited, next, [asset]).join(" "), /must remain visible/);
+  const uploaded = { ...asset, source: undefined };
+  assert.match(validateCanvasV2EvidenceContinuity(previous, next, [uploaded]).join(" "), /must remain visible/);
+  const humanCopy = { ...previous, html: previous.html + previous.html.replace('node-id="reference"', 'node-id="human-copy"').replace('origin="northstar"', 'origin="user"') };
+  assert.match(validateCanvasV2EvidenceContinuity(humanCopy, next, [asset]).join(" "), /must remain visible/);
 });

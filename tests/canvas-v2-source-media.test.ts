@@ -152,3 +152,38 @@ test("chat retains literal source text without fetching images and reuses it on 
   assert.deepEqual(reads,[page]);
   assert.equal(again,enriched);
 });
+
+test("responsive and lazy source images retain useful size and their own caption", () => {
+  const items = canvasV2PageMediaCandidates(`<meta property="og:image" content="/portrait.jpg?w=6000">
+    <figure><img src=/placeholder.jpg data-src=/portrait.jpg
+      data-srcset="/portrait.jpg?w=640 640w, /portrait.jpg?w=1440 1440w, /portrait.jpg?w=6000 6000w"
+      alt="Alex Rivera"><figcaption>Research lead &amp; co-founder</figcaption></figure>
+    <figure><img data-original=/laboratory.jpg><figcaption>Prototype in the laboratory</figcaption></figure>`, page, "Alex Rivera research lead");
+  assert.equal(items.length, 2);
+  assert.equal(items[0].url, "https://research.example/portrait.jpg?w=1440");
+  assert.equal(items[0].label, "Alex Rivera — Research lead & co-founder");
+  assert.equal(items[1].url, "https://research.example/laboratory.jpg");
+  assert.equal(items[1].label, "Prototype in the laboratory");
+});
+
+test("responsive sources smaller than the target retain their largest available image", () => {
+  const [image] = canvasV2PageMediaCandidates('<img src="/tiny.jpg" srcset="/small.jpg 320w, /medium.jpg 960w">', page);
+  assert.equal(image.url, "https://research.example/medium.jpg");
+});
+
+test("the live source reader rejects spoofed pixels and retains real image bytes", async () => {
+  const { readNorthstarSource } = await import("../lib/canvas-v2/agent-source.server");
+  const action = { name: "inspect_image", arguments: { url: `${page}/photo.png` } };
+  await assert.rejects(readNorthstarSource(action, new AbortController().signal, async url => ({ url, mimeType: "image/png", bytes: Buffer.from("not an image") })), /declared image format/);
+  const response = await readNorthstarSource(action, new AbortController().signal, async url => ({ url, mimeType: "image/png", bytes: png }));
+  const body = await response.json();
+  assert.equal(body.asset.originalUrl, `${page}/photo.png`);
+  assert.equal(body.asset.url, `data:image/png;base64,${png.toString("base64")}`);
+});
+
+
+test("unlabelled responsive variants replace huge metadata originals without losing labels", () => {
+  const [image] = canvasV2PageMediaCandidates('<meta property="og:image" content="/chart.png?w=8000"><img srcset="/chart.png?w=1400 1400w, /chart.png?w=8000 8000w"><img src="/chart.png?w=100" alt="Energy balance">', page);
+  assert.equal(image.url, "https://research.example/chart.png?w=1400");
+  assert.equal(image.label, "Energy balance");
+});

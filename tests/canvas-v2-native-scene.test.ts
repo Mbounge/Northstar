@@ -1969,3 +1969,23 @@ test("cropping a moved island image serializes its pixel child exactly once", ()
   assert.equal((html.match(/data-canvas-v2-node-id="note-crop-source"/g) ?? []).length, 1);
   assert.equal((html.match(/src="https:\/\/evidence.test\/photo.png"/g) ?? []).length, 1);
 });
+
+test("measured image dimensions do not override later authored sizing, while human resizing stays authoritative", () => {
+  const source = scene();
+  const image = source.nodes[0];
+  image.tagName = "img";
+  image.kind = "image";
+  image.layoutMode = "flow";
+  image.userEdited = false;
+  image.inlineStyle = { width: "100px", height: "145px", "inline-size": "100px", "block-size": "145px", "object-fit": "contain", opacity: "0.8" };
+  image.authoredImageLayout = { width: "", height: "", "inline-size": "", "block-size": "", "object-fit": "" };
+  const html = serializeCanvasV2NativeScene(source).html;
+  assert.doesNotMatch(html, /(?:style="|;)width:100px/);
+  assert.doesNotMatch(html, /(?:style="|;)height:145px/);
+  assert.match(html, /opacity:0.8/);
+  assert.equal(image.inlineStyle.width, "100px", "public paint still uses its measured footprint");
+  image.authoredImageLayout.width = "75%";
+  assert.match(serializeCanvasV2NativeScene(source).html, /(?:style="|;)width:75%/);
+  image.userEdited = true;
+  assert.match(serializeCanvasV2NativeScene(source).html, /(?:style="|;)width:100px/);
+});

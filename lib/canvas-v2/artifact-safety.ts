@@ -133,7 +133,19 @@ export function validateCanvasV2EvidenceContinuity(
   const previousIds = canvasV2VisibleEvidenceIds(previous);
   const nextIds = canvasV2VisibleEvidenceIds(next);
   if (!options.allowUserEvidenceRemoval) {
-    for (const asset of evidence) if (previousIds.has(asset.id) && !nextIds.has(asset.id)) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
+    for (const asset of evidence) {
+      if (!previousIds.has(asset.id) || nextIds.has(asset.id)) continue;
+      // Research assets remain in the evidence registry after their presentation
+      // changes. A model-owned web image can be replaced without preserving a
+      // decorative duplicate. Uploaded/human-edited evidence and canonical app
+      // flows keep their existing continuity protections.
+      const bindings = Array.from(previous.html.matchAll(/<[a-z][^>]*>/gi), match => match[0])
+        .filter(tag => /\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] === asset.id);
+      const replaceableResearchImage = asset.source?.sourceType === "web-image" && bindings.length > 0
+        && bindings.every(tag => /\bdata-canvas-v2-origin\s*=\s*["']northstar["']/i.test(tag)
+          && !/\bdata-canvas-v2-last-author\s*=\s*["']user["']/i.test(tag));
+      if (!replaceableResearchImage) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
+    }
   }
   failures.push(...validateCanvasV2EvidenceAuthorshipTransition(previous, next, evidence, options));
   return Array.from(new Set(failures));

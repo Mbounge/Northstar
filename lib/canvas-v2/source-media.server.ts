@@ -61,18 +61,32 @@ function decode(value: string): string {
 /** Candidates are page-owned references, not assertions about what their pixels prove. */
 export function canvasV2PageMediaCandidates(html: string, sourceUrl: string, subject = ""): MediaCandidate[] {
   const result: MediaCandidate[] = [];
-  for (const tag of html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").matchAll(/<(img|video|source|iframe|meta)\b[^>]*>/gi)) {
-    const attrs = new Map([...tag[0].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(match => [match[1].toLowerCase(), decode(match[2] ?? match[3])]));
+  const responsiveUrls = new Set<string>();
+  const source = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  const captions = [...source.matchAll(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi)].map(figure => ({
+    start: figure.index!, end: figure.index! + figure[0].length,
+    text: decode((/<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i.exec(figure[0])?.[1] ?? "").replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim(),
+  }));
+  for (const tag of source.matchAll(/<(img|video|source|iframe|meta)\b[^>]*>/gi)) {
+    const attrs = new Map([...tag[0].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)].map(match => [match[1].toLowerCase(), decode(match[2] ?? match[3] ?? match[4])]));
     const name = tag[1].toLowerCase();
     const property = attrs.get("property") ?? attrs.get("name");
     if (name === "meta" && !["og:image", "og:video", "og:video:url", "twitter:image"].includes(property ?? "")) continue;
-    const responsive = (attrs.get("srcset") ?? attrs.get("data-srcset"))?.split(",").map(item => item.trim().split(/\s+/)[0]).filter(Boolean).at(-1);
+    // Pick a useful inspection/rendering size, not a tiny placeholder or a huge
+    // original. This chooses a source variant; it never crops the image.
+    const variants = (attrs.get("data-srcset") ?? attrs.get("srcset") ?? "").split(",").map(item => {
+      const [url, descriptor = "1x"] = item.trim().split(/\s+/);
+      return { url, size: parseFloat(descriptor) * (descriptor.endsWith("x") ? 1280 : 1) };
+    }).filter(item => item.url && Number.isFinite(item.size)).sort((a, b) => a.size - b.size);
+    const responsive = (variants.find(item => item.size >= 1280) ?? variants.at(-1))?.url;
     const direct = attrs.get("src");
-    const raw = name === "meta" ? attrs.get("content") : (!direct || direct.startsWith("data:") ? attrs.get("data-src") ?? responsive ?? direct : direct);
+    const raw = name === "meta" ? attrs.get("content") : (responsive ?? attrs.get("data-src") ?? attrs.get("data-original") ?? direct);
     if (!raw) continue;
     let url: URL; try { url = new URL(raw, sourceUrl); } catch { continue; }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) continue;
-    const label = (attrs.get("alt") ?? attrs.get("title") ?? "").trim().slice(0, 240);
+    if (responsive) responsiveUrls.add(url.toString());
+    const caption = captions.find(item => tag.index! >= item.start && tag.index! < item.end)?.text;
+    const label = [...new Set([attrs.get("alt")?.trim(), attrs.get("title")?.trim(), caption].filter(Boolean))].join(" — ").slice(0, 480);
     if (/favicon|tracking|pixel|spacer/i.test(`${label} ${url.pathname}`)) continue;
     if (Number(attrs.get("width")) > 0 && Number(attrs.get("width")) <= 2) continue;
     const isVideo = Boolean(canvasV2VideoEmbedUrl(url.toString())) || /\.(mp4|webm)$/i.test(url.pathname);
@@ -88,7 +102,11 @@ export function canvasV2PageMediaCandidates(html: string, sourceUrl: string, sub
     if (/\.(?:png|jpe?g|webp|gif)$/i.test(identity.pathname)) for (const key of ["f", "w", "h", "width", "height", "format", "quality"]) identity.searchParams.delete(key);
     const key = identity.toString(); const previous = unique.get(key);
     if (!previous) unique.set(key, item);
-    else if (!previous.label && item.label) unique.set(key, { ...previous, label: item.label });
+    else unique.set(key, {
+      ...previous,
+      url: responsiveUrls.has(item.url) && !responsiveUrls.has(previous.url) ? item.url : previous.url,
+      label: item.label || previous.label,
+    });
   }
   // Retrieval order often puts navigation, coffee, or lifestyle imagery before
   // the actual subject. Rank page-owned candidates using the retained finding;
@@ -100,7 +118,7 @@ export function canvasV2PageMediaCandidates(html: string, sourceUrl: string, sub
   return [...unique.values()].sort((a, b) => relevance(b) - relevance(a));
 }
 
-function actualImageType(bytes: Buffer): string | undefined {
+export function actualImageType(bytes: Buffer): string | undefined {
   if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
   if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "image/jpeg";
   if (bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";

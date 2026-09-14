@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import { object, string, type JsonObject } from './managed-agent/protocol';
-import { readCanvasV2PublicMedia, canvasV2PageMediaCandidates, type CanvasV2MediaRead } from './source-media.server';
+import { readCanvasV2PublicMedia, canvasV2PageMediaCandidates, actualImageType, type CanvasV2MediaRead } from './source-media.server';
 
 export async function readNorthstarSource(action: JsonObject, signal: AbortSignal, read: CanvasV2MediaRead = readCanvasV2PublicMedia) {
     const args = object(action.arguments); const media = await read(string(args.url), signal);
     if (action.name === 'inspect_image') {
       if (!/^image\/(png|jpeg|webp|gif)(;|$)/i.test(media.mimeType)) throw new Error('This URL did not return a supported image.');
-      const mime = media.mimeType.split(';')[0]; const assetId = `source-${createHash('sha256').update(media.url).digest('hex').slice(0, 20)}`;
+      const mime = media.mimeType.split(';')[0].toLowerCase();
+      if (actualImageType(media.bytes) !== mime) throw new Error('This response does not contain the declared image format.');
+      const assetId = `source-${createHash('sha256').update(media.url).digest('hex').slice(0, 20)}`;
       return Response.json({ asset: { id: assetId, label: media.url, url: `data:${mime};base64,${media.bytes.toString('base64')}`, originalUrl: media.url, mimeType: mime, mediaType: mime === 'image/gif' ? 'gif' : 'image', authority: 'observed', source: { providerId: 'openai-web-search', providerLabel: 'Public web', sourceId: assetId, sourceType: 'web-image', label: media.url, sourceUrl: media.url, retrievedAt: new Date().toISOString(), permission: 'authorized' } } });
     }
     if (!/text\/html/i.test(media.mimeType)) throw new Error('This source is not an HTML page; use the web-search tool to inspect it.');
