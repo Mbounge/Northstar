@@ -3,6 +3,7 @@
 import { canvasV2IsStatusQuestion, canvasV2SteeredInstruction, type CanvasV2LiveInput } from "@/lib/canvas-v2/live-input";
 import { mergeCanvasV2Activity, type CanvasV2Activity } from "@/lib/canvas-v2/tool-activity";
 
+import { useTimedChatTurns } from "./use-timed-chat-turns";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { canvasV2ChatStatusForLoop, type CanvasV2ChatStatus } from "@/lib/canvas-v2/chat-lifecycle";
@@ -52,6 +53,8 @@ export interface CanvasV2ChatTurn {
   message: string;
   attachments?: CanvasV2ChatAttachment[];
   createdAt: string;
+  elapsedMs?: number;
+  activeSince?: number;
   status: CanvasV2ChatStatus;
   route?: CanvasV2InteractionRoute;
   routeSummary?: string;
@@ -95,7 +98,7 @@ export function useCanvasV2Chat(input: {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<CanvasV2ChatAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string>();
-  const [turns, setTurns] = useState<CanvasV2ChatTurn[]>([]);
+  const [turns, setTurns] = useTimedChatTurns();
   const [modelSelection, setModelSelection] = useState<CanvasV2ModelSelection>(CANVAS_V2_DEFAULT_MODEL);
   const activeRoutingTurnId = useRef<string | undefined>(undefined);
   const activeDesignTurnId = useRef<string | undefined>(undefined);

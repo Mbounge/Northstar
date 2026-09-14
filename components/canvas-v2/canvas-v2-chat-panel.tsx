@@ -3,6 +3,7 @@ import { CanvasV2MarkdownMessage } from "./canvas-v2-markdown-message";
 
 import {
   ArrowUp,
+  ArrowDown,
   Check,
   ChevronDown,
   Database,
@@ -30,6 +31,7 @@ import {
   CANVAS_V2_MAX_CHAT_ATTACHMENTS,
   type CanvasV2ChatImageAttachment,
 } from "@/lib/canvas-v2/chat-attachments";
+import { canvasV2ElapsedLabel } from "@/lib/canvas-v2/chat-lifecycle";
 import { canvasV2VisibleProgressSteps } from "@/lib/canvas-v2/design-loop";
 import { canvasV2HasConfirmedWebSearch, canvasV2ActivitySummary } from "@/lib/canvas-v2/tool-activity";
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
@@ -177,6 +179,13 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
   </div>;
 }
 
+function PendingDots({ reconnecting }: { reconnecting?: boolean }) {
+  return <div role="status" aria-label={reconnecting ? "Reconnecting" : "Response in progress"} className="flex h-7 items-center gap-1.5 text-[#88818f] dark:text-[#a39baa]" data-testid="canvas-v2-pending-dots">
+    {[0, 1, 2].map(index => <span key={index} aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current motion-safe:animate-pulse" style={{ animationDelay: `${index * 180}ms` }} />)}
+    {reconnecting && <span className="ml-1 text-xs">Reconnecting…</span>}
+  </div>;
+}
+
 function ChatTurn({
   turn,
   busy,
@@ -188,6 +197,9 @@ function ChatTurn({
   onContinue: (turnId: string) => void;
   onOpenImage: (attachment: CanvasV2ChatImageAttachment) => void;
 }) {
+  const active = turn.status === "routing" || turn.status === "running";
+  const progress = <>{!turn.loop && turn.activity?.length ? <ActivityFeed items={turn.activity} active={active} /> : null}{turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}</>;
+  const hasProgress = Boolean(turn.activity?.length || (turn.route && turn.canvasInstruction));
   return <article className="space-y-3" data-chat-turn={turn.id}>
     <div className="ml-10 text-[13px] leading-[1.55] text-[#37314f] dark:text-[#e2ddfb]">
       {turn.attachments?.length ? <div className="mb-2 flex snap-x snap-mandatory items-start gap-1.5 overflow-x-auto [scrollbar-width:thin]" data-testid="canvas-v2-sent-images" aria-label={`${turn.attachments.length} sent attachments`}>
@@ -209,12 +221,18 @@ function ChatTurn({
     <div className="flex items-start gap-3">
       <div className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-lg bg-[#171721] text-[10px] font-black text-white dark:bg-[#6d59ed]">N</div>
       <div className="min-w-0 flex-1 pt-0.5">
-        {(turn.status === "routing" || (turn.status === "running" && !turn.loop)) && !turn.activity?.some(item => item.kind === "activity" && item.status === "started") && <div className="flex items-center gap-2 text-[13px] text-[#727282]"><Loader2 className="h-3.5 w-3.5 animate-spin text-[#735fff]" />{turn.retry ? "Reconnecting…" : turn.activity?.length ? "Working…" : "Starting…"}</div>}
+        {active && <PendingDots reconnecting={Boolean(turn.retry)} />}
+        {!active && !turn.feedbackFor && (hasProgress || turn.elapsedMs !== undefined) && <details className="group/progress mb-3 text-[#88818f] dark:text-[#a39baa]" data-testid="canvas-v2-completed-progress">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-xs marker:hidden">
+            <span>{turn.status === "failed" ? "Failed after" : turn.status === "stopped" ? "Stopped after" : turn.status === "incomplete" ? "Paused after" : "Worked for"} {canvasV2ElapsedLabel(turn.elapsedMs ?? 0)}</span>
+            <ChevronDown aria-hidden="true" className="h-3 w-3 -rotate-90 transition-transform group-open/progress:rotate-0" />
+          </summary>
+          <div className="pt-3">{progress}</div>
+        </details>}
+        {active && progress}
         {turn.feedbackState && <p className="text-[12px] text-[#777085]" data-testid="canvas-v2-feedback-state">{turn.feedbackState === "queued" ? "Sending feedback…" : turn.feedbackState === "accepted" ? "Feedback received" : turn.feedbackState === "incorporated" ? "Feedback incorporated" : "Feedback was not incorporated before stopping"}</p>}
-        {!turn.loop && turn.activity?.length ? <ActivityFeed items={turn.activity} active={turn.status === "routing" || turn.status === "running"} /> : null}
         {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.answer} /></div>}
         {turn.routeSummary && !turn.answer && !turn.loop?.finalSummary && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
-        {turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}
         {turn.loop?.clarification && <div data-testid="canvas-v2-discovery-question" className="mt-4 border-t border-[#e9e5f7] pt-3 dark:border-white/[.09]">
           <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#7663e7] dark:text-[#aa9cff]">Your judgment matters here</div>
           <p className="mt-1.5 text-[13px] font-semibold leading-[1.6] text-[#3f3b4d] dark:text-[#e0dce7]">{turn.loop.clarification.question}</p>
@@ -244,7 +262,8 @@ export function CanvasV2ChatPanel({
   selections?: readonly CanvasV2InspectableElement[];
 }) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [showLatest, setShowLatest] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const followingLatestRef = useRef(true);
@@ -255,11 +274,38 @@ export function CanvasV2ChatPanel({
   const selectedEvidence = canvasV2EvidenceSourceForSelection(engine.committed, selection);
   const selectedDiscovery = canvasV2DiscoveryMemoryForSelection(engine.committed.discoveryGraph, selection);
 
+  const updateFollowing = () => {
+    const area = scrollAreaRef.current;
+    if (!area) return;
+    followingLatestRef.current = area.scrollHeight - area.scrollTop - area.clientHeight < 48;
+    setShowLatest(!followingLatestRef.current);
+  };
+  const jumpToLatest = () => {
+    const area = scrollAreaRef.current;
+    followingLatestRef.current = true;
+    setShowLatest(false);
+    area?.scrollTo({ top: area.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  };
   useEffect(() => {
-    const newTurn = chat.turns.length > previousTurnCountRef.current;
+    const area = scrollAreaRef.current;
+    if (!area) return;
+    if (chat.turns.length > previousTurnCountRef.current) followingLatestRef.current = true;
     previousTurnCountRef.current = chat.turns.length;
-    if (newTurn || followingLatestRef.current) endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (followingLatestRef.current) area.scrollTop = area.scrollHeight;
+    updateFollowing();
   }, [chat.turns]);
+  useEffect(() => {
+    const area = scrollAreaRef.current;
+    const content = contentRef.current;
+    if (!area || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (followingLatestRef.current) area.scrollTop = area.scrollHeight;
+      updateFollowing();
+    });
+    observer.observe(area);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -341,16 +387,19 @@ export function CanvasV2ChatPanel({
   };
 
   return <>
+    <div className="relative min-h-0 flex-1">
     <div
       ref={scrollAreaRef}
-      className="flex-1 overflow-y-auto px-4 pb-3 pt-4 text-[#292834] [scrollbar-width:thin] [scrollbar-color:#d8d4ec_transparent] dark:text-[#f2f1f7] dark:[scrollbar-color:#4b485a_transparent]"
+      data-testid="canvas-v2-chat-scroll"
+      className="h-full overflow-y-auto px-4 pb-3 pt-4 text-[#292834] [scrollbar-width:thin] [scrollbar-color:#d8d4ec_transparent] dark:text-[#f2f1f7] dark:[scrollbar-color:#4b485a_transparent]"
       aria-live="polite"
-      onScroll={() => {
-        const area = scrollAreaRef.current;
-        if (!area) return;
-        followingLatestRef.current = area.scrollHeight - area.scrollTop - area.clientHeight < 72;
+      onClickCapture={event => {
+        // Opening history is a reading action, not a request to follow new output.
+        if (event.target instanceof Element && event.target.closest("summary")) followingLatestRef.current = false;
       }}
+      onScroll={updateFollowing}
     >
+      <div ref={contentRef} className="min-h-full">
       {!chat.turns.length && <div className="flex min-h-[260px] h-full flex-col items-center justify-center px-3 pb-8 text-center">
         <Sparkles aria-hidden="true" className="mb-5 h-7 w-7 text-[#aaa5b6] dark:text-[#66616f]" />
         <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
@@ -359,7 +408,9 @@ export function CanvasV2ChatPanel({
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Rendering the manual revision…</div>}
       {engine.manualNotice && <div className="mt-5 text-xs font-semibold leading-5 text-[#6e6b7b]">{engine.manualNotice}</div>}
       {engine.manualError && <div className="mt-5 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44]">{engine.manualError}</div>}
-      <div ref={endRef} />
+      </div>
+    </div>
+    {showLatest && <button type="button" onClick={jumpToLatest} aria-label="Jump to latest response" title="Jump to latest response" className="absolute bottom-2 left-1/2 z-10 grid h-9 w-9 -translate-x-1/2 place-items-center rounded-full border border-black/10 bg-white text-[#655f70] shadow-md transition hover:bg-[#f3f0fa] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8976ee] dark:border-white/15 dark:bg-[#29262f] dark:text-[#d4cfdf] dark:hover:bg-[#35303f]" data-testid="canvas-v2-jump-to-latest"><ArrowDown aria-hidden="true" className="h-4 w-4" /></button>}
     </div>
 
     <div className="relative m-3 mt-1 rounded-[20px] border border-[#dedde7] bg-white p-2.5 shadow-[0_12px_34px_rgba(42,39,70,.10)] transition focus-within:border-[#b8aff5] focus-within:shadow-[0_16px_42px_rgba(83,67,177,.15)] dark:border-white/[.1] dark:bg-[#211f28] dark:shadow-[0_16px_42px_rgba(0,0,0,.28)] dark:focus-within:border-[#7668bd]">

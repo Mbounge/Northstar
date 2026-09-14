@@ -1,0 +1,37 @@
+import { expect, test } from '@playwright/test';
+
+test('chat follows live content, respects scrolling away, and collapses completed progress with a stable duration', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/canvas-v2-e2e/codex');
+  await page.getByLabel('Message North Star').fill('chat progress parity');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByRole('status', { name: 'Response in progress' })).toBeVisible();
+  await expect(page.getByText('Working…', { exact: true })).toHaveCount(0);
+  const area = page.getByTestId('canvas-v2-chat-scroll');
+  await expect(page.getByTestId('canvas-v2-live-activity')).toContainText('Progress 2.');
+  await expect.poll(() => area.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(48);
+  await area.evaluate(el => { el.scrollTop = 0; });
+  const jump = page.getByRole('button', { name: 'Jump to latest response' });
+  await expect(jump).toBeVisible();
+  await expect(page.getByTestId('canvas-v2-live-activity')).toContainText('Progress 4.');
+  expect(await area.evaluate(el => el.scrollTop)).toBe(0);
+  await jump.click();
+  await expect(jump).toBeHidden();
+  const history = page.getByTestId('canvas-v2-completed-progress');
+  await expect(history).toBeVisible();
+  await expect(history).not.toHaveAttribute('open', '');
+  await expect(history.locator('summary').first()).toContainText(/Worked for [0-9]+s/);
+  await expect(page.getByTestId('canvas-v2-pending-dots')).toHaveCount(0);
+  await expect(page.getByText('The comparison is complete.', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('canvas-v2-live-activity')).toBeHidden();
+  const timing = await history.locator('summary').first().innerText();
+  await history.locator('summary').first().click();
+  await expect(page.getByTestId('canvas-v2-live-activity')).toBeVisible();
+  await history.locator('summary').first().click();
+  await page.getByLabel('Message North Star').fill('hold');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByTestId('canvas-v2-pending-dots')).toBeVisible();
+  await page.getByRole('button', { name: 'Stop current response', exact: true }).click();
+  await expect(page.getByTestId('canvas-v2-completed-progress').last()).toContainText('Stopped after');
+  await expect(history.first().locator('summary').first()).toHaveText(timing);
+});

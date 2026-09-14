@@ -2,7 +2,7 @@ import { createElement, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
+  const pattern = /(`[^`]+`|cite[^\n]*(?:|$)|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
   const parts = text.split(pattern).filter((part) => part.length > 0);
 
   return parts.map((part, index) => {
@@ -14,6 +14,20 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
           {part.slice(1, -1)}
         </code>
       );
+    }
+
+    if (part.startsWith("cite")) {
+      // A streamed citation can arrive in pieces. Only link complete, explicit URLs;
+      // native reference IDs cannot be reconstructed from their names.
+      if (!part.endsWith("")) return null;
+      return <span key={key}>{part.slice("cite".length, -1).split("").map((reference, citationIndex) => {
+        let url: URL | undefined;
+        try { url = new URL(reference); } catch { /* Native reference without a URL. */ }
+        if (!url || !["https:", "http:"].includes(url.protocol) || url.username || url.password) {
+          return <span key={citationIndex} className="text-zinc-500" title="The source URL was not supplied with this reference."> [Source unavailable]</span>;
+        }
+        return <a key={citationIndex} href={url.href} target="_blank" rel="noreferrer" className="ml-1 font-[700] text-[#5E50F5] underline underline-offset-2 dark:text-[#BDB6FF]">{url.hostname.replace(/^www\./, "")}</a>;
+      })}</span>;
     }
 
     if (part.startsWith("**") && part.endsWith("**")) {

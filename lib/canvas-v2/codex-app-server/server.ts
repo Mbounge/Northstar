@@ -7,6 +7,7 @@ import { codexDisplayEvents } from './events';
 import { spawnCodex, type CodexTransport } from './rpc.server';
 import type { DynamicToolSpec } from './generated/v2/DynamicToolSpec';
 import type { DynamicToolCallResponse } from './generated/v2/DynamicToolCallResponse';
+import { codexDiscoveryReviewer, DiscoveryReviewContext, DiscoveryReviewRun, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from './discovery-review';
 import type { TurnSteerParams } from './generated/v2/TurnSteerParams';
 
 type PendingTool = { rpcId: string | number; action: JsonObject };
@@ -14,6 +15,10 @@ type Session = {
   id: string; owner: string; token: string; rpc: CodexTransport; threadId: string;
   turn: JsonObject; events: JsonObject[]; items: Map<string, JsonObject>; pending: Map<string, PendingTool>;
   listeners: Set<(e: JsonObject) => void>; receipts: Map<string, { fingerprint: string; work: Promise<unknown> }>;
+  nativeTurnId: string; nativeActive: boolean; reviewRun?: DiscoveryReviewRun; reviewContext: DiscoveryReviewContext;
+  reviewReport?: { status: string; durationMs?: number; proposedAnswer?: string; feedback?: string; continuedAnswer?: string;
+    rounds?: Array<{ draft: string; feedback: string; rawFeedback?: string; durationMs: number; activity: ReturnType<DiscoveryReviewContext['activity']> }>;
+    initialActivity?: ReturnType<DiscoveryReviewContext['activity']>; completedActivity?: ReturnType<DiscoveryReviewContext['activity']> };
   commands: Promise<unknown>; lastUse: number; disconnectedAt?: number; closed: boolean;
 };
 const functions = NORTHSTAR_AGENT_TOOLS.filter(t => 'name' in t);
@@ -28,7 +33,8 @@ export class CodexSessionHost {
   private creations = new Map<string, { fingerprint: string; work: Promise<Session> }>();
   private starting = new Map<string, number>();
   private reaper: ReturnType<typeof setInterval>;
-  constructor(private factory: () => Promise<CodexTransport>, private sourceReader: typeof readNorthstarSource = readNorthstarSource, private limits = { sessions: 20, perOwner: 2 }) {
+  constructor(private factory: () => Promise<CodexTransport>, private sourceReader: typeof readNorthstarSource = readNorthstarSource, private limits = { sessions: 20, perOwner: 2 }, private reviewer?: DiscoveryReviewer, private maxReviewRounds = 6) {
+    if (!Number.isInteger(maxReviewRounds) || maxReviewRounds < 1 || maxReviewRounds > 200) throw new Error('Configure a discovery review budget between 1 and 200 rounds.');
     this.reaper = setInterval(() => {
       const now = Date.now();
       for (const s of this.sessions.values()) {
@@ -38,7 +44,7 @@ export class CodexSessionHost {
   }
   dispose() { clearInterval(this.reaper); for (const s of this.sessions.values()) this.close(s); }
   private close(s: Session, message = 'The Codex connection expired. Start a new conversation.') {
-    if (s.closed) return; s.closed = true;
+    if (s.closed) return; s.closed = true; s.reviewRun?.stop();
     this.emit(s, { type: 'agent.session.turn.failed', error: { message } });
     s.rpc.close(); this.sessions.delete(s.token);
     for (const [key, value] of this.creations) void value.work.then(v => { if (v === s) this.creations.delete(key); }).catch(() => undefined);
@@ -66,20 +72,54 @@ export class CodexSessionHost {
     this.starting.set(owner, (this.starting.get(owner) || 0) + 1);
     let rpc: CodexTransport;
     try { rpc = await this.factory(); } finally { const left = (this.starting.get(owner) || 1) - 1; if (left) this.starting.set(owner, left); else this.starting.delete(owner); }
-    const s: Session = { id: randomUUID(), owner, token: randomUUID(), rpc, threadId: '', turn: {}, events: [], items: new Map(), pending: new Map(), listeners: new Set(), receipts: new Map(), commands: Promise.resolve(), lastUse: Date.now(), disconnectedAt: Date.now(), closed: false };
+    const s: Session = { id: randomUUID(), owner, token: randomUUID(), rpc, threadId: '', nativeTurnId: '', nativeActive: false, reviewContext: new DiscoveryReviewContext(), turn: {}, events: [], items: new Map(), pending: new Map(), listeners: new Set(), receipts: new Map(), commands: Promise.resolve(), lastUse: Date.now(), disconnectedAt: Date.now(), closed: false };
     this.sessions.set(s.token, s);
     rpc.onClose(() => { if (!s.closed) { this.emit(s, { type: 'agent.session.turn.failed', error: { message: 'The Codex process stopped. Start a new conversation.' } }); this.close(s); } });
     rpc.onMessage(message => {
       const p = object(message.params);
       if (p.threadId && p.threadId !== s.threadId) return;
+      const nativeId = string(p.turnId) || string(object(p.turn).id);
+      if (message.method === 'turn/started') { s.nativeTurnId = nativeId; s.nativeActive = true; }
+      if (nativeId && s.nativeTurnId && nativeId !== s.nativeTurnId) return;
+      if (message.method === 'turn/completed') s.nativeActive = false;
+      if (this.reviewer && message.method === 'item/completed' && ['agentMessage', 'webSearch'].includes(string(object(p.item).type))) {
+        const item = object(p.item);
+        s.reviewContext.observation(item);
+        if (s.reviewReport?.status === 'continuing' && item.type === 'agentMessage' && item.phase !== 'commentary') s.reviewReport.continuedAnswer = string(item.text);
+      }
+      if (s.reviewRun?.filter(message)) return;
+      if (message.method === 'turn/completed' && s.reviewRun) {
+        const run = s.reviewRun;
+        if (run.completedTurns.has(s.nativeTurnId)) return;
+        run.completedTurns.add(s.nativeTurnId);
+        if (run.phase === 'reviewing' || run.phase === 'done') return;
+        if (object(p.turn).status === 'completed' && run.draft.trim()) {
+          run.phase = 'reviewing'; void this.review(s, key); return;
+        }
+        if (s.reviewReport?.status === 'continuing') {
+          s.reviewReport.status = 'interrupted';
+          s.reviewReport.completedActivity = s.reviewContext.activity();
+        }
+        run.stop();
+        if (object(p.turn).status === 'completed') {
+          s.reviewReport = { ...s.reviewReport, status: 'unavailable' };
+          this.emit(s, { type: 'agent.session.turn.failed', turn_id: run.publicTurnId, error: { message: 'The model ended without an answer for review. This discovery run is unfinished.' } });
+          return;
+        }
+      }
+      if (message.method === 'error' && !p.willRetry) s.reviewRun?.stop();
+      if (message.method === 'turn/started' && s.reviewRun) return;
       if (message.method === 'item/tool/call' && message.id !== undefined) {
         if (!toolNames.has(string(p.tool))) { rpc.reply(message.id as string | number, { success: false, contentItems: [{ type: 'inputText', text: 'This tool is unavailable in Northstar.' }] }); return; }
-        const action = { name: p.tool, arguments: p.arguments, call_id: p.callId, turn_id: p.turnId };
+        const action = { name: p.tool, arguments: p.arguments, call_id: p.callId, turn_id: s.reviewRun?.publicTurnId || p.turnId };
         s.pending.set(string(p.callId), { rpcId: message.id as string | number, action });
         this.emit(s, { type: 'agent.session.requires_action', session: { required_actions: [action] } }); return;
       }
       if (message.id !== undefined && message.method) { rpc.reject(message.id as string | number, 'This operation is not enabled in Northstar.'); return; }
-      for (const e of codexDisplayEvents(message)) this.emit(s, e);
+      for (const e of codexDisplayEvents(message)) {
+        if (s.reviewRun) { e.turn_id = s.reviewRun.publicTurnId; if (e.turn) e.turn = { ...object(e.turn), id: s.reviewRun.publicTurnId }; }
+        this.emit(s, e);
+      }
     });
     try {
       await rpc.request('initialize', { clientInfo: { name: 'northstar', version: '1.0.0' }, capabilities: { experimentalApi: true } });
@@ -111,18 +151,73 @@ export class CodexSessionHost {
     const work = s.commands.then(async () => {
       if (s.closed) throw new Error('This Codex conversation is closed.');
       const input = await codexInput(body, s.rpc.cwd);
-      if (s.turn.status === 'in_progress') {
-        const params: TurnSteerParams = { threadId: s.threadId, expectedTurnId: string(s.turn.id), clientUserMessageId: string(body.requestId), input };
+      if (this.reviewer) s.reviewContext.user(input);
+      if (s.nativeActive) {
+        const params: TurnSteerParams = { threadId: s.threadId, expectedTurnId: s.nativeTurnId, clientUserMessageId: string(body.requestId), input };
         // A rejected steer is returned, never blindly resubmitted as a new turn.
         await s.rpc.request('turn/steer', params);
       } else {
+        if (this.reviewer) {
+          if (s.reviewRun?.phase === 'reviewing') {
+            const publicId = s.reviewRun.publicTurnId; s.reviewRun.stop();
+            s.reviewRun = new DiscoveryReviewRun(publicId); s.reviewReport = { status: 'pending' };
+          }
+          else { s.reviewRun = new DiscoveryReviewRun(randomUUID()); s.reviewReport = { status: 'pending' }; this.emit(s, { type: 'agent.session.turn.created', turn: { id: s.reviewRun.publicTurnId } }); }
+        }
         const result = await s.rpc.request('turn/start', { threadId: s.threadId, input, model: 'gpt-5.6-luna', effort: 'high' });
-        if (!s.turn.id || s.turn.id !== object(result.turn).id) this.emit(s, { type: 'agent.session.turn.created', turn: { id: object(result.turn).id } });
+        s.nativeTurnId = string(object(result.turn).id);
+        if (!s.reviewRun && (!s.turn.id || s.turn.id !== object(result.turn).id)) this.emit(s, { type: 'agent.session.turn.created', turn: { id: object(result.turn).id } });
       }
       return { accepted: true };
     });
     const guarded = work.catch(error => { this.close(s, 'Codex could not accept the input reliably. The process was stopped; start a new conversation.'); throw error; });
     s.commands = guarded.catch(() => undefined); return guarded;
+  }
+  private progress(s: Session, text: string) {
+    this.emit(s, { type: 'agent.session.turn.item.done', turn_id: s.turn.id, item: { id: randomUUID(), type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text }] } });
+  }
+  private async review(s: Session, key: string) {
+    const run = s.reviewRun!, started = Date.now();
+    run.rounds++;
+    s.reviewReport = { ...s.reviewReport, status: 'reviewing', proposedAnswer: s.reviewReport?.proposedAnswer ?? run.draft,
+      initialActivity: s.reviewReport?.initialActivity ?? s.reviewContext.activity() };
+    this.progress(s, 'I’m checking whether the explanation misses anything that would change the answer.');
+    let feedback: string;
+    let rawFeedback: string;
+    let remainingWork: number;
+    try {
+      rawFeedback = await this.reviewer!(s.reviewContext.packet(run.draft), { key, model: 'gpt-5.6-luna', signal: run.controller.signal });
+      feedback = s.reviewContext.reconcileFeedback(rawFeedback);
+      remainingWork = (parseDiscoveryFeedback(feedback).work as unknown[]).length;
+    }
+    catch {
+      if (s.closed || s.reviewRun !== run || run.phase !== 'reviewing') return;
+      s.reviewReport = { ...s.reviewReport, status: 'unavailable', durationMs: Date.now() - started };
+      this.finishReviewedDraft(s, run, 'The additional check was unavailable. Here is the latest answer; its review is unfinished.'); return;
+    }
+    const work = s.commands.then(async () => {
+      if (s.closed || s.reviewRun !== run || run.phase !== 'reviewing') return;
+      const durationMs = Date.now() - started;
+      const rounds = [...(s.reviewReport?.rounds ?? []), { draft: run.draft, feedback, rawFeedback, durationMs, activity: s.reviewContext.activity() }];
+      s.reviewReport = { ...s.reviewReport, status: 'reviewing', durationMs, feedback, rounds, completedActivity: s.reviewContext.activity() };
+      s.reviewContext.reviewed(run.draft, feedback);
+      if (!remainingWork) { s.reviewReport.status = 'completed'; this.finishReviewedDraft(s, run); return; }
+      if (run.rounds >= this.maxReviewRounds) {
+        s.reviewReport.status = 'budget_exhausted';
+        this.finishReviewedDraft(s, run, 'I reached the review limit with unresolved points. Here is the latest answer; it has not passed the full review.'); return;
+      }
+      run.nextDraft(); s.reviewReport.status = 'continuing';
+      const result = await s.rpc.request('turn/start', { threadId: s.threadId, model: 'gpt-5.6-luna', effort: 'high', input: [{ type: 'text', text: reviewContinuation(feedback), text_elements: [] }] });
+      s.nativeTurnId = string(object(result.turn).id);
+    });
+    s.commands = work.catch(() => { this.close(s, 'The continuation could not start reliably. Start a new conversation.'); });
+    await s.commands;
+  }
+  private finishReviewedDraft(s: Session, run: DiscoveryReviewRun, notice?: string) {
+    run.stop();
+    if (notice) this.progress(s, notice);
+    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: item.text }] } });
+    this.emit(s, { type: 'agent.session.turn.completed', turn_id: run.publicTurnId });
   }
   private stream(s: Session, identity: boolean, signal: AbortSignal) {
     let remove = () => {};
@@ -160,7 +255,7 @@ export class CodexSessionHost {
     if (body.op === 'heartbeat') return Response.json({ accepted: true });
     if (body.op === 'close') { this.close(s, 'Conversation closed.'); return Response.json({ accepted: true }); }
     if (body.op === 'stream') return this.stream(s, false, signal);
-    if (body.op === 'snapshot') return Response.json({ session: { required_actions: [...s.pending.values()].map(v => v.action) }, turn: s.turn, items: [...s.items.values()] });
+    if (body.op === 'snapshot') return Response.json({ session: { required_actions: [...s.pending.values()].map(v => v.action) }, turn: s.turn, review: s.reviewReport, items: [...s.items.values()] });
     if (body.op === 'read') {
       const pending = s.pending.get(string(body.callId));
       if (!pending || pending.action.turn_id !== body.turnId || !['read_source', 'inspect_image'].includes(string(pending.action.name))) throw new Error('This source read is no longer pending.');
@@ -169,7 +264,11 @@ export class CodexSessionHost {
     if (body.op === 'send') return Response.json(await this.once(s, body, () => this.input(s, body)));
     if (body.op === 'cancel') return Response.json(await this.once(s, body, async () => {
       await s.commands;
-      if (s.turn.status === 'in_progress') await s.rpc.request('turn/interrupt', { threadId: s.threadId, turnId: s.turn.id });
+      const wasRunning = s.turn.status === 'in_progress';
+      s.reviewRun?.stop();
+      if (wasRunning && s.reviewReport) s.reviewReport.status = 'cancelled';
+      if (s.nativeActive) await s.rpc.request('turn/interrupt', { threadId: s.threadId, turnId: s.nativeTurnId });
+      if (wasRunning) this.emit(s, { type: 'agent.session.turn.cancelled', turn_id: s.turn.id });
       return { accepted: true };
     }));
     if (body.op === 'result') return Response.json(await this.once(s, body, async () => {
@@ -178,6 +277,7 @@ export class CodexSessionHost {
       const raw = body.success === false ? [{ type: 'input_text', text: string(body.error).slice(0, 2000) }] : Array.isArray(body.output) ? body.output : [{ type: 'input_text', text: typeof body.output === 'string' ? body.output : JSON.stringify(body.output) }];
       if (JSON.stringify(raw).length > 10_000_000) throw new Error('Tool output exceeds the transport limit.');
       const contentItems: DynamicToolCallResponse['contentItems'] = raw.map(v => { const part = object(v); return part.type === 'input_image' ? { type: 'inputImage', imageUrl: string(part.image_url) } : { type: 'inputText', text: string(part.text) }; });
+      if (this.reviewer) s.reviewContext.tool(string(pending.action.name), pending.action.arguments, contentItems);
       s.rpc.reply(pending.rpcId, { success: body.success !== false, contentItems } satisfies DynamicToolCallResponse); s.pending.delete(string(body.callId));
       return { accepted: true };
     }));
@@ -191,10 +291,10 @@ const configuredLimit = (value: string | undefined, fallback: number) => {
 };
 const globalHost = globalThis as typeof globalThis & { northstarCodexHost?: CodexSessionHost };
 export function productionCodexHost() {
-  if (globalHost.northstarCodexHost && typeof globalHost.northstarCodexHost.configure !== 'function') {
+  if (globalHost.northstarCodexHost && Object.getPrototypeOf(globalHost.northstarCodexHost) !== CodexSessionHost.prototype) {
     globalHost.northstarCodexHost.dispose(); globalHost.northstarCodexHost = undefined;
   }
-  const host = globalHost.northstarCodexHost ??= new CodexSessionHost(() => spawnCodex(process.env.NORTHSTAR_CODEX_BINARY || 'codex'), readNorthstarSource, { sessions: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS, 20), perOwner: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS_PER_USER, 2) });
+  const host = globalHost.northstarCodexHost ??= new CodexSessionHost(() => spawnCodex(process.env.NORTHSTAR_CODEX_BINARY || 'codex'), readNorthstarSource, { sessions: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS, 20), perOwner: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS_PER_USER, 2) }, process.env.NORTHSTAR_DISCOVERY_REVIEW === 'advisory' ? codexDiscoveryReviewer(() => spawnCodex(process.env.NORTHSTAR_CODEX_BINARY || 'codex')) : undefined, configuredLimit(process.env.NORTHSTAR_DISCOVERY_REVIEW_MAX_ROUNDS, 6));
   host.configure(NORTHSTAR_AGENT_INSTRUCTIONS, tools);
   return host;
 }

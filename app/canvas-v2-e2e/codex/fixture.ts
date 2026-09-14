@@ -39,6 +39,14 @@ export class FixtureCodex implements CodexTransport {
       this.emit('item/completed', { turnId: this.turn, item: { id: `search-${this.turn}`, type: 'webSearch', query: 'Compare the evidence', action: { type: 'search', query: 'Compare the evidence' }, results: [{ title: 'Example evidence', url: 'https://example.com/evidence' }] } });
       this.followupRepair = /repair parity/i.test(message); this.sourcePhoto = /research photo parity/i.test(message); this.mediaParity = /media parity/i.test(message) || this.sourcePhoto; this.mediaStep = 0; this.selectionEdit = /selection parity/i.test(message); this.oversized = /oversize parity/i.test(message); this.overlapParity = /overlap parity/i.test(message); this.parity = /composition parity|oversize parity|overlap parity/i.test(message); this.chapter = 0; this.repair = false; this.rejected = false;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
+      if (/chat progress parity/i.test(message)) {
+        const turnId = this.turn;
+        for (let index = 0; index < 4; index++) this.timers.push(setTimeout(() => {
+          this.emit('item/completed', { turnId, item: { id: `phase-${turnId}-${index}`, type: 'agentMessage', phase: 'commentary', text: `Progress ${index + 1}. ` + 'Comparing the available material and checking what changes the explanation. '.repeat(8) } });
+        }, index * 1000));
+        this.timers.push(setTimeout(() => this.finish('The comparison is complete. The final answer stays visible while the earlier progress can be expanded.'), 6000));
+        return { turn: { id: this.turn } };
+      }
       if (/three-step plan/i.test(message)) { this.finish('1. Map the journeys.\n\n2. Compare the experience.\n\n3. Recommend changes.'); return { turn: { id: this.turn } }; }
       if (this.appsScenario) { this.appsScenario.start(); return { turn: { id: this.turn } }; }
       if (this.mediaParity) this.tool('read_source', {url: this.sourcePhoto ? 'https://www.abrielle.ca/menus' : this.origin + '/canvas-v2-e2e/codex/media/article', focus: this.sourcePhoto ? 'breakfast restaurant' : 'reference'});

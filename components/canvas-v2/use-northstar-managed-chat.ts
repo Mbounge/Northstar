@@ -1,4 +1,5 @@
 'use client';
+import { useTimedChatTurns } from "./use-timed-chat-turns";
 import { useEffect, useRef, useState } from 'react';
 import type { useCanvasV2Chat, CanvasV2ChatTurn } from './use-canvas-v2-chat';
 import type { useCanvasV2DesignLoop } from './use-canvas-v2-design-loop';
@@ -19,7 +20,7 @@ import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
 import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 
 export function useNorthstarManagedChat(input: { enabled: boolean; endpoint?: string; accountEndpoint?: string; gatewayHandoff?: CanvasV2GatewayHandoff; selectedNodeIds?: string[]; getWorkingContext?: (policy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined; base: ReturnType<typeof useCanvasV2Chat>; engine: ReturnType<typeof useCanvasV2DesignLoop> }) {
-  const [turns, setTurns] = useState<CanvasV2ChatTurn[]>([]);
+  const [turns, setTurns] = useTimedChatTurns();
   const [busy, setBusy] = useState(false);
   const current = useRef(input); current.current = input;
   const client = useRef<ManagedAgentClient | undefined>(undefined);
