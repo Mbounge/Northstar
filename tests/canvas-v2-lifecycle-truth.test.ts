@@ -64,7 +64,7 @@ test("the chat keeps every committed composition turn visible without exposing i
   assert.match(panel, /Checking a private draft before it reaches your canvas/);
   assert.doesNotMatch(panel, /Replanning from the last committed canvas/);
   assert.match(panel, /followingLatestRef\.current/);
-  assert.match(panel, /area\.scrollHeight - area\.scrollTop - area\.clientHeight < 72/);
+  assert.match(panel, /area\.scrollHeight - area\.scrollTop - area\.clientHeight < 48/);
   assert.match(panel, /step\.summary/);
   assert.doesNotMatch(panel, /Inspect design turn|Visible goal|Observed result|Model activity/);
 });

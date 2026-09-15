@@ -226,6 +226,7 @@ function reconcilePublicSceneGeometry(
     if (id && !elements.has(id)) elements.set(id, element);
   }
   let changed = false;
+  const sceneNodes = canvasV2NativeSceneNodeMap(scene);
   const nodes = scene.nodes.map((node) => {
     // Absolute canvas objects already have authoritative world geometry from
     // the native scene. Reading their painted browser pixels back through the
@@ -246,7 +247,7 @@ function reconcilePublicSceneGeometry(
         return { ...node, geometry: { ...node.geometry, width, height } };
       }
     }
-    if (element && node.kind === "text" && !textMode && node.layoutMode === "absolute" && node.geometry.rotation === 0 && !element.hasAttribute("data-canvas-v2-native-transient")) {
+    if (element && canvasV2NativeSceneNodeSupportsTextEditing(node, sceneNodes) && !textMode && node.layoutMode === "absolute" && node.geometry.rotation === 0 && !element.hasAttribute("data-canvas-v2-native-transient")) {
       const paint = canvasV2ElementPaintBounds(element);
       const box = element.getBoundingClientRect();
       const width = Math.max(node.geometry.width, roundSceneMetric((paint.right - box.left) / scaleX));

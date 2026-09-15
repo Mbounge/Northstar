@@ -19,23 +19,23 @@ import { insertCanvasV2CanonicalFlow } from '@/lib/canvas-v2/flow-insertion';
 import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
 import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 
-export function useNorthstarManagedChat(input: { enabled: boolean; endpoint?: string; accountEndpoint?: string; gatewayHandoff?: CanvasV2GatewayHandoff; selectedNodeIds?: string[]; getWorkingContext?: (policy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined; base: ReturnType<typeof useCanvasV2Chat>; engine: ReturnType<typeof useCanvasV2DesignLoop> }) {
-  const [turns, setTurns] = useTimedChatTurns();
+export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot; enabled: boolean; endpoint?: string; accountEndpoint?: string; gatewayHandoff?: CanvasV2GatewayHandoff; selectedNodeIds?: string[]; getWorkingContext?: (policy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined; base: ReturnType<typeof useCanvasV2Chat>; engine: ReturnType<typeof useCanvasV2DesignLoop> }) {
+  const [turns, setTurns] = useTimedChatTurns((input.initial?.turns ?? []).map(t => t.status === "running" ? { ...t, status: "stopped", activeSince: undefined, error: "The page closed during this run. Send a follow-up to continue from saved work." } : t));
   const [busy, setBusy] = useState(false);
   const current = useRef(input); current.current = input;
   const client = useRef<ManagedAgentClient | undefined>(undefined);
   const rootId = useRef<string | undefined>(undefined);
-  const assets = useRef(new Map<string, CanvasV2EvidenceAsset>());
+  const assets = useRef(new Map<string, CanvasV2EvidenceAsset>((input.initial?.memory?.assets ?? []).map(a => [a.id, a])));
   const accountHandles = useRef(new AccountToolHandles());
   const inspectedPixels = useRef(new Map<string, string>());
-  const accountPackets = useRef<CanvasV2EvidencePacket[]>([]);
-  const accountFlows = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>());
+  const accountPackets = useRef<CanvasV2EvidencePacket[]>(input.initial?.memory?.accountPackets ?? []);
+  const accountFlows = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlows ?? []));
   const readRevision = useRef<string | undefined>(undefined);
-  const sourceMedia = useRef<CodexSourceMediaCandidate[]>([]);
-  const sourcePages = useRef<string[]>([]);
+  const sourceMedia = useRef<CodexSourceMediaCandidate[]>(input.initial?.memory?.sourceMedia ?? []);
+  const sourcePages = useRef<string[]>(input.initial?.memory?.sourcePages ?? []);
   const compositionPlan = useRef<CodexCompositionPlan | undefined>(undefined);
-  const compositionHistory = useRef<CodexCompositionPlan[]>([]);
-  const compositionSequence = useRef(0);
+  const compositionHistory = useRef<CodexCompositionPlan[]>(input.initial?.memory?.compositionHistory ?? []);
+  const compositionSequence = useRef(input.initial?.memory?.compositionSequence ?? 0);
   const editActive = useRef(false);
   const busyRef = useRef(false);
   const stopping = useRef<Promise<void> | undefined>(undefined);
@@ -185,7 +185,7 @@ export function useNorthstarManagedChat(input: { enabled: boolean; endpoint?: st
     window.addEventListener('pagehide', dispose);
     return () => { window.removeEventListener('pagehide', dispose); dispose(); };
   }, []);
-  const submit = async (override?: string) => {
+  const submit = async (override?: string, supplied?: Extract<import('@/lib/canvas-v2/sessions/types').SessionCommand,{kind:'submit'}>) => {
     if (stopping.current) {
       if (waitingToSubmit.current) return;
       waitingToSubmit.current = true;
@@ -197,12 +197,14 @@ export function useNorthstarManagedChat(input: { enabled: boolean; endpoint?: st
     const id = crypto.randomUUID();
     const feedback = busyRef.current;
     if (!feedback) rootId.current = id;
-    const attachments = [...base.attachments];
+    const attachments = [...(supplied?.attachments ?? base.attachments)];
     for (const a of attachments) if (a.kind === 'image') assets.current.set(a.id, { id: a.id, url: a.dataUrl, label: a.name, authority: 'supplied', mimeType: a.mimeType, source: { providerId: 'user-upload', providerLabel: 'Uploaded material', sourceId: a.id, sourceType: 'uploaded', label: a.name, retrievedAt: new Date().toISOString(), permission: 'authorized' } });
     setTurns(all => [...all, { id, message, attachments, createdAt: new Date().toISOString(), status: feedback ? 'responded' : 'running', ...(feedback ? { feedbackFor: rootId.current, feedbackState: 'queued' as const } : {}) }]);
     busyRef.current = true; setBusy(true); base.setDraft(''); for (const a of attachments) base.removeAttachment(a.id);
     try {
-      await getClient().send(message, attachments, base.modelSelection, id);
+      const runtime = getClient();
+      const restored = !runtime.token && turns.length ? JSON.stringify(turns.map(t => ({ user: t.message, answer: t.answer, status: t.status, activity: t.activity }))) : undefined;
+      await runtime.send(message, attachments, supplied?.model ?? base.modelSelection, id, supplied?.effort ?? base.reasoningEffort, restored);
       if (feedback) setTurns(all => all.map(turn => turn.id === id ? { ...turn, feedbackState: 'accepted' } : turn));
     }
     catch {
@@ -223,5 +225,8 @@ export function useNorthstarManagedChat(input: { enabled: boolean; endpoint?: st
     if (editActive.current) current.current.engine.stop();
     stopping.current = (client.current?.cancel() ?? Promise.resolve()).catch(() => undefined).finally(() => { stopping.current = undefined; });
   };
-  return { ...input.base, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
+  const memory = () => ({ assets: [...assets.current.values()], accountPackets: accountPackets.current,
+    accountFlows: [...accountFlows.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
+    compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
+  return { ...input.base, memory, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
 }

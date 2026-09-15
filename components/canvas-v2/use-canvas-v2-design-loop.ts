@@ -201,8 +201,8 @@ function id(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function useCanvasV2DesignLoop(designEndpoint: string) {
-  const initial = useMemo(() => createCanvasV2CommittedRevision({
+export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV2ArtifactRevision) {
+  const initial = useMemo(() => restored ?? createCanvasV2CommittedRevision({
     id: "canvas-v2-initial-revision",
     document: STARTER_DOCUMENT,
     evidence: [],
@@ -1518,6 +1518,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string) {
     steer,
     stop,
     applyManualDocument,
+    receiveSharedRevision: (revision: CanvasV2ArtifactRevision) => {
+      if (revision.id === committedRef.current.id) return;
+      if (revision.state !== 'committed') throw new Error('Only committed canvas updates can be shared.');
+      assertCanvasV2ArtifactDocument(revision.document);
+      setCandidate(undefined);setPendingManualEdit(undefined);
+      nativeSceneRef.current=undefined;setNativeScene(undefined);
+      acceptCommittedRevision(revision,`shared:${revision.id}`);
+    },
     readCompositionFeedback: () => compositionFeedbackRef.current?.revisionId === committedRef.current.id
       ? compositionFeedbackRef.current : undefined,
     readRejectedComposition: () => rejectedCompositionRef.current,

@@ -3602,6 +3602,7 @@ export function serializeCanvasV2NativeScene(scene: CanvasV2NativeSceneDocument)
 export function reconcileCanvasV2NativeSceneMeasurement(current: CanvasV2NativeSceneDocument, measured: CanvasV2NativeSceneDocument): CanvasV2NativeSceneDocument {
   if (current.revisionId !== measured.revisionId) return current;
   const byId = new Map(measured.nodes.map(node => [node.id, node]));
+  const currentById = canvasV2NativeSceneNodeMap(current);
   let changed = false;
   const nodes = current.nodes.map(node => {
     const next = byId.get(node.id);
@@ -3610,7 +3611,7 @@ export function reconcileCanvasV2NativeSceneMeasurement(current: CanvasV2NativeS
     let geometry = node.geometry;
     if ((mode === "point" || mode === "area") && next.attributes["data-canvas-v2-text-mode"] === mode) {
       geometry = { ...geometry, width: mode === "point" ? next.geometry.width : geometry.width, height: next.geometry.height };
-    } else if (node.kind === "text" && !mode && node.layoutMode === "absolute") {
+    } else if (canvasV2NativeSceneNodeSupportsTextEditing(node, currentById) && !mode && node.layoutMode === "absolute") {
       const width = Math.max(geometry.width, next.geometry.width);
       const height = Math.max(geometry.height, next.geometry.height);
       if (width > geometry.width + .1 || height > geometry.height + .1) geometry = { ...geometry, width, height };

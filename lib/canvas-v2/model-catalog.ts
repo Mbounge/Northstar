@@ -2,6 +2,7 @@ export const CANVAS_V2_DEFAULT_MODEL = "gpt-5.6-luna" as const;
 
 export const CANVAS_V2_SELECTABLE_MODELS = [
   CANVAS_V2_DEFAULT_MODEL,
+  "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra",
   "gemini-3.1-flash-lite",
   "gemini-3.5-flash-lite",
   "gemini-3.5-flash",
@@ -21,11 +22,6 @@ export interface CanvasV2ModelCatalogEntry {
   disabledReason?: string;
 }
 
-/**
- * The client may display the expensive models as a future-facing cost guard,
- * but the server allowlist below makes them impossible to execute. A disabled
- * menu item is never treated as an authorization boundary.
- */
 export const CANVAS_V2_MODEL_CATALOG: readonly CanvasV2ModelCatalogEntry[] = [
   {
     id: CANVAS_V2_DEFAULT_MODEL,
@@ -71,23 +67,22 @@ export const CANVAS_V2_MODEL_CATALOG: readonly CanvasV2ModelCatalogEntry[] = [
     id: "gpt-5.6-terra",
     label: "GPT-5.6 Terra",
     provider: "openai",
-    enabled: false,
-    selectable: false,
+    enabled: true,
+    selectable: true,
     description: "Higher-cost OpenAI model",
-    disabledReason: "Disabled by North Star's cost guard",
   },
   {
     id: "gpt-5.6-sol",
     label: "GPT-5.6 Sol",
     provider: "openai",
-    enabled: false,
-    selectable: false,
+    enabled: true,
+    selectable: true,
     description: "Frontier OpenAI model",
-    disabledReason: "Disabled by North Star's cost guard",
   },
+  { id: "gpt-6-astra", label: "GPT-6 Astra", provider: "openai", enabled: true, selectable: true, description: "Complex discovery and synthesis" },
 ] as const;
 
-const OPENAI_EXECUTION_ALLOWLIST = new Set<string>([CANVAS_V2_DEFAULT_MODEL]);
+const OPENAI_EXECUTION_ALLOWLIST = new Set<string>([CANVAS_V2_DEFAULT_MODEL, "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]);
 const GOOGLE_EXECUTION_ALLOWLIST = new Set<string>([
   "gemini-3.1-flash-lite",
   "gemini-3.5-flash-lite",
@@ -132,4 +127,22 @@ export function canvasV2ModelLabel(model: string | undefined): string {
   if (!model) return "GPT-5.6 Luna";
   return CANVAS_V2_MODEL_CATALOG.find((entry) => entry.id === model)?.label
     ?? model.replace(/^gemini-/i, "Gemini ").replaceAll("-", " ");
+}
+
+export const NORTHSTAR_MODELS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
+export const NORTHSTAR_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export type NorthstarEffort = typeof NORTHSTAR_EFFORTS[number];
+export interface NorthstarModelCapability { id: string; label: string; efforts: NorthstarEffort[]; }
+export function northstarRunConfig(model: unknown, effort: unknown = "high") {
+  if (!NORTHSTAR_MODELS.includes(model as typeof NORTHSTAR_MODELS[number])) throw new Error("Choose an available Northstar model. No substitution was made.");
+  if (!NORTHSTAR_EFFORTS.includes(effort as NorthstarEffort)) throw new Error("Choose a supported thinking level.");
+  return { model: model as typeof NORTHSTAR_MODELS[number], effort: effort as NorthstarEffort };
+}
+export function northstarModelCapabilities(rows: unknown[]): NorthstarModelCapability[] {
+  return NORTHSTAR_MODELS.flatMap(id => {
+    const row = rows.find(raw => raw && typeof raw === 'object' && (raw as {model?: string}).model === id) as { inputModalities?: string[]; supportedReasoningEfforts?: {reasoningEffort: string}[] } | undefined;
+    if (!row || (row.inputModalities && !row.inputModalities.includes('image'))) return [];
+    const efforts = NORTHSTAR_EFFORTS.filter(e => row.supportedReasoningEfforts?.some(v => v.reasoningEffort === e));
+    return efforts.length ? [{ id, label: canvasV2ModelLabel(id), efforts }] : [];
+  });
 }

@@ -28,7 +28,7 @@ export class FixtureCodex implements CodexTransport {
   async request(method: string, raw: unknown): Promise<JsonObject> {
     const params = object(raw); this.calls.push({ method, params });
     if (method === 'initialize') return { userAgent: 'codex/0.153.4' };
-    if (method === 'model/list') return { data: [{ model: 'gpt-5.6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'high' }], inputModalities: ['text', 'image'] }] };
+    if (method === 'model/list') return { data: ['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol','gpt-6-astra'].map(model => ({model, supportedReasoningEfforts: ['low','medium','high','xhigh','max',...(model==='gpt-5.6-luna'?[]:['ultra'])].map(reasoningEffort=>({reasoningEffort})),inputModalities:['text','image']})) };
     if (method === 'thread/start') return { thread: { id: 'thread-fixture' } };
     if (method === 'turn/start') {
       this.turn = `turn-${++this.count}`;

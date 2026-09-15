@@ -14,18 +14,15 @@ import {
   extractCanvasV2StructuredText,
 } from "../lib/canvas-v2/structured-provider";
 
-test("the active Canvas V2 cost policy executes Luna and never escalates to Terra or Sol", () => {
+test("Luna is the default; other Northstar models require an explicit selection", () => {
   assert.equal(CANVAS_V2_DEFAULT_MODEL, "gpt-5.6-luna");
   assert.deepEqual(canvasV2DesignModelChain(CANVAS_V2_DEFAULT_MODEL), ["gpt-5.6-luna"]);
-  assert.equal(parseCanvasV2ModelSelection("gpt-5.6-terra"), "gpt-5.6-luna");
-  assert.equal(parseCanvasV2ModelSelection("gpt-5.6-sol"), "gpt-5.6-luna");
-  assert.throws(() => canvasV2ProviderForModel("gpt-5.6-terra"), /not executable/);
-  assert.throws(() => canvasV2ProviderForModel("gpt-5.6-sol"), /not executable/);
-
-  for (const id of ["gpt-5.6-terra", "gpt-5.6-sol"]) {
-    const entry = CANVAS_V2_MODEL_CATALOG.find((candidate) => candidate.id === id);
-    assert.equal(entry?.enabled, false);
-    assert.equal(entry?.selectable, false);
+  for (const id of ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]) {
+    assert.equal(parseCanvasV2ModelSelection(id), id);
+    assert.equal(canvasV2ProviderForModel(id), "openai");
+    const entry = CANVAS_V2_MODEL_CATALOG.find(candidate => candidate.id === id);
+    assert.equal(entry?.enabled, true);
+    assert.equal(entry?.selectable, true);
   }
 });
 

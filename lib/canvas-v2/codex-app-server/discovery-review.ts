@@ -222,7 +222,7 @@ export class DiscoveryReviewContext {
   }
 }
 
-export type DiscoveryReviewer = (packet: ReturnType<DiscoveryReviewContext['packet']>, options: { key: string; model: string; signal: AbortSignal }) => Promise<string>;
+export type DiscoveryReviewer = (packet: ReturnType<DiscoveryReviewContext['packet']>, options: { key: string; model: string; effort?: import('../model-catalog').NorthstarEffort; signal: AbortSignal }) => Promise<string>;
 
 /** A separate ephemeral Codex process, same model/effort, no discovery tools or side effects. */
 export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, timeoutMs = 120_000): DiscoveryReviewer {
@@ -277,7 +277,7 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
         else images.push(part);
       }
       signal.throwIfAborted();
-      await peer.request('turn/start', { threadId, model: options.model, effort: 'high', outputSchema: DISCOVERY_REVIEW_SCHEMA, input: [{ type: 'text', text: packet.text, text_elements: [] }, ...images] });
+      await peer.request('turn/start', { threadId, model: options.model, effort: options.effort ?? 'high', outputSchema: DISCOVERY_REVIEW_SCHEMA, input: [{ type: 'text', text: packet.text, text_elements: [] }, ...images] });
       return await completed;
     } finally { clearTimeout(timer); signal.removeEventListener('abort', stop); rpc?.close(); }
   };

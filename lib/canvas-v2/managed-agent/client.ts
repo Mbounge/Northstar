@@ -12,7 +12,7 @@ export class ManagedAgentClient {
   private heartbeat?: ReturnType<typeof setInterval>;
   private heartbeatPending = false;
   private cancelling = false;
-  private selectedModel?: string;
+
   private recoveries = 0;
   private pendingInputs = 0;
   private buffered?: JsonObject[];
@@ -43,30 +43,28 @@ export class ManagedAgentClient {
   }
   private publish(view: AgentView) { this.view = view; if (!this.disposed) this.options.onView(this.pendingInputs && view.status === 'completed' ? { ...view, status: 'running' } : view); }
   private fail(error: unknown) { this.stream?.abort(); this.stream = undefined; this.publish({ ...this.view, status: 'failed', error: error instanceof Error ? error.message : 'The agent connection failed.' }); }
-  send(message: string, attachments: unknown[], model: string, requestId: string) {
+  send(message: string, attachments: unknown[], model: string, requestId: string, effort = 'high', restoredHistory?: string) {
     this.pendingInputs++;
     const work = this.commands.then(async () => {
       if (this.disposed || this.cancelling) throw new Error('The agent is stopping.');
-      if (this.selectedModel && model !== this.selectedModel) throw new Error('Keep the current model for this conversation. Start a fresh workspace to change models.');
       if (!this.token) {
-        this.selectedModel = model;
         this.actions = new AbortController();
         this.publish({ ...emptyAgentView(), status: 'running' });
-        await this.create(message, attachments, model, requestId);
+        await this.create(message, attachments, model, requestId, effort, restoredHistory);
         return; // Initial input was submitted with creation; never send it twice.
       }
       if (this.view.status !== 'running') { this.recoveries = 0; this.actions = new AbortController(); this.publish({ ...emptyAgentView(), sessionId: this.sessionId, status: 'running' }); }
       if (!this.stream) await this.listen(); // Subscribe before submitting input; do not lose early events.
-      await this.request({ op: 'send', message, attachments, requestId });
+      await this.request({ op: 'send', message, attachments, requestId, model, effort });
     });
     this.commands = work.catch(() => undefined);
     return work.catch(error => { this.fail(error); throw error; }).finally(() => { this.pendingInputs--; this.publish(this.view); this.closeSettledStream(); });
   }
-  private async create(message: string, attachments: unknown[], model: string, requestId: string) {
+  private async create(message: string, attachments: unknown[], model: string, requestId: string, effort: string, restoredHistory?: string) {
     const controller = new AbortController(); this.stream = controller;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const response = await this.request({ op: 'create', model, message, attachments, requestId: `create:${requestId}` }, controller.signal);
+      const response = await this.request({ op: 'create', model, effort, restoredHistory, message, attachments, requestId: `create:${requestId}` }, controller.signal);
       await new Promise<void>((resolve, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('Session identity was not received. Initial input may have been accepted; do not resubmit blindly.')); }, 30_000);
         this.consume(response, controller, event => {
@@ -212,7 +210,7 @@ export class ManagedAgentClient {
   }
   dispose() {
     this.disposed = true; clearInterval(this.heartbeat); this.heartbeat = undefined; this.actions.abort(); this.stream?.abort(); this.stream = undefined;
-    // This workspace has no reload persistence. Do not leave paid work orphaned on unmount.
+    // Saved work restores separately; browser-owned tool execution stops on unmount.
     if (this.token && (this.options.closeOnDispose || this.view.status === 'running')) void this.request({ op: this.options.closeOnDispose ? 'close' : 'cancel', requestId: crypto.randomUUID() }).catch(() => undefined);
   }
 }

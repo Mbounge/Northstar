@@ -8,7 +8,7 @@ const workspace = fs.readFileSync(path.join(root, "components/canvas-v2/canvas-v
 const hook = fs.readFileSync(path.join(root, "components/canvas-v2/use-canvas-v2-design-loop.ts"), "utf8");
 
 test("the North Star shell delegates creative execution to the isolated V2 hook", () => {
-  assert.match(workspace, /useCanvasV2DesignLoop\(designEndpoint\)/);
+  assert.match(workspace, /useCanvasV2DesignLoop\(designEndpoint, initialSnapshot\?\.revision\)/);
   assert.doesNotMatch(workspace, /fetch\("\/api\/canvas-v2\/design"/);
   assert.match(hook, /committed/);
   assert.match(hook, /candidate/);
@@ -29,7 +29,7 @@ test("the integrated shell exposes chat, selection, pan, and zoom without legacy
 test("collapsing the panel cannot discard conversation or in-flight routing state", () => {
   assert.match(workspace, /const legacyChat = useCanvasV2Chat\(/);
   assert.match(workspace, /const managedChat = useNorthstarManagedChat\(/);
-  assert.match(workspace, /const chat = agentEndpoint \? managedChat : legacyChat/);
+  assert.match(workspace, /const localChat = agentEndpoint \? managedChat : legacyChat/);
   assert.match(workspace, /<CanvasV2ChatPanel chat=\{chat\}/);
   const panel = fs.readFileSync(path.join(root, "components/canvas-v2/canvas-v2-chat-panel.tsx"), "utf8");
   assert.doesNotMatch(panel, /const chat = useCanvasV2Chat\(/);

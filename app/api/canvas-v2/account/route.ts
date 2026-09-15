@@ -1,3 +1,4 @@
+import { sameNorthstarOrigin } from '@/lib/canvas-v2/request-origin';
 import { createClient } from '@/lib/supabase/server';
 import { loadAppDataCatalog, resolveAppDataTenantId } from '@/lib/app-data/canvas-v2-catalog';
 import { createCanvasV2AccountEvidenceProvider } from '@/lib/canvas-v2/account-evidence-provider';
@@ -7,7 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
-  if (request.headers.get('origin') && request.headers.get('origin') !== new URL(request.url).origin) return Response.json({ error: 'Invalid origin.' }, { status: 403 });
+  if (request.headers.get('origin') && !sameNorthstarOrigin(request)) return Response.json({ error: 'Invalid origin.' }, { status: 403 });
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return Response.json({ error: 'Sign in to access your account apps.' }, { status: 401 });

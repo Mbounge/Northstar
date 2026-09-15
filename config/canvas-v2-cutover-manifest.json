@@ -30,7 +30,7 @@
       "each canonical journey remains one uninterrupted horizontal rail while the artboard grows to its intrinsic width",
       "required named-app retrieval commits visibly without consuming a creative provider call",
       "wide canonical rails provide bounded overview and legible segmented model observations",
-      "refresh clears the artboard, chat, active work, and undo history back to the canonical starter"
+      "temporary-session refresh clears canvas and chat; saved-session refresh restores committed work and marks interrupted runs stopped"
     ]
   },
   "productionV2": {
@@ -47,8 +47,8 @@
     "workspace": "components/canvas-v2/canvas-v2-workspace.tsx",
     "sharedDataAdapter": "lib/app-data/canvas-v2-catalog.ts",
     "sharedMediaAdapter": "lib/app-data/review-media.ts",
-    "pageLifecycle": "in-memory only; refresh starts a clean canvas and discards obsolete V2 recovery keys",
-    "expectedSourceFileCount": 134
+    "pageLifecycle": "account-owned saved sessions restore chat, canvas and media; temporary sessions reset on refresh",
+    "expectedSourceFileCount": 146
   },
   "testOnly": {
     "routeRoots": [

@@ -88,6 +88,7 @@ function id(): string {
 }
 
 export function useCanvasV2Chat(input: {
+  initial?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot;
   endpoint: string;
   engine: DesignEngine;
   selection?: CanvasV2InspectableElement;
@@ -95,11 +96,12 @@ export function useCanvasV2Chat(input: {
   getWorkingContext?: (selectionPolicy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined;
   gatewayHandoff?: CanvasV2GatewayHandoff;
 }) {
-  const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<CanvasV2ChatAttachment[]>([]);
+  const [draft, setDraft] = useState(input.initial?.draft ?? "");
+  const [attachments, setAttachments] = useState<CanvasV2ChatAttachment[]>(input.initial?.attachments ?? []);
   const [attachmentError, setAttachmentError] = useState<string>();
   const [turns, setTurns] = useTimedChatTurns();
-  const [modelSelection, setModelSelection] = useState<CanvasV2ModelSelection>(CANVAS_V2_DEFAULT_MODEL);
+  const [reasoningEffort, setReasoningEffort] = useState<import('@/lib/canvas-v2/model-catalog').NorthstarEffort>(input.initial?.effort ?? 'high');
+  const [modelSelection, setModelSelection] = useState<CanvasV2ModelSelection>(input.initial?.model ?? CANVAS_V2_DEFAULT_MODEL);
   const activeRoutingTurnId = useRef<string | undefined>(undefined);
   const activeDesignTurnId = useRef<string | undefined>(undefined);
   const routingSequence = useRef(0);
@@ -368,5 +370,7 @@ export function useCanvasV2Chat(input: {
     } : candidate));
   };
 
-  return { runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
+  return {
+    setRunConfiguration: (model:CanvasV2ModelSelection, effort:import('@/lib/canvas-v2/model-catalog').NorthstarEffort)=>{setModelSelection(model);setReasoningEffort(effort);},
+    reasoningEffort, setReasoningEffort, runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
 }

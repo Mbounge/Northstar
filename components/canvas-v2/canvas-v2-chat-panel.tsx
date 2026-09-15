@@ -1,4 +1,5 @@
 "use client";
+import { ModelThinkingPicker } from "./model-thinking-picker";
 import { CanvasV2MarkdownMessage } from "./canvas-v2-markdown-message";
 
 import {
@@ -37,6 +38,7 @@ import { canvasV2HasConfirmedWebSearch, canvasV2ActivitySummary } from "@/lib/ca
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import { canvasV2EvidenceSourceForSelection } from "@/lib/canvas-v2/evidence-packets";
 import { canvasV2DiscoveryMemoryForSelection } from "@/lib/canvas-v2/discovery-graph";
+
 import {
   CANVAS_V2_MODEL_CATALOG,
   canvasV2ModelLabel,
@@ -472,6 +474,7 @@ export function CanvasV2ChatPanel({
           <span className="hidden truncate text-[11px] font-medium text-[#92909e] 2xl:inline">{chat.attachments.length ? `${chat.attachments.length}/${CANVAS_V2_MAX_CHAT_ATTACHMENTS} attached` : "Images or long pasted text"}</span>
         </div>
         <div className="flex items-center gap-2">
+          {chat.runtime === "codex" ? <ModelThinkingPicker model={chat.modelSelection} effort={chat.reasoningEffort} disabled={chat.busy} endpoint={'modelEndpoint' in chat ? chat.modelEndpoint as string : undefined} onChange={chat.setRunConfiguration} /> : (
           <button
             type="button"
             onClick={() => setModelMenuOpen((open) => !open)}
@@ -483,13 +486,15 @@ export function CanvasV2ChatPanel({
             <span className="truncate">{canvasV2ModelLabel(chat.modelSelection)}</span>
             <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition ${modelMenuOpen ? "rotate-180" : ""}`} />
           </button>
+          )}
           {chat.busy && !chat.draft.trim() && !chat.attachments.length
             ? <button onClick={chat.stop} aria-label="Stop current response" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#ecebf0] text-[#4d4a59] transition hover:bg-[#e2e0e8]"><Square className="h-3.5 w-3.5 fill-current" /></button>
             : <button onClick={() => void chat.submit()} disabled={(!chat.draft.trim() && !chat.attachments.length) || preparingImages || !engine.ready || engine.applyingManualEdit} aria-label="Send message" className="grid h-9 w-9 place-items-center rounded-[12px] bg-[#6d59ed] text-white shadow-[0_7px_18px_rgba(86,68,195,.24)] transition hover:-translate-y-0.5 hover:bg-[#5d49dc] disabled:translate-y-0 disabled:bg-[#d7d5df] disabled:shadow-none"><ArrowUp className="h-4.5 w-4.5" /></button>}
         </div>
       </div>
 
-      {modelMenuOpen && <div role="menu" aria-label="North Star model" className="absolute bottom-[62px] right-[54px] z-30 w-[272px] overflow-hidden rounded-[20px] border border-[#dedce7] bg-[#25242a] p-2 text-white shadow-[0_22px_70px_rgba(22,20,35,.28)]">
+
+      {chat.runtime !== "codex" && modelMenuOpen && <div role="menu" aria-label="North Star model" className="absolute bottom-[62px] right-[54px] z-30 w-[272px] overflow-hidden rounded-[20px] border border-[#dedce7] bg-[#25242a] p-2 text-white shadow-[0_22px_70px_rgba(22,20,35,.28)]">
         <div className="px-3 pb-2 pt-1 text-[9px] font-black uppercase tracking-[.16em] text-[#9995a5]">Model</div>
         {CANVAS_V2_MODEL_CATALOG.filter(entry => !chat.runtime || entry.id === "gpt-5.6-luna").map((entry) => {
           const selected = entry.id === chat.modelSelection;
@@ -513,7 +518,7 @@ export function CanvasV2ChatPanel({
             </span>
           </button>;
         })}
-        <div className="mx-3 mt-1 border-t border-white/10 px-0 py-2 text-[9px] leading-4 text-[#8e8a97]">Each run remains pinned to the model you choose. Terra and Sol are blocked in every execution path.</div>
+        <div className="mx-3 mt-1 border-t border-white/10 px-0 py-2 text-[9px] leading-4 text-[#8e8a97]">Each run remains pinned to the model you choose.</div>
       </div>}
     </div>
     {expandedImage && typeof document !== "undefined" ? createPortal(<div role="dialog" aria-modal="true" aria-label={expandedImage.name} className="fixed inset-0 z-[9999] grid place-items-center bg-black/90 p-5 backdrop-blur-md" onMouseDown={(event) => {

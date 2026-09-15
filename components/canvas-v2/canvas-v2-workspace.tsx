@@ -597,13 +597,20 @@ export function CanvasV2Workspace({
   researchEndpoint = "/api/canvas-v2/research",
   accountEndpoint = "/api/canvas-v2/account",
   routerEndpoint = "/api/canvas-v2/route",
-  agentEndpoint,
+  agentEndpoint, initialSnapshot, onSnapshot, sessionTitle, onSessionMenu, liveReplica, sendSessionCommand, registerSessionController,
 }: {
   designEndpoint?: string;
   researchEndpoint?: string;
   accountEndpoint?: string;
   routerEndpoint?: string;
   agentEndpoint?: string;
+  initialSnapshot?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot;
+  onSnapshot?: (snapshot: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot, busy: boolean) => void;
+  sessionTitle?: string;
+  onSessionMenu?: () => void;
+  liveReplica?: import('@/lib/canvas-v2/sessions/types').LiveSessionState;
+  sendSessionCommand?: (command:import('@/lib/canvas-v2/sessions/types').SessionCommand)=>Promise<void>;
+  registerSessionController?: (execute:(command:import('@/lib/canvas-v2/sessions/types').SessionCommand)=>Promise<void>)=>void;
 } = {}) {
   const [gatewayHandoff, setGatewayHandoff] = useState<CanvasV2GatewayHandoff>();
   const [gatewayEntry, setGatewayEntry] = useState(false);
@@ -646,7 +653,7 @@ export function CanvasV2Workspace({
     };
   }, []);
 
-  const engine = useCanvasV2DesignLoop(designEndpoint);
+  const engine = useCanvasV2DesignLoop(designEndpoint, initialSnapshot?.revision);
   const { theme, toggleTheme } = useTheme();
   const [panel, setPanel] = useState<Panel>("chat");
   const floatingPanel = useFloatingPanel();
@@ -694,7 +701,7 @@ export function CanvasV2Workspace({
   // A fresh board opens at the origin of its large world plane. This is a one-time camera
   // bootstrap; after the first measured frame, navigation belongs exclusively
   // to the person and AI commits never pan or zoom it.
-  const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
+  const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => initialSnapshot?.viewport ?? centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
   const viewportRef = useRef(viewport);
   const cameraPinchActiveRef = useRef(false);
   const nativePinchScaleRef = useRef<number | undefined>(undefined);
@@ -946,6 +953,7 @@ export function CanvasV2Workspace({
   }, [chatOpen, floatingPanel.rect]);
 
   const legacyChat = useCanvasV2Chat({
+    initial: initialSnapshot,
     endpoint: routerEndpoint,
     engine,
     selection: selectedElement,
@@ -960,12 +968,59 @@ export function CanvasV2Workspace({
     }),
   });
 
-  const managedChat = useNorthstarManagedChat({ enabled: Boolean(agentEndpoint), endpoint: agentEndpoint, accountEndpoint, gatewayHandoff, selectedNodeIds: selectedElements.map(element => element.nodeId), base: legacyChat, engine, getWorkingContext: (selectionPolicy) => buildCanvasV2WorkingContext({
+  const managedChat = useNorthstarManagedChat({ initial: initialSnapshot, enabled: Boolean(agentEndpoint) && !liveReplica, endpoint: agentEndpoint, accountEndpoint, gatewayHandoff:liveReplica?undefined:gatewayHandoff, selectedNodeIds: selectedElements.map(element => element.nodeId), base: legacyChat, engine, getWorkingContext: (selectionPolicy) => buildCanvasV2WorkingContext({
     scene: engine.readNativeScene(), selections: selectedElements,
     visibleBounds: canvasV2VisibleWorkspaceBounds(viewportRef.current, workspaceSizeRef.current, contentInsets()),
     viewport: viewportRef.current, selectionPolicy,
   }) });
-  const chat = agentEndpoint ? managedChat : legacyChat;
+  const localChat = agentEndpoint ? managedChat : legacyChat;
+  const chat = liveReplica && sendSessionCommand ? {...localChat,turns:liveReplica.snapshot.turns,busy:liveReplica.busy,
+    submit:async (override?:string)=>{
+      const message=(override ?? localChat.draft).trim();if(!message && !localChat.attachments.length)return;
+      const sent=await sendSessionCommand({kind:'submit',message:message || 'Review the attached material.',attachments:localChat.attachments,model:localChat.modelSelection,effort:localChat.reasoningEffort}).then(()=>true,()=>false);
+      if(!sent)return;
+      localChat.setDraft('');for(const attachment of localChat.attachments)localChat.removeAttachment(attachment.id);
+    },stop:()=>{void sendSessionCommand({kind:'stop'}).catch(()=>{});},
+    setRunConfiguration:(model:typeof localChat.modelSelection,effort:typeof localChat.reasoningEffort)=>{
+      localChat.setRunConfiguration(model,effort);void sendSessionCommand({kind:'settings',model,effort}).catch(()=>{});
+    },
+  } : localChat;
+  const sharedController = useRef(registerSessionController);sharedController.current=registerSessionController;
+  useEffect(()=>{
+    sharedController.current?.(async command=>{
+      if(command.kind==='title')return; // The session shell owns titles.
+      if(command.kind==='submit') {localChat.setRunConfiguration(command.model,command.effort);void managedChat.submit(command.message,command);return;}
+      if(command.kind==='stop') {managedChat.stop();return;}
+      if(command.kind==='settings') {
+        if(managedChat.busy)throw new Error('Model settings can change after this response finishes.');
+        localChat.setModelSelection(command.model);localChat.setReasoningEffort(command.effort);return;
+      }
+      if(engine.readCommittedRevision().id!==command.baseRevision)throw new Error('The canvas changed during that edit. Please try the edit again.');
+      if(engine.applyingManualEdit)throw new Error('The canvas is finishing another edit. Please try again.');
+      // The sending view has already rendered and committed this human edit.
+      // Keep its revision identity so both views converge on the same commit.
+      engine.receiveSharedRevision(command.revision);
+    });
+  });
+  const replicaRevision=liveReplica?.snapshot.revision;
+  const replicaRevisionId=replicaRevision?.id;
+  const replicaRevisionRef=useRef(replicaRevision);replicaRevisionRef.current=replicaRevision;
+  const replicaModel=liveReplica?.snapshot.model;
+  const replicaEffort=liveReplica?.snapshot.effort;
+  const sharedEngine=useRef(engine);sharedEngine.current=engine;
+  const sharedChat=useRef(localChat);sharedChat.current=localChat;
+  useEffect(()=>{
+    if(replicaRevisionRef.current)sharedEngine.current.receiveSharedRevision(replicaRevisionRef.current);
+  },[replicaRevisionId]);
+  useEffect(()=>{
+    if(replicaModel)sharedChat.current.setModelSelection(replicaModel);
+    if(replicaEffort)sharedChat.current.setReasoningEffort(replicaEffort);
+  },[replicaModel,replicaEffort]);
+  const snapshotListener = useRef(onSnapshot); snapshotListener.current = onSnapshot;
+  useEffect(() => {
+    snapshotListener.current?.({ schema: 1, revision: engine.committed, turns: chat.turns, draft: chat.draft, attachments: chat.attachments,
+      model: chat.modelSelection, effort: chat.reasoningEffort, viewport, memory: managedChat.memory() }, chat.busy);
+  }, [engine.committed, chat.turns, chat.draft, chat.attachments, chat.modelSelection, chat.reasoningEffort, viewport, chat.busy]);
 
   useEffect(() => {
     if (!gatewayHandoff || gatewayHandoff.autoSubmit || !engine.ready) return;
@@ -3332,8 +3387,8 @@ export function CanvasV2Workspace({
           onClick={() => setNorthStarMenuOpen((open) => !open)}
           className={`grid h-14 w-14 place-items-center border-r border-[#e8e8ef] bg-[#181824] text-sm font-black text-white transition dark:border-white/[.08] ${northStarMenuOpen ? "shadow-[inset_0_-3px_0_#7865ff]" : "hover:bg-[#242431]"}`}
         >N</button>
-        <button className="flex h-14 items-center gap-3 px-4 text-left" aria-label="Canvas menu">
-          <span><span className="block text-[10px] font-black uppercase tracking-[.16em] text-[#8c8c9a] dark:text-[#8e8b99]">North Star</span><span className="block text-sm font-bold tracking-[-.01em]">Untitled canvas</span></span>
+        <button className="flex h-14 items-center gap-3 px-4 text-left" aria-label="Canvas menu" onClick={onSessionMenu}>
+          <span><span className="block text-[10px] font-black uppercase tracking-[.16em] text-[#8c8c9a] dark:text-[#8e8b99]">North Star</span><span className="block text-sm font-bold tracking-[-.01em]">{sessionTitle || "Untitled canvas"}</span></span>
           <ChevronDown className="h-4 w-4 text-[#7c7c8a] dark:text-[#9995a5]" />
         </button>
         {!chatOpen && <button aria-label="Open North Star panel" onClick={() => setChatOpen(true)} className="grid h-14 w-12 place-items-center border-l border-[#e8e8ef] text-[#6653e8] hover:bg-[#f2efff] dark:border-white/[.08] dark:text-[#b4a9ff] dark:hover:bg-white/[.06]"><MessageSquare className="h-4 w-4" /></button>}

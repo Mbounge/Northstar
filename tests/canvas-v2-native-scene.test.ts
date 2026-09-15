@@ -1989,3 +1989,27 @@ test("measured image dimensions do not override later authored sizing, while hum
   image.userEdited = true;
   assert.match(serializeCanvasV2NativeScene(source).html, /(?:style="|;)width:100px/);
 });
+
+
+test("edited note text expands its measured bounds without moving or replacing its content", () => {
+  const source = scene();
+  const note = source.nodes[0];
+  note.kind = "note";
+  note.tagName = "div";
+  note.attributes.role = "note";
+  note.inlineStyle["white-space"] = "nowrap";
+  note.directText = "Edited from the second tab";
+  note.content = [{ kind: "text", value: note.directText }];
+  const measured = { ...source, nodes: [{ ...note, geometry: { ...note.geometry, x: 9999, width: 307, height: 48 }, directText: "stale" }] };
+  const result = reconcileCanvasV2NativeSceneMeasurement(source, measured);
+  assert.equal(result.nodes[0].geometry.width, 307);
+  assert.equal(result.nodes[0].geometry.x, note.geometry.x);
+  assert.equal(result.nodes[0].directText, note.directText);
+  assert.deepEqual(result.nodes[0].content, note.content);
+  assert.equal(reconcileCanvasV2NativeSceneMeasurement(result, result), result);
+
+  // Image dimensions must not be changed by text reconciliation.
+  const image = { ...note, kind: "image" as const, tagName: "img", content: [], directText: undefined };
+  const images = { ...source, nodes: [image] };
+  assert.equal(reconcileCanvasV2NativeSceneMeasurement(images, measured), images);
+});

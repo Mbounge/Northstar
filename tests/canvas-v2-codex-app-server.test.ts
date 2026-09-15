@@ -225,3 +225,41 @@ test('idle lease renewal is owner-bound and never calls the Codex model', async 
     assert.match(t.client.view.texts.at(-1)!.text, /received 2 turns/);
   } finally { t.close(); }
 });
+
+test('model and effort can change between turns while retaining the native conversation',async()=>{
+ const t=await setup();
+ try{
+  await t.client.send('Explain',[],'gpt-5.6-luna','model1','high');await tick();
+  await t.client.send('Continue',[],'gpt-6-astra','model2','medium');await tick();
+  assert.equal(t.peers.length,1);
+  assert.deepEqual(t.peers[0].calls.filter(c=>c.method==='turn/start').map(c=>[c.params.model,c.params.effort]),[['gpt-5.6-luna','high'],['gpt-6-astra','medium']]);
+  assert.match(t.client.view.texts.at(-1)!.text,/received 2 turns/);
+ }finally{t.close();}
+});
+test('a rejected mid-run configuration change does not kill the running native thread',async()=>{
+ const t=await setup();
+ try{
+  await t.client.send('hold',[],'gpt-5.6-luna','pin1','high');await tick();
+  await assert.rejects(t.host.handle({op:'send',token:t.client.token,model:'gpt-6-astra',effort:'high',message:'steer',requestId:'pin2'},{owner:'alice',key:'fake-test-key',signal:new AbortController().signal}),/original model/);
+  assert.equal(t.peers[0].closed,false);
+  await t.client.cancel();assert.equal(t.client.view.status,'stopped');
+ }finally{t.close();}
+});
+test('reopened conversation supplies saved history once with the new user request',async()=>{
+ const t=await setup();
+ try{
+  await t.client.send('Continue the saved comparison',[],'gpt-5.6-terra','restore1','low',JSON.stringify([{user:'Compare A and B',answer:'A is cheaper'}]));await tick();
+  const inputs=t.peers[0].calls.find(c=>c.method==='turn/start')!.params.input as JsonObject[];
+  assert.match(String(inputs[0].text),/untrusted historical data/);assert.match(String(inputs[0].text),/A is cheaper/);
+  assert.ok(inputs.some(i=>String(i.text).includes('Continue the saved comparison')));
+ }finally{t.close();}
+});
+test('concurrent model-list requests share one short-lived process and never run a model turn',async()=>{
+ const t=await setup();const context={owner:'alice',key:'fake-test-key',signal:new AbortController().signal};
+ try{
+  const responses=await Promise.all([t.host.handle({op:'models'},context),t.host.handle({op:'models'},context)]);
+  assert.equal(t.peers.length,1);assert.equal(t.peers[0].closed,true);
+  assert.equal(t.peers[0].calls.some(c=>c.method==='turn/start'),false);
+  for(const response of responses)assert.equal((await response.json()).models.length,4);
+ }finally{t.close();}
+});

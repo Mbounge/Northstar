@@ -1,3 +1,4 @@
+import { sameNorthstarOrigin } from '../request-origin';
 import { issueWorkerGrant, workerOrigin } from './auth.server';
 
 /** A small authenticated control request; prompts and image bytes never pass through it. */
@@ -5,8 +6,8 @@ export async function workerConnection(request: Request, options: {
   env: NodeJS.ProcessEnv; authorize: () => Promise<string | undefined>;
 }): Promise<Response> {
   const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie, Origin' } });
-  const origin = new URL(request.url).origin;
-  if (request.headers.get('origin') !== origin) return json({ error: 'Invalid origin.' }, 403);
+  const origin = request.headers.get('origin') || '';
+  if (!sameNorthstarOrigin(request, options.env.NODE_ENV === 'development')) return json({ error: 'Invalid origin.' }, 403);
   const owner = await options.authorize();
   if (!owner) return json({ error: 'Sign in to continue.' }, 401);
   const env = options.env;

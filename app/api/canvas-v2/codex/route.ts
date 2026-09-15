@@ -1,3 +1,4 @@
+import { sameNorthstarOrigin } from '@/lib/canvas-v2/request-origin';
 import { northstarDiscoveryEndpoint } from '@/lib/canvas-v2/managed-agent/config';
 import { canvasV2LocalCodexEvaluationAllowed } from '@/e2e/canvas-v2-deterministic-evaluation';
 import { createClient } from '@/lib/supabase/server';
@@ -10,7 +11,7 @@ export async function POST(request: Request) {
   if (northstarDiscoveryEndpoint(process.env.NORTHSTAR_DISCOVERY_RUNTIME) !== '/api/canvas-v2/codex') return Response.json({ error: 'Codex discovery is not enabled.' }, { status: 404 });
   if (process.env.NORTHSTAR_WORKER_URL || process.env.VERCEL) return Response.json({ error: 'Connect through the authorized discovery worker.' }, { status: 503 });
   const localEvaluation = canvasV2LocalCodexEvaluationAllowed(request);
-  if (!localEvaluation && request.headers.get('origin') && request.headers.get('origin') !== new URL(request.url).origin) return Response.json({ error: 'Invalid origin.' }, { status: 403 });
+  if (!localEvaluation && request.headers.get('origin') && !sameNorthstarOrigin(request)) return Response.json({ error: 'Invalid origin.' }, { status: 403 });
   let owner: string;
   if (localEvaluation) owner = 'explicit-local-canonical-evaluation';
   else {
