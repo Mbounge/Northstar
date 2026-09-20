@@ -136,7 +136,7 @@ export class AccountToolHandles {
  * Inspection never mounts a visible image; the original canvas asset remains unchanged.
  */
 export async function readAccountAssetPixels(url: string, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<string> {
-  if (url.startsWith('data:image/')) return url;
+  if (/^data:image\/(png|jpeg|webp);base64,/.test(url) && url.length <= 6_000_000) return url;
   const response = await fetcher(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), credentials: 'omit' });
   if (!response.ok) throw new Error('The account screenshot could not be loaded.');
   let blob = await response.blob();

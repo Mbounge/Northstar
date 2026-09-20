@@ -48,7 +48,7 @@
     "sharedDataAdapter": "lib/app-data/canvas-v2-catalog.ts",
     "sharedMediaAdapter": "lib/app-data/review-media.ts",
     "pageLifecycle": "account-owned saved sessions restore chat, canvas and media; temporary sessions reset on refresh",
-    "expectedSourceFileCount": 146
+    "expectedSourceFileCount": 153
   },
   "testOnly": {
     "routeRoots": [

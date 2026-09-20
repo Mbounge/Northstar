@@ -1,3 +1,6 @@
+import { NORTHSTAR_CREATIVE_TOOLS } from '../creative/tools';
+import { NorthstarCreativeRuntime } from '../creative/runtime.server';
+import { isCreativeTool, type CreativeContext } from '../creative/types';
 import { northstarRunConfig, northstarModelCapabilities, type NorthstarModelCapability, type NorthstarEffort } from '../model-catalog';
 import { randomUUID, createHash } from 'node:crypto';
 import { NORTHSTAR_AGENT_INSTRUCTIONS, NORTHSTAR_AGENT_TOOLS } from '../managed-agent/config';
@@ -21,10 +24,10 @@ type Session = {
   reviewReport?: { status: string; durationMs?: number; proposedAnswer?: string; feedback?: string; continuedAnswer?: string;
     rounds?: Array<{ draft: string; feedback: string; rawFeedback?: string; durationMs: number; activity: ReturnType<DiscoveryReviewContext['activity']> }>;
     initialActivity?: ReturnType<DiscoveryReviewContext['activity']>; completedActivity?: ReturnType<DiscoveryReviewContext['activity']> };
-  commands: Promise<unknown>; lastUse: number; disconnectedAt?: number; closed: boolean;
+  creative: NorthstarCreativeRuntime; commands: Promise<unknown>; lastUse: number; disconnectedAt?: number; closed: boolean;
 };
 const functions = NORTHSTAR_AGENT_TOOLS.filter(t => 'name' in t);
-const tools = functions.map(t => ({ type: 'function', name: t.name, description: t.description, inputSchema: t.parameters })) as DynamicToolSpec[];
+const tools = [...functions, ...NORTHSTAR_CREATIVE_TOOLS].map(t => ({ type: 'function', name: t.name, description: t.description, inputSchema: t.parameters })) as DynamicToolSpec[];
 const encoder = new TextEncoder();
 
 /** A single persistent Node worker owns its private child processes. No serverless deployment. */
@@ -36,7 +39,7 @@ export class CodexSessionHost {
   private creations = new Map<string, { fingerprint: string; work: Promise<Session> }>();
   private starting = new Map<string, number>();
   private reaper: ReturnType<typeof setInterval>;
-  constructor(private factory: () => Promise<CodexTransport>, private sourceReader: typeof readNorthstarSource = readNorthstarSource, private limits = { sessions: 20, perOwner: 2 }, private reviewer?: DiscoveryReviewer, private maxReviewRounds = 6) {
+  constructor(private factory: () => Promise<CodexTransport>, private sourceReader: typeof readNorthstarSource = readNorthstarSource, private limits = { sessions: 20, perOwner: 2 }, private reviewer?: DiscoveryReviewer, private maxReviewRounds = 6, private creativeFactory = (key: string, model: () => string) => new NorthstarCreativeRuntime(key, model, { generationModel: process.env.NORTHSTAR_IMAGE_MODEL, editModel: process.env.NORTHSTAR_IMAGE_EDIT_MODEL })) {
     if (!Number.isInteger(maxReviewRounds) || maxReviewRounds < 1 || maxReviewRounds > 200) throw new Error('Configure a discovery review budget between 1 and 200 rounds.');
     this.reaper = setInterval(() => {
       const now = Date.now();
@@ -47,7 +50,7 @@ export class CodexSessionHost {
   }
   dispose() { clearInterval(this.reaper); for (const s of this.sessions.values()) this.close(s); }
   private close(s: Session, message = 'The Codex connection expired. Start a new conversation.') {
-    if (s.closed) return; s.closed = true; s.reviewRun?.stop();
+    if (s.closed) return; s.closed = true; s.reviewRun?.stop(); s.creative.dispose();
     this.emit(s, { type: 'agent.session.turn.failed', error: { message } });
     s.rpc.close(); this.sessions.delete(s.token);
     for (const [key, value] of this.creations) void value.work.then(v => { if (v === s) this.creations.delete(key); }).catch(() => undefined);
@@ -75,7 +78,8 @@ export class CodexSessionHost {
     this.starting.set(owner, (this.starting.get(owner) || 0) + 1);
     let rpc: CodexTransport;
     try { rpc = await this.factory(); } finally { const left = (this.starting.get(owner) || 1) - 1; if (left) this.starting.set(owner, left); else this.starting.delete(owner); }
-    const s: Session = { ...selected, capabilities: [], id: randomUUID(), owner, token: randomUUID(), rpc, threadId: '', nativeTurnId: '', nativeActive: false, reviewContext: new DiscoveryReviewContext(), turn: {}, events: [], items: new Map(), pending: new Map(), listeners: new Set(), receipts: new Map(), commands: Promise.resolve(), lastUse: Date.now(), disconnectedAt: Date.now(), closed: false };
+    const creative = this.creativeFactory(key, () => s.model);
+    const s: Session = { ...selected, creative, capabilities: [], id: randomUUID(), owner, token: randomUUID(), rpc, threadId: '', nativeTurnId: '', nativeActive: false, reviewContext: new DiscoveryReviewContext(), turn: {}, events: [], items: new Map(), pending: new Map(), listeners: new Set(), receipts: new Map(), commands: Promise.resolve(), lastUse: Date.now(), disconnectedAt: Date.now(), closed: false };
     this.sessions.set(s.token, s);
     rpc.onClose(() => { if (!s.closed) { this.emit(s, { type: 'agent.session.turn.failed', error: { message: 'The Codex process stopped. Start a new conversation.' } }); this.close(s); } });
     rpc.onMessage(message => {
@@ -298,10 +302,21 @@ export class CodexSessionHost {
       if (!pending || pending.action.turn_id !== body.turnId || !['read_source', 'inspect_image'].includes(string(pending.action.name))) throw new Error('This source read is no longer pending.');
       return this.sourceReader(pending.action, signal);
     }
+    if (body.op === 'creative' || body.op === 'creative-poll') {
+      const callId = string(body.callId), pending = s.pending.get(callId);
+      if (!pending || pending.action.turn_id !== body.turnId || !isCreativeTool(pending.action.name) || s.turn.status !== 'in_progress') throw new Error('This creative operation is no longer pending.');
+      const existing = s.creative.job(callId);
+      if (existing) return Response.json(existing);
+      if (body.op === 'creative-poll') throw new Error('This creative operation has not started.');
+      const context = object(body.context);
+      // The command/prompt comes only from the pending model call. The browser supplies retained bytes and current geometry.
+      return Response.json(s.creative.start(callId, pending.action.name, object(pending.action.arguments), {inputs: Array.isArray(context.inputs) ? context.inputs : [], canvas: context.canvas} as CreativeContext));
+    }
     if (body.op === 'send') return Response.json(await this.once(s, body, () => this.input(s, body)));
     if (body.op === 'cancel') return Response.json(await this.once(s, body, async () => {
       await s.commands;
       const wasRunning = s.turn.status === 'in_progress';
+      s.creative.cancel();
       s.reviewRun?.stop();
       if (wasRunning && s.reviewReport) s.reviewReport.status = 'cancelled';
       if (s.nativeActive) await s.rpc.request('turn/interrupt', { threadId: s.threadId, turnId: s.nativeTurnId });
@@ -315,7 +330,7 @@ export class CodexSessionHost {
       if (JSON.stringify(raw).length > 10_000_000) throw new Error('Tool output exceeds the transport limit.');
       const contentItems: DynamicToolCallResponse['contentItems'] = raw.map(v => { const part = object(v); return part.type === 'input_image' ? { type: 'inputImage', imageUrl: string(part.image_url) } : { type: 'inputText', text: string(part.text) }; });
       if (this.reviewer) s.reviewContext.tool(string(pending.action.name), pending.action.arguments, contentItems);
-      s.rpc.reply(pending.rpcId, { success: body.success !== false, contentItems } satisfies DynamicToolCallResponse); s.pending.delete(string(body.callId));
+      s.rpc.reply(pending.rpcId, { success: body.success !== false, contentItems } satisfies DynamicToolCallResponse); s.pending.delete(string(body.callId)); s.creative.release(string(body.callId));
       return { accepted: true };
     }));
     throw new Error('Unknown Codex operation.');

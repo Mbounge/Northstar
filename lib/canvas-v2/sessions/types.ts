@@ -8,7 +8,7 @@ export interface NorthstarSnapshot {
   schema: 1; revision: CanvasV2ArtifactRevision; turns: CanvasV2ChatTurn[]; draft: string;
   attachments?: import("../chat-attachments").CanvasV2ChatAttachment[];
   model: CanvasV2ModelSelection; effort: NorthstarEffort; viewport: CanvasV2WorkspaceViewport;
-  memory?: { assets: CanvasV2EvidenceAsset[]; accountPackets: CanvasV2EvidencePacket[];
+  memory?: { artifacts?: import('../creative/types').NorthstarArtifact[]; assets: CanvasV2EvidenceAsset[]; accountPackets: CanvasV2EvidencePacket[];
     accountFlows: [string, {app: AppDataApp; flow: AppDataFlow}][]; sourceMedia: CodexSourceMediaCandidate[];
     sourcePages: string[]; compositionHistory: CodexCompositionPlan[]; compositionSequence: number; };
 }

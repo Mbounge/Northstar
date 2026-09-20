@@ -1,8 +1,10 @@
 import { createElement, type ReactNode } from "react";
+import { downloadArtifact, resolveArtifactLink } from '@/lib/canvas-v2/creative/download';
+import type { NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { cn } from "@/lib/utils";
 
-function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
-  const pattern = /(`[^`]+`|cite[^\n]*(?:|$)|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
+function renderInline(text: string, keyPrefix: string, artifacts: NorthstarArtifact[]): ReactNode[] {
+  const pattern = /(`[^`]+`|cite[^\n]*(?:|$)|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(<?(?:https?:\/\/|artifact:|(?:sandbox:)?\/mnt\/data\/)[^)>]+>?\))/g;
   const parts = text.split(pattern).filter((part) => part.length > 0);
 
   return parts.map((part, index) => {
@@ -38,7 +40,14 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
       return <em key={key}>{part.slice(1, -1)}</em>;
     }
 
-    const linkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
+    const fileLink = part.match(/^\[([^\]]+)\]\(<?(artifact:[^)>]+|(?:sandbox:)?\/mnt\/data\/[^)>]+)>?\)$/);
+    if (fileLink) {
+      const artifact = resolveArtifactLink(fileLink[2], artifacts);
+      return artifact ? <button key={key} type="button" onClick={() => void downloadArtifact(artifact)} className="font-semibold text-[#5E50F5] underline underline-offset-2 dark:text-[#BDB6FF]">{fileLink[1]}</button>
+        : <span key={key}>{fileLink[1]} <span className="text-zinc-500">(file not exported)</span></span>;
+    }
+
+    const linkMatch = part.match(/^\[([^\]]+)\]\(<?(https?:\/\/[^)>]+)>?\)$/);
     if (linkMatch) {
       return (
         <a
@@ -57,7 +66,8 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   });
 }
 
-export function CanvasV2MarkdownMessage({ content }: { content: string }) {
+export function CanvasV2MarkdownMessage({ content, artifacts = [] }: { content: string; artifacts?: NorthstarArtifact[] }) {
+  const renderInlineMarkdown = (text: string, key: string) => renderInline(text, key, artifacts);
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let index = 0;

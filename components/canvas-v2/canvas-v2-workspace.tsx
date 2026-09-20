@@ -102,6 +102,7 @@ import {
   copyCanvasV2NativeSelection,
   pasteCanvasV2NativeClipboard,
   canvasV2NativeTableRows,
+  canvasV2NativeSceneAbsoluteBounds,
   type CanvasV2NativeClipboard,
   canvasV2NativeSceneSelectionContainsTarget,
   serializeCanvasV2NativeScene,
@@ -137,6 +138,7 @@ import {
   constrainCanvasV2WorkspaceViewport,
   fitCanvasV2WorkspaceBounds,
   resizeCanvasV2WorkspaceBounds,
+  revealCanvasV2WorkspaceBounds,
   translateCanvasV2WorkspaceBounds,
   type CanvasV2ResizeHandle,
   type CanvasV2WorkspaceInsets,
@@ -1223,6 +1225,31 @@ export function CanvasV2Workspace({
     if (bounds) commitViewport(fitCanvasV2WorkspaceBounds(bounds, cameraSize(), contentInsets(), 48));
     else fitContent();
   };
+
+  const revealedAiRevision = useRef(engine.committed.id);
+  useLayoutEffect(() => {
+    const revision = engine.committed;
+    const scene = engine.nativeScene;
+    if (revealedAiRevision.current === revision.id || scene?.revisionId !== revision.id) return;
+    const transaction = revision.sceneTransaction;
+    if (transaction?.origin !== "northstar") { revealedAiRevision.current = revision.id; return; }
+    const bounds = canvasV2NativeSceneAbsoluteBounds(scene, transaction.targetIslandId)
+      ?? unionCanvasV2ObjectBounds(transaction.mutations.flatMap(mutation => {
+        if (mutation.kind === "preserve" || mutation.kind === "remove") return [];
+        const nodeBounds = canvasV2NativeSceneAbsoluteBounds(scene, mutation.nodeId);
+        return nodeBounds ? [nodeBounds] : [];
+      }));
+    if (!bounds) return;
+    revealedAiRevision.current = revision.id;
+    const insets = contentInsets();
+    const visible = canvasV2VisibleWorkspaceBounds(viewportRef.current, cameraSize(), insets);
+    // Do not disturb a visible composition or change zoom. A restored/native
+    // recompile can put an accepted edit off-screen; reveal that committed work
+    // from its actual native bounds, never from an uncommitted draft.
+    if (!canvasV2BoundsIntersect(bounds, visible)) {
+      commitViewport(revealCanvasV2WorkspaceBounds(bounds, viewportRef.current, cameraSize(), insets, 48));
+    }
+  }, [engine.committed, engine.nativeScene, cameraSize, contentInsets, commitViewport]);
 
   const receiveGeometry = useCallback((geometry: CanvasV2CanvasGeometry) => {
     geometryRef.current = geometry;

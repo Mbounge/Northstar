@@ -1,7 +1,9 @@
 'use client';
+import { artifactMetadata, isCreativeTool, type NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
+import { creativeInputContext, runCreativeJob, creativeResultForModel } from '@/lib/canvas-v2/creative/bridge';
 import { useTimedChatTurns } from "./use-timed-chat-turns";
 import { useEffect, useRef, useState } from 'react';
-import type { useCanvasV2Chat, CanvasV2ChatTurn } from './use-canvas-v2-chat';
+import type { useCanvasV2Chat } from './use-canvas-v2-chat';
 import type { useCanvasV2DesignLoop } from './use-canvas-v2-design-loop';
 import { codexWorkerFetch } from '@/lib/canvas-v2/worker/transport';
 import { ManagedAgentClient } from '@/lib/canvas-v2/managed-agent/client';
@@ -26,6 +28,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
   const client = useRef<ManagedAgentClient | undefined>(undefined);
   const rootId = useRef<string | undefined>(undefined);
   const assets = useRef(new Map<string, CanvasV2EvidenceAsset>((input.initial?.memory?.assets ?? []).map(a => [a.id, a])));
+  const artifacts = useRef(new Map<string, NorthstarArtifact>((input.initial?.memory?.artifacts ?? []).map(a => [a.id, a])));
   const accountHandles = useRef(new AccountToolHandles());
   const inspectedPixels = useRef(new Map<string, string>());
   const accountPackets = useRef<CanvasV2EvidencePacket[]>(input.initial?.memory?.accountPackets ?? []);
@@ -54,6 +57,26 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
     const runtime = new ManagedAgentClient({ fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const output = await (async () => {
       const args = object(accountHandles.current.decode(action.arguments)); const engine = current.current.engine;
+      if (isCreativeTool(action.name)) {
+        const turnId = rootId.current;
+        const revision = engine.readCommittedRevision();
+        const registered = [...new Map([...revision.evidence, ...assets.current.values()].map(a=>[a.id,a])).values()];
+        let html = revision.document.html;
+        for (const asset of registered) html = html.replaceAll(asset.url, `northstar-asset:${asset.id}`);
+        const measurement = engine.displayedObservation?.revisionId === revision.id ? engine.displayedObservation : undefined;
+        const context = await creativeInputContext(object(action.arguments), args, registered, [...artifacts.current.values()], action.name === 'workspace_run' ? {
+          revisionId: revision.id, document: {html, css: revision.document.css}, nodes: measurement?.spatial.nodes ?? [], measurementRevisionId: measurement?.revisionId,
+          connectors: measurement ? canvasV2MeasuredConnectorDirectory(measurement.spatial.nodes) : undefined,
+          viewport: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.('reference')),
+        } : undefined, signal);
+        const result = await runCreativeJob((body, s)=>runtime.request(body, s), action, context, signal);
+        signal.throwIfAborted();
+        for (const asset of result.assets) assets.current.set(asset.id, asset);
+        for (const artifact of result.artifacts) artifacts.current.set(artifact.id, artifact);
+        accountHandles.current.remember({apps:[], flows:[], evidence:result.assets});
+        setTurns(all=>all.map(turn=>turn.id===turnId?{...turn, artifacts:[...new Map([...(turn.artifacts??[]),...result.artifacts].map(a=>[a.id,a])).values()]}:turn));
+        return creativeResultForModel(result);
+      }
       if (action.name === 'account_read') {
         const query = parseAccountQuery(args);
         const response = await fetch(current.current.accountEndpoint ?? '/api/canvas-v2/account', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(query), signal });
@@ -128,7 +151,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
         const range = args.nodeId ? findCanvasV2SourceNodeRange(html, string(args.nodeId)) : undefined;
         if (args.nodeId && !range) throw new Error('This canvas object no longer exists. Read the current canvas.');
         readRevision.current = revision.id;
-        return { baseRevisionId: revision.id, media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: engine.displayedObservation ? buildCanvasV2IslandRegistry({ observation: engine.displayedObservation }) : [], selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
+        return { baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: engine.displayedObservation ? buildCanvasV2IslandRegistry({ observation: engine.displayedObservation }) : [], selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
           truncated: !range && html.length > 48_000,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),
           evidence: registered.map(({ id, url, originalUrl, label, mediaType, mimeType, source }) => ({ id, mediaType, mimeType, source, url: `northstar-asset:${id}`, originalUrl: originalUrl ?? (url.startsWith("data:") ? undefined : url), playbackUrl: mediaType === "gif" ? originalUrl : mediaType === "video" ? url : undefined, label })),
@@ -225,7 +248,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
     if (editActive.current) current.current.engine.stop();
     stopping.current = (client.current?.cancel() ?? Promise.resolve()).catch(() => undefined).finally(() => { stopping.current = undefined; });
   };
-  const memory = () => ({ assets: [...assets.current.values()], accountPackets: accountPackets.current,
+  const memory = () => ({ artifacts: [...artifacts.current.values()], assets: [...assets.current.values()], accountPackets: accountPackets.current,
     accountFlows: [...accountFlows.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
     compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
   return { ...input.base, memory, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };

@@ -144,7 +144,24 @@ export function validateCanvasV2EvidenceContinuity(
       const replaceableResearchImage = asset.source?.sourceType === "web-image" && bindings.length > 0
         && bindings.every(tag => /\bdata-canvas-v2-origin\s*=\s*["']northstar["']/i.test(tag)
           && !/\bdata-canvas-v2-last-author\s*=\s*["']user["']/i.test(tag));
-      if (!replaceableResearchImage) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
+      // An inspected generated/processed image may replace its own earlier version.
+      // Keep the original in the registry, not as a forced duplicate on the canvas.
+      // Require actual retained lineage and the same model-owned image node; this
+      // does not authorize removing uploaded/human-edited evidence or app sources.
+      const creativeProviders = new Set(["northstar-image-generation", "northstar-execution"]);
+      const derivedReplacement = creativeProviders.has(asset.source?.providerId ?? "") && bindings.length > 0
+        && bindings.every(tag => {
+          const nodeId = /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+          if (!nodeId || !/^<img\b/i.test(tag) || !/\bdata-canvas-v2-origin\s*=\s*["']northstar["']/i.test(tag)
+            || /\bdata-canvas-v2-last-author\s*=\s*["']user["']/i.test(tag)) return false;
+          const replacementTag = Array.from(next.html.matchAll(/<img\b[^>]*>/gi), match => match[0])
+            .find(nextTag => /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(nextTag)?.[1] === nodeId);
+          const replacementId = replacementTag && /\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/i.exec(replacementTag)?.[1];
+          const replacement = evidence.find(candidate => candidate.id === replacementId);
+          return Boolean(replacement && creativeProviders.has(replacement.source?.providerId ?? "")
+            && replacement.tags?.includes(`derived-from:${asset.id}`));
+        });
+      if (!replaceableResearchImage && !derivedReplacement) failures.push(`Committed evidence must remain visible: ${asset.label} (${asset.id}).`);
     }
   }
   failures.push(...validateCanvasV2EvidenceAuthorshipTransition(previous, next, evidence, options));

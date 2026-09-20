@@ -92,3 +92,13 @@ test('turn timing includes repeated running updates, freezes at completion, and 
   const feedback = stamp<CanvasV2TurnTiming>([], [{ ...initial, feedbackFor: 'parent', status: 'responded' as const }], 20000);
   assert.equal(feedback[0].elapsedMs, undefined);
 });
+
+test('export links, including angle-wrapped sandbox URLs, use retained download actions', () => {
+  const artifact:import('../lib/canvas-v2/creative/types').NorthstarArtifact={id:'file1',name:'numbers.csv',label:'Numbers',mimeType:'text/csv',dataUrl:'data:text/csv;base64,MTg=',bytes:2,origin:'computed',createdAt:'2026-09-20',inputAssetIds:[],workspacePath:'/mnt/data/northstar/numbers.csv'};
+  for(const url of ['artifact:file1','<artifact:file1>','/mnt/data/northstar/numbers.csv','</mnt/data/northstar/numbers.csv>','sandbox:/mnt/data/northstar/numbers.csv']){
+    const html=renderToStaticMarkup(createElement(CanvasV2MarkdownMessage,{content:`[Download numbers](${url})`,artifacts:[artifact]}));
+    assert.match(html,/<button/);assert.match(html,/Download numbers/);assert.doesNotMatch(html,/file not exported|href=|data:text/);
+  }
+  const missing=renderToStaticMarkup(createElement(CanvasV2MarkdownMessage,{content:'[Missing](/mnt/data/not-exported.csv)',artifacts:[artifact]}));
+  assert.match(missing,/file not exported/);assert.doesNotMatch(missing,/<button|href=/);
+});

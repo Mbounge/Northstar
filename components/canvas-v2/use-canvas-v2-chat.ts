@@ -46,6 +46,7 @@ import {
 import type { CanvasV2GatewayHandoff } from "@/lib/canvas-v2/gateway-handoff";
 
 export interface CanvasV2ChatTurn {
+  artifacts?: import('@/lib/canvas-v2/creative/types').NorthstarArtifact[];
   id: string;
   activity?: CanvasV2Activity[];
   feedbackFor?: string;

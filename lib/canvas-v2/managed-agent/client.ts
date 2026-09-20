@@ -149,7 +149,7 @@ export class ManagedAgentClient {
   }
   private toolActivity(action: JsonObject, status: 'started' | 'completed' | 'failed', output?: unknown) {
     const id = `tool:${action.turn_id}:${action.call_id}`;
-    const names: Record<string, string> = { account_read: 'Read account apps', inspect_asset: 'Inspect account evidence', canvas_insert_flow: 'Place an app flow', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
+    const names: Record<string, string> = { workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect account evidence', canvas_insert_flow: 'Place an app flow', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
     const previous = this.view.activity.find(a => a.id === id);
     const args = object(action.arguments);
     const result = object(output);

@@ -1,4 +1,6 @@
 "use client";
+import type { NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
+import { CreativeArtifacts } from "./creative-artifacts";
 import { ModelThinkingPicker } from "./model-thinking-picker";
 import { CanvasV2MarkdownMessage } from "./canvas-v2-markdown-message";
 
@@ -189,11 +191,13 @@ function PendingDots({ reconnecting }: { reconnecting?: boolean }) {
 }
 
 function ChatTurn({
+  artifacts,
   turn,
   busy,
   onContinue,
   onOpenImage,
 }: {
+  artifacts: NorthstarArtifact[];
   turn: CanvasV2ChatTurn;
   busy: boolean;
   onContinue: (turnId: string) => void;
@@ -233,7 +237,8 @@ function ChatTurn({
         </details>}
         {active && progress}
         {turn.feedbackState && <p className="text-[12px] text-[#777085]" data-testid="canvas-v2-feedback-state">{turn.feedbackState === "queued" ? "Sending feedback…" : turn.feedbackState === "accepted" ? "Feedback received" : turn.feedbackState === "incorporated" ? "Feedback incorporated" : "Feedback was not incorporated before stopping"}</p>}
-        {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.answer} /></div>}
+        {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.answer} artifacts={[...(turn.artifacts ?? []), ...artifacts]} /></div>}
+        {!!turn.artifacts?.length && <CreativeArtifacts artifacts={turn.artifacts} onOpenImage={onOpenImage} />}
         {turn.routeSummary && !turn.answer && !turn.loop?.finalSummary && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
         {turn.loop?.clarification && <div data-testid="canvas-v2-discovery-question" className="mt-4 border-t border-[#e9e5f7] pt-3 dark:border-white/[.09]">
           <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#7663e7] dark:text-[#aa9cff]">Your judgment matters here</div>
@@ -406,7 +411,7 @@ export function CanvasV2ChatPanel({
         <Sparkles aria-hidden="true" className="mb-5 h-7 w-7 text-[#aaa5b6] dark:text-[#66616f]" />
         <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
       </div>}
-      <div className="space-y-7">{chat.turns.map((turn) => <ChatTurn key={turn.id} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} />)}</div>
+      <div className="space-y-7">{chat.turns.map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} />)}</div>
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Rendering the manual revision…</div>}
       {engine.manualNotice && <div className="mt-5 text-xs font-semibold leading-5 text-[#6e6b7b]">{engine.manualNotice}</div>}
       {engine.manualError && <div className="mt-5 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44]">{engine.manualError}</div>}
