@@ -7,62 +7,55 @@ import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset, CanvasV2EvidenceP
 
 const FORBIDDEN_HTML = /<(?:script|iframe|object|embed|base|form|link|meta|video|audio)\b|\son[a-z]+\s*=|javascript\s*:/i;
 const FORBIDDEN_CSS = /@import|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|url\s*\(/i;
-const MAX_HTML_LENGTH = 180_000;
-const MAX_CSS_LENGTH = 120_000;
 export const CANVAS_V2_MAX_LOCAL_IMAGE_BYTES = 2_500_000;
-export const CANVAS_V2_MAX_LOCAL_IMAGE_TOTAL_BYTES = 20_000_000;
 
 const LOCAL_USER_IMAGE = /\bdata-canvas-v2-local-image\s*=\s*["']true["']/i;
 const USER_ORIGIN = /\bdata-canvas-v2-origin\s*=\s*["']user["']/i;
 const IMAGE_SOURCE = /\bsrc\s*=\s*(["'])([^"']+)\1/i;
 const LOCAL_IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/i;
-const LOCAL_IMAGE_PLACEHOLDER = "data:image/png;base64,LOCAL_USER_IMAGE";
 
 function decodedBase64Bytes(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor(value.length * 3 / 4) - padding);
 }
 
-function inspectCanvasV2LocalImages(html: string): { structuralHtml: string; failures: string[] } {
+function inspectCanvasV2LocalImages(html: string): string[] {
   const failures: string[] = [];
-  let totalBytes = 0;
-  const structuralHtml = html.replace(/<img\b[^>]*>/gi, (tag) => {
+  for (const [tag] of html.matchAll(/<img\b[^>]*>/gi)) {
     const localUserImage = LOCAL_USER_IMAGE.test(tag) && USER_ORIGIN.test(tag);
     // Evidence images are resolved from approved asset handles before this
     // check. Pixel bytes are not markup regardless of who placed the object.
     // Exact source approval is still enforced by validateCanvasV2EvidenceBindings.
     const boundEvidenceImage = /\bdata-canvas-v2-evidence-id\s*=\s*["'][^"']+["']/i.test(tag);
-    if (!localUserImage && !boundEvidenceImage) return tag;
+    if (!localUserImage && !boundEvidenceImage) continue;
     const sourceMatch = IMAGE_SOURCE.exec(tag);
     const source = sourceMatch?.[2] ?? "";
-    if (/^blob:[^\s"'<>]+$/i.test(source)) return tag;
+    if (/^blob:[^\s"'<>]+$/i.test(source)) continue;
     const dataUrl = LOCAL_IMAGE_DATA_URL.exec(source);
     if (!dataUrl) {
-      if (!localUserImage) return tag;
+      if (!localUserImage) continue;
       failures.push("A local user image has an invalid source.");
-      return tag;
+      continue;
     }
     const byteSize = decodedBase64Bytes(dataUrl[1]);
-    totalBytes += byteSize;
-    if (byteSize < 1 || byteSize > CANVAS_V2_MAX_LOCAL_IMAGE_BYTES) failures.push(localUserImage ? "A local user image is too large." : "An evidence image is too large.");
-    // Inline pixels are durable artifact data, not executable or structural
-    // markup. Count a fixed source sentinel toward the 180 KB HTML safety rail
-    // while enforcing their decoded payload through a separate byte budget.
-    return tag.replace(IMAGE_SOURCE, `src="${LOCAL_IMAGE_PLACEHOLDER}"`);
-  });
-  if (totalBytes > CANVAS_V2_MAX_LOCAL_IMAGE_TOTAL_BYTES) failures.push("The local user images are too large as a group.");
-  return { structuralHtml, failures };
+    if (byteSize < 1 || byteSize > CANVAS_V2_MAX_LOCAL_IMAGE_BYTES) {
+      const imageId = /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? "unidentified";
+      failures.push(`${localUserImage ? "A local user image" : "An evidence image"} is too large or empty: ${imageId} contains ${byteSize} decoded bytes; the per-image limit is ${CANVAS_V2_MAX_LOCAL_IMAGE_BYTES}. Optimize this image's bytes without cropping it. This is not a canvas-size or screenshot-count limit.`);
+    }
+  }
+  return failures;
 }
 
 export function validateCanvasV2ArtifactDocument(
   document: CanvasV2ArtifactDocument,
 ): string[] {
   const failures: string[] = [];
-  const localImages = inspectCanvasV2LocalImages(document.html);
   if (!document.html.trim()) failures.push("Artifact HTML is empty.");
-  if (localImages.structuralHtml.length > MAX_HTML_LENGTH) failures.push("Artifact HTML is too large.");
-  failures.push(...localImages.failures);
-  if (document.css.length > MAX_CSS_LENGTH) failures.push("Artifact CSS is too large.");
+  // This is the accumulated workspace, not one model-authored payload. Imported
+  // flows, retained media and earlier islands must not exhaust later edits.
+  // Bound incoming fragments in source-patch and transfers at their endpoints;
+  // keep document-wide validation focused on safe content and stable identities.
+  failures.push(...inspectCanvasV2LocalImages(document.html));
   if (FORBIDDEN_HTML.test(document.html)) failures.push("Artifact HTML contains prohibited executable or embedded content.");
   if (FORBIDDEN_CSS.test(document.css)) failures.push("Artifact CSS contains a prohibited construct.");
   if (document.javascript?.trim()) failures.push("Canvas V2 Phase 2 does not execute model-authored JavaScript.");

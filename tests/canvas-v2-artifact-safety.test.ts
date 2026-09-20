@@ -26,7 +26,7 @@ function localImage(data: string): string {
   return `<img data-canvas-v2-node-id="local-image" data-canvas-v2-local-image="true" data-canvas-v2-origin="user" src="data:image/png;base64,${data}" alt="Local image">`;
 }
 
-test("safe local image pixels use a dedicated payload budget instead of the structural HTML limit", () => {
+test("safe local image pixels do not impose a structural HTML limit", () => {
   const payload = Buffer.alloc(220_000, 7).toString("base64");
   const html = `<main data-canvas-v2-node-id="canvas">${localImage(payload)}</main>`;
   assert.ok(html.length > 180_000);
@@ -34,9 +34,9 @@ test("safe local image pixels use a dedicated payload budget instead of the stru
   assert.deepEqual(validateCanvasV2EvidenceBindings({ html, css: "" }, []), []);
 });
 
-test("ordinary oversized markup and oversized local pixel payloads remain rejected", () => {
+test("accumulated markup and CSS can grow while individual image payloads stay bounded", () => {
   const markup = `<main data-canvas-v2-node-id="canvas">${"x".repeat(181_000)}</main>`;
-  assert.match(validateCanvasV2ArtifactDocument({ html: markup, css: "" }).join(" "), /Artifact HTML is too large/);
+  assert.deepEqual(validateCanvasV2ArtifactDocument({ html: markup, css: ".card{color:purple}".repeat(8_000) }), []);
 
   const payload = Buffer.alloc(CANVAS_V2_MAX_LOCAL_IMAGE_BYTES + 1, 3).toString("base64");
   const html = `<main data-canvas-v2-node-id="canvas">${localImage(payload)}</main>`;

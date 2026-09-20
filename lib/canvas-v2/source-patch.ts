@@ -289,7 +289,12 @@ export function findCanvasV2SourceNodeRange(html: string, nodeId: string): Canva
 
 function requiredText(value: unknown, label: string, maxLength: number): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label} is required.`);
-  if (value.length > maxLength) throw new Error(`${label} is too large.`);
+  if (value.length > maxLength) {
+    const repair = label.startsWith("Patch target")
+      ? "Use the exact stable node ID from canvas_read."
+      : "Split newly authored HTML/CSS into smaller operations or successive edits while preserving the requested content and all existing evidence.";
+    throw new Error(`${label} is too large: ${value.length} characters; this input allows ${maxLength}. This limit applies only to this patch field, not the existing canvas, its source flows, or its screenshot count. ${repair}`);
+  }
   return value.trim();
 }
 

@@ -24,6 +24,8 @@ Files persist across calls within the same active native session. Containers exp
 
 Per-operation transfer bounds: 16 imported files / 6 MB combined, 32 text files, 8 exported files / 8 MB each / 16 MB combined. Work can use further calls; these are transfer bounds, not total multimedia quotas. Saved sessions retain their existing 100 MB snapshot limit.
 
+Canvas document validation does not impose a cumulative HTML/CSS or inline-image byte quota across imported app flows and composition islands. The former 180,000-character HTML, 120,000-character CSS and 20 MB aggregate inline-image checks have been removed. Incoming source patches still bound each authored fragment (32,000 HTML characters, 24,000 CSS characters) and each call (10 operations); inline images retain their individual 2.5 MB decoded-byte check. Errors identify the specific oversized input and its measured size. Content safety, exact evidence binding, stable identities, protected source flows and human-edit protections remain enforced. Existing transfer and saved-session storage limits still apply.
+
 ## Image generation and edits
 
 `generate_image` creates an original illustration; `inputAssetIds` changes it to an image-edit request. Originals remain retained and untouched. Outputs include synthetic provenance and parent asset IDs. A verified derived asset can replace its prior generated version at the same model-owned image node; the original need not remain visibly duplicated. Uploaded, human-edited and canonical app evidence retain their continuity protections. Real people, app screenshots and documentary evidence continue to use retrieved authentic media. The model is instructed to inspect generated pixels before composing and keep text, cards, charts and connectors editable.
