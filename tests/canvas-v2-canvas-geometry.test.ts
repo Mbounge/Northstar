@@ -138,11 +138,11 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(nativeScene, /sceneOverride\?\.revisionId !== revision\.id && compiledRevisionId !== revision\.id/);
   assert.match(nativeScene, /needsCompiler && <div[^>]*style=\{PRIVATE_RENDER_SURFACE_STYLE\}><iframe/);
   assert.match(nativeScene, /querySelectorAll<HTMLElement>\("\[data-canvas-v2-node-id\]"\)/);
-  assert.match(nativeScene, /contentVisibility: "auto"/);
+  assert.match(nativeScene, /observeCanvasV2ImageVisibility\(root\)/);
   assert.match(nativeScene, /node\.canonicalEvidence \|\| node\.attributes\["data-canvas-v2-evidence-role"\] === "canonical"/);
   assert.match(nativeScene, /loading: eagerCanonicalEvidenceImage \? "eager"/);
-  assert.match(nativeScene, /decoding: eagerCanonicalEvidenceImage \? "sync"/);
-  assert.match(nativeScene, /fetchPriority: "high"/);
+  assert.match(nativeScene, /decoding: "async"/);
+  assert.match(nativeScene, /fetchPriority: "auto"/);
   assert.doesNotMatch(nativeScene, /transientGeometry=\{transientGeometry\}/);
   assert.doesNotMatch(workspace, /transientGeometry=\{transientGeometry\}/);
 });

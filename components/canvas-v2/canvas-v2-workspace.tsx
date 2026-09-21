@@ -705,7 +705,7 @@ export function CanvasV2Workspace({
   // to the person and AI commits never pan or zoom it.
   const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => initialSnapshot?.viewport ?? centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
   const viewportRef = useRef(viewport);
-  const cameraPinchActiveRef = useRef(false);
+  const cameraPreviewActiveRef = useRef(false);
   const nativePinchScaleRef = useRef<number | undefined>(undefined);
   const nativePinchHandlerRef = useRef<(event: Event) => void>(() => undefined);
   const renderedViewportRef = useRef(viewport);
@@ -1070,10 +1070,10 @@ export function CanvasV2Workspace({
       toolbar.style.visibility = "";
     }
     const atmosphereLayer = atmosphereLayerRef.current;
-    if (atmosphereLayer && !cameraPinchActiveRef.current) {
-      // Pinch keeps the decorative gradients still while the content follows
-      // the fingers. Repainting three full-screen gradients every zoom frame
-      // adds raster work without helping navigation. Settle them once at end.
+    if (atmosphereLayer && !cameraPreviewActiveRef.current) {
+      // Keep decorative gradients still during both pan and zoom. Repainting
+      // three full-screen gradients on every camera frame adds raster work
+      // without helping navigation. Settle them once at gesture end.
       // Camera preview is a hot path. Cached ResizeObserver geometry avoids a
       // DOM read after the surface write, which would force synchronous layout
       // on every trackpad frame. Keep these inherited custom properties on the
@@ -1125,6 +1125,7 @@ export function CanvasV2Workspace({
   }, [applyViewportVisual]);
 
   const beginCameraPreview = useCallback(() => {
+    cameraPreviewActiveRef.current = true;
     const workspace = workspaceRef.current;
     if (workspace && workspace.dataset.canvasV2CameraPreview !== "active") workspace.dataset.canvasV2CameraPreview = "active";
   }, []);
@@ -1134,7 +1135,7 @@ export function CanvasV2Workspace({
     wheelCommitTimerRef.current = undefined;
     wheelCommitDeadlineRef.current = 0;
     const next = viewportRef.current;
-    cameraPinchActiveRef.current = false;
+    cameraPreviewActiveRef.current = false;
     if (viewportPreviewFrameRef.current !== undefined) cancelAnimationFrame(viewportPreviewFrameRef.current);
     viewportPreviewFrameRef.current = undefined;
     pendingViewportRef.current = undefined;
@@ -3167,7 +3168,6 @@ export function CanvasV2Workspace({
     const deltaX = canvasV2NormalizedWheelDelta(event.deltaX, event.deltaMode, camera.width);
     const deltaY = canvasV2NormalizedWheelDelta(event.deltaY, event.deltaMode, camera.height);
     if (event.ctrlKey || event.metaKey) {
-      cameraPinchActiveRef.current = true;
       const rect = workspaceOriginRef.current;
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
@@ -3197,7 +3197,7 @@ export function CanvasV2Workspace({
     event.preventDefault(); event.stopPropagation();
     const gesture = event as Event & { scale?: number; clientX?: number; clientY?: number };
     if (event.type === "gesturestart") {
-      nativePinchScaleRef.current = 1; cameraPinchActiveRef.current = true; beginCameraPreview(); return;
+      nativePinchScaleRef.current = 1; beginCameraPreview(); return;
     }
     if (event.type === "gestureend") {
       nativePinchScaleRef.current = undefined; finishCameraPreview(); return;
@@ -3205,7 +3205,7 @@ export function CanvasV2Workspace({
     if (!Number.isFinite(gesture.scale) || !gesture.scale || gesture.scale <= 0) return;
     const previousScale = nativePinchScaleRef.current ?? 1;
     nativePinchScaleRef.current = gesture.scale;
-    cameraPinchActiveRef.current = true;
+    beginCameraPreview();
     const origin = workspaceOriginRef.current;
     const anchor = { x: Number.isFinite(gesture.clientX) ? gesture.clientX! - origin.left : workspaceSizeRef.current.width / 2, y: Number.isFinite(gesture.clientY) ? gesture.clientY! - origin.top : workspaceSizeRef.current.height / 2 };
     previewViewport(current => zoomViewportAtPoint(current, current.scale * gesture.scale! / previousScale, anchor));

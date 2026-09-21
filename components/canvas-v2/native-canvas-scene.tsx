@@ -1,6 +1,7 @@
 "use client";
 
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
+import { observeCanvasV2ImageVisibility } from "./native-image-visibility";
 
 import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
 
@@ -447,10 +448,6 @@ const NativeNode = memo(function NativeNode({
     "--canvas-v2-native-height": `${node.geometry.height}px`,
     "--canvas-v2-native-rotation": `${node.geometry.rotation}deg`,
     zIndex: CANVAS_V2_NATIVE_STACK_BASE + node.geometry.zIndex,
-    ...(node.kind === "image" && !eagerCanonicalEvidenceImage ? {
-      contentVisibility: "auto",
-      containIntrinsicSize: `${Math.max(1, node.geometry.width)}px ${Math.max(1, node.geometry.height)}px`,
-    } : {}),
   } as CSSProperties;
   const content = node.content.map((item, index) => {
     if (item.kind === "text") return item.value;
@@ -475,12 +472,11 @@ const NativeNode = memo(function NativeNode({
       // never appears incomplete until the user pans the canvas. Other image
       // objects retain lazy loading for normal workspace performance.
       loading: eagerCanonicalEvidenceImage ? "eager" : node.attributes.loading ?? "lazy",
-      // The private render gate has already fetched these canonical assets.
-      // Decode them synchronously when the accepted public scene mounts so
-      // Chromium cannot present a partially rasterized rail until the next
-      // pan, zoom, or composition invalidates its tiles.
-      decoding: eagerCanonicalEvidenceImage ? "sync" : node.attributes.decoding ?? "async",
-      ...(eagerCanonicalEvidenceImage ? { fetchPriority: "high" } : {}),
+      // Keep complete rails eager, but don't block presentation on synchronous
+      // decoding of every full-resolution screen or prioritize every request.
+      // Viewport paint culling below also covers canonical evidence images.
+      decoding: "async",
+      fetchPriority: "auto",
     } : {}),
     suppressContentEditableWarning: true,
   };
@@ -541,6 +537,11 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const renderedScene = sceneOverride ?? scene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
   const bySourceId = useMemo(() => renderedScene ? canvasV2NativeSceneSourceNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
+
+  useEffect(() => {
+    const root = publicSceneRef.current;
+    if (root && renderedScene) return observeCanvasV2ImageVisibility(root);
+  }, [renderedScene]);
 
   const compile = useCallback(async () => {
     const sequence = ++compileSequenceRef.current;
@@ -913,7 +914,11 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   };
 
   const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (inspectionEnabled && !activePointerRef.current) inspectHoverTarget(event.target);
+    // Wheel navigation moves many objects underneath a stationary pointer.
+    // Don't inspect their computed styles or update React hover state while
+    // the camera owns the gesture. Object drags still use the active path.
+    const navigating = publicSceneRef.current?.closest('[data-canvas-v2-camera-preview="active"]');
+    if (inspectionEnabled && !activePointerRef.current && !navigating) inspectHoverTarget(event.target);
     const active = activePointerRef.current;
     if (!active || active.pointerId !== event.pointerId) return;
     if (active.element && onElementPointer) onElementPointer({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: active.element });
@@ -1154,6 +1159,11 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     [data-canvas-v2-native-scene="true"] img[data-canvas-v2-native-runtime-node="true"] {
       -webkit-user-drag:none!important;
       user-select:none!important;
+    }
+    /* Camera-only paint culling. Layout, source URLs, native bounds and the
+       private full-document renderer remain unchanged. */
+    [data-canvas-v2-native-scene="true"] img[data-canvas-v2-image-offscreen] {
+      visibility:hidden!important;
     }
     /* The measured image box is also its interaction box. Never apply a
        public-only intrinsic size that disagrees with stored geometry. */
