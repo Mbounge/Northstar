@@ -489,6 +489,8 @@ export interface CanvasV2SpatialObservation {
 
 export interface CanvasV2RenderObservation {
   schema: typeof CANVAS_V2_OBSERVATION_SCHEMA;
+  /** Theme actually used for these pixels; absent on older observations. */
+  theme?: "light" | "dark";
   revisionId: string;
   screenshotDataUrl: string;
   viewport: {

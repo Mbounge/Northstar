@@ -374,8 +374,16 @@ function themeElements(
   elements.forEach((element) => {
     // Preservation is deliberately leaf-local. A malformed container marker
     // must never exempt an island's readable descendants from the host theme.
-    if (MEDIA_TAGS.has(element.tagName) || element.getAttribute("data-canvas-v2-theme-preserve") === "true") return;
+    if (MEDIA_TAGS.has(element.tagName)) return;
     const computed = view.getComputedStyle(element);
+    if (element.getAttribute("data-canvas-v2-theme-preserve") === "true") {
+      // Keep literal swatch colors, but give any descendant labels their real
+      // backing color instead of incorrectly treating it as the host canvas.
+      const inherited = visibleBackgrounds.get(element.parentElement ?? element) ?? HOST_BACKGROUND[theme];
+      const background = parseColor(computed.backgroundColor);
+      visibleBackgrounds.set(element, background ? composite(background, inherited) : inherited);
+      return;
+    }
     const authoredValues = new Map(THEMED_PROPERTIES.map((property) => [property, computed.getPropertyValue(property).trim()]));
     const original = new Map<string, StoredStyle>();
     const style = (element as HTMLElement | SVGElement).style;

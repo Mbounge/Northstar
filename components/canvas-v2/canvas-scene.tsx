@@ -719,6 +719,7 @@ function CanvasV2ObservationScene({
       && frame.contentDocument === frameDocument
       && frameDocument.defaultView !== null
       && frameDocument.documentElement?.dataset.canvasV2RevisionId === revision.id
+      && frameDocument.documentElement?.dataset.canvasV2Theme === theme
     );
 
     try {
@@ -835,6 +836,7 @@ function CanvasV2ObservationScene({
 
       const compatibilityObservation: CanvasV2RenderObservation = {
         schema: CANVAS_V2_OBSERVATION_SCHEMA,
+        theme,
         revisionId: revision.id,
         screenshotDataUrl,
         viewport: { width: geometry.width, height: geometry.height, deviceScaleFactor: captureGeometry.width / geometry.width },
@@ -882,11 +884,11 @@ function CanvasV2ObservationScene({
 
   useEffect(() => {
     if (captureEnabled && frameLoad > 0) void capture();
-    // The iframe load counter and revision identity are the capture clock.
+    // The iframe load counter, revision and theme are the capture clock.
     // Calling through the current render's closure prevents an old onLoad
     // handler from publishing the document that preceded a fast repair.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captureEnabled, frameLoad, revision.id]);
+  }, [captureEnabled, frameLoad, revision.id, theme]);
 
   return (
     <div className={bare ? "relative" : "relative overflow-auto rounded-xl border border-zinc-300 bg-zinc-200 p-4"}>

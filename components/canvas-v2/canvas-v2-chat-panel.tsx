@@ -2,6 +2,7 @@
 import type { NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { CreativeArtifacts } from "./creative-artifacts";
 import { ModelThinkingPicker } from "./model-thinking-picker";
+import { chronologicalManagedTurns } from '@/lib/canvas-v2/managed-agent/chat-timeline';
 import { CanvasV2MarkdownMessage } from "./canvas-v2-markdown-message";
 
 import {
@@ -198,7 +199,7 @@ function ChatTurn({
   onOpenImage,
 }: {
   artifacts: NorthstarArtifact[];
-  turn: CanvasV2ChatTurn;
+  turn: CanvasV2ChatTurn & { earlierSegment?: boolean };
   busy: boolean;
   onContinue: (turnId: string) => void;
   onOpenImage: (attachment: CanvasV2ChatImageAttachment) => void;
@@ -227,16 +228,16 @@ function ChatTurn({
     <div className="flex items-start gap-3">
       <div className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-lg bg-[#171721] text-[10px] font-black text-white dark:bg-[#6d59ed]">N</div>
       <div className="min-w-0 flex-1 pt-0.5">
-        {active && <PendingDots reconnecting={Boolean(turn.retry)} />}
-        {!active && !turn.feedbackFor && (hasProgress || turn.elapsedMs !== undefined) && <details className="group/progress mb-3 text-[#88818f] dark:text-[#a39baa]" data-testid="canvas-v2-completed-progress">
+        {active && !turn.earlierSegment && <PendingDots reconnecting={Boolean(turn.retry)} />}
+        {!active && (hasProgress || turn.elapsedMs !== undefined) && <details className="group/progress mb-3 text-[#88818f] dark:text-[#a39baa]" data-testid="canvas-v2-completed-progress">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-xs marker:hidden">
-            <span>{turn.status === "failed" ? "Failed after" : turn.status === "stopped" ? "Stopped after" : turn.status === "incomplete" ? "Paused after" : "Worked for"} {canvasV2ElapsedLabel(turn.elapsedMs ?? 0)}</span>
+            <span>{turn.earlierSegment ? 'Earlier activity' : `${turn.status === "failed" ? "Failed after" : turn.status === "stopped" ? "Stopped after" : turn.status === "incomplete" ? "Paused after" : "Worked for"} ${canvasV2ElapsedLabel(turn.elapsedMs ?? 0)}`}</span>
             <ChevronDown aria-hidden="true" className="h-3 w-3 -rotate-90 transition-transform group-open/progress:rotate-0" />
           </summary>
           <div className="pt-3">{progress}</div>
         </details>}
         {active && progress}
-        {turn.feedbackState && <p className="text-[12px] text-[#777085]" data-testid="canvas-v2-feedback-state">{turn.feedbackState === "queued" ? "Sending feedback…" : turn.feedbackState === "accepted" ? "Feedback received" : turn.feedbackState === "incorporated" ? "Feedback incorporated" : "Feedback was not incorporated before stopping"}</p>}
+        {turn.feedbackState && <p className="text-[12px] text-[#777085]" data-testid="canvas-v2-feedback-state">{turn.feedbackState === "queued" ? "Sending feedback…" : turn.feedbackState === "accepted" ? "Sent to agent" : turn.feedbackState === "incorporated" ? "Feedback incorporated" : turn.steeringBoundary ? "Delivery could not be confirmed" : "Feedback was not incorporated before stopping"}</p>}
         {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.answer} artifacts={[...(turn.artifacts ?? []), ...artifacts]} /></div>}
         {!!turn.artifacts?.length && <CreativeArtifacts artifacts={turn.artifacts} onOpenImage={onOpenImage} />}
         {turn.routeSummary && !turn.answer && !turn.loop?.finalSummary && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
@@ -250,7 +251,7 @@ function ChatTurn({
           <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">Work was interrupted.</span> {turn.loop?.pauseReason ?? "North Star did not finish the requested work."}</p>
           <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Resume the work</button>
         </div>}
-        {turn.status === "stopped" && <div data-testid="canvas-v2-turn-stopped" className="mt-3 text-xs text-[#777789]">Stopped.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-3 text-[#6d59ed] hover:underline disabled:opacity-40 dark:text-[#b3a8ff]">Continue</button>}</div>}
+        {turn.status === "stopped" && !turn.earlierSegment && <div data-testid="canvas-v2-turn-stopped" className="mt-3 text-xs text-[#777789]">Stopped.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-3 text-[#6d59ed] hover:underline disabled:opacity-40 dark:text-[#b3a8ff]">Continue</button>}</div>}
         {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && turn.loop && turn.loop.deliveryMode !== "chat" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
       </div>
     </div>
@@ -411,7 +412,7 @@ export function CanvasV2ChatPanel({
         <Sparkles aria-hidden="true" className="mb-5 h-7 w-7 text-[#aaa5b6] dark:text-[#66616f]" />
         <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
       </div>}
-      <div className="space-y-7">{chat.turns.map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} />)}</div>
+      <div className="space-y-7">{chronologicalManagedTurns(chat.turns).map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} />)}</div>
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Rendering the manual revision…</div>}
       {engine.manualNotice && <div className="mt-5 text-xs font-semibold leading-5 text-[#6e6b7b]">{engine.manualNotice}</div>}
       {engine.manualError && <div className="mt-5 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44]">{engine.manualError}</div>}

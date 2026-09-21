@@ -1,5 +1,6 @@
 "use client";
 
+import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 import { observeCanvasV2ImageVisibility } from "./native-image-visibility";
 
@@ -1244,16 +1245,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           // move. Canvas chrome must always sit above authored object layers.
           isolation: "isolate",
           colorScheme: theme,
-          "--northstar-ink": theme === "dark" ? "#f4f3f8" : "#151620",
-          "--northstar-muted": theme === "dark" ? "#c7c3cf" : "#737686",
-          "--northstar-violet": theme === "dark" ? "#9d8cff" : "#6b4dff",
-          "--northstar-line": theme === "dark" ? "rgba(255,255,255,.12)" : "rgba(78,67,135,.14)",
-          "--northstar-surface": theme === "dark" ? "#1b1a22" : "#ffffff",
-          "--northstar-surface-subtle": theme === "dark" ? "#23212b" : "#f6f5fa",
-          "--northstar-note-surface": theme === "dark" ? "#3a3218" : "#fff2a8",
-          "--northstar-note-ink": theme === "dark" ? "#fff0b8" : "#332e1e",
-          "--northstar-note-line": theme === "dark" ? "#8f7a31" : "#d8bd51",
-          "--northstar-note-shadow": theme === "dark" ? "rgba(0,0,0,.28)" : "rgba(71,59,10,.12)",
+          ...CANVAS_V2_THEME_TOKENS[theme],
         } as CSSProperties}
         onPointerDown={pointerDown}
         onPointerMove={pointerMove}

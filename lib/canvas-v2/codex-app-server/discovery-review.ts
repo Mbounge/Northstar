@@ -160,11 +160,18 @@ export class DiscoveryReviewContext {
     this.sequence++;
     while (this.size > 120_000 && this.entries.length > 1) { this.size -= this.entries.shift()!.length; this.omitted++; }
   }
-  user(input: UserInput[]) {
-    this.nativeSearches.clear(); this.toolResults = {};
-    this.handoff = undefined; this.openWork.clear();
-    this.question = input.filter(p => p.type === 'text').map(p => p.text).join('\n');
-    this.record('User input', this.question);
+  user(input: UserInput[], steering = false) {
+    const message = input.filter(p => p.type === 'text').map(p => p.text).join('\n');
+    if (!steering) {
+      this.nativeSearches.clear(); this.toolResults = {};
+      this.handoff = undefined; this.openWork.clear();
+      this.question = message;
+    } else {
+      // A correction updates the current task; it does not erase the original
+      // request or the research/tools already used to address it.
+      this.question += '\n\nLatest user steering (takes precedence where it changes the task):\n' + message;
+    }
+    this.record(steering ? 'User steering' : 'User input', message);
     for (const part of input) if (part.type === 'localImage') this.image(part.path, part, statSync(part.path).size);
   }
   tool(name: string, args: unknown, content: unknown) {

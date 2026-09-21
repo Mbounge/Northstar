@@ -50,6 +50,7 @@ export interface CanvasV2ChatTurn {
   id: string;
   activity?: CanvasV2Activity[];
   feedbackFor?: string;
+  steeringBoundary?: import('@/lib/canvas-v2/managed-agent/chat-timeline').SteeringBoundary;
   feedbackState?: "queued" | "accepted" | "incorporated" | "cancelled";
   message: string;
   attachments?: CanvasV2ChatAttachment[];

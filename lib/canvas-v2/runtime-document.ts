@@ -1,3 +1,4 @@
+import { canvasV2ThemeTokenCss } from "./theme-context";
 import type { CanvasV2ArtifactRevision } from "@/lib/canvas-v2/types";
 import { assertCanvasV2ArtifactDocument } from "@/lib/canvas-v2/artifact-safety";
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
@@ -68,28 +69,10 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
     }
     :root {
       color-scheme:light;
-      --northstar-ink:#151620;
-      --northstar-muted:#5d6070;
-      --northstar-violet:#5f49e8;
-      --northstar-line:rgba(66,54,123,.22);
-      --northstar-surface:#ffffff;
-      --northstar-surface-subtle:#f6f5fa;
-      --northstar-note-surface:#fff2a8;
-      --northstar-note-ink:#332e1e;
-      --northstar-note-line:#d8bd51;
-      --northstar-note-shadow:rgba(71,59,10,.12);
+      ${canvasV2ThemeTokenCss("light")}
     }
     :root[data-canvas-v2-theme="dark"] {
-      --northstar-ink:#f4f3f8;
-      --northstar-muted:#c7c3cf;
-      --northstar-violet:#9d8cff;
-      --northstar-line:rgba(255,255,255,.12);
-      --northstar-surface:#1b1a22;
-      --northstar-surface-subtle:#23212b;
-      --northstar-note-surface:#3a3218;
-      --northstar-note-ink:#fff0b8;
-      --northstar-note-line:#8f7a31;
-      --northstar-note-shadow:rgba(0,0,0,.28);
+      ${canvasV2ThemeTokenCss("dark")}
     }
     html, body { margin:0; width:${CANVAS_V2_WORKSPACE.width}px; height:${CANVAS_V2_WORKSPACE.height}px; min-width:0; min-height:0; background-color:transparent!important; background-image:none!important; overflow:visible; }
     html { position:relative; }

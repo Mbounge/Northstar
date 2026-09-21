@@ -43,28 +43,28 @@ export class ManagedAgentClient {
   }
   private publish(view: AgentView) { this.view = view; if (!this.disposed) this.options.onView(this.pendingInputs && view.status === 'completed' ? { ...view, status: 'running' } : view); }
   private fail(error: unknown) { this.stream?.abort(); this.stream = undefined; this.publish({ ...this.view, status: 'failed', error: error instanceof Error ? error.message : 'The agent connection failed.' }); }
-  send(message: string, attachments: unknown[], model: string, requestId: string, effort = 'high', restoredHistory?: string) {
+  send(message: string, attachments: unknown[], model: string, requestId: string, effort = 'high', restoredHistory?: string, canvasTheme?: 'light' | 'dark') {
     this.pendingInputs++;
     const work = this.commands.then(async () => {
       if (this.disposed || this.cancelling) throw new Error('The agent is stopping.');
       if (!this.token) {
         this.actions = new AbortController();
         this.publish({ ...emptyAgentView(), status: 'running' });
-        await this.create(message, attachments, model, requestId, effort, restoredHistory);
+        await this.create(message, attachments, model, requestId, effort, restoredHistory, canvasTheme);
         return; // Initial input was submitted with creation; never send it twice.
       }
       if (this.view.status !== 'running') { this.recoveries = 0; this.actions = new AbortController(); this.publish({ ...emptyAgentView(), sessionId: this.sessionId, status: 'running' }); }
       if (!this.stream) await this.listen(); // Subscribe before submitting input; do not lose early events.
-      await this.request({ op: 'send', message, attachments, requestId, model, effort });
+      await this.request({ op: 'send', message, attachments, requestId, model, effort, canvasTheme });
     });
     this.commands = work.catch(() => undefined);
     return work.catch(error => { this.fail(error); throw error; }).finally(() => { this.pendingInputs--; this.publish(this.view); this.closeSettledStream(); });
   }
-  private async create(message: string, attachments: unknown[], model: string, requestId: string, effort: string, restoredHistory?: string) {
+  private async create(message: string, attachments: unknown[], model: string, requestId: string, effort: string, restoredHistory?: string, canvasTheme?: 'light' | 'dark') {
     const controller = new AbortController(); this.stream = controller;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const response = await this.request({ op: 'create', model, effort, restoredHistory, message, attachments, requestId: `create:${requestId}` }, controller.signal);
+      const response = await this.request({ op: 'create', model, effort, restoredHistory, message, attachments, canvasTheme, requestId: `create:${requestId}` }, controller.signal);
       await new Promise<void>((resolve, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('Session identity was not received. Initial input may have been accepted; do not resubmit blindly.')); }, 30_000);
         this.consume(response, controller, event => {

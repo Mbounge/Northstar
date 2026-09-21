@@ -13,6 +13,8 @@ export function validateCodexInput(body: JsonObject) {
 export async function codexInput(body: JsonObject, cwd: string): Promise<UserInput[]> {
   const { message, attachments } = validateCodexInput(body);
   const input: UserInput[] = [{ type: 'text', text: message, text_elements: [] }];
+  if (body.canvasTheme === 'light' || body.canvasTheme === 'dark') input.push({ type: 'text',
+    text: `Canvas display context: the user's current theme is ${body.canvasTheme}. Canvas tools return the latest theme and host color tokens. Make authored content compatible with both themes; preserve original evidence pixels.`, text_elements: [] });
   for (const a of attachments) {
     if (a.kind === 'text') input.push({ type: 'text', text: `Attached document: ${a.name}\n${a.text}`, text_elements: [] });
     else {

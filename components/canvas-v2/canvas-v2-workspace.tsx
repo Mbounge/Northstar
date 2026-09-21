@@ -970,7 +970,7 @@ export function CanvasV2Workspace({
     }),
   });
 
-  const managedChat = useNorthstarManagedChat({ initial: initialSnapshot, enabled: Boolean(agentEndpoint) && !liveReplica, endpoint: agentEndpoint, accountEndpoint, gatewayHandoff:liveReplica?undefined:gatewayHandoff, selectedNodeIds: selectedElements.map(element => element.nodeId), base: legacyChat, engine, getWorkingContext: (selectionPolicy) => buildCanvasV2WorkingContext({
+  const managedChat = useNorthstarManagedChat({ theme, initial: initialSnapshot, enabled: Boolean(agentEndpoint) && !liveReplica, endpoint: agentEndpoint, accountEndpoint, gatewayHandoff:liveReplica?undefined:gatewayHandoff, selectedNodeIds: selectedElements.map(element => element.nodeId), base: legacyChat, engine, getWorkingContext: (selectionPolicy) => buildCanvasV2WorkingContext({
     scene: engine.readNativeScene(), selections: selectedElements,
     visibleBounds: canvasV2VisibleWorkspaceBounds(viewportRef.current, workspaceSizeRef.current, contentInsets()),
     viewport: viewportRef.current, selectionPolicy,

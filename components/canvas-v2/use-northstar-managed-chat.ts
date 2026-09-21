@@ -6,7 +6,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { useCanvasV2Chat } from './use-canvas-v2-chat';
 import type { useCanvasV2DesignLoop } from './use-canvas-v2-design-loop';
 import { codexWorkerFetch } from '@/lib/canvas-v2/worker/transport';
+import { canvasV2ModelThemeContext } from '@/lib/canvas-v2/theme-context';
+import type { CanvasV2ArtifactTheme } from '@/lib/canvas-v2/artifact-theme';
 import { ManagedAgentClient } from '@/lib/canvas-v2/managed-agent/client';
+import { captureSteeringBoundary, chronologicalManagedTurns } from '@/lib/canvas-v2/managed-agent/chat-timeline';
 import { object, string, type AgentView } from '@/lib/canvas-v2/managed-agent/protocol';
 import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
 import type { CanvasV2GatewayHandoff } from '@/lib/canvas-v2/gateway-handoff';
@@ -21,7 +24,7 @@ import { insertCanvasV2CanonicalFlow } from '@/lib/canvas-v2/flow-insertion';
 import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
 import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 
-export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot; enabled: boolean; endpoint?: string; accountEndpoint?: string; gatewayHandoff?: CanvasV2GatewayHandoff; selectedNodeIds?: string[]; getWorkingContext?: (policy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined; base: ReturnType<typeof useCanvasV2Chat>; engine: ReturnType<typeof useCanvasV2DesignLoop> }) {
+export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; initial?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot; enabled: boolean; endpoint?: string; accountEndpoint?: string; gatewayHandoff?: CanvasV2GatewayHandoff; selectedNodeIds?: string[]; getWorkingContext?: (policy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined; base: ReturnType<typeof useCanvasV2Chat>; engine: ReturnType<typeof useCanvasV2DesignLoop> }) {
   const [turns, setTurns] = useTimedChatTurns((input.initial?.turns ?? []).map(t => t.status === "running" ? { ...t, status: "stopped", activeSince: undefined, error: "The page closed during this run. Send a follow-up to continue from saved work." } : t));
   const [busy, setBusy] = useState(false);
   const current = useRef(input); current.current = input;
@@ -57,6 +60,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
     const runtime = new ManagedAgentClient({ fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const output = await (async () => {
       const args = object(accountHandles.current.decode(action.arguments)); const engine = current.current.engine;
+      const themeContext = canvasV2ModelThemeContext(current.current.theme ?? "light");
       if (isCreativeTool(action.name)) {
         const turnId = rootId.current;
         const revision = engine.readCommittedRevision();
@@ -65,7 +69,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
         for (const asset of registered) html = html.replaceAll(asset.url, `northstar-asset:${asset.id}`);
         const measurement = engine.displayedObservation?.revisionId === revision.id ? engine.displayedObservation : undefined;
         const context = await creativeInputContext(object(action.arguments), args, registered, [...artifacts.current.values()], action.name === 'workspace_run' ? {
-          revisionId: revision.id, document: {html, css: revision.document.css}, nodes: measurement?.spatial.nodes ?? [], measurementRevisionId: measurement?.revisionId,
+          theme: themeContext, revisionId: revision.id, document: {html, css: revision.document.css}, nodes: measurement?.spatial.nodes ?? [], measurementRevisionId: measurement?.revisionId,
           connectors: measurement ? canvasV2MeasuredConnectorDirectory(measurement.spatial.nodes) : undefined,
           viewport: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.('reference')),
         } : undefined, signal);
@@ -123,7 +127,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
         const baseRevisionId = requireCodexCanvasReadRevision(readRevision.current, revision.id);
         const plan = planCodexComposition({ ...args, baseRevisionId }, revision.id, observation, [...revision.evidence, ...assets.current.values()], ++compositionSequence.current);
         compositionPlan.current = plan;
-        return { accountEvidence: accountPackets.current.map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })), plan, islandSelector: `[data-canvas-v2-node-id="${plan.execution.target.islandId}"]`,
+        return { theme: themeContext, accountEvidence: accountPackets.current.map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })), plan, islandSelector: `[data-canvas-v2-node-id="${plan.execution.target.islandId}"]`,
           media: codexMediaInventory([...revision.evidence, ...assets.current.values()], sourceMedia.current, sourcePages.current),
           sourceMedia: sourceMedia.current, viewport: codexCompositionViewport(current.current.getWorkingContext?.("reference")), islands: buildCanvasV2IslandRegistry({ observation }), collaboration: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), previousDirections: compositionHistory.current.map(p => ({ islandId: p.execution.target.islandId, direction: p.direction })), grammar: CODEX_NATIVE_CANVAS_GRAMMAR,
           authoring: 'Use the returned target islandId as both data-canvas-v2-node-id and data-canvas-v2-island-id on a transparent section with data-canvas-v2-design-region, data-canvas-v2-story-role and data-canvas-v2-territory-relation matching the contract. Keep full-composition child wrappers transparent too: the Northstar canvas supplies the backdrop, so do not enclose the composition in a grey sheet, panel, border or shadow. Use local fills only where they help individual objects communicate; honor explicit requests for a standalone page or poster. Keep child objects independently identified. For researched compositions, include inspected source multimedia alongside the ideas it enriches. If retained research assets are empty, read relevant source pages and inspect candidates before composing; try another source if one fails. Representative imagery can enrich the story without proving an exact claim; label it accordingly. Choose typography, dimensions, spacing and hierarchy for the visual story and intended reading scale. Use natural heights and inspect the rendered result for readability. Size and typography suggestions are advisory. Fix text spilling outside cards, clipped content, readable-text collisions and overlaps between independent islands; backgrounds and intentional layers within an object may overlap. These are authoring units, not a command to change the user camera. Place new independent islands near the visible workspace; use an explicit existing anchor only when the narrative needs adjacency. Preserve the strongest insights from the conversation when choosing the visual form. Choose heading structure to suit the composition; a separate title island is optional. Commit one island transaction at a time; choose any number of islands. Use canvas_review to inspect the committed render before developing the next section.' };
@@ -136,7 +140,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
         const target = args.nodeId ? observation.designDetails?.find(d => d.nodeId === args.nodeId) : undefined;
         if (args.nodeId && !target) throw new Error('That composition has no detail capture. Review the overview or read the object instead.');
         return [
-          { type: 'input_text', text: JSON.stringify({ revisionId: revision.id, layoutFeedback: engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, islands: buildCanvasV2IslandRegistry({ observation }), spatial: observation.spatial, plan: compositionPlan.current,
+          { type: 'input_text', text: JSON.stringify({ theme: themeContext, renderedTheme: observation.theme ?? "unknown", revisionId: revision.id, layoutFeedback: engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, islands: buildCanvasV2IslandRegistry({ observation }), spatial: observation.spatial, plan: compositionPlan.current,
             rejected: rejected ? { revisionId: rejected.observation.revisionId, failures: rejected.failures, note: 'Rejected draft only; public canvas unchanged.' } : undefined }) },
           { type: 'input_image', image_url: target?.screenshotDataUrl ?? observation.screenshotDataUrl },
           ...(rejected ? [{ type: 'input_text', text: 'Most recent rejected draft:' }, { type: 'input_image', image_url: rejected.observation.screenshotDataUrl }] : []),
@@ -151,7 +155,7 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
         const range = args.nodeId ? findCanvasV2SourceNodeRange(html, string(args.nodeId)) : undefined;
         if (args.nodeId && !range) throw new Error('This canvas object no longer exists. Read the current canvas.');
         readRevision.current = revision.id;
-        return { baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: engine.displayedObservation ? buildCanvasV2IslandRegistry({ observation: engine.displayedObservation }) : [], selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
+        return { theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: engine.displayedObservation ? buildCanvasV2IslandRegistry({ observation: engine.displayedObservation }) : [], selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
           truncated: !range && html.length > 48_000,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),
           evidence: registered.map(({ id, url, originalUrl, label, mediaType, mimeType, source }) => ({ id, mediaType, mimeType, source, url: `northstar-asset:${id}`, originalUrl: originalUrl ?? (url.startsWith("data:") ? undefined : url), playbackUrl: mediaType === "gif" ? originalUrl : mediaType === "video" ? url : undefined, label })),
@@ -222,17 +226,18 @@ export function useNorthstarManagedChat(input: { initial?: import("@/lib/canvas-
     if (!feedback) rootId.current = id;
     const attachments = [...(supplied?.attachments ?? base.attachments)];
     for (const a of attachments) if (a.kind === 'image') assets.current.set(a.id, { id: a.id, url: a.dataUrl, label: a.name, authority: 'supplied', mimeType: a.mimeType, source: { providerId: 'user-upload', providerLabel: 'Uploaded material', sourceId: a.id, sourceType: 'uploaded', label: a.name, retrievedAt: new Date().toISOString(), permission: 'authorized' } });
-    setTurns(all => [...all, { id, message, attachments, createdAt: new Date().toISOString(), status: feedback ? 'responded' : 'running', ...(feedback ? { feedbackFor: rootId.current, feedbackState: 'queued' as const } : {}) }]);
+    const steeringBoundary = feedback ? captureSteeringBoundary(client.current?.view.activity ?? []) : undefined;
+    setTurns(all => [...all, { id, message, attachments, createdAt: new Date().toISOString(), status: feedback ? 'responded' : 'running', ...(feedback ? { feedbackFor: rootId.current, feedbackState: 'queued' as const, steeringBoundary } : {}) }]);
     busyRef.current = true; setBusy(true); base.setDraft(''); for (const a of attachments) base.removeAttachment(a.id);
     try {
       const runtime = getClient();
-      const restored = !runtime.token && turns.length ? JSON.stringify(turns.map(t => ({ user: t.message, answer: t.answer, status: t.status, activity: t.activity }))) : undefined;
-      await runtime.send(message, attachments, supplied?.model ?? base.modelSelection, id, supplied?.effort ?? base.reasoningEffort, restored);
+      const restored = !runtime.token && turns.length ? JSON.stringify(chronologicalManagedTurns(turns).map(t => ({ user: t.message, answer: t.answer, status: t.status, activity: t.activity }))) : undefined;
+      await runtime.send(message, attachments, supplied?.model ?? base.modelSelection, id, supplied?.effort ?? base.reasoningEffort, restored, current.current.theme);
       if (feedback) setTurns(all => all.map(turn => turn.id === id ? { ...turn, feedbackState: 'accepted' } : turn));
     }
-    catch {
+    catch (error) {
       // The runtime publishes the failure on the active turn; do not leave feedback queued.
-      if (feedback) setTurns(all => all.map(turn => turn.id === id ? { ...turn, feedbackState: 'cancelled' } : turn));
+      if (feedback) setTurns(all => all.map(turn => turn.id === id ? { ...turn, feedbackState: 'cancelled', error: error instanceof Error ? error.message : 'The agent could not accept this message.' } : turn));
     }
   };
   const gatewaySent = useRef<string | undefined>(undefined);

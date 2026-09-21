@@ -36,6 +36,7 @@ export interface CreativeContext {
     document: { html: string; css: string };
     nodes: unknown[];
     measurementRevisionId?: string;
+    theme?: ReturnType<typeof import('../theme-context').canvasV2ModelThemeContext>;
     connectors?: unknown;
     viewport?: unknown;
   };
