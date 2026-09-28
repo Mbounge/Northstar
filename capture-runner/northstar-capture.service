@@ -1,0 +1,27 @@
+[Unit]
+Description=Northstar Android capture control service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+WorkingDirectory=/opt/northstar
+EnvironmentFile=/etc/northstar/capture.env
+ExecStart=/usr/bin/python3 /opt/northstar/capture-runner/server.py
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+# Keep supervised captures alive through a control-service restart. The
+# persisted registry identifies their PIDs and the stop API signals them.
+KillMode=process
+TimeoutStopSec=90
+NoNewPrivileges=true
+UMask=0077
+ProtectSystem=strict
+StateDirectory=northstar
+ReadWritePaths=/var/lib/northstar
+
+[Install]
+WantedBy=multi-user.target

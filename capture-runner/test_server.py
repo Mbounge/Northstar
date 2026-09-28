@@ -1,0 +1,116 @@
+import importlib.util
+import json
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+
+SPEC = importlib.util.spec_from_file_location("capture_server", Path(__file__).with_name("server.py"))
+server = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(server)
+
+
+class CaptureServerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        server.ROOT = Path(self.temp.name)
+        self.old_script = server.SCRIPT
+        server.SCRIPT = server.ROOT / "spy_mobile2.5.py"
+        server.SCRIPT.touch()
+        server.TOKEN = "test-secret"
+        server.DEVICES = {"pixel": "offline-test-serial"}
+        server.PROCESSES.clear()
+        self.http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.http.server_port}"
+
+    def tearDown(self):
+        self.http.shutdown()
+        self.http.server_close()
+        self.thread.join(timeout=3)
+        self.temp.cleanup()
+        server.SCRIPT = self.old_script
+
+    def call(self, path, body=None, authorized=True):
+        headers = {"Content-Type": "application/json"}
+        if authorized:
+            headers["Authorization"] = "Bearer test-secret"
+        request = Request(self.base + path, headers=headers,
+                          data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urlopen(request, timeout=3) as response:
+                return response.status, json.load(response)
+        except HTTPError as error:
+            with error:
+                return error.code, json.load(error)
+
+    def test_authenticated_run_is_persistent_and_cannot_start_without_app(self):
+        self.assertEqual(self.call("/v1/runs", authorized=False)[0], 401)
+        status, payload = self.call("/v1/runs", {
+            "app": "Graet", "package_name": "com.graet.app",
+            "organization_id": "tenant-1", "device_id": "pixel", "scope": "browsing",
+        })
+        self.assertEqual(status, 201)
+        run_id = payload["run"]["id"]
+        self.assertEqual(self.call("/v1/runs")[1]["runs"][0]["id"], run_id)
+        self.assertEqual(json.loads((server.ROOT / "runs.json").read_text())[run_id]["status"], "queued")
+        self.assertEqual(self.call(f"/v1/runs/{run_id}/start", {})[0], 409)
+
+    def test_invalid_package_scope_and_screen_path_are_rejected(self):
+        common = {"app": "Graet", "organization_id": "tenant-1", "device_id": "pixel", "scope": "browsing"}
+        self.assertEqual(self.call("/v1/runs", {**common, "package_name": "com.app;rm"})[0], 400)
+        self.assertEqual(self.call("/v1/runs", {**common, "package_name": "com.app", "scope": "onboarding"})[0], 400)
+        self.assertEqual(self.call("/v1/runs/../../runs")[0], 404)
+
+    def test_partial_audit_cannot_claim_complete_after_process_exit(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Graet", "package_name": "com.graet", "organization_id": "tenant-1",
+            "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        runs = server._read_runs()
+        runs[run_id].update(status="running", pid=123456)
+        server._write_runs(runs)
+        status_path = server._run_dir(run_id) / "capture_supervisor_status.json"
+        status_path.write_text(json.dumps({"state": "complete", "coverage": {
+            "capture_status": "finished", "audit_status": "complete",
+            "pending_obligations": 1, "screenshots": 1,
+        }}))
+        with patch.object(server, "_pid_alive", return_value=False):
+            self.assertEqual(self.call(f"/v1/runs/{run_id}")[1]["run"]["status"], "needs_review")
+            status_path.write_text(json.dumps({"state": "complete", "coverage": {
+                "capture_status": "finished", "audit_status": "complete",
+                "pending_obligations": 0, "unverified_destinations": 0,
+                "incomplete_topbars": 0, "partial_captures": 0, "screenshots": 1,
+            }}))
+            self.assertEqual(self.call(f"/v1/runs/{run_id}")[1]["run"]["status"], "complete")
+
+    def test_play_install_preflight_allows_missing_target_but_requires_store(self):
+        run = {"device_id": "pixel", "package_name": "com.graet"}
+        with patch.object(server, "_device_property", return_value="1"), \
+             patch.object(server, "_installed", side_effect=lambda serial, package: package == "com.android.vending"):
+            readiness = server._preflight(run, True)
+            self.assertTrue(readiness["ready"])
+            self.assertFalse(readiness["installed"])
+            self.assertTrue(readiness["play_store"])
+        with patch.object(server, "_device_property", return_value="1"), \
+             patch.object(server, "_installed", return_value=False):
+            readiness = server._preflight(run, True)
+            self.assertFalse(readiness["ready"])
+            self.assertEqual(readiness["reason"], "Google Play Store is unavailable on this device")
+        with patch.object(server, "_device_property", return_value="1"), \
+             patch.object(server, "_installed", return_value=True), \
+             patch.object(server, "_launchable", return_value=False):
+            readiness = server._preflight(run, True)
+            self.assertFalse(readiness["ready"])
+            self.assertEqual(readiness["reason"], "App is installed but has no launchable activity")
+
+
+if __name__ == "__main__":
+    unittest.main()

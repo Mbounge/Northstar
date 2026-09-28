@@ -56,3 +56,5 @@ next-env.d.ts
 # Independently packaged discovery worker
 /worker/node_modules/
 /worker/dist/
+# Python capture runner test artifacts
+capture-runner/__pycache__/
