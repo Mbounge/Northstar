@@ -164,12 +164,15 @@ class CaptureServerTests(unittest.TestCase):
         (directory / "screenshots" / "screen.png").write_bytes(b"png")
         (directory / "capture_supervisor_status.json").write_text(json.dumps({"state": "complete"}))
         (directory / "onboarding_manifest.json").write_text(json.dumps({
-            "result": {"status": "COMPLETED_SETTLED", "settled_home_reached": True}
+            "result": {"status": "COMPLETED_SETTLED", "settled_home_reached": True,
+                       "score": 40, "account_created": False, "signup_found": False}
         }))
         with patch.object(server, "_pid_alive", return_value=False):
             status = self.call(f"/v1/runs/{run_id}")[1]["run"]
         self.assertEqual(status["status"], "complete")
         self.assertTrue(status["manifest_available"])
+        self.assertEqual(status["onboarding_result"]["score"], 40)
+        self.assertFalse(status["onboarding_result"]["account_created"])
 
 
 if __name__ == "__main__":

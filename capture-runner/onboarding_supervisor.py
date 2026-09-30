@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+from tempfile import NamedTemporaryFile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,6 +59,21 @@ def _identity_email(path: Path) -> str:
     return email.strip()
 
 
+def _verify_screenshot(adb: str, serial: str) -> None:
+    """Exercise the same ADB-to-temporary-file path used by the agent."""
+    with NamedTemporaryFile(suffix=".png") as screenshot:
+        subprocess.run([adb, "-s", serial, "shell", "screencap", "-p", "/sdcard/screen.png"],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        subprocess.run([adb, "-s", serial, "pull", "/sdcard/screen.png", screenshot.name],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        # ADB writes through a separate process, so reopen rather than read
+        # the NamedTemporaryFile handle's stale buffer.
+        with open(screenshot.name, "rb") as saved:
+            header = saved.read(8)
+        if header != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("ADB did not produce a readable PNG")
+
+
 def supervise(app: str, package: str, serial: str, session: Path) -> int:
     global CHILD
     session.mkdir(parents=True, exist_ok=True)
@@ -83,6 +99,12 @@ def supervise(app: str, package: str, serial: str, session: Path) -> int:
     if STOP_REQUESTED:
         _status(session, "paused", "operator requested stop")
         return 0
+
+    try:
+        _verify_screenshot(adb, serial)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        _status(session, "needs_review", "Device screenshot capture failed; check ADB and writable TMPDIR")
+        return 2
 
     # The onboarding script uses plain `adb shell`, so ANDROID_SERIAL is
     # essential when several dedicated emulators run on the same host.

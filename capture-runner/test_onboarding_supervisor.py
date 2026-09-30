@@ -64,6 +64,7 @@ class OnboardingSupervisorTests(unittest.TestCase):
             "ONBOARDING_IDENTITY_PROFILE": str(self.profile),
             "ONBOARDING_PASSWORD": "test-password", "CAPTURE_ADB": "adb",
         }), patch.object(supervisor, "ensure_installed", return_value=None), \
+             patch.object(supervisor, "_verify_screenshot", return_value=None), \
              patch.object(supervisor.subprocess, "run") as clear, \
              patch.object(supervisor.subprocess, "Popen", side_effect=launch):
             result = supervisor.supervise("Example", "com.example.app", "emulator-5554", session)
@@ -93,6 +94,20 @@ class OnboardingSupervisorTests(unittest.TestCase):
         result, _, _ = self.run_agent(session, "BLOCKED_VERIFICATION")
         self.assertEqual(result, 2)
         self.assertEqual(json.loads((session / "capture_supervisor_status.json").read_text())["state"], "needs_review")
+
+    def test_unavailable_screenshot_stops_before_agent_launch(self):
+        session = self.root / "no-screenshot"
+        with patch.dict(os.environ, {
+            "ONBOARDING_IDENTITY_PROFILE": str(self.profile),
+            "ONBOARDING_PASSWORD": "test-password", "CAPTURE_ADB": "adb",
+        }), patch.object(supervisor, "ensure_installed", return_value=None), \
+             patch.object(supervisor, "_verify_screenshot", side_effect=OSError("read-only temp")), \
+             patch.object(supervisor.subprocess, "Popen") as launch:
+            self.assertEqual(supervisor.supervise("Example", "com.example.app", "emulator-5554", session), 2)
+        launch.assert_not_called()
+        status = json.loads((session / "capture_supervisor_status.json").read_text())
+        self.assertEqual(status["state"], "needs_review")
+        self.assertIn("screenshot", status["reason"])
 
 
 if __name__ == "__main__":

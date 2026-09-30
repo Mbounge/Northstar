@@ -149,6 +149,15 @@ def _status(run: dict) -> dict:
     screens = directory / "screenshots"
     result["screens"] = len(list(screens.glob("*.png"))) if screens.is_dir() else 0
     result["manifest_available"] = (directory / ("onboarding_manifest.json" if result.get("scope") == "onboarding" else "session_manifest.json")).is_file()
+    if result.get("scope") == "onboarding":
+        manifest = _json_file(directory / "onboarding_manifest.json")
+        outcome = manifest.get("result") if isinstance(manifest.get("result"), dict) else None
+        result["onboarding_result"] = ({
+            "score": outcome.get("score"),
+            "signup_found": outcome.get("signup_found") is True,
+            "account_created": outcome.get("account_created") is True,
+            "settled_home_reached": outcome.get("settled_home_reached") is True,
+        } if outcome else None)
     result["icon_available"] = (directory / "extracted_icons" / "ic_launcher_mipmap-xxxhdpi.png").is_file()
     result["audit_status"] = _json_file(directory / "unattended_audit.json").get("status")
     result["coverage"] = coverage

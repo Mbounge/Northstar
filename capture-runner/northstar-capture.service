@@ -9,6 +9,8 @@ User=northstar
 Group=northstar
 WorkingDirectory=/opt/northstar
 EnvironmentFile=/etc/northstar/capture.env
+Environment=TMPDIR=/var/lib/northstar/tmp
+ExecStartPre=/usr/bin/mkdir -p /var/lib/northstar/tmp
 ExecStart=/usr/bin/python3 /opt/northstar/capture-runner/server.py
 Restart=on-failure
 RestartSec=5
