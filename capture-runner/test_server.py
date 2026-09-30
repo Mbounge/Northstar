@@ -79,6 +79,27 @@ class CaptureServerTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(payload["run"]["organization_id"], "")
 
+    def test_browsing_launcher_exposes_adb_to_worker(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+
+        class FakeProcess:
+            pid = 12345
+
+            def poll(self):
+                return None
+
+        with patch.object(server.Handler, "_device_online", return_value=True), \
+             patch.object(server, "_preflight", return_value={"ready": True}), \
+             patch.object(server.subprocess, "Popen", return_value=FakeProcess()) as launch, \
+             patch.object(server, "ADB", "/opt/android-sdk/platform-tools/adb"):
+            self.assertEqual(self.call(f"/v1/runs/{run_id}/start", {})[0], 200)
+        self.assertEqual(launch.call_args.kwargs["env"]["PATH"].split(":")[0],
+                         "/opt/android-sdk/platform-tools")
+
     def test_full_log_download_is_authenticated_and_redacted(self):
         _, payload = self.call("/v1/runs", {
             "app": "Example", "package_name": "com.example.app",

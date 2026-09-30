@@ -419,13 +419,15 @@ class Handler(BaseHTTPRequestHandler):
                     "MOBILESPY_RESUME_SESSION_DIR": str(_run_dir(run_id)),
                     "NORTHSTAR_CAPTURE_RUN_ID": run_id,
                 })
+                # Both agents invoke `adb` directly. The service's restricted
+                # PATH need not contain the Android SDK on its own.
+                env["PATH"] = f"{Path(ADB).parent}:{env.get('PATH', '')}"
                 if run["scope"] == "onboarding":
                     env.update({
                         "ONBOARDING_SCRIPT": str(ONBOARDING_SCRIPT),
                         "ONBOARDING_IDENTITY_PROFILE": str(ONBOARDING_PROFILE),
                         "ONBOARDING_PYTHON": ONBOARDING_PYTHON,
                     })
-                    env["PATH"] = f"{Path(ADB).parent}:{env.get('PATH', '')}"
                     command = [PYTHON, "-u", str(ONBOARDING_SUPERVISOR),
                                "--app", run["app"], "--package", run["package_name"],
                                "--serial", serial, "--session", str(_run_dir(run_id)),

@@ -9219,6 +9219,13 @@ class OnboardingSpy:
         semantic = self._infer_field_semantic(target_desc, value_type)
         target_lower = str(target_desc or "").casefold()
 
+        def display_value(candidate):
+            value_text = str(candidate)
+            if (semantic == "password" or "pass" in target_lower
+                    or (self.persona.password and value_text == self.persona.password)):
+                return "[redacted]"
+            return value_text
+
         if (
             semantic == "email"
             and any(
@@ -9255,13 +9262,13 @@ class OnboardingSpy:
             ):
                 print(
                     f"         🛡️ Ignoring invented identity override "
-                    f"'{override_value}' for '{target_desc}'; "
-                    f"using authoritative persona value '{value}'"
+                    f"'{display_value(override_value)}' for '{target_desc}'; "
+                    f"using authoritative persona value '{display_value(value)}'"
                 )
             else:
                 print(
                     f"         👤 Using authoritative persona value for "
-                    f"'{target_desc}': '{value}'"
+                    f"'{target_desc}': '{display_value(value)}'"
                 )
         elif profile_key:
             self._missing_profile_requirement = profile_key
@@ -9279,12 +9286,12 @@ class OnboardingSpy:
             # Non-profile app-local text (for example a search query) may use
             # the planner's value, but it is NOT promoted into persistent identity.
             value = str(override_value)
-            print(f"         🔎 Using non-profile planner text: '{value}'")
+            print(f"         🔎 Using non-profile planner text: '{display_value(value)}'")
         else:
             confirmed_value = self._resolve_confirm_field(target_desc, value_type)
             if confirmed_value:
                 value = confirmed_value
-                print(f"         🔁 Confirm field detected — using previously entered value: '{value}'")
+                print(f"         🔁 Confirm field detected — using previously entered value: '{display_value(value)}'")
             else:
                 value = self.persona.get_value(
                     value_type, target_desc=target_desc
@@ -9382,7 +9389,7 @@ class OnboardingSpy:
         if focus_xml:
             xml_str = focus_xml
 
-        print(f"         ⌨️ Typing: '{value}'")
+        print(f"         ⌨️ Typing: '{display_value(value)}'")
         self.device.select_all_and_delete()
         time.sleep(0.3)
         self.device.clear_field()
