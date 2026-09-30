@@ -473,11 +473,10 @@ const NativeNode = memo(function NativeNode({
       // never appears incomplete until the user pans the canvas. Other image
       // objects retain lazy loading for normal workspace performance.
       loading: eagerCanonicalEvidenceImage ? "eager" : node.attributes.loading ?? "lazy",
-      // Keep complete rails eager, but don't block presentation on synchronous
-      // decoding of every full-resolution screen or prioritize every request.
-      // Viewport paint culling below also covers canonical evidence images.
+      // Let the browser decode full-resolution screens without blocking the
+      // main thread. Every source screen remains visible while panning.
       decoding: "async",
-      fetchPriority: "auto",
+      fetchPriority: eagerCanonicalEvidenceImage ? "high" : "auto",
     } : {}),
     suppressContentEditableWarning: true,
   };
@@ -1163,7 +1162,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     }
     /* Camera-only paint culling. Layout, source URLs, native bounds and the
        private full-document renderer remain unchanged. */
-    [data-canvas-v2-native-scene="true"] img[data-canvas-v2-image-offscreen] {
+    [data-canvas-v2-native-scene="true"] img[data-canvas-v2-image-offscreen]:not([data-canvas-v2-evidence-role="canonical"]) {
       visibility:hidden!important;
     }
     /* The measured image box is also its interaction box. Never apply a

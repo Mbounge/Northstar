@@ -343,7 +343,11 @@ const configuredLimit = (value: string | undefined, fallback: number) => {
 };
 const globalHost = globalThis as typeof globalThis & { northstarCodexHost?: CodexSessionHost };
 export function productionCodexHost() {
-  if (globalHost.northstarCodexHost && Object.getPrototypeOf(globalHost.northstarCodexHost) !== CodexSessionHost.prototype) {
+  // A dev hot reload replaces the class prototype while an existing browser may
+  // still be streaming a turn. Keep that host alive: disposing it here drops
+  // every active session between two ordinary API requests.
+  if (globalHost.northstarCodexHost && Object.getPrototypeOf(globalHost.northstarCodexHost) !== CodexSessionHost.prototype
+    && !(globalHost.northstarCodexHost as unknown as { sessions?: Map<string, unknown> }).sessions?.size) {
     globalHost.northstarCodexHost.dispose(); globalHost.northstarCodexHost = undefined;
   }
   const host = globalHost.northstarCodexHost ??= new CodexSessionHost(() => spawnCodex(process.env.NORTHSTAR_CODEX_BINARY || 'codex'), readNorthstarSource, { sessions: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS, 20), perOwner: configuredLimit(process.env.NORTHSTAR_MAX_SESSIONS_PER_USER, 2) }, process.env.NORTHSTAR_DISCOVERY_REVIEW === 'advisory' ? codexDiscoveryReviewer(() => spawnCodex(process.env.NORTHSTAR_CODEX_BINARY || 'codex')) : undefined, configuredLimit(process.env.NORTHSTAR_DISCOVERY_REVIEW_MAX_ROUNDS, 6));

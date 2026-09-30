@@ -108,6 +108,13 @@ export function accountResultForModel(result: AccountResult, limit: number) {
 export class AccountToolHandles {
   private ids = new Map<string, string>();
   private originals = new Map<string, string>();
+  constructor(entries: readonly [string, string][] = []) {
+    for (const [id, handle] of entries) {
+      if (typeof id !== 'string' || !/^ns-(?:app|flow|asset)-\d+$/.test(handle)) continue;
+      this.ids.set(id, handle); this.originals.set(handle, id);
+    }
+  }
+  entries(): [string, string][] { return [...this.ids.entries()]; }
   remember(result: Pick<AccountResult, 'apps' | 'flows' | 'evidence'>) {
     for (const [kind, values] of [['app', result.apps], ['flow', result.flows], ['asset', result.evidence]] as const) {
       for (const item of values) if (!this.ids.has(item.id)) {
@@ -129,6 +136,7 @@ export class AccountToolHandles {
   decode<T>(value: T): T {
     return this.transform(value, text => text.replace(/ns-(?:app|flow|asset)-\d+/g, handle => this.originals.get(handle) ?? handle));
   }
+  resolve(handle: string): string | undefined { return this.originals.get(handle); }
 }
 
 /** Send actual pixels to the model, not a remote URL that its image transport may not fetch.

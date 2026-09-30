@@ -97,3 +97,54 @@ using the capture host.
 Use a temporary data root and a throwaway token, then call `/health`,
 `/v1/devices`, and `/v1/runs`. The included `test_server.py` exercises auth,
 durable run creation, and invalid input without launching MobileSpy.
+
+## iPhone capture through Northstar Admin
+
+The iOS runner is a separate Mac-hosted service (`ios_server.py`) using
+Appium's XCUITest driver (`ios_agent.py`). Admin is the control plane: select
+**iPhone (iOS)**, the organization, the app's bundle ID and the real iPhone;
+then create, start, pause or resume the run in Capture studio. The Admin page
+shows preflight status, saved screenshots, a recent device frame and the
+agent log. It does not expose Appium or the iPhone directly to the browser.
+
+A *real, trusted iPhone* is required for a public App Store build. Install
+Graet through the iPhone's App Store and sign in there. Xcode Simulator cannot
+install the public App Store build. On the Mac host, install an Xcode version
+compatible with its macOS and the phone's iOS, accept the Xcode license,
+enable Developer Mode and UI Automation on the iPhone, and configure and start
+Appium with its XCUITest driver and WebDriverAgent signing. See the
+[Appium real-device setup](https://appium.github.io/appium-xcuitest-driver/latest/getting-started/device-setup/)
+and [XCUITest system requirements](https://appium.github.io/appium-xcuitest-driver/latest/getting-started/system-requirements/).
+
+Set these on the Mac runner host, preferably in a protected service environment:
+
+```text
+NORTHSTAR_IOS_RUNNER_TOKEN=<long random secret, different from the Android token>
+IOS_CAPTURE_DEVICES_JSON={"graet-iphone":{"udid":"<real iPhone UDID>","name":"Graet iPhone"}}
+IOS_CAPTURE_DATA_ROOT=/var/lib/northstar/ios-captures
+IOS_CAPTURE_BIND=127.0.0.1
+IOS_CAPTURE_PORT=8788
+IOS_APPIUM_URL=http://127.0.0.1:4723
+IOS_XCODE_ORG_ID=<Apple Development team ID, if WebDriverAgent needs signing>
+IOS_CAPTURE_MAX_ACTIONS=120
+```
+
+Run `ios_server.py` as a persistent service on the Mac. Publish only its
+bearer-protected HTTP endpoint through a private, HTTPS connection reachable
+by Northstar's server; keep Appium on localhost. Set the following on the
+Northstar Next.js server, alongside the Android runner variables:
+
+```text
+NORTHSTAR_IOS_RUNNER_URL=https://<private-https-endpoint>
+NORTHSTAR_IOS_RUNNER_TOKEN=<same Mac-runner token>
+```
+
+The iOS agent checkpoints after each screen and action, so resume uses the
+same run directory and skips previously attempted controls. It avoids obvious
+purchase, publish and account-changing actions and returns to the app after
+an external screen. It deliberately reports **Needs review** when it reaches
+a navigation or action limit; no current iOS run is marked Complete without
+an evidence-backed coverage audit. This is a foundation for live-device
+calibration and coverage planning, not a claim that Graet has already been
+captured. No compatible real iPhone is connected in the current environment,
+and the iOS path has not yet been validated against Graet on-device.

@@ -61,6 +61,7 @@ export interface CanvasV2ChatTurn {
   route?: CanvasV2InteractionRoute;
   routeSummary?: string;
   answer?: string;
+  evidenceReferences?: Record<string, import('@/lib/canvas-v2/chat-evidence').CanvasV2ChatEvidenceReference>;
   canvasInstruction?: string;
   runId?: string;
   loop?: CanvasV2LoopState;

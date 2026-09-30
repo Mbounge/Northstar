@@ -68,7 +68,7 @@ const RESPONSE_SCHEMA = {
     answer: { type: "string" },
     canvasInstruction: { type: "string" },
     selectionPolicy: { type: "string", enum: ["none", "modify", "reference"] },
-    researchTargets: { type: "array", items: { type: "string" }, maxItems: 12 },
+    researchTargets: { type: "array", items: { type: "string" } },
     researchMode: { type: "string", enum: ["none", "evidence", "synthesis"] },
     inquiry: {
       type: "object",

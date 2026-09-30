@@ -113,10 +113,14 @@ export default async function CompanyDashboardPage({
   const iconUrl = productData?.iconUrl;
 
   const bSynthesized =
+    productData?.web?.browsing?.sessionIntel?.competitive_profile?.micro_niche ||
+    productData?.mobile?.browsing?.sessionIntel?.competitive_profile?.micro_niche ||
     productData?.web?.browsing?.sessionIntel?.competitive_profile?.app_category ||
     productData?.mobile?.browsing?.sessionIntel?.competitive_profile?.app_category;
 
   const oSynthesized =
+    productData?.web?.onboarding?.sessionIntel?.competitive_profile?.micro_niche ||
+    productData?.mobile?.onboarding?.sessionIntel?.competitive_profile?.micro_niche ||
     productData?.web?.onboarding?.sessionIntel?.competitive_profile?.app_category ||
     productData?.mobile?.onboarding?.sessionIntel?.competitive_profile?.app_category;
 

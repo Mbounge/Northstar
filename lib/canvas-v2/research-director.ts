@@ -337,7 +337,7 @@ function uniqueTargets(targets: readonly string[]): string[] {
     const key = normalize(value);
     if (value && key.trim() && !values.has(key)) values.set(key, value);
   }
-  return Array.from(values.values()).slice(0, 12);
+  return Array.from(values.values());
 }
 
 function requirementForTarget(catalog: AppDataCatalog, requestedName: string, visibleFlowIds: readonly string[], instruction: string): CanvasV2ResearchRequirement {
@@ -511,8 +511,11 @@ export function buildCanvasV2ResearchCatalogIndex(
   const requirements = Array.from(requirementsByIdentity.values());
   const visibleApps = Array.from(new Set(requirements.filter((requirement) => requirement.state === "visible").map((requirement) => requirement.appName).filter((app): app is string => Boolean(app))));
   const requiredAppIds = new Set(requirements.map((requirement) => requirement.appId).filter((appId): appId is string => Boolean(appId)));
-  const scopedApps = (requiredAppIds.size ? catalog.apps.filter((app) => requiredAppIds.has(app.id)) : catalog.apps)
-    .slice(0, MAX_INDEX_APPS);
+  // Bound broad catalog previews, but never drop an app explicitly requested
+  // by the user from the model-facing index or its required evidence gate.
+  const scopedApps = requiredAppIds.size
+    ? catalog.apps.filter((app) => requiredAppIds.has(app.id))
+    : catalog.apps.slice(0, MAX_INDEX_APPS);
   return {
     catalogScope: {
       totalAppCount: catalog.apps.length,

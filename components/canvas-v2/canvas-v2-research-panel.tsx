@@ -16,12 +16,21 @@ export function CanvasV2ResearchPanel({ endpoint, busy, onInsertFlow, onInsertSc
   const research = useCanvasV2Research(endpoint);
   const [selectedApp, setSelectedApp] = useState<AppDataApp>();
   const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
   const openApp = async (app: AppDataApp) => {
     setSelectedApp(app);
     await research.run({ operation: "list-flows", appName: app.name, limit: 30 });
   };
   const openFlow = (flow: AppDataFlow) => research.run({ operation: "flow-screens", appName: selectedApp?.name, flowName: flow.name, limit: 60 });
-  const search = () => research.run({ operation: "search", query, limit: 30 });
+  const search = () => { setSubmittedQuery(query); void research.run({ operation: "search", query, limit: 30 }); };
+  const loadMore = () => {
+    const current = research.result;
+    const offset = current?.pagination?.nextOffset;
+    if (!current || offset === undefined || research.loadingMore) return;
+    if (current.operation === "list-flows") void research.run({ operation: "list-flows", appName: selectedApp?.name, offset, limit: 30 }, true);
+    else if (current.operation === "list-apps") void research.run({ operation: "list-apps", offset, limit: 30 }, true);
+    else if (current.operation === "search") void research.run({ operation: "search", query: submittedQuery, offset, limit: 30 }, true);
+  };
   const showingScreens = research.result?.operation === "flow-screens" && research.result.flows[0];
 
   return <div className="flex min-h-0 flex-1 flex-col">
@@ -43,11 +52,13 @@ export function CanvasV2ResearchPanel({ endpoint, busy, onInsertFlow, onInsertSc
         <button onClick={() => { setSelectedApp(undefined); void research.run({ operation: "list-apps", limit: 30 }); }} className="mb-4 flex items-center gap-1 text-xs font-bold text-[#6553e8]"><ArrowLeft className="h-3.5 w-3.5" />All apps</button>
         <h2 className="font-black">{selectedApp?.name}</h2><p className="mt-1 text-xs text-[#858594]">Choose an ordered captured flow</p>
         <div className="mt-4 space-y-2">{research.result.flows.map((flow) => <button key={flow.id} onClick={() => void openFlow(flow)} className="w-full rounded-xl border border-[#e6e6ee] p-3 text-left hover:border-[#aaa0f8] hover:bg-[#faf9ff] dark:border-white/[.09] dark:hover:border-[#7163b8] dark:hover:bg-white/[.045]"><div className="text-xs font-bold">{flow.name}</div><div className="mt-1 text-[10px] text-[#8b8b99]">{flow.screens.length} screens · {[flow.platform, flow.sessionType].filter(Boolean).join(" ")}</div></button>)}</div>
+        {research.result.pagination?.nextOffset !== undefined && <button onClick={loadMore} disabled={research.loadingMore} className="mt-4 w-full rounded-xl border border-[#dcd9f4] px-3 py-2.5 text-xs font-bold text-[#6553e8] disabled:opacity-50 dark:border-white/[.15] dark:text-[#c0b6ff]">{research.loadingMore ? "Loading more flows…" : `Load more flows (${research.result.flows.length} of ${research.result.pagination.total})`}</button>}
         {!research.result.flows.length && <div className="py-8 text-sm text-[#858594]">No captured flows are available for this app.</div>}
       </>}
       {!research.loading && !research.error && (research.result?.operation === "list-apps" || research.result?.operation === "search") && <>
         <div className="mb-4"><h2 className="font-black">Research library</h2><p className="mt-1 text-xs text-[#858594]">Account apps and exact captured evidence</p></div>
         <div className="space-y-2">{research.result.apps.map((app) => <button key={app.id} onClick={() => void openApp(app)} className="flex w-full items-center gap-3 rounded-xl border border-[#e6e6ee] p-3 text-left hover:border-[#aaa0f8] hover:bg-[#faf9ff] dark:border-white/[.09] dark:hover:border-[#7163b8] dark:hover:bg-white/[.045]">{app.iconUrl ? <img src={app.iconUrl} alt="" className="h-9 w-9 rounded-lg object-contain" /> : <div className="grid h-9 w-9 place-items-center rounded-lg bg-[#eeeaff] text-xs font-black text-[#6553e8] dark:bg-[#302b4a] dark:text-[#c0b6ff]">{app.name.slice(0, 1)}</div>}<div className="min-w-0 flex-1"><div className="truncate text-xs font-bold">{app.name}</div><div className="mt-1 text-[10px] text-[#8b8b99]">{app.flows.length} flows · {app.totalScreens} screens</div></div></button>)}</div>
+        {research.result.pagination?.nextOffset !== undefined && <button onClick={loadMore} disabled={research.loadingMore} className="mt-4 w-full rounded-xl border border-[#dcd9f4] px-3 py-2.5 text-xs font-bold text-[#6553e8] disabled:opacity-50 dark:border-white/[.15] dark:text-[#c0b6ff]">{research.loadingMore ? "Loading more apps…" : `Load more (${research.result.apps.length} shown)`}</button>}
         {!research.result.apps.length && <div className="py-8 text-sm text-[#858594]">No grounded evidence matched this search.</div>}
       </>}
     </div>

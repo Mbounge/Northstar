@@ -9,7 +9,7 @@ export interface NorthstarSnapshot {
   attachments?: import("../chat-attachments").CanvasV2ChatAttachment[];
   model: CanvasV2ModelSelection; effort: NorthstarEffort; viewport: CanvasV2WorkspaceViewport;
   memory?: { artifacts?: import('../creative/types').NorthstarArtifact[]; assets: CanvasV2EvidenceAsset[]; accountPackets: CanvasV2EvidencePacket[];
-    accountFlows: [string, {app: AppDataApp; flow: AppDataFlow}][]; sourceMedia: CodexSourceMediaCandidate[];
+    accountFlows: [string, {app: AppDataApp; flow: AppDataFlow}][]; accountFlowSummaries?: [string, {app: AppDataApp; flow: AppDataFlow}][]; accountHandles?: [string, string][]; sourceMedia: CodexSourceMediaCandidate[];
     sourcePages: string[]; compositionHistory: CodexCompositionPlan[]; compositionSequence: number; };
 }
 export interface NorthstarSession {

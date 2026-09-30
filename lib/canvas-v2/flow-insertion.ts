@@ -54,6 +54,15 @@ export function canvasV2CompactJourneySegmentLabel(value: string): string {
   return `${parts[0]} → ${parts.at(-1)}`;
 }
 
+export function canvasV2CompleteFlowScreens(flow: AppDataFlow, evidence: readonly CanvasV2EvidenceAsset[]): CanvasV2EvidenceAsset[] {
+  if (!flow.screens.length) throw new Error("This flow has no renderable screenshots.");
+  const byId = new Map(evidence.map((asset) => [asset.id, asset]));
+  const screens = flow.screens.map((screen) => byId.get(`screen:${screen.id}`));
+  const missing = screens.filter((screen) => !screen).length;
+  if (missing) throw new Error(`Cannot show the complete flow: ${missing} of ${flow.screens.length} screenshots are unavailable.`);
+  return screens as CanvasV2EvidenceAsset[];
+}
+
 function mergeEvidence(current: readonly CanvasV2EvidenceAsset[], next: readonly CanvasV2EvidenceAsset[]): CanvasV2EvidenceAsset[] {
   return Array.from(new Map([...current, ...next].map((asset) => [asset.id, { ...asset }])).values());
 }
@@ -67,8 +76,7 @@ export function insertCanvasV2CanonicalFlow(input: {
   packet?: CanvasV2EvidencePacket;
 }): CanvasV2FlowInsertion {
   if (typeof DOMParser === "undefined") throw new Error("Flow insertion requires a browser document.");
-  const screenEvidence = input.flow.screens.map((screen) => input.evidence.find((asset) => asset.id === `screen:${screen.id}`)).filter((asset): asset is CanvasV2EvidenceAsset => Boolean(asset));
-  if (!screenEvidence.length) throw new Error("This flow has no renderable screenshots.");
+  const screenEvidence = canvasV2CompleteFlowScreens(input.flow, input.evidence);
 
   const parsed = new DOMParser().parseFromString(`<body>${input.document.html}</body>`, "text/html");
   const host = parsed.querySelector<HTMLElement>('[data-canvas-v2-node-id="canvas"]') ?? parsed.querySelector<HTMLElement>("main") ?? parsed.body;

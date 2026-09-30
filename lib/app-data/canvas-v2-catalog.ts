@@ -356,7 +356,7 @@ export function normalizeAppDataRows(rows: UnknownRecord[], tenantId: string): A
   return rows.map((row) => {
     const name = text(row, ["app_name", "name"]) ?? "Untitled app";
     const appId = id(tenantId, name);
-    const flows = records(row.app_sessions).flatMap((session) => {
+    const allFlows = records(row.app_sessions).flatMap((session) => {
       const platform = text(session, ["platform"]);
       const sessionType = text(session, ["session_type", "flow_type", "type"]);
       const storagePrefix = text(session, ["storage_prefix", "storagePrefix"]);
@@ -382,6 +382,16 @@ export function normalizeAppDataRows(rows: UnknownRecord[], tenantId: string): A
         screens: uniqueSessionScreens.map((screen, index) => normalizeScreen(screen, tenantId, name, flowName, flowId, platform, sessionType, storagePrefix, index)),
       };
       return [...specificFlows, sessionFlow];
+    });
+    const seenFlows = new Set<string>();
+    const flows = allFlows.filter((flow) => {
+      if (flow.scope === "session") return true;
+      const signature = [flow.platform, flow.sessionType, token(flow.name), ...flow.screens.map((screen) =>
+        screen.imageUrl ?? screen.sourceUrl ?? `${screen.index}:${token(screen.name)}`
+      )].join("\u0000");
+      if (seenFlows.has(signature)) return false;
+      seenFlows.add(signature);
+      return true;
     });
     return {
       id: appId,

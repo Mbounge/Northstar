@@ -7,6 +7,10 @@ import type { CanvasV2EvidencePacket } from '../lib/canvas-v2/types';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { CanvasV2MarkdownMessage } from '../components/canvas-v2/canvas-v2-markdown-message';
+import { AccountToolHandles } from '../lib/canvas-v2/account-tools';
+import { citedChatEvidence } from '../lib/canvas-v2/chat-evidence';
+import type { AppDataApp, AppDataFlow } from '../lib/app-data/canvas-v2-catalog';
+import type { CanvasV2EvidenceAsset } from '../lib/canvas-v2/types';
 
 test('analytical chat uses discovery but has no canvas mutation authority', () => {
   const routed = parseCanvasV2InteractionDecision({route:'research-conversation',summary:'I’ll investigate the question.',researchMode:'synthesis'}, 'Explain this using web search');
@@ -31,6 +35,75 @@ test('chat Markdown renders structure and safe source links while escaping hosti
   for (const marker of ['<h3','<strong','<table','<blockquote','<pre','href="https://example.com/source"']) assert.ok(html.includes(marker),marker);
   assert.ok(!html.includes('<img'));
   assert.ok(!html.includes('href="javascript:'));
+});
+
+test('account flow citations become readable names and compact, saved screen evidence in comparison tables', () => {
+  const app = { id: 'app:graet', name: 'GRAET', flows: [], totalScreens: 2 } as AppDataApp;
+  const flow = { id: 'flow:graet:players', name: 'Finding Players', appName: app.name, screens: [{ id: 'player-one' }, { id: 'player-two' }] } as AppDataFlow;
+  const evidence = [
+    { id: 'screen:player-one', label: 'Player directory', url: 'https://example.com/players.png', kind: 'screenshot' },
+    { id: 'screen:player-two', label: 'Player profile', url: 'https://example.com/profile.png', kind: 'screenshot' },
+  ] as CanvasV2EvidenceAsset[];
+  const handles = new AccountToolHandles();
+  handles.remember({ apps: [app], flows: [flow], evidence });
+  const flowHandle = handles.encode(flow.id);
+  const firstHandle = handles.encode(evidence[0].id);
+  const secondHandle = handles.encode(evidence[1].id);
+  const answer = '| Dimension | GRAET |\n| --- | --- |\n| Discovery | [Finding Players](' + flowHandle + '), ' + firstHandle + ', ' + secondHandle + ' |';
+  const references = citedChatEvidence({ answer, resolve: handle => handles.resolve(handle), assets: new Map(evidence.map(asset => [asset.id, asset])), flows: new Map([[flow.id, { app, flow }]]) });
+  const savedReferences = JSON.parse(JSON.stringify(references));
+  const html = renderToStaticMarkup(createElement(CanvasV2MarkdownMessage, { content: answer, evidenceReferences: savedReferences }));
+  assert.ok(html.includes('Finding Players'));
+  assert.ok(!html.includes('View flow'));
+  assert.ok(html.includes('Player directory'));
+  assert.ok(html.includes('1 of 2'));
+  assert.ok(html.includes('src="https://example.com/players.png"'));
+  assert.equal((html.match(/data-testid="canvas-v2-inline-screen"/g) ?? []).length, 1);
+  assert.ok(!html.includes('ns-flow-'));
+  assert.ok(!html.includes('ns-asset-'));
+  assert.deepEqual(new AccountToolHandles(handles.entries()).decode(firstHandle), evidence[0].id);
+});
+
+test('unknown or unsafe account handles do not become image URLs or raw internal IDs in chat', () => {
+  const answer = 'Unknown ns-asset-5 and [Missing flow](ns-flow-6).';
+  const html = renderToStaticMarkup(createElement(CanvasV2MarkdownMessage, { content: answer }));
+  assert.ok(html.includes('Screen unavailable'));
+  assert.ok(html.includes('Missing flow'));
+  assert.ok(!html.includes('ns-asset-5'));
+  assert.ok(!html.includes('ns-flow-6'));
+  const handles = new AccountToolHandles([['screen:unsafe', 'ns-asset-5']]);
+  const references = citedChatEvidence({ answer, resolve: handle => handles.resolve(handle), assets: new Map([['screen:unsafe', { id: 'screen:unsafe', label: 'Unsafe', url: 'javascript:alert(1)' } as CanvasV2EvidenceAsset]]), flows: new Map() });
+  assert.deepEqual(references, {});
+});
+
+test('an adjacent screenshot range becomes one carousel without leaving a raw screen number', () => {
+  const evidence = [
+    { id: 'screen:one', label: 'Player filters', url: 'https://example.com/filters.png', kind: 'screenshot' },
+    { id: 'screen:two', label: 'Player results', url: 'https://example.com/results.png', kind: 'screenshot' },
+  ] as CanvasV2EvidenceAsset[];
+  const handles = new AccountToolHandles();
+  handles.remember({ apps: [], flows: [], evidence });
+  const first = handles.encode(evidence[0].id);
+  const second = handles.encode(evidence[1].id);
+  const suffix = second.split('-').at(-1);
+  const answer = 'Filters ' + first + '–' + suffix + ' show the player count.';
+  const references = citedChatEvidence({ answer, resolve: handle => handles.resolve(handle), assets: new Map(evidence.map(asset => [asset.id, asset])), flows: new Map() });
+  const html = renderToStaticMarkup(createElement(CanvasV2MarkdownMessage, { content: answer, evidenceReferences: references }));
+  assert.ok(html.includes('1 of 2'));
+  assert.ok(!html.includes('ns-asset-'));
+  assert.ok(!html.includes('–' + suffix));
+});
+
+test('chat does not repeat a flow name solely to display its citation', () => {
+  for (const content of ['Explore → Finding Players ([Finding Players](ns-flow-1)) has 10 screens.', 'GRAET’s **Finding Players** (`ns-flow-1`) has 10 screens.']) {
+    const html = renderToStaticMarkup(createElement(CanvasV2MarkdownMessage, {
+      content,
+      evidenceReferences: { 'ns-flow-1': { kind: 'flow', handle: 'ns-flow-1', id: 'flow:players', label: 'Finding Players', appId: 'app:graet', appName: 'GRAET', screenCount: 10 } },
+    }));
+    assert.equal((html.match(/Finding Players/g) ?? []).length, 1);
+    assert.ok(!html.includes('View flow'));
+    assert.ok(!html.includes('ns-flow-1'));
+  }
 });
 
 test('a chat contract failure retains research without creating a canvas repair or retry loop', () => {

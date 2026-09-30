@@ -71,7 +71,7 @@ export function canvasV2ResearchTargetSupportedByUserMessage(target: string, use
 function researchTargets(value: unknown, userMessage: string): string[] {
   if (!Array.isArray(value)) return [];
   const targets = new Map<string, string>();
-  for (const entry of value.slice(0, 12)) {
+  for (const entry of value) {
     if (typeof entry !== "string" || !entry.trim()) continue;
     const target = entry.trim().slice(0, 160);
     if (!canvasV2ResearchTargetSupportedByUserMessage(target, userMessage)) continue;

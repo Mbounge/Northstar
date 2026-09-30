@@ -142,7 +142,6 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(nativeScene, /node\.canonicalEvidence \|\| node\.attributes\["data-canvas-v2-evidence-role"\] === "canonical"/);
   assert.match(nativeScene, /loading: eagerCanonicalEvidenceImage \? "eager"/);
   assert.match(nativeScene, /decoding: "async"/);
-  assert.match(nativeScene, /fetchPriority: "auto"/);
   assert.doesNotMatch(nativeScene, /transientGeometry=\{transientGeometry\}/);
   assert.doesNotMatch(workspace, /transientGeometry=\{transientGeometry\}/);
 });

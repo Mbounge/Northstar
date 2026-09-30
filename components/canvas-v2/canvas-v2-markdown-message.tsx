@@ -1,14 +1,57 @@
-import { createElement, type ReactNode } from "react";
+import { createElement, useState, type ReactNode } from "react";
 import { downloadArtifact, resolveArtifactLink } from '@/lib/canvas-v2/creative/download';
 import type { NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
+import { chatEvidenceHandles, type CanvasV2ChatEvidenceReference } from '@/lib/canvas-v2/chat-evidence';
 import { cn } from "@/lib/utils";
 
-function renderInline(text: string, keyPrefix: string, artifacts: NorthstarArtifact[]): ReactNode[] {
-  const pattern = /(`[^`]+`|cite[^\n]*(?:|$)|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(<?(?:https?:\/\/|artifact:|(?:sandbox:)?\/mnt\/data\/)[^)>]+>?\))/g;
-  const parts = text.split(pattern).filter((part) => part.length > 0);
+type AssetReference = Extract<CanvasV2ChatEvidenceReference, { kind: 'asset' }>;
 
-  return parts.map((part, index) => {
+function InlineEvidenceScreen({ screens, onOpen }: { screens: AssetReference[]; onOpen?: (screen: AssetReference) => void }) {
+  const [index, setIndex] = useState(0);
+  const screen = screens[index] ?? screens[0];
+  return <span className="float-left mb-1 mr-3 flex w-[82px] flex-col" data-testid="canvas-v2-inline-screen">
+    <button type="button" onClick={() => onOpen?.(screen)} title={'Expand ' + screen.label} aria-label={'Expand ' + screen.label} className="flex h-[150px] w-[82px] items-start justify-center overflow-hidden bg-transparent p-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#7561ed]">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={screen.url} alt={screen.label} loading="lazy" referrerPolicy="no-referrer" className="h-full w-full object-contain object-top" />
+    </button>
+    <span className="mt-1 line-clamp-2 text-[10px] font-medium leading-3 text-[#5e5969] dark:text-[#c8c3d3]">{screen.label}</span>
+    {screens.length > 1 && <span className="mt-0.5 inline-flex items-center justify-between text-[10px] text-[#6754df] dark:text-[#b3a8ff]">
+      <button type="button" onClick={() => setIndex((index + screens.length - 1) % screens.length)} aria-label="Previous screen" className="px-1">‹</button>
+      <span>{index + 1} of {screens.length}</span>
+      <button type="button" onClick={() => setIndex((index + 1) % screens.length)} aria-label="Next screen" className="px-1">›</button>
+    </span>}
+  </span>;
+}
+
+function renderInline(text: string, keyPrefix: string, artifacts: NorthstarArtifact[], references: Record<string, CanvasV2ChatEvidenceReference>, onOpenEvidence?: (screen: AssetReference) => void, evidenceFirst = false): ReactNode[] {
+  const pattern = /(`[^`]+`|cite[^\n]*(?:|$)|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(<?(?:https?:\/\/|artifact:|(?:sandbox:)?\/mnt\/data\/)[^)>]+>?\))/g;
+  const evidencePattern = /(\[[^\]]+\]\(ns-(?:flow|asset)-\d+(?:[–—-]\d+)?\)|\x60ns-(?:flow|asset)-\d+(?:[–—-]\d+)?\x60|ns-(?:flow|asset)-\d+(?:[–—-]\d+)?)/g;
+  const parts = text.split(new RegExp('(' + evidencePattern.source.slice(1, -1) + '|' + pattern.source.slice(1, -1) + ')', 'g')).filter((part): part is string => Boolean(part));
+  const handlesFor = (part: string) => chatEvidenceHandles(part);
+  const handleFor = (part: string) => handlesFor(part)[0];
+  const screens = [...new Set(parts.flatMap(part => handlesFor(part)))]
+    .map(handle => references[handle]).filter((ref): ref is AssetReference => ref?.kind === 'asset');
+  const firstScreenPart = parts.findIndex(part => references[handleFor(part) ?? '']?.kind === 'asset');
+  const lastScreenPart = parts.findLastIndex(part => references[handleFor(part) ?? '']?.kind === 'asset');
+  const repeatedFlowParts = new Set(parts.flatMap((part, index) => {
+    const reference = references[handleFor(part) ?? ''];
+    if (reference?.kind !== 'flow') return [];
+    const prior = parts.slice(Math.max(0, index - 3), index).join('').replace(/[\s*_`()[\]]/g, '');
+    return prior.endsWith(reference.label.replace(/\s/g, '')) ? [index] : [];
+  }));
+
+  const rendered = parts.map((part, index) => {
     const key = `${keyPrefix}-${index}`;
+    const handle = handleFor(part);
+    const reference = handle ? references[handle] : undefined;
+    if (reference?.kind === 'asset') return !evidenceFirst && index === firstScreenPart ? <InlineEvidenceScreen key={key} screens={screens} onOpen={onOpenEvidence} /> : null;
+    if (repeatedFlowParts.has(index)) return null;
+    if (reference?.kind === 'flow') {
+      const label = part.match(/^\[([^\]]+)\]/)?.[1] ?? reference.label;
+      return <span key={key} className="font-semibold">{label}</span>;
+    }
+    if (handle && /^ns-(?:asset|flow)-\d+(?:[–—-]\d+)?$/.test(part.replaceAll(String.fromCharCode(96), ''))) return <span key={key} className="text-zinc-500">{handle.startsWith('ns-flow-') ? 'Flow unavailable' : 'Screen unavailable'}</span>;
+    if (handle && /^\[[^\]]+\]\(ns-(?:asset|flow)-\d+(?:[–—-]\d+)?\)$/.test(part)) return <span key={key}>{part.match(/^\[([^\]]+)\]/)?.[1]} <span className="text-zinc-500">(unavailable)</span></span>;
 
     if (part.startsWith("`") && part.endsWith("`")) {
       return (
@@ -62,13 +105,20 @@ function renderInline(text: string, keyPrefix: string, artifacts: NorthstarArtif
       );
     }
 
+    if (screens.length && index > firstScreenPart && index < lastScreenPart && /^[,;\s]+$/.test(part)) return null;
+    if (screens.length && index === firstScreenPart - 1) return part.replace(/\(\s*$/, '');
+    if (screens.length && index === lastScreenPart + 1) return part.replace(/^[,;\s]*\)\s*/, ' ');
+    if (repeatedFlowParts.has(index + 1)) return part.replace(/\(\s*$/, '');
+    if (repeatedFlowParts.has(index - 1)) return part.replace(/^\s*\)\s*/, ' ');
     return part;
   });
+  return evidenceFirst && screens.length ? [<InlineEvidenceScreen key={`${keyPrefix}-evidence`} screens={screens} onOpen={onOpenEvidence} />, ...rendered] : rendered;
 }
 
-export function CanvasV2MarkdownMessage({ content, artifacts = [] }: { content: string; artifacts?: NorthstarArtifact[] }) {
-  const renderInlineMarkdown = (text: string, key: string) => renderInline(text, key, artifacts);
-  const lines = content.replace(/\r\n/g, "\n").split("\n");
+export function CanvasV2MarkdownMessage({ content, artifacts = [], evidenceReferences = {}, onOpenEvidence }: { content: string; artifacts?: NorthstarArtifact[]; evidenceReferences?: Record<string, CanvasV2ChatEvidenceReference>; onOpenEvidence?: (screen: AssetReference) => void }) {
+  const renderInlineMarkdown = (text: string, key: string, evidenceFirst = false) => renderInline(text, key, artifacts, evidenceReferences, onOpenEvidence, evidenceFirst);
+  const displayContent = content.replace(/([^\n|()]+?)\s*\(\[([^\]]+)\]\(ns-flow-\d+\)\)/g, (whole, before: string, label: string) => before.replace(/\*+/g, '').trimEnd().endsWith(label) ? before : whole);
+  const lines = displayContent.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let index = 0;
 
@@ -195,7 +245,7 @@ export function CanvasV2MarkdownMessage({ content, artifacts = [] }: { content: 
       blocks.push(<div key={`table-${blocks.length}`} className="my-3 max-w-full overflow-x-auto rounded-lg border border-zinc-200 dark:border-white/15" tabIndex={0} role="region" aria-label="Comparison table">
         <table className="w-full border-collapse text-left text-[0.9em]">
           <thead><tr>{headings.map((cell, i) => <th key={i} scope="col" className="border-b border-zinc-200 bg-black/[0.03] px-3 py-2 font-semibold dark:border-white/15 dark:bg-white/5">{renderInlineMarkdown(cell, `th-${i}`)}</th>)}</tr></thead>
-          <tbody>{rows.map((row, i) => <tr key={i}>{headings.map((_, j) => <td key={j} className="border-b border-zinc-100 px-3 py-2 align-top dark:border-white/10">{renderInlineMarkdown(row[j] ?? "", `td-${i}-${j}`)}</td>)}</tr>)}</tbody>
+          <tbody>{rows.map((row, i) => <tr key={i}>{headings.map((_, j) => <td key={j} className="border-b border-zinc-100 px-3 py-2 align-top leading-relaxed dark:border-white/10"><div className="flow-root">{renderInlineMarkdown(row[j] ?? "", `td-${i}-${j}`, true)}</div></td>)}</tr>)}</tbody>
         </table>
       </div>);
       continue;

@@ -62,6 +62,7 @@ export async function GET(request: Request) {
 
       let iconUrl: string | null = null;
       let category = "General Utilities";
+      let hasSpecificCategory = false;
       let latestEmployees = "?";
       const sessionsToUpsert: any[] = [];
 
@@ -89,8 +90,12 @@ export async function GET(request: Request) {
 
           if (intelRes.ok) {
             sessionIntel = await intelRes.json();
+            const niche = sessionIntel.competitive_profile?.micro_niche;
             const synthCat = sessionIntel.competitive_profile?.app_category;
-            if (synthCat && synthCat.toLowerCase() !== 'unknown') {
+            if (typeof niche === 'string' && niche.trim() && niche.toLowerCase() !== 'unknown') {
+              category = niche.trim();
+              hasSpecificCategory = true;
+            } else if (!hasSpecificCategory && typeof synthCat === 'string' && synthCat.toLowerCase() !== 'unknown') {
               category = formatCategory(synthCat);
             }
             if (sessType === 'onboarding') {
@@ -108,7 +113,9 @@ export async function GET(request: Request) {
             const manifest = await manifestRes.json();
             const screenshots = manifest.enriched_screenshots || manifest.onboarding_screenshots || manifest.screenshots || [];
             totalScreens = screenshots.length || 0;
-            category = formatCategory(manifest.metadata?.app_category || manifest.app_category || category);
+            if (!hasSpecificCategory && category === "General Utilities") {
+              category = formatCategory(manifest.metadata?.app_category || manifest.app_category);
+            }
 
             // ─── OPTIMIZED LIGHTWEIGHT COMPILATION ───
             for (const entry of screenshots) {
@@ -227,10 +234,17 @@ export async function GET(request: Request) {
         }
       } catch (e: any) {}
 
-      // Upsert App record
+      // A storage rescan must not erase catalog details that were already curated.
+      const { data: existingApp } = await supabaseAdmin.from('target_apps')
+        .select('category,icon_url,employees,rank,revenue')
+        .eq('tenant_id', targetTenantId).eq('app_name', appName).maybeSingle();
       await supabaseAdmin.from('target_apps').upsert({
-        tenant_id: targetTenantId, app_name: appName, category: category, icon_url: iconUrl,
-        employees: latestEmployees, rank: "?", revenue: "?", last_scan: new Date().toISOString()
+        tenant_id: targetTenantId, app_name: appName,
+        category: category === "General Utilities" ? existingApp?.category || category : category,
+        icon_url: iconUrl || existingApp?.icon_url || null,
+        employees: latestEmployees === "?" ? existingApp?.employees || "?" : latestEmployees,
+        rank: existingApp?.rank || "?", revenue: existingApp?.revenue || "?",
+        last_scan: new Date().toISOString()
       }, { onConflict: 'tenant_id, app_name' });
 
       // Upsert Sessions

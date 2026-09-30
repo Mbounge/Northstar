@@ -19,35 +19,72 @@ async function authorize() {
   return { db };
 }
 
-async function proxy(method: "GET" | "POST", path: string, body?: unknown) {
-  const base = process.env.NORTHSTAR_CAPTURE_RUNNER_URL?.replace(/\/$/, "");
-  const token = process.env.NORTHSTAR_CAPTURE_RUNNER_TOKEN;
-  if (!base || !token) {
-    return NextResponse.json({ error: "Capture runner is not configured" }, { status: 503 });
-  }
+type Runner = "android" | "ios";
+
+function connection(runner: Runner) {
+  const prefix = runner === "ios" ? "NORTHSTAR_IOS_RUNNER" : "NORTHSTAR_CAPTURE_RUNNER";
+  const base = process.env[`${prefix}_URL`]?.replace(/\/$/, "");
+  const token = process.env[`${prefix}_TOKEN`];
+  return base && token ? { base, token } : null;
+}
+
+async function fromRunner(runner: Runner, method: "GET" | "POST", path: string, body?: unknown): Promise<Response | null> {
+  const config = connection(runner);
+  if (!config) return null;
   try {
-    const target = `${base}/v1/${path === "devices" ? "devices" : `runs${path ? `/${path}` : ""}`}`;
-    const response = await fetch(target, {
+    const target = `${config.base}/v1/${path === "devices" ? "devices" : `runs${path ? `/${path}` : ""}`}`;
+    return await fetch(target, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${config.token}`,
         ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
       },
       body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
       cache: "no-store",
       signal: AbortSignal.timeout(path.endsWith("/frame") ? 20000 : 12000),
     });
-    const bytes = await response.arrayBuffer();
-    return new NextResponse(bytes, {
-      status: response.status,
-      headers: {
-        "Content-Type": response.headers.get("Content-Type") || "application/json",
-        "Cache-Control": "no-store",
-      },
-    });
   } catch {
-    return NextResponse.json({ error: "Capture runner is unreachable" }, { status: 503 });
+    return null;
   }
+}
+
+async function forward(response: Response) {
+  return new NextResponse(await response.arrayBuffer(), {
+    status: response.status,
+    headers: { "Content-Type": response.headers.get("Content-Type") || "application/json", "Cache-Control": "no-store" },
+  });
+}
+
+async function mergedList(path: "devices" | "") {
+  const responses = await Promise.all((["android", "ios"] as const).map(async (runner) => ({
+    runner, response: await fromRunner(runner, "GET", path),
+  })));
+  const key = path === "devices" ? "devices" : "runs";
+  const results: Record<string, unknown>[] = [];
+  let available = false;
+  for (const { runner, response } of responses) {
+    if (!response?.ok) continue;
+    available = true;
+    const body = await response.json();
+    if (!Array.isArray(body?.[key])) continue;
+    for (const item of body[key]) {
+      if (item && typeof item === "object" && !Array.isArray(item)) results.push({ ...item, platform: runner });
+    }
+  }
+  if (!available) return NextResponse.json({ error: "Capture runners are not configured or reachable" }, { status: 503 });
+  if (key === "runs") results.sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
+  return NextResponse.json({ [key]: results }, { headers: { "Cache-Control": "no-store" } });
+}
+
+async function proxyRun(method: "GET" | "POST", path: string, body?: unknown) {
+  let failure: Response | null = null;
+  for (const runner of ["android", "ios"] as const) {
+    const response = await fromRunner(runner, method, path, body);
+    if (response?.status === 404) continue;
+    if (response && response.status >= 500) { failure = response; continue; }
+    if (response) return forward(response);
+  }
+  return failure ? forward(failure) : NextResponse.json({ error: "Run not found or runner unavailable" }, { status: 503 });
 }
 
 export async function GET(_request: Request, context: Context) {
@@ -60,7 +97,8 @@ export async function GET(_request: Request, context: Context) {
       .select("app_name, tenant_id, icon_url").order("app_name", { ascending: true });
     return NextResponse.json({ apps: error ? [] : data ?? [] }, { headers: { "Cache-Control": "no-store" } });
   }
-  return proxy("GET", path);
+  if (path === "devices" || path === "") return mergedList(path);
+  return proxyRun("GET", path);
 }
 
 export async function POST(request: Request, context: Context) {
@@ -68,7 +106,7 @@ export async function POST(request: Request, context: Context) {
   if (auth.error) return auth.error;
   const path = ((await context.params).path || []).join("/");
   if (!allowedPost.test(path)) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  if (path) return proxy("POST", path);
+  if (path) return proxyRun("POST", path);
   let body: Record<string, unknown>;
   try {
     body = await request.json();
@@ -83,11 +121,16 @@ export async function POST(request: Request, context: Context) {
   const { data: organization } = await auth.db!.from("customers")
     .select("id").eq("id", organizationId).single();
   if (!organization) return NextResponse.json({ error: "Unknown organization" }, { status: 400 });
-  return proxy("POST", "", {
+  const platform = body.platform === undefined ? "android" : body.platform;
+  if (platform !== "android" && platform !== "ios") {
+    return NextResponse.json({ error: "Invalid capture platform" }, { status: 400 });
+  }
+  const response = await fromRunner(platform, "POST", "", {
     app: body.app,
     package_name: body.package_name,
     organization_id: organizationId,
     device_id: body.device_id,
     scope: body.scope,
   });
+  return response ? forward(response) : NextResponse.json({ error: `${platform} runner is unavailable` }, { status: 503 });
 }

@@ -23,6 +23,7 @@ import { mergeCanvasV2EvidencePackets } from '@/lib/canvas-v2/evidence-packets';
 import { insertCanvasV2CanonicalFlow } from '@/lib/canvas-v2/flow-insertion';
 import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
 import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
+import { citedChatEvidence } from '@/lib/canvas-v2/chat-evidence';
 
 export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; initial?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot; enabled: boolean; endpoint?: string; accountEndpoint?: string; gatewayHandoff?: CanvasV2GatewayHandoff; selectedNodeIds?: string[]; getWorkingContext?: (policy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined; base: ReturnType<typeof useCanvasV2Chat>; engine: ReturnType<typeof useCanvasV2DesignLoop> }) {
   const [turns, setTurns] = useTimedChatTurns((input.initial?.turns ?? []).map(t => t.status === "running" ? { ...t, status: "stopped", activeSince: undefined, error: "The page closed during this run. Send a follow-up to continue from saved work." } : t));
@@ -32,10 +33,11 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const rootId = useRef<string | undefined>(undefined);
   const assets = useRef(new Map<string, CanvasV2EvidenceAsset>((input.initial?.memory?.assets ?? []).map(a => [a.id, a])));
   const artifacts = useRef(new Map<string, NorthstarArtifact>((input.initial?.memory?.artifacts ?? []).map(a => [a.id, a])));
-  const accountHandles = useRef(new AccountToolHandles());
+  const accountHandles = useRef(new AccountToolHandles(input.initial?.memory?.accountHandles));
   const inspectedPixels = useRef(new Map<string, string>());
   const accountPackets = useRef<CanvasV2EvidencePacket[]>(input.initial?.memory?.accountPackets ?? []);
   const accountFlows = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlows ?? []));
+  const accountFlowSummaries = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlowSummaries ?? input.initial?.memory?.accountFlows ?? []));
   const readRevision = useRef<string | undefined>(undefined);
   const sourceMedia = useRef<CodexSourceMediaCandidate[]>(input.initial?.memory?.sourceMedia ?? []);
   const sourcePages = useRef<string[]>(input.initial?.memory?.sourcePages ?? []);
@@ -50,9 +52,10 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     busyRef.current = view.status === 'running'; setBusy(busyRef.current);
     const final = view.status === 'completed' ? view.texts.findLast(t => t.phase === 'final_answer') ?? view.texts.at(-1) : undefined;
     if (final?.text) sourcePages.current = rememberCodexSourcePages(sourcePages.current, final.text);
+    const evidenceReferences = final?.text ? citedChatEvidence({ answer: final.text, resolve: handle => accountHandles.current.resolve?.(handle), assets: assets.current, flows: accountFlowSummaries.current }) : undefined;
     setTurns(all => all.map(turn => turn.id === rootId.current ? { ...turn,
       status: view.status === 'completed' ? 'responded' : view.status === 'idle' ? 'running' : view.status,
-      activity: view.activity.filter(a => a.id !== `message:${final?.id}`), answer: final?.text, error: view.error,
+      activity: view.activity.filter(a => a.id !== `message:${final?.id}`), answer: final?.text, evidenceReferences, error: view.error,
     } : turn));
   };
   const getClient = () => {
@@ -89,6 +92,10 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (!response.ok || !body.result) throw new Error(string(body.error) || 'Account evidence could not be loaded.');
         const result = body.result as AccountResult;
         accountHandles.current.remember(result);
+        for (const flow of result.flows) {
+          const app = result.apps.find(a => a.name === flow.appName);
+          if (app) accountFlowSummaries.current.set(flow.id, { app, flow: { ...flow, sourceScreenCount: flow.screens.length || flow.sourceScreenCount, screens: [] } });
+        }
         for (const asset of result.evidence) assets.current.set(asset.id, asset);
         accountPackets.current = mergeCanvasV2EvidencePackets(accountPackets.current, result.packets);
         // Only a complete flow read authorizes canonical insertion; search subsets cannot masquerade as journeys.
@@ -253,8 +260,8 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     if (editActive.current) current.current.engine.stop();
     stopping.current = (client.current?.cancel() ?? Promise.resolve()).catch(() => undefined).finally(() => { stopping.current = undefined; });
   };
-  const memory = () => ({ artifacts: [...artifacts.current.values()], assets: [...assets.current.values()], accountPackets: accountPackets.current,
-    accountFlows: [...accountFlows.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
+  const memory = () => ({ artifacts: [...artifacts.current.values()], assets: [...assets.current.values()], accountPackets: accountPackets.current, accountHandles: accountHandles.current.entries?.() ?? [],
+    accountFlows: [...accountFlows.current.entries()], accountFlowSummaries: [...accountFlowSummaries.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
     compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
   return { ...input.base, memory, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
 }

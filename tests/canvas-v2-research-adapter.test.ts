@@ -8,6 +8,8 @@ import {
   resolveReviewScreenshotStoragePrefix,
 } from "../lib/app-data/review-media";
 import { runCanvasV2Research } from "../lib/canvas-v2/research-adapter";
+import { readAccountTools } from "../lib/canvas-v2/account-tools";
+import { canvasV2CompleteFlowScreens } from "../lib/canvas-v2/flow-insertion";
 
 const catalog: AppDataCatalog = {
   tenantId: "tenant-1",
@@ -37,6 +39,34 @@ test("lists tenant apps and returns exact icon evidence", () => {
   assert.deepEqual(result.evidence.map((asset) => asset.id), ["icon:app:awin"]);
 });
 
+test("apps and flows beyond the first panel page remain discoverable", () => {
+  const manyApps: AppDataCatalog = {
+    ...catalog,
+    apps: Array.from({ length: 35 }, (_, index) => ({
+      ...catalog.apps[0],
+      id: `app:${index}`,
+      name: `Vendor ${index}`,
+      flows: Array.from({ length: 35 }, (_, flowIndex) => ({
+        ...catalog.apps[0].flows[0],
+        id: `flow:${index}:${flowIndex}`,
+        name: `Journey ${flowIndex}`,
+        appName: `Vendor ${index}`,
+      })),
+    })),
+  };
+  const firstApps = runCanvasV2Research(manyApps, { operation: "list-apps", limit: 30 });
+  const laterApps = runCanvasV2Research(manyApps, { operation: "list-apps", offset: firstApps.pagination?.nextOffset, limit: 30 });
+  assert.equal(firstApps.pagination?.total, 35);
+  assert.equal(firstApps.pagination?.nextOffset, 30);
+  assert.equal(laterApps.apps.length, 5);
+  assert.equal(laterApps.apps[4]?.name, "Vendor 34");
+  const firstFlows = runCanvasV2Research(manyApps, { operation: "list-flows", appName: "Vendor 34", limit: 30 });
+  const laterFlows = runCanvasV2Research(manyApps, { operation: "list-flows", appName: "Vendor 34", offset: firstFlows.pagination?.nextOffset, limit: 30 });
+  assert.equal(firstFlows.pagination?.nextOffset, 30);
+  assert.equal(laterFlows.flows.length, 5);
+  assert.equal(laterFlows.flows[4]?.name, "Journey 34");
+});
+
 test("retrieves an ordered flow with exact screenshot evidence bindings", () => {
   const result = runCanvasV2Research(catalog, { operation: "flow-screens", appName: "Awin", flowName: "onboarding" });
   assert.deepEqual(result.screens.map((screen) => screen.id), ["screen:1", "screen:2"]);
@@ -49,6 +79,21 @@ test("retrieves an ordered flow with exact screenshot evidence bindings", () => 
   assert.deepEqual(result.packets[0]?.assets.map((asset) => asset.sequenceIndex), [undefined, 0, 1]);
   assert.equal(result.packets[0]?.source.permission, "authorized");
   assert.match(result.packets[0]?.limitations[0] ?? "", /visible product behavior and interface structure/);
+});
+
+test("a 61-screen account flow stays complete beyond the model's 60-screen page", async () => {
+  const original = catalog.apps[0].flows[0];
+  const screens = Array.from({ length: 61 }, (_, index) => ({ ...original.screens[0], id: `long-${index}`, name: `Screen ${index + 1}`, imageUrl: `https://assets.example/long/${index}.png`, index }));
+  const flow = { ...original, id: 'flow:long', name: 'Long journey', screens };
+  const extended = { ...catalog, apps: [{ ...catalog.apps[0], flows: [flow] }] };
+  const result = await readAccountTools(extended, { operation: 'flow-screens', appId: catalog.apps[0].id, flowId: flow.id, offset: 0, limit: 60 });
+  assert.equal(result.pagination.nextOffset, 60);
+  assert.equal(result.flows[0].screens.length, 61);
+  assert.equal(canvasV2CompleteFlowScreens(result.flows[0], result.evidence).length, 61);
+  const panel = runCanvasV2Research(extended, { operation: 'flow-screens', appName: 'Awin', flowName: 'Long journey', limit: 60 });
+  assert.equal(panel.screens.length, 61);
+  assert.equal(canvasV2CompleteFlowScreens(panel.flows[0], panel.evidence).length, 61);
+  assert.throws(() => canvasV2CompleteFlowScreens(result.flows[0], result.evidence.slice(0, -1)), /complete flow/);
 });
 
 test("semantic screenshot search stays grounded in catalog identities", () => {
@@ -100,6 +145,25 @@ test("tenant taxonomy roots become coherent deduplicated journeys without losing
     ["Partner onboarding", "Verification and activation"],
   ]);
   assert.equal(apps[0]?.flows.filter((flow) => flow.scope === "session").length, 1);
+});
+
+test("canvas app picker removes identical taxonomy choices while retaining complete capture", () => {
+  const screens = [1, 2].map((step) => ({ timeline_step: step, display_label: `AI ${step}`, screenshot_file: `https://assets.example/ai/${step}.png` }));
+  const apps = normalizeAppDataRows([{
+    app_name: "Example",
+    app_sessions: [{
+      platform: "mobile",
+      session_type: "browsing",
+      flows_data: {
+        screen_catalog: screens,
+        taxonomy: [{ id: "ai", label: "AI", screens: [1, 2], children: [{ id: "ai-child", label: "AI", screens: [1, 2] }] }],
+      },
+    }],
+  }], "tenant-1");
+
+  assert.equal(apps[0]?.flows.filter((flow) => flow.name === "AI").length, 1);
+  assert.equal(apps[0]?.flows.filter((flow) => flow.scope === "session").length, 1);
+  assert.equal(apps[0]?.totalScreens, 2);
 });
 
 test("branching taxonomy becomes complete path candidates instead of one flattened journey", () => {

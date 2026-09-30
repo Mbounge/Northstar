@@ -42,6 +42,7 @@ async function handlePost(request: NextRequest) {
       platform: body.platform === "mobile" || body.platform === "web" ? body.platform : undefined,
       sessionType: body.sessionType === "onboarding" || body.sessionType === "browsing" ? body.sessionType : undefined,
       limit: typeof body.limit === "number" ? body.limit : undefined,
+      offset: typeof body.offset === "number" ? body.offset : undefined,
     };
     const catalog = user && supabase
       ? await loadAppDataCatalog(supabase, await resolveAppDataTenantId(supabase, user.id))

@@ -4,9 +4,10 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, AlertTriangle, UserX, Search, Loader2, ArrowLeft, User as UserIcon, RefreshCw, Bell, Smartphone } from "lucide-react";
+import { ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, AlertTriangle, UserX, Search, Loader2, ArrowLeft, User as UserIcon, RefreshCw, Bell, Smartphone, FolderOpen } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { CaptureConsoleLive } from "@/components/admin/capture-console-live";
+import { TenantWorkspace } from "@/components/admin/tenant-workspace";
 import { createClient } from "@/lib/supabase/client";
 import { formatDistanceToNow } from "date-fns";
 import { Unbounded } from "next/font/google";
@@ -18,7 +19,7 @@ type ToastType = "success" | "error" | "info";
 
 export default function AdminDashboard() {
   const supabase = createClient();
-  const [activeTab, setActiveTab] = useState<"requests" | "directory" | "customers" | "captures">("requests");
+  const [activeTab, setActiveTab] = useState<"requests" | "directory" | "customers" | "tenants" | "captures">("requests");
   
   // Real DB State
   const [users, setUsers] = useState<any[]>([]);
@@ -76,6 +77,10 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchData();
+  }, []);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab") === "tenants") setActiveTab("tenants");
   }, []);
 
   // Filtered views
@@ -398,6 +403,9 @@ export default function AdminDashboard() {
           <button onClick={() => setActiveTab("customers")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "customers" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
             <Building2 className="w-4 h-4" /> Organizations
           </button>
+          <button onClick={() => setActiveTab("tenants")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "tenants" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
+            <FolderOpen className="w-4 h-4" /> Tenant workspace
+          </button>
           <button onClick={() => setActiveTab("captures")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "captures" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
             <Smartphone className="w-4 h-4" /> Captures
           </button>
@@ -415,6 +423,9 @@ export default function AdminDashboard() {
           <>
             {activeTab === "captures" && (
             <CaptureConsoleLive organizations={customers.map((customer) => ({ id: customer.id, name: customer.name }))} />
+            )}
+            {activeTab === "tenants" && (
+              <TenantWorkspace tenants={customers.map((customer) => ({ id: customer.id, name: customer.name }))} />
             )}
             {/* ── REQUESTS TAB ── */}
             {activeTab === "requests" && (

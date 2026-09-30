@@ -78,6 +78,8 @@ import { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-desi
 import { useTheme } from "@/components/theme-provider";
 import { insertCanvasV2EvidenceAsset } from "@/lib/canvas-v2/evidence-insertion";
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
+import type { CanvasV2ChatEvidenceReference } from "@/lib/canvas-v2/chat-evidence";
+import type { AccountResult } from "@/lib/canvas-v2/account-tools";
 import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
 import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachments";
@@ -690,6 +692,11 @@ export function CanvasV2Workspace({
   const [selectionTarget, setSelectionTarget] = useState<string>();
   const [historySelectionRestore, setHistorySelectionRestore] = useState<{ revisionId: string; nodeIds: string[] }>();
   const [sceneElements, setSceneElements] = useState<CanvasV2InspectableElement[]>([]);
+  const [flowPlacement, setFlowPlacement] = useState<{ message: string; error?: boolean }>();
+  const pendingFlowPlacementRef = useRef<{ id: string; appName: string; flowName: string; screenCount: number } | undefined>(undefined);
+  const attemptedChatFlowsRef = useRef(new Set<string>());
+  const loadingChatFlowRef = useRef(false);
+  const [flowQueueTick, setFlowQueueTick] = useState(0);
   const [marquee, setMarquee] = useState<MarqueeGesture>();
   const [mutationError, setMutationError] = useState<string>();
   const [layersOpen, setLayersOpen] = useState(false);
@@ -704,6 +711,7 @@ export function CanvasV2Workspace({
   // bootstrap; after the first measured frame, navigation belongs exclusively
   // to the person and AI commits never pan or zoom it.
   const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => initialSnapshot?.viewport ?? centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
+  const restoredFlowViewRef = useRef(Boolean(initialSnapshot?.revision.document.html.includes('data-canvas-v2-canonical-flow')));
   const viewportRef = useRef(viewport);
   const cameraPreviewActiveRef = useRef(false);
   const nativePinchScaleRef = useRef<number | undefined>(undefined);
@@ -775,6 +783,7 @@ export function CanvasV2Workspace({
   const workspacePasteHandlerRef = useRef<(event: ClipboardEvent) => void>(() => undefined);
   const workspaceWheelHandlerRef = useRef<(event: globalThis.WheelEvent) => void>(() => undefined);
   const sceneElementsRef = useRef<CanvasV2InspectableElement[]>([]);
+  const pendingFlowRevealRef = useRef<string | undefined>(undefined);
   const internalClipboardRef = useRef<{ snapshot?: CanvasV2NativeClipboard; pasteCount: number }>({ pasteCount: 0 });
   const renderCountRef = useRef(0);
   renderCountRef.current += 1;
@@ -1219,6 +1228,99 @@ export function CanvasV2Workspace({
       authoredBounds ? 96 : 48,
     ));
   }, [cameraSize, commitViewport, contentInsets]);
+
+  const revealFlowIfReady = useCallback(() => {
+    const laneId = pendingFlowRevealRef.current;
+    if (!laneId) return;
+    // A complete journey may span many screens. Focus its beginning at a readable
+    // scale, while leaving the entire horizontal sequence available to pan through.
+    const firstScreens = [1, 2].map((index) => sceneElementsRef.current.find((item) => item.nodeId === `${laneId}-screen-${index}`)).filter((item): item is CanvasV2InspectableElement => Boolean(item));
+    if (!firstScreens.length) return;
+    const identity = sceneElementsRef.current.find((item) => item.nodeId === `${laneId}-identity`);
+    const bounds = unionCanvasV2ObjectBounds([...(identity ? [identity.bounds] : []), ...firstScreens.map((item) => item.bounds)]);
+    if (!bounds) return;
+    pendingFlowRevealRef.current = undefined;
+    commitViewport(fitCanvasV2WorkspaceBounds(bounds, cameraSize(), contentInsets(), 72));
+  }, [cameraSize, commitViewport, contentInsets]);
+
+  useEffect(() => { revealFlowIfReady(); }, [sceneElements, revealFlowIfReady]);
+
+  useEffect(() => {
+    const pending = pendingFlowPlacementRef.current;
+    if (!pending) return;
+    const committed = new DOMParser().parseFromString(engine.committed.document.html, 'text/html');
+    if (!Array.from(committed.querySelectorAll('[data-canvas-v2-canonical-flow]')).some((node) => node.getAttribute('data-canvas-v2-canonical-flow') === pending.id)) {
+      if (engine.manualError) {
+        pendingFlowPlacementRef.current = undefined;
+        setFlowPlacement({ message: engine.manualError, error: true });
+      }
+      return;
+    }
+    pendingFlowPlacementRef.current = undefined;
+    setFlowPlacement({ message: `Added all ${pending.screenCount} ${pending.appName} ${pending.flowName} screens to canvas.` });
+  }, [engine.committed, engine.manualError]);
+
+  useEffect(() => {
+    if (!restoredFlowViewRef.current) return;
+    const flowScreens = sceneElements.filter((item) => item.kind === 'image' && item.nodeId.includes('-screen-'));
+    if (!flowScreens.length) return;
+    restoredFlowViewRef.current = false;
+    const visible = canvasV2VisibleWorkspaceBounds(viewportRef.current, cameraSize(), contentInsets());
+    if (!flowScreens.some((item) => canvasV2BoundsIntersect(item.bounds, visible))) fitContent();
+  }, [cameraSize, contentInsets, fitContent, sceneElements]);
+
+  const revealFlowNode = (nodeId: string) => {
+    pendingFlowRevealRef.current = nodeId;
+    revealFlowIfReady();
+  };
+
+  useEffect(() => {
+    if (loadingChatFlowRef.current || !engine.ready || engine.running || engine.applyingManualEdit || chat.busy) return;
+    const flows = chat.turns.flatMap((turn) => turn.status === 'responded'
+      ? Object.values(turn.evidenceReferences ?? {}).filter((reference): reference is Extract<CanvasV2ChatEvidenceReference, { kind: 'flow' }> => reference.kind === 'flow').map((reference) => ({ turnId: turn.id, reference }))
+      : []);
+    const existing = new DOMParser().parseFromString(engine.readCommittedRevision().document.html, 'text/html');
+    const next = flows.find(({ turnId, reference }) => {
+      const key = turnId + ':' + reference.id;
+      if (attemptedChatFlowsRef.current.has(key)) return false;
+      if (Array.from(existing.querySelectorAll('[data-canvas-v2-canonical-flow]')).some((node) => node.getAttribute('data-canvas-v2-canonical-flow') === reference.id)) {
+        attemptedChatFlowsRef.current.add(key);
+        return false;
+      }
+      return true;
+    });
+    if (!next) return;
+    const { reference, turnId } = next;
+    attemptedChatFlowsRef.current.add(turnId + ':' + reference.id);
+    loadingChatFlowRef.current = true;
+    setFlowPlacement({ message: `Adding the complete ${reference.appName} ${reference.label} flow to canvas…` });
+    void (async () => {
+      try {
+        const response = await fetch(accountEndpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ operation: 'flow-screens', appId: reference.appId, flowId: reference.id, offset: 0, limit: 60 }) });
+        if (!response.ok || response.redirected) throw new Error('The account flow could not be loaded.');
+        const body = await response.json() as { result?: AccountResult };
+        const result = body.result;
+        const app = result?.apps.find((item) => item.id === reference.appId);
+        const flow = result?.flows.find((item) => item.id === reference.id);
+        if (!result || !app || !flow) throw new Error('The account flow is no longer available.');
+        const packet = result.packets.find((item) => item.kind === 'screenshot-sequence' && item.appId === app.id);
+        const revision = engine.readCommittedRevision();
+        const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: result.evidence, packet });
+        const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((item) => item.id === packet.id) ? [packet] : [])];
+        if (!engine.applyManualDocument(insertion.document, `Placed all ${flow.screens.length} ordered ${app.name} ${flow.name} screens on canvas.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error(engine.readManualFailure() || 'The canvas is still finishing another edit.');
+        pendingFlowPlacementRef.current = { id: flow.id, appName: app.name, flowName: flow.name, screenCount: flow.screens.length };
+        revealFlowNode(insertion.laneNodeId);
+        setFlowPlacement({ message: `Rendering all ${flow.screens.length} ${app.name} ${flow.name} screens on canvas…` });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'The complete flow could not be placed.';
+        setFlowPlacement({ message, error: !message.endsWith('already on the canvas.') });
+      } finally {
+        loadingChatFlowRef.current = false;
+        setFlowQueueTick((tick) => tick + 1);
+      }
+    })();
+  }, [accountEndpoint, chat.busy, chat.turns, engine.applyingManualEdit, engine.committed.id, engine.ready, engine.running, flowQueueTick]);
 
   const showLatestComposition = () => {
     const transaction = engine.committed.sceneTransaction;
@@ -2978,6 +3080,7 @@ export function CanvasV2Workspace({
       if (!engine.applyManualDocument(insertion.document, `Inserted the complete ordered ${app.name} ${flow.name} evidence flow.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error("Wait for the current revision to finish rendering.");
       setPanel("chat");
       setSelectionTarget(insertion.laneNodeId);
+      revealFlowNode(insertion.laneNodeId);
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : "The flow could not be inserted.");
     }
@@ -3472,7 +3575,7 @@ export function CanvasV2Workspace({
           <button aria-label="Collapse North Star panel" onClick={() => setChatOpen(false)} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
         </div>
 
-        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} flowPlacement={flowPlacement} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
           <div className="flex items-end justify-between px-1"><div><span className="text-[10px] font-black uppercase tracking-[.18em] text-[#735fef] dark:text-[#aa9cff]">Object library</span><h2 className="mt-1 text-base font-black tracking-[-.02em]">Add to canvas</h2></div><span className="pb-0.5 text-[10px] font-semibold text-[#92919e] dark:text-[#8f8b99]">Click or drag</span></div>
           <div role="tablist" aria-label="Object library categories" className="mt-4 grid grid-cols-5 gap-1 rounded-[14px] bg-[#f2f1f6] p-1 dark:bg-white/[.05]">
             {HUMAN_AUTHORING_TABS.map((item) => <button key={item.id} type="button" role="tab" aria-selected={authoringTab === item.id} onClick={() => setAuthoringTab(item.id)} className={`h-8 rounded-[10px] text-[10px] font-black transition ${authoringTab === item.id ? "bg-white text-[#5545c8] shadow-[0_2px_9px_rgba(45,41,78,.1)] dark:bg-white/[.12] dark:text-[#c8c0ff]" : "text-[#858391] hover:text-[#4e4d58] dark:text-[#928e9d] dark:hover:text-[#d4d1da]"}`}>{item.label}</button>)}

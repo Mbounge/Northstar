@@ -1,7 +1,12 @@
 /** Public-camera paint optimization only: never changes scene data or sources. */
 export function observeCanvasV2ImageVisibility(scene: HTMLElement): () => void {
   if (typeof IntersectionObserver === "undefined") return () => {};
-  const images = Array.from(scene.querySelectorAll<HTMLImageElement>("img[data-canvas-v2-native-scene-id]"));
+  // A captured flow is one complete source sequence. Never hide its distant
+  // screens while the user pans across a long lane: the observer callback can
+  // arrive after the camera has moved and makes those screens pop in late.
+  const images = Array.from(scene.querySelectorAll<HTMLImageElement>(
+    'img[data-canvas-v2-native-scene-id]:not([data-canvas-v2-evidence-role="canonical"])',
+  ));
   let disposed = false;
   const observer = new IntersectionObserver((entries) => {
     if (disposed) return;
@@ -13,7 +18,7 @@ export function observeCanvasV2ImageVisibility(scene: HTMLElement): () => void {
     }
   }, {
     root: scene.closest<HTMLElement>("[data-canvas-v2-native-wheel-capture]"),
-    rootMargin: "512px",
+    rootMargin: "1024px",
     threshold: 0,
   });
   // Start visible. Do not gate the initial rail on an observer callback or

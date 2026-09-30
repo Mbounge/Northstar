@@ -26,21 +26,36 @@ export async function readCanvasV2ResearchResponse(response: Response): Promise<
 export function useCanvasV2Research(endpoint: string) {
   const [result, setResult] = useState<CanvasV2ResearchResult>();
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
-  const run = useCallback(async (query: CanvasV2ResearchQuery) => {
-    setLoading(true);
+  const run = useCallback(async (query: CanvasV2ResearchQuery, append = false) => {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     setError(undefined);
     try {
       const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(query) });
       const nextResult = await readCanvasV2ResearchResponse(response);
-      setResult(nextResult);
+      setResult((current) => {
+        if (!append || !current || current.operation !== nextResult.operation) return nextResult;
+        const unique = <T extends { id: string }>(items: T[]) => Array.from(new Map(items.map((item) => [item.id, item])).values());
+        return {
+          ...nextResult,
+          apps: unique([...current.apps, ...nextResult.apps]),
+          flows: unique([...current.flows, ...nextResult.flows]),
+          screens: unique([...current.screens, ...nextResult.screens]),
+          evidence: unique([...current.evidence, ...nextResult.evidence]),
+          packets: unique([...current.packets, ...nextResult.packets]),
+          sources: Array.from(new Map([...current.sources, ...nextResult.sources].map((source) => [`${source.providerId}:${source.sourceId}`, source])).values()),
+        };
+      });
       return nextResult;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Research could not be loaded.");
     } finally {
-      setLoading(false);
+      if (append) setLoadingMore(false);
+      else setLoading(false);
     }
   }, [endpoint]);
   useEffect(() => { void run({ operation: "list-apps", limit: 30 }); }, [run]);
-  return { result, loading, error, run };
+  return { result, loading, loadingMore, error, run };
 }

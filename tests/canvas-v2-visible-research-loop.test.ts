@@ -74,6 +74,23 @@ test("the model sees both explicitly named apps and chooses exact complete flows
   assert.deepEqual(result.evidence.filter((asset) => asset.screen).map((asset) => asset.app), ["Awin", "Awin"]);
 });
 
+test("the research index retains every explicitly requested app beyond its broad preview size", () => {
+  const manyApps: AppDataCatalog = {
+    ...catalog,
+    apps: Array.from({ length: 30 }, (_, index) => ({
+      ...catalog.apps[0],
+      id: `app:vendor-${index}`,
+      name: `Vendor ${index}`,
+      flows: catalog.apps[0].flows.map((flow) => ({ ...flow, id: `flow:vendor-${index}`, appName: `Vendor ${index}` })),
+    })),
+  };
+  const names = manyApps.apps.map((app) => app.name);
+  const index = buildCanvasV2ResearchCatalogIndex(manyApps, `Compare ${names.join(", ")} onboarding`, revision(), names);
+  assert.equal(index.requirements.length, 30);
+  assert.equal(index.apps.length, 30);
+  assert.equal(index.catalogScope.omittedAppCount, 0);
+});
+
 test("a named app cannot substitute browsing evidence for an onboarding request", () => {
   const browsingOnly: AppDataCatalog = { tenantId: "tenant", apps: [{
     id: "app:awin",

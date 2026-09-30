@@ -223,7 +223,7 @@ function compactDiscoveryProductAvailability(
   return catalog.apps
     .map((app, index) => ({ app, index, relevant: relevance.includes(app.name.toLowerCase()) }))
     .sort((left, right) => Number(right.relevant) - Number(left.relevant) || left.index - right.index)
-    .slice(0, 12)
+    .slice(0, Math.max(12, targetNames.length))
     .map(({ app }) => ({
       name: app.name.slice(0, 160),
       totalScreens: app.totalScreens,
@@ -2277,7 +2277,7 @@ async function handlePost(request: NextRequest) {
           ? "sensemaking"
           : "composition";
     let researchTargets = Array.isArray(body.run?.researchTargets)
-      ? body.run.researchTargets.filter((target): target is string => typeof target === "string").slice(0, 12)
+      ? body.run.researchTargets.filter((target): target is string => typeof target === "string")
       : [];
     // Product research requirements and a discovery move's operational
     // targets are different namespaces. Keep the former stable for the

@@ -364,7 +364,7 @@ export function createCanvasV2AccountEvidenceProvider(input: {
       // labels once at least one authorized app target has resolved. Treating a
       // flow label as a missing account app produced a false warning beside valid
       // Awin research and encouraged the model to author an irrelevant boundary.
-      const matchedApps = Array.from(new Map(targets.slice(0, 12)
+      const matchedApps = Array.from(new Map(targets
         .flatMap((target) => {
           const app = appForTarget(input.catalog, target);
           return app ? [[app.id, app] as const] : [];

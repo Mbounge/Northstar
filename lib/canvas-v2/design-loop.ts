@@ -291,7 +291,7 @@ export function createCanvasV2Loop(input: {
     ...(input.attachments?.length ? { attachments: input.attachments.slice(0, CANVAS_V2_MAX_CHAT_ATTACHMENTS) } : {}),
     status: "thinking",
     steps: [],
-    researchTargets: Array.from(new Set((input.continuation?.researchTargets ?? input.researchTargets ?? []).map((target) => target.trim()).filter(Boolean))).slice(0, 12),
+    researchTargets: Array.from(new Set((input.continuation?.researchTargets ?? input.researchTargets ?? []).map((target) => target.trim()).filter(Boolean))),
     researchMode: input.continuation?.researchMode ?? input.researchMode,
     modelSelection: input.continuation?.modelSelection ?? input.modelSelection ?? CANVAS_V2_DEFAULT_MODEL,
     workingContext: input.continuation?.workingContext ?? input.workingContext,
