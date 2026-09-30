@@ -26936,19 +26936,33 @@ OUTPUT JSON:
                 break
 
             coord_key = (resolved_x // 10 * 10, resolved_y // 10 * 10)
+            prior_coords = list(attempted_coords)
             attempted_coords.add(coord_key)
             print(f"         [{close_attempt}/{MAX_CLOSE_RETRIES}] Tapping ({resolved_x}, {resolved_y}) [{coord_source}]")
 
-            # Delegate coordinate verification and tap execution to your master click engine
-            label = close_target.get("label", "close") if close_target else "close"
-            clk = await self.find_and_click_target(
-                "CloseButton", label, parent_bytes, parent_hash,
-                prefer_coords=(resolved_x, resolved_y),
-                max_retries=1,  # Outer loop handles attempts
-                verify_destination=False  # Arriving at parent is verified locally below
+            # Return controls are already located on the CURRENT child screen.
+            # The general click engine re-resolves labels against the screen XML;
+            # on article pages it can turn a back-arrow coordinate into an image
+            # target, and the tap probe then follows that image into another child.
+            # Probe the intended close control at this coordinate directly, then
+            # prove the parent separately below.
+            close_intent = (
+                "Back arrow" if any(token in coord_source.casefold()
+                                    for token in ("back", "navigate up", "arrow"))
+                else "Close"
+            )
+            clicked = await self._probe_tap(
+                resolved_x, resolved_y,
+                target=close_intent,
+                context="_smart_return_from_child",
+                kind="navigation",
+                failed_points=prior_coords,
+                point_validator=lambda x, y: (
+                    0 < x < screen_w and 0 < y < int(screen_h * 0.40)
+                ),
             )
 
-            if clk.get("success"):
+            if clicked:
                 time.sleep(1.5)
                 post_img = await self._capture_active_screen()
                 if post_img and await _check_at_parent(post_img):
