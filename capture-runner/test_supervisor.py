@@ -32,6 +32,19 @@ class SupervisorTests(unittest.TestCase):
             }))
             self.assertEqual(supervisor._snapshot(root)["audit_status"], "partial")
 
+    def test_unverified_root_is_coverage_debt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session_manifest.json").write_text(json.dumps({
+                "stabilization_summary": {"status": "partial",
+                                          "roots_needing_review": ["Search"]},
+                "unattended_audit": {"status": "complete", "pending": 0},
+            }))
+            snapshot = supervisor._snapshot(root)
+            self.assertEqual(snapshot["roots_needing_review"], 1)
+            cleared = dict(snapshot, roots_needing_review=0)
+            self.assertTrue(supervisor._structural_progress(snapshot, cleared))
+
     def test_partial_first_pass_resumes_and_complete_requires_audit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

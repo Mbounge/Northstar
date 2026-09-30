@@ -3976,13 +3976,139 @@ def _latest_pristine_capture_outcomes(reports):
         # A renamed menu item can create a second capture of an already
         # verified destination. Keep that attempt in the audit trail without
         # letting its partial result invalidate the canonical complete lane.
-        if report.get("superseded_by_verified_scope"):
+        if report.get("superseded_by_verified_scope") or report.get("misrouted_diagnostic"):
             continue
         context = str(report["context"])
         key = (context if context.endswith("_preflight_survey")
                else "scope:" + _canonical_manifest_path(report.get("scope") or context))
         latest[key] = report
     return latest
+
+
+def _repair_scroll_limit(reports, path, base=MAX_CHILD_SCROLLS, ceiling=36):
+    """Give a bounded second attempt more depth when a page hit the first cap."""
+    wanted = _smart_norm(_canonical_manifest_path(path))
+    matching = [report for report in (reports or []) if isinstance(report, dict)
+                and _smart_norm(_canonical_manifest_path(report.get("scope"))) == wanted]
+    if not matching or matching[-1].get("status") != "capture_limit_reached":
+        return base
+    attempts = int(matching[-1].get("swipe_attempts") or 0)
+    return min(ceiling, max(base * 2, attempts + 8))
+
+
+def _reconcile_capture_evidence(session_data, tab_progress, screenshot_dir):
+    """Quarantine invalid lane evidence without deleting the original screenshots.
+
+    This runs at resume and at each root exit. A known wrong-route image or a
+    missing/corrupt file must never continue to certify a canonical lane.
+    Uncertain visual classifications remain review work rather than guesses.
+    """
+    if not isinstance(session_data, dict):
+        return []
+    screenshot_root = os.path.realpath(screenshot_dir)
+    misroutes = {
+        os.path.realpath(str(item.get("diagnostic_screenshot"))): item
+        for item in session_data.get("overlay_misroutes", [])
+        if isinstance(item, dict) and not item.get("resolved")
+        and item.get("diagnostic_screenshot")
+    }
+    events = []
+    affected_roots = set()
+    for lane in session_data.get("tabs", []):
+        if not isinstance(lane, dict):
+            continue
+        path = str(lane.get("canonical_path") or lane.get("name") or "")
+        if not path:
+            continue
+        kept = []
+        for raw in lane.get("survey_screenshots", []) or []:
+            value = str(raw)
+            candidate = os.path.realpath(
+                value if os.path.isabs(value) else os.path.join(screenshot_root, value))
+            reason = None
+            if candidate in misroutes and _smart_norm(path.split(" > ", 1)[0]) == _smart_norm(
+                    misroutes[candidate].get("root")):
+                reason = "known_wrong_route"
+            elif os.path.dirname(candidate) != screenshot_root:
+                reason = "outside_session"
+            else:
+                try:
+                    with open(candidate, "rb") as image_file:
+                        if image_file.read(8) != b"\x89PNG\r\n\x1a\n":
+                            reason = "invalid_png"
+                except OSError:
+                    reason = "missing_png"
+            if not reason:
+                kept.append(raw)
+                continue
+            events.append({"path": path, "screenshot": value, "reason": reason})
+            affected_roots.add(path.split(" > ", 1)[0])
+            session_data.setdefault("excluded_captures", []).append({
+                "path": path, "reason": reason, "survey_screenshots": [value],
+                "classification": "diagnostic_only",
+            })
+            for report in session_data.get("pristine_capture_results", []) or []:
+                if isinstance(report, dict) and value in (report.get("screenshots") or []):
+                    report["misrouted_diagnostic"] = True
+        if len(kept) != len(lane.get("survey_screenshots", []) or []):
+            lane["survey_screenshots"] = kept
+            state = tab_progress.setdefault(path, {})
+            state["survey"] = "partial"
+            state["interaction"] = "partial"
+    if events:
+        targets = session_data.setdefault("targeted_recaptures", [])
+        for root in sorted(affected_roots):
+            if root not in targets:
+                targets.append(root)
+            session_data.setdefault("root_exit_checkpoints", {}).pop(root, None)
+        session_data.setdefault("reconciliation_events", []).append({
+            "at": datetime.now().isoformat(), "source": "automatic_evidence_audit",
+            "events": events,
+        })
+    return events
+
+
+def _root_exit_checkpoint(root, lanes, tab_progress, deferred, misroutes=None):
+    """Report a root's evidence debt before traversal can claim it explored."""
+    root_key = _smart_norm(root)
+    matching = [lane for lane in (lanes or []) if isinstance(lane, dict)
+                and _smart_norm(_canonical_manifest_path(
+                    lane.get("canonical_path") or lane.get("name")
+                ).split(" > ", 1)[0]) == root_key]
+    direct = [lane for lane in matching if lane.get("type") in (
+        "active_filter", "filter", "default_view", "captured_surface", "root")
+        and _is_direct_root_subview(
+            lane.get("canonical_path") or lane.get("name"), root)]
+    incomplete = [str(lane.get("canonical_path") or lane.get("name"))
+                  for lane in direct if not _root_subview_feature_covered(
+                      lane,
+                      (tab_progress or {}).get(lane.get("canonical_path") or lane.get("name"), {}),
+                      direct, tab_progress or {},
+                  )]
+    pending = (tab_progress or {}).get(root, {}).get("_pristine_pending_captures", {})
+    pending = pending if isinstance(pending, dict) else {}
+    open_captures = sorted({str(v.get("scope") or k) for k, v in pending.items()
+                            if isinstance(v, dict)})
+    blocked = root in (deferred or {})
+    unresolved_misroutes = sorted({str(item.get("item")) for item in (misroutes or [])
+                                   if isinstance(item, dict) and not item.get("resolved")
+                                   and _smart_norm(item.get("root")) == root_key})
+    # A root with no direct feature lane is not complete merely because a menu
+    # or a diagnostic screenshot happened to be saved under its name.
+    verified = bool(direct and not incomplete and not open_captures
+                    and not blocked and not unresolved_misroutes)
+    return {"root": root, "status": "verified" if verified else "review_needed",
+            "direct_subviews": len(direct), "incomplete_subviews": incomplete,
+            "open_captures": open_captures, "destination_deferred": blocked,
+            "unresolved_misroutes": unresolved_misroutes,
+            "timestamp": time.time()}
+
+
+def _accept_overlay_prediction(prediction, root_still_selected):
+    """A selected root bar outranks a visual guess about a floating tooltip."""
+    return bool(isinstance(prediction, dict)
+                and prediction.get("is_overlay") is True
+                and not root_still_selected)
 
 
 def _manifest_frame_role(path, index, total):
@@ -7071,8 +7197,8 @@ class ExplorationControlPlane:
                 return "No verified semantic route from the root to this surface"
         return None
 
-    async def run_repair_pass(self):
-        """Bounded debt-driven cleanup after the proven traversal has finished."""
+    async def run_repair_pass(self, root_filter=None, max_jobs=None, max_seconds=None):
+        """Bounded debt-driven cleanup, optionally before leaving one root tab."""
         result = {
             "mode": SMART_UNATTENDED_MODE, "started_at": datetime.now().isoformat(),
             "attempted": 0, "completed": 0, "failed": 0, "jobs": [],
@@ -7081,6 +7207,10 @@ class ExplorationControlPlane:
             result["status"] = "disabled"
             return result
         start = time.time()
+        job_limit = SMART_REPAIR_JOB_LIMIT if max_jobs is None else min(
+            SMART_REPAIR_JOB_LIMIT, max(0, int(max_jobs)))
+        time_limit = SMART_REPAIR_TIME_LIMIT_SECONDS if max_seconds is None else min(
+            SMART_REPAIR_TIME_LIMIT_SECONDS, max(1, int(max_seconds)))
         seen = set()
         completed_action_roots = {
             _smart_norm(path.split(" > ", 1)[0])
@@ -7088,12 +7218,16 @@ class ExplorationControlPlane:
             if isinstance(path, str) and path.strip()
         }
         print(f"\n{'='*70}\n   🧭 UNATTENDED COVERAGE REPAIR\n{'='*70}")
-        while result["attempted"] < SMART_REPAIR_JOB_LIMIT:
-            if time.time() - start >= SMART_REPAIR_TIME_LIMIT_SECONDS:
+        while result["attempted"] < job_limit:
+            if time.time() - start >= time_limit:
                 result["stop_reason"] = "repair time budget exhausted"
                 break
             frontier = self.planner.frontier(
                 self.graph, limit=max(200, len(self.graph.pending())))
+            if root_filter:
+                frontier = [item for item in frontier if _smart_norm(
+                    str(item.get("path") or "").split(" > ", 1)[0]
+                ) == _smart_norm(root_filter)]
             eligible = []
             for item in frontier:
                 block_reason = self._repair_block_reason(item)
@@ -7117,7 +7251,7 @@ class ExplorationControlPlane:
             result["attempted"] += 1
             job = dict(row)
             job["started_at"] = time.time()
-            print(f"   🔧 REPAIR {result['attempted']}/{SMART_REPAIR_JOB_LIMIT}: "
+            print(f"   🔧 REPAIR {result['attempted']}/{job_limit}: "
                   f"{row.get('path')} :: {row.get('obligation')}")
             acquired, reason = await self._reacquire_for_repair(row.get("surface_id"))
             if not acquired:
@@ -7137,7 +7271,10 @@ class ExplorationControlPlane:
                 elif obligation in ("pristine", "vertical_extent"):
                     shots = await self.agent.full_pristine_capture(
                         f"repair_{self.agent.sanitize_filename(path)}",
-                        max_scrolls=MAX_CHILD_SCROLLS,
+                        max_scrolls=_repair_scroll_limit(
+                            self.agent.session_data.get("pristine_capture_results", []), path),
+                        logical_surface_key=path,
+                        force_recapture=True,
                     )
                     report = getattr(self.agent, "_last_pristine_capture_result", {}) or {}
                     success = bool(shots and report.get("capture_complete"))
@@ -7230,6 +7367,10 @@ class ExplorationControlPlane:
                 if (isinstance(branch, dict) and branch.get("status") != "complete"
                         and _menu_branch_resume_state(session_data, path) != "complete"):
                     deferred.append("menu_branch:" + path + ":" + str(branch.get("status")))
+            for misroute in session_data.get("overlay_misroutes") or []:
+                if isinstance(misroute, dict) and not misroute.get("resolved"):
+                    deferred.append("overlay_misroute:" + str(misroute.get("root"))
+                                    + ":" + str(misroute.get("item")))
             contract = session_data.get("artifact_contract") or {}
             coverage = contract.get("capture_coverage") or {}
             validation = contract.get("validation") or {}
@@ -9194,6 +9335,13 @@ class UniversalMobileSpy:
 
         if RESUME_SESSION and RESUME_SESSION_DIR and os.path.exists(RESUME_SESSION_DIR):
             self.memory.load_memory()
+            reconciled = _reconcile_capture_evidence(
+                self.session_data, self.memory.tab_progress, self.screenshot_dir)
+            if reconciled:
+                print(f"   🧹 Automatically quarantined {len(reconciled)} invalid lane reference(s); "
+                      "affected roots queued for recapture")
+                self._force_save_manifest()
+                self.memory.save_memory()
 
         self.cache = AnalysisCache()
         self.safety = SafetyGuardrails()
@@ -22912,7 +23060,7 @@ OUTPUT JSON:
 
     async def full_pristine_capture(
         self, context_name, max_scrolls=None, logical_surface_key=None,
-        transient_surface=False,
+        transient_surface=False, force_recapture=False,
     ):
         """Capture a surface once per survey pass, independent of classifier wording.
 
@@ -22943,7 +23091,8 @@ OUTPUT JSON:
             resume_reuse = bool(
                 logical_surface_key and isinstance(prior, dict) and prior.get("restored")
             )
-            if (self._reuse_prior_survey_capture or resume_reuse) and isinstance(prior, dict) and prior.get("screenshots"):
+            if (not force_recapture and (self._reuse_prior_survey_capture or resume_reuse)
+                    and isinstance(prior, dict) and prior.get("screenshots")):
                 if resume_reuse and not self._reuse_prior_survey_capture:
                     reused_by = "resumed logical-surface checkpoint"
                 print(
@@ -33333,6 +33482,144 @@ OUTPUT JSON:
             self.memory.current_location = _saved_loc
             print(f"      🗂️ Returned to parent location: '{self.memory.current_location}'")
 
+    async def _checkpoint_root_exit(self, root_name):
+        reconciled = _reconcile_capture_evidence(
+            self.session_data, self.memory.tab_progress, self.screenshot_dir)
+        if reconciled:
+            print(f"      🧹 Root-exit evidence audit quarantined {len(reconciled)} "
+                  "invalid reference(s)")
+        checkpoint = _root_exit_checkpoint(
+            root_name, self.session_data.get("tabs", []),
+            self.memory.tab_progress,
+            self.session_data.get("exploration_deferred", {}),
+            self.session_data.get("overlay_misroutes", []),
+        )
+        if (checkpoint["status"] != "verified"
+                and getattr(self, "control_plane", None)):
+            # Repair this root now. A blocked or infinite surface remains
+            # explicit review work, while independent roots get their turn.
+            repair = await self.control_plane.run_repair_pass(
+                root_filter=root_name, max_jobs=4, max_seconds=240)
+            self.session_data.setdefault("root_repair_passes", {})[root_name] = repair
+            checkpoint = _root_exit_checkpoint(
+                root_name, self.session_data.get("tabs", []),
+                self.memory.tab_progress,
+                self.session_data.get("exploration_deferred", {}),
+                self.session_data.get("overlay_misroutes", []),
+            )
+        self.session_data.setdefault("root_exit_checkpoints", {})[root_name] = checkpoint
+        self._force_save_manifest()
+        self.memory.save_memory()
+        if checkpoint["status"] == "verified":
+            self.memory.app_map.mark_explored(f"tab:{root_name}")
+            print(f"      ✅ ROOT EXIT VERIFIED: {root_name}")
+        else:
+            print(f"      ⚠️ ROOT EXIT NEEDS REVIEW: {root_name}; "
+                  f"incomplete subviews={checkpoint['incomplete_subviews']}; "
+                  f"open captures={checkpoint['open_captures']}; "
+                  f"destination deferred={checkpoint['destination_deferred']}; "
+                  f"misroutes={checkpoint['unresolved_misroutes']}")
+
+    async def _advance_root_introduction(self, root, image, elements):
+        """Advance a proved informational intro, never an auth/consent gate."""
+        native_text = " ".join(str(el.get("text") or el.get("content_desc") or "")
+                               for el in (elements or []) if isinstance(el, dict)).casefold()
+        if any(cue in native_text for cue in (
+                "password", "create account", "sign in", "log in", "accept terms",
+                "free trial", "subscribe", "payment method", "allow access")):
+            return False
+        verdict = await self._ai_call(
+            f"The native {APP_NAME} tab '{root}' opened this full-screen page. "
+            "Is it solely an informational first-use introduction with a safe "
+            "Continue/Next/Get started action? Reject sign-in, account creation, "
+            "permissions, consent, payments, destructive actions, and any ambiguity. "
+            'OUTPUT JSON: {"informational_intro":true/false,'
+            '"safe_to_continue":true/false,"action_label":"exact visible label",'
+            '"evidence":"visible heading and action"}.',
+            image=image, log_label="ROOT_INTRO_GATE_CHECK",
+            model_override=TARGETING_MODEL,
+        )
+        if not (isinstance(verdict, dict)
+                and verdict.get("informational_intro") is True
+                and verdict.get("safe_to_continue") is True):
+            return False
+        label = str(verdict.get("action_label") or "").strip()
+        if _smart_norm(label) not in {
+                "continue", "next", "get started", "start exploring"}:
+            return False
+        w, h = self.device.screen_size
+        matches = []
+        for element in elements or []:
+            if not isinstance(element, dict) or element.get("enabled") is False:
+                continue
+            name = element.get("text") or element.get("content_desc") or ""
+            if _smart_norm(name) != _smart_norm(label):
+                continue
+            bounds = element.get("bounds")
+            if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
+                continue
+            x0, y0, x1, y1 = bounds
+            if not all(isinstance(v, (int, float)) for v in bounds):
+                continue
+            x, y = int((x0 + x1) / 2), int((y0 + y1) / 2)
+            if 0 <= x < w and 0 <= y < h:
+                matches.append((x, y))
+        if len(set(matches)) != 1:
+            print(f"      ⚠️ Informational intro for '{root}' has no unique native {label!r} control")
+            return False
+        x, y = matches[0]
+        before_hash = compute_screen_hash(image)
+        if not await self._probe_tap(x, y, target=label,
+                                     context=f"root_intro:{root}", kind="control"):
+            return False
+        time.sleep(1.0)
+        after = await self._capture_active_screen()
+        if not after or compute_screen_hash(after) == before_hash:
+            return False
+        path = self.save_screenshot_bytes(
+            image, f"tab_intro_{self.sanitize_filename(root)[:30]}")
+        if path:
+            lane_path = f"{root} > Introduction"
+            lanes = self.session_data.setdefault("tabs", [])
+            lane = next((item for item in lanes if isinstance(item, dict)
+                         and item.get("canonical_path") == lane_path), None)
+            if lane is None:
+                lane = {"name": lane_path, "canonical_path": lane_path,
+                        "type": "prerequisite", "survey_screenshots": []}
+                lanes.append(lane)
+            if path not in lane["survey_screenshots"]:
+                lane["survey_screenshots"].append(path)
+            self.session_data.setdefault("root_gate_advances", []).append({
+                "root": root, "path": lane_path, "action": label,
+                "screenshot": path, "timestamp": time.time(),
+            })
+            self._force_save_manifest()
+        print(f"      ➡️ Advanced informational introduction for '{root}' via {label!r}")
+        return True
+
+    async def _verify_overlay_destination(self, root, item, before, after):
+        """Fail closed when an overlay action lands on an unrelated page."""
+        result = await self._ai_call(
+            f"I tapped '{item}' in the '{root}' menu of {APP_NAME}. "
+            "Image 1 is the menu before the tap; image 2 is the resulting page. "
+            "Does image 2 show the expected result of this EXACT menu action? "
+            "A different app page, an underlying control accidentally tapped, "
+            "or a merely changed screen is not enough. For Close/Dismiss, "
+            "returning to the parent root is expected. If uncertain, answer false. "
+            'OUTPUT JSON: {"matches_action":true/false,'
+            '"confidence":0.0,"observed_page":"short title",'
+            '"reason":"why the page does or does not match"}.',
+            images=[before, after], log_label="OVERLAY_DESTINATION_VERIFY",
+            model_override=TARGETING_MODEL,
+        )
+        if not isinstance(result, dict) or result.get("matches_action") is not True:
+            return False, result or {}
+        try:
+            confidence = float(result.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0
+        return confidence >= 0.75, result
+
     async def _enforce_current_tab(self, ignore_child_guard=False, require_root=False,
                                    verify_only=False, observed_image=None):
         # MOBILE_SPY2_STABILIZE_V1: navigation
@@ -33567,6 +33854,7 @@ OUTPUT JSON:
         tried = set()
         last_img, last_reason, last_observed = None, "No usable observation", None
         named_nav_tap = None
+        intro_advances = 0
         # Original five navigation opportunities, plus verification of the last tap.
         for attempt in range(1 if verify_only else 6):
             foreground = getattr(self.device, "is_target_app_foreground", self.device.is_app_running)
@@ -33654,8 +33942,12 @@ OUTPUT JSON:
                 if (named_nav_tap is not None and
                         compute_screen_hash(img) != named_nav_tap["before_hash"]):
                     # The exact named native navigation item opened a full-screen
-                    # prerequisite. Preserve that screen, but do not mark the tab
-                    # complete or loop through recovery taps on another page.
+                    # prerequisite. A simple informational introduction can be
+                    # advanced safely, but auth/consent gates remain deferred.
+                    if not require_root and intro_advances < 2 and await self._advance_root_introduction(
+                            requested_name, img, elements):
+                        intro_advances += 1
+                        continue
                     value = report("gated_destination",
                                    "Named native tab opened a full-screen prerequisite; root tab remains unverified",
                                    requested_name, "named_xml_navigation")
@@ -34738,7 +35030,7 @@ OUTPUT JSON:
         for report_index, report in enumerate(capture_reports or []):
             if not isinstance(report, dict):
                 continue
-            if report.get("superseded_by_verified_scope"):
+            if report.get("superseded_by_verified_scope") or report.get("misrouted_diagnostic"):
                 continue
             scope = _canonical_manifest_path(report.get("scope"))
             if not scope:
@@ -36740,7 +37032,14 @@ OUTPUT JSON:
                     )
                     sub_views_done.append(is_done)
 
-                if sub_views_done and all(sub_views_done):
+                root_checkpoint = _root_exit_checkpoint(
+                    tab["name"], self.session_data.get("tabs", []),
+                    self.memory.tab_progress,
+                    self.session_data.get("exploration_deferred", {}),
+                    self.session_data.get("overlay_misroutes", []),
+                )
+                if (sub_views_done and all(sub_views_done)
+                        and root_checkpoint["status"] == "verified"):
                     print(f"\n{'='*60}\n   ⏭️ SKIPPING TAB {ti}/{len(main_tabs)}: {tab['name'].upper()} (Saved feature coverage verified; partial feed extent remains in audit)\n{'='*60}")
                     continue
                 elif sub_views_done and any(sub_views_done):
@@ -36862,6 +37161,10 @@ OUTPUT JSON:
                     print(f"      ⚠️ Exploration deferred for '{tab['name']}': no verified destination. Continuing to the next tab.")
                     continue
                 self.session_data.setdefault("exploration_deferred", {}).pop(tab['name'], None)
+                # A failed early tour is historical once this destination has
+                # been physically verified during the actual traversal.
+                self.session_data.setdefault("preflight_deferred", {}).pop(tab['name'], None)
+                self._force_save_manifest()
 
                 if not self.device.is_app_running():
                     print(f"      🚨 Tab tap took us out of app! Relaunching...")
@@ -36901,6 +37204,17 @@ OUTPUT JSON:
                         "reasoning": "..."
                     }}
                     """, image=tab_img, log_label="TAB_OVERLAY_CHECK")
+
+                    if overlay_menu and overlay_menu.get("is_overlay"):
+                        # Small coach marks/tooltips can fool the visual menu
+                        # classifier. A still-visible, selected native root bar
+                        # proves this is the tab page, not a replacement menu.
+                        root_still_selected = await self._enforce_current_tab(
+                            require_root=True, verify_only=True,
+                            observed_image=tab_img)
+                        if not _accept_overlay_prediction(overlay_menu, root_still_selected):
+                            print(f"      🧭 Rejecting overlay prediction for '{tab['name']}': native root remains selected")
+                            overlay_menu = dict(overlay_menu, is_overlay=False)
 
                     if overlay_menu and overlay_menu.get("is_overlay"):
                         menu_items = overlay_menu.get("menu_items", [])
@@ -36984,6 +37298,35 @@ OUTPUT JSON:
                             if item_clk and item_clk.get("success"):
                                 time.sleep(2)
                                 post_menu_img = await self._capture_active_screen()
+                                matched, match_evidence = (False, {})
+                                if post_menu_img and overlay_parent_img:
+                                    matched, match_evidence = await self._verify_overlay_destination(
+                                        tab['name'], mi_name, overlay_parent_img,
+                                        post_menu_img)
+                                if not matched:
+                                    diagnostic = (self.save_screenshot_bytes(
+                                        post_menu_img,
+                                        f"overlay_misroute_{self.sanitize_filename(mi_name)[:24]}")
+                                        if post_menu_img else None)
+                                    self.session_data.setdefault("overlay_misroutes", []).append({
+                                        "root": tab['name'], "item": mi_name,
+                                        "observed_page": str(match_evidence.get("observed_page") or "")[:160],
+                                        "reason": str(match_evidence.get("reason") or "Destination not verified")[:350],
+                                        "diagnostic_screenshot": diagnostic,
+                                        "timestamp": time.time(),
+                                    })
+                                    self._force_save_manifest()
+                                    print(f"      ⚠️ Menu action '{mi_name}' reached an unverified destination; retaining diagnostic, not a canonical lane")
+                                    self.device.press_back()
+                                    time.sleep(2)
+                                    continue
+                                for old in self.session_data.get("overlay_misroutes", []):
+                                    if (isinstance(old, dict) and not old.get("resolved")
+                                            and old.get("root") == tab['name']
+                                            and old.get("item") == mi_name):
+                                        old["resolved"] = True
+                                        old["resolved_at"] = time.time()
+                                self._force_save_manifest()
                                 if post_menu_img:
                                     is_root_jump = await self._ai_call(f"""
                                     ROOT TAB JUMP CHECK for {APP_NAME}.
@@ -37068,8 +37411,12 @@ OUTPUT JSON:
 
                         self.device.press_back()
                         time.sleep(2)
-                        self.memory.app_map.mark_explored(f"tab:{tab['name']}")
-                        continue
+                        root_after_menu = await self._enforce_current_tab(require_root=True)
+                        if root_after_menu:
+                            print(f"      🧭 '{tab['name']}' menu closed onto a verified root; continuing its content survey")
+                        else:
+                            await self._checkpoint_root_exit(tab['name'])
+                            continue
 
             if await self.handle_unexpected_dialogs():
                 time.sleep(1)
@@ -37536,7 +37883,7 @@ OUTPUT JSON:
                 if self.memory._understanding_update_counter % 3 == 0:
                     await self.update_app_understanding()
 
-            self.memory.app_map.mark_explored(f"tab:{tab['name']}")
+            await self._checkpoint_root_exit(tab['name'])
 
         # ── PHASE 2: GLOBAL TOP-BAR EXPLORATION ──
         _resume_child_header_repair = self._resume_needs_child_header_repair()
@@ -37602,21 +37949,40 @@ OUTPUT JSON:
             isinstance(_unattended_audit, dict)
             and _unattended_audit.get("status") != "complete"
         )
+        _root_review = []
+        for tab in main_tabs:
+            root_name = str(tab.get("name") or "")
+            if not root_name:
+                continue
+            checkpoint = _root_exit_checkpoint(
+                root_name, self.session_data.get("tabs", []),
+                self.memory.tab_progress,
+                self.session_data.get("exploration_deferred", {}),
+                self.session_data.get("overlay_misroutes", []),
+            )
+            self.session_data.setdefault("root_exit_checkpoints", {})[root_name] = checkpoint
+            if checkpoint["status"] != "verified":
+                _root_review.append(root_name)
         self.session_data["stabilization_summary"] = {
-            "status": "partial" if (_deferred_roots or _deferred_topbars or _partial_capture_contexts or _audit_partial) else "finished",
+            "status": "partial" if (_deferred_roots or _deferred_topbars
+                                   or _partial_capture_contexts or _audit_partial
+                                   or _root_review) else "finished",
             "unverified_destinations": sorted(_deferred_roots),
             "incomplete_topbars": sorted(_deferred_topbars),
             "partial_captures": _partial_capture_contexts,
+            "roots_needing_review": _root_review,
             "unattended_audit_status": (
                 _unattended_audit.get("status") if isinstance(_unattended_audit, dict) else "not_run"
             ),
         }
         self._force_save_manifest()
-        if _deferred_roots or _deferred_topbars or _partial_capture_contexts or _audit_partial:
+        if (_deferred_roots or _deferred_topbars or _partial_capture_contexts
+                or _audit_partial or _root_review):
             print(f"\n{'='*70}\n⚠️ EXPLORATION FINISHED WITH DEFERRED WORK\n{'='*70}")
             print(f"Unverified destinations: {sorted(_deferred_roots)}; "
                   f"incomplete top bars: {sorted(_deferred_topbars)}; "
-                  f"partial captures: {_partial_capture_contexts}")
+                  f"partial captures: {_partial_capture_contexts}; "
+                  f"roots needing review: {_root_review}")
             if _audit_partial:
                 print(f"Unattended audit: partial; pending obligations: "
                       f"{len(_unattended_audit.get('pending_obligations', []))}")

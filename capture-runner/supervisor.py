@@ -63,6 +63,7 @@ def _snapshot(session: Path) -> dict:
     deferred = summary.get("unverified_destinations") or []
     topbars = summary.get("incomplete_topbars") or []
     partial = summary.get("partial_captures") or []
+    roots_needing_review = summary.get("roots_needing_review") or []
     pngs = len(list((session / "screenshots").glob("*.png")))
     return {
         "capture_status": summary.get("status", "unknown"),
@@ -72,6 +73,7 @@ def _snapshot(session: Path) -> dict:
         "unverified_destinations": len(deferred),
         "incomplete_topbars": len(topbars),
         "partial_captures": len(partial),
+        "roots_needing_review": len(roots_needing_review),
         "screenshots": pngs,
         "device_failures": len(manifest.get("device_failures") or []),
     }
@@ -83,6 +85,7 @@ def _structural_progress(before: dict, after: dict) -> bool:
     return (after["terminal_obligations"] > before["terminal_obligations"]
             or after["pending_obligations"] < before["pending_obligations"]
             or after["partial_captures"] < before["partial_captures"]
+            or after["roots_needing_review"] < before["roots_needing_review"]
             or after["unverified_destinations"] < before["unverified_destinations"]
             or after["incomplete_topbars"] < before["incomplete_topbars"])
 
@@ -181,7 +184,8 @@ def supervise(app: str, session: Path, max_passes: int) -> int:
         elif (after["screenshots"] > 0 and after["capture_status"] == "finished"
               and after["audit_status"] == "complete"
               and not any(after[key] for key in ("pending_obligations", "unverified_destinations",
-                                                   "incomplete_topbars", "partial_captures"))):
+                                                   "incomplete_topbars", "partial_captures",
+                                                   "roots_needing_review"))):
             state_name, reason = "complete", "evidence-backed coverage audit complete"
         elif paused:
             state_name, reason = "needs_review", "provider or Android device paused the worker"

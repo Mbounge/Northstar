@@ -39,7 +39,7 @@ def _issue(path: str, reason: str, *, uncertain: bool = False) -> dict:
     }
 
 
-def _open_checks(lanes: list[dict], progress: dict) -> list[dict]:
+def _open_checks(lanes: list[dict], progress: dict, manifest: dict | None = None) -> list[dict]:
     checks: list[dict] = []
     seen: set[tuple[str, str]] = set()
 
@@ -70,9 +70,22 @@ def _open_checks(lanes: list[dict], progress: dict) -> list[dict]:
         ):
             add(_issue(path, "Capture limit reached; the end of this page was not confirmed."))
 
+    for item in (manifest or {}).get("overlay_misroutes") or []:
+        if isinstance(item, dict) and not item.get("resolved"):
+            root, action = str(item.get("root") or ""), str(item.get("item") or "")
+            add(_issue(f"{root} > {action}",
+                       "Menu action reached an unrelated page; the intended destination needs a verified retry.",
+                       uncertain=True))
+    for root, gate in ((manifest or {}).get("exploration_deferred") or {}).items():
+        if isinstance(gate, dict) and gate.get("status") == "gated_destination":
+            add(_issue(str(root),
+                       "The tab opened a first-use or access prerequisite; its actual content is not verified yet.",
+                       uncertain=True))
+
     for lane in lanes:
         path = _lane_path(lane)
-        if (len(_parts(path)) > 2 or not (lane.get("survey_screenshots") or lane.get("interactions"))
+        if (lane.get("type") in ("prerequisite", "overlay_menu_item_root_jump")
+                or len(_parts(path)) > 2 or not (lane.get("survey_screenshots") or lane.get("interactions"))
                 or any(check["path"] == path or check["path"].startswith(path + " > ") for check in checks)):
             continue
         stages = progress.get(path) if isinstance(progress.get(path), dict) else {}
@@ -112,7 +125,8 @@ def _state(lanes: list[dict], progress: dict, current: bool) -> str:
     return "needs_followup"
 
 
-def _summary(name: str, lanes: list[dict], progress: dict, current_path: str, checks: list[dict]) -> dict:
+def _summary(name: str, lanes: list[dict], progress: dict, current_path: str,
+             checks: list[dict], gated: bool = False) -> dict:
     current = current_path == name or current_path.startswith(name + " > ")
     screens = {
         path for lane in lanes for path in lane.get("survey_screenshots", [])
@@ -121,7 +135,7 @@ def _summary(name: str, lanes: list[dict], progress: dict, current_path: str, ch
     direct = [lane for lane in lanes if len(_parts(str(lane.get("canonical_path") or lane.get("name") or ""))) <= 2]
     return {
         "name": name,
-        "state": _state(lanes, progress, current),
+        "state": "not_reached" if gated else _state(lanes, progress, current),
         "screens": len(screens),
         "open_checks": [check for check in checks if check["path"] == name or check["path"].startswith(name + " > ")],
         "subviews": [
@@ -160,9 +174,13 @@ def build_progress(directory: Path, *, active: bool = False) -> dict:
         roots = list(dict.fromkeys(str(lane.get("root_path") or "") for lane in lanes
                                   if lane.get("root_path") and lane.get("type") not in ("global_menu", "global_section")))
 
-    checks = _open_checks(lanes, progress)
+    checks = _open_checks(lanes, progress, manifest)
+    deferred = manifest.get("exploration_deferred") or {}
     tabs = [_summary(name, [lane for lane in lanes if lane.get("root_path") == name
-                      or str(lane.get("canonical_path") or lane.get("name") or "") == name], progress, active_path, checks)
+                      or str(lane.get("canonical_path") or lane.get("name") or "") == name],
+                     progress, active_path, checks,
+                     isinstance(deferred.get(name), dict)
+                     and deferred[name].get("status") == "gated_destination")
             for name in dict.fromkeys(roots)]
     visited = sum(tab["state"] != "not_reached" for tab in tabs)
     done = sum(tab["state"] == "done" for tab in tabs)

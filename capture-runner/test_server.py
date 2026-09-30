@@ -200,6 +200,27 @@ class CaptureServerTests(unittest.TestCase):
         self.assertEqual(progress["tabs"][1]["state"], "not_reached")
         self.assertEqual(progress["areas"][0]["state"], "not_identified")
 
+    def test_progress_keeps_gated_tab_unreached_and_explains_misroute(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "org.example", "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        directory = server._run_dir(run_id)
+        (directory / "screenshots").mkdir()
+        (directory / "session_manifest.json").write_text(json.dumps({
+            "root_tab_reconciliation": [{"live_names": ["Search", "Activity"]}],
+            "tabs": [{"name": "Activity > Introduction", "canonical_path": "Activity > Introduction",
+                      "root_path": "Activity", "type": "prerequisite", "survey_screenshots": ["intro.png"]}],
+            "exploration_deferred": {"Activity": {"status": "gated_destination"}},
+            "overlay_misroutes": [{"root": "Search", "item": "Add", "resolved": False}],
+        }))
+        (directory / "agent_memory.json").write_text(json.dumps({"tab_progress": {}}))
+        progress = self.call(f"/v1/runs/{run_id}/progress")[1]["progress"]
+        self.assertEqual(progress["visited_tabs"], 0)
+        self.assertEqual(progress["tabs"][1]["state"], "not_reached")
+        self.assertIn("prerequisite", progress["tabs"][1]["open_checks"][0]["reason"])
+        self.assertIn("unrelated page", progress["tabs"][0]["open_checks"][0]["reason"])
+
     def test_finish_with_evidence_is_terminal_without_claiming_full_audit(self):
         _, payload = self.call("/v1/runs", {
             "app": "Wikipedia", "package_name": "org.wikipedia", "device_id": "pixel", "scope": "browsing",
