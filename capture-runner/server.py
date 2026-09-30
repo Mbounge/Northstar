@@ -75,6 +75,19 @@ def _json_file(path: Path) -> dict:
         return {}
 
 
+def _sanitized_log(path: Path) -> str:
+    try:
+        text = path.read_text(errors="replace")
+    except FileNotFoundError:
+        return ""
+    text = re.sub(r"sk-[A-Za-z0-9_-]{16,}", "[redacted key]", text)
+    for name in ("ONBOARDING_PASSWORD", "OPENAI_API_KEY", "NORTHSTAR_CAPTURE_RUNNER_TOKEN"):
+        secret = os.environ.get(name, "")
+        if len(secret) >= 8:
+            text = text.replace(secret, f"[redacted {name.lower()}]")
+    return text
+
+
 def _onboarding_identity_ready() -> bool:
     profile = _json_file(ONBOARDING_PROFILE)
     identity = profile.get("identity")
@@ -297,20 +310,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "Screen not found"})
                 return self._binary(screen.read_bytes(), "image/png")
             if len(parts) == 4 and parts[3] == "logs":
-                log_path = _run_dir(parts[2]) / "launch.log"
-                try:
-                    with log_path.open("rb") as file:
-                        file.seek(0, os.SEEK_END)
-                        file.seek(max(0, file.tell() - 32768))
-                        text = file.read().decode("utf-8", "replace")
-                        text = re.sub(r"sk-[A-Za-z0-9_-]{16,}", "[redacted key]", text)
-                        password = os.environ.get("ONBOARDING_PASSWORD", "")
-                        if password:
-                            text = text.replace(password, "[redacted password]")
-                        lines = text.splitlines()[-120:]
-                except FileNotFoundError:
-                    lines = []
-                return self._send(200, {"lines": lines})
+                return self._send(200, {"lines": _sanitized_log(_run_dir(parts[2]) / "launch.log").splitlines()[-120:]})
+            if len(parts) == 5 and parts[3:] == ["logs", "download"]:
+                log = _sanitized_log(_run_dir(parts[2]) / "launch.log")
+                return self._binary(log.encode("utf-8"), "text/plain; charset=utf-8")
             if len(parts) == 4 and parts[3] == "frame":
                 if not _status(run)["live"]:
                     return self._send(409, {"error": "Run is not active"})

@@ -79,6 +79,28 @@ class CaptureServerTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(payload["run"]["organization_id"], "")
 
+    def test_full_log_download_is_authenticated_and_redacted(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "onboarding",
+        })
+        run_id = payload["run"]["id"]
+        log = server._run_dir(run_id) / "launch.log"
+        log.write_text("\n".join(f"line {n}" for n in range(150)) + "\npassword=sample-secret-value\n")
+        url = self.base + f"/v1/runs/{run_id}/logs/download"
+        with self.assertRaises(HTTPError) as unauthorized:
+            urlopen(url, timeout=3)
+        self.assertEqual(unauthorized.exception.code, 401)
+        unauthorized.exception.close()
+        with patch.dict(server.os.environ, {"ONBOARDING_PASSWORD": "sample-secret-value"}):
+            with urlopen(Request(url, headers={"Authorization": "Bearer test-secret"}), timeout=3) as response:
+                content = response.read().decode()
+                self.assertEqual(response.headers["Content-Type"], "text/plain; charset=utf-8")
+        self.assertIn("line 0", content)
+        self.assertIn("line 149", content)
+        self.assertNotIn("sample-secret-value", content)
+        self.assertIn("[redacted onboarding_password]", content)
+
     def test_partial_audit_cannot_claim_complete_after_process_exit(self):
         _, payload = self.call("/v1/runs", {
             "app": "Graet", "package_name": "com.graet", "organization_id": "tenant-1",

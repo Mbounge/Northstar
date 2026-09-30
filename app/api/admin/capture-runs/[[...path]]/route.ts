@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ path?: string[] }> };
-const allowedGet = /^(?:|devices|catalog|[a-f0-9-]{36}(?:\/(?:logs|frame|icon|preflight|screens(?:\/[A-Za-z0-9_.-]+\.png)?))?)$/;
+const allowedGet = /^(?:|devices|catalog|[a-f0-9-]{36}(?:\/(?:logs(?:\/download)?|frame|icon|preflight|screens(?:\/[A-Za-z0-9_.-]+\.png)?))?)$/;
 const allowedPost = /^(?:|[a-f0-9-]{36}\/(?:start|stop))$/;
 
 async function authorize() {
@@ -82,7 +82,20 @@ async function proxyRun(method: "GET" | "POST", path: string, body?: unknown) {
     const response = await fromRunner(runner, method, path, body);
     if (response?.status === 404) continue;
     if (response && response.status >= 500) { failure = response; continue; }
-    if (response) return forward(response);
+    if (response) {
+      if (method === "GET" && path.endsWith("/logs/download") && response.ok) {
+        const runId = path.split("/")[0];
+        return new NextResponse(await response.arrayBuffer(), {
+          status: response.status,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": `attachment; filename="northstar-capture-${runId}.log.txt"`,
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+      return forward(response);
+    }
   }
   return failure ? forward(failure) : NextResponse.json({ error: "Run not found or runner unavailable" }, { status: 503 });
 }

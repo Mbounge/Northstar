@@ -80,10 +80,14 @@ def _screen_state(nodes: list[dict], app: str) -> tuple[str, tuple[int, int] | N
     title_visible = bool(app_name and any(app_name in label.lower() for label in labels))
     if not title_visible:
         return "unknown", None
-    install_buttons = [node for node in nodes if _text(node).strip().lower() == "install"
-                       and node.get("enabled") != "false"]
-    if len(install_buttons) == 1:
-        return "install", _center(install_buttons[0])
+    # Play often exposes both a button and its child label as separate nodes
+    # with the same bounds. They represent one control, not two choices.
+    install_points = {_center(node) for node in nodes
+                      if _text(node).strip().lower() == "install"
+                      and node.get("enabled") != "false"}
+    install_points.discard(None)
+    if len(install_points) == 1:
+        return "install", install_points.pop()
     if any(label.strip().lower() == "open" for label in labels):
         return "open", None
     if any(word in all_text for word in ("pending", "installing", "downloading", "verifying")):

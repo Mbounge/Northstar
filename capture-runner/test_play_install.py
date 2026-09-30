@@ -22,7 +22,9 @@ class PlayInstallTests(unittest.TestCase):
         state, point = play._screen_state(play._ui_nodes(xml("GRAET: Hockey News", "Install")), "Graet")
         self.assertEqual((state, point), ("install", (50, 30)))
         self.assertEqual(play._screen_state(play._ui_nodes(xml("NHL", "Install")), "Graet"), ("unknown", None))
-        self.assertEqual(play._screen_state(play._ui_nodes(xml("Graet", "Install", "Install")), "Graet"), ("unknown", None))
+        self.assertEqual(play._screen_state(play._ui_nodes(xml("Graet", "Install", "Install")), "Graet"), ("install", (50, 30)))
+        distinct_buttons = '<hierarchy><node text="Graet" /><node text="Install" bounds="[0,0][100,60]" enabled="true" /><node text="Install" bounds="[0,60][100,120]" enabled="true" /></hierarchy>'
+        self.assertEqual(play._screen_state(play._ui_nodes(distinct_buttons), "Graet"), ("unknown", None))
 
     def test_incompatible_and_auth_are_terminal(self):
         self.assertEqual(play._screen_state(play._ui_nodes(xml("This app won't work for your device")), "Graet")[0], "incompatible")
