@@ -18,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from capture_progress import build_progress
+
 
 ROOT = Path(os.environ.get("CAPTURE_DATA_ROOT", "./capture-data")).expanduser().resolve()
 SCRIPT = Path(os.environ.get("MOBILESPY_SCRIPT", "./spy_mobile2.5.py")).expanduser().resolve()
@@ -150,10 +152,28 @@ def _status(run: dict) -> dict:
     directory = _run_dir(run_id)
     process = PROCESSES.get(run_id)
     alive = process.poll() is None if process else _pid_alive(result.get("pid"), run_id)
+    if (result["status"] == "finishing" and alive
+            and time.time() - float(result.get("finish_requested_at") or 0) >= 120):
+        # The requested checkpoint is best effort. A stuck agent must not
+        # leave an operator-approved finish pending forever. This supervisor
+        # started a new process group, which also owns its MobileSpy child.
+        pid = result.get("pid")
+        if _pid_alive(pid, run_id):
+            try:
+                if os.getpgid(pid) == pid:
+                    os.killpg(pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
     if process and not alive:
         PROCESSES.pop(run_id, None)
     supervisor = _json_file(directory / "capture_supervisor_status.json")
     coverage = supervisor.get("coverage") if isinstance(supervisor.get("coverage"), dict) else {}
+    if result["status"] == "finishing" and not alive:
+        result["status"] = "finished_early" if result.get("scope") == "browsing" and any(
+            (directory / "screenshots").glob("*.png")
+        ) else "needs_review"
+        result["pid"] = None
+        result["updated_at"] = time.time()
     if result["status"] in ("running", "stopping") and not alive:
         if result.get("scope") == "onboarding":
             manifest = _json_file(directory / "onboarding_manifest.json")
@@ -194,6 +214,8 @@ def _status(run: dict) -> dict:
     result["audit_status"] = _json_file(directory / "unattended_audit.json").get("status")
     result["coverage"] = coverage
     result["reason"] = supervisor.get("reason") or ("Capture process exited without a final checkpoint" if result["status"] == "needs_review" else None)
+    if result["status"] == "finished_early":
+        result["reason"] = "Finished by an admin with the saved evidence; remaining coverage is still shown for review"
     if result.get("scope") == "onboarding" and result["status"] == "needs_review" and supervisor.get("state") == "complete" and result.get("onboarding_result") and not result["onboarding_result"]["account_created"] and result["onboarding_result"]["settled_home_reached"]:
         result["reason"] = "Guest home reached, but no account was created; inspect the app's account entry"
     result["phase"] = supervisor.get("phase")
@@ -334,6 +356,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "Run not found"})
             if len(parts) == 3:
                 return self._send(200, {"run": _status(run)})
+            if len(parts) == 4 and parts[3] == "progress":
+                if run.get("scope") != "browsing":
+                    return self._send(409, {"error": "Navigation progress is available for browsing captures"})
+                return self._send(200, {"progress": build_progress(_run_dir(parts[2]), active=_status(run)["live"])})
             if len(parts) == 4 and parts[3] == "preflight":
                 serial = DEVICES.get(run["device_id"])
                 return self._send(200, {"preflight": _preflight(run, bool(serial and self._device_online(serial)))})
@@ -397,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
                     and parts[3] == "reboot"):
                 return self._reboot_device(parts[2])
             if (len(parts) == 4 and parts[:2] == ["v1", "runs"]
-                    and ID_RE.fullmatch(parts[2]) and parts[3] in ("start", "stop")):
+                    and ID_RE.fullmatch(parts[2]) and parts[3] in ("start", "stop", "finish")):
                 return self._change(parts[2], parts[3])
             return self._send(404, {"error": "Not found"})
         except (ValueError, KeyError) as exc:
@@ -449,7 +475,7 @@ class Handler(BaseHTTPRequestHandler):
             if action == "start":
                 if state["live"]:
                     return self._send(409, {"error": "Run already active"})
-                if state["status"] == "complete":
+                if state["status"] in ("complete", "finished_early", "finishing"):
                     return self._send(409, {"error": "Completed runs cannot be restarted"})
                 preflight = _preflight(run, bool(serial and self._device_online(serial)))
                 if not preflight["ready"]:
@@ -492,6 +518,22 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 PROCESSES[run_id] = process
                 run.update(status="running", pid=process.pid, updated_at=time.time())
+            elif action == "finish":
+                if run.get("scope") != "browsing":
+                    return self._send(409, {"error": "Finish with evidence is available for browsing captures"})
+                if state["status"] in ("complete", "finished_early", "finishing", "stopping"):
+                    return self._send(409, {"error": "Run is already finished"})
+                if not any((_run_dir(run_id) / "screenshots").glob("*.png")):
+                    return self._send(409, {"error": "Save at least one screen before finishing"})
+                if state["live"]:
+                    try:
+                        os.kill(run["pid"], signal.SIGINT)
+                    except ProcessLookupError:
+                        return self._send(409, {"error": "Capture process already exited; retry after status refresh"})
+                    run.update(status="finishing", finish_requested_at=time.time(), updated_at=time.time())
+                else:
+                    run.update(status="finished_early", pid=None,
+                               finish_requested_at=time.time(), updated_at=time.time())
             else:
                 if not state["live"]:
                     return self._send(409, {"error": "Run is not active"})

@@ -168,6 +168,66 @@ class CaptureServerTests(unittest.TestCase):
             }}))
             self.assertEqual(self.call(f"/v1/runs/{run_id}")[1]["run"]["status"], "complete")
 
+    def test_progress_distinguishes_saved_home_evidence_from_other_root_tabs(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Wikipedia", "package_name": "org.wikipedia", "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        directory = server._run_dir(run_id)
+        (directory / "screenshots").mkdir()
+        (directory / "screenshots" / "home.png").write_bytes(b"png")
+        (directory / "session_manifest.json").write_text(json.dumps({
+            "root_tab_reconciliation": [{"live_names": ["Home", "Saved", "Search", "Activity", "More"]}],
+            "tabs": [{"name": "Home > Community", "canonical_path": "Home > Community",
+                      "root_path": "Home", "survey_screenshots": ["home.png"],
+                      "capture_status": "partial", "interactions": [{"id": "example"}]}],
+        }))
+        (directory / "agent_memory.json").write_text(json.dumps({
+            "current_location": "Home > Community", "current_phase": "STRUCTURED_FEED",
+            "tab_progress": {"Home > Community": {"survey": "partial", "interaction": "partial"}},
+        }))
+        code, response = self.call(f"/v1/runs/{run_id}/progress")
+        self.assertEqual(code, 200)
+        progress = response["progress"]
+        self.assertEqual((progress["visited_tabs"], progress["identified_tabs"], progress["navigation_percent"]),
+                         (1, 5, 20))
+        self.assertEqual(progress["tabs"][0]["state"], "needs_followup")
+        self.assertEqual(server.build_progress(directory, active=True)["tabs"][0]["state"], "capturing")
+        self.assertEqual(progress["tabs"][1]["state"], "not_reached")
+        self.assertEqual(progress["areas"][0]["state"], "not_identified")
+
+    def test_finish_with_evidence_is_terminal_without_claiming_full_audit(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Wikipedia", "package_name": "org.wikipedia", "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        self.assertEqual(self.call(f"/v1/runs/{run_id}/finish", {})[0], 409)
+        directory = server._run_dir(run_id)
+        (directory / "screenshots").mkdir()
+        (directory / "screenshots" / "home.png").write_bytes(b"png")
+        (directory / "unattended_audit.json").write_text(json.dumps({"status": "partial"}))
+        runs = server._read_runs()
+        runs[run_id].update(status="running", pid=123456)
+        server._write_runs(runs)
+        with patch.object(server, "_pid_alive", return_value=True), patch.object(server.os, "kill") as stop:
+            code, response = self.call(f"/v1/runs/{run_id}/finish", {})
+            self.assertEqual(code, 200)
+            self.assertEqual(response["run"]["status"], "finishing")
+            stop.assert_called_once_with(123456, server.signal.SIGINT)
+        overdue = server._read_runs()[run_id]
+        overdue["finish_requested_at"] = server.time.time() - 121
+        with patch.object(server, "_pid_alive", return_value=True), \
+             patch.object(server.os, "getpgid", return_value=123456), \
+             patch.object(server.os, "killpg") as force_stop:
+            self.assertEqual(server._status(overdue)["status"], "finishing")
+            force_stop.assert_called_once_with(123456, server.signal.SIGKILL)
+        with patch.object(server, "_pid_alive", return_value=False):
+            code, response = self.call(f"/v1/runs/{run_id}")
+            self.assertEqual(code, 200)
+            self.assertEqual(response["run"]["status"], "finished_early")
+            self.assertEqual(response["run"]["audit_status"], "partial")
+        self.assertEqual(self.call(f"/v1/runs/{run_id}/start", {})[0], 409)
+
     def test_play_install_preflight_allows_missing_target_but_requires_store(self):
         run = {"device_id": "pixel", "package_name": "com.graet"}
         with patch.object(server, "_device_property", return_value="1"), \
