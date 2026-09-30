@@ -93,6 +93,11 @@ checkpoint. Resume reuses the same session directory. A run becomes Complete
 only after both the capture summary and audit report completion with no
 remaining coverage debt. Live device frames, logs, and all saved screenshots
 are available in Admin.
+The deployed browsing-agent source is tracked at
+`capture-runner/agents/browsing_mobile2.py`; copy it to `MOBILESPY_SCRIPT` on
+the capture host when deploying an agent change. Android's share sheet and
+media picker may briefly own focus during app interactions. The agent captures
+those surfaces without treating them as an app exit.
 
 Keep one assigned emulator per active run. The runner's device pool must contain
 only dedicated capture devices, not a serial currently used by a separate
