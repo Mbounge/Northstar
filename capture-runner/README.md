@@ -17,7 +17,7 @@ this service. The browser never receives the runner token or model API key.
   if the target app is missing. Sign-in stays on the device; the runner never
   handles the Google password.
 - The MobileSpy script and its Python dependencies installed on the host.
-- The onboarding agent and a host-side identity profile when onboarding
+- The versioned onboarding agent in `agents/onboarding_mobile2.py` and a host-side identity profile when onboarding
   capture is enabled. Keep its account password in the host secret store.
 - A persistent data volume for `CAPTURE_DATA_ROOT`.
 - HTTPS reachability from the Northstar Next.js server to this service through
@@ -73,8 +73,12 @@ checks the device and Play Store, installs the app if needed, clears that
 app's data, and starts the onboarding agent. The persistent run directory
 holds screenshots, `onboarding_manifest.json`, memory, and resume state.
 Pause checkpoints the run; Resume preserves the account and device data.
-Completion requires a settled-home manifest and saved screens. A blocked or
-partial result needs review. The host identity profile needs `identity.email`;
+Completion requires confirmed account creation, a settled-home manifest, and
+saved screens. A usable guest home alone needs review; Resume preserves its
+screens and app state while the agent seeks the account entry. A blocked or
+partial result needs review. Apps with no discoverable account path report
+`BLOCKED_ACCOUNT_UNAVAILABLE` for explicit guest-only review rather than
+inventing a signup or exhausting the step budget. The host identity profile needs `identity.email`;
 the account password stays in `ONBOARDING_PASSWORD` on the host.
 
 After onboarding, **Queue browsing** on the completed run reuses its app,

@@ -135,9 +135,13 @@ def supervise(app: str, package: str, serial: str, session: Path) -> int:
     result = _manifest_result(session)
     status = str(result.get("status", ""))
     screens = len(list((session / "screenshots").glob("*.png")))
-    if status.startswith("COMPLETED_") and screens > 0 and result.get("settled_home_reached"):
+    if (status.startswith("COMPLETED_") and screens > 0
+            and result.get("settled_home_reached") and result.get("account_created") is True):
         _status(session, "complete", "Onboarding reached a settled home with saved evidence")
         return 0
+    if result.get("settled_home_reached") and result.get("account_created") is not True:
+        _status(session, "needs_review", "Guest home reached, but no account was created; inspect the app's account entry")
+        return 2
     reason = (f"Onboarding ended with {status}" if status else
               f"Onboarding exited {exit_code} without a complete manifest")
     _status(session, "needs_review", reason)

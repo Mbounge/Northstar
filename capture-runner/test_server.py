@@ -169,7 +169,7 @@ class CaptureServerTests(unittest.TestCase):
         }))
         with patch.object(server, "_pid_alive", return_value=False):
             status = self.call(f"/v1/runs/{run_id}")[1]["run"]
-        self.assertEqual(status["status"], "complete")
+        self.assertEqual(status["status"], "needs_review")
         self.assertTrue(status["manifest_available"])
         self.assertEqual(status["onboarding_result"]["score"], 40)
         self.assertFalse(status["onboarding_result"]["account_created"])

@@ -15,17 +15,19 @@ SPEC.loader.exec_module(supervisor)
 
 
 class FakeProcess:
-    def __init__(self, command, cwd, env, stdin, session, status):
+    def __init__(self, command, cwd, env, stdin, session, status, account_created):
         self.command = command
         self.env = env
         self.session = session
         self.status = status
+        self.account_created = account_created
 
     def wait(self):
         (self.session / "screenshots").mkdir(exist_ok=True)
         (self.session / "screenshots" / "screen.png").write_bytes(b"png")
         (self.session / "onboarding_manifest.json").write_text(json.dumps({
-            "result": {"status": self.status, "settled_home_reached": self.status == "COMPLETED_SETTLED"}
+            "result": {"status": self.status, "settled_home_reached": self.status == "COMPLETED_SETTLED",
+                       "account_created": self.account_created}
         }))
         return 0
 
@@ -53,12 +55,12 @@ class OnboardingSupervisorTests(unittest.TestCase):
         supervisor.STOP_REQUESTED = False
         self.temp.cleanup()
 
-    def run_agent(self, session, status):
+    def run_agent(self, session, status, account_created=True):
         commands = []
 
         def launch(command, cwd, env, stdin):
             commands.append((command, env))
-            return FakeProcess(command, cwd, env, stdin, session, status)
+            return FakeProcess(command, cwd, env, stdin, session, status, account_created)
 
         with patch.dict(os.environ, {
             "ONBOARDING_IDENTITY_PROFILE": str(self.profile),
@@ -94,6 +96,14 @@ class OnboardingSupervisorTests(unittest.TestCase):
         result, _, _ = self.run_agent(session, "BLOCKED_VERIFICATION")
         self.assertEqual(result, 2)
         self.assertEqual(json.loads((session / "capture_supervisor_status.json").read_text())["state"], "needs_review")
+
+    def test_guest_home_requires_review(self):
+        session = self.root / "guest"
+        result, _, _ = self.run_agent(session, "COMPLETED_SETTLED", account_created=False)
+        self.assertEqual(result, 2)
+        status = json.loads((session / "capture_supervisor_status.json").read_text())
+        self.assertEqual(status["state"], "needs_review")
+        self.assertIn("no account", status["reason"])
 
     def test_unavailable_screenshot_stops_before_agent_launch(self):
         session = self.root / "no-screenshot"

@@ -132,6 +132,7 @@ def _status(run: dict) -> dict:
             complete = (supervisor.get("state") == "complete"
                         and str(outcome.get("status", "")).startswith("COMPLETED_")
                         and bool(outcome.get("settled_home_reached"))
+                        and outcome.get("account_created") is True
                         and any((directory / "screenshots").glob("*.png")))
         else:
             complete = (supervisor.get("state") == "complete"
@@ -152,6 +153,8 @@ def _status(run: dict) -> dict:
     if result.get("scope") == "onboarding":
         manifest = _json_file(directory / "onboarding_manifest.json")
         outcome = manifest.get("result") if isinstance(manifest.get("result"), dict) else None
+        if result["status"] == "complete" and outcome and outcome.get("account_created") is not True:
+            result["status"] = "needs_review"
         result["onboarding_result"] = ({
             "score": outcome.get("score"),
             "signup_found": outcome.get("signup_found") is True,
@@ -162,6 +165,8 @@ def _status(run: dict) -> dict:
     result["audit_status"] = _json_file(directory / "unattended_audit.json").get("status")
     result["coverage"] = coverage
     result["reason"] = supervisor.get("reason") or ("Capture process exited without a final checkpoint" if result["status"] == "needs_review" else None)
+    if result.get("scope") == "onboarding" and result["status"] == "needs_review" and supervisor.get("state") == "complete" and result.get("onboarding_result") and not result["onboarding_result"]["account_created"] and result["onboarding_result"]["settled_home_reached"]:
+        result["reason"] = "Guest home reached, but no account was created; inspect the app's account entry"
     result["phase"] = supervisor.get("phase")
     result["pass"] = supervisor.get("pass")
     result["max_passes"] = supervisor.get("max_passes")
