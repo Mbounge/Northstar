@@ -155,7 +155,7 @@ test("notes, lines, drawings and local images are separate selectable objects", 
   // revision acknowledgement may settle one frame later. Use the same enabled
   // state a person sees before opening the picker so this test never bypasses
   // the product's in-flight edit guard through the hidden file input.
-  await expect(app(page).getByTitle("Upload image · or drop a file on canvas")).toBeEnabled();
+  await expect(app(page).getByTitle("Upload image, GIF, or video · or drop a file on canvas")).toBeEnabled();
   await page.getByLabel("Choose images for the canvas").setInputFiles("public/northstar/design-references/evidence-canvas.png");
   const image = scene(page).locator('img[data-canvas-v2-local-image="true"]');
   await expect(image).toHaveCount(1);

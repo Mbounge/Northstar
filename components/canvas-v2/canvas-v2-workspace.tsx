@@ -2873,9 +2873,14 @@ export function CanvasV2Workspace({
     }
   };
 
-  const chooseLocalImage = (replaceNodeId?: string) => {
+  const chooseLocalImage = (replaceNodeId?: string, includePlayableMedia = false) => {
     imageReplaceTargetRef.current = replaceNodeId;
-    if (localImageInputRef.current) localImageInputRef.current.value = "";
+    if (localImageInputRef.current) {
+      localImageInputRef.current.value = "";
+      localImageInputRef.current.accept = includePlayableMedia && !replaceNodeId
+        ? "image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"
+        : "image/png,image/jpeg,image/webp";
+    }
     localImageInputRef.current?.click();
   };
 
@@ -4086,7 +4091,7 @@ export function CanvasV2Workspace({
         <button onClick={() => { selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.ready || engine.applyingManualEdit} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
         {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} aria-pressed={tool === "place" && placementTool?.primitive === primitive} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, options)} disabled={!engine.ready || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
-        <button title="Upload image · or drop a file on canvas" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
+        <button title="Upload image, GIF, or video · or drop a file on canvas" aria-label="Upload image, GIF, or video" onClick={() => chooseLocalImage(undefined, true)} disabled={!engine.ready || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
         <button title="More creation tools" onClick={() => { setPanel("shapes"); setChatOpen(true); }} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Plus className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
         <button aria-label="Layers" title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>

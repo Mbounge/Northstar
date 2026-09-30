@@ -1,6 +1,17 @@
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
+test("canvas upload button accepts and inserts a video", async ({ page }) => {
+  await page.route("**/api/canvas-v2/**", route => route.abort());
+  await page.goto("/canvas");
+  await expect(page.getByTestId("canvas-v2-native-scene")).toHaveCount(1);
+  await page.getByRole("button", { name: "Upload image, GIF, or video" }).click();
+  const picker = page.getByLabel("Choose images for the canvas");
+  await expect(picker).toHaveAttribute("accept", /video\/mp4/);
+  await picker.setInputFiles(path.resolve("e2e/fixtures/media/canvas-motion.mp4"));
+  await expect(page.locator("[data-canvas-v2-playable-media]")).toHaveCount(1);
+});
+
 test("video is a clean native frame and Space toggles playback without moving or revising it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

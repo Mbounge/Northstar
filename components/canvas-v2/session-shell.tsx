@@ -90,7 +90,7 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
       aria-hidden={active!==item.frameId} tabIndex={active===item.frameId?0:-1}
       inert={active!==item.frameId} className="absolute top-0 h-full w-full border-0" style={{left:0,zIndex:active===item.frameId?1:0,pointerEvents:active===item.frameId?'auto':'none'}}/>) }
     {!current && <div className="flex h-full flex-col items-center justify-center gap-4 bg-[radial-gradient(ellipse_at_top_left,#282052,transparent_65%)]"><p role="status" className="text-sm text-white/50">{error ? 'Saved sessions are unavailable. You can retry or open a temporary canvas.' : sidebar && !creating ? 'Choose a session from History or start a new one.' : 'Opening your canvas…'}</p>{error && <button onClick={()=>void add(true)} className="rounded-xl border border-white/10 px-5 py-3">Open temporary canvas</button>}</div>}
-    {current?.temporary && <span className="fixed right-4 top-20 z-30 text-xs text-white/40">Temporary</span>}
+    {current?.temporary && <span className="fixed right-4 top-20 z-30 rounded-full bg-[#e9e3ff] px-2.5 py-1 text-xs font-semibold text-[#48359f] shadow-sm dark:bg-[#342a60] dark:text-[#ded5ff]">Temporary</span>}
     {sidebar && <><button aria-label="Close sessions" className="fixed inset-0 z-40 bg-black/20" onClick={()=>setSidebar(false)}/>
       <aside aria-label="Canvas sessions" className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-white/10 bg-[#191820] shadow-2xl">
         <div className="flex items-center justify-between px-5 py-5"><span className="font-semibold">Sessions</span><button aria-label="Close sessions sidebar" onClick={()=>setSidebar(false)}><ChevronLeft size={18}/></button></div>
