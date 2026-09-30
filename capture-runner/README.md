@@ -1,5 +1,8 @@
 # Northstar capture host
 
+For the current Hetzner host address, SSH command, service names, and read-only
+checks, see [capture host operations](../docs/capture-host-operations.md).
+
 This is the real host-side control service for Admin → Capture studio. It is
 separate from the existing Render discovery worker. The Next.js admin API checks
 the signed-in Supabase user's admin role, then proxies commands and evidence to
