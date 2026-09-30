@@ -184,7 +184,9 @@ class CaptureServerTests(unittest.TestCase):
         }))
         (directory / "agent_memory.json").write_text(json.dumps({
             "current_location": "Home > Community", "current_phase": "STRUCTURED_FEED",
-            "tab_progress": {"Home > Community": {"survey": "partial", "interaction": "partial"}},
+            "tab_progress": {"Home > Community": {"survey": "partial", "interaction": "partial",
+                "_pristine_pending_captures": {"feed": {"scope": "Home > Community",
+                    "reason": "App context changed after swipe"}}}},
         }))
         code, response = self.call(f"/v1/runs/{run_id}/progress")
         self.assertEqual(code, 200)
@@ -192,6 +194,8 @@ class CaptureServerTests(unittest.TestCase):
         self.assertEqual((progress["visited_tabs"], progress["identified_tabs"], progress["navigation_percent"]),
                          (1, 5, 20))
         self.assertEqual(progress["tabs"][0]["state"], "needs_followup")
+        self.assertEqual(progress["tabs"][0]["open_checks"], [{
+            "path": "Home > Community", "reason": "App context changed after swipe", "impact": "broad"}])
         self.assertEqual(server.build_progress(directory, active=True)["tabs"][0]["state"], "capturing")
         self.assertEqual(progress["tabs"][1]["state"], "not_reached")
         self.assertEqual(progress["areas"][0]["state"], "not_identified")

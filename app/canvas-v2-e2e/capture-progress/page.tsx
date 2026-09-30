@@ -3,24 +3,32 @@ import { CaptureProgressView, type CaptureProgress } from "@/components/admin/ca
 
 const preview: CaptureProgress = {
   tabs: [
-    { name: "Home", state: "capturing", screens: 144, subviews: [
+    { name: "Home", state: "needs_followup", screens: 52, open_checks: [
+      { path: "Home > Community", reason: "App context changed after swipe; the section survey could not be verified.", impact: "broad" },
+      { path: "Home > For you", reason: "Changing cards made the visual end of the section uncertain.", impact: "broad" },
+      { path: "Home > Community > Dam Featured Card", reason: "Capture limit reached; the bottom of this page was not confirmed.", impact: "local" },
+      { path: "Home > Community > More on this day", reason: "Capture limit reached; the bottom of this page was not confirmed.", impact: "local" },
+    ], subviews: [
       { name: "Home > Community", state: "needs_followup", screens: 6 },
-      { name: "Home > For you", state: "capturing", screens: 1 },
+      { name: "Home > For you", state: "needs_followup", screens: 1 },
     ] },
-    { name: "Saved", state: "not_reached", screens: 0, subviews: [] },
-    { name: "Search", state: "not_reached", screens: 0, subviews: [] },
-    { name: "Activity", state: "not_reached", screens: 0, subviews: [] },
-    { name: "More", state: "not_reached", screens: 0, subviews: [] },
+    { name: "Saved", state: "capturing", screens: 2, open_checks: [], subviews: [
+      { name: "Saved > All articles", state: "capturing", screens: 1 },
+      { name: "Saved > Collections", state: "needs_followup", screens: 1 },
+    ] },
+    { name: "Search", state: "not_reached", screens: 0, open_checks: [], subviews: [] },
+    { name: "Activity", state: "not_reached", screens: 0, open_checks: [], subviews: [] },
+    { name: "More", state: "not_reached", screens: 0, open_checks: [], subviews: [] },
   ],
   areas: [
     { name: "Profile", state: "not_identified", screens: 0 },
     { name: "Settings", state: "not_identified", screens: 0 },
   ],
   identified_tabs: 5,
-  visited_tabs: 1,
+  visited_tabs: 2,
   done_tabs: 0,
-  navigation_percent: 20,
-  current_path: "Home > For you",
+  navigation_percent: 40,
+  current_path: "Saved > All articles",
   current_phase: "STRUCTURED_GRID",
   last_screen_at: Date.now() / 1000,
 };

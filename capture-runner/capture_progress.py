@@ -22,6 +22,79 @@ def _parts(path: str) -> list[str]:
     return [part.strip() for part in path.split(">") if part.strip()]
 
 
+def _lane_path(lane: dict) -> str:
+    return str(lane.get("canonical_path") or lane.get("name") or "")
+
+
+def _issue(path: str, reason: str, *, uncertain: bool = False) -> dict:
+    depth = len(_parts(path))
+    detail = reason.strip()
+    if len(detail) >= 260 and not detail.endswith((".", "!", "?", "…")):
+        detail += "… [agent note clipped]"
+    return {
+        "path": path,
+        "reason": detail,
+        # This describes scope, not a judgement about business importance.
+        "impact": "unverified" if uncertain else "broad" if depth <= 2 else "local",
+    }
+
+
+def _open_checks(lanes: list[dict], progress: dict) -> list[dict]:
+    checks: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(check: dict) -> None:
+        key = (check["path"].casefold(), check["reason"].casefold())
+        if check["path"] and check["reason"] and key not in seen:
+            seen.add(key)
+            checks.append(check)
+
+    for path, stages in progress.items():
+        if not isinstance(stages, dict):
+            continue
+        pending = stages.get("_pristine_pending_captures")
+        if not isinstance(pending, dict):
+            continue
+        for item in pending.values():
+            if isinstance(item, dict):
+                scope = str(item.get("scope") or path)
+                reason = str(item.get("reason") or "Capture could not be verified")
+                add(_issue(scope, reason))
+
+    for lane in lanes:
+        path = _lane_path(lane)
+        status = lane.get("capture_status")
+        if status == "capture_limit_reached" and not any(
+            check["path"] == path and "capture limit" in check["reason"].casefold()
+            for check in checks
+        ):
+            add(_issue(path, "Capture limit reached; the end of this page was not confirmed."))
+
+    for lane in lanes:
+        path = _lane_path(lane)
+        if (len(_parts(path)) > 2 or not (lane.get("survey_screenshots") or lane.get("interactions"))
+                or any(check["path"] == path or check["path"].startswith(path + " > ") for check in checks)):
+            continue
+        stages = progress.get(path) if isinstance(progress.get(path), dict) else {}
+        if stages.get("survey") == "partial":
+            add(_issue(path, "The section survey has not reached a verified end."))
+        elif stages.get("interaction") == "partial":
+            add(_issue(path, "The section's interaction pass is not fully verified."))
+        elif stages.get("survey") == "complete" and stages.get("interaction") != "complete":
+            add(_issue(path, "An interaction pass has not been verified yet.", uncertain=True))
+        elif stages.get("interaction") == "complete" and stages.get("survey") != "complete":
+            add(_issue(path, "The survey end has not been verified yet.", uncertain=True))
+        elif stages.get("survey") != "complete" or stages.get("interaction") != "complete":
+            add(_issue(path, "A complete survey and interaction checkpoint is not recorded yet.", uncertain=True))
+    # A root checkpoint and its child section can report the same failed
+    # observation. Keep the more specific path rather than double-counting it.
+    return [check for check in checks if not any(
+        other is not check and other["reason"].casefold() == check["reason"].casefold()
+        and other["path"].startswith(check["path"] + " > ")
+        for other in checks
+    )]
+
+
 def _state(lanes: list[dict], progress: dict, current: bool) -> str:
     if not lanes:
         return "not_reached"
@@ -39,7 +112,7 @@ def _state(lanes: list[dict], progress: dict, current: bool) -> str:
     return "needs_followup"
 
 
-def _summary(name: str, lanes: list[dict], progress: dict, current_path: str) -> dict:
+def _summary(name: str, lanes: list[dict], progress: dict, current_path: str, checks: list[dict]) -> dict:
     current = current_path == name or current_path.startswith(name + " > ")
     screens = {
         path for lane in lanes for path in lane.get("survey_screenshots", [])
@@ -50,6 +123,7 @@ def _summary(name: str, lanes: list[dict], progress: dict, current_path: str) ->
         "name": name,
         "state": _state(lanes, progress, current),
         "screens": len(screens),
+        "open_checks": [check for check in checks if check["path"] == name or check["path"].startswith(name + " > ")],
         "subviews": [
             {
                 "name": str(lane.get("canonical_path") or lane.get("name") or ""),
@@ -86,8 +160,9 @@ def build_progress(directory: Path, *, active: bool = False) -> dict:
         roots = list(dict.fromkeys(str(lane.get("root_path") or "") for lane in lanes
                                   if lane.get("root_path") and lane.get("type") not in ("global_menu", "global_section")))
 
+    checks = _open_checks(lanes, progress)
     tabs = [_summary(name, [lane for lane in lanes if lane.get("root_path") == name
-                      or str(lane.get("canonical_path") or lane.get("name") or "") == name], progress, active_path)
+                      or str(lane.get("canonical_path") or lane.get("name") or "") == name], progress, active_path, checks)
             for name in dict.fromkeys(roots)]
     visited = sum(tab["state"] != "not_reached" for tab in tabs)
     done = sum(tab["state"] == "done" for tab in tabs)

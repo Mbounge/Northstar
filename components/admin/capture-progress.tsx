@@ -1,9 +1,11 @@
 "use client";
 
-import { Check, CircleDashed, Clock3, Compass, Layers3, Settings2, UserRound } from "lucide-react";
+import { Check, ChevronDown, CircleDashed, Clock3, Compass, Layers3, Settings2, UserRound } from "lucide-react";
+
+type OpenCheck = { path: string; reason: string; impact: "broad" | "local" | "unverified" };
 
 export type CaptureProgress = {
-  tabs: { name: string; state: ProgressState; screens: number; subviews: { name: string; state: ProgressState; screens: number }[] }[];
+  tabs: { name: string; state: ProgressState; screens: number; open_checks: OpenCheck[]; subviews: { name: string; state: ProgressState; screens: number }[] }[];
   areas: { name: string; state: ProgressState; screens: number }[];
   identified_tabs: number;
   visited_tabs: number;
@@ -20,7 +22,7 @@ const stateCopy: Record<ProgressState, string> = {
   not_identified: "Not identified yet",
   not_reached: "Not reached",
   capturing: "Capturing now",
-  needs_followup: "Captured · gaps remain",
+  needs_followup: "Review needed",
   done: "Checked",
 };
 
@@ -37,6 +39,38 @@ function State({ value }: { value: ProgressState }) {
     {value === "done" ? <Check className="h-3 w-3" /> : value === "capturing" ? <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" /> : null}
     {stateCopy[value]}
   </span>;
+}
+
+const impactCopy: Record<OpenCheck["impact"], string> = {
+  broad: "Main-section impact",
+  local: "One-page impact",
+  unverified: "Impact not yet known",
+};
+
+const impactTone: Record<OpenCheck["impact"], string> = {
+  broad: "bg-[#fff0d5] text-[#8b5318] dark:bg-[#523b23] dark:text-[#f5cc91]",
+  local: "bg-[#e7f4f3] text-[#226d6b] dark:bg-[#1c4142] dark:text-[#9fdad5]",
+  unverified: "bg-[#f0eff5] text-[#6d687c] dark:bg-white/[.08] dark:text-[#c0bacd]",
+};
+
+function OpenChecks({ checks, tabName }: { checks: OpenCheck[]; tabName: string }) {
+  if (!checks.length) return null;
+  const first = checks[0];
+  return <details className="group ml-10 mt-3 rounded-[10px] border border-[#e8e3ef] bg-[#fcfbfe] dark:border-white/[.09] dark:bg-white/[.035]">
+    <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[12px] text-[#5b566c] marker:hidden dark:text-[#d0c9dd] [&::-webkit-details-marker]:hidden">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#e7ad5c]" />
+      <span className="min-w-0 flex-1 truncate"><strong className="font-semibold">{checks.length} known open {checks.length === 1 ? "check" : "checks"}</strong> · {first.path === tabName ? tabName : first.path.split(" > ").slice(1).join(" › ")}: {first.reason}</span>
+      <span className="shrink-0 font-semibold text-[#6d50c2] dark:text-[#c4aeff]"><span className="group-open:hidden">See details</span><span className="hidden group-open:inline">Hide details</span></span>
+      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#8d7bbf] transition-transform group-open:rotate-180" />
+    </summary>
+    <div className="border-t border-[#ece8f1] px-3 pb-2 pt-1 dark:border-white/[.08]">
+      <p className="my-2 text-[11px] leading-relaxed text-[#777083] dark:text-[#aaa3b8]">These are recorded capture checks; the final audit may add others. Impact describes the size of the affected navigation area, not the app’s business importance.</p>
+      <ol className="m-0 list-none divide-y divide-[#ece8f1] p-0 dark:divide-white/[.08]">{checks.map((check, index) => <li key={`${check.path}-${check.reason}-${index}`} className="py-3 first:pt-1">
+        <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${impactTone[check.impact]}`}>{impactCopy[check.impact]}</span><span className="text-[12px] font-semibold text-[#373346] dark:text-[#f1edfa]">{check.path}</span></div>
+        <p className="mb-0 mt-1.5 break-words text-[12px] leading-relaxed text-[#5d586b] dark:text-[#c5bed0]">{check.reason}</p>
+      </li>)}</ol>
+    </div>
+  </details>;
 }
 
 function timeSince(timestamp: number | null) {
@@ -76,6 +110,7 @@ export function CaptureProgressView({ progress }: { progress: CaptureProgress })
           <State value={tab.state} />
         </div>
         {tab.subviews.length > 0 && <div className="ml-10 mt-2.5 flex flex-wrap gap-1.5">{tab.subviews.map((view) => <span key={view.name} className="inline-flex items-center gap-1.5 rounded-[7px] border border-[#e7e4ee] bg-[#faf9fc] px-2 py-1 text-[10px] text-[#5b576a] dark:border-white/[.08] dark:bg-white/[.04] dark:text-[#cbc5d6]"><span className={`h-1.5 w-1.5 rounded-full ${view.state === "done" ? "bg-[#36ae82]" : view.state === "capturing" ? "bg-[#8c65ee]" : view.state === "needs_followup" ? "bg-[#efba70]" : "bg-[#c9c5d4]"}`} />{view.name.split(" > ").slice(-1)[0]}</span>)}</div>}
+        <OpenChecks checks={tab.open_checks || []} tabName={tab.name} />
       </div>) : <div className="border-t border-[#f0eef4] px-6 py-6 text-[12px] text-[#817c90] dark:border-white/[.06] dark:text-[#aaa4b9]">The navigation map appears as soon as the agent identifies tabs.</div>}
     </div>
 
