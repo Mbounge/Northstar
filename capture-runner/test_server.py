@@ -20,10 +20,12 @@ class CaptureServerTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         server.ROOT = Path(self.temp.name)
         self.old_script = server.SCRIPT
+        self.old_emulator_units = server.EMULATOR_UNITS
         server.SCRIPT = server.ROOT / "spy_mobile2.5.py"
         server.SCRIPT.touch()
         server.TOKEN = "test-secret"
         server.DEVICES = {"pixel": "offline-test-serial"}
+        server.EMULATOR_UNITS = {"pixel": "northstar-emulator.service"}
         server.PROCESSES.clear()
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
@@ -36,6 +38,27 @@ class CaptureServerTests(unittest.TestCase):
         self.thread.join(timeout=3)
         self.temp.cleanup()
         server.SCRIPT = self.old_script
+        server.EMULATOR_UNITS = self.old_emulator_units
+
+    def test_device_reboot_requires_auth_and_idle_device(self):
+        self.assertEqual(self.call("/v1/devices/pixel/reboot", {}, authorized=False)[0], 401)
+        self.assertEqual(self.call("/v1/devices/unknown/reboot", {})[0], 404)
+        with patch.object(server, "_restart_emulator") as restart:
+            self.assertEqual(self.call("/v1/devices/pixel/reboot", {})[0], 202)
+            restart.assert_called_once_with("pixel")
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "browsing",
+        })
+        run = server._read_runs()[payload["run"]["id"]]
+        run.update(status="running", pid=12345)
+        server._write_runs({run["id"]: run})
+        with patch.object(server, "_pid_alive", return_value=True), \
+             patch.object(server, "_restart_emulator") as restart:
+            code, response = self.call("/v1/devices/pixel/reboot", {})
+        self.assertEqual(code, 409)
+        self.assertIn("Pause", response["error"])
+        restart.assert_not_called()
 
     def call(self, path, body=None, authorized=True):
         headers = {"Content-Type": "application/json"}

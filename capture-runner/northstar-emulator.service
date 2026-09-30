@@ -11,7 +11,7 @@ SupplementaryGroups=kvm
 WorkingDirectory=/opt/northstar
 Environment=ANDROID_HOME=/opt/android-sdk
 Environment=ANDROID_SDK_ROOT=/opt/android-sdk
-ExecStart=/opt/android-sdk/emulator/emulator -avd Graet_API35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel on -port 5554
+ExecStart=/opt/android-sdk/emulator/emulator -avd Graet_API35 -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu swiftshader -feature -Vulkan -accel on -port 5554
 Restart=always
 RestartSec=10
 KillSignal=SIGTERM

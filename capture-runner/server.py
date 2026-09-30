@@ -33,10 +33,39 @@ TOKEN = os.environ.get("NORTHSTAR_CAPTURE_RUNNER_TOKEN", "")
 HOST = os.environ.get("CAPTURE_BIND", "127.0.0.1")
 PORT = int(os.environ.get("CAPTURE_PORT", "8787"))
 DEVICES = json.loads(os.environ.get("CAPTURE_DEVICES_JSON", "{}"))
+EMULATOR_UNITS = json.loads(os.environ.get("CAPTURE_EMULATOR_UNITS_JSON", "{}"))
 LOCK = threading.RLock()
 PROCESSES: dict[str, subprocess.Popen] = {}
 ID_RE = re.compile(r"^[a-f0-9-]{36}$")
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
+
+
+def _restart_emulator(device_id: str) -> None:
+    """Terminate a verified emulator owned by this service user; systemd restarts it."""
+    serial = DEVICES.get(device_id, "")
+    unit = EMULATOR_UNITS.get(device_id, "")
+    if not re.fullmatch(r"emulator-\d{4}", serial) or not re.fullmatch(
+        r"northstar-emulator(?:-[2-9][0-9]*)?\.service", unit
+    ):
+        raise ValueError("Device reboot is not configured")
+    pid_text = subprocess.check_output(
+        ["systemctl", "show", "--property=MainPID", "--value", unit],
+        text=True, timeout=5,
+    ).strip()
+    if not pid_text.isdigit() or int(pid_text) <= 0:
+        raise ValueError("Emulator service is not running")
+    pid = int(pid_text)
+    process = Path(f"/proc/{pid}")
+    command = (process / "cmdline").read_bytes().split(b"\x00")
+    expected_port = serial.removeprefix("emulator-").encode()
+    executable = command[0] if command else b""
+    if (os.stat(process).st_uid != os.geteuid()
+            or not (executable == b"/opt/android-sdk/emulator/emulator"
+                    or executable == b"/opt/android-sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless")
+            or not any(command[i:i + 2] == [b"-port", expected_port]
+                       for i in range(len(command) - 1))):
+        raise ValueError("Emulator process identity could not be verified")
+    os.kill(pid, signal.SIGTERM)
 
 
 def _registry_path() -> Path:
@@ -286,7 +315,8 @@ class Handler(BaseHTTPRequestHandler):
             })
         if parts == ["v1", "devices"]:
             return self._send(200, {"devices": [
-                {"id": key, "serial": value, "online": self._device_online(value)}
+                {"id": key, "serial": value, "online": self._device_online(value),
+                 "reboot_available": key in EMULATOR_UNITS}
                 for key, value in DEVICES.items()
             ]})
         if parts == ["v1", "runs"]:
@@ -363,6 +393,9 @@ class Handler(BaseHTTPRequestHandler):
             parts = self._parts()
             if parts == ["v1", "runs"]:
                 return self._create(body)
+            if (len(parts) == 4 and parts[:2] == ["v1", "devices"]
+                    and parts[3] == "reboot"):
+                return self._reboot_device(parts[2])
             if (len(parts) == 4 and parts[:2] == ["v1", "runs"]
                     and ID_RE.fullmatch(parts[2]) and parts[3] in ("start", "stop")):
                 return self._change(parts[2], parts[3])
@@ -391,6 +424,19 @@ class Handler(BaseHTTPRequestHandler):
             _run_dir(run_id).mkdir(parents=True, exist_ok=False)
             _write_runs(runs)
         self._send(201, {"run": _status(run)})
+
+    def _reboot_device(self, device_id: str) -> None:
+        if device_id not in DEVICES:
+            return self._send(404, {"error": "Device not found"})
+        with LOCK:
+            for run in _read_runs().values():
+                if run["device_id"] == device_id and _status(run)["live"]:
+                    return self._send(409, {"error": "Pause the active run before rebooting its device"})
+            try:
+                _restart_emulator(device_id)
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                return self._send(503, {"error": str(exc)})
+        self._send(202, {"device_id": device_id, "status": "restarting"})
 
     def _change(self, run_id: str, action: str) -> None:
         with LOCK:

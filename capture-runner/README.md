@@ -39,6 +39,7 @@ store. Never put live values in Git, a browser, or Codex app configuration.
 NORTHSTAR_CAPTURE_RUNNER_TOKEN=<generate a long random secret>
 CAPTURE_DATA_ROOT=/var/lib/northstar/captures
 CAPTURE_DEVICES_JSON={"device-1":"emulator-5554"}
+CAPTURE_EMULATOR_UNITS_JSON={"device-1":"northstar-emulator.service"}
 CAPTURE_ADB=/opt/android-sdk/platform-tools/adb
 MOBILESPY_SCRIPT=/opt/northstar/spy/spy_mobile2.5.py
 MOBILESPY_PYTHON=/opt/northstar/venv/bin/python3
@@ -99,6 +100,11 @@ MobileSpy process. The host service survives its own restart while the capture
 supervisors continue; the registry and per-run checkpoints live on persistent
 storage. Publication and preprocessing into a tenant's indexed catalog are
 separate steps; a capture's Complete status does not imply either one.
+Admin can restart a configured Android emulator while it is idle. The runner
+verifies that the systemd service's main process belongs to the runner user and
+matches that device's ADB port, then terminates it; `Restart=always` brings the
+emulator back without wiping its installed apps or capture files. Pause an
+active run first and resume it after the device is back online.
 
 Before declaring an app capture operational, confirm the host is connected,
 the Play account is signed in, the app can install on the assigned device, and

@@ -2,12 +2,12 @@
 /* eslint-disable @next/next/no-img-element -- These are operator-requested original device frames and app assets. */
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Activity, CircleAlert, Download, FileImage, Pause, Play, Plus, RefreshCw, Smartphone, X } from "lucide-react";
+import { Activity, CircleAlert, Download, FileImage, Pause, Play, Plus, RefreshCw, RotateCcw, Smartphone, X } from "lucide-react";
 
 type Organization = { id: string; name: string };
 type Coverage = { capture_status?: string; audit_status?: string; pending_obligations?: number; unverified_destinations?: number; incomplete_topbars?: number; partial_captures?: number };
 type Run = { onboarding_result?: { score?: number | null; signup_found: boolean; account_created: boolean; settled_home_reached: boolean } | null; platform?: "android" | "ios"; id: string; app: string; package_name: string; organization_id: string; device_id: string; scope: string; status: string; screens: number; icon_available?: boolean; audit_status?: string | null; live: boolean; created_at: number; reason?: string | null; phase?: string; coverage?: Coverage; pass?: number; max_passes?: number; last_activity_at?: string };
-type Device = { id: string; serial: string; name?: string; platform?: "android" | "ios"; online: boolean };
+type Device = { id: string; serial: string; name?: string; platform?: "android" | "ios"; online: boolean; reboot_available?: boolean };
 type Preflight = { platform?: "android" | "ios"; appium_ready?: boolean; online: boolean; booted: boolean; installed: boolean; launchable: boolean; play_store: boolean; ready: boolean; model: string; api_level: string; abi: string; reason?: string | null };
 type CatalogApp = { app_name: string; tenant_id: string; icon_url: string | null };
 type Detail = "overview" | "screens" | "activity" | "setup";
@@ -91,16 +91,19 @@ export function CaptureConsoleLive({ organizations }: { organizations: Organizat
       setError("");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Capture runner unavailable"); }
   }, []);
+  const updateDevices = useCallback(async () => {
+    try { setDevices((await request<{ devices: Device[] }>("/devices")).devices); }
+    catch { /* Run list reports connection failures separately. */ }
+  }, []);
 
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => void refresh(), 3000);
-    const updateDevices = () => void request<{ devices: Device[] }>("/devices").then((data) => setDevices(data.devices)).catch(() => {});
-    updateDevices();
-    const deviceTimer = window.setInterval(updateDevices, 10000);
+    void updateDevices();
+    const deviceTimer = window.setInterval(() => void updateDevices(), 10000);
     void request<{ apps: CatalogApp[] }>("/catalog").then((data) => setCatalog(data.apps)).catch(() => {});
     return () => { clearInterval(timer); clearInterval(deviceTimer); };
-  }, [refresh]);
+  }, [refresh, updateDevices]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -137,6 +140,15 @@ export function CaptureConsoleLive({ organizations }: { organizations: Organizat
     finally { setBusy(false); }
   }
 
+  async function rebootDevice(device: Device) {
+    setBusy(true);
+    try {
+      await request(`/devices/${encodeURIComponent(device.id)}/reboot`, { method: "POST" });
+      await updateDevices();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Device reboot failed"); }
+    finally { setBusy(false); }
+  }
+
   async function create(event: FormEvent) {
     event.preventDefault(); setBusy(true);
     try {
@@ -150,6 +162,7 @@ export function CaptureConsoleLive({ organizations }: { organizations: Organizat
     <div className="flex items-start justify-between gap-4 mb-5"><div><div className="uppercase tracking-[0.16em] text-[11px] font-semibold text-violet-600 dark:text-violet-300">Capture studio</div><h2 className="text-[28px] font-semibold tracking-[-0.045em] mt-2 mb-1">App capture, in one place.</h2><p className="m-0 text-[13px] opacity-55">Operate captures and inspect live device, log and screen evidence.</p></div><button onClick={() => setCreateOpen(true)} disabled={!devices.length} className="flex items-center gap-2 rounded-[11px] bg-[#24232d] dark:bg-white text-white dark:text-[#24232d] px-4 py-3 text-[12px] font-semibold disabled:opacity-40"><Plus className="h-4 w-4" /> New capture</button></div>
     {error && <div role="alert" className="rounded-[12px] bg-rose-500/10 text-rose-700 dark:text-rose-300 p-3 mb-4 text-[12px] flex gap-2"><CircleAlert className="h-4 w-4 shrink-0" />{error}</div>}
     {!devices.length && <div className="rounded-[12px] bg-violet-500/10 p-3 mb-4 text-[12px]">No capture device is configured. Connect an Android capture runner to load devices.</div>}
+    {!!devices.length && <div className={`${card} p-4 mb-4`}><div className="flex items-center justify-between gap-3 mb-3"><h3 className="m-0 text-[13px] font-semibold">Capture devices</h3><span className="text-[11px] opacity-50">Restart preserves installed apps and saved capture files</span></div><div className="flex flex-wrap gap-2">{devices.map((device) => { const occupied = runs.some((run) => run.device_id === device.id && (run.platform || "android") === (device.platform || "android") && run.live); return <div key={`${device.platform || "android"}-${device.id}`} className="flex items-center gap-2 rounded-[10px] border border-black/10 dark:border-white/10 px-3 py-2 text-[12px]"><span className={`h-2 w-2 rounded-full ${device.online ? "bg-emerald-500" : "bg-rose-500"}`} /><span className="font-medium">{device.name || device.id}</span><span className="opacity-50">{occupied ? "In use" : device.online ? "Online" : "Offline"}</span>{device.platform !== "ios" && device.reboot_available && <button type="button" onClick={() => void rebootDevice(device)} disabled={busy || occupied} title={occupied ? "Pause the active run first" : `Restart ${device.name || device.id}`} aria-label={`Restart ${device.name || device.id}`} className="ml-1 rounded-[7px] p-1.5 hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-30"><RotateCcw className="h-3.5 w-3.5" /></button>}</div>; })}</div></div>}
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">{[
       { label: "Running", count: runs.filter((r) => r.live).length, Icon: Activity },
       { label: "Waiting", count: runs.filter((r) => ["queued", "paused"].includes(r.status)).length, Icon: Pause },

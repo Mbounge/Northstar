@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ path?: string[] }> };
 const allowedGet = /^(?:|devices|catalog|[a-f0-9-]{36}(?:\/(?:logs(?:\/download)?|frame|icon|preflight|screens(?:\/[A-Za-z0-9_.-]+\.png)?))?)$/;
-const allowedPost = /^(?:|[a-f0-9-]{36}\/(?:start|stop))$/;
+const allowedPost = /^(?:|[a-f0-9-]{36}\/(?:start|stop)|devices\/[A-Za-z0-9_-]+\/reboot)$/;
 
 async function authorize() {
   const db = await createClient();
@@ -32,7 +32,7 @@ async function fromRunner(runner: Runner, method: "GET" | "POST", path: string, 
   const config = connection(runner);
   if (!config) return null;
   try {
-    const target = `${config.base}/v1/${path === "devices" ? "devices" : `runs${path ? `/${path}` : ""}`}`;
+    const target = `${config.base}/v1/${path === "devices" || path.startsWith("devices/") ? path : `runs${path ? `/${path}` : ""}`}`;
     return await fetch(target, {
       method,
       headers: {
@@ -119,6 +119,10 @@ export async function POST(request: Request, context: Context) {
   if (auth.error) return auth.error;
   const path = ((await context.params).path || []).join("/");
   if (!allowedPost.test(path)) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+  if (path.startsWith("devices/")) {
+    const response = await fromRunner("android", "POST", path);
+    return response ? forward(response) : NextResponse.json({ error: "Android runner is unavailable" }, { status: 503 });
+  }
   if (path) return proxyRun("POST", path);
   let body: Record<string, unknown>;
   try {
