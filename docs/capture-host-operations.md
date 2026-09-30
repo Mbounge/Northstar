@@ -19,6 +19,15 @@ On the host:
 - Active Android emulator services: `northstar-emulator.service`, `northstar-emulator-2.service`, and `northstar-emulator-3.service`
 - Disabled spare: `northstar-emulator-4.service`
 
+The three active emulator units use `-gpu lavapipe -feature -Vulkan -no-snapshot-load`.
+Their service definitions are tracked in `capture-runner/`. The previous
+`swiftshader_indirect` setting caused repeated emulator process crashes during
+Wikipedia feed scrolling. After the primary device passed that scroll twice
+without a restart, devices 2 and 3 were switched one at a time and verified to
+boot, reconnect through ADB, capture screenshots, and retain Play Store. Keep
+checking process restarts during full parallel capture runs; basic device
+checks do not establish sustained multi-agent stability.
+
 Read-only checks:
 
 ```sh

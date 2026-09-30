@@ -1,0 +1,24 @@
+[Unit]
+Description=Northstar Play-enabled Android capture device 3
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+SupplementaryGroups=kvm
+WorkingDirectory=/opt/northstar
+Environment=ANDROID_HOME=/opt/android-sdk
+Environment=ANDROID_SDK_ROOT=/opt/android-sdk
+ExecStart=/opt/android-sdk/emulator/emulator -avd Northstar_Capture_3 -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu lavapipe -feature -Vulkan -accel on -port 5558
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=45
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/northstar/.android /opt/android-sdk
+
+[Install]
+WantedBy=multi-user.target
