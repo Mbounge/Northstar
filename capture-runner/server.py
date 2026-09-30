@@ -22,7 +22,11 @@ from urllib.parse import urlparse
 ROOT = Path(os.environ.get("CAPTURE_DATA_ROOT", "./capture-data")).expanduser().resolve()
 SCRIPT = Path(os.environ.get("MOBILESPY_SCRIPT", "./spy_mobile2.5.py")).expanduser().resolve()
 SUPERVISOR = Path(__file__).with_name("supervisor.py")
+ONBOARDING_SCRIPT = Path(os.environ.get("ONBOARDING_SCRIPT", "./onboarding_mobile2.py")).expanduser().resolve()
+ONBOARDING_SUPERVISOR = Path(__file__).with_name("onboarding_supervisor.py")
+ONBOARDING_PROFILE = Path(os.environ.get("ONBOARDING_IDENTITY_PROFILE", "./onboarding_identity_profile.json")).expanduser().resolve()
 PYTHON = os.environ.get("MOBILESPY_PYTHON", "python3")
+ONBOARDING_PYTHON = os.environ.get("ONBOARDING_PYTHON", PYTHON)
 MAX_PASSES = int(os.environ.get("CAPTURE_MAX_PASSES", "12"))
 ADB = os.environ.get("CAPTURE_ADB", "adb")
 TOKEN = os.environ.get("NORTHSTAR_CAPTURE_RUNNER_TOKEN", "")
@@ -71,6 +75,15 @@ def _json_file(path: Path) -> dict:
         return {}
 
 
+def _onboarding_identity_ready() -> bool:
+    profile = _json_file(ONBOARDING_PROFILE)
+    identity = profile.get("identity")
+    email = identity.get("email") if isinstance(identity, dict) else None
+    return (ONBOARDING_SCRIPT.is_file() and ONBOARDING_SUPERVISOR.is_file()
+            and isinstance(email, str) and "@" in email
+            and bool(os.environ.get("ONBOARDING_PASSWORD")))
+
+
 def _pid_alive(pid: int | None, run_id: str) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
@@ -100,21 +113,29 @@ def _status(run: dict) -> dict:
     supervisor = _json_file(directory / "capture_supervisor_status.json")
     coverage = supervisor.get("coverage") if isinstance(supervisor.get("coverage"), dict) else {}
     if result["status"] in ("running", "stopping") and not alive:
-        complete = (supervisor.get("state") == "complete"
-                    and coverage.get("capture_status") == "finished"
-                    and coverage.get("audit_status") == "complete"
-                    and isinstance(coverage.get("screenshots"), int)
-                    and coverage["screenshots"] > 0
-                    and all(coverage.get(key) == 0 for key in (
-                        "pending_obligations", "unverified_destinations",
-                        "incomplete_topbars", "partial_captures")))
+        if result.get("scope") == "onboarding":
+            manifest = _json_file(directory / "onboarding_manifest.json")
+            outcome = manifest.get("result") if isinstance(manifest.get("result"), dict) else {}
+            complete = (supervisor.get("state") == "complete"
+                        and str(outcome.get("status", "")).startswith("COMPLETED_")
+                        and bool(outcome.get("settled_home_reached"))
+                        and any((directory / "screenshots").glob("*.png")))
+        else:
+            complete = (supervisor.get("state") == "complete"
+                        and coverage.get("capture_status") == "finished"
+                        and coverage.get("audit_status") == "complete"
+                        and isinstance(coverage.get("screenshots"), int)
+                        and coverage["screenshots"] > 0
+                        and all(coverage.get(key) == 0 for key in (
+                            "pending_obligations", "unverified_destinations",
+                            "incomplete_topbars", "partial_captures")))
         result["status"] = "complete" if complete else (
             "paused" if supervisor.get("state") == "paused" else "needs_review")
         result["pid"] = None
         result["updated_at"] = time.time()
     screens = directory / "screenshots"
     result["screens"] = len(list(screens.glob("*.png"))) if screens.is_dir() else 0
-    result["manifest_available"] = (directory / "session_manifest.json").is_file()
+    result["manifest_available"] = (directory / ("onboarding_manifest.json" if result.get("scope") == "onboarding" else "session_manifest.json")).is_file()
     result["icon_available"] = (directory / "extracted_icons" / "ic_launcher_mipmap-xxxhdpi.png").is_file()
     result["audit_status"] = _json_file(directory / "unattended_audit.json").get("status")
     result["coverage"] = coverage
@@ -165,16 +186,19 @@ def _preflight(run: dict, online: bool) -> dict:
     booted = bool(online and serial and _device_property(serial, "sys.boot_completed") == "1")
     launchable = bool(installed and _launchable(serial, run["package_name"]))
     play_store = bool(online and serial and _installed(serial, "com.android.vending"))
+    onboarding = run.get("scope") == "onboarding"
+    script_ready = _onboarding_identity_ready() if onboarding else (SCRIPT.is_file() and SUPERVISOR.is_file())
     return {
         "online": online, "booted": booted, "installed": installed, "launchable": launchable,
         "play_store": play_store,
         "ready": bool(booted and (launchable if installed else play_store)
-                      and SCRIPT.is_file() and SUPERVISOR.is_file()),
+                      and script_ready),
         "model": _device_property(serial, "ro.product.model") if online and serial else "",
         "api_level": _device_property(serial, "ro.build.version.sdk") if online and serial else "",
         "abi": _device_property(serial, "ro.product.cpu.abi") if online and serial else "",
         "reason": ("Device offline" if not online else "Device is still booting" if not booted
-                   else "MobileSpy runtime not installed" if not SCRIPT.is_file() or not SUPERVISOR.is_file()
+                   else "Onboarding agent or host-side identity is not configured" if onboarding and not script_ready
+                   else "MobileSpy runtime not installed" if not script_ready
                    else "App is installed but has no launchable activity" if installed and not launchable
                    else "Google Play Store is unavailable on this device" if not installed and not play_store else None),
     }
@@ -230,6 +254,8 @@ class Handler(BaseHTTPRequestHandler):
                 "devices": len(DEVICES), "online_devices": online,
                 "mobilespy_installed": SCRIPT.is_file(),
                 "supervisor_installed": SUPERVISOR.is_file(),
+                "onboarding_installed": ONBOARDING_SCRIPT.is_file() and ONBOARDING_SUPERVISOR.is_file(),
+                "onboarding_identity_configured": _onboarding_identity_ready(),
             })
         if parts == ["v1", "devices"]:
             return self._send(200, {"devices": [
@@ -278,6 +304,9 @@ class Handler(BaseHTTPRequestHandler):
                         file.seek(max(0, file.tell() - 32768))
                         text = file.read().decode("utf-8", "replace")
                         text = re.sub(r"sk-[A-Za-z0-9_-]{16,}", "[redacted key]", text)
+                        password = os.environ.get("ONBOARDING_PASSWORD", "")
+                        if password:
+                            text = text.replace(password, "[redacted password]")
                         lines = text.splitlines()[-120:]
                 except FileNotFoundError:
                     lines = []
@@ -331,8 +360,8 @@ class Handler(BaseHTTPRequestHandler):
         device_id = str(body.get("device_id", "")).strip()
         scope = str(body.get("scope", "browsing")).lower()
         if (not name or len(name) > 100 or not PACKAGE_RE.fullmatch(package)
-                or not organization_id or device_id not in DEVICES
-                or scope != "browsing"):
+                or device_id not in DEVICES
+                or scope not in ("onboarding", "browsing")):
             raise ValueError("Invalid app, package, organization, device or scope")
         run_id = str(uuid.uuid4())
         run = {"id": run_id, "app": name, "package_name": package,
@@ -373,11 +402,26 @@ class Handler(BaseHTTPRequestHandler):
                     "MOBILESPY_RESUME_SESSION_DIR": str(_run_dir(run_id)),
                     "NORTHSTAR_CAPTURE_RUN_ID": run_id,
                 })
+                if run["scope"] == "onboarding":
+                    env.update({
+                        "ONBOARDING_SCRIPT": str(ONBOARDING_SCRIPT),
+                        "ONBOARDING_IDENTITY_PROFILE": str(ONBOARDING_PROFILE),
+                        "ONBOARDING_PYTHON": ONBOARDING_PYTHON,
+                    })
+                    env["PATH"] = f"{Path(ADB).parent}:{env.get('PATH', '')}"
+                    command = [PYTHON, "-u", str(ONBOARDING_SUPERVISOR),
+                               "--app", run["app"], "--package", run["package_name"],
+                               "--serial", serial, "--session", str(_run_dir(run_id)),
+                               "--run-id", run_id]
+                else:
+                    if ONBOARDING_PROFILE.is_file():
+                        env["MOBILESPY_IDENTITY_PROFILE"] = str(ONBOARDING_PROFILE)
+                    command = [PYTHON, "-u", str(SUPERVISOR), "--app", run["app"],
+                               "--session", str(_run_dir(run_id)), "--run-id", run_id,
+                               "--max-passes", str(MAX_PASSES)]
                 with (_run_dir(run_id) / "launch.log").open("ab") as log:
                     process = subprocess.Popen(
-                        [PYTHON, "-u", str(SUPERVISOR), "--app", run["app"],
-                         "--session", str(_run_dir(run_id)), "--run-id", run_id,
-                         "--max-passes", str(MAX_PASSES)], cwd=SCRIPT.parent, env=env,
+                        command, cwd=(ONBOARDING_SCRIPT if run["scope"] == "onboarding" else SCRIPT).parent, env=env,
                         stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
                         stdin=subprocess.DEVNULL,
                     )

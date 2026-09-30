@@ -14,17 +14,18 @@ this service. The browser never receives the runner token or model API key.
   if the target app is missing. Sign-in stays on the device; the runner never
   handles the Google password.
 - The MobileSpy script and its Python dependencies installed on the host.
+- The onboarding agent and a host-side identity profile when onboarding
+  capture is enabled. Keep its account password in the host secret store.
 - A persistent data volume for `CAPTURE_DATA_ROOT`.
 - HTTPS reachability from the Northstar Next.js server to this service through
   a reverse proxy or private network. Do not expose ADB or port 8787 directly.
 
 Android's Linux emulator uses KVM. A dedicated bare-metal host is appropriate;
 a generic cloud VM without nested virtualization is not a safe assumption.
-Graet's package ID in the existing capture evidence is `com.graet`. A Pixel
-label and Android 15 are not proof of compatibility: the native Play Store on
-the capture host must install that package. If Play reports incompatibility,
-the run stops as **Needs review** with the device model, API level, and ABI
-available in Admin. Choose a different *verified* host device before resuming.
+A Pixel label and Android version are not proof that a particular app is
+compatible: the native Play Store on the assigned device must install the
+exact package. If Play reports incompatibility, the run stops as **Needs
+review** with the model, API level, and ABI available in Admin.
 
 ## Configuration
 
@@ -38,6 +39,10 @@ CAPTURE_DEVICES_JSON={"device-1":"emulator-5554"}
 CAPTURE_ADB=/opt/android-sdk/platform-tools/adb
 MOBILESPY_SCRIPT=/opt/northstar/spy/spy_mobile2.5.py
 MOBILESPY_PYTHON=/opt/northstar/venv/bin/python3
+ONBOARDING_SCRIPT=/opt/northstar/spy/onboarding_mobile2.py
+ONBOARDING_PYTHON=/opt/northstar/venv/bin/python3
+ONBOARDING_IDENTITY_PROFILE=/etc/northstar/onboarding_identity_profile.json
+ONBOARDING_PASSWORD=<host-only account password>
 CAPTURE_BIND=127.0.0.1
 CAPTURE_PORT=8787
 CAPTURE_MAX_PASSES=12
@@ -56,41 +61,41 @@ NORTHSTAR_CAPTURE_RUNNER_URL=https://<capture-host-domain>
 NORTHSTAR_CAPTURE_RUNNER_TOKEN=<same host token>
 ```
 
-The Admin Capture studio lists real runs and devices. Queue a browsing run for
-an organization and device, with Graet entered as app `Graet` / package
-`com.graet`. Starting it first checks the device and Play Store; the supervisor
-installs the app from Play when necessary, then starts MobileSpy. It retries
-resumable capture passes only while evidence or coverage improves. An
+The Admin Capture studio lists real runs and devices. Queue an **onboarding**
+run for an Android package and dedicated device in the shared capture pool.
+An organization can be selected as a capture request context, but capture
+evidence is stored centrally under its run ID; organization selection does
+not publish it to that tenant. Starting it
+checks the device and Play Store, installs the app if needed, clears that
+app's data, and starts the onboarding agent. The persistent run directory
+holds screenshots, `onboarding_manifest.json`, memory, and resume state.
+Pause checkpoints the run; Resume preserves the account and device data.
+Completion requires a settled-home manifest and saved screens. A blocked or
+partial result needs review. The host identity profile needs `identity.email`;
+the account password stays in `ONBOARDING_PASSWORD` on the host.
+
+After onboarding, **Queue browsing** on the completed run reuses its app,
+organization, package, and device. Browsing begins in the signed-in app and
+MobileSpy maps its structure. Its supervisor retries resumable capture passes
+only while evidence or coverage improves. An
 incompatible listing, missing Play sign-in, repeated crash, or stalled coverage
 becomes **Needs review**, with a concrete reason. Pause sends a graceful
 interrupt to the supervisor, which forwards it to MobileSpy and waits for its
 checkpoint. Resume reuses the same session directory. A run becomes Complete
 only after both the capture summary and audit report completion with no
-remaining coverage debt. Live device frames, logs, and saved screenshots are
-available in Admin.
+remaining coverage debt. Live device frames, logs, and all saved screenshots
+are available in Admin.
 
 Keep one assigned emulator per active run. The runner's device pool must contain
 only dedicated capture devices, not a serial currently used by a separate
 MobileSpy process. The host service survives its own restart while the capture
 supervisors continue; the registry and per-run checkpoints live on persistent
-storage. Onboarding and publication to a tenant's app catalog are separate
-operations and are not implied by a browsing run's completion.
+storage. Publication and preprocessing into a tenant's indexed catalog are
+separate steps; a capture's Complete status does not imply either one.
 
-Before declaring the system operational, provision the host, sign the Play
-account into its emulator, configure the two server-side runner variables,
-and confirm Graet's native install. No cloud host or account is provisioned by
-this repository alone.
-
-## Current Graet device result
-
-The first dedicated host is provisioned with an Android 15 Google Play x86_64
-emulator, and the Play account is signed in. Its native `com.graet` listing says
-“Your device isn't compatible with this version.” The installer reports this
-as an incompatible, review-needed run instead of retrying or substituting a
-different app. The exact incompatibility reason is not known from the listing;
-Graet needs a device on which native Play installation succeeds before a
-capture can begin. This result does not prevent other compatible apps from
-using the capture host.
+Before declaring an app capture operational, confirm the host is connected,
+the Play account is signed in, the app can install on the assigned device, and
+the host-side onboarding identity is configured when that agent is needed.
 
 ## Local smoke test without a capture
 

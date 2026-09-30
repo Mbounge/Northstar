@@ -65,8 +65,19 @@ class CaptureServerTests(unittest.TestCase):
     def test_invalid_package_scope_and_screen_path_are_rejected(self):
         common = {"app": "Graet", "organization_id": "tenant-1", "device_id": "pixel", "scope": "browsing"}
         self.assertEqual(self.call("/v1/runs", {**common, "package_name": "com.app;rm"})[0], 400)
-        self.assertEqual(self.call("/v1/runs", {**common, "package_name": "com.app", "scope": "onboarding"})[0], 400)
+        status, payload = self.call("/v1/runs", {**common, "package_name": "com.app", "scope": "onboarding"})
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["run"]["scope"], "onboarding")
+        self.assertEqual(self.call("/v1/runs", {**common, "package_name": "com.app", "scope": "marketing"})[0], 400)
         self.assertEqual(self.call("/v1/runs/../../runs")[0], 404)
+
+    def test_capture_can_enter_shared_pool_without_tenant(self):
+        status, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "onboarding",
+        })
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["run"]["organization_id"], "")
 
     def test_partial_audit_cannot_claim_complete_after_process_exit(self):
         _, payload = self.call("/v1/runs", {
@@ -110,6 +121,33 @@ class CaptureServerTests(unittest.TestCase):
             readiness = server._preflight(run, True)
             self.assertFalse(readiness["ready"])
             self.assertEqual(readiness["reason"], "App is installed but has no launchable activity")
+
+    def test_onboarding_requires_configured_host_identity_and_its_own_manifest(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app", "organization_id": "tenant-1",
+            "device_id": "pixel", "scope": "onboarding",
+        })
+        run_id = payload["run"]["id"]
+        with patch.object(server, "_device_property", return_value="1"), \
+             patch.object(server, "_installed", return_value=True), \
+             patch.object(server, "_launchable", return_value=True):
+            readiness = server._preflight(payload["run"], True)
+        self.assertFalse(readiness["ready"])
+        self.assertIn("identity", readiness["reason"])
+        run = server._read_runs()[run_id]
+        run.update(status="running", pid=123456)
+        server._write_runs({run_id: run})
+        directory = server._run_dir(run_id)
+        (directory / "screenshots").mkdir()
+        (directory / "screenshots" / "screen.png").write_bytes(b"png")
+        (directory / "capture_supervisor_status.json").write_text(json.dumps({"state": "complete"}))
+        (directory / "onboarding_manifest.json").write_text(json.dumps({
+            "result": {"status": "COMPLETED_SETTLED", "settled_home_reached": True}
+        }))
+        with patch.object(server, "_pid_alive", return_value=False):
+            status = self.call(f"/v1/runs/{run_id}")[1]["run"]
+        self.assertEqual(status["status"], "complete")
+        self.assertTrue(status["manifest_available"])
 
 
 if __name__ == "__main__":

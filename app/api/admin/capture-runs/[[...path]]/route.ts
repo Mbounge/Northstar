@@ -114,23 +114,32 @@ export async function POST(request: Request, context: Context) {
   } catch {
     return NextResponse.json({ error: "Expected JSON object" }, { status: 400 });
   }
-  const organizationId = body.organization_id;
+  const organizationId = body.organization_id === undefined ? "" : body.organization_id;
   if (typeof organizationId !== "string") {
-    return NextResponse.json({ error: "Select an organization" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid organization" }, { status: 400 });
   }
-  const { data: organization } = await auth.db!.from("customers")
-    .select("id").eq("id", organizationId).single();
-  if (!organization) return NextResponse.json({ error: "Unknown organization" }, { status: 400 });
+  if (organizationId) {
+    const { data: organization } = await auth.db!.from("customers")
+      .select("id").eq("id", organizationId).single();
+    if (!organization) return NextResponse.json({ error: "Unknown organization" }, { status: 400 });
+  }
   const platform = body.platform === undefined ? "android" : body.platform;
   if (platform !== "android" && platform !== "ios") {
     return NextResponse.json({ error: "Invalid capture platform" }, { status: 400 });
+  }
+  const scope = body.scope === undefined ? "browsing" : body.scope;
+  if (scope !== "onboarding" && scope !== "browsing") {
+    return NextResponse.json({ error: "Choose onboarding or browsing" }, { status: 400 });
+  }
+  if (platform === "ios" && scope === "onboarding") {
+    return NextResponse.json({ error: "iOS onboarding capture is not available" }, { status: 400 });
   }
   const response = await fromRunner(platform, "POST", "", {
     app: body.app,
     package_name: body.package_name,
     organization_id: organizationId,
     device_id: body.device_id,
-    scope: body.scope,
+    scope,
   });
   return response ? forward(response) : NextResponse.json({ error: `${platform} runner is unavailable` }, { status: 503 });
 }
