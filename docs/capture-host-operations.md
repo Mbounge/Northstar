@@ -15,13 +15,16 @@ On the host:
 - Central run data: `/var/lib/northstar/captures`
 - Runner configuration and token: `/etc/northstar/capture.env` (do not print or copy this file into logs)
 - Control service: `northstar-capture.service`
-- Android emulator service: `northstar-emulator.service`
+- Active Android emulator services: `northstar-emulator.service`, `northstar-emulator-2.service`, and `northstar-emulator-3.service`
+- Disabled spare: `northstar-emulator-4.service`
 
 Read-only checks:
 
 ```sh
-systemctl status northstar-capture northstar-emulator --no-pager
+systemctl status northstar-capture northstar-emulator northstar-emulator-2 northstar-emulator-3 --no-pager
 sudo -u northstar /opt/android-sdk/platform-tools/adb devices -l
 ```
 
-The production Admin capture page proxies authenticated requests to the host. Android onboarding and browsing are separate queued run types. Start onboarding first on the online device, review its screenshots and completion state, then queue browsing on the same signed-in device. A successful capture remains in the central run pool; preprocessing, flow generation, and tenant publication are separate steps. The host currently has one Android device, so runs must use it sequentially.
+The production Admin capture page proxies authenticated requests to the host. Android onboarding and browsing are separate queued run types. Start onboarding first on an online device, review its screenshots and completion state, then queue browsing on that same signed-in device. A successful capture remains in the central run pool; preprocessing, flow generation, and tenant publication are separate steps.
+
+The host has 4 physical CPU cores / 8 hardware threads and 31 GiB RAM. Three independent Play-enabled emulators are currently online as `android-1`, `android-2`, and `android-3`, with two virtual CPU cores each. They share the owner's Google Play account state but have separate writable emulator disks and ADB serials. The runner allows only one live capture per device, so different devices can run different apps concurrently. Three-device Play listing, screenshot, and UI-read checks passed. A fourth emulator also passed those lightweight checks after tuning, but is disabled to leave headroom for actual capture agents. Three simultaneous full agent runs have **not** yet been validated end to end; watch the first parallel runs before raising the operating limit.
