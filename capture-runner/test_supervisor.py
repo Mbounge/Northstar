@@ -14,6 +14,12 @@ SPEC.loader.exec_module(supervisor)
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_disconnected_emulator_is_detected_from_agent_log(self):
+        self.assertTrue(supervisor._device_disconnected_in_log("adb: device offline"))
+        self.assertTrue(supervisor._device_disconnected_in_log("adb: device 'emulator-5554' not found"))
+        self.assertTrue(supervisor._device_disconnected_in_log("ADB shell timed out after 20s"))
+        self.assertFalse(supervisor._device_disconnected_in_log("Native root navigation verified"))
+
     def test_manifest_audit_disagreement_never_counts_as_complete(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

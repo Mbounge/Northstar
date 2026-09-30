@@ -93,6 +93,13 @@ def _progress(before: dict, after: dict) -> bool:
     return _structural_progress(before, after) or after["screenshots"] > before["screenshots"]
 
 
+def _device_disconnected_in_log(log: str) -> bool:
+    lower = log.casefold()
+    return any(message in lower for message in (
+        "adb: device offline", "adb: device '", "adb shell timed out",
+    ))
+
+
 def _signal_child(_signum, _frame) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
@@ -161,6 +168,7 @@ def supervise(app: str, session: Path, max_passes: int) -> int:
                       if "SCRIPT CRASHED:" in line), None)
         paused = ("MOBILESPY PAUSED:" in new_log
                   or after["device_failures"] > before["device_failures"])
+        device_disconnected = _device_disconnected_in_log(new_log)
         changed = _progress(before, after)
         structural = _structural_progress(before, after)
         screenshot_only_passes = (0 if structural else screenshot_only_passes + 1)
@@ -177,6 +185,8 @@ def supervise(app: str, session: Path, max_passes: int) -> int:
             state_name, reason = "complete", "evidence-backed coverage audit complete"
         elif paused:
             state_name, reason = "needs_review", "provider or Android device paused the worker"
+        elif device_disconnected:
+            state_name, reason = "needs_review", "assigned emulator disconnected during capture; verify device and resume"
         elif crash and crash == prior_crash:
             state_name, reason = "needs_review", "same script exception repeated after resume"
         elif not changed:
