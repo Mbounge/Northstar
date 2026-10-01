@@ -43,11 +43,13 @@ def collector_owns_debugging_port(port: int = 9222) -> bool:
         if len(pids) != 1:
             return False
         process = subprocess.run(
-            ["ps", "-p", next(iter(pids)), "-o", "command="],
+            ["lsof", "-nP", "-p", next(iter(pids)), "-Fn"],
             capture_output=True, text=True, check=True, timeout=3,
         )
-        expected = f"--user-data-dir={Path(CHROME_DATA_DIR).expanduser().resolve()}"
-        return expected in process.stdout
+        files = set(process.stdout.splitlines())
+        chrome_executable = "n/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        profile_prefix = f"n{Path(CHROME_DATA_DIR).expanduser().resolve()}/Default/"
+        return chrome_executable in files and any(file.startswith(profile_prefix) for file in files)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
 

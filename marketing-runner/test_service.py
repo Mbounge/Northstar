@@ -50,10 +50,10 @@ class MarketingRunnerTests(unittest.TestCase):
 
     def test_debugging_port_must_belong_to_collector_profile(self):
         listener = MagicMock(returncode=0, stdout="p1234\n")
-        process = MagicMock(returncode=0, stdout=f"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir={COLLECTOR_CHROME_DATA_DIR}\n")
+        process = MagicMock(returncode=0, stdout=f"n/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\nn{COLLECTOR_CHROME_DATA_DIR}/Default/History\n")
         with patch.object(service, "CHROME_DATA_DIR", str(COLLECTOR_CHROME_DATA_DIR)), patch.object(service.subprocess, "run", side_effect=[listener, process]):
             self.assertTrue(service.collector_owns_debugging_port())
-        wrong_profile = MagicMock(returncode=0, stdout="Google Chrome --user-data-dir=/Users/mbounge/Library/Application Support/Google/Chrome\n")
+        wrong_profile = MagicMock(returncode=0, stdout="n/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\nn/Users/mbounge/Library/Application Support/Google/Chrome/Default/History\n")
         with patch.object(service, "CHROME_DATA_DIR", str(COLLECTOR_CHROME_DATA_DIR)), patch.object(service.subprocess, "run", side_effect=[listener, wrong_profile]):
             self.assertFalse(service.collector_owns_debugging_port())
         with patch.object(service, "CHROME_DATA_DIR", str(COLLECTOR_CHROME_DATA_DIR)), patch.object(service, "collector_owns_debugging_port", return_value=False), self.assertRaisesRegex(RuntimeError, "does not belong"):
