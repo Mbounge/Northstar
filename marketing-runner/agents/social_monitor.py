@@ -6,7 +6,7 @@ import time
 import re
 import random
 from datetime import datetime
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright_stealth import Stealth
 from google import genai
 from google.genai import types
@@ -38,7 +38,7 @@ MAX_WEB_HITS = 1
 MAX_COMMENTS = 2
 TEST_LIMIT = None # Set to a number, e.g. 5, to test a partial roster
 
-# Speed knobs. 1.0 is the old speed. 0.35 is materially faster while still allowing pages to render.
+# Speed knobs shorten human-paced actions; source readiness is checked separately.
 DELAY_SCALE = 0.20
 CLICK_DELAY_SCALE = 0.25
 SCROLL_DELAY_SCALE = 0.30
@@ -472,14 +472,28 @@ class SocialMonitor:
 
             data = []
             processed_urls = set()
+            tweet_locator = page.locator("article[data-testid='tweet']")
+            for attempt in range(2):
+                try:
+                    await tweet_locator.first.wait_for(state="visible", timeout=12000)
+                    break
+                except PlaywrightTimeoutError:
+                    if attempt == 0 and self.has_time(35):
+                        print("      ⚠️ X profile has not rendered posts; reloading once.")
+                        await page.reload(wait_until="domcontentloaded")
+                    else:
+                        print(f"      ⚠️ X profile has no visible posts at {page.url.split('?')[0]} ({await page.title()}).")
+                        return []
 
             print(f"      📜 Loading tweets...")
             for scroll_round in range(3):
+                if await tweet_locator.count() >= MAX_POSTS:
+                    break
                 await page.evaluate("window.scrollBy(0, window.innerHeight)")
                 await self.human_delay(1.0, 1.8)
                 await self.simulate_human(page)
 
-            tweets = await page.locator("article[data-testid='tweet']").all()
+            tweets = await tweet_locator.all()
             print(f"      📊 Found {len(tweets)} tweets loaded")
 
             for i in range(min(MAX_POSTS, len(tweets))):
@@ -567,12 +581,25 @@ class SocialMonitor:
         await page.set_viewport_size(MOBILE_VIEWPORT)
 
         try:
-            await page.goto(url, timeout=15000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
             await self.human_delay(3, 6)
 
             if "login" in page.url:
                 print("      ⚠️ Login required, skipping Instagram")
                 return []
+
+            post_locator = page.locator("a[href*='/p/'], a[href*='/reel/']")
+            for attempt in range(2):
+                try:
+                    await post_locator.first.wait_for(state="visible", timeout=12000)
+                    break
+                except PlaywrightTimeoutError:
+                    if attempt == 0 and self.has_time(35):
+                        print("      ⚠️ Instagram profile has not rendered posts; reloading once.")
+                        await page.reload(wait_until="domcontentloaded")
+                    else:
+                        print(f"      ⚠️ Instagram profile has no visible posts at {page.url.split('?')[0]} ({await page.title()}).")
+                        return []
 
             grid_shot = await page.screenshot(type="jpeg", quality=60)
             grid_id = f"IG_GRID_{uuid.uuid4().hex[:6]}"
@@ -583,7 +610,7 @@ class SocialMonitor:
                 "type": "Grid", "screenshot": f"{self.data_dir}/screenshots/{grid_id}.jpg"
             }]
 
-            all_links = await page.locator("a[href*='/p/'], a[href*='/reel/']").all()
+            all_links = await post_locator.all()
 
             unique_hrefs = []
             seen = set()
