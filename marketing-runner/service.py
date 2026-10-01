@@ -51,12 +51,17 @@ def linkedin_browser_connected() -> bool:
     try:
         endpoint = cdp_endpoint()
         if CHROME_DATA_DIR:
-            import socket
             from urllib.parse import urlsplit
-            with socket.create_connection(("127.0.0.1", urlsplit(endpoint).port), timeout=1):
-                return True
-        with urlopen(f"{endpoint}/json/version", timeout=1) as response:
-            return response.status == 200
+            port = urlsplit(endpoint).port
+            version_url = f"http://127.0.0.1:{port}/json/version"
+        else:
+            version_url = f"{endpoint}/json/version"
+        with urlopen(version_url, timeout=2) as response:
+            version = json.load(response)
+            return response.status == 200 and (
+                version.get("webSocketDebuggerUrl") == endpoint if CHROME_DATA_DIR
+                else bool(version.get("webSocketDebuggerUrl"))
+            )
     except Exception:
         return False
 
@@ -155,7 +160,7 @@ def queue_run(target_id: str, kind: str, trigger: str) -> dict:
         if kind not in {"research", "snapshot"}:
             raise ValueError("Unknown run type")
         if trigger == "manual" and CHROME_DATA_DIR and not linkedin_browser_connected():
-            raise ValueError("The signed-in Chrome collector is unavailable. Open Chrome and enable local debugging before starting a run")
+            raise ValueError("The dedicated Chrome collector endpoint is unavailable. Start its browser before running social capture")
         runs = read_json(RUNS, {})
         if any(run["target_id"] == target_id and run["status"] in {"queued", "running"} for run in runs.values()):
             raise ValueError("This app already has an active social run")
@@ -361,6 +366,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("NORTHSTAR_MARKETING_RUNNER_TOKEN is required")
+    if CHROME_DATA_DIR:
+        from mac_collector import dedicated_chrome_data_dir
+        dedicated_chrome_data_dir(CHROME_DATA_DIR)
     ROOT.mkdir(parents=True, exist_ok=True)
     # Interrupted work is inspectable and may be retried explicitly; never imply it completed.
     runs = read_json(RUNS, {})

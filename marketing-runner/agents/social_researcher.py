@@ -659,7 +659,7 @@ class SocialResearcher:
             try:
                 if self.found_brand_handles.get("linkedin"):
                     print("   🔗 Connecting to the dedicated signed-in Chrome session...")
-                    browser = await p.chromium.connect_over_cdp(LINKEDIN_CDP_URL, timeout=10000)
+                    browser = await p.chromium.connect_over_cdp(LINKEDIN_CDP_URL, timeout=60000)
                     context = browser.contexts[0]
                     page = await context.new_page()
                     await self.extract_direct_employees(page)

@@ -4,15 +4,40 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import service
+from install_mac_worker import LABELS, definitions
+from mac_collector import MANAGED_CHROME_DATA_DIR, dedicated_chrome_data_dir
 from publisher import validate_feed
 
 TENANT = "12345678-1234-1234-1234-123456789abc"
 
 
 class MarketingRunnerTests(unittest.TestCase):
+    def test_collector_cannot_use_everyday_chrome_or_profile(self):
+        regular = Path.home() / "Library/Application Support/Google/Chrome"
+        self.assertEqual(dedicated_chrome_data_dir(""), str(MANAGED_CHROME_DATA_DIR))
+        with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
+            dedicated_chrome_data_dir(str(regular))
+        with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
+            dedicated_chrome_data_dir(str(regular / "Profile 3"))
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
+                dedicated_chrome_data_dir(directory)
+
+    def test_installed_browser_is_confined_to_managed_profile(self):
+        launch_agents = definitions()
+        arguments = launch_agents[LABELS[0]]["ProgramArguments"]
+        self.assertIn(f"--user-data-dir={MANAGED_CHROME_DATA_DIR}", arguments)
+        self.assertIn("--remote-debugging-address=127.0.0.1", arguments)
+        self.assertEqual(
+            launch_agents[LABELS[1]]["EnvironmentVariables"]["NORTHSTAR_MARKETING_CHROME_DATA_DIR"],
+            str(MANAGED_CHROME_DATA_DIR),
+        )
+        with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
+            definitions(str(Path.home() / "Library/Application Support/Google/Chrome"))
+
     def test_chrome_debugging_port_is_resolved_without_exporting_browser_data(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -22,6 +47,17 @@ class MarketingRunnerTests(unittest.TestCase):
             (root / "DevToolsActivePort").write_text("bad\n/devtools/browser/test-id\n")
             with patch.object(service, "CHROME_DATA_DIR", str(root)), self.assertRaises(ValueError):
                 service.cdp_endpoint()
+
+    def test_collector_rejects_a_stale_or_wrong_chrome_endpoint(self):
+        endpoint = "ws://127.0.0.1:43127/devtools/browser/expected"
+        response = MagicMock()
+        response.status = 200
+        response.__enter__.return_value = response
+        with patch.object(service, "CHROME_DATA_DIR", "/tmp/collector-profile"), patch.object(service, "cdp_endpoint", return_value=endpoint), patch.object(service, "urlopen", return_value=response):
+            response.read.return_value = json.dumps({"webSocketDebuggerUrl": "ws://127.0.0.1:43127/devtools/browser/other"}).encode()
+            self.assertFalse(service.linkedin_browser_connected())
+            response.read.return_value = json.dumps({"webSocketDebuggerUrl": endpoint}).encode()
+            self.assertTrue(service.linkedin_browser_connected())
 
     def test_target_validation_and_schedule(self):
         target = service.validate_target({
@@ -81,7 +117,7 @@ class MarketingRunnerTests(unittest.TestCase):
                 "socials": {"twitter": "https://x.com/example"}})
             with patch.object(service, "CHROME_DATA_DIR", str(root)), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=False):
                 service.write_json(service.TARGETS, {target["id"]: target})
-                with self.assertRaisesRegex(ValueError, "signed-in Chrome collector is unavailable"):
+                with self.assertRaisesRegex(ValueError, "dedicated Chrome collector endpoint is unavailable"):
                     service.queue_run(target["id"], "snapshot", "manual")
 
     def test_blocked_people_discovery_preserves_brand_but_needs_review(self):

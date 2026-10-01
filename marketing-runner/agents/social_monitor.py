@@ -796,7 +796,7 @@ class SocialMonitor:
         async with async_playwright() as p:
             try:
                 print("\n🔗 [PHASE 1] Connecting to signed-in LinkedIn Chrome...")
-                browser = await p.chromium.connect_over_cdp(LINKEDIN_CDP_URL, timeout=10000)
+                browser = await p.chromium.connect_over_cdp(LINKEDIN_CDP_URL, timeout=60000)
                 context = browser.contexts[0]
                 page_cdp = await context.new_page()
 
@@ -833,7 +833,7 @@ class SocialMonitor:
             page_managed = None
             try:
                 if SHARED_SIGNED_IN_CHROME:
-                    browser_managed = await p.chromium.connect_over_cdp(LINKEDIN_CDP_URL, timeout=10000)
+                    browser_managed = await p.chromium.connect_over_cdp(LINKEDIN_CDP_URL, timeout=60000)
                     context_managed = browser_managed.contexts[0]
                     page_managed = await context_managed.new_page()
                     print("   🔗 Using the same signed-in Chrome context for all social platforms.")
