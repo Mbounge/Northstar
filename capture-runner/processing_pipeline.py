@@ -193,7 +193,14 @@ def _enrichment_valid(session: Path, expected: set[str]) -> bool:
         value = _read(path)
         if not path.is_file() or value.get("extraction_meta", {}).get("provider") != "openai":
             return False
-    return (session / "enriched/session_intelligence.json").is_file()
+    intelligence = _read(session / "enriched/session_intelligence.json")
+    profile = intelligence.get("competitive_profile") or {}
+    return (isinstance(intelligence.get("executive_summary"), str)
+            and bool(intelligence["executive_summary"].strip())
+            and isinstance(profile, dict)
+            and bool(str(profile.get("macro_market") or "").strip())
+            and str(profile.get("macro_market")).strip() != "Unclassified"
+            and bool(str(profile.get("micro_niche") or "").strip()))
 
 
 def _flows_valid(session: Path, expected: set[str]) -> bool:

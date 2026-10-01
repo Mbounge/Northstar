@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from processing_pipeline import inspect, prepare, run
+from processing_pipeline import _enrichment_valid, inspect, prepare, run
 
 
 class ProcessingPipelineTests(unittest.TestCase):
@@ -62,6 +62,26 @@ class ProcessingPipelineTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest))
             with self.assertRaisesRegex(ValueError, "manifest changed"):
                 run(session)
+
+    def test_screen_checkpoints_do_not_hide_failed_market_synthesis(self):
+        with tempfile.TemporaryDirectory() as root:
+            session, image = self.fixture(root)
+            enriched = session / "enriched"
+            enriched.mkdir()
+            (enriched / "screen.json").write_text(json.dumps({
+                "extraction_meta": {"provider": "openai"}}))
+            (enriched / "enriched_manifest.json").write_text(json.dumps({
+                "enriched_screenshots": [{"screenshot": image.name,
+                                          "enriched_file": "screen.json"}]}))
+            intelligence = enriched / "session_intelligence.json"
+            intelligence.write_text(json.dumps({"executive_summary": "",
+                                                "competitive_profile": {}}))
+            self.assertFalse(_enrichment_valid(session, {image.name}))
+            intelligence.write_text(json.dumps({
+                "executive_summary": "Evidence-backed summary",
+                "competitive_profile": {"macro_market": "Education & Learning",
+                                        "micro_niche": "Encyclopedia"}}))
+            self.assertTrue(_enrichment_valid(session, {image.name}))
 
 
 if __name__ == "__main__":

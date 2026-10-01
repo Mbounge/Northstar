@@ -164,7 +164,7 @@ def _get_pillar(label: str) -> str:
 class TeardownSessionMemory:
     """Accumulates system and design intelligence across non-linear tab exploration."""
 
-    def __init__(self, app_name: str, app_macro_market: str = "Utilities & Infrastructure", app_micro_niche: str = "General"):
+    def __init__(self, app_name: str, app_macro_market: str = "Unclassified", app_micro_niche: str = "Unclassified"):
         self.app_name = app_name
         self.app_macro_market = app_macro_market
         self.app_micro_niche = app_micro_niche
@@ -468,13 +468,13 @@ class TeardownPostProcessor:
         self.flows_json = self._load_json("flows/flows.json") # Hook to deterministic V2 lanes
 
         app_name = self.manifest.get("app", "Unknown") if self.manifest else "Unknown"
-        initial_category = (self.agent_memory.get("app_type", "Utilities & Infrastructure") if self.agent_memory else "Utilities & Infrastructure")
+        initial_category = (self.agent_memory.get("app_type") or "Unclassified") if self.agent_memory else "Unclassified"
 
         # Start with the initial category parsed as the micro niche.
         # The Synthesis phase will cleanly re-map this to the strict Macro/Micro taxonomy.
         self.memory = TeardownSessionMemory(
             app_name=app_name,
-            app_macro_market="Utilities & Infrastructure",
+            app_macro_market="Unclassified",
             app_micro_niche=initial_category
         )
         self.memory.app_category = initial_category
@@ -679,8 +679,8 @@ class TeardownPostProcessor:
 
         prompt = f"""APP TEARDOWN INTELLIGENCE EXTRACTION v3.0
 
-You are an expert competitive intelligence analyst conducting a full product teardown
-of "{self.memory.app_name}" ({self.memory.app_category}).
+You are an expert competitive intelligence analyst interpreting a captured screen
+of "{self.memory.app_name}" ({self.memory.app_category}). Only report what the evidence supports.
 
 This is SCREEN {step} of {total}.
 
@@ -1158,8 +1158,11 @@ Coverage: {json.dumps(self.apk_intel.get('extraction_coverage', {}), indent=2)}
 
         prompt = f"""SESSION-LEVEL TEARDOWN INTELLIGENCE SYNTHESIS v3.0
 
-You are producing the definitive competitive intelligence report for "{self.memory.app_name}"
-based on a complete automated product teardown.
+You are producing an evidence-based competitive intelligence report for "{self.memory.app_name}"
+from the captured screens. The capture audit status is
+"{(self._load_json('unattended_audit.json') or {}).get('status', 'unknown')}".
+Do not claim a complete product teardown when the audit is partial or unknown.
+Describe unobserved features, outcomes, and monetization as unverified.
 
 MANDATORY TAXONOMY - MACRO MARKET:
 In your response, you must classify the app under exactly ONE of the following macro market options:
@@ -1412,8 +1415,11 @@ OUTPUT JSON:
 }}
 """
         ai_synthesis = await self._ai_extract(prompt, [], model=self.SYNTHESIS_MODEL)
-        if not isinstance(ai_synthesis.get("executive_summary"), str):
+        profile = ai_synthesis.get("competitive_profile") if isinstance(ai_synthesis, dict) else None
+        if not isinstance(ai_synthesis, dict) or not isinstance(ai_synthesis.get("executive_summary"), str) or not ai_synthesis["executive_summary"].strip():
             raise RuntimeError("Session synthesis omitted executive_summary")
+        if not isinstance(profile, dict) or profile.get("macro_market") not in MACRO_MARKETS or not isinstance(profile.get("micro_niche"), str) or not profile["micro_niche"].strip():
+            raise RuntimeError("Session synthesis did not classify the app's market and niche")
 
         session_intel = {
             "schema_version": SCHEMA_VERSION,
