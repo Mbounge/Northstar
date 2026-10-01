@@ -291,6 +291,36 @@ def _publication_files(run: dict) -> dict:
     return result
 
 
+def _generated_flow_summary(run: dict) -> dict:
+    session = _run_dir(run["id"])
+    if _json_file(session / "processing_pipeline.json").get("stage") != "ready_for_review":
+        raise ValueError("Generated flows are not ready for review")
+    flows = _json_file(session / "enriched/flows.json")
+    catalog = flows.get("screen_catalog") or []
+    roots = flows.get("taxonomy") or []
+    if not isinstance(catalog, list) or not catalog or not isinstance(roots, list) or not roots:
+        raise ValueError("Generated flow map is missing")
+
+    def screen_name(indices: list) -> str | None:
+        for index in indices:
+            if isinstance(index, int) and 1 <= index <= len(catalog) and isinstance(catalog[index - 1], dict):
+                name = Path(str(catalog[index - 1].get("screenshot_file") or "")).name
+                if re.fullmatch(r"[A-Za-z0-9_.-]+\.png", name):
+                    return name
+        return None
+
+    def summarize(node: dict) -> dict:
+        children = [summarize(child) for child in node.get("children") or [] if isinstance(child, dict)]
+        indices = node.get("screens") if isinstance(node.get("screens"), list) else []
+        first = screen_name(indices) or next((child["first_screen"] for child in children if child["first_screen"]), None)
+        return {"label": str(node.get("label") or "Flow")[:120],
+                "description": str(node.get("description") or "")[:600],
+                "screens": len(indices), "first_screen": first, "children": children}
+
+    return {"summary": flows.get("summary") or {},
+            "roots": [summarize(root) for root in roots if isinstance(root, dict)]}
+
+
 def _json_file(path: Path) -> dict:
     try:
         data = json.loads(path.read_text())
@@ -678,6 +708,11 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 5 and parts[3:] == ["pipeline", "artifacts"]:
                 try:
                     return self._send(200, {"artifacts": _publication_files(run)})
+                except ValueError as exc:
+                    return self._send(409, {"error": str(exc)})
+            if len(parts) == 5 and parts[3:] == ["pipeline", "flow-summary"]:
+                try:
+                    return self._send(200, {"flows": _generated_flow_summary(run)})
                 except ValueError as exc:
                     return self._send(409, {"error": str(exc)})
             if (len(parts) >= 6 and parts[3:5] == ["pipeline", "artifact"]):

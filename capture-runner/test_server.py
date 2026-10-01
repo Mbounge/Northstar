@@ -241,6 +241,28 @@ class CaptureServerTests(unittest.TestCase):
             launch.assert_not_called()
         self.assertEqual(server._json_file(status_path)["stage"], "failed")
 
+    def test_generated_flow_review_shows_sections_and_screenshot_evidence(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        endpoint = f"/v1/runs/{run_id}/pipeline/flow-summary"
+        self.assertEqual(self.call(endpoint)[0], 409)
+        session = server._run_dir(run_id)
+        (session / "enriched").mkdir()
+        server._write_json(session / "processing_pipeline.json", {"stage": "ready_for_review"})
+        server._write_json(session / "enriched/flows.json", {
+            "summary": {"total_screens": 2, "total_flows": 1},
+            "screen_catalog": [{"screenshot_file": "s001.png"}, {"screenshot_file": "s002.png"}],
+            "taxonomy": [{"label": "Home", "screens": [1, 2], "children": [
+                {"label": "Search", "description": "Search results and detail", "screens": [2], "children": []}]}],
+        })
+        code, result = self.call(endpoint)
+        self.assertEqual(code, 200)
+        self.assertEqual(result["flows"]["summary"]["total_screens"], 2)
+        self.assertEqual(result["flows"]["roots"][0]["children"][0]["first_screen"], "s002.png")
+
     def test_host_restart_resumes_interrupted_run_but_not_operator_pause(self):
         ids = []
         for app in ("Interrupted", "Paused"):

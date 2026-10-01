@@ -15,6 +15,8 @@ type Pipeline = {
 type StoreCandidate = { track_id: number; title: string; seller: string; bundle_id?: string; icon_url?: string; url?: string };
 type Publication = { stage: "uploading" | "complete"; tenant_id: string; app_name: string; cursor: number; files: { path: string }[]; audit_status: string };
 type Organization = { id: string; name: string };
+type GeneratedFlow = { label: string; description: string; screens: number; first_screen?: string | null; children: GeneratedFlow[] };
+type GeneratedFlows = { summary: { total_screens?: number; total_flows?: number; total_root_flows?: number }; roots: GeneratedFlow[] };
 
 const api = "/api/admin/capture-runs";
 const active = new Set(["queued", "preparing", "preprocessing", "flow_generation"]);
@@ -22,6 +24,10 @@ const complete = new Set(["prepared", "preprocessing", "flow_generation", "ready
 
 function stageLabel(stage: string) {
   return ({ not_started: "Not started", queued: "Starting", preparing: "Checking evidence", prepared: "Map ready", preprocessing: "Reading screens", flow_generation: "Building flows", ready_for_review: "Ready for review", failed: "Needs attention" } as Record<string, string>)[stage] || stage.replaceAll("_", " ");
+}
+
+function flowDescendants(root: GeneratedFlow): GeneratedFlow[] {
+  return root.children.length ? root.children.flatMap((child) => [child, ...flowDescendants(child)]) : [];
 }
 
 export function CapturePipeline({ runId, appName, packageName, appStoreRequired, organizations, organizationId, onShowGaps }: { runId: string; appName: string; packageName: string; appStoreRequired: boolean; organizations: Organization[]; organizationId: string; onShowGaps: () => void }) {
@@ -38,6 +44,8 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
   const [acknowledgePartial, setAcknowledgePartial] = useState(false);
   const [publication, setPublication] = useState<Publication | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [generated, setGenerated] = useState<GeneratedFlows | null>(null);
+  const [generatedError, setGeneratedError] = useState("");
   const currentRunId = useRef(runId);
   currentRunId.current = runId;
 
@@ -51,7 +59,7 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
   }, [runId]);
 
   useEffect(() => {
-    setPipeline(null); setError(""); setExpanded(false); setShowLog(false); setLogs([]); setStoreQuery(appName); setStoreCandidates([]); setTenantId(organizationId); setPublication(null);
+    setPipeline(null); setError(""); setExpanded(false); setShowLog(false); setLogs([]); setStoreQuery(appName); setStoreCandidates([]); setTenantId(organizationId); setPublication(null); setGenerated(null); setGeneratedError("");
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
@@ -65,6 +73,21 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
       .then((body) => { if (!cancelled) setPublication(body?.publication || null); });
     return () => { cancelled = true; };
   }, [runId, tenantId]);
+
+  const loadGenerated = useCallback(async () => {
+    try {
+      const response = await fetch(`${api}/${runId}/pipeline/flow-summary`, { cache: "no-store" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "Could not load generated flows");
+      if (currentRunId.current === runId) { setGenerated(body.flows); setGeneratedError(""); }
+    } catch (cause) {
+      if (currentRunId.current === runId) setGeneratedError(cause instanceof Error ? cause.message : "Could not load generated flows");
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    if (pipeline?.stage === "ready_for_review") void loadGenerated();
+  }, [pipeline?.stage, loadGenerated]);
 
   useEffect(() => {
     if (!showLog) return;
@@ -201,7 +224,7 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
         <label className="mt-4 block text-[12px] font-semibold">Organization<select value={tenantId} onChange={(event) => setTenantId(event.target.value)} className="mt-1.5 block w-full rounded-[9px] border border-[#ddd6e8] bg-transparent p-2.5 text-[13px] dark:border-white/15"><option value="">Choose organization</option>{organizations.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}</select></label>
         {showGaps && <label className="mt-3 flex items-start gap-2 text-[12px] leading-5"><input type="checkbox" checked={acknowledgePartial} onChange={(event) => setAcknowledgePartial(event.target.checked)} className="mt-1" /><span>I reviewed the capture gaps. This release will retain its partial audit status.</span></label>}
         {publication && <div className="mt-3 text-[12px] tabular-nums">{publication.stage === "complete" ? "Delivered" : "Transferring"} · {publication.cursor} of {publication.files.length} files</div>}
-        <button type="button" disabled={publishing || !tenantId || stage !== "ready_for_review" || pipeline.app_store?.stage !== "ready_for_review" || Boolean(showGaps && !acknowledgePartial) || publication?.stage === "complete"} onClick={() => void deliver()} className="mt-4 rounded-[9px] bg-[#6544bd] px-4 py-2.5 text-[12px] font-semibold text-white disabled:opacity-40">{publishing ? "Delivering evidence…" : publication?.stage === "uploading" ? "Resume delivery" : publication?.stage === "complete" ? "Delivered" : "Deliver to organization"}</button>
+        <button type="button" disabled={publishing || !tenantId || stage !== "ready_for_review" || !generated || Boolean(generatedError) || pipeline.app_store?.stage !== "ready_for_review" || Boolean(showGaps && !acknowledgePartial) || publication?.stage === "complete"} onClick={() => void deliver()} className="mt-4 rounded-[9px] bg-[#6544bd] px-4 py-2.5 text-[12px] font-semibold text-white disabled:opacity-40">{publishing ? "Delivering evidence…" : publication?.stage === "uploading" ? "Resume delivery" : publication?.stage === "complete" ? "Delivered" : "Deliver to organization"}</button>
       </div>
       {stage === "failed" && pipeline.error && <div role="alert" className="rounded-[12px] border border-rose-500/20 bg-rose-500/[.07] px-4 py-3 text-[13px] text-rose-700 dark:text-rose-200">{pipeline.error}</div>}
       <div className="flex flex-wrap items-center gap-3"><span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold ${working ? "bg-violet-500/10 text-violet-700 dark:text-violet-200" : stage === "failed" ? "bg-rose-500/10 text-rose-700 dark:text-rose-200" : complete.has(stage) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200" : "bg-black/[.05] text-[#777080] dark:bg-white/[.07] dark:text-[#bcb3c7]"}`}>{working && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}{stageLabel(stage)}</span>{pipeline.can_prepare && !hasMap && !working && <button onClick={() => void action("prepare")} disabled={busy} className="rounded-[10px] bg-[#6544bd] px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-[#5535ae] disabled:opacity-40">Prepare flow map</button>}{hasMap && stage !== "ready_for_review" && !working && <button onClick={() => void action("run")} disabled={busy} className="rounded-[10px] bg-[#6544bd] px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-[#5535ae] disabled:opacity-40">{stage === "failed" ? "Resume processing" : "Analyze screens & generate flows"}</button>}{hasMap && !working && stage !== "ready_for_review" && <button onClick={() => void action("prepare")} disabled={busy} className="rounded-[10px] border border-[#ddd6e8] px-3 py-2.5 text-[13px] font-semibold dark:border-white/15">Recheck map</button>}<button onClick={() => setShowLog((value) => !value)} className="ml-auto text-[12px] font-semibold text-[#6c54a3] underline underline-offset-2 dark:text-[#ccb8ff]">{showLog ? "Hide activity" : "Processing activity"}</button></div>
@@ -220,6 +243,17 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
           </div>)}</div>
         </div>)}
         {groups.length > 6 && <button onClick={() => setExpanded((value) => !value)} className="w-full px-5 py-3 text-left text-[13px] font-semibold text-violet-700 transition hover:bg-violet-500/[.05] dark:text-violet-200">{expanded ? "Show fewer sections" : `Show all ${groups.length} sections`}</button>}
+      </div>}
+
+      {stage === "ready_for_review" && <div className="overflow-hidden rounded-[17px] border border-[#e8e3ee] bg-white dark:border-white/[.11] dark:bg-[#1b1923]">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#eeeaf2] px-5 py-4 dark:border-white/[.08]">
+          <div><div className="text-[11px] font-bold uppercase tracking-[.14em] text-violet-700 dark:text-violet-300">Generated flow review</div><h4 className="m-0 mt-1 text-[16px] font-semibold">What tenants will see</h4><p className="m-0 mt-1 text-[12px] leading-5 text-[#81798b] dark:text-[#aaa2b5]">Inspect the finished flow sections and their screen evidence before delivery.</p></div>
+          {generated && <span className="rounded-full bg-violet-500/[.08] px-3 py-1.5 text-[12px] font-semibold tabular-nums text-violet-700 dark:text-violet-200">{generated.summary.total_flows ?? "—"} flows · {generated.summary.total_screens ?? "—"} screens</span>}
+        </div>
+        {generatedError ? <div className="flex items-center justify-between gap-3 px-5 py-4 text-[12px] text-rose-700 dark:text-rose-200"><span>{generatedError}</span><button onClick={() => void loadGenerated()} className="shrink-0 font-semibold underline underline-offset-2">Retry</button></div> : !generated ? <div className="px-5 py-6 text-[12px] text-[#81798b] dark:text-[#aaa2b5]">Loading generated flows…</div> : generated.roots.map((root, index) => <details key={`${root.label}-${index}`} className="group border-b border-[#eeeaf2] last:border-0 dark:border-white/[.08]" open={index === 0}>
+          <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 marker:hidden hover:bg-violet-500/[.035]"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-violet-500/[.1] text-[12px] font-bold text-violet-700 dark:text-violet-200">{String(index + 1).padStart(2, "0")}</span><span className="min-w-0 flex-1"><strong className="block text-[13px]">{root.label}</strong>{root.description && <span className="mt-0.5 block text-[12px] leading-5 text-[#81798b] dark:text-[#aaa2b5]">{root.description}</span>}</span><span className="shrink-0 text-[12px] tabular-nums text-[#81798b] dark:text-[#aaa2b5]">{root.screens} screens · {root.children.length} flows</span></summary>
+          <div className="grid gap-2 px-5 pb-5 sm:grid-cols-2">{(flowDescendants(root).length ? flowDescendants(root) : [root]).map((flow, flowIndex) => <div key={`${flow.label}-${flowIndex}`} className="flex min-w-0 gap-3 rounded-[11px] bg-[#f8f6fa] p-3 dark:bg-white/[.045]">{flow.first_screen ? <img loading="lazy" src={`${api}/${runId}/screens/${encodeURIComponent(flow.first_screen)}`} alt="" className="h-14 w-8 shrink-0 rounded-[4px] bg-black/10 object-cover" /> : <FileImage className="mt-1 h-5 w-5 shrink-0 text-[#a79daf]" />}<div className="min-w-0"><div className="flex flex-wrap items-baseline gap-x-2"><strong className="text-[12px]">{flow.label}</strong><span className="text-[11px] tabular-nums text-[#81798b] dark:text-[#aaa2b5]">{flow.screens} screens</span></div>{flow.description && <p className="m-0 mt-1 line-clamp-3 text-[11px] leading-[1.45] text-[#777080] dark:text-[#aaa2b5]">{flow.description}</p>}</div></div>)}</div>
+        </details>)}
       </div>}
 
       <div className="flex items-start gap-2 text-[12px] leading-5 text-[#81798b] dark:text-[#aaa2b5]"><Layers3 className="mt-0.5 h-3.5 w-3.5 shrink-0" />Generated evidence is held for review until it is explicitly delivered to a tenant.</div>
