@@ -67,6 +67,7 @@ class OnboardingSupervisorTests(unittest.TestCase):
             "ONBOARDING_PASSWORD": "test-password", "CAPTURE_ADB": "adb",
         }), patch.object(supervisor, "ensure_installed", return_value=None), \
              patch.object(supervisor, "_verify_screenshot", return_value=None), \
+             patch.object(supervisor, "_device_online", return_value=True), \
              patch.object(supervisor.subprocess, "run") as clear, \
              patch.object(supervisor.subprocess, "Popen", side_effect=launch):
             result = supervisor.supervise("Example", "com.example.app", "emulator-5554", session)
@@ -112,12 +113,37 @@ class OnboardingSupervisorTests(unittest.TestCase):
             "ONBOARDING_PASSWORD": "test-password", "CAPTURE_ADB": "adb",
         }), patch.object(supervisor, "ensure_installed", return_value=None), \
              patch.object(supervisor, "_verify_screenshot", side_effect=OSError("read-only temp")), \
+             patch.object(supervisor, "_device_online", return_value=True), \
              patch.object(supervisor.subprocess, "Popen") as launch:
             self.assertEqual(supervisor.supervise("Example", "com.example.app", "emulator-5554", session), 2)
         launch.assert_not_called()
         status = json.loads((session / "capture_supervisor_status.json").read_text())
         self.assertEqual(status["state"], "needs_review")
         self.assertIn("screenshot", status["reason"])
+
+    def test_offline_emulator_resumes_same_onboarding_session(self):
+        session = self.root / "recover"
+        launches = []
+
+        def launch(command, cwd, env, stdin):
+            launches.append(command)
+            return FakeProcess(command, cwd, env, stdin, session,
+                               "BLOCKED_DEVICE" if len(launches) == 1 else "COMPLETED_SETTLED", True)
+
+        with patch.dict(os.environ, {
+            "ONBOARDING_IDENTITY_PROFILE": str(self.profile),
+            "ONBOARDING_PASSWORD": "test-password", "CAPTURE_ADB": "adb",
+        }), patch.object(supervisor, "ensure_installed", return_value=None), \
+             patch.object(supervisor, "_verify_screenshot", return_value=None), \
+             patch.object(supervisor, "_device_online", return_value=False), \
+             patch.object(supervisor, "_wait_for_device", return_value=True) as reconnect, \
+             patch.object(supervisor.subprocess, "run") as clear, \
+             patch.object(supervisor.subprocess, "Popen", side_effect=launch):
+            self.assertEqual(supervisor.supervise("Example", "com.example.app", "emulator-5554", session), 0)
+        self.assertEqual(len(launches), 2)
+        clear.assert_called_once()
+        reconnect.assert_called_once()
+        self.assertEqual(json.loads((session / "capture_supervisor_status.json").read_text())["state"], "complete")
 
 
 if __name__ == "__main__":

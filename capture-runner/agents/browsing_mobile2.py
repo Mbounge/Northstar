@@ -4111,6 +4111,60 @@ def _accept_overlay_prediction(prediction, root_still_selected):
                 and not root_still_selected)
 
 
+def _accept_named_root_overlay(prediction):
+    """Require an actionable menu before treating a named root tap as an overlay."""
+    if not isinstance(prediction, dict) or prediction.get("is_overlay") is not True:
+        return False
+    items = prediction.get("menu_items")
+    if not isinstance(items, list):
+        return False
+    names = {_smart_norm(item.get("name")) for item in items if isinstance(item, dict)
+             and isinstance(item.get("name"), str)}
+    names -= {"", "cancel", "close", "dismiss"}
+    return len(names) >= 2
+
+
+def _confirmed_root_access_gate(prediction):
+    """An optional sign-in prompt must never block a usable guest root."""
+    return (isinstance(prediction, dict)
+            and prediction.get("is_required") is True
+            and prediction.get("root_content_visible") is False
+            and bool(str(prediction.get("visible_evidence") or "").strip()))
+
+
+def _prioritize_targeted_roots(tabs, targets):
+    """Honor the ordered resume targets before general coverage-debt priority."""
+    priority = {}
+    for target in targets or []:
+        if isinstance(target, str):
+            priority.setdefault(_smart_norm(target), len(priority))
+    return sorted(tabs, key=lambda tab: priority.get(
+        _smart_norm(tab.get("name")), len(priority))) if priority else tabs
+
+
+def _foreground_exit_reason(elements):
+    text = " ".join(str(item.get(key) or "") for item in elements or []
+                    if isinstance(item, dict) for key in ("text", "content_desc")).casefold()
+    if any(phrase in text for phrase in (
+            "keeps stopping", "has stopped", "isn't responding", "is not responding")):
+        return "app_crash"
+    return "left_app_unverified"
+
+
+def _recent_android_crash(log, package, since_epoch):
+    """Only attribute a fatal AndroidRuntime entry to this tap and package."""
+    lines = str(log or "").splitlines()
+    for index, line in enumerate(lines):
+        if "FATAL EXCEPTION" not in line:
+            continue
+        stamp = re.match(r"\s*(\d{9,11}(?:\.\d+)?)", line)
+        if stamp is None or float(stamp.group(1)) < since_epoch - 2:
+            continue
+        if any(f"Process: {package}" in detail for detail in lines[index:index + 6]):
+            return True
+    return False
+
+
 def _manifest_frame_role(path, index, total):
     name = os.path.basename(str(path or "")).casefold()
     if any(token in name for token in ("pre_click", "pre_action", "before_")):
@@ -8266,6 +8320,19 @@ class DeviceController:
         # A few Android builds omit mCurrentFocus. Only then use ActivityManager.
         resumed = self.adb("dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity|ResumedActivity'")
         return self.package_name in resumed
+
+    def crashed_since(self, since_epoch):
+        """Check only recent AndroidRuntime markers; never log crash-stack content."""
+        command = ["adb"]
+        if self.device_serial:
+            command.extend(["-s", self.device_serial])
+        command.extend(["logcat", "-d", "-v", "epoch", "-s", "AndroidRuntime:E"])
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0 and _recent_android_crash(
+            result.stdout, self.package_name, since_epoch)
 
     def ensure_app_focus(self):
         if not self.is_app_running():
@@ -28827,6 +28894,7 @@ OUTPUT JSON: {{"fully_visible": true/false}}
             pre_click_img = pre_img
 
             # MOBILE_TAP_PROBE_V1 site 058
+            tap_started_at = time.time()
             if not await self._probe_tap(resolved_x, resolved_y, target=target, context=f'{section} :: find_and_click_target', kind=('field' if section == 'FormFocus' else 'control'), failed_points=all_attempts, point_validator=_validate_coords):
                 _smart_finish(success=False, outcome=ActionOutcome.FAILED,
                               detail=self._last_tap_probe.get('reason', 'probe_unresolved'))
@@ -28837,6 +28905,14 @@ OUTPUT JSON: {{"fully_visible": true/false}}
             pre_img = self._last_tap_probe.get('before_img', pre_img)
             pre_click_img = pre_img
             time.sleep(random.uniform(2.0, 3.5))
+
+            if (str(section).startswith("TabOverlay_")
+                    and not self.device.is_target_app_foreground()):
+                reason = ("app_crash" if self.device.crashed_since(tap_started_at) else
+                          _foreground_exit_reason(self.device.get_ui_elements()))
+                print(f"         ↗️ '{target}' left the target app ({reason}); stopping retries")
+                return {"success": False, "reason": reason,
+                        "attempt": attempt, "x": resolved_x, "y": resolved_y}
 
             if await self.handle_ad_if_present():
                 time.sleep(1)
@@ -33482,7 +33558,7 @@ OUTPUT JSON:
             self.memory.current_location = _saved_loc
             print(f"      🗂️ Returned to parent location: '{self.memory.current_location}'")
 
-    async def _checkpoint_root_exit(self, root_name):
+    async def _checkpoint_root_exit(self, root_name, *, allow_repair=True):
         reconciled = _reconcile_capture_evidence(
             self.session_data, self.memory.tab_progress, self.screenshot_dir)
         if reconciled:
@@ -33494,7 +33570,7 @@ OUTPUT JSON:
             self.session_data.get("exploration_deferred", {}),
             self.session_data.get("overlay_misroutes", []),
         )
-        if (checkpoint["status"] != "verified"
+        if (allow_repair and checkpoint["status"] != "verified"
                 and getattr(self, "control_plane", None)):
             # Repair this root now. A blocked or infinite surface remains
             # explicit review work, while independent roots get their turn.
@@ -33673,8 +33749,8 @@ OUTPUT JSON:
         saved_gate = (self.session_data.get("exploration_deferred", {}) or {}).get(requested_name)
         if not verify_only and isinstance(saved_gate, dict) and saved_gate.get("status") == "gated_destination":
             # A gate describes one observed destination, not the root tab for
-            # all future runs. Recheck it once when a fresh native root bar
-            # contains the requested tab, then retain the result on resume.
+            # all future runs. Allow a bounded fresh check when a native root
+            # bar contains the requested tab, at most once per run.
             native_target = any(
                 isinstance(tab, dict)
                 and norm(tab.get("name")) == norm(requested_name)
@@ -33684,12 +33760,12 @@ OUTPUT JSON:
             )
             rechecks = self.session_data.setdefault("root_gate_rechecks", {})
             count = int(rechecks.get(requested_name, 0) or 0)
-            if native_target and count < 1 and requested_name not in gated_this_run:
+            if native_target and count < 3 and requested_name not in gated_this_run:
                 rechecks[requested_name] = count + 1
                 self.session_data.setdefault("exploration_deferred", {}).pop(requested_name, None)
                 self.session_data.setdefault("topbar_deferred", {}).pop(requested_name, None)
                 self._force_save_manifest()
-                print(f"      🔄 TAB_GATE_RECHECK: '{requested_name}' found in the live root bar; one bounded retry")
+                print(f"      🔄 TAB_GATE_RECHECK: '{requested_name}' found in the live root bar; retry {count + 1}/3")
             else:
                 report("gated_destination",
                        "Saved prerequisite for this root tab; awaiting an explicit state change",
@@ -33902,6 +33978,34 @@ OUTPUT JSON:
                         break
             if observed in by_id:
                 last_observed = by_id[observed]["name"]
+            if (not require_root and named_nav_tap is not None
+                    and compute_screen_hash(img) != named_nav_tap["before_hash"]):
+                # A dimmed root bar behind a menu can still be reported as
+                # selected by visual identity. Check the changed surface before
+                # certifying a full root page or calling it an access gate.
+                overlay = await self._ai_call(
+                    f"NAMED ROOT MENU CHECK for {APP_NAME}. The exact native bottom "
+                    f"navigation item '{requested_name}' was tapped and changed the screen. "
+                    "Is this its own navigation menu or bottom sheet with at least "
+                    "two distinct actionable destinations? A login/consent prompt, "
+                    "tooltip, or unrelated dialog is not a root menu. Report only "
+                    "visible menu items. OUTPUT JSON: "
+                    '{"is_overlay":true/false,'
+                    '"menu_items":[{"name":"visible destination","x":0,"y":0}],'
+                    '"reasoning":"visible evidence"}.',
+                    image=img, log_label="NAMED_ROOT_MENU_CHECK",
+                    model_override=TARGETING_MODEL,
+                )
+                if _accept_named_root_overlay(overlay):
+                    self._last_verified_root_overlay = {
+                        "tab": requested_name, "screen_hash": compute_screen_hash(img),
+                        "prediction": overlay,
+                    }
+                    report("verified_root_overlay",
+                           "Named native root tab opened a menu with distinct destinations",
+                           requested_name, "named_xml_navigation")
+                    print(f"      ✅ ROOT_MENU verified: '{requested_name}' opened its navigation menu")
+                    return True
             if observed == wanted:
                 report("verified_root", why, last_observed, "xml" if len(xml_active) == 1 else "ai")
                 print(f"      ✅ TAB_IDENTITY verified: requested='{requested_name}', observed='{last_observed}'")
@@ -37000,14 +37104,8 @@ OUTPUT JSON:
             if getattr(self, "control_plane", None) and RESUME_SESSION
             else list(main_tabs)
         )
-        targeted_recaptures = {
-            _smart_norm(name) for name in self.session_data.get("targeted_recaptures", [])
-            if isinstance(name, str)
-        }
-        if targeted_recaptures:
-            exploration_tabs.sort(
-                key=lambda tab: 0 if _smart_norm(tab.get("name")) in targeted_recaptures else 1
-            )
+        exploration_tabs = _prioritize_targeted_roots(
+            exploration_tabs, self.session_data.get("targeted_recaptures", []))
         for ti, tab in enumerate(exploration_tabs, 1):
             if RESUME_SESSION:
                 sub_views_done = []
@@ -37066,14 +37164,14 @@ OUTPUT JSON:
                     getattr(self, "_last_tab_verification", {}) or {}
                 ).get("status")
                 if (destination_ready is not True or destination_status not in
-                        ("verified_root", "verified_action_surface")):
+                        ("verified_root", "verified_action_surface", "verified_root_overlay")):
                     self.session_data.setdefault("exploration_deferred", {})[tab['name']] = dict(
                         getattr(self, "_last_tab_verification", {}) or {})
                     self._force_save_manifest()
                     print(f"      ⚠️ Exploration deferred for '{tab['name']}': destination unverified.")
                     continue
 
-                tab_confirmed = destination_status == "verified_action_surface"
+                tab_confirmed = destination_status in ("verified_action_surface", "verified_root_overlay")
                 for tab_verify_attempt in range(0 if tab_confirmed else 3):
                     verify_img = await self._capture_active_screen()
                     if not verify_img:
@@ -37151,10 +37249,10 @@ OUTPUT JSON:
                 # MOBILE_SPY2_STABILIZE_V1: main_destination_gate
                 # Preserve the original tab/overlay strategies. A failed pre-flight
                 # target gets a real retry here, not a silent omission or mislabel.
-                if await self._enforce_current_tab() is not True or (
-                    (getattr(self, "_last_tab_verification", {}) or {}).get("status")
-                    not in ("verified_root", "verified_action_surface")
-                ):
+                if (destination_status != "verified_root_overlay"
+                        and (await self._enforce_current_tab() is not True or
+                             (getattr(self, "_last_tab_verification", {}) or {}).get("status")
+                             not in ("verified_root", "verified_action_surface"))):
                     self.session_data.setdefault("exploration_deferred", {})[tab['name']] = dict(
                         getattr(self, "_last_tab_verification", {}) or {})
                     self._force_save_manifest()
@@ -37174,7 +37272,15 @@ OUTPUT JSON:
                 # ── CHECK: Did the tab open an OVERLAY/MENU instead of a page? ──
                 tab_img = await self._capture_active_screen()
                 if tab_img:
-                    overlay_menu = await self._ai_call(f"""
+                    verified_overlay = getattr(self, "_last_verified_root_overlay", None)
+                    overlay_menu = (verified_overlay["prediction"]
+                                    if destination_status == "verified_root_overlay"
+                                    and isinstance(verified_overlay, dict)
+                                    and verified_overlay.get("tab") == tab["name"]
+                                    and verified_overlay.get("screen_hash") == compute_screen_hash(tab_img)
+                                    else None)
+                    if overlay_menu is None:
+                        overlay_menu = await self._ai_call(f"""
                     BOTTOM NAV OVERLAY CHECK for {APP_NAME}.
 
                     I just tapped the "{tab['name']}" bottom navigation tab.
@@ -37205,7 +37311,7 @@ OUTPUT JSON:
                     }}
                     """, image=tab_img, log_label="TAB_OVERLAY_CHECK")
 
-                    if overlay_menu and overlay_menu.get("is_overlay"):
+                    if overlay_menu and overlay_menu.get("is_overlay") and destination_status != "verified_root_overlay":
                         # Small coach marks/tooltips can fool the visual menu
                         # classifier. A still-visible, selected native root bar
                         # proves this is the tab page, not a replacement menu.
@@ -37216,6 +37322,24 @@ OUTPUT JSON:
                             print(f"      🧭 Rejecting overlay prediction for '{tab['name']}': native root remains selected")
                             overlay_menu = dict(overlay_menu, is_overlay=False)
 
+                    if (overlay_menu and overlay_menu.get("is_overlay")
+                            and not _accept_named_root_overlay(overlay_menu)):
+                        # A one-off coach mark or promotion with one action and
+                        # Close is evidence of a prompt, not a root's menu.
+                        # Clicking Close first can make the action impossible to
+                        # reopen; fuzzy targeting must not then click a different
+                        # control with the same short label on another page.
+                        prompt_path = self.save_screenshot_bytes(
+                            tab_img, f"tab_prompt_{self.sanitize_filename(tab['name'])}")
+                        if prompt_path:
+                            self._add_global_section_to_manifest(
+                                section_name=f"{tab['name']} > First-use prompt",
+                                section_type="prerequisite",
+                                screenshots=[prompt_path],
+                            )
+                        print(f"      🧭 '{tab['name']}' opened a one-action prompt, not a navigation menu")
+                        overlay_menu = dict(overlay_menu, is_overlay=False)
+
                     if overlay_menu and overlay_menu.get("is_overlay"):
                         menu_items = overlay_menu.get("menu_items", [])
                         print(f"      📋 Tab '{tab['name']}' opened overlay with "
@@ -37225,6 +37349,12 @@ OUTPUT JSON:
                         overlay_path = self.save_screenshot_bytes(
                             tab_img, f"tab_overlay_{self.sanitize_filename(tab['name'])}"
                         )
+                        if overlay_path and destination_status == "verified_root_overlay":
+                            self._add_global_section_to_manifest(
+                                section_name=f"{tab['name']} > Menu",
+                                section_type="root_overlay_menu",
+                                screenshots=[overlay_path],
+                            )
 
                         overlay_parent_img = tab_img
                         overlay_parent_hash = compute_screen_hash(tab_img)
@@ -37233,6 +37363,16 @@ OUTPUT JSON:
                             mi_name = menu_item.get("name", "menu item")
                             mi_x = menu_item.get("x")
                             mi_y = menu_item.get("y")
+
+                            if _smart_norm(mi_name) in ("close", "cancel", "dismiss"):
+                                continue
+
+                            if any(item.get("root") == tab['name'] and item.get("item") == mi_name
+                                   for collection in ("external_destinations", "blocked_menu_destinations")
+                                   for item in self.session_data.get(collection, [])
+                                   if isinstance(item, dict)):
+                                print(f"      ↗️ Skipping documented outside or crashing destination '{mi_name}' on resume")
+                                continue
 
                             is_safe, reason = self.safety.is_action_safe(mi_name)
                             if not is_safe:
@@ -37279,6 +37419,36 @@ OUTPUT JSON:
                                     else:
                                         print(f"      ⚠️ Failed to reopen overlay — tab coords unknown")
 
+                                    restored = (await self._ai_call(
+                                        f"OVERLAY RESTORE CHECK for {APP_NAME}. "
+                                        f"The root menu '{tab['name']}' was closed while exploring it. "
+                                        f"Is that same menu now visibly open, with the exact "
+                                        f"destination '{mi_name}' present and actionable? "
+                                        "Do not match a similarly named control on another page. "
+                                        'OUTPUT JSON: {"menu_open":true/false,'
+                                        '"exact_item_visible":true/false, "reason":"visible evidence"}.',
+                                        image=overlay_parent_img,
+                                        log_label="OVERLAY_RESTORE_CHECK",
+                                        model_override=TARGETING_MODEL,
+                                    ) if overlay_parent_img else None)
+                                    if not (isinstance(restored, dict)
+                                            and restored.get("menu_open") is True
+                                            and restored.get("exact_item_visible") is True):
+                                        diagnostic = (self.save_screenshot_bytes(
+                                            overlay_parent_img,
+                                            f"overlay_restore_failed_{self.sanitize_filename(mi_name)[:24]}")
+                                            if overlay_parent_img else None)
+                                        self.session_data.setdefault("overlay_misroutes", []).append({
+                                            "root": tab['name'], "item": mi_name,
+                                            "reason": "Menu closed and the exact destination could not be reopened",
+                                            "diagnostic_screenshot": diagnostic,
+                                            "timestamp": time.time(),
+                                        })
+                                        self._force_save_manifest()
+                                        print(f"      ⚠️ '{mi_name}' deferred: original menu could not be restored")
+                                        item_clk = {"success": False, "reason": "overlay_not_restored"}
+                                        break
+
                                 item_clk = await self.find_and_click_target(
                                     f"TabOverlay_{tab['name']}", mi_name,
                                     overlay_parent_img, overlay_parent_hash,
@@ -37290,6 +37460,31 @@ OUTPUT JSON:
                                     break
 
                                 fail_reason = item_clk.get("reason", "unknown")
+                                if fail_reason in ("left_app_unverified", "app_crash"):
+                                    collection = ("blocked_menu_destinations" if fail_reason == "app_crash"
+                                                  else "external_destinations")
+                                    diagnostic = None
+                                    if fail_reason == "app_crash":
+                                        try:
+                                            diagnostic = self.save_screenshot_bytes(
+                                                self.device.get_screenshot_bytes(),
+                                                f"menu_app_crash_{self.sanitize_filename(mi_name)[:24]}")
+                                        except (OSError, ValueError, TypeError):
+                                            pass
+                                    self.session_data.setdefault(collection, []).append({
+                                        "root": tab['name'], "item": mi_name,
+                                        "reason": ("Opening this menu item crashed the target app"
+                                                   if fail_reason == "app_crash" else
+                                                   "Opening this menu item left the target app; destination unverified"),
+                                        "diagnostic_screenshot": diagnostic,
+                                        "timestamp": time.time(),
+                                    })
+                                    self._force_save_manifest()
+                                    self.device.press_back()
+                                    if not self.device.is_target_app_foreground():
+                                        self.device.launch_app()
+                                    print(f"      ↗️ '{mi_name}' recorded as {fail_reason}; continuing with remaining menu items")
+                                    break
                                 print(f"      ⚠️ Overlay item tap failed ({fail_reason}). Forcing hard reset (Attempt {overlay_retry+1}/3)")
                                 self.device.press_back()
                                 time.sleep(2)
@@ -37411,10 +37606,48 @@ OUTPUT JSON:
 
                         self.device.press_back()
                         time.sleep(2)
-                        root_after_menu = await self._enforce_current_tab(require_root=True)
-                        if root_after_menu:
-                            print(f"      🧭 '{tab['name']}' menu closed onto a verified root; continuing its content survey")
-                        else:
+                        # A root navigation item that opens a menu has no page
+                        # of its own to survey. The screen behind the dismissed
+                        # menu belongs to the previous root (for example Home's
+                        # "For you" feed behind Wikipedia's More sheet). Treating
+                        # that background as this root creates false lanes and
+                        # can trap the agent in repeated taps on dimmed controls.
+                        # Menu roots have no underlying root page to repair.
+                        # Keep unresolved menu items in the checkpoint, but do
+                        # not make the repair plane tap the dimmed background.
+                        await self._checkpoint_root_exit(tab['name'], allow_repair=False)
+                        continue
+
+                    if destination_status == "verified_root":
+                        gate = await self._ai_call(
+                            f"ROOT ACCESS CHECK for {APP_NAME}, tab '{tab['name']}'. "
+                            "Does this screen require login, account creation, permission, "
+                            "consent, or payment BEFORE the tab's actual content can be "
+                            "used? A normal empty state with actions is usable content. "
+                            "An optional sign-in banner beside a usable feed is not a "
+                            "gate. A menu with a login item and other destinations is "
+                            "not a gate. Answer only from visible text and controls. "
+                            'OUTPUT JSON: {"is_required":true/false,'
+                            '"root_content_visible":true/false,'
+                            '"visible_evidence":"exact blocking prompt or control"}.',
+                            image=tab_img, log_label="ROOT_ACCESS_GATE_CHECK",
+                            model_override=TARGETING_MODEL,
+                        )
+                        if _confirmed_root_access_gate(gate):
+                            gate_path = self.save_screenshot_bytes(
+                                tab_img, f"tab_account_gate_{self.sanitize_filename(tab['name'])}")
+                            lane = self._get_or_create_manifest_tab(
+                                f"{tab['name']} > Access required", "prerequisite")
+                            if gate_path and gate_path not in lane["survey_screenshots"]:
+                                lane["survey_screenshots"].append(gate_path)
+                            self.session_data.setdefault("exploration_deferred", {})[tab['name']] = {
+                                "status": "gated_destination",
+                                "reason": str(gate["visible_evidence"])[:350],
+                                "diagnostic_screenshot": gate_path,
+                                "timestamp": time.time(),
+                            }
+                            self._force_save_manifest()
+                            print(f"      ↪️ ROOT_ACCESS_GATE: '{tab['name']}' requires access before its content is available")
                             await self._checkpoint_root_exit(tab['name'])
                             continue
 

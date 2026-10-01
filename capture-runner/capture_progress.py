@@ -76,15 +76,31 @@ def _open_checks(lanes: list[dict], progress: dict, manifest: dict | None = None
             add(_issue(f"{root} > {action}",
                        "Menu action reached an unrelated page; the intended destination needs a verified retry.",
                        uncertain=True))
+    for item in (manifest or {}).get("blocked_menu_destinations") or []:
+        if isinstance(item, dict):
+            root, action = str(item.get("root") or ""), str(item.get("item") or "")
+            add(_issue(f"{root} > {action}",
+                       str(item.get("reason") or "The app closed before this menu destination could be captured."),
+                       uncertain=True))
+    for item in (manifest or {}).get("external_destinations") or []:
+        if isinstance(item, dict):
+            root, action = str(item.get("root") or ""), str(item.get("item") or "")
+            add(_issue(f"{root} > {action}",
+                       str(item.get("reason") or "This action left the app; the destination is unverified."),
+                       uncertain=True))
     for root, gate in ((manifest or {}).get("exploration_deferred") or {}).items():
         if isinstance(gate, dict) and gate.get("status") == "gated_destination":
+            evidence = str(gate.get("reason") or "").strip()
             add(_issue(str(root),
-                       "The tab opened a first-use or access prerequisite; its actual content is not verified yet.",
+                       (f"Access prerequisite: {evidence}. The tab's content is not verified yet."
+                        if evidence else "The tab opened a first-use or access prerequisite; its actual content is not verified yet."),
                        uncertain=True))
 
     for lane in lanes:
         path = _lane_path(lane)
-        if (lane.get("type") in ("prerequisite", "overlay_menu_item_root_jump")
+        if (lane.get("type") in ("prerequisite", "overlay_menu_item_root_jump",
+                                  "root_overlay_menu", "overlay_menu_item",
+                                  "global_menu", "global_section")
                 or len(_parts(path)) > 2 or not (lane.get("survey_screenshots") or lane.get("interactions"))
                 or any(check["path"] == path or check["path"].startswith(path + " > ") for check in checks)):
             continue
@@ -133,9 +149,15 @@ def _summary(name: str, lanes: list[dict], progress: dict, current_path: str,
         if isinstance(path, str)
     }
     direct = [lane for lane in lanes if len(_parts(str(lane.get("canonical_path") or lane.get("name") or ""))) <= 2]
+    destination_evidence = any(
+        lane.get("type") not in ("prerequisite", "overlay_menu_item_root_jump")
+        and (lane.get("survey_screenshots") or lane.get("interactions"))
+        for lane in lanes
+    )
     return {
         "name": name,
-        "state": "not_reached" if gated else _state(lanes, progress, current),
+        "state": ("needs_followup" if destination_evidence else "access_required")
+                 if gated else _state(lanes, progress, current),
         "screens": len(screens),
         "open_checks": [check for check in checks if check["path"] == name or check["path"].startswith(name + " > ")],
         "subviews": [
@@ -182,7 +204,7 @@ def build_progress(directory: Path, *, active: bool = False) -> dict:
                      isinstance(deferred.get(name), dict)
                      and deferred[name].get("status") == "gated_destination")
             for name in dict.fromkeys(roots)]
-    visited = sum(tab["state"] != "not_reached" for tab in tabs)
+    visited = sum(tab["state"] not in ("not_reached", "access_required") for tab in tabs)
     done = sum(tab["state"] == "done" for tab in tabs)
 
     def area(kind: str, labels: set[str]) -> dict:

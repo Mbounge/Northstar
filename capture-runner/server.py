@@ -214,6 +214,10 @@ def _status(run: dict) -> dict:
     result["audit_status"] = _json_file(directory / "unattended_audit.json").get("status")
     result["coverage"] = coverage
     result["reason"] = supervisor.get("reason") or ("Capture process exited without a final checkpoint" if result["status"] == "needs_review" else None)
+    if result["status"] == "reconnecting":
+        result["reason"] = result.get("recovery_reason") or "Waiting for the assigned device before resuming the saved capture"
+    elif result["status"] == "needs_review" and result.get("recovery_reason"):
+        result["reason"] = result["recovery_reason"]
     if result["status"] == "finished_early":
         result["reason"] = "Finished by an admin with the saved evidence; remaining coverage is still shown for review"
     if result.get("scope") == "onboarding" and result["status"] == "needs_review" and supervisor.get("state") == "complete" and result.get("onboarding_result") and not result["onboarding_result"]["account_created"] and result["onboarding_result"]["settled_home_reached"]:
@@ -224,6 +228,110 @@ def _status(run: dict) -> dict:
     result["last_activity_at"] = supervisor.get("updated_at")
     result["live"] = bool(alive)
     return result
+
+
+def _launch_run(run: dict) -> None:
+    """Start a saved run without clearing app data or changing its run ID."""
+    run_id = run["id"]
+    serial = DEVICES[run["device_id"]]
+    env = os.environ.copy()
+    env.update({
+        "MOBILESPY_APP_NAME": run["app"],
+        "MOBILESPY_PACKAGE_NAME": run["package_name"],
+        "MOBILESPY_DEVICE_SERIAL": serial,
+        "MOBILESPY_RESUME_SESSION_DIR": str(_run_dir(run_id)),
+        "NORTHSTAR_CAPTURE_RUN_ID": run_id,
+    })
+    env["PATH"] = f"{Path(ADB).parent}:{env.get('PATH', '')}"
+    if run["scope"] == "onboarding":
+        env.update({
+            "ONBOARDING_SCRIPT": str(ONBOARDING_SCRIPT),
+            "ONBOARDING_IDENTITY_PROFILE": str(ONBOARDING_PROFILE),
+            "ONBOARDING_PYTHON": ONBOARDING_PYTHON,
+        })
+        command = [PYTHON, "-u", str(ONBOARDING_SUPERVISOR),
+                   "--app", run["app"], "--package", run["package_name"],
+                   "--serial", serial, "--session", str(_run_dir(run_id)),
+                   "--run-id", run_id]
+    else:
+        if ONBOARDING_PROFILE.is_file():
+            env["MOBILESPY_IDENTITY_PROFILE"] = str(ONBOARDING_PROFILE)
+        command = [PYTHON, "-u", str(SUPERVISOR), "--app", run["app"],
+                   "--session", str(_run_dir(run_id)), "--run-id", run_id,
+                   "--max-passes", str(MAX_PASSES)]
+    with (_run_dir(run_id) / "launch.log").open("ab") as log:
+        process = subprocess.Popen(
+            command, cwd=(ONBOARDING_SCRIPT if run["scope"] == "onboarding" else SCRIPT).parent,
+            env=env, stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True, stdin=subprocess.DEVNULL,
+        )
+    PROCESSES[run_id] = process
+    run.update(status="running", pid=process.pid, updated_at=time.time())
+    run.pop("recovery_reason", None)
+
+
+def _resume_interrupted_run(run_id: str, timeout: int = 180) -> None:
+    """Wait for a rebooted device, then resume exactly the interrupted session."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with LOCK:
+            runs = _read_runs()
+            run = runs.get(run_id)
+            if not run or run.get("status") != "reconnecting":
+                return
+            serial = DEVICES.get(run.get("device_id"))
+            if serial and Handler._device_online(serial):
+                preflight = _preflight(run, True)
+                occupied = any(
+                    other["id"] != run_id and other.get("device_id") == run.get("device_id")
+                    and _status(other)["live"] for other in runs.values()
+                )
+                if preflight["ready"] and not occupied:
+                    _launch_run(run)
+                    _write_runs(runs)
+                    return
+        time.sleep(5)
+    with LOCK:
+        runs = _read_runs()
+        run = runs.get(run_id)
+        if run and run.get("status") == "reconnecting":
+            run.update(status="needs_review", pid=None, updated_at=time.time(),
+                       recovery_reason="Automatic reconnect timed out; saved capture is ready for manual review")
+            _write_runs(runs)
+
+
+def _recover_interrupted_runs() -> list[str]:
+    """Queue only runs interrupted by host/service loss, never operator pauses."""
+    with LOCK:
+        runs = _read_runs()
+        candidates = []
+        changed = False
+        for run in runs.values():
+            if run.get("status") not in ("running", "reconnecting") or _pid_alive(
+                    run.get("pid"), run["id"]):
+                continue
+            supervisor = _json_file(_run_dir(run["id"]) / "capture_supervisor_status.json")
+            if supervisor.get("state") in ("paused", "complete", "needs_review"):
+                recovered_status = ("paused" if supervisor["state"] == "paused"
+                                    else "needs_review" if supervisor["state"] == "needs_review"
+                                    else _status({**run, "status": "running"})["status"])
+                run.update(status=recovered_status, pid=None, updated_at=time.time())
+                changed = True
+                continue
+            attempts = int(run.get("auto_resume_attempts") or 0)
+            if attempts >= 2:
+                run.update(status="needs_review", pid=None, updated_at=time.time(),
+                           recovery_reason="Automatic resume limit reached; inspect the saved run")
+                changed = True
+                continue
+            run.update(status="reconnecting", pid=None, updated_at=time.time(),
+                       auto_resume_attempts=attempts + 1,
+                       recovery_reason="Capture host restarted; waiting to resume the saved session")
+            candidates.append(run["id"])
+            changed = True
+        if changed:
+            _write_runs(runs)
+    return candidates
 
 
 def _installed(serial: str, package: str) -> bool:
@@ -483,41 +591,7 @@ class Handler(BaseHTTPRequestHandler):
                 for other in runs.values():
                     if other["id"] != run_id and other["device_id"] == run["device_id"] and _status(other)["live"]:
                         return self._send(409, {"error": "Device is occupied by another run"})
-                env = os.environ.copy()
-                env.update({
-                    "MOBILESPY_APP_NAME": run["app"],
-                    "MOBILESPY_PACKAGE_NAME": run["package_name"],
-                    "MOBILESPY_DEVICE_SERIAL": serial,
-                    "MOBILESPY_RESUME_SESSION_DIR": str(_run_dir(run_id)),
-                    "NORTHSTAR_CAPTURE_RUN_ID": run_id,
-                })
-                # Both agents invoke `adb` directly. The service's restricted
-                # PATH need not contain the Android SDK on its own.
-                env["PATH"] = f"{Path(ADB).parent}:{env.get('PATH', '')}"
-                if run["scope"] == "onboarding":
-                    env.update({
-                        "ONBOARDING_SCRIPT": str(ONBOARDING_SCRIPT),
-                        "ONBOARDING_IDENTITY_PROFILE": str(ONBOARDING_PROFILE),
-                        "ONBOARDING_PYTHON": ONBOARDING_PYTHON,
-                    })
-                    command = [PYTHON, "-u", str(ONBOARDING_SUPERVISOR),
-                               "--app", run["app"], "--package", run["package_name"],
-                               "--serial", serial, "--session", str(_run_dir(run_id)),
-                               "--run-id", run_id]
-                else:
-                    if ONBOARDING_PROFILE.is_file():
-                        env["MOBILESPY_IDENTITY_PROFILE"] = str(ONBOARDING_PROFILE)
-                    command = [PYTHON, "-u", str(SUPERVISOR), "--app", run["app"],
-                               "--session", str(_run_dir(run_id)), "--run-id", run_id,
-                               "--max-passes", str(MAX_PASSES)]
-                with (_run_dir(run_id) / "launch.log").open("ab") as log:
-                    process = subprocess.Popen(
-                        command, cwd=(ONBOARDING_SCRIPT if run["scope"] == "onboarding" else SCRIPT).parent, env=env,
-                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-                        stdin=subprocess.DEVNULL,
-                    )
-                PROCESSES[run_id] = process
-                run.update(status="running", pid=process.pid, updated_at=time.time())
+                _launch_run(run)
             elif action == "finish":
                 if run.get("scope") != "browsing":
                     return self._send(409, {"error": "Finish with evidence is available for browsing captures"})
@@ -557,4 +631,8 @@ if __name__ == "__main__":
         raise SystemExit("CAPTURE_DEVICES_JSON must map device names to ADB serials")
     ROOT.mkdir(parents=True, exist_ok=True)
     print(f"Northstar capture runner listening on {HOST}:{PORT} with {len(DEVICES)} device(s)")
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    interrupted = _recover_interrupted_runs()
+    service = ThreadingHTTPServer((HOST, PORT), Handler)
+    for run_id in interrupted:
+        threading.Thread(target=_resume_interrupted_run, args=(run_id,), daemon=True).start()
+    service.serve_forever()

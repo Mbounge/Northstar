@@ -16,11 +16,12 @@ export type CaptureProgress = {
   last_screen_at: number | null;
 };
 
-type ProgressState = "not_identified" | "not_reached" | "capturing" | "needs_followup" | "done";
+type ProgressState = "not_identified" | "not_reached" | "access_required" | "capturing" | "needs_followup" | "done";
 
 const stateCopy: Record<ProgressState, string> = {
   not_identified: "Not identified yet",
   not_reached: "Not reached",
+  access_required: "Access required",
   capturing: "Capturing now",
   needs_followup: "Review needed",
   done: "Checked",
@@ -29,6 +30,7 @@ const stateCopy: Record<ProgressState, string> = {
 const stateTone: Record<ProgressState, string> = {
   not_identified: "text-[#77758a] dark:text-[#a7a4b8] bg-[#f2f1f6] dark:bg-white/[.06]",
   not_reached: "text-[#77758a] dark:text-[#a7a4b8] bg-[#f2f1f6] dark:bg-white/[.06]",
+  access_required: "text-[#855718] dark:text-[#f3d29c] bg-[#fff3dc] dark:bg-[#4b3a25]",
   capturing: "text-[#5c41b9] dark:text-[#d8c9ff] bg-[#eee8ff] dark:bg-[#403168]",
   needs_followup: "text-[#8b5814] dark:text-[#f4cc8c] bg-[#fff2dc] dark:bg-[#523c25]",
   done: "text-[#167354] dark:text-[#a9ead0] bg-[#e3f5eb] dark:bg-[#204939]",
@@ -90,12 +92,12 @@ export function CaptureProgressView({ progress }: { progress: CaptureProgress })
         <div>
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[.16em] text-[#7859cf] dark:text-[#bfaaff]"><Compass className="h-3.5 w-3.5" /> Capture map</div>
           <h4 className="m-0 mt-2 text-[21px] font-semibold tracking-[-.035em] text-[#252339] dark:text-[#f6f2ff]">Where the agent has been</h4>
-          <p className="m-0 mt-1 text-[12px] leading-relaxed text-[#686579] dark:text-[#b7b1c8]">{total ? `${progress.visited_tabs} of ${total} main tabs reached` : "Waiting for the agent to identify main tabs"} · {progress.done_tabs} fully checked</p>
+          <p className="m-0 mt-1 text-[12px] leading-relaxed text-[#686579] dark:text-[#b7b1c8]">{total ? `${progress.visited_tabs} of ${total} main tabs reached` : "Waiting for the agent to identify main tabs"}{progress.tabs.some((tab) => tab.state === "access_required") ? ` · ${progress.tabs.filter((tab) => tab.state === "access_required").length} access required` : ""} · {progress.done_tabs} fully checked</p>
         </div>
         <div className="text-right"><div className="text-[32px] leading-none font-semibold tracking-[-.06em] tabular-nums text-[#3d2b82] dark:text-[#dfd0ff]">{total ? `${percent}%` : "—"}</div><div className="mt-1 text-[10px] font-semibold uppercase tracking-[.12em] text-[#777389] dark:text-[#aca5bd]">Main tabs reached</div></div>
       </div>
       <div className="mt-5 flex gap-1.5" role="img" aria-label={`${progress.visited_tabs} of ${total} main tabs reached`}>
-        {progress.tabs.map((tab) => <div key={tab.name} title={`${tab.name}: ${stateCopy[tab.state]}`} className={`h-2 flex-1 rounded-full ${tab.state === "done" ? "bg-[#36ae82]" : tab.state === "capturing" ? "bg-[#8c65ee]" : tab.state === "needs_followup" ? "bg-[#efba70]" : "bg-[#e7e5ee] dark:bg-white/[.12]"}`} />)}
+        {progress.tabs.map((tab) => <div key={tab.name} title={`${tab.name}: ${stateCopy[tab.state]}`} className={`h-2 flex-1 rounded-full ${tab.state === "done" ? "bg-[#36ae82]" : tab.state === "capturing" ? "bg-[#8c65ee]" : tab.state === "needs_followup" ? "bg-[#efba70]" : tab.state === "access_required" ? "bg-[#e4bd73] dark:bg-[#a98243]" : "bg-[#e7e5ee] dark:bg-white/[.12]"}`} />)}
         {!total && <div className="h-2 w-full rounded-full bg-[#e7e5ee] dark:bg-white/[.12]" />}
       </div>
       <p className="m-0 mt-2 text-[11px] text-[#807b8f] dark:text-[#a9a3b5]">This measures known navigation coverage. The final audit may still find gaps.</p>

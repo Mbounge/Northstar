@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from play_install import InstallBlocked, ensure_installed
+from supervisor import _wait_for_device
 
 
 SCRIPT = Path(os.environ.get("ONBOARDING_SCRIPT", "./onboarding_mobile2.py")).expanduser().resolve()
@@ -74,6 +75,15 @@ def _verify_screenshot(adb: str, serial: str) -> None:
             raise ValueError("ADB did not produce a readable PNG")
 
 
+def _device_online(adb: str, serial: str) -> bool:
+    try:
+        result = subprocess.run([adb, "-s", serial, "get-state"], capture_output=True,
+                                text=True, timeout=10)
+        return result.returncode == 0 and result.stdout.strip() == "device"
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def supervise(app: str, package: str, serial: str, session: Path) -> int:
     global CHILD
     session.mkdir(parents=True, exist_ok=True)
@@ -103,8 +113,23 @@ def supervise(app: str, package: str, serial: str, session: Path) -> int:
     try:
         _verify_screenshot(adb, serial)
     except (OSError, ValueError, subprocess.SubprocessError):
-        _status(session, "needs_review", "Device screenshot capture failed; check ADB and writable TMPDIR")
-        return 2
+        if STOP_REQUESTED:
+            _status(session, "paused", "operator requested stop")
+            return 0
+        recovered = (not _device_online(adb, serial)
+                     and _wait_for_device(adb, serial, package,
+                                          should_stop=lambda: STOP_REQUESTED))
+        if STOP_REQUESTED:
+            _status(session, "paused", "operator requested stop")
+            return 0
+        if not recovered:
+            _status(session, "needs_review", "Device screenshot capture failed; check ADB and writable TMPDIR")
+            return 2
+        try:
+            _verify_screenshot(adb, serial)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            _status(session, "needs_review", "Device screenshot capture failed after emulator reconnected")
+            return 2
 
     # The onboarding script uses plain `adb shell`, so ANDROID_SERIAL is
     # essential when several dedicated emulators run on the same host.
@@ -122,17 +147,35 @@ def supervise(app: str, package: str, serial: str, session: Path) -> int:
         # data on resume: it may contain the account that onboarding created.
         subprocess.run([adb, "-s", serial, "shell", "pm", "clear", package],
                        check=True, timeout=30, stdout=subprocess.DEVNULL)
-    _status(session, "running", "Onboarding agent is exploring the account flow")
     command = [PYTHON, "-u", str(SCRIPT), "--app-name", app,
                "--package", package, "--resume", str(session), "--continue-current"]
-    CHILD = subprocess.Popen(command, cwd=SCRIPT.parent, env=env, stdin=subprocess.DEVNULL)
-    exit_code = CHILD.wait()
-    CHILD = None
+    reconnects = 0
+    while True:
+        _status(session, "running", "Onboarding agent is exploring the account flow")
+        CHILD = subprocess.Popen(command, cwd=SCRIPT.parent, env=env, stdin=subprocess.DEVNULL)
+        exit_code = CHILD.wait()
+        CHILD = None
+        if STOP_REQUESTED:
+            _status(session, "paused", "operator requested stop")
+            return 0
+        result = _manifest_result(session)
+        if (str(result.get("status", "")).startswith("COMPLETED_")
+                and result.get("settled_home_reached")
+                and result.get("account_created") is True):
+            break
+        if reconnects >= 2 or _device_online(adb, serial):
+            break
+        _status(session, "reconnecting", "Assigned emulator disconnected; waiting to resume saved onboarding")
+        if not _wait_for_device(adb, serial, package,
+                                should_stop=lambda: STOP_REQUESTED):
+            break
+        reconnects += 1
+        print(f"🧭 ONBOARDING {app}: {serial} reconnected; resuming saved session", flush=True)
+
     if STOP_REQUESTED:
         _status(session, "paused", "operator requested stop")
         return 0
 
-    result = _manifest_result(session)
     status = str(result.get("status", ""))
     screens = len(list((session / "screenshots").glob("*.png")))
     if (status.startswith("COMPLETED_") and screens > 0

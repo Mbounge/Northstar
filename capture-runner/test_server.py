@@ -123,6 +123,56 @@ class CaptureServerTests(unittest.TestCase):
         self.assertEqual(launch.call_args.kwargs["env"]["PATH"].split(":")[0],
                          "/opt/android-sdk/platform-tools")
 
+    def test_host_restart_resumes_interrupted_run_but_not_operator_pause(self):
+        ids = []
+        for app in ("Interrupted", "Paused"):
+            _, payload = self.call("/v1/runs", {
+                "app": app, "package_name": "com.example.app",
+                "device_id": "pixel", "scope": "browsing",
+            })
+            ids.append(payload["run"]["id"])
+        interrupted, paused = ids
+        runs = server._read_runs()
+        runs[interrupted].update(status="running", pid=123456)
+        runs[paused].update(status="paused", pid=None)
+        server._write_runs(runs)
+        with patch.object(server, "_pid_alive", return_value=False):
+            self.assertEqual(server._recover_interrupted_runs(), [interrupted])
+        recovered = server._read_runs()
+        self.assertEqual(recovered[interrupted]["status"], "reconnecting")
+        self.assertEqual(recovered[interrupted]["auto_resume_attempts"], 1)
+        self.assertEqual(recovered[paused]["status"], "paused")
+
+        class FakeProcess:
+            pid = 54321
+
+            def poll(self):
+                return None
+
+        with patch.object(server.Handler, "_device_online", return_value=True), \
+             patch.object(server, "_preflight", return_value={"ready": True}), \
+             patch.object(server.subprocess, "Popen", return_value=FakeProcess()) as launch:
+            server._resume_interrupted_run(interrupted, timeout=1)
+        restored = server._read_runs()[interrupted]
+        self.assertEqual((restored["status"], restored["pid"]), ("running", 54321))
+        self.assertEqual(launch.call_args.kwargs["env"]["MOBILESPY_RESUME_SESSION_DIR"],
+                         str(server._run_dir(interrupted)))
+
+    def test_reconnect_budget_never_loops_forever(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Interrupted", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        runs = server._read_runs()
+        runs[run_id].update(status="reconnecting", pid=None, auto_resume_attempts=2)
+        server._write_runs(runs)
+        with patch.object(server, "_pid_alive", return_value=False):
+            self.assertEqual(server._recover_interrupted_runs(), [])
+        state = server._read_runs()[run_id]
+        self.assertEqual(state["status"], "needs_review")
+        self.assertIn("limit", state["recovery_reason"])
+
     def test_full_log_download_is_authenticated_and_redacted(self):
         _, payload = self.call("/v1/runs", {
             "app": "Example", "package_name": "com.example.app",
@@ -200,7 +250,7 @@ class CaptureServerTests(unittest.TestCase):
         self.assertEqual(progress["tabs"][1]["state"], "not_reached")
         self.assertEqual(progress["areas"][0]["state"], "not_identified")
 
-    def test_progress_keeps_gated_tab_unreached_and_explains_misroute(self):
+    def test_progress_distinguishes_access_gate_and_explains_misroute(self):
         _, payload = self.call("/v1/runs", {
             "app": "Example", "package_name": "org.example", "device_id": "pixel", "scope": "browsing",
         })
@@ -217,9 +267,33 @@ class CaptureServerTests(unittest.TestCase):
         (directory / "agent_memory.json").write_text(json.dumps({"tab_progress": {}}))
         progress = self.call(f"/v1/runs/{run_id}/progress")[1]["progress"]
         self.assertEqual(progress["visited_tabs"], 0)
-        self.assertEqual(progress["tabs"][1]["state"], "not_reached")
+        self.assertEqual(progress["tabs"][1]["state"], "access_required")
         self.assertIn("prerequisite", progress["tabs"][1]["open_checks"][0]["reason"])
         self.assertIn("unrelated page", progress["tabs"][0]["open_checks"][0]["reason"])
+
+    def test_progress_shows_captured_menu_items_despite_stale_root_gate(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "org.example", "device_id": "pixel", "scope": "browsing",
+        })
+        directory = server._run_dir(payload["run"]["id"])
+        (directory / "session_manifest.json").write_text(json.dumps({
+            "root_tab_reconciliation": [{"live_names": ["More"]}],
+            "tabs": [{"name": "More > Settings", "canonical_path": "More > Settings",
+                      "root_path": "More", "type": "overlay_menu_item",
+                      "survey_screenshots": ["settings.png"]}],
+            "exploration_deferred": {"More": {"status": "gated_destination"}},
+            "blocked_menu_destinations": [{"root": "More", "item": "Places",
+                                            "reason": "Opening this menu item crashed the target app"}],
+        }))
+        (directory / "agent_memory.json").write_text(json.dumps({"tab_progress": {}}))
+        progress = self.call(f"/v1/runs/{payload['run']['id']}/progress")[1]["progress"]
+        self.assertEqual(progress["visited_tabs"], 1)
+        self.assertEqual(progress["tabs"][0]["state"], "needs_followup")
+        self.assertTrue(progress["tabs"][0]["open_checks"])
+        self.assertTrue(any("crashed" in check["reason"]
+                            for check in progress["tabs"][0]["open_checks"]))
+        self.assertFalse(any("checkpoint is not recorded" in check["reason"]
+                             for check in progress["tabs"][0]["open_checks"]))
 
     def test_finish_with_evidence_is_terminal_without_claiming_full_audit(self):
         _, payload = self.call("/v1/runs", {

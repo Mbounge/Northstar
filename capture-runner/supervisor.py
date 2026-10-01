@@ -103,6 +103,31 @@ def _device_disconnected_in_log(log: str) -> bool:
     ))
 
 
+def _wait_for_device(adb: str, serial: str, package: str, timeout: int = 180,
+                     should_stop=None) -> bool:
+    """Wait through an emulator restart before resuming the same saved capture."""
+    deadline = time.monotonic() + timeout
+    stable_checks = 0
+    while not (should_stop() if should_stop is not None else STOP_REQUESTED) and time.monotonic() < deadline:
+        try:
+            state = subprocess.run([adb, "-s", serial, "get-state"], capture_output=True,
+                                   text=True, timeout=10)
+            boot = subprocess.run([adb, "-s", serial, "shell", "getprop", "sys.boot_completed"],
+                                  capture_output=True, text=True, timeout=10)
+            installed = subprocess.run([adb, "-s", serial, "shell", "pm", "path", package],
+                                       capture_output=True, text=True, timeout=15)
+            ready = (state.returncode == 0 and state.stdout.strip() == "device"
+                     and boot.returncode == 0 and boot.stdout.strip() == "1"
+                     and installed.returncode == 0 and installed.stdout.startswith("package:"))
+        except (OSError, subprocess.TimeoutExpired):
+            ready = False
+        stable_checks = stable_checks + 1 if ready else 0
+        if stable_checks >= 2:
+            return True
+        time.sleep(5)
+    return False
+
+
 def _signal_child(_signum, _frame) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
@@ -142,6 +167,7 @@ def supervise(app: str, session: Path, max_passes: int) -> int:
 
     prior_crash = None
     screenshot_only_passes = 0
+    device_reconnects = 0
     history = []
     for number in range(1, max_passes + 1):
         if STOP_REQUESTED:
@@ -169,16 +195,23 @@ def supervise(app: str, session: Path, max_passes: int) -> int:
             new_log = ""
         crash = next((line.strip() for line in new_log.splitlines()
                       if "SCRIPT CRASHED:" in line), None)
-        paused = ("MOBILESPY PAUSED:" in new_log
-                  or after["device_failures"] > before["device_failures"])
+        provider_paused = "MOBILESPY PAUSED:" in new_log
+        device_failure = after["device_failures"] > before["device_failures"]
         device_disconnected = _device_disconnected_in_log(new_log)
+        reconnected = False
+        if device_disconnected and not STOP_REQUESTED and device_reconnects < 2:
+            print(f"🧭 SUPERVISOR {app}: waiting for {serial} to reconnect before resuming", flush=True)
+            reconnected = _wait_for_device(adb, serial, package)
+            if reconnected:
+                device_reconnects += 1
         changed = _progress(before, after)
         structural = _structural_progress(before, after)
         screenshot_only_passes = (0 if structural else screenshot_only_passes + 1)
         history.append({"pass": number, "exit_code": returncode,
                         "started_with": before, "ended_with": after,
                         "progress": changed, "structural_progress": structural,
-                        "crash": crash, "finished_at": _utc_now()})
+                        "crash": crash, "device_disconnected": device_disconnected,
+                        "device_reconnected": reconnected, "finished_at": _utc_now()})
         if STOP_REQUESTED:
             state_name, reason = "paused", "operator requested stop"
         elif (after["screenshots"] > 0 and after["capture_status"] == "finished"
@@ -187,10 +220,12 @@ def supervise(app: str, session: Path, max_passes: int) -> int:
                                                    "incomplete_topbars", "partial_captures",
                                                    "roots_needing_review"))):
             state_name, reason = "complete", "evidence-backed coverage audit complete"
-        elif paused:
+        elif provider_paused or (device_failure and not reconnected):
             state_name, reason = "needs_review", "provider or Android device paused the worker"
-        elif device_disconnected:
+        elif device_disconnected and not reconnected:
             state_name, reason = "needs_review", "assigned emulator disconnected during capture; verify device and resume"
+        elif reconnected:
+            state_name, reason = "resuming", "assigned emulator reconnected; continuing saved session"
         elif crash and crash == prior_crash:
             state_name, reason = "needs_review", "same script exception repeated after resume"
         elif not changed:
@@ -209,7 +244,7 @@ def supervise(app: str, session: Path, max_passes: int) -> int:
               f"{after['pending_obligations']} pending", flush=True)
         if state_name != "resuming":
             return 0 if state_name in ("complete", "paused") else 2
-        prior_crash = crash
+        prior_crash = None if reconnected else crash
         time.sleep(3)
     state = {"app": app, "state": "paused", "reason": "operator requested stop",
              "updated_at": _utc_now(), "coverage": _snapshot(session), "history": history}

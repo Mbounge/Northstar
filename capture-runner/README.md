@@ -95,15 +95,23 @@ remaining coverage debt. Live device frames, logs, and all saved screenshots
 are available in Admin.
 The deployed browsing-agent source is tracked at
 `capture-runner/agents/browsing_mobile2.py`; copy it to `MOBILESPY_SCRIPT` on
-the capture host when deploying an agent change. Android's share sheet and
+the capture host when deploying an agent change. Keep
+`capture-runner/agents/reliable_long_screenshot.py` beside the deployed agent;
+the agent uses it for strict, reject-on-bad-alignment panoramas of long pages.
+The browsing Python environment needs OpenCV and NumPy. Ordinary viewport
+screenshots remain the evidence when a panorama is rejected. Android's share sheet and
 media picker may briefly own focus during app interactions. The agent captures
 those surfaces without treating them as an app exit.
 
 Keep one assigned emulator per active run. The runner's device pool must contain
 only dedicated capture devices, not a serial currently used by a separate
-MobileSpy process. The host service survives its own restart while the capture
-supervisors continue; the registry and per-run checkpoints live on persistent
-storage. Publication and preprocessing into a tenant's indexed catalog are
+MobileSpy process. The registry and per-run checkpoints live on persistent
+storage. If the host service restarts while a run was active, it marks that
+run reconnecting, waits up to three minutes for its assigned device, and
+relaunches the saved session. Recovery is limited to two attempts per run;
+an operator pause is never resumed automatically. The supervisors also wait
+through a transient emulator disconnect while they remain active. Publication
+and preprocessing into a tenant's indexed catalog are
 separate steps; a capture's Complete status does not imply either one.
 Admin can restart a configured Android emulator while it is idle. The runner
 verifies that the systemd service's main process belongs to the runner user and
