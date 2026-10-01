@@ -352,6 +352,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == ["v1", "status"]:
             return self.reply(200, {"status": "online", "active": ACTIVE.is_set(),
                                     "linkedin_browser_connected": linkedin_browser_connected(),
+                                    "worker_location": os.environ.get("NORTHSTAR_MARKETING_WORKER_LOCATION", "cloud"),
                                     "platform_signin_verified": False})
         if path == ["v1", "targets"]:
             return self.reply(200, {"targets": [public_target(t) for t in read_json(TARGETS, {}).values()]})

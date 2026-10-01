@@ -24,6 +24,7 @@ class MarketingRunnerTests(unittest.TestCase):
             configure_mac_collector()
             self.assertEqual(os.environ["NORTHSTAR_MARKETING_PUBLISH_URL"],
                              "https://www.usenorthstar.ai/api/internal/marketing-publish")
+            self.assertEqual(os.environ["NORTHSTAR_MARKETING_WORKER_LOCATION"], "mac_bridge")
 
     def test_collector_cannot_use_everyday_chrome_or_profile(self):
         regular = Path.home() / "Library/Application Support/Google/Chrome"

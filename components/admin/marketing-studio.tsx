@@ -48,6 +48,7 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [online, setOnline] = useState(false);
+  const [workerLocation, setWorkerLocation] = useState("");
   const [linkedinBrowserConnected, setLinkedinBrowserConnected] = useState(false);
   const [logRun, setLogRun] = useState<string | null>(null);
   const [log, setLog] = useState("");
@@ -64,6 +65,7 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
     if (targetList.status === "fulfilled") setTargets(targetList.value.targets || []);
     if (runList.status === "fulfilled") setRuns(runList.value.runs || []);
     setOnline(status.status === "fulfilled" && status.value.status === "online");
+    setWorkerLocation(status.status === "fulfilled" ? status.value.worker_location || "" : "");
     setLinkedinBrowserConnected(status.status === "fulfilled" && status.value.linkedin_browser_connected === true);
     if (targetList.status === "rejected") setError(targetList.reason.message);
     else setError("");
@@ -132,7 +134,7 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
         <h2 className="text-3xl font-semibold tracking-[-.035em]">Social studio</h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-400">Connect official social profiles, discover people, and capture evidence-backed snapshots for the app’s Marketing view and canvas.</p>
       </div>
-      <div className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${online ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300" : "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300"}`}><span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-500" : "bg-amber-500"}`}/>{online ? "Collector online" : "Collector unavailable"}</div>
+      <div className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${online ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300" : "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300"}`}><span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-500" : "bg-amber-500"}`}/>{online ? workerLocation === "mac_bridge" ? "Mac bridge online" : workerLocation === "cloud" ? "Cloud collector online" : "Collector online" : "Collector unavailable"}</div>
     </div>
 
     <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">

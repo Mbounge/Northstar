@@ -38,6 +38,7 @@ def configure() -> None:
     os.environ.setdefault("NORTHSTAR_MARKETING_DATA_ROOT", str(project.parent.parent / "outputs" / "marketing-collector"))
     os.environ.setdefault("NORTHSTAR_MARKETING_BIND", "127.0.0.1")
     os.environ.setdefault("NORTHSTAR_MARKETING_PORT", "8790")
+    os.environ["NORTHSTAR_MARKETING_WORKER_LOCATION"] = "mac_bridge"
     os.environ["NORTHSTAR_MARKETING_CHROME_DATA_DIR"] = dedicated_chrome_data_dir(
         os.environ.get("NORTHSTAR_MARKETING_CHROME_DATA_DIR", "")
     )
