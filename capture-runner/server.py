@@ -137,6 +137,8 @@ def _pipeline_status(run: dict) -> dict:
     result["lanes"] = [{"name": lane.get("label") or lane.get("subview") or "Flow",
                         "root": root.get("label") or "App",
                         "screens": lane.get("screen_count") or 0,
+                        "main_screens": len(lane.get("spine") or []),
+                        "branches": len(lane.get("branches") or []),
                         "first_screen": next((Path(item).name for item in
                             (lane.get("spine") or []) + [screen
                                 for branch in lane.get("branches") or []
