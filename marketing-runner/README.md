@@ -9,7 +9,7 @@ Required host environment in `/etc/northstar/marketing.env`:
 ```
 NORTHSTAR_MARKETING_RUNNER_TOKEN=<random secret>
 NORTHSTAR_MARKETING_PUBLISH_TOKEN=<another random secret>
-NORTHSTAR_MARKETING_PUBLISH_URL=https://usenorthstar.ai/api/internal/marketing-publish
+NORTHSTAR_MARKETING_PUBLISH_URL=https://www.usenorthstar.ai/api/internal/marketing-publish
 NORTHSTAR_MARKETING_DATA_ROOT=/var/lib/northstar/marketing
 NORTHSTAR_MARKETING_BIND=127.0.0.1
 NORTHSTAR_MARKETING_PORT=8790

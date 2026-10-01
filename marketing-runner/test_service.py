@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import service
 from install_mac_worker import LABELS, chrome_arguments, definitions
-from mac_collector import COLLECTOR_CHROME_DATA_DIR, dedicated_chrome_data_dir
+from mac_collector import COLLECTOR_CHROME_DATA_DIR, configure as configure_mac_collector, dedicated_chrome_data_dir
 from open_collector_browser import SOCIAL_URLS, launch_command, main as open_collector_browser
 from publisher import validate_feed
 
@@ -16,6 +16,15 @@ TENANT = "12345678-1234-1234-1234-123456789abc"
 
 
 class MarketingRunnerTests(unittest.TestCase):
+    def test_mac_collector_publishes_to_canonical_host_without_redirect(self):
+        with patch.dict(os.environ, {}, clear=True), patch("mac_collector.dotenv_values", return_value={
+            "NORTHSTAR_MARKETING_RUNNER_TOKEN": "runner-test",
+            "NORTHSTAR_MARKETING_PUBLISH_TOKEN": "publisher-test",
+        }):
+            configure_mac_collector()
+            self.assertEqual(os.environ["NORTHSTAR_MARKETING_PUBLISH_URL"],
+                             "https://www.usenorthstar.ai/api/internal/marketing-publish")
+
     def test_collector_cannot_use_everyday_chrome_or_profile(self):
         regular = Path.home() / "Library/Application Support/Google/Chrome"
         self.assertEqual(dedicated_chrome_data_dir(""), str(COLLECTOR_CHROME_DATA_DIR))

@@ -32,7 +32,9 @@ def configure() -> None:
         if not value:
             raise RuntimeError(f"{name} is missing from the local ignored environment file")
         os.environ[name] = value
-    os.environ.setdefault("NORTHSTAR_MARKETING_PUBLISH_URL", "https://usenorthstar.ai/api/internal/marketing-publish")
+    # Use the canonical host: the apex redirects to www and HTTP clients drop
+    # Authorization when following that cross-host redirect.
+    os.environ.setdefault("NORTHSTAR_MARKETING_PUBLISH_URL", "https://www.usenorthstar.ai/api/internal/marketing-publish")
     os.environ.setdefault("NORTHSTAR_MARKETING_DATA_ROOT", str(project.parent.parent / "outputs" / "marketing-collector"))
     os.environ.setdefault("NORTHSTAR_MARKETING_BIND", "127.0.0.1")
     os.environ.setdefault("NORTHSTAR_MARKETING_PORT", "8790")
