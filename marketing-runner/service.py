@@ -166,6 +166,13 @@ def public_run(run: dict) -> dict:
     return {key: value for key, value in run.items() if key != "work_dir"}
 
 
+def last_complete_snapshot_at() -> str | None:
+    runs = read_json(RUNS, {})
+    return max((run["finished_at"] for run in runs.values()
+                if run.get("kind") == "snapshot" and run.get("status") == "completed"
+                and run.get("snapshot_id") and run.get("finished_at")), default=None)
+
+
 def next_due(target: dict, after: datetime) -> datetime | None:
     if target["cadence"] == "off":
         return None
@@ -353,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"status": "online", "active": ACTIVE.is_set(),
                                     "linkedin_browser_connected": linkedin_browser_connected(),
                                     "worker_location": os.environ.get("NORTHSTAR_MARKETING_WORKER_LOCATION", "cloud"),
-                                    "platform_signin_verified": False})
+                                    "last_complete_snapshot_at": last_complete_snapshot_at()})
         if path == ["v1", "targets"]:
             return self.reply(200, {"targets": [public_target(t) for t in read_json(TARGETS, {}).values()]})
         if path == ["v1", "runs"]:

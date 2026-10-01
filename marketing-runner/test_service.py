@@ -16,6 +16,18 @@ TENANT = "12345678-1234-1234-1234-123456789abc"
 
 
 class MarketingRunnerTests(unittest.TestCase):
+    def test_status_uses_last_published_snapshot_not_browser_presence(self):
+        runs = {
+            "review": {"kind": "snapshot", "status": "needs_review", "finished_at": "2026-10-02T00:00:00Z"},
+            "published": {"kind": "snapshot", "status": "completed", "snapshot_id": "snapshot-1",
+                          "finished_at": "2026-10-01T15:49:49Z"},
+            "research": {"kind": "research", "status": "completed", "finished_at": "2026-10-03T00:00:00Z"},
+        }
+        with patch.object(service, "read_json", return_value=runs):
+            self.assertEqual(service.last_complete_snapshot_at(), "2026-10-01T15:49:49Z")
+        with patch.object(service, "read_json", return_value={}):
+            self.assertIsNone(service.last_complete_snapshot_at())
+
     def test_mac_collector_publishes_to_canonical_host_without_redirect(self):
         with patch.dict(os.environ, {}, clear=True), patch("mac_collector.dotenv_values", return_value={
             "NORTHSTAR_MARKETING_RUNNER_TOKEN": "runner-test",
