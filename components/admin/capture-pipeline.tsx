@@ -10,7 +10,7 @@ type Pipeline = {
   capture_status: string; audit_status: string; saved_screens?: number;
   canonical_screens?: number; saved_checkpoints?: number; boards?: number;
   lanes: Lane[];
-  app_store?: { stage: string; track_id?: number; package_id?: string; title?: string; seller?: string; screenshots?: number; source_url?: string; error?: string };
+  app_store?: { stage: string; phase?: string; track_id?: number; package_id?: string; title?: string; seller?: string; screenshots?: number; review_count?: number; competitor_count?: number; source_url?: string; error?: string };
 };
 type StoreCandidate = { track_id: number; title: string; seller: string; bundle_id?: string; icon_url?: string; url?: string };
 type Publication = { stage: "uploading" | "complete"; tenant_id: string; app_name: string; cursor: number; files: { path: string }[]; audit_status: string };
@@ -37,6 +37,8 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
   const [expanded, setExpanded] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [showStoreLog, setShowStoreLog] = useState(false);
+  const [storeLogs, setStoreLogs] = useState<string[]>([]);
   const [storeQuery, setStoreQuery] = useState(appName);
   const [storeCandidates, setStoreCandidates] = useState<StoreCandidate[]>([]);
   const [storeSearching, setStoreSearching] = useState(false);
@@ -59,7 +61,7 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
   }, [runId]);
 
   useEffect(() => {
-    setPipeline(null); setError(""); setExpanded(false); setShowLog(false); setLogs([]); setStoreQuery(appName); setStoreCandidates([]); setTenantId(organizationId); setPublication(null); setGenerated(null); setGeneratedError("");
+    setPipeline(null); setError(""); setExpanded(false); setShowLog(false); setLogs([]); setShowStoreLog(false); setStoreLogs([]); setStoreQuery(appName); setStoreCandidates([]); setTenantId(organizationId); setPublication(null); setGenerated(null); setGeneratedError("");
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
@@ -105,6 +107,22 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [runId, showLog]);
 
+  useEffect(() => {
+    if (!showStoreLog) return;
+    let cancelled = false;
+    const update = async () => {
+      try {
+        const response = await fetch(`${api}/${runId}/pipeline/app-store/logs`, { cache: "no-store" });
+        if (!response.ok) return;
+        const body = await response.json();
+        if (!cancelled) setStoreLogs(body.lines || []);
+      } catch { /* Research status remains visible above. */ }
+    };
+    void update();
+    const timer = window.setInterval(() => void update(), 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [runId, showStoreLog]);
+
   const groups = useMemo(() => {
     const found = new Map<string, Lane[]>();
     for (const lane of pipeline?.lanes || []) found.set(lane.root, [...(found.get(lane.root) || []), lane]);
@@ -148,14 +166,14 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
     finally { setBusy(false); }
   }
 
-  async function retryPlay() {
+  async function retryResearch() {
     setBusy(true); setError("");
     try {
       const response = await fetch(`${api}/${runId}/pipeline/app-store`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "Could not retry Google Play research");
+      if (!response.ok) throw new Error(body.error || "Could not retry App Store research");
       void refresh();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not retry Google Play research"); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not retry App Store research"); }
     finally { setBusy(false); }
   }
 
@@ -210,11 +228,13 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
       {showGaps && <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-amber-500/25 bg-amber-500/[.08] px-4 py-3"><div><div className="text-[13px] font-semibold text-amber-800 dark:text-amber-200">Capture audit: {pipeline.audit_status.replaceAll("_", " ")}</div><p className="m-0 mt-0.5 text-[12px] leading-5 text-amber-800/80 dark:text-amber-100/80">A flow map preserves what was captured; it does not resolve coverage gaps.</p></div><button onClick={onShowGaps} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-amber-900 underline underline-offset-2 dark:text-amber-100">See exact gaps <ArrowRight className="h-3.5 w-3.5" /></button></div>}
       <div className="rounded-[17px] border border-[#e8e3ee] bg-white p-5 dark:border-white/[.11] dark:bg-[#1b1923]">
         <div className="text-[14px] font-semibold">Official store listing</div>
-        <p className="m-0 mt-1 text-[12px] leading-5 text-[#81798b] dark:text-[#aaa2b5]">{appStoreRequired ? `Google Play verifies ${packageName} and supplies the app icon before capture starts.` : "This older capture can select an official Apple listing as separate iOS research."}</p>
-        {pipeline.app_store?.stage === "ready_for_review" && <div className="mt-3 text-[12px]">Captured <strong>{pipeline.app_store.title}</strong> by {pipeline.app_store.seller} · {pipeline.app_store.screenshots || 0} images. {pipeline.app_store.source_url && <a href={pipeline.app_store.source_url} target="_blank" rel="noreferrer" className="text-violet-700 underline dark:text-violet-300">View source</a>}</div>}
-        {pipeline.app_store?.stage === "researching" && <div className="mt-3 text-[12px] text-violet-700 dark:text-violet-300">Collecting selected listing and verifying its assets…</div>}
+        <p className="m-0 mt-1 text-[12px] leading-5 text-[#81798b] dark:text-[#aaa2b5]">{appStoreRequired ? `The original research agent explores the Apple App Store for ${appName}, captures its icon and screenshots, and writes its competitive analysis before capture starts. Android installation still uses ${packageName} on Google Play.` : "This older capture can select an official Apple listing separately."}</p>
+        {pipeline.app_store?.stage === "ready_for_review" && <div className="mt-3 text-[12px]">Captured <strong>{pipeline.app_store.title}</strong> by {pipeline.app_store.seller} · {pipeline.app_store.screenshots || 0} images{typeof pipeline.app_store.review_count === "number" ? ` · ${pipeline.app_store.review_count} reviews` : ""}{typeof pipeline.app_store.competitor_count === "number" ? ` · ${pipeline.app_store.competitor_count} related apps` : ""}. {pipeline.app_store.source_url && <a href={pipeline.app_store.source_url} target="_blank" rel="noreferrer" className="text-violet-700 underline dark:text-violet-300">View source</a>}</div>}
+        {pipeline.app_store?.stage === "researching" && <div className="mt-3 text-[12px] text-violet-700 dark:text-violet-300">{pipeline.app_store.phase === "waiting_for_browser" ? "Waiting for the dedicated App Store browser…" : "Researching the listing and saving its assets with GPT‑6 Luna…"}</div>}
         {pipeline.app_store?.stage === "failed" && <div className="mt-3 text-[12px] text-rose-700 dark:text-rose-300">{pipeline.app_store.error || "Listing research failed"}</div>}
-        {pipeline.app_store?.stage !== "ready_for_review" && appStoreRequired && <button disabled={busy || pipeline.app_store?.stage === "researching"} onClick={() => void retryPlay()} className="mt-4 rounded-[9px] bg-[#6544bd] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-40">Retry Google Play research</button>}
+        {pipeline.app_store?.stage && pipeline.app_store.stage !== "not_started" && <button type="button" onClick={() => setShowStoreLog((value) => !value)} className="mt-3 block text-[12px] font-semibold text-violet-700 underline underline-offset-2 dark:text-violet-300">{showStoreLog ? "Hide research activity" : "View research activity"}</button>}
+        {showStoreLog && <pre className="mt-3 max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] bg-[#14121a] p-4 text-[11px] leading-5 text-white/80">{storeLogs.length ? storeLogs.join("\n") : "The research worker has not written activity yet."}</pre>}
+        {pipeline.app_store?.stage !== "ready_for_review" && appStoreRequired && <button disabled={busy || pipeline.app_store?.stage === "researching"} onClick={() => void retryResearch()} className="mt-4 rounded-[9px] bg-[#6544bd] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-40">Retry App Store research</button>}
         {pipeline.app_store?.stage !== "ready_for_review" && !appStoreRequired && <form onSubmit={(event) => { event.preventDefault(); void searchStore(); }} className="mt-4 flex flex-wrap gap-2"><input aria-label="Search App Store" value={storeQuery} onChange={(event) => setStoreQuery(event.target.value)} className="min-w-[190px] flex-1 rounded-[9px] border border-[#ddd6e8] bg-transparent px-3 py-2 text-[13px] dark:border-white/15" /><button disabled={storeSearching || !storeQuery.trim()} className="rounded-[9px] bg-[#6544bd] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-40">{storeSearching ? "Searching…" : "Find Apple listing"}</button></form>}
         {storeCandidates.length > 0 && <div className="mt-3 max-h-[260px] overflow-auto rounded-[10px] border border-[#e8e3ee] dark:border-white/10">{storeCandidates.map((item) => <div key={item.track_id} className="flex items-center gap-3 border-b border-[#eeeaf2] p-2.5 last:border-0 dark:border-white/10">{item.icon_url && <img src={item.icon_url} alt="" className="h-9 w-9 rounded-[8px] object-cover" />}<div className="min-w-0 flex-1"><div className="truncate text-[12px] font-semibold">{item.title}</div><div className="truncate text-[11px] text-[#81798b]">{item.seller} · {item.bundle_id || "Bundle ID unknown"}</div></div><button disabled={busy || pipeline.app_store?.stage === "researching"} onClick={() => void selectListing(item.track_id)} className="rounded-[8px] border border-violet-500/30 px-3 py-1.5 text-[11px] font-semibold text-violet-700 disabled:opacity-40 dark:text-violet-300">Select</button></div>)}</div>}
       </div>

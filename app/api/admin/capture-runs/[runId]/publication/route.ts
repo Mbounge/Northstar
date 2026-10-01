@@ -64,7 +64,7 @@ function contentType(path: string) {
 function validateSource(source: Source) {
   if (!Array.isArray(source.files) || !source.files.length || source.files.length > 5000 || !/^[a-f0-9]{64}$/.test(source.fingerprint)) throw new Error("Capture artifact list is invalid");
   const names = source.files.map((item) => item.path);
-  if (new Set(names).size !== names.length || source.files.some((item) => (!/^(?:browsing\/(?:screenshots|enriched|flows)|app_store\/(?:screenshots|icons))\/[A-Za-z0-9_.-]+$/.test(item.path) && !/^app_store\/(?:app_store_manifest|itunes_lookup|play_listing)\.json$/.test(item.path)) || !Number.isSafeInteger(item.bytes) || item.bytes < 1 || item.bytes > 20_000_000 || !/^[a-f0-9]{64}$/.test(item.sha256))) throw new Error("Capture artifact paths are invalid");
+  if (new Set(names).size !== names.length || source.files.some((item) => (!/^(?:browsing\/(?:screenshots|enriched|flows)|app_store\/(?:screenshots|icons))\/[A-Za-z0-9_.-]+$/.test(item.path) && !/^app_store\/(?:app_store_manifest|agent_manifest|itunes_lookup|play_listing)\.json$/.test(item.path)) || !Number.isSafeInteger(item.bytes) || item.bytes < 1 || item.bytes > 20_000_000 || !/^[a-f0-9]{64}$/.test(item.sha256))) throw new Error("Capture artifact paths are invalid");
   if (source.app_store.stage !== "ready_for_review") throw new Error("Select and finish App Store research before delivery");
   if (!names.includes("browsing/enriched/enriched_manifest.json") || !names.includes("browsing/enriched/flows.json") || !names.includes("app_store/app_store_manifest.json")) throw new Error("Required processing or listing evidence is missing");
 }

@@ -34,7 +34,9 @@ ONBOARDING_PYTHON = os.environ.get("ONBOARDING_PYTHON", PYTHON)
 PROCESSING_PIPELINE = Path(__file__).with_name("processing_pipeline.py")
 APP_STORE_RESEARCH = Path(__file__).with_name("app_store_research.py")
 PLAY_STORE_RESEARCH = Path(__file__).with_name("play_store_research.py")
+APP_STORE_AGENT = Path(__file__).with_name("app_store_agent_worker.py")
 PROCESSING_PYTHON = os.environ.get("CAPTURE_PROCESSING_PYTHON", PYTHON)
+APP_STORE_AGENT_PYTHON = os.environ.get("NORTHSTAR_APP_STORE_PYTHON", PROCESSING_PYTHON)
 MAX_PASSES = int(os.environ.get("CAPTURE_MAX_PASSES", "12"))
 ADB = os.environ.get("CAPTURE_ADB", "adb")
 TOKEN = os.environ.get("NORTHSTAR_CAPTURE_RUNNER_TOKEN", "")
@@ -137,10 +139,7 @@ def _pipeline_status(run: dict) -> dict:
     result["audit_status"] = result.get("audit_status") or _json_file(
         session / "unattended_audit.json").get("status") or "unknown"
     result["saved_checkpoints"] = len(list((session / "enriched").glob("step_*_enriched.json")))
-    store = _json_file(session / "app_store_research.json")
-    if store.get("stage") == "researching" and not _app_store_worker_alive(session, run["id"], store):
-        if time.time() - float(store.get("started_unix") or 0) > 15:
-            store.update(stage="failed", error="App Store research worker stopped")
+    store = _app_store_status(session, run["id"])
     result["app_store"] = store or {"stage": "not_started"}
     taxonomy = _json_file(session / "flows/flows.json")
     result["lanes"] = [{"name": lane.get("label") or lane.get("subview") or "Flow",
@@ -165,10 +164,22 @@ def _app_store_worker_alive(session: Path, run_id: str, store: dict) -> bool:
         pid_file = session / "app_store_worker.pid"
         pid = int(pid_file.read_text() if pid_file.is_file() else store.get("worker_pid"))
         command = Path(f"/proc/{pid}/cmdline").read_bytes()
-        return ((b"app_store_research.py" in command or b"play_store_research.py" in command)
+        return ((b"app_store_research.py" in command or b"play_store_research.py" in command
+                 or b"app_store_agent_worker.py" in command)
                 and run_id.encode() in command)
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _app_store_status(session: Path, run_id: str) -> dict:
+    path = session / "app_store_research.json"
+    store = _json_file(path)
+    if (store.get("stage") == "researching"
+            and time.time() - float(store.get("started_unix") or 0) > 15
+            and not _app_store_worker_alive(session, run_id, store)):
+        store.update(stage="failed", error="App Store research worker stopped before completion")
+        _write_json(path, store)
+    return store
 
 
 def _spawn_pipeline_worker(run_id: str, action: str) -> None:
@@ -254,9 +265,13 @@ def _publication_files(run: dict) -> dict:
         if not listing or not (listing.get("track_id") or listing.get("package_id")):
             raise ValueError("Official listing manifest is missing its identity")
         files.add("app_store/app_store_manifest.json")
-        files.add("app_store/itunes_lookup.json" if listing.get("track_id") else "app_store/play_listing.json")
+        source_file = ("agent_manifest.json" if (session / "app_store/agent_manifest.json").is_file()
+                       else "itunes_lookup.json" if listing.get("track_id") else "play_listing.json")
+        files.add("app_store/" + source_file)
         asset_paths = [listing.get("icons", {}).get("app_icon")]
         asset_paths.extend(listing.get("screenshots", {}).get("carousel") or [])
+        asset_paths.extend(item.get("icon_path") for item in listing.get("raw_data", {}).get("competitors") or []
+                           if isinstance(item, dict) and item.get("icon_path"))
         for relative in asset_paths:
             if not isinstance(relative, str) or not re.fullmatch(r"(?:icons|screenshots)/[A-Za-z0-9_.-]+\.(?:png|jpg|jpeg)", relative):
                 raise ValueError("Official listing contains an unsafe asset path")
@@ -335,7 +350,9 @@ def _sanitized_log(path: Path) -> str:
     except FileNotFoundError:
         return ""
     text = re.sub(r"sk-[A-Za-z0-9_-]{16,}", "[redacted key]", text)
-    for name in ("ONBOARDING_PASSWORD", "OPENAI_API_KEY", "NORTHSTAR_CAPTURE_RUNNER_TOKEN"):
+    text = re.sub(r"AIza[A-Za-z0-9_-]{20,}", "[redacted key]", text)
+    for name in ("ONBOARDING_PASSWORD", "OPENAI_API_KEY", "NORTHSTAR_CAPTURE_RUNNER_TOKEN",
+                 "NORTHSTAR_APP_STORE_GEMINI_API_KEY"):
         secret = os.environ.get(name, "")
         if len(secret) >= 8:
             text = text.replace(secret, f"[redacted {name.lower()}]")
@@ -435,7 +452,7 @@ def _status(run: dict) -> dict:
         } if outcome else None)
     result["icon_available"] = ((directory / "app_store/icons/app_icon_512x512.png").is_file()
                                 or (directory / "extracted_icons" / "ic_launcher_mipmap-xxxhdpi.png").is_file())
-    result["app_store"] = _json_file(directory / "app_store_research.json")
+    result["app_store"] = _app_store_status(directory, run["id"])
     result["audit_status"] = _json_file(directory / "unattended_audit.json").get("status")
     result["coverage"] = coverage
     result["reason"] = supervisor.get("reason") or ("Capture process exited without a final checkpoint" if result["status"] == "needs_review" else None)
@@ -705,6 +722,9 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 5 and parts[3:] == ["pipeline", "app-store"]:
                 return self._send(200, {"app_store": _json_file(
                     _run_dir(parts[2]) / "app_store_research.json")})
+            if len(parts) == 6 and parts[3:] == ["pipeline", "app-store", "logs"]:
+                return self._send(200, {"lines": _sanitized_log(
+                    _run_dir(parts[2]) / "app_store_research.log").splitlines()[-120:]})
             if len(parts) == 5 and parts[3:] == ["pipeline", "artifacts"]:
                 try:
                     return self._send(200, {"artifacts": _publication_files(run)})
@@ -837,16 +857,22 @@ class Handler(BaseHTTPRequestHandler):
         self._send(201, {"run": _status(run)})
 
     def _launch_app_store(self, run: dict, track_id: int | None) -> dict:
-        script = APP_STORE_RESEARCH if track_id is not None else PLAY_STORE_RESEARCH
-        if not script.is_file() or not Path(PROCESSING_PYTHON).is_file():
+        script = (APP_STORE_AGENT if run.get("app_store_required")
+                  else APP_STORE_RESEARCH if track_id is not None else PLAY_STORE_RESEARCH)
+        python = APP_STORE_AGENT_PYTHON if script == APP_STORE_AGENT else PROCESSING_PYTHON
+        if not script.is_file() or not Path(python).is_file():
             raise ValueError("App Store research worker is not installed")
         session = _run_dir(run["id"])
         previous = _json_file(session / "app_store_research.json")
         if previous.get("stage") == "researching" and _app_store_worker_alive(session, run["id"], previous):
             raise ValueError("App Store research is already running")
-        command = [PROCESSING_PYTHON, "-u", str(script),
+        command = (["/usr/bin/timeout", "--signal=TERM", "--kill-after=10s", "45m"]
+                   if script == APP_STORE_AGENT else []) + [python, "-u", str(script),
                    "--session", str(session), "--app", run["app"]]
-        command += ["--track-id", str(track_id)] if track_id is not None else ["--package", run["package_name"]]
+        if script == APP_STORE_AGENT:
+            command += ["--package", run["package_name"]]
+        else:
+            command += ["--track-id", str(track_id)] if track_id is not None else ["--package", run["package_name"]]
         status = {"stage": "researching", "track_id": track_id,
                   "package_id": run["package_name"] if track_id is None else None,
                   "started_unix": time.time()}
@@ -901,7 +927,7 @@ class Handler(BaseHTTPRequestHandler):
             if _status(run)["status"] not in ("queued", "complete", "finished_early"):
                 return self._send(409, {"error": "Pause or finish the capture before changing its listing"})
             if run.get("app_store_required") and track_id is not None:
-                return self._send(409, {"error": "New Android captures require the exact Google Play package listing"})
+                return self._send(409, {"error": "New captures run the original Apple App Store research agent automatically"})
             return self._send(202, {"app_store": self._launch_app_store(run, track_id)})
 
     def _reboot_device(self, device_id: str) -> None:

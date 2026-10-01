@@ -1,0 +1,18 @@
+[Unit]
+Description=Northstar Apple App Store research browser
+After=northstar-marketing-display.service
+Requires=northstar-marketing-display.service
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/google-chrome-stable --user-data-dir=/var/lib/northstar/app-store-browser --remote-debugging-address=127.0.0.1 --remote-debugging-port=9233 --no-first-run --no-default-browser-check --disable-dev-shm-usage --no-sandbox about:blank
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

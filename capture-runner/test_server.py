@@ -134,6 +134,23 @@ class CaptureServerTests(unittest.TestCase):
             server.PLAY_STORE_RESEARCH = old_script
             server.PROCESSING_PYTHON = old_python
 
+    def test_new_capture_launches_original_apple_research_agent(self):
+        run = {"id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "app": "Example",
+               "package_name": "com.example.app", "app_store_required": True}
+        session = server._run_dir(run["id"])
+        session.mkdir()
+        self.research_patch.stop()
+        try:
+            with patch.object(server, "APP_STORE_AGENT_PYTHON", sys.executable), \
+                 patch.object(server.subprocess, "Popen", return_value=SimpleNamespace(pid=12345)) as launch:
+                server.Handler._launch_app_store(None, run, None)
+            command = launch.call_args.args[0]
+            self.assertIn(str(server.APP_STORE_AGENT), command)
+            self.assertEqual(command[-2:], ["--package", "com.example.app"])
+            self.assertIn("45m", command)
+        finally:
+            self.research_patch.start()
+
     def test_listing_launch_failure_keeps_run_visible_for_retry(self):
         with patch.object(server.Handler, "_launch_app_store", side_effect=ValueError("Worker unavailable")):
             code, payload = self.call("/v1/runs", {
