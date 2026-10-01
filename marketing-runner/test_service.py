@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import service
 from install_mac_worker import LABELS, definitions
 from mac_collector import MANAGED_CHROME_DATA_DIR, dedicated_chrome_data_dir
+from open_collector_browser import SOCIAL_URLS, launch_command
 from publisher import validate_feed
 
 TENANT = "12345678-1234-1234-1234-123456789abc"
@@ -37,6 +38,13 @@ class MarketingRunnerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
             definitions(str(Path.home() / "Library/Application Support/Google/Chrome"))
+
+    def test_one_time_signin_launcher_uses_only_collector_profile(self):
+        command = launch_command()
+        self.assertEqual(command[:4], ["open", "-na", "/Applications/Google Chrome.app", "--args"])
+        self.assertIn(f"--user-data-dir={MANAGED_CHROME_DATA_DIR}", command)
+        self.assertIn("--remote-debugging-address=127.0.0.1", command)
+        self.assertEqual(tuple(command[-3:]), SOCIAL_URLS)
 
     def test_chrome_debugging_port_is_resolved_without_exporting_browser_data(self):
         with tempfile.TemporaryDirectory() as directory:
