@@ -739,7 +739,12 @@ class Handler(BaseHTTPRequestHandler):
             runs[run_id] = run
             _run_dir(run_id).mkdir(parents=True, exist_ok=False)
             _write_runs(runs)
-            self._launch_app_store(run, track_id)
+            try:
+                self._launch_app_store(run, track_id)
+            except ValueError as exc:
+                status_path = _run_dir(run_id) / "app_store_research.json"
+                if _json_file(status_path).get("stage") != "failed":
+                    _write_json(status_path, {"stage": "failed", "error": str(exc)})
         self._send(201, {"run": _status(run)})
 
     def _launch_app_store(self, run: dict, track_id: int | None) -> dict:

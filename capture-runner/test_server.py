@@ -134,6 +134,17 @@ class CaptureServerTests(unittest.TestCase):
             server.PLAY_STORE_RESEARCH = old_script
             server.PROCESSING_PYTHON = old_python
 
+    def test_listing_launch_failure_keeps_run_visible_for_retry(self):
+        with patch.object(server.Handler, "_launch_app_store", side_effect=ValueError("Worker unavailable")):
+            code, payload = self.call("/v1/runs", {
+                "app": "Example", "package_name": "com.example.app",
+                "device_id": "pixel", "scope": "onboarding",
+            })
+        self.assertEqual(code, 201)
+        self.assertEqual(payload["run"]["app_store"]["stage"], "failed")
+        self.assertEqual(payload["run"]["app_store"]["error"], "Worker unavailable")
+        self.assertIn(payload["run"]["id"], server._read_runs())
+
     def test_invalid_package_scope_and_screen_path_are_rejected(self):
         common = {"app": "Graet", "organization_id": "tenant-1", "device_id": "pixel", "scope": "browsing"}
         self.assertEqual(self.call("/v1/runs", {**common, "package_name": "com.app;rm"})[0], 400)
