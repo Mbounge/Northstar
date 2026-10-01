@@ -28,6 +28,11 @@ class CaptureServerTests(unittest.TestCase):
         server.DEVICES = {"pixel": "offline-test-serial"}
         server.EMULATOR_UNITS = {"pixel": "northstar-emulator.service"}
         server.PROCESSES.clear()
+        def complete_research(run, _track_id):
+            server._write_json(server._run_dir(run["id"]) / "app_store_research.json", {"stage": "ready_for_review"})
+            return {"stage": "ready_for_review"}
+        self.research_patch = patch.object(server.Handler, "_launch_app_store", side_effect=complete_research)
+        self.research_patch.start()
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
         self.thread.start()
@@ -38,6 +43,7 @@ class CaptureServerTests(unittest.TestCase):
         self.http.server_close()
         self.thread.join(timeout=3)
         self.temp.cleanup()
+        self.research_patch.stop()
         server.SCRIPT = self.old_script
         server.EMULATOR_UNITS = self.old_emulator_units
 
@@ -85,6 +91,19 @@ class CaptureServerTests(unittest.TestCase):
         self.assertEqual(self.call("/v1/runs")[1]["runs"][0]["id"], run_id)
         self.assertEqual(json.loads((server.ROOT / "runs.json").read_text())[run_id]["status"], "queued")
         self.assertEqual(self.call(f"/v1/runs/{run_id}/start", {})[0], 409)
+
+    def test_new_capture_waits_for_listing_assets(self):
+        with patch.object(server.Handler, "_launch_app_store", return_value={"stage": "researching"}) as research:
+            status, payload = self.call("/v1/runs", {
+                "app": "Example", "package_name": "com.example.app", "device_id": "pixel",
+                "scope": "onboarding", "app_store_track_id": 123456,
+            })
+        self.assertEqual(status, 201)
+        research.assert_called_once()
+        run_id = payload["run"]["id"]
+        code, result = self.call(f"/v1/runs/{run_id}/start", {})
+        self.assertEqual(code, 409)
+        self.assertIn("App Store research", result["error"])
 
     def test_invalid_package_scope_and_screen_path_are_rejected(self):
         common = {"app": "Graet", "organization_id": "tenant-1", "device_id": "pixel", "scope": "browsing"}

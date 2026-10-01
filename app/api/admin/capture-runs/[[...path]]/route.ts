@@ -5,8 +5,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ path?: string[] }> };
-const allowedGet = /^(?:|devices|catalog|[a-f0-9-]{36}(?:\/(?:logs(?:\/download)?|frame|icon|preflight|progress|pipeline(?:\/logs)?|screens(?:\/[A-Za-z0-9_.-]+\.png)?))?)$/;
-const allowedPost = /^(?:|[a-f0-9-]{36}\/(?:start|stop|finish|pipeline\/(?:prepare|run))|devices\/[A-Za-z0-9_-]+\/reboot)$/;
+const allowedGet = /^(?:|devices|catalog|[a-f0-9-]{36}(?:\/(?:logs(?:\/download)?|frame|icon|preflight|progress|pipeline(?:\/(?:logs|app-store))?|screens(?:\/[A-Za-z0-9_.-]+\.png)?))?)$/;
+const allowedPost = /^(?:|[a-f0-9-]{36}\/(?:start|stop|finish|pipeline\/(?:prepare|run|app-store))|devices\/[A-Za-z0-9_-]+\/reboot)$/;
 
 async function authorize() {
   const db = await createClient();
@@ -123,7 +123,15 @@ export async function POST(request: Request, context: Context) {
     const response = await fromRunner("android", "POST", path);
     return response ? forward(response) : NextResponse.json({ error: "Android runner is unavailable" }, { status: 503 });
   }
-  if (path) return proxyRun("POST", path);
+  if (path) {
+    if (path.endsWith("/pipeline/app-store")) {
+      let body: { track_id?: number };
+      try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
+      if (body.track_id !== undefined && (!Number.isSafeInteger(body.track_id) || (body.track_id || 0) <= 0)) return NextResponse.json({ error: "Select a valid listing" }, { status: 400 });
+      return proxyRun("POST", path, body.track_id === undefined ? {} : { track_id: body.track_id });
+    }
+    return proxyRun("POST", path);
+  }
   let body: Record<string, unknown>;
   try {
     body = await request.json();
@@ -151,12 +159,16 @@ export async function POST(request: Request, context: Context) {
   if (platform === "ios" && scope === "onboarding") {
     return NextResponse.json({ error: "iOS onboarding capture is not available" }, { status: 400 });
   }
+  if (platform === "ios" && (!Number.isSafeInteger(body.app_store_track_id) || Number(body.app_store_track_id) <= 0)) {
+    return NextResponse.json({ error: "Choose an official App Store listing before creating the capture" }, { status: 400 });
+  }
   const response = await fromRunner(platform, "POST", "", {
     app: body.app,
     package_name: body.package_name,
     organization_id: organizationId,
     device_id: body.device_id,
     scope,
+    app_store_track_id: body.app_store_track_id,
   });
   return response ? forward(response) : NextResponse.json({ error: `${platform} runner is unavailable` }, { status: 503 });
 }
