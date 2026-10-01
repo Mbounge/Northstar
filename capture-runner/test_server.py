@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import sys
 import tempfile
 import threading
 import unittest
@@ -122,6 +123,36 @@ class CaptureServerTests(unittest.TestCase):
             self.assertEqual(self.call(f"/v1/runs/{run_id}/start", {})[0], 200)
         self.assertEqual(launch.call_args.kwargs["env"]["PATH"].split(":")[0],
                          "/opt/android-sdk/platform-tools")
+
+    def test_pipeline_requires_finished_capture_and_starts_checkpointed_worker(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        url = f"/v1/runs/{run_id}/pipeline"
+        self.assertEqual(self.call(url)[1]["pipeline"]["stage"], "not_started")
+        self.assertEqual(self.call(url + "/prepare", {})[0], 409)
+        runs = server._read_runs()
+        runs[run_id]["status"] = "finished_early"
+        server._write_runs(runs)
+
+        class FakeProcess:
+            pid = 45678
+
+        with patch.object(server, "PROCESSING_PYTHON", sys.executable), \
+             patch.object(server.subprocess, "Popen", return_value=FakeProcess()) as launch:
+            code, result = self.call(url + "/prepare", {})
+        self.assertEqual(code, 202)
+        self.assertEqual(result["pipeline"]["stage"], "queued")
+        self.assertEqual(launch.call_args.args[0][-1], "--prepare")
+        self.assertEqual(self.call(url + "/prepare", {})[0], 409)
+        (server._run_dir(run_id) / "processing_pipeline.json").write_text(
+            json.dumps({"stage": "prepared", "canonical_screens": 1}))
+        with patch.object(server, "PROCESSING_PYTHON", sys.executable), \
+             patch.object(server.subprocess, "Popen", return_value=FakeProcess()) as launch:
+            self.assertEqual(self.call(url + "/run", {})[0], 202)
+        self.assertEqual(launch.call_args.args[0][-1], "--run")
 
     def test_host_restart_resumes_interrupted_run_but_not_operator_pause(self):
         ids = []

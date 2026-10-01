@@ -5,8 +5,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ path?: string[] }> };
-const allowedGet = /^(?:|devices|catalog|[a-f0-9-]{36}(?:\/(?:logs(?:\/download)?|frame|icon|preflight|progress|screens(?:\/[A-Za-z0-9_.-]+\.png)?))?)$/;
-const allowedPost = /^(?:|[a-f0-9-]{36}\/(?:start|stop|finish)|devices\/[A-Za-z0-9_-]+\/reboot)$/;
+const allowedGet = /^(?:|devices|catalog|[a-f0-9-]{36}(?:\/(?:logs(?:\/download)?|frame|icon|preflight|progress|pipeline(?:\/logs)?|screens(?:\/[A-Za-z0-9_.-]+\.png)?))?)$/;
+const allowedPost = /^(?:|[a-f0-9-]{36}\/(?:start|stop|finish|pipeline\/(?:prepare|run))|devices\/[A-Za-z0-9_-]+\/reboot)$/;
 
 async function authorize() {
   const db = await createClient();

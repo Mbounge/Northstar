@@ -29,6 +29,8 @@ ONBOARDING_SUPERVISOR = Path(__file__).with_name("onboarding_supervisor.py")
 ONBOARDING_PROFILE = Path(os.environ.get("ONBOARDING_IDENTITY_PROFILE", "./onboarding_identity_profile.json")).expanduser().resolve()
 PYTHON = os.environ.get("MOBILESPY_PYTHON", "python3")
 ONBOARDING_PYTHON = os.environ.get("ONBOARDING_PYTHON", PYTHON)
+PROCESSING_PIPELINE = Path(__file__).with_name("processing_pipeline.py")
+PROCESSING_PYTHON = os.environ.get("CAPTURE_PROCESSING_PYTHON", PYTHON)
 MAX_PASSES = int(os.environ.get("CAPTURE_MAX_PASSES", "12"))
 ADB = os.environ.get("CAPTURE_ADB", "adb")
 TOKEN = os.environ.get("NORTHSTAR_CAPTURE_RUNNER_TOKEN", "")
@@ -82,6 +84,16 @@ def _read_runs() -> dict:
         return {}
 
 
+def _write_json(path: Path, value: dict) -> None:
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    with temp.open("w") as file:
+        json.dump(value, file, indent=2)
+        file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temp, path)
+
+
 def _write_runs(runs: dict) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     temp = ROOT / f".runs-{uuid.uuid4().hex}.tmp"
@@ -96,6 +108,44 @@ def _run_dir(run_id: str) -> Path:
     if not ID_RE.fullmatch(run_id):
         raise ValueError("Invalid run ID")
     return ROOT / run_id
+
+
+def _pipeline_worker_alive(run_id: str, pid: object) -> bool:
+    try:
+        command = Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\x00", b" ")
+        return (b"processing_pipeline.py" in command and run_id.encode() in command)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _pipeline_status(run: dict) -> dict:
+    session = _run_dir(run["id"])
+    result = _json_file(session / "processing_pipeline.json")
+    result.setdefault("stage", "not_started")
+    if result["stage"] == "queued" and time.time() - float(result.get("queued_at") or 0) > 60:
+        result.update(stage="failed", error="Processing worker did not start")
+    if result["stage"] in ("preparing", "preprocessing", "flow_generation") and not _pipeline_worker_alive(
+            run["id"], result.get("worker_pid")):
+        result.update(stage="failed", error="Processing worker stopped before its final checkpoint")
+    result["capture_status"] = _status(run)["status"]
+    result["can_prepare"] = (run.get("scope") == "browsing"
+                             and result["capture_status"] in ("complete", "finished_early"))
+    result["audit_status"] = result.get("audit_status") or _json_file(
+        session / "unattended_audit.json").get("status") or "unknown"
+    result["saved_checkpoints"] = len(list((session / "enriched").glob("step_*_enriched.json")))
+    taxonomy = _json_file(session / "flows/flows.json")
+    result["lanes"] = [{"name": lane.get("label") or lane.get("subview") or "Flow",
+                        "root": root.get("label") or "App",
+                        "screens": lane.get("screen_count") or 0,
+                        "first_screen": next((Path(item).name for item in
+                            (lane.get("spine") or []) + [screen
+                                for branch in lane.get("branches") or []
+                                if isinstance(branch, dict)
+                                for screen in branch.get("screenshots") or []]
+                            if isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9_.-]+\.png", Path(item).name)), None)}
+                       for root in taxonomy.get("taxonomy") or [] if isinstance(root, dict)
+                       for lane in root.get("children") or [] if isinstance(lane, dict)]
+    return result
 
 
 def _json_file(path: Path) -> dict:
@@ -468,6 +518,15 @@ class Handler(BaseHTTPRequestHandler):
                 if run.get("scope") != "browsing":
                     return self._send(409, {"error": "Navigation progress is available for browsing captures"})
                 return self._send(200, {"progress": build_progress(_run_dir(parts[2]), active=_status(run)["live"])})
+            if len(parts) == 4 and parts[3] == "pipeline":
+                if run.get("scope") != "browsing":
+                    return self._send(409, {"error": "Processing is available for browsing captures"})
+                return self._send(200, {"pipeline": _pipeline_status(run)})
+            if len(parts) == 5 and parts[3:] == ["pipeline", "logs"]:
+                if run.get("scope") != "browsing":
+                    return self._send(409, {"error": "Processing is available for browsing captures"})
+                return self._send(200, {"lines": _sanitized_log(
+                    _run_dir(parts[2]) / "processing_pipeline.log").splitlines()[-120:]})
             if len(parts) == 4 and parts[3] == "preflight":
                 serial = DEVICES.get(run["device_id"])
                 return self._send(200, {"preflight": _preflight(run, bool(serial and self._device_online(serial)))})
@@ -533,6 +592,10 @@ class Handler(BaseHTTPRequestHandler):
             if (len(parts) == 4 and parts[:2] == ["v1", "runs"]
                     and ID_RE.fullmatch(parts[2]) and parts[3] in ("start", "stop", "finish")):
                 return self._change(parts[2], parts[3])
+            if (len(parts) == 5 and parts[:2] == ["v1", "runs"]
+                    and ID_RE.fullmatch(parts[2]) and parts[3] == "pipeline"
+                    and parts[4] in ("prepare", "run")):
+                return self._start_pipeline(parts[2], parts[4])
             return self._send(404, {"error": "Not found"})
         except (ValueError, KeyError) as exc:
             return self._send(400, {"error": str(exc)})
@@ -558,6 +621,37 @@ class Handler(BaseHTTPRequestHandler):
             _run_dir(run_id).mkdir(parents=True, exist_ok=False)
             _write_runs(runs)
         self._send(201, {"run": _status(run)})
+
+    def _start_pipeline(self, run_id: str, action: str) -> None:
+        with LOCK:
+            run = _read_runs().get(run_id)
+            if not run:
+                return self._send(404, {"error": "Run not found"})
+            pipeline = _pipeline_status(run)
+            if not pipeline["can_prepare"]:
+                return self._send(409, {"error": "Finish the browsing capture before processing"})
+            if pipeline["stage"] in ("queued", "preparing", "preprocessing", "flow_generation"):
+                return self._send(409, {"error": "This capture is already processing"})
+            if not PROCESSING_PIPELINE.is_file() or not Path(PROCESSING_PYTHON).is_file():
+                return self._send(503, {"error": "Processing worker is not installed"})
+            if action == "run" and pipeline["stage"] not in (
+                    "prepared", "failed", "ready_for_review"):
+                return self._send(409, {"error": "Prepare and review the canonical flow map first"})
+            if action == "prepare" and pipeline["stage"] == "ready_for_review":
+                return self._send(409, {"error": "This capture already has processed flows"})
+            session = _run_dir(run_id)
+            command = [PROCESSING_PYTHON, "-u", str(PROCESSING_PIPELINE),
+                       "--session", str(session), "--" + action]
+            _write_json(session / "processing_pipeline.json", {
+                **_json_file(session / "processing_pipeline.json"),
+                "stage": "queued", "queued_at": time.time(), "error": None,
+            })
+            with (session / "processing_pipeline.log").open("ab") as log:
+                subprocess.Popen(command, cwd=PROCESSING_PIPELINE.parent,
+                                 env=os.environ.copy(), stdout=log,
+                                 stderr=subprocess.STDOUT, start_new_session=True,
+                                 stdin=subprocess.DEVNULL)
+            return self._send(202, {"pipeline": _pipeline_status(run)})
 
     def _reboot_device(self, device_id: str) -> None:
         if device_id not in DEVICES:
