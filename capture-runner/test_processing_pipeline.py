@@ -63,6 +63,15 @@ class ProcessingPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "manifest changed"):
                 run(session)
 
+    def test_changed_screenshot_cannot_reuse_previous_processing_checkpoints(self):
+        with tempfile.TemporaryDirectory() as root:
+            session, image = self.fixture(root)
+            prepared = prepare(session)
+            self.assertEqual(len(prepared["source_screens_sha256"]), 64)
+            Image.new("RGB", (40, 80), "black").save(image)
+            with self.assertRaisesRegex(ValueError, "screenshots changed"):
+                run(session)
+
     def test_screen_checkpoints_do_not_hide_failed_market_synthesis(self):
         with tempfile.TemporaryDirectory() as root:
             session, image = self.fixture(root)

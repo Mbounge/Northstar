@@ -84,6 +84,18 @@ def _canonical_refs(manifest: dict, session: Path) -> list[Path]:
     return list(paths.values())
 
 
+def _evidence_sha256(refs: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(refs, key=lambda item: item.name):
+        digest.update(path.name.encode())
+        digest.update(b"\0")
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _flow_refs(flows: list[dict]) -> set[str]:
     names: set[str] = set()
     for flow in flows:
@@ -120,6 +132,7 @@ def inspect(session: Path, *, verify_pixels: bool = False) -> dict:
         "session": session,
         "manifest": manifest,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "source_screens_sha256": _evidence_sha256(refs),
         "capture_status": status,
         "audit_status": str(_read(session / "unattended_audit.json").get("status") or "unknown"),
         "canonical_screens": len(refs),
@@ -169,6 +182,7 @@ def prepare(session: Path) -> dict:
     return _status(session, stage="prepared", error=None,
                    worker_pid=None,
                    source_manifest_sha256=info["manifest_sha256"],
+                   source_screens_sha256=info["source_screens_sha256"],
                    source_run_id=session.name, capture_status=info["capture_status"],
                    audit_status=info["audit_status"],
                    canonical_screens=info["canonical_screens"],
@@ -226,6 +240,8 @@ def run(session: Path) -> dict:
     current = _read(session / "processing_pipeline.json")
     if current.get("source_manifest_sha256") and current["source_manifest_sha256"] != info["manifest_sha256"]:
         raise ValueError("Capture manifest changed after preparation; review the source before reprocessing")
+    if current.get("source_screens_sha256") and current["source_screens_sha256"] != info["source_screens_sha256"]:
+        raise ValueError("Canonical screenshots changed after preparation; review the source before reprocessing")
     if current.get("source_manifest_sha256") != info["manifest_sha256"]:
         prepare(session)
     if not (session / "flows/flows.json").is_file():
@@ -250,6 +266,8 @@ def run(session: Path) -> dict:
                                         stderr=subprocess.STDOUT, check=False)
                 if result.returncode or not _flows_valid(session, expected):
                     raise RuntimeError("Generated flow taxonomy omitted canonical screens")
+        if _evidence_sha256(_canonical_refs(info["manifest"], session)) != info["source_screens_sha256"]:
+            raise RuntimeError("Canonical screenshots changed during processing")
         return _status(session, stage="ready_for_review", error=None,
                        finished_at=time.time(), worker_pid=None)
     except Exception as exc:
