@@ -213,6 +213,34 @@ class CaptureServerTests(unittest.TestCase):
             self.assertEqual(self.call(url + "/run", {})[0], 202)
         self.assertEqual(launch.call_args.args[0][-1], "--run")
 
+    def test_processing_recovers_dead_worker_but_stops_after_bounded_retries(self):
+        _, payload = self.call("/v1/runs", {
+            "app": "Example", "package_name": "com.example.app",
+            "device_id": "pixel", "scope": "browsing",
+        })
+        run_id = payload["run"]["id"]
+        runs = server._read_runs()
+        runs[run_id]["status"] = "finished_early"
+        server._write_runs(runs)
+        status_path = server._run_dir(run_id) / "processing_pipeline.json"
+        server._write_json(status_path, {"stage": "preprocessing", "worker_pid": 12345})
+        with patch.object(server, "_pipeline_worker_alive", return_value=True), \
+             patch.object(server, "_spawn_pipeline_worker") as launch:
+            server._recover_processing_once()
+            launch.assert_not_called()
+        with patch.object(server, "_pipeline_worker_alive", return_value=False), \
+             patch.object(server, "_spawn_pipeline_worker") as launch:
+            server._recover_processing_once()
+            launch.assert_called_once_with(run_id, "run")
+        self.assertEqual(server._json_file(status_path)["automatic_restarts"], 1)
+        server._write_json(status_path, {"stage": "flow_generation", "worker_pid": 12345,
+                                         "automatic_restarts": 3})
+        with patch.object(server, "_pipeline_worker_alive", return_value=False), \
+             patch.object(server, "_spawn_pipeline_worker") as launch:
+            server._recover_processing_once()
+            launch.assert_not_called()
+        self.assertEqual(server._json_file(status_path)["stage"], "failed")
+
     def test_host_restart_resumes_interrupted_run_but_not_operator_pause(self):
         ids = []
         for app in ("Interrupted", "Paused"):

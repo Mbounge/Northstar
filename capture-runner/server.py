@@ -12,6 +12,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -168,6 +169,59 @@ def _app_store_worker_alive(session: Path, run_id: str, store: dict) -> bool:
                 and run_id.encode() in command)
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _spawn_pipeline_worker(run_id: str, action: str) -> None:
+    session = _run_dir(run_id)
+    command = [PROCESSING_PYTHON, "-u", str(PROCESSING_PIPELINE),
+               "--session", str(session), "--" + action]
+    with (session / "processing_pipeline.log").open("ab") as log:
+        subprocess.Popen(command, cwd=PROCESSING_PIPELINE.parent,
+                         env=os.environ.copy(), stdout=log,
+                         stderr=subprocess.STDOUT, start_new_session=True,
+                         stdin=subprocess.DEVNULL)
+
+
+def _recover_processing_once() -> None:
+    """Resume checkpointed processing after a host restart or killed worker."""
+    with LOCK:
+        for run_id, run in _read_runs().items():
+            if run.get("scope") != "browsing" or run.get("status") not in ("complete", "finished_early"):
+                continue
+            session = _run_dir(run_id)
+            status_path = session / "processing_pipeline.json"
+            state = _json_file(status_path)
+            stage = state.get("stage")
+            if stage not in ("queued", "preparing", "preprocessing", "flow_generation"):
+                continue
+            if _pipeline_worker_alive(run_id, state.get("worker_pid")):
+                continue
+            if stage == "queued" and time.time() - float(state.get("queued_at") or 0) < 60:
+                continue
+            retries = int(state.get("automatic_restarts") or 0)
+            if retries >= 3:
+                _write_json(status_path, {**state, "stage": "failed", "worker_pid": None,
+                                          "error": "Processing worker stopped after three automatic restarts"})
+                continue
+            action = "prepare" if stage == "preparing" else "run"
+            resumed = {**state, "stage": "queued", "worker_pid": None,
+                       "queued_at": time.time(), "automatic_restarts": retries + 1,
+                       "error": None}
+            _write_json(status_path, resumed)
+            try:
+                _spawn_pipeline_worker(run_id, action)
+            except (OSError, subprocess.SubprocessError) as exc:
+                _write_json(status_path, {**resumed, "stage": "failed",
+                                          "error": f"Could not restart processing worker: {exc}"})
+
+
+def _processing_watchdog() -> None:
+    while True:
+        try:
+            _recover_processing_once()
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"Processing recovery check failed: {exc}", file=sys.stderr)
+        time.sleep(30)
 
 
 def _publication_files(run: dict) -> dict:
@@ -793,17 +847,12 @@ class Handler(BaseHTTPRequestHandler):
             if action == "prepare" and pipeline["stage"] == "ready_for_review":
                 return self._send(409, {"error": "This capture already has processed flows"})
             session = _run_dir(run_id)
-            command = [PROCESSING_PYTHON, "-u", str(PROCESSING_PIPELINE),
-                       "--session", str(session), "--" + action]
             _write_json(session / "processing_pipeline.json", {
                 **_json_file(session / "processing_pipeline.json"),
-                "stage": "queued", "queued_at": time.time(), "error": None,
+                "stage": "queued", "queued_at": time.time(),
+                "automatic_restarts": 0, "error": None,
             })
-            with (session / "processing_pipeline.log").open("ab") as log:
-                subprocess.Popen(command, cwd=PROCESSING_PIPELINE.parent,
-                                 env=os.environ.copy(), stdout=log,
-                                 stderr=subprocess.STDOUT, start_new_session=True,
-                                 stdin=subprocess.DEVNULL)
+            _spawn_pipeline_worker(run_id, action)
             return self._send(202, {"pipeline": _pipeline_status(run)})
 
     def _start_app_store(self, run_id: str, body: dict) -> None:
@@ -898,4 +947,5 @@ if __name__ == "__main__":
     service = ThreadingHTTPServer((HOST, PORT), Handler)
     for run_id in interrupted:
         threading.Thread(target=_resume_interrupted_run, args=(run_id,), daemon=True).start()
+    threading.Thread(target=_processing_watchdog, daemon=True).start()
     service.serve_forever()
