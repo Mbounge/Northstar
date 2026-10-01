@@ -19,6 +19,7 @@ ROSTER_FILE = os.environ.get("NORTHSTAR_MARKETING_ROSTER_FILE", f"data/{COMPANY_
 MODEL_ROSTER = ["gemini-3.1-flash-lite"] # Fast-first fallback order
 USER_DATA_DIR = os.environ.get("NORTHSTAR_MARKETING_BROWSER_DIR", "./browser_profile")
 LINKEDIN_CDP_URL = os.environ.get("NORTHSTAR_MARKETING_CDP_URL", "http://127.0.0.1:9222")
+SHARED_SIGNED_IN_CHROME = os.environ.get("NORTHSTAR_MARKETING_BROWSER_MODE") == "shared_cdp"
 HEADLESS = os.environ.get("NORTHSTAR_MARKETING_HEADLESS", "0") == "1"
 
 # Five-minute run budget.
@@ -824,45 +825,61 @@ class SocialMonitor:
             print(f"📂 Data saved to: {self.data_dir}/master_feed.json")
             return
 
-        print("\n🤖 [PHASE 2] Starting persistent Chrome for X, Instagram and Web...")
+        print("\n🤖 [PHASE 2] Capturing X, Instagram and Web...")
         try:
           async with Stealth().use_async(async_playwright()) as p:
-            context_managed = await p.chromium.launch_persistent_context(
-                user_data_dir=USER_DATA_DIR,
-                headless=HEADLESS,
-                args=["--disable-blink-features=AutomationControlled"],
-                viewport=DESKTOP_VIEWPORT,
-                ignore_default_args=["--enable-automation"]
-            )
-            page_managed = context_managed.pages[0] if context_managed.pages else await context_managed.new_page()
+            browser_managed = None
+            context_managed = None
+            page_managed = None
+            try:
+                if SHARED_SIGNED_IN_CHROME:
+                    browser_managed = await p.chromium.connect_over_cdp(LINKEDIN_CDP_URL, timeout=10000)
+                    context_managed = browser_managed.contexts[0]
+                    page_managed = await context_managed.new_page()
+                    print("   🔗 Using the same signed-in Chrome context for all social platforms.")
+                else:
+                    context_managed = await p.chromium.launch_persistent_context(
+                        user_data_dir=USER_DATA_DIR,
+                        headless=HEADLESS,
+                        args=["--disable-blink-features=AutomationControlled"],
+                        viewport=DESKTOP_VIEWPORT,
+                        ignore_default_args=["--enable-automation"]
+                    )
+                    page_managed = context_managed.pages[0] if context_managed.pages else await context_managed.new_page()
 
-            for entity in target_roster:
-                if not self.should_start_work("next stealth entity"):
-                    break
-                print(f"\n🕵️ [STEALTH] MONITORING: {entity['name']}")
-                socials = entity.get('socials', {})
+                for entity in target_roster:
+                    if not self.should_start_work("next social entity"):
+                        break
+                    print(f"\n🕵️ [SOCIAL] MONITORING: {entity['name']}")
+                    socials = entity.get('socials', {})
 
-                if socials.get('twitter'):
-                    x_data = await self.monitor_twitter(page_managed, socials['twitter'], entity['name'])
-                    self.master_db.extend(x_data)
-                    self.save_db()
+                    if socials.get('twitter'):
+                        x_data = await self.monitor_twitter(page_managed, socials['twitter'], entity['name'])
+                        self.master_db.extend(x_data)
+                        self.save_db()
 
-                if socials.get('instagram'):
-                    ig_data = await self.monitor_instagram(context_managed, socials['instagram'], entity['name'])
-                    self.master_db.extend(ig_data)
-                    self.save_db()
+                    if socials.get('instagram'):
+                        ig_data = await self.monitor_instagram(context_managed, socials['instagram'], entity['name'])
+                        self.master_db.extend(ig_data)
+                        self.save_db()
 
-                should_fetch_web = (
-                    FETCH_WEB_MEDIA
-                    and self.has_time(MIN_SECONDS_FOR_WEB_MEDIA)
-                    and (WEB_MEDIA_SCOPE == "brand_and_people" or entity['name'] == COMPANY_NAME)
-                )
-                if should_fetch_web:
-                    web_data = await self.monitor_web_media(page_managed, entity['name'], entity.get('role', ''))
-                    self.master_db.extend(web_data)
-                    self.save_db()
-
-            await context_managed.close()
+                    should_fetch_web = (
+                        FETCH_WEB_MEDIA
+                        and self.has_time(MIN_SECONDS_FOR_WEB_MEDIA)
+                        and (WEB_MEDIA_SCOPE == "brand_and_people" or entity['name'] == COMPANY_NAME)
+                    )
+                    if should_fetch_web:
+                        web_data = await self.monitor_web_media(page_managed, entity['name'], entity.get('role', ''))
+                        self.master_db.extend(web_data)
+                        self.save_db()
+            finally:
+                if SHARED_SIGNED_IN_CHROME:
+                    if page_managed:
+                        await page_managed.close()
+                    if browser_managed:
+                        await browser_managed.close()
+                elif context_managed:
+                    await context_managed.close()
         except Exception as e:
             print(f"\n⚠️ X/Instagram phase unavailable: {str(e)[:160]}")
 

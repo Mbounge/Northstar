@@ -13,6 +13,16 @@ TENANT = "12345678-1234-1234-1234-123456789abc"
 
 
 class MarketingRunnerTests(unittest.TestCase):
+    def test_chrome_debugging_port_is_resolved_without_exporting_browser_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "DevToolsActivePort").write_text("43127\n/devtools/browser/test-id\n")
+            with patch.object(service, "CHROME_DATA_DIR", str(root)):
+                self.assertEqual(service.cdp_endpoint(), "ws://127.0.0.1:43127/devtools/browser/test-id")
+            (root / "DevToolsActivePort").write_text("bad\n/devtools/browser/test-id\n")
+            with patch.object(service, "CHROME_DATA_DIR", str(root)), self.assertRaises(ValueError):
+                service.cdp_endpoint()
+
     def test_target_validation_and_schedule(self):
         target = service.validate_target({
             "tenant_id": TENANT, "app_name": "Example App", "cadence": "weekly",
@@ -47,6 +57,8 @@ class MarketingRunnerTests(unittest.TestCase):
             self.assertEqual(len(accepted), 1)
             self.assertEqual(coverage["sources"]["linkedin"]["posts"], 1)
             self.assertEqual(coverage["rejected_records"], 3)
+            _, incomplete = validate_feed(records, root, {"linkedin": "https://linkedin.com/company/example", "twitter": "https://x.com/example"})
+            self.assertEqual(incomplete["sources"]["twitter"]["status"], "no_verified_posts")
 
     def test_duplicate_active_run_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -61,6 +73,16 @@ class MarketingRunnerTests(unittest.TestCase):
                 service.record(first["id"], status="completed")
                 second = service.queue_run(target["id"], "snapshot", "manual")
                 self.assertNotEqual(first["id"], second["id"])
+
+    def test_mac_collector_rejects_manual_run_while_browser_is_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = service.validate_target({"tenant_id": TENANT, "app_name": "Example",
+                "socials": {"twitter": "https://x.com/example"}})
+            with patch.object(service, "CHROME_DATA_DIR", str(root)), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=False):
+                service.write_json(service.TARGETS, {target["id"]: target})
+                with self.assertRaisesRegex(ValueError, "signed-in Chrome collector is unavailable"):
+                    service.queue_run(target["id"], "snapshot", "manual")
 
     def test_blocked_people_discovery_preserves_brand_but_needs_review(self):
         with tempfile.TemporaryDirectory() as directory:

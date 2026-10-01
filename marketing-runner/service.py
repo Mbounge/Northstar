@@ -29,11 +29,33 @@ RUNS = ROOT / "runs.json"
 MAX_LOG_BYTES = 300_000
 SOCIAL_HOSTS = {"linkedin": {"linkedin.com"}, "twitter": {"x.com", "twitter.com"}, "instagram": {"instagram.com"}}
 CDP_URL = os.environ.get("NORTHSTAR_MARKETING_CDP_URL", "http://127.0.0.1:9222").rstrip("/")
+CHROME_DATA_DIR = os.environ.get("NORTHSTAR_MARKETING_CHROME_DATA_DIR", "")
+
+
+def cdp_endpoint() -> str:
+    """Use Chrome's current local debugging socket when it rotates its port."""
+    if not CHROME_DATA_DIR:
+        return CDP_URL
+    active_port = Path(CHROME_DATA_DIR) / "DevToolsActivePort"
+    lines = active_port.read_text().splitlines()
+    if len(lines) < 2:
+        raise RuntimeError("Chrome remote debugging is not enabled")
+    port = int(lines[0])
+    route = lines[1].strip()
+    if not 1 <= port <= 65535 or not route.startswith("/devtools/browser/"):
+        raise RuntimeError("Chrome debugging endpoint is invalid")
+    return f"ws://127.0.0.1:{port}{route}"
 
 
 def linkedin_browser_connected() -> bool:
     try:
-        with urlopen(f"{CDP_URL}/json/version", timeout=1) as response:
+        endpoint = cdp_endpoint()
+        if CHROME_DATA_DIR:
+            import socket
+            from urllib.parse import urlsplit
+            with socket.create_connection(("127.0.0.1", urlsplit(endpoint).port), timeout=1):
+                return True
+        with urlopen(f"{endpoint}/json/version", timeout=1) as response:
             return response.status == 200
     except Exception:
         return False
@@ -132,6 +154,8 @@ def queue_run(target_id: str, kind: str, trigger: str) -> dict:
             raise ValueError("Unknown marketing target")
         if kind not in {"research", "snapshot"}:
             raise ValueError("Unknown run type")
+        if trigger == "manual" and CHROME_DATA_DIR and not linkedin_browser_connected():
+            raise ValueError("The signed-in Chrome collector is unavailable. Open Chrome and enable local debugging before starting a run")
         runs = read_json(RUNS, {})
         if any(run["target_id"] == target_id and run["status"] in {"queued", "running"} for run in runs.values()):
             raise ValueError("This app already has an active social run")
@@ -203,6 +227,8 @@ def perform(run: dict):
                 "NORTHSTAR_MARKETING_OUTPUT_DIR": str(work / "capture"),
                 "NORTHSTAR_MARKETING_BROWSER_DIR": str(ROOT / "browser" / "shared-social"),
                 "PYTHONUNBUFFERED": "1"})
+    if CHROME_DATA_DIR:
+        env["NORTHSTAR_MARKETING_CDP_URL"] = cdp_endpoint()
     with log.open("a") as output:
         output.write(f"[{now()}] {run['kind']} started for {target['app_name']}\n")
     if run["kind"] == "research" or not roster.exists():
@@ -225,6 +251,11 @@ def perform(run: dict):
         record(run["id"], status="needs_review", finished_at=now(),
                error="No valid screenshot-backed posts were captured. Nothing was published.")
         return
+    missing = [platform for platform, source in coverage["sources"].items() if not source["posts"]]
+    if missing:
+        record(run["id"], status="needs_review", finished_at=now(),
+               error=f"No screenshot-backed posts were verified for {', '.join(missing)}. Nothing was published.")
+        return
     snapshot_id = publish_snapshot(target, run["id"], validated, work / "capture")
     record(run["id"], status="completed", finished_at=now(), snapshot_id=snapshot_id)
 
@@ -240,7 +271,7 @@ def scheduler():
                 schedule_changed = False
                 for target in targets.values():
                     due = target.get("next_due_at")
-                    if target["cadence"] != "off" and due and datetime.fromisoformat(due) <= current:
+                    if target["cadence"] != "off" and due and datetime.fromisoformat(due) <= current and (not CHROME_DATA_DIR or linkedin_browser_connected()):
                         if not any(r["target_id"] == target["id"] and r["status"] in {"queued", "running"} for r in runs.values()):
                             queue_run(target["id"], "snapshot", "schedule")
                             runs = read_json(RUNS, {})
@@ -249,7 +280,7 @@ def scheduler():
                 if schedule_changed:
                     write_json(TARGETS, targets)
                 queued = sorted((r for r in runs.values() if r["status"] == "queued"), key=lambda r: r["created_at"])
-            if queued and not ACTIVE.is_set():
+            if queued and not ACTIVE.is_set() and (not CHROME_DATA_DIR or linkedin_browser_connected()):
                 ACTIVE.set()
                 run = queued[0]
                 try:
