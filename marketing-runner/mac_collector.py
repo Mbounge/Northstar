@@ -12,15 +12,14 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-MANAGED_CHROME_DATA_DIR = (Path(__file__).resolve().parent.parent.parent.parent /
-                           "outputs/marketing-collector/chrome-profile").resolve()
+COLLECTOR_CHROME_DATA_DIR = (Path.home() / "chrome_profile").resolve()
 
 
 def dedicated_chrome_data_dir(value: str) -> str:
     """Never attach Playwright to the user's everyday multi-profile Chrome."""
-    directory = Path(value).expanduser().resolve() if value else MANAGED_CHROME_DATA_DIR
-    if directory != MANAGED_CHROME_DATA_DIR:
-        raise RuntimeError("Only Northstar's managed, isolated Chrome collector profile is allowed")
+    directory = Path(value).expanduser().resolve() if value else COLLECTOR_CHROME_DATA_DIR
+    if directory != COLLECTOR_CHROME_DATA_DIR:
+        raise RuntimeError("Only the existing isolated Chrome collector profile is allowed")
     return str(directory)
 
 
@@ -40,6 +39,7 @@ def configure() -> None:
     os.environ["NORTHSTAR_MARKETING_CHROME_DATA_DIR"] = dedicated_chrome_data_dir(
         os.environ.get("NORTHSTAR_MARKETING_CHROME_DATA_DIR", "")
     )
+    os.environ["NORTHSTAR_MARKETING_CDP_URL"] = "http://127.0.0.1:9222"
     os.environ["NORTHSTAR_MARKETING_BROWSER_MODE"] = "shared_cdp"
 
 

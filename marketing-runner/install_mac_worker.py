@@ -26,8 +26,8 @@ def definitions(chrome_data_dir: str | None = None) -> dict[str, dict]:
         LABELS[0]: {
             "Label": LABELS[0],
             "ProgramArguments": [str(CHROME), f"--user-data-dir={isolated_dir}",
-                                 "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
-                                 "--disable-sync", "--no-first-run", "--no-default-browser-check"],
+                                 "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9222",
+                                 "--no-first-run", "--no-default-browser-check"],
             "RunAtLoad": True,
             "KeepAlive": True,
             "ThrottleInterval": 15,

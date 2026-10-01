@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 
 from install_mac_worker import CHROME, LABELS, definitions
-from mac_collector import MANAGED_CHROME_DATA_DIR
+from mac_collector import COLLECTOR_CHROME_DATA_DIR
 
 SOCIAL_URLS = (
     "https://www.linkedin.com/feed/",
@@ -20,6 +20,6 @@ def launch_command() -> list[str]:
 
 
 if __name__ == "__main__":
-    MANAGED_CHROME_DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    COLLECTOR_CHROME_DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     subprocess.run(launch_command(), check=True)
     print("Northstar collector Chrome opened. Sign in to LinkedIn, X, and Instagram in that new window.")

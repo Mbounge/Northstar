@@ -32,10 +32,39 @@ CDP_URL = os.environ.get("NORTHSTAR_MARKETING_CDP_URL", "http://127.0.0.1:9222")
 CHROME_DATA_DIR = os.environ.get("NORTHSTAR_MARKETING_CHROME_DATA_DIR", "")
 
 
+def collector_owns_debugging_port(port: int = 9222) -> bool:
+    """Refuse to attach when the port belongs to another Chrome profile."""
+    try:
+        listener = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"],
+            capture_output=True, text=True, check=True, timeout=3,
+        )
+        pids = {line[1:] for line in listener.stdout.splitlines() if line.startswith("p") and line[1:].isdigit()}
+        if len(pids) != 1:
+            return False
+        process = subprocess.run(
+            ["ps", "-p", next(iter(pids)), "-o", "command="],
+            capture_output=True, text=True, check=True, timeout=3,
+        )
+        expected = f"--user-data-dir={Path(CHROME_DATA_DIR).expanduser().resolve()}"
+        return expected in process.stdout
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+
+
 def cdp_endpoint() -> str:
-    """Use Chrome's current local debugging socket when it rotates its port."""
+    """Resolve only the selected Chrome profile's debugging socket."""
     if not CHROME_DATA_DIR:
         return CDP_URL
+    from mac_collector import COLLECTOR_CHROME_DATA_DIR
+    if Path(CHROME_DATA_DIR).expanduser().resolve() == COLLECTOR_CHROME_DATA_DIR:
+        if not collector_owns_debugging_port():
+            raise RuntimeError("Port 9222 does not belong to the isolated Chrome collector")
+        with urlopen("http://127.0.0.1:9222/json/version", timeout=2) as response:
+            endpoint = json.load(response).get("webSocketDebuggerUrl", "")
+        if not endpoint.startswith("ws://127.0.0.1:9222/devtools/browser/"):
+            raise RuntimeError("The isolated Chrome debugging endpoint is invalid")
+        return endpoint
     active_port = Path(CHROME_DATA_DIR) / "DevToolsActivePort"
     lines = active_port.read_text().splitlines()
     if len(lines) < 2:

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import service
 from install_mac_worker import LABELS, definitions
-from mac_collector import MANAGED_CHROME_DATA_DIR, dedicated_chrome_data_dir
+from mac_collector import COLLECTOR_CHROME_DATA_DIR, dedicated_chrome_data_dir
 from open_collector_browser import SOCIAL_URLS, launch_command
 from publisher import validate_feed
 
@@ -18,7 +18,7 @@ TENANT = "12345678-1234-1234-1234-123456789abc"
 class MarketingRunnerTests(unittest.TestCase):
     def test_collector_cannot_use_everyday_chrome_or_profile(self):
         regular = Path.home() / "Library/Application Support/Google/Chrome"
-        self.assertEqual(dedicated_chrome_data_dir(""), str(MANAGED_CHROME_DATA_DIR))
+        self.assertEqual(dedicated_chrome_data_dir(""), str(COLLECTOR_CHROME_DATA_DIR))
         with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
             dedicated_chrome_data_dir(str(regular))
         with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
@@ -27,14 +27,15 @@ class MarketingRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
                 dedicated_chrome_data_dir(directory)
 
-    def test_installed_browser_is_confined_to_managed_profile(self):
+    def test_installed_browser_uses_existing_isolated_profile(self):
         launch_agents = definitions()
         arguments = launch_agents[LABELS[0]]["ProgramArguments"]
-        self.assertIn(f"--user-data-dir={MANAGED_CHROME_DATA_DIR}", arguments)
+        self.assertIn(f"--user-data-dir={COLLECTOR_CHROME_DATA_DIR}", arguments)
         self.assertIn("--remote-debugging-address=127.0.0.1", arguments)
+        self.assertIn("--remote-debugging-port=9222", arguments)
         self.assertEqual(
             launch_agents[LABELS[1]]["EnvironmentVariables"]["NORTHSTAR_MARKETING_CHROME_DATA_DIR"],
-            str(MANAGED_CHROME_DATA_DIR),
+            str(COLLECTOR_CHROME_DATA_DIR),
         )
         with self.assertRaisesRegex(RuntimeError, "isolated Chrome collector"):
             definitions(str(Path.home() / "Library/Application Support/Google/Chrome"))
@@ -42,9 +43,21 @@ class MarketingRunnerTests(unittest.TestCase):
     def test_one_time_signin_launcher_uses_only_collector_profile(self):
         command = launch_command()
         self.assertEqual(command[:4], ["open", "-na", "/Applications/Google Chrome.app", "--args"])
-        self.assertIn(f"--user-data-dir={MANAGED_CHROME_DATA_DIR}", command)
+        self.assertIn(f"--user-data-dir={COLLECTOR_CHROME_DATA_DIR}", command)
         self.assertIn("--remote-debugging-address=127.0.0.1", command)
+        self.assertIn("--remote-debugging-port=9222", command)
         self.assertEqual(tuple(command[-3:]), SOCIAL_URLS)
+
+    def test_debugging_port_must_belong_to_collector_profile(self):
+        listener = MagicMock(returncode=0, stdout="p1234\n")
+        process = MagicMock(returncode=0, stdout=f"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir={COLLECTOR_CHROME_DATA_DIR}\n")
+        with patch.object(service, "CHROME_DATA_DIR", str(COLLECTOR_CHROME_DATA_DIR)), patch.object(service.subprocess, "run", side_effect=[listener, process]):
+            self.assertTrue(service.collector_owns_debugging_port())
+        wrong_profile = MagicMock(returncode=0, stdout="Google Chrome --user-data-dir=/Users/mbounge/Library/Application Support/Google/Chrome\n")
+        with patch.object(service, "CHROME_DATA_DIR", str(COLLECTOR_CHROME_DATA_DIR)), patch.object(service.subprocess, "run", side_effect=[listener, wrong_profile]):
+            self.assertFalse(service.collector_owns_debugging_port())
+        with patch.object(service, "CHROME_DATA_DIR", str(COLLECTOR_CHROME_DATA_DIR)), patch.object(service, "collector_owns_debugging_port", return_value=False), self.assertRaisesRegex(RuntimeError, "does not belong"):
+            service.cdp_endpoint()
 
     def test_chrome_debugging_port_is_resolved_without_exporting_browser_data(self):
         with tempfile.TemporaryDirectory() as directory:
