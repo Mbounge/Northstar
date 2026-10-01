@@ -190,15 +190,15 @@ def next_due(target: dict, after: datetime) -> datetime | None:
     return None
 
 
-def queue_run(target_id: str, kind: str, trigger: str) -> dict:
+def queue_run(target_id: str, kind: str, trigger: str, scheduled_for: str | None = None) -> dict:
     with LOCK:
         targets = read_json(TARGETS, {})
         if target_id not in targets:
             raise ValueError("Unknown marketing target")
         if kind not in {"research", "snapshot"}:
             raise ValueError("Unknown run type")
-        if trigger == "manual" and CHROME_DATA_DIR and not linkedin_browser_connected():
-            raise ValueError("The dedicated Chrome collector endpoint is unavailable. Start its browser before running social capture")
+        if trigger == "manual" and not linkedin_browser_connected():
+            raise ValueError("The signed-in collector browser is unavailable. Start it before running social capture")
         runs = read_json(RUNS, {})
         if any(run["target_id"] == target_id and run["status"] in {"queued", "running"} for run in runs.values()):
             raise ValueError("This app already has an active social run")
@@ -207,6 +207,8 @@ def queue_run(target_id: str, kind: str, trigger: str) -> dict:
                "status": "queued", "created_at": now(), "started_at": None, "finished_at": None,
                "coverage": {}, "post_count": 0, "snapshot_id": None, "error": None,
                "work_dir": str(ROOT / "runs" / run_id)}
+        if scheduled_for:
+            run["scheduled_for"] = scheduled_for
         runs[run_id] = run
         write_json(RUNS, runs)
         return public_run(run)
@@ -303,32 +305,76 @@ def perform(run: dict):
     record(run["id"], status="completed", finished_at=now(), snapshot_id=snapshot_id)
 
 
+def schedule_due_targets(current: datetime):
+    """Queue a due snapshot only when its browser and target are ready.
+
+    A due time stays due while the browser is offline or a manual run owns the
+    same target. A queued schedule run records its due time so a service restart
+    cannot queue the same occurrence a second time.
+    """
+    with LOCK:
+        targets = read_json(TARGETS, {})
+        runs = read_json(RUNS, {})
+        changed = False
+        for target in targets.values():
+            due = target.get("next_due_at")
+            if target["cadence"] == "off" or not due or datetime.fromisoformat(due) > current:
+                continue
+            already_queued = any(
+                run["target_id"] == target["id"] and run.get("trigger") == "schedule"
+                and run.get("scheduled_for") == due for run in runs.values()
+            )
+            if not already_queued:
+                if not linkedin_browser_connected():
+                    continue
+                if any(run["target_id"] == target["id"] and run["status"] in {"queued", "running"}
+                       for run in runs.values()):
+                    continue
+                queue_run(target["id"], "snapshot", "schedule", scheduled_for=due)
+                runs = read_json(RUNS, {})
+            target["next_due_at"] = next_due(target, current).isoformat()
+            changed = True
+        if changed:
+            write_json(TARGETS, targets)
+
+
+def save_target(target: dict) -> dict | None:
+    with LOCK:
+        targets = read_json(TARGETS, {})
+        previous = targets.get(target["id"])
+        target["next_due_at"] = next_due(target, datetime.now(timezone.utc)).isoformat() if target["cadence"] != "off" else None
+        targets[target["id"]] = target
+        write_json(TARGETS, targets)
+        if target["cadence"] == "off":
+            runs = read_json(RUNS, {})
+            cancelled = False
+            for run in runs.values():
+                if run["target_id"] == target["id"] and run["status"] == "queued" and run.get("trigger") == "schedule":
+                    run.update(status="cancelled", finished_at=now(), error="Automatic snapshots were turned off before this run started")
+                    cancelled = True
+            if cancelled:
+                write_json(RUNS, runs)
+        return previous
+
+
 def scheduler():
     ROOT.mkdir(parents=True, exist_ok=True)
     while True:
         try:
+            schedule_due_targets(datetime.now(timezone.utc))
             with LOCK:
-                targets = read_json(TARGETS, {})
                 runs = read_json(RUNS, {})
-                current = datetime.now(timezone.utc)
-                schedule_changed = False
-                for target in targets.values():
-                    due = target.get("next_due_at")
-                    if target["cadence"] != "off" and due and datetime.fromisoformat(due) <= current and (not CHROME_DATA_DIR or linkedin_browser_connected()):
-                        if not any(r["target_id"] == target["id"] and r["status"] in {"queued", "running"} for r in runs.values()):
-                            queue_run(target["id"], "snapshot", "schedule")
-                            runs = read_json(RUNS, {})
-                        target["next_due_at"] = next_due(target, current).isoformat()
-                        schedule_changed = True
-                if schedule_changed:
-                    write_json(TARGETS, targets)
                 queued = sorted((r for r in runs.values() if r["status"] == "queued"), key=lambda r: r["created_at"])
-            if queued and not ACTIVE.is_set() and (not CHROME_DATA_DIR or linkedin_browser_connected()):
+            if queued and not ACTIVE.is_set() and linkedin_browser_connected():
                 ACTIVE.set()
                 run = queued[0]
                 try:
-                    record(run["id"], status="running", started_at=now())
-                    perform(run)
+                    with LOCK:
+                        current_run = read_json(RUNS, {}).get(run["id"])
+                        if current_run and current_run["status"] == "queued":
+                            record(run["id"], status="running", started_at=now())
+                    if current_run and current_run["status"] == "queued":
+                        perform(run)
                 except Exception as error:
                     record(run["id"], status="failed", finished_at=now(), error=str(error)[:300])
                 finally:
@@ -385,12 +431,7 @@ class Handler(BaseHTTPRequestHandler):
             path = self.path.strip("/").split("/")
             if path == ["v1", "targets"]:
                 target = validate_target(body)
-                with LOCK:
-                    targets = read_json(TARGETS, {})
-                    previous = targets.get(target["id"])
-                    target["next_due_at"] = next_due(target, datetime.now(timezone.utc)).isoformat() if target["cadence"] != "off" else None
-                    targets[target["id"]] = target
-                    write_json(TARGETS, targets)
+                previous = save_target(target)
                 if previous and previous["socials"] != target["socials"]:
                     roster = ROOT / "rosters" / target["tenant_id"] / f"{target['app_name'].casefold()}.json"
                     roster.unlink(missing_ok=True)

@@ -150,7 +150,7 @@ class MarketingRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             target = service.validate_target({"tenant_id": TENANT, "app_name": "Example", "socials": {"twitter": "https://x.com/example"}})
-            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"):
+            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=True):
                 service.write_json(service.TARGETS, {target["id"]: target})
                 first = service.queue_run(target["id"], "snapshot", "manual")
                 self.assertEqual(first["status"], "queued")
@@ -167,15 +167,66 @@ class MarketingRunnerTests(unittest.TestCase):
                 "socials": {"twitter": "https://x.com/example"}})
             with patch.object(service, "CHROME_DATA_DIR", str(root)), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=False):
                 service.write_json(service.TARGETS, {target["id"]: target})
-                with self.assertRaisesRegex(ValueError, "dedicated Chrome collector endpoint is unavailable"):
+                with self.assertRaisesRegex(ValueError, "signed-in collector browser is unavailable"):
                     service.queue_run(target["id"], "snapshot", "manual")
+
+    def test_cloud_manual_run_rejects_offline_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = service.validate_target({"tenant_id": TENANT, "app_name": "Example",
+                "socials": {"twitter": "https://x.com/example"}})
+            with patch.object(service, "CHROME_DATA_DIR", ""), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=False):
+                service.write_json(service.TARGETS, {target["id"]: target})
+                with self.assertRaisesRegex(ValueError, "signed-in collector browser is unavailable"):
+                    service.queue_run(target["id"], "snapshot", "manual")
+
+    def test_schedule_waits_for_browser_and_active_run_without_losing_due_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current = datetime(2026, 10, 1, 14, tzinfo=timezone.utc)
+            target = service.validate_target({"tenant_id": TENANT, "app_name": "Example",
+                "cadence": "daily", "timezone": "UTC", "hour": 13,
+                "socials": {"twitter": "https://x.com/example"}})
+            target["next_due_at"] = "2026-10-01T13:00:00+00:00"
+            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"):
+                service.write_json(service.TARGETS, {target["id"]: target})
+                with patch.object(service, "linkedin_browser_connected", return_value=False):
+                    service.schedule_due_targets(current)
+                self.assertEqual(service.read_json(service.TARGETS, {})[target["id"]]["next_due_at"], target["next_due_at"])
+                self.assertEqual(service.read_json(service.RUNS, {}), {})
+
+                with patch.object(service, "linkedin_browser_connected", return_value=True):
+                    manual = service.queue_run(target["id"], "research", "manual")
+                    service.schedule_due_targets(current)
+                    self.assertEqual(len(service.read_json(service.RUNS, {})), 1)
+                    self.assertEqual(service.read_json(service.TARGETS, {})[target["id"]]["next_due_at"], target["next_due_at"])
+                    service.record(manual["id"], status="completed")
+                    service.schedule_due_targets(current)
+                    runs = service.read_json(service.RUNS, {})
+                    scheduled = [run for run in runs.values() if run["trigger"] == "schedule"]
+                    self.assertEqual(len(scheduled), 1)
+                    self.assertEqual(scheduled[0]["scheduled_for"], target["next_due_at"])
+                    self.assertEqual(service.read_json(service.TARGETS, {})[target["id"]]["next_due_at"], "2026-10-02T13:00:00+00:00")
+
+                    # A restart after queueing must not create another run for that occurrence.
+                    saved = service.read_json(service.TARGETS, {})
+                    saved[target["id"]]["next_due_at"] = target["next_due_at"]
+                    service.write_json(service.TARGETS, saved)
+                    service.schedule_due_targets(current)
+                    self.assertEqual(len(service.read_json(service.RUNS, {})), 2)
+
+                    disabled = {**target, "cadence": "off"}
+                    service.save_target(disabled)
+                    self.assertIsNone(service.read_json(service.TARGETS, {})[target["id"]]["next_due_at"])
+                    scheduled_run = next(run for run in service.read_json(service.RUNS, {}).values() if run["trigger"] == "schedule")
+                    self.assertEqual(scheduled_run["status"], "cancelled")
 
     def test_blocked_people_discovery_preserves_brand_but_needs_review(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             target = service.validate_target({"tenant_id": TENANT, "app_name": "Example",
                 "socials": {"linkedin": "https://www.linkedin.com/company/example/"}})
-            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"):
+            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=True):
                 service.write_json(service.TARGETS, {target["id"]: target})
                 run = service.queue_run(target["id"], "research", "manual")
 
