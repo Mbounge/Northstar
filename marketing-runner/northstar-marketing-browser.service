@@ -1,0 +1,20 @@
+[Unit]
+Description=Northstar dedicated LinkedIn collection browser
+After=northstar-marketing-display.service
+Requires=northstar-marketing-display.service
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+Environment=DISPLAY=:99
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/northstar/marketing/browsers
+Environment=NORTHSTAR_MARKETING_LINKEDIN_PROFILE=/var/lib/northstar/marketing/linkedin-browser
+ExecStart=/opt/northstar/marketing-venv/bin/python3 /opt/northstar/marketing-runner/browser_host.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

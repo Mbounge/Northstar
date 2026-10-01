@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Activity, CircleAlert, Download, FileImage, Pause, Play, Plus, RefreshCw, RotateCcw, Smartphone, X } from "lucide-react";
 import { CaptureProgressView, type CaptureProgress } from "./capture-progress";
+import { AdminAppIcon } from "./admin-app-icon";
 
 type Organization = { id: string; name: string };
 type Coverage = { capture_status?: string; audit_status?: string; pending_obligations?: number; unverified_destinations?: number; incomplete_topbars?: number; partial_captures?: number };
@@ -23,10 +24,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function Icon({ run, catalog }: { run: Run; catalog: CatalogApp[] }) {
-  const url = catalog.find((app) => app.tenant_id === run.organization_id && app.app_name.toLowerCase() === run.app.toLowerCase())?.icon_url;
-  return url ? <img src={url} alt={`${run.app} icon`} className="h-11 w-11 shrink-0 rounded-[11px] object-cover" />
-    : run.icon_available ? <img src={`${api}/${run.id}/icon`} alt={`${run.app} icon`} className="h-11 w-11 shrink-0 rounded-[11px] object-cover" />
-    : <span aria-hidden="true" className="h-11 w-11 shrink-0 rounded-[11px] bg-violet-500 text-white flex items-center justify-center font-bold">{run.app[0]?.toUpperCase()}</span>;
+  const matches = catalog.filter((app) => app.app_name.toLowerCase() === run.app.toLowerCase() && app.icon_url);
+  const url = matches.find((app) => app.tenant_id === run.organization_id)?.icon_url || matches[0]?.icon_url;
+  return <AdminAppIcon appName={run.app} iconUrl={url} fallbackUrl={run.icon_available ? `${api}/${run.id}/icon` : null} className="h-11 w-11 rounded-[11px]" />;
 }
 
 function Frame({ run }: { run: Run }) {

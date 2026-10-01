@@ -19,12 +19,14 @@ type TopTab = "product" | "marketing" | "business";
 
 type MarketingPayload = {
   posts: SocialPost[];
+  sourceSnapshotId: string;
 };
 
 type BusinessPayload = {
   jobs: BusinessJob[];
   roster: RosterPerson[];
   businessScreenshots: string[];
+  sourceSnapshotId: string;
 };
 
 function snapshotKey(snapshotId: string) {
@@ -137,6 +139,7 @@ export function CompanyDashboardTabs({
               posts: Array.isArray(payload?.data?.posts)
                 ? payload.data.posts
                 : [],
+              sourceSnapshotId: payload?.data?.sourceSnapshotId || "",
             };
 
             setMarketingBySnapshot((prev) => ({
@@ -215,6 +218,7 @@ export function CompanyDashboardTabs({
               )
                 ? payload.data.businessScreenshots
                 : [],
+              sourceSnapshotId: payload?.data?.sourceSnapshotId || "",
             };
 
             setBusinessBySnapshot((prev) => ({
@@ -426,7 +430,7 @@ export function CompanyDashboardTabs({
                 key={`mkt-${activeSnapshotId}`}
                 posts={marketingPosts}
                 companyId={dataBucketId}
-                snapshotId={activeSnapshotId}
+                snapshotId={marketingData?.sourceSnapshotId || activeSnapshotId}
                 tenantId={tenantId}
               />
             )}
@@ -456,7 +460,7 @@ export function CompanyDashboardTabs({
                 jobs={businessJobs}
                 roster={businessRoster}
                 companyId={dataBucketId}
-                snapshotId={activeSnapshotId}
+                snapshotId={businessData?.sourceSnapshotId || activeSnapshotId}
                 tenantId={tenantId}
                 businessScreenshots={businessScreenshots}
               />

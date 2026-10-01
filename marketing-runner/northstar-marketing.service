@@ -1,0 +1,30 @@
+[Unit]
+Description=Northstar isolated social capture and schedule runner
+After=network-online.target northstar-marketing-display.service northstar-marketing-browser.service
+Wants=network-online.target northstar-marketing-display.service northstar-marketing-browser.service
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+WorkingDirectory=/opt/northstar/marketing-runner
+EnvironmentFile=/etc/northstar/marketing.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/northstar/marketing/browsers
+Environment=HOME=/var/lib/northstar/marketing
+Environment=XDG_CACHE_HOME=/var/lib/northstar/marketing/cache
+Environment=TMPDIR=/var/lib/northstar/marketing/tmp
+Environment=DISPLAY=:99
+ExecStart=/opt/northstar/marketing-venv/bin/python3 /opt/northstar/marketing-runner/service.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/northstar/marketing
+RuntimeDirectory=northstar-marketing
+MemoryMax=4G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

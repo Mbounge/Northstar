@@ -1,0 +1,16 @@
+[Unit]
+Description=Northstar marketing browser display
+After=network.target
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

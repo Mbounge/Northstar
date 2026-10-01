@@ -58,3 +58,4 @@ next-env.d.ts
 /worker/dist/
 # Python capture runner test artifacts
 capture-runner/__pycache__/
+marketing-runner/**/__pycache__/

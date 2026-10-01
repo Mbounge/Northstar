@@ -2,7 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getDashboardData } from "@/lib/data";
+import { getPillarSnapshot } from "@/lib/pillar-snapshot";
 import {
   getOrSetServerResponseCache,
   privateApiCacheHeaders,
@@ -68,7 +68,7 @@ export async function GET(
   try {
     const cacheKey = [
       "business",
-      "v1",
+      "v2",
       profile.customer_id,
       dataBucketId,
       snapshotId || "no-snapshot",
@@ -76,13 +76,9 @@ export async function GET(
 
     const { value: data, status: cacheStatus } =
       await getOrSetServerResponseCache(cacheKey, async () => {
-        const dashboardData = await getDashboardData(
-          profile.customer_id,
-          dataBucketId,
-          snapshotId
-        );
+        const resolved = await getPillarSnapshot(profile.customer_id, dataBucketId, snapshotId, "business");
 
-        return extractBusinessData(dashboardData);
+        return { ...extractBusinessData(resolved?.dashboard), sourceSnapshotId: resolved?.snapshotId || "" };
       });
 
     return NextResponse.json(
