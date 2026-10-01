@@ -106,6 +106,7 @@ export function CaptureConsoleLive({ organizations }: { organizations: Organizat
   const detailNavRef = useRef<HTMLDivElement>(null);
   const detailContentRef = useRef<HTMLDivElement>(null);
   const pendingNavTop = useRef<number | null>(null);
+  const navAnchorRef = useRef<{ top: number; expires: number } | null>(null);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -131,6 +132,7 @@ export function CaptureConsoleLive({ organizations }: { organizations: Organizat
     const navTop = detailNavRef.current?.getBoundingClientRect().top;
     const contentTop = detailContentRef.current?.getBoundingClientRect().top;
     pendingNavTop.current = navTop ?? null;
+    navAnchorRef.current = navTop == null ? null : { top: navTop, expires: Date.now() + 5000 };
     setDetailFloorHeight(Math.max(450, window.innerHeight - (contentTop ?? 0) + 32));
     setDetail(next);
   }
@@ -141,6 +143,39 @@ export function CaptureConsoleLive({ organizations }: { organizations: Organizat
     if (previousTop == null || !detailNavRef.current) return;
     const shift = detailNavRef.current.getBoundingClientRect().top - previousTop;
     if (Math.abs(shift) > 1) window.scrollTo({ top: window.scrollY + shift, behavior: "auto" });
+  }, [detail]);
+
+  useEffect(() => {
+    const content = detailContentRef.current;
+    if (!content || !navAnchorRef.current) return;
+    let frame = 0;
+    const restore = () => {
+      const anchor = navAnchorRef.current;
+      if (!anchor || Date.now() > anchor.expires || !detailNavRef.current) return;
+      const shift = detailNavRef.current.getBoundingClientRect().top - anchor.top;
+      if (Math.abs(shift) > 1) window.scrollTo({ top: window.scrollY + shift, behavior: "auto" });
+    };
+    const observer = new ResizeObserver(() => {
+      restore();
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(restore);
+    });
+    const cancel = () => { navAnchorRef.current = null; };
+    observer.observe(content);
+    window.addEventListener("wheel", cancel, { passive: true });
+    window.addEventListener("touchstart", cancel, { passive: true });
+    window.addEventListener("pointerdown", cancel, { passive: true });
+    window.addEventListener("keydown", cancel);
+    const timeout = window.setTimeout(cancel, 5000);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+      window.removeEventListener("wheel", cancel);
+      window.removeEventListener("touchstart", cancel);
+      window.removeEventListener("pointerdown", cancel);
+      window.removeEventListener("keydown", cancel);
+    };
   }, [detail]);
 
   const refresh = useCallback(async () => {
