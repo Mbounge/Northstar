@@ -1,0 +1,17 @@
+[Unit]
+Description=Northstar social collection desktop window manager
+After=northstar-marketing-display.service
+Requires=northstar-marketing-display.service
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/openbox --sm-disable
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
