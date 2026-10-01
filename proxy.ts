@@ -6,6 +6,12 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { canvasV2LocalEvaluationEnabled } from '@/lib/canvas-v2/local-evaluation'
 
 export async function proxy(request: NextRequest) {
+  // This exact server-to-server endpoint authenticates its own bearer token.
+  // A Supabase browser session is neither available nor required for the collector.
+  if (request.nextUrl.pathname === '/api/internal/marketing-publish') {
+    return NextResponse.next({ request })
+  }
+
   // Browser release-gate harnesses must exercise their real iframe boundaries
   // without depending on a developer's Supabase cookies. They remain unavailable
   // in production even if the explicit E2E environment is set accidentally.
