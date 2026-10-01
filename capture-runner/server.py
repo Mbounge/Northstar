@@ -137,13 +137,8 @@ def _pipeline_status(run: dict) -> dict:
         session / "unattended_audit.json").get("status") or "unknown"
     result["saved_checkpoints"] = len(list((session / "enriched").glob("step_*_enriched.json")))
     store = _json_file(session / "app_store_research.json")
-    if store.get("stage") == "researching":
-        try:
-            command = Path(f"/proc/{int(store.get('worker_pid'))}/cmdline").read_bytes()
-            alive = (b"app_store_research.py" in command or b"play_store_research.py" in command) and run["id"].encode() in command
-        except (OSError, TypeError, ValueError):
-            alive = False
-        if not alive and time.time() - float(store.get("started_unix") or 0) > 15:
+    if store.get("stage") == "researching" and not _app_store_worker_alive(session, run["id"], store):
+        if time.time() - float(store.get("started_unix") or 0) > 15:
             store.update(stage="failed", error="App Store research worker stopped")
     result["app_store"] = store or {"stage": "not_started"}
     taxonomy = _json_file(session / "flows/flows.json")
@@ -161,6 +156,18 @@ def _pipeline_status(run: dict) -> dict:
                        for root in taxonomy.get("taxonomy") or [] if isinstance(root, dict)
                        for lane in root.get("children") or [] if isinstance(lane, dict)]
     return result
+
+
+def _app_store_worker_alive(session: Path, run_id: str, store: dict) -> bool:
+    """The PID is separate so a fast worker cannot have its result overwritten."""
+    try:
+        pid_file = session / "app_store_worker.pid"
+        pid = int(pid_file.read_text() if pid_file.is_file() else store.get("worker_pid"))
+        command = Path(f"/proc/{pid}/cmdline").read_bytes()
+        return ((b"app_store_research.py" in command or b"play_store_research.py" in command)
+                and run_id.encode() in command)
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def _publication_files(run: dict) -> dict:
@@ -741,20 +748,26 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("App Store research worker is not installed")
         session = _run_dir(run["id"])
         previous = _json_file(session / "app_store_research.json")
-        if previous.get("stage") == "researching":
+        if previous.get("stage") == "researching" and _app_store_worker_alive(session, run["id"], previous):
             raise ValueError("App Store research is already running")
         command = [PROCESSING_PYTHON, "-u", str(script),
                    "--session", str(session), "--app", run["app"]]
         command += ["--track-id", str(track_id)] if track_id is not None else ["--package", run["package_name"]]
-        with (session / "app_store_research.log").open("ab") as log:
-            child = subprocess.Popen(command, cwd=APP_STORE_RESEARCH.parent,
-                                     env=os.environ.copy(), stdout=log,
-                                     stderr=subprocess.STDOUT, start_new_session=True,
-                                     stdin=subprocess.DEVNULL)
         status = {"stage": "researching", "track_id": track_id,
                   "package_id": run["package_name"] if track_id is None else None,
-                  "worker_pid": child.pid, "started_unix": time.time()}
+                  "started_unix": time.time()}
         _write_json(session / "app_store_research.json", status)
+        try:
+            with (session / "app_store_research.log").open("ab") as log:
+                child = subprocess.Popen(command, cwd=APP_STORE_RESEARCH.parent,
+                                         env=os.environ.copy(), stdout=log,
+                                         stderr=subprocess.STDOUT, start_new_session=True,
+                                         stdin=subprocess.DEVNULL)
+            (session / "app_store_worker.pid").write_text(str(child.pid))
+        except (OSError, subprocess.SubprocessError) as exc:
+            _write_json(session / "app_store_research.json", {
+                **status, "stage": "failed", "error": f"Could not start listing research: {exc}"})
+            raise ValueError("Could not start App Store research worker") from exc
         return status
 
     def _start_pipeline(self, run_id: str, action: str) -> None:

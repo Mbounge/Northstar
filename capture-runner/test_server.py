@@ -4,6 +4,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -104,6 +105,34 @@ class CaptureServerTests(unittest.TestCase):
         code, result = self.call(f"/v1/runs/{run_id}/start", {})
         self.assertEqual(code, 409)
         self.assertIn("App Store research", result["error"])
+
+    def test_listing_worker_result_survives_fast_exit_and_stale_run_retries(self):
+        run = {"id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "app": "Example", "package_name": "com.example.app"}
+        session = server._run_dir(run["id"])
+        session.mkdir()
+        listing = session / "app_store_research.json"
+        old_script, old_python = server.PLAY_STORE_RESEARCH, server.PROCESSING_PYTHON
+        server.PLAY_STORE_RESEARCH = server.ROOT / "play_store_research.py"
+        server.PLAY_STORE_RESEARCH.touch()
+        server.PROCESSING_PYTHON = sys.executable
+        self.research_patch.stop()
+        try:
+            def finish_immediately(*_args, **_kwargs):
+                server._write_json(listing, {"stage": "ready_for_review", "title": "Example"})
+                return SimpleNamespace(pid=12345)
+
+            with patch.object(server.subprocess, "Popen", side_effect=finish_immediately) as launch:
+                server.Handler._launch_app_store(None, run, None)
+                self.assertEqual(server._json_file(listing)["stage"], "ready_for_review")
+                self.assertEqual((session / "app_store_worker.pid").read_text(), "12345")
+                server._write_json(listing, {"stage": "researching", "started_unix": 1})
+                server.Handler._launch_app_store(None, run, None)
+                self.assertEqual(launch.call_count, 2)
+                self.assertEqual(server._json_file(listing)["stage"], "ready_for_review")
+        finally:
+            self.research_patch.start()
+            server.PLAY_STORE_RESEARCH = old_script
+            server.PROCESSING_PYTHON = old_python
 
     def test_invalid_package_scope_and_screen_path_are_rejected(self):
         common = {"app": "Graet", "organization_id": "tenant-1", "device_id": "pixel", "scope": "browsing"}
