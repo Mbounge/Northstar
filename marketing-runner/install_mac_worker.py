@@ -20,17 +20,21 @@ CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 LABELS = ("ai.usenorthstar.marketing.browser", "ai.usenorthstar.marketing.collector", "ai.usenorthstar.marketing.tunnel")
 
 
+def chrome_arguments(chrome_data_dir: str | None = None) -> list[str]:
+    isolated_dir = dedicated_chrome_data_dir(chrome_data_dir or "")
+    return [str(CHROME), f"--user-data-dir={isolated_dir}",
+            "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9222",
+            "--no-first-run", "--no-default-browser-check"]
+
+
 def definitions(chrome_data_dir: str | None = None) -> dict[str, dict]:
     isolated_dir = dedicated_chrome_data_dir(chrome_data_dir or "")
     return {
         LABELS[0]: {
             "Label": LABELS[0],
-            "ProgramArguments": [str(CHROME), f"--user-data-dir={isolated_dir}",
-                                 "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9222",
-                                 "--no-first-run", "--no-default-browser-check"],
+            "ProgramArguments": [sys.executable, str(RUNNER / "open_collector_browser.py")],
             "RunAtLoad": True,
-            "KeepAlive": True,
-            "ThrottleInterval": 15,
+            "EnvironmentVariables": {"NORTHSTAR_MARKETING_CHROME_DATA_DIR": isolated_dir},
             "StandardOutPath": str(DATA / "browser.stdout.log"),
             "StandardErrorPath": str(DATA / "browser.stderr.log"),
         },

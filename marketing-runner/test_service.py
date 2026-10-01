@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import service
-from install_mac_worker import LABELS, definitions
+from install_mac_worker import LABELS, chrome_arguments, definitions
 from mac_collector import COLLECTOR_CHROME_DATA_DIR, dedicated_chrome_data_dir
-from open_collector_browser import SOCIAL_URLS, launch_command
+from open_collector_browser import SOCIAL_URLS, launch_command, main as open_collector_browser
 from publisher import validate_feed
 
 TENANT = "12345678-1234-1234-1234-123456789abc"
@@ -29,10 +29,12 @@ class MarketingRunnerTests(unittest.TestCase):
 
     def test_installed_browser_uses_existing_isolated_profile(self):
         launch_agents = definitions()
-        arguments = launch_agents[LABELS[0]]["ProgramArguments"]
+        arguments = chrome_arguments()
         self.assertIn(f"--user-data-dir={COLLECTOR_CHROME_DATA_DIR}", arguments)
         self.assertIn("--remote-debugging-address=127.0.0.1", arguments)
         self.assertIn("--remote-debugging-port=9222", arguments)
+        self.assertFalse(launch_agents[LABELS[0]].get("KeepAlive", False))
+        self.assertTrue(launch_agents[LABELS[0]]["ProgramArguments"][-1].endswith("open_collector_browser.py"))
         self.assertEqual(
             launch_agents[LABELS[1]]["EnvironmentVariables"]["NORTHSTAR_MARKETING_CHROME_DATA_DIR"],
             str(COLLECTOR_CHROME_DATA_DIR),
@@ -47,6 +49,11 @@ class MarketingRunnerTests(unittest.TestCase):
         self.assertIn("--remote-debugging-address=127.0.0.1", command)
         self.assertIn("--remote-debugging-port=9222", command)
         self.assertEqual(tuple(command[-3:]), SOCIAL_URLS)
+
+    def test_launcher_reuses_running_collector_without_opening_another(self):
+        with patch("open_collector_browser.service.collector_owns_debugging_port", return_value=True), patch("open_collector_browser.subprocess.run") as run:
+            open_collector_browser()
+            run.assert_not_called()
 
     def test_debugging_port_must_belong_to_collector_profile(self):
         listener = MagicMock(returncode=0, stdout="p1234\n")
