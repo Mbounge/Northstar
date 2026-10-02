@@ -206,7 +206,7 @@ export default function AdminDashboard() {
         <div 
           className={`
             fixed bottom-8 right-8 z-[200] flex items-center gap-3.5 px-6 py-4 border shadow-2xl 
-            animate-in slide-in-from-bottom-5 duration-300 rounded-none max-w-md
+            animate-in slide-in-from-bottom-5 duration-300 rounded-2xl max-w-md
             ${toast.type === "success" ? "border-emerald-500/30 text-emerald-400 bg-emerald-950/20" : ""}
             ${toast.type === "error" ? "border-rose-500/30 text-rose-400 bg-rose-950/20" : ""}
             ${toast.type === "info" ? "border-sky-500/30 text-sky-400 bg-sky-950/20" : ""}
@@ -225,7 +225,7 @@ export default function AdminDashboard() {
         <div className="fixed inset-0 z-[80] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default" onClick={() => setViewingOrgId(null)} />
           <div
-            className="relative z-10 w-[700px] max-h-[80vh] flex flex-col border border-white/10 shadow-2xl animate-in zoom-in-95 duration-200 rounded-none"
+            className="relative z-10 w-[700px] max-w-[calc(100vw-32px)] max-h-[80vh] flex flex-col overflow-hidden rounded-[24px] border border-white/10 shadow-2xl animate-in zoom-in-95 duration-200"
             style={{ background: "rgba(0,0,0,0.60)", backdropFilter: "blur(24px)" }}
           >
             {/* Header */}
@@ -255,9 +255,9 @@ export default function AdminDashboard() {
               ) : (
                 <div className="flex flex-col gap-2">
                   {orgUsersList.map(user => (
-                    <div key={user.id} className="flex items-center justify-between p-4 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors">
+                    <div key={user.id} className="flex items-center justify-between gap-4 rounded-2xl p-4 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors">
                       <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-white/10 flex items-center justify-center text-white/60 font-bold text-[14px]">
+                        <div className="w-10 h-10 shrink-0 rounded-xl bg-white/10 flex items-center justify-center text-white/60 font-bold text-[14px]">
                           {user.full_name ? user.full_name.charAt(0).toUpperCase() : <UserIcon className="w-4 h-4" />}
                         </div>
                         <div className="flex flex-col">
@@ -273,7 +273,7 @@ export default function AdminDashboard() {
                         </span>
                         <button 
                           onClick={() => handleActionClick(user, "revoke")} 
-                          className="text-[12px] text-rose-400 hover:text-rose-300 font-medium bg-transparent border border-rose-500/30 hover:bg-rose-500/10 px-3 py-1.5 transition-colors cursor-pointer"
+                          className="rounded-lg text-[12px] text-rose-400 hover:text-rose-300 font-medium bg-transparent border border-rose-500/30 hover:bg-rose-500/10 px-3 py-1.5 transition-colors cursor-pointer"
                         >
                           Revoke
                         </button>
@@ -292,7 +292,7 @@ export default function AdminDashboard() {
         <div className="fixed inset-0 z-[90] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default" onClick={() => setOrgModalOpen(false)} />
           <div
-            className="relative z-10 w-[599px] py-12 flex flex-col items-center justify-center border border-white/10 animate-in zoom-in-95 duration-200"
+            className="relative z-10 w-[599px] max-w-[calc(100vw-32px)] rounded-[24px] py-12 flex flex-col items-center justify-center border border-white/10 animate-in zoom-in-95 duration-200"
             style={{ background: "rgba(0,0,0,0.60)", backdropFilter: "blur(24px)", boxShadow: "0 24px 80px rgba(0,0,0,0.40)" }}
           >
             <button onClick={() => setOrgModalOpen(false)} className="absolute top-8 left-8 p-2 text-white bg-transparent border-none cursor-pointer hover:opacity-70 transition-opacity">
@@ -304,19 +304,19 @@ export default function AdminDashboard() {
               <span className="font-[700] text-[36px] block leading-[1.1]">organization</span>
             </h2>
             
-            <form onSubmit={handleCreateOrg} className="flex flex-col w-[349px] gap-[8px]">
+            <form onSubmit={handleCreateOrg} className="flex w-[349px] max-w-[calc(100vw-80px)] flex-col gap-2">
               <input
                 autoFocus
                 type="text"
                 placeholder="e.g. Sequoia Capital"
                 value={newOrgName}
                 onChange={(e) => setNewOrgName(e.target.value)}
-                className="w-full h-[56px] bg-transparent border border-zinc-300 dark:border-white px-4 text-[14px] text-white outline-none rounded-none box-border placeholder:text-zinc-500 focus:bg-white/5 transition-colors"
+                className="w-full h-[56px] rounded-xl bg-white/5 border border-white/20 px-4 text-[14px] text-white outline-none box-border placeholder:text-white/40 focus:border-violet-400 transition-colors"
               />
               <button
                 type="submit"
                 disabled={!newOrgName.trim()}
-                className="w-full h-[56px] cursor-pointer bg-white/10 hover:bg-white/20 border-0 border-y border-white/30 hover:border-white/50 text-white rounded-none transition-all duration-300 ease-out flex items-center justify-center disabled:opacity-50"
+                className="w-full h-[56px] cursor-pointer rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-all duration-200 flex items-center justify-center disabled:opacity-50"
               >
                 <span className="font-sans text-[16px] font-[700] leading-[24px] tracking-[-0.01em]">Create</span>
               </button>
@@ -330,7 +330,7 @@ export default function AdminDashboard() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default" onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })} />
           <div
-            className="relative z-10 w-[599px] py-12 flex flex-col items-center justify-center border border-white/10 px-12 animate-in zoom-in-95 duration-200"
+            className="relative z-10 w-[599px] max-w-[calc(100vw-32px)] rounded-[24px] py-12 flex flex-col items-center justify-center border border-white/10 px-8 animate-in zoom-in-95 duration-200"
             style={{ background: "rgba(0,0,0,0.60)", backdropFilter: "blur(24px)", boxShadow: "0 24px 80px rgba(0,0,0,0.40)" }}
           >
             <button onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })} className="absolute top-8 left-8 p-2 text-white bg-transparent border-none cursor-pointer hover:opacity-70 transition-opacity">
@@ -355,7 +355,7 @@ export default function AdminDashboard() {
                 <select 
                   value={selectedCompanyId}
                   onChange={(e) => setSelectedCompanyId(e.target.value)}
-                  className="w-full h-[56px] bg-transparent border border-zinc-300 dark:border-white px-4 text-[14px] text-white outline-none rounded-none box-border appearance-none focus:bg-white/5 transition-colors cursor-pointer"
+                  className="w-full h-[56px] rounded-xl bg-white/5 border border-white/20 px-4 text-[14px] text-white outline-none box-border appearance-none focus:border-violet-400 transition-colors cursor-pointer"
                 >
                   <option value="" disabled className="text-black">-- Select an organization --</option>
                   {customers.map(c => (
@@ -369,7 +369,7 @@ export default function AdminDashboard() {
             <button
               onClick={executeAction} 
               disabled={confirmModal.type === "approve" && !selectedCompanyId}
-              className="w-[349px] h-[56px] cursor-pointer bg-white/10 hover:bg-white/20 border-0 border-y border-white/30 hover:border-white/50 text-white rounded-none transition-all duration-300 ease-out flex items-center justify-center disabled:opacity-50"
+              className="w-[349px] max-w-full h-[56px] cursor-pointer rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-all duration-200 flex items-center justify-center disabled:opacity-50"
             >
               <span className="font-sans text-[16px] font-[700] leading-[24px] tracking-[-0.01em]">
                 Confirm {confirmModal.type}
@@ -426,7 +426,7 @@ export default function AdminDashboard() {
             {activeTab === "requests" && (
               <div className="animate-in fade-in duration-500">
                 <div className="mb-6"><div className="text-[11px] font-bold uppercase tracking-[.18em] text-violet-600 dark:text-violet-300">Access</div><h2 className="mt-2 text-[30px] font-semibold tracking-[-.045em]">Requests</h2><p className="mt-1 text-[13px] text-slate-500 dark:text-white/50">Review the people waiting to join North Star.</p></div>
-                <div className="bg-white/75 dark:bg-[#171821]/90 backdrop-blur-2xl border border-black/[.08] dark:border-white/[.09] shadow-[0_18px_55px_rgba(35,28,71,.06)] overflow-hidden rounded-[22px]">
+                <div className="overflow-x-auto rounded-[22px] border border-black/[.08] bg-white/75 shadow-[0_18px_55px_rgba(35,28,71,.06)] backdrop-blur-2xl dark:border-white/[.09] dark:bg-[#171821]/90">
                   <table className="w-full text-left text-[14px]">
                     <thead className="bg-black/5 dark:bg-white/5 border-b border-black/10 dark:border-white/10 text-zinc-600 dark:text-zinc-400 font-medium">
                       <tr>
@@ -444,10 +444,10 @@ export default function AdminDashboard() {
                           <td className="px-6 py-4 opacity-60">{formatDate(user.created_at)}</td>
                           <td className="px-6 py-4">
                             <div className="flex justify-end gap-2">
-                              <button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white dark:hover:bg-white/20 border border-white/80 dark:border-white/20 text-black dark:text-white transition-colors text-[13px] font-semibold rounded-none cursor-pointer">
+                              <button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-[13px] font-semibold text-violet-800 transition-colors hover:bg-violet-500/20 dark:text-violet-200 cursor-pointer">
                                 Approve
                               </button>
-                              <button onClick={() => handleActionClick(user, "reject")} className="flex items-center gap-1.5 px-3 py-1.5 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-black/60 dark:text-white/60 transition-colors text-[13px] font-medium rounded-none cursor-pointer">
+                              <button onClick={() => handleActionClick(user, "reject")} className="flex items-center gap-1.5 rounded-lg border border-transparent px-3 py-1.5 text-[13px] font-medium text-black/60 transition-colors hover:bg-black/5 dark:text-white/60 dark:hover:bg-white/5 cursor-pointer">
                                 Reject
                               </button>
                             </div>
@@ -465,15 +465,15 @@ export default function AdminDashboard() {
               <div className="animate-in fade-in duration-500">
                 <div className="mb-6"><div className="text-[11px] font-bold uppercase tracking-[.18em] text-violet-600 dark:text-violet-300">People</div><h2 className="mt-2 text-[30px] font-semibold tracking-[-.045em]">Directory</h2><p className="mt-1 text-[13px] text-slate-500 dark:text-white/50">Find people and manage their workspace access.</p></div>
                 <div className="flex justify-between items-center mb-6">
-                  <div className="relative w-[349px]">
+                  <div className="relative w-full max-w-[349px]">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/50 dark:text-white/50" />
                     <input type="text" placeholder="Search users..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
-                      className="w-full bg-white/40 dark:bg-black/30 backdrop-blur-md border border-white/60 dark:border-white/10 rounded-none pl-11 pr-4 py-3 text-[14px] text-black dark:text-white focus:outline-none focus:border-black/30 dark:focus:border-white/30 transition-colors placeholder:text-black/50 dark:placeholder:text-white/50" 
+                      className="w-full rounded-xl border border-black/[.08] bg-white/65 py-3 pl-11 pr-4 text-[14px] text-black outline-none backdrop-blur-md transition-colors placeholder:text-black/50 focus:border-violet-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-white/50"
                     />
                   </div>
                 </div>
                 
-                <div className="bg-white/75 dark:bg-[#171821]/90 backdrop-blur-2xl border border-black/[.08] dark:border-white/[.09] shadow-[0_18px_55px_rgba(35,28,71,.06)] overflow-hidden rounded-[22px]">
+                <div className="overflow-x-auto rounded-[22px] border border-black/[.08] bg-white/75 shadow-[0_18px_55px_rgba(35,28,71,.06)] backdrop-blur-2xl dark:border-white/[.09] dark:bg-[#171821]/90">
                   <table className="w-full text-left text-[14px]">
                     <thead className="bg-black/5 dark:bg-white/5 border-b border-black/10 dark:border-white/10 text-zinc-600 dark:text-zinc-400 font-medium">
                       <tr>
@@ -492,16 +492,16 @@ export default function AdminDashboard() {
                           </td>
                           <td className="px-6 py-4 font-medium opacity-90">{user.customer ? user.customer.name : <span className="opacity-50 italic">Unassigned</span>}</td>
                           <td className="px-6 py-4">
-                            <span className={`px-2 py-1 rounded-sm text-[11px] font-bold uppercase tracking-wider ${user.role === 'admin' ? 'bg-black dark:bg-white text-white dark:text-black' : 'bg-black/10 dark:bg-white/10 text-black dark:text-white'}`}>
+                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider ${user.role === 'admin' ? 'bg-violet-600 text-white' : 'bg-black/10 dark:bg-white/10 text-black dark:text-white'}`}>
                               {user.role}
                             </span>
                           </td>
                           <td className="px-6 py-4">
                             <div className="flex justify-end gap-2">
                               {user.status === "approved" ? ( 
-                                <button onClick={() => handleActionClick(user, "revoke")} className="flex items-center gap-1.5 px-3 py-1.5 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-rose-600 dark:text-rose-400 transition-colors text-[13px] font-medium rounded-none cursor-pointer">Revoke</button> 
+                                <button onClick={() => handleActionClick(user, "revoke")} className="flex items-center gap-1.5 rounded-lg border border-transparent px-3 py-1.5 text-[13px] font-medium text-rose-600 transition-colors hover:bg-rose-500/10 dark:text-rose-400 cursor-pointer">Revoke</button>
                               ) : ( 
-                                <button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white dark:hover:bg-white/20 border border-white/80 dark:border-white/20 text-black dark:text-white transition-colors text-[13px] font-semibold rounded-none cursor-pointer">Approve</button> 
+                                <button onClick={() => handleActionClick(user, "approve")} className="flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-[13px] font-semibold text-violet-800 transition-colors hover:bg-violet-500/20 dark:text-violet-200 cursor-pointer">Approve</button>
                               )}
                             </div>
                           </td>
@@ -520,13 +520,13 @@ export default function AdminDashboard() {
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {/* Add New Card */}
-                  <button onClick={() => setOrgModalOpen(true)} className="flex flex-col items-center justify-center gap-3 bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl hover:bg-white/60 dark:hover:bg-white/5 transition-colors p-8 rounded-none cursor-pointer min-h-[160px]">
+                  <button onClick={() => setOrgModalOpen(true)} className="flex min-h-[180px] flex-col items-center justify-center gap-3 rounded-[22px] border border-dashed border-violet-500/30 bg-violet-500/[.04] p-8 text-violet-700 shadow-[0_18px_55px_rgba(35,28,71,.04)] backdrop-blur-2xl transition hover:-translate-y-0.5 hover:bg-violet-500/[.09] dark:text-violet-200 cursor-pointer">
                     <Plus className="w-8 h-8 text-black/50 dark:text-white/50" />
                     <span className="text-[15px] font-bold text-black/70 dark:text-white/70">Create Workspace</span>
                   </button>
 
                   {customers.map((customer) => {
-                    const userCount = users.filter(u => u.customer_id === customer.id).length;
+                    const userCount = users.filter(u => u.customer_id === customer.id && u.status === "approved").length;
                     return (
                       <div 
                         key={customer.id} 
@@ -538,13 +538,13 @@ export default function AdminDashboard() {
                         </div>
                         <div className="flex justify-between items-end mt-4 pt-4 border-t border-black/5 dark:border-white/5">
                           {/* Left: View Members */}
-                          <span onClick={() => setViewingOrgId(customer.id)} className="text-[11px] text-black/40 dark:text-white/40 font-mono hover:underline cursor-pointer">View members →</span>
+                          <button type="button" onClick={() => setViewingOrgId(customer.id)} className="rounded-lg px-2 py-1 text-[12px] font-semibold text-violet-700 hover:bg-violet-500/10 dark:text-violet-200 cursor-pointer">View members →</button>
                           
                           {/* Right: DB Sync Button (with Loading State) */}
                           <button
                             onClick={() => handleSyncOrganization(customer.id)}
                             disabled={syncingOrgId !== null}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 dark:bg-white/5 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 text-black dark:text-white text-[11px] font-bold uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-all"
+                            className="flex items-center gap-1.5 rounded-lg border border-black/10 bg-white/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-black transition-all hover:bg-white/70 disabled:opacity-50 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:bg-white/10 cursor-pointer"
                             title="Synchronize Storage files to Postgres Database"
                           >
                             {syncingOrgId === customer.id ? (

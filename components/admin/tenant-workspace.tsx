@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { AdminAppIcon } from "./admin-app-icon";
+import { AdminAppRail } from "./admin-app-rail";
+import { AdminTenantPicker } from "./admin-tenant-picker";
 import { adminAppBackground } from "./admin-app-background";
 import { CheckCircle2, CloudUpload, Database, FolderOpen, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 
@@ -155,11 +157,7 @@ export function TenantWorkspace({ tenants }: { tenants: Tenant[] }) {
     </div>
     {message && <div role="status" className={`${panel} mb-4 px-5 py-3 text-[12px]`}>{message}</div>}
 
-    <div className="mb-6 flex flex-wrap items-center gap-2 border-b border-black/[.08] pb-4 dark:border-white/[.09]">
-      <span className="mr-2 text-[11px] font-bold uppercase tracking-[.15em] text-slate-500 dark:text-white/40">Organization</span>
-      {tenants.map((tenant) => <button key={tenant.id} onClick={() => { setTenantId(tenant.id); setSelectedApp(""); setUploadOpen(false); }} aria-pressed={tenantId === tenant.id} className={`rounded-full px-4 py-2 text-[12px] font-semibold transition ${tenantId === tenant.id ? 'bg-[#242038] text-white shadow-[0_8px_22px_rgba(36,32,56,.18)] dark:bg-white dark:text-[#242038]' : 'bg-white/55 text-slate-600 hover:bg-white dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10'}`}>{tenant.name}</button>)}
-      {!tenants.length && <span className="text-[12px] text-slate-500">No organizations yet.</span>}
-    </div>
+    <AdminTenantPicker tenants={tenants} selectedId={tenantId} onSelect={(id) => { setTenantId(id); setSelectedApp(""); setUploadOpen(false); setSearch(""); }} />
 
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_92px] xl:items-start">
       <div className="order-2 min-w-0 xl:order-1">
@@ -182,13 +180,7 @@ export function TenantWorkspace({ tenants }: { tenants: Tenant[] }) {
         </div> : <div className={`${panel} px-6 py-14 text-center text-[13px] text-slate-500`}>{loading ? 'Loading apps…' : 'Choose an app from the rail to inspect its evidence.'}</div>}
       </div>
 
-      <aside aria-label={`Apps for ${inventory?.tenant.name || tenants.find((tenant) => tenant.id === tenantId)?.name || 'organization'}`} className="order-1 min-w-0 xl:order-2 xl:sticky xl:top-4">
-        <div className="mb-2 hidden text-center text-[10px] font-bold uppercase tracking-[.16em] text-slate-500 dark:text-white/45 xl:block">Apps</div>
-        <div className="flex gap-2 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:max-h-[calc(100vh-90px)] xl:flex-col xl:items-center xl:overflow-y-auto xl:overflow-x-visible xl:pb-4">
-          {filtered.map((entry) => <button key={entry.name} type="button" title={entry.name} aria-label={`View ${entry.name}`} aria-pressed={selectedApp === entry.name} onClick={() => { setSelectedApp(entry.name); setUploadOpen(false); setConfirmRemove(false); }} className="group relative shrink-0 rounded-[14px] transition duration-200 hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500"><AdminAppIcon appName={entry.name} iconUrl={entry.icon_url} className={`h-[58px] w-[58px] rounded-[14px] shadow-[0_7px_22px_rgba(0,0,0,.16)] ${selectedApp === entry.name ? 'ring-[3px] ring-violet-500' : ''}`} /><span className="sr-only">{entry.name}</span></button>)}
-          {!loading && !filtered.length && <span className="px-2 py-4 text-[11px] text-slate-500">No apps</span>}
-        </div>
-      </aside>
+      <AdminAppRail organization={inventory?.tenant.name || tenants.find((tenant) => tenant.id === tenantId)?.name || 'organization'} apps={filtered.map((entry) => ({ id: entry.name, name: entry.name, iconUrl: entry.icon_url }))} selectedId={selectedApp} onSelect={(name) => { setSelectedApp(name); setUploadOpen(false); setConfirmRemove(false); }} loading={loading} />
     </div>
     {uploadOpen && app && <div className="fixed inset-0 z-[230] flex items-center justify-center p-4"><button className="absolute inset-0 bg-[#0c0b14]/65 backdrop-blur-[6px]" aria-label="Close upload" onClick={() => !working && setUploadOpen(false)} /><div role="dialog" aria-modal="true" aria-labelledby="tenant-upload-title" className="relative w-full max-w-[540px] rounded-[20px] bg-[#f8f8fc] dark:bg-[#1b1a22] p-6 shadow-2xl"><div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[0.14em] text-violet-600 dark:text-violet-300 font-bold">{inventory?.tenant.name} / {app.name}</div><h3 id="tenant-upload-title" className="text-[20px] font-semibold m-0 mt-1">Upload to tenant</h3></div><button onClick={() => !working && setUploadOpen(false)} aria-label="Close"><X className="h-5 w-5" /></button></div><p className="text-[12px] opacity-60 mt-3">Choose an evidence lane and upload the generated folder. Folder paths are preserved below that lane.</p><label className="block text-[12px] font-semibold mt-4">Destination<select value={lane} onChange={(event) => setLane(event.target.value as Lane)} className="block w-full mt-1.5 rounded-[9px] bg-white dark:bg-[#25242f] border border-black/10 dark:border-white/10 p-3 text-[12px]">{lanes.filter((item) => item.id === "onboarding" || item.id === "browsing" || item.id === "app_store").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><div className="flex gap-2 mt-4"><input ref={fileInput} type="file" multiple className="hidden" onChange={(event) => setFiles(uploadFiles(Array.from(event.target.files || [])))} /><input ref={folderInput} type="file" multiple className="hidden" onChange={(event) => setFiles(uploadFiles(Array.from(event.target.files || [])))} /><button onClick={() => fileInput.current?.click()} className="rounded-[9px] border border-black/10 dark:border-white/10 px-3 py-2 text-[12px] font-semibold">Choose files</button><button onClick={() => folderInput.current?.click()} className="rounded-[9px] border border-black/10 dark:border-white/10 px-3 py-2 text-[12px] font-semibold">Choose folder</button></div><div className="mt-3 rounded-[10px] bg-black/[0.04] dark:bg-white/[0.05] p-3 text-[11px]"><div className="font-semibold">{files.length} file{files.length === 1 ? "" : "s"} selected</div>{files.length > 0 && <div className="opacity-50 truncate mt-1">{files.slice(0, 3).map((entry) => entry.relative).join(" · ")}{files.length > 3 ? ` · +${files.length - 3} more` : ""}</div>}{working && <div className="mt-2 text-violet-700 dark:text-violet-300">Uploaded or attempted {uploadCount} / {files.length}</div>}{failedFiles.length > 0 && <div className="mt-2 text-rose-700 dark:text-rose-300 break-words">Failed: {failedFiles.slice(0, 8).join(", ")}{failedFiles.length > 8 ? ` and ${failedFiles.length - 8} more` : ""}</div>}</div><div className="flex justify-end gap-2 mt-5"><button onClick={() => setUploadOpen(false)} disabled={working} className="px-3 py-2 text-[12px]">Cancel</button><button onClick={() => void upload()} disabled={working || !files.length} className="rounded-[9px] bg-[#24232d] dark:bg-white text-white dark:text-[#24232d] px-4 py-2.5 text-[12px] font-semibold disabled:opacity-40">{working ? "Uploading…" : "Upload files"}</button></div></div></div>}
   </section>;

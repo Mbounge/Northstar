@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, Check, Clock3, Download, ExternalLink, Megaphone, Play, RefreshCw, Search, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowUpRight, Clock3, Download, ExternalLink, Megaphone, Play, RefreshCw, Search, ShieldCheck, Sparkles } from "lucide-react";
 import { AdminAppIcon } from "./admin-app-icon";
+import { AdminAppRail } from "./admin-app-rail";
+import { AdminTenantPicker } from "./admin-tenant-picker";
 import { adminAppBackground } from "./admin-app-background";
 
 type App = { app_name: string; tenant_id: string; icon_url?: string | null };
@@ -16,7 +18,7 @@ const PILLARS = [
   { key: "instagram", label: "Instagram", placeholder: "https://www.instagram.com/…" },
 ] as const;
 
-const panel = "border border-slate-200/90 bg-white/80 shadow-[0_16px_48px_-34px_rgba(23,25,61,.35)] dark:border-white/10 dark:bg-[#171720]/90";
+const panel = "border border-black/[.08] bg-white/75 shadow-[0_18px_55px_rgba(35,28,71,.06)] backdrop-blur-xl dark:border-white/[.09] dark:bg-[#171821]/90";
 const field = "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10 dark:border-white/10 dark:bg-white/[.045] dark:text-white dark:focus:border-violet-400";
 const smallLabel = "mb-2 block text-[11px] font-bold uppercase tracking-[.14em] text-slate-500 dark:text-slate-400";
 
@@ -85,7 +87,7 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
   const active = appRuns.some((item) => ["queued", "running"].includes(item.status));
   const dirty = Boolean(app && (!target || cadence !== target.cadence || hour !== target.hour || weekday !== target.weekday || monthday !== target.monthday || timezone !== target.timezone || PILLARS.some(({ key }) => (socials[key] || "").trim() !== (target.socials[key] || ""))));
 
-  function choose(next: string) {
+  const choose = useCallback((next: string) => {
     setSelected(next);
     const found = targets.find((item) => item.id === next);
     setSocials(found?.socials || {});
@@ -97,7 +99,11 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
     setLogRun(null);
     setError("");
     setNotice("");
-  }
+  }, [targets]);
+
+  useEffect(() => {
+    if (!selected && appOptions.length) choose(`${appOptions[0].tenant_id}:${appOptions[0].app_name.toLowerCase()}`);
+  }, [appOptions, choose, selected]);
 
   async function mutate(path: string, body: unknown, label: string) {
     setBusy(label); setError(""); setNotice("");
@@ -140,24 +146,17 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
       <div className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${online ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300" : "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300"}`}><span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-500" : "bg-amber-500"}`}/>{online ? workerLocation === "mac_bridge" ? "Mac bridge online" : workerLocation === "cloud" ? "Cloud collector online" : "Collector online" : "Collector unavailable"}</div>
     </div>
 
-    <div className="space-y-5">
-      <aside className={`${panel} self-start overflow-hidden rounded-[22px]`}>
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200/80 px-5 py-4 dark:border-white/10"><span className="mr-2 text-[11px] font-bold uppercase tracking-[.15em] text-slate-500">Organization</span>{organizations.map((organization) => <button key={organization.id} onClick={() => { setSelectedOrganizationId(organization.id); choose(""); setQuery(""); }} aria-pressed={activeOrganizationId === organization.id} className={`rounded-full px-4 py-2 text-xs font-semibold transition ${activeOrganizationId === organization.id ? 'bg-[#242038] text-white dark:bg-white dark:text-[#242038]' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10'}`}>{organization.name}</button>)}</div>
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 p-5 dark:border-white/10"><div><div className="text-sm font-semibold">Apps in {organizations.find((organization) => organization.id === activeOrganizationId)?.name || 'this organization'}</div><div className="mt-1 text-xs text-slate-500">Choose one to configure its social sources and snapshots.</div></div>
-          <div className="relative w-full sm:w-[260px]"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400"/><input aria-label="Search apps" className={`${field} pl-9`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search this organization"/></div>
-        </div>
-        <div className="flex gap-2 overflow-x-auto p-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {appOptions.map((item) => { const id = `${item.tenant_id}:${item.app_name.toLowerCase()}`; const configured = targets.some((entry) => entry.id === id); return <button key={id} onClick={() => choose(id)} aria-pressed={selected === id} style={{ background: adminAppBackground(item.app_name) }} className={`flex min-h-[86px] w-[210px] shrink-0 items-center gap-3 rounded-[14px] border px-4 py-3 text-left shadow-sm transition hover:-translate-y-0.5 ${selected === id ? "border-violet-300 ring-2 ring-violet-400/50" : "border-white/10"}`}>
-            <AdminAppIcon appName={item.app_name} iconUrl={item.icon_url} className="h-12 w-12 shrink-0 rounded-[12px]" /><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{item.app_name}</div><div className="truncate text-xs text-white/65">{configured ? "Socials configured" : "Set up socials"}</div></div>{configured && <Check className="h-4 w-4 shrink-0 text-emerald-200"/>}
-          </button>; })}
-          {!appOptions.length && <div className="px-4 py-8 text-center text-sm text-slate-500">No matching apps in this organization.</div>}
-        </div>
-      </aside>
+    <AdminTenantPicker tenants={organizations} selectedId={activeOrganizationId} onSelect={(id) => { setSelectedOrganizationId(id); choose(""); setQuery(""); }} />
 
-      <div className="min-w-0 space-y-5">
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_92px] xl:items-start">
+      <div className="order-2 min-w-0 space-y-5 xl:order-1">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div><h3 className="m-0 text-[20px] font-semibold tracking-[-.035em]">{organizations.find((organization) => organization.id === activeOrganizationId)?.name || 'Choose an organization'}</h3><p className="m-0 mt-1 text-[12px] text-slate-500 dark:text-white/45">{apps.filter((item) => item.tenant_id === activeOrganizationId).length} apps in this workspace</p></div>
+          <div className="relative"><Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"/><input aria-label="Search apps" className="w-[220px] max-w-[60vw] rounded-xl border border-black/[.08] bg-white/70 py-2.5 pl-10 pr-3 text-[12px] outline-none transition focus:border-violet-500 dark:border-white/10 dark:bg-white/5" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find an app"/></div>
+        </div>
         {!app ? <div className={`${panel} flex min-h-[450px] flex-col items-center justify-center rounded-[22px] p-10 text-center`}><div className="mb-5 rounded-2xl bg-violet-100 p-4 text-violet-600 dark:bg-violet-400/10 dark:text-violet-300"><Megaphone className="h-7 w-7"/></div><h3 className="text-xl font-semibold">Choose an app to begin</h3><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">Its social sources, capture history, schedule, and publication status will live here.</p></div> : <>
           <div className={`${panel} overflow-hidden rounded-[22px]`}>
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 px-6 py-5 dark:border-white/10"><div className="flex items-center gap-3"><AdminAppIcon appName={app.app_name} iconUrl={app.icon_url} className="h-12 w-12 rounded-[13px] text-lg"/><div><div className="text-[11px] font-bold uppercase tracking-[.15em] text-slate-500">Source setup</div><h3 className="mt-1 text-xl font-semibold tracking-tight">{app.app_name}</h3></div></div><div className="text-right text-xs text-slate-500">{target ? <>Last configured<br/><span className="font-medium text-slate-700 dark:text-slate-300">{Object.keys(target.socials).length} social sources</span></> : "Not configured yet"}</div></div>
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-5 py-6 text-white sm:px-7" style={{ background: adminAppBackground(app.app_name) }}><div className="flex items-center gap-4"><AdminAppIcon appName={app.app_name} iconUrl={app.icon_url} className="h-16 w-16 rounded-[16px] text-2xl shadow-[0_8px_24px_rgba(22,17,55,.18)]"/><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-white/70">{organizations.find((organization) => organization.id === activeOrganizationId)?.name} / social studio</div><h3 className="m-0 mt-1 text-[clamp(22px,3vw,30px)] font-semibold tracking-[-.045em]">{app.app_name}</h3><div className="mt-1 text-[12px] text-white/70">{target ? `${Object.keys(target.socials).length} social sources configured` : "Social sources not configured"}</div></div></div></div>
             <div className="grid gap-6 p-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(240px,.7fr)]">
               <div><div className={smallLabel}>Official profiles</div><div className="space-y-3">{PILLARS.map((source) => <label key={source.key} className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-600 dark:text-slate-300">{source.label}</span><input className={field} type="url" value={socials[source.key] || ""} onChange={(event) => setSocials((current) => ({ ...current, [source.key]: event.target.value }))} placeholder={source.placeholder}/></label>)}</div><p className="mt-3 text-xs leading-5 text-slate-500">Use public brand profile URLs. Social account sign-ins stay on the capture worker and are never shared with Northstar users.</p>{socials.linkedin && <div className={`mt-4 flex items-start gap-2 rounded-xl px-3 py-2.5 text-xs leading-5 ${linkedinBrowserConnected ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-200" : "bg-amber-50 text-amber-800 dark:bg-amber-400/10 dark:text-amber-200"}`}><span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${linkedinBrowserConnected ? "bg-emerald-500" : "bg-amber-500"}`}/><span>{!linkedinBrowserConnected ? "Collector browser endpoint is unavailable. Start the dedicated signed-in browser before running social capture." : verifiedSnapshot ? `Collector reachable. Every configured source was captured in the ${dateLabel(verifiedSnapshot.finished_at)} snapshot. Sign-ins may expire, so each new run checks evidence again.` : "Collector reachable. Capture a snapshot to verify each configured source with screenshot evidence."}</span></div>}</div>
               <div><label className={smallLabel} htmlFor="social-cadence">Automatic snapshots</label><select id="social-cadence" className={field} value={cadence} onChange={(event) => setCadence(event.target.value as Target["cadence"])}><option value="off">Off — manual only</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
@@ -181,6 +180,7 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
           </div>
         </>}
       </div>
+      <AdminAppRail organization={organizations.find((organization) => organization.id === activeOrganizationId)?.name || "organization"} apps={appOptions.map((item) => { const id = `${item.tenant_id}:${item.app_name.toLowerCase()}`; const configured = targets.some((entry) => entry.id === id); return { id, name: item.app_name, iconUrl: item.icon_url, detail: configured ? "Socials configured" : "Set up socials", status: configured ? "configured" as const : undefined }; })} selectedId={selected} onSelect={choose} />
     </div>
     {logRun && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setLogRun(null)}><div onClick={(event) => event.stopPropagation()} className="flex h-[min(80vh,800px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-[#191920]"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-white/10"><div><h3 className="text-base font-semibold">Run log</h3><p className="text-xs text-slate-500">Collector output · {logRun}</p></div><div className="flex gap-2"><button onClick={downloadLog} className="rounded-lg border border-slate-200 p-2 dark:border-white/15" aria-label="Download log"><Download className="h-4 w-4"/></button><button onClick={() => void showLog(logRun)} className="rounded-lg border border-slate-200 p-2 dark:border-white/15" aria-label="Refresh log"><RefreshCw className="h-4 w-4"/></button><button onClick={() => setLogRun(null)} className="rounded-lg border border-slate-200 px-3 text-sm dark:border-white/15">Close</button></div></div><pre className="min-h-0 flex-1 overflow-auto bg-slate-950 p-5 text-xs leading-5 text-slate-200">{log}</pre></div></div>}
   </section>;
