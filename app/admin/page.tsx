@@ -4,7 +4,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, AlertTriangle, UserX, Search, Loader2, ArrowLeft, User as UserIcon, RefreshCw, Bell, Smartphone, FolderOpen, Megaphone } from "lucide-react";
+import { ShieldAlert, CheckCircle2, XCircle, Building2, Mail, Users, Plus, UserX, Search, Loader2, ArrowLeft, User as UserIcon, RefreshCw, Smartphone, FolderOpen, Megaphone } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { CaptureConsoleLive } from "@/components/admin/capture-console-live";
 import { TenantWorkspace } from "@/components/admin/tenant-workspace";
@@ -20,7 +20,7 @@ type ToastType = "success" | "error" | "info";
 
 export default function AdminDashboard() {
   const supabase = createClient();
-  const [activeTab, setActiveTab] = useState<"requests" | "directory" | "customers" | "tenants" | "captures" | "marketing">("requests");
+  const [activeTab, setActiveTab] = useState<"requests" | "directory" | "customers" | "tenants" | "captures" | "marketing">("tenants");
   
   // Real DB State
   const [users, setUsers] = useState<any[]>([]);
@@ -81,7 +81,8 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("tab") === "tenants") setActiveTab("tenants");
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested === "tenants" || requested === "captures" || requested === "marketing" || requested === "customers" || requested === "directory" || requested === "requests") setActiveTab(requested);
   }, []);
 
   // Filtered views
@@ -157,7 +158,7 @@ export default function AdminDashboard() {
       } else {
         showToast(data.error || "Failed to sync organization.", "error");
       }
-    } catch (e) {
+    } catch {
       showToast("An unexpected error occurred during synchronization.", "error");
     } finally {
       setSyncingOrgId(null);
@@ -174,7 +175,7 @@ export default function AdminDashboard() {
   const orgUsersList = viewingOrgId ? users.filter(u => u.customer_id === viewingOrgId && u.status === "approved") : [];
 
   return (
-    <div className="relative min-h-screen bg-[#EEF0F8] dark:bg-[#09090b] flex flex-col overflow-hidden font-sans">
+    <div className="relative min-h-screen bg-[#eceef7] dark:bg-[#08090e] flex flex-col overflow-hidden font-sans text-[#20202a] dark:text-[#f6f5fb]">
       
       {/* ── AMBIENT BACKGROUND ── */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center">
@@ -379,45 +380,32 @@ export default function AdminDashboard() {
       )}
 
       {/* ── HEADER ── */}
-      <header className="relative z-10 w-full px-8 pt-9 pb-6 flex items-center justify-between box-border">
+      <header className="relative z-10 w-full max-w-[1640px] mx-auto px-5 sm:px-10 xl:px-14 pt-7 pb-5 flex items-center justify-between box-border">
         <div className="flex items-center gap-4">
-          <Link href="/" className="p-2 transition-opacity hover:opacity-70">
+          <Link href="/" aria-label="Back to North Star" className="p-2 rounded-full transition-colors hover:bg-black/5 dark:hover:bg-white/10">
             <ArrowLeft className="w-5 h-5 text-zinc-900 dark:text-white" strokeWidth={2.5} />
           </Link>
-          <h1 className={`${unbounded.className} text-[30px] font-semibold tracking-tight text-[#0A0A0A] dark:text-white m-0`}>
-            North Star <span className="font-[300] opacity-50">Admin</span>
+          <h1 className={`${unbounded.className} text-[clamp(19px,2.5vw,29px)] font-semibold tracking-tight text-[#0A0A0A] dark:text-white m-0`}>
+            North Star <span className="font-[300] opacity-50">/ Admin</span>
           </h1>
         </div>
         <ThemeToggle />
       </header>
 
       {/* ── TABS ── */}
-      <div className="relative z-10 w-full px-12 mb-6">
-        <div className="flex flex-row items-center gap-8 border-b border-black/10 dark:border-white/10"> 
-          <button onClick={() => setActiveTab("requests")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "requests" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
-            <ShieldAlert className="w-4 h-4" /> Requests
-            {pendingUsers.length > 0 && <span className="ml-1 bg-white/20 dark:bg-white/10 px-2 py-0.5 rounded-sm text-[12px]">{pendingUsers.length}</span>}
-          </button>
-          <button onClick={() => setActiveTab("directory")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "directory" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
-            <Users className="w-4 h-4" /> Directory
-          </button>
-          <button onClick={() => setActiveTab("customers")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "customers" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
-            <Building2 className="w-4 h-4" /> Organizations
-          </button>
-          <button onClick={() => setActiveTab("tenants")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "tenants" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
-            <FolderOpen className="w-4 h-4" /> Tenant workspace
-          </button>
-          <button onClick={() => setActiveTab("captures")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "captures" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
-            <Smartphone className="w-4 h-4" /> Captures
-          </button>
-          <button onClick={() => setActiveTab("marketing")} className={`h-[49px] px-4 flex items-center gap-2 transition-colors duration-200 ease-in-out border-none text-[16px] cursor-pointer whitespace-nowrap rounded-none bg-transparent ${activeTab === "marketing" ? "font-bold text-black dark:text-white border-b-2 border-black dark:border-white" : "font-medium text-black/60 dark:text-white/60 hover:opacity-70"}`}>
-            <Megaphone className="w-4 h-4" /> Marketing
-          </button>
-        </div>
+      <div className="relative z-10 w-full max-w-[1640px] mx-auto px-5 sm:px-10 xl:px-14 mb-9">
+        <nav aria-label="Admin sections" className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3 border-b border-black/10 dark:border-white/10 pb-3">
+          <div className="flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-x-auto rounded-[15px] border border-black/[.07] bg-white/45 p-1 shadow-sm backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden dark:border-white/[.08] dark:bg-white/[.055] sm:w-auto">
+            {([['tenants', 'Apps & tenants', FolderOpen], ['captures', 'Captures', Smartphone], ['marketing', 'Marketing', Megaphone]] as const).map(([id, label, Icon]) => <button key={id} onClick={() => setActiveTab(id)} aria-current={activeTab === id ? 'page' : undefined} className={`flex shrink-0 items-center gap-2 rounded-[11px] px-3 py-2.5 text-[12px] font-semibold transition-colors sm:px-4 sm:text-[13px] ${activeTab === id ? 'bg-[#211c37] text-white shadow-[0_8px_24px_rgba(36,25,73,.22)] dark:bg-white/15 dark:text-white' : 'text-slate-600 hover:bg-white/70 dark:text-white/60 dark:hover:bg-white/10'}`}><Icon className="h-4 w-4" />{label}</button>)}
+          </div>
+          <div className="flex w-full flex-nowrap items-center justify-between gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:w-auto sm:justify-start">
+            {([['customers', 'Organizations', Building2], ['directory', 'People', Users], ['requests', 'Requests', ShieldAlert]] as const).map(([id, label, Icon]) => <button key={id} onClick={() => setActiveTab(id)} aria-current={activeTab === id ? 'page' : undefined} className={`flex items-center gap-2 rounded-[10px] px-3 py-2.5 text-[12px] font-semibold transition-colors ${activeTab === id ? 'bg-violet-600/10 text-violet-800 dark:bg-violet-300/15 dark:text-violet-200' : 'text-slate-500 hover:bg-black/5 dark:text-white/45 dark:hover:bg-white/10'}`}><Icon className="h-3.5 w-3.5" />{label}{id === 'requests' && pendingUsers.length > 0 && <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[10px] leading-none text-white">{pendingUsers.length}</span>}</button>)}
+          </div>
+        </nav>
       </div>
 
       {/* ── MAIN CONTENT ── */}
-      <main className="relative z-10 flex-1 w-full max-w-7xl mx-auto px-12 pb-20 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      <main className="relative z-10 flex-1 w-full max-w-[1640px] mx-auto px-5 sm:px-10 xl:px-14 pb-20 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         
         {isLoading && activeTab !== "captures" ? (
           <div className="flex items-center justify-center py-40 text-black dark:text-white">
@@ -437,7 +425,8 @@ export default function AdminDashboard() {
             {/* ── REQUESTS TAB ── */}
             {activeTab === "requests" && (
               <div className="animate-in fade-in duration-500">
-                <div className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl overflow-hidden rounded-none">
+                <div className="mb-6"><div className="text-[11px] font-bold uppercase tracking-[.18em] text-violet-600 dark:text-violet-300">Access</div><h2 className="mt-2 text-[30px] font-semibold tracking-[-.045em]">Requests</h2><p className="mt-1 text-[13px] text-slate-500 dark:text-white/50">Review the people waiting to join North Star.</p></div>
+                <div className="bg-white/75 dark:bg-[#171821]/90 backdrop-blur-2xl border border-black/[.08] dark:border-white/[.09] shadow-[0_18px_55px_rgba(35,28,71,.06)] overflow-hidden rounded-[22px]">
                   <table className="w-full text-left text-[14px]">
                     <thead className="bg-black/5 dark:bg-white/5 border-b border-black/10 dark:border-white/10 text-zinc-600 dark:text-zinc-400 font-medium">
                       <tr>
@@ -474,6 +463,7 @@ export default function AdminDashboard() {
             {/* ── DIRECTORY TAB ── */}
             {activeTab === "directory" && (
               <div className="animate-in fade-in duration-500">
+                <div className="mb-6"><div className="text-[11px] font-bold uppercase tracking-[.18em] text-violet-600 dark:text-violet-300">People</div><h2 className="mt-2 text-[30px] font-semibold tracking-[-.045em]">Directory</h2><p className="mt-1 text-[13px] text-slate-500 dark:text-white/50">Find people and manage their workspace access.</p></div>
                 <div className="flex justify-between items-center mb-6">
                   <div className="relative w-[349px]">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-black/50 dark:text-white/50" />
@@ -483,7 +473,7 @@ export default function AdminDashboard() {
                   </div>
                 </div>
                 
-                <div className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl overflow-hidden rounded-none">
+                <div className="bg-white/75 dark:bg-[#171821]/90 backdrop-blur-2xl border border-black/[.08] dark:border-white/[.09] shadow-[0_18px_55px_rgba(35,28,71,.06)] overflow-hidden rounded-[22px]">
                   <table className="w-full text-left text-[14px]">
                     <thead className="bg-black/5 dark:bg-white/5 border-b border-black/10 dark:border-white/10 text-zinc-600 dark:text-zinc-400 font-medium">
                       <tr>
@@ -526,6 +516,7 @@ export default function AdminDashboard() {
             {/* ── CUSTOMERS TAB ── */}
             {activeTab === "customers" && (
               <div className="animate-in fade-in duration-500">
+                <div className="mb-6"><div className="text-[11px] font-bold uppercase tracking-[.18em] text-violet-600 dark:text-violet-300">Workspaces</div><h2 className="mt-2 text-[30px] font-semibold tracking-[-.045em]">Organizations</h2><p className="mt-1 text-[13px] text-slate-500 dark:text-white/50">The teams and people using North Star.</p></div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {/* Add New Card */}
@@ -539,10 +530,10 @@ export default function AdminDashboard() {
                     return (
                       <div 
                         key={customer.id} 
-                        className="bg-white/40 dark:bg-black/30 backdrop-blur-2xl border border-white/60 dark:border-white/10 shadow-xl p-8 rounded-none min-h-[180px] flex flex-col justify-between group"
+                        className="bg-white/75 dark:bg-[#171821]/90 backdrop-blur-2xl border border-black/[.08] dark:border-white/[.09] shadow-[0_18px_55px_rgba(35,28,71,.06)] p-7 rounded-[22px] min-h-[180px] flex flex-col justify-between group transition hover:-translate-y-0.5 hover:shadow-[0_22px_55px_rgba(35,28,71,.13)]"
                       >
                         <div className="cursor-pointer" onClick={() => setViewingOrgId(customer.id)}>
-                          <h3 className="font-bold text-[18px] text-black dark:text-white mb-2 group-hover:text-blue-500 transition-colors">{customer.name}</h3>
+                          <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-[13px] bg-violet-600/10 text-violet-700 dark:bg-violet-400/15 dark:text-violet-200"><Building2 className="h-5 w-5" /></div><h3 className="font-bold text-[20px] tracking-tight text-black dark:text-white mb-2 group-hover:text-violet-600 dark:group-hover:text-violet-300 transition-colors">{customer.name}</h3>
                           <div className="flex items-center gap-2 text-[14px] text-black/60 dark:text-white/60"><Users className="w-4 h-4" /> {userCount} active users</div>
                         </div>
                         <div className="flex justify-between items-end mt-4 pt-4 border-t border-black/5 dark:border-white/5">

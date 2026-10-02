@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Check, Clock3, Download, ExternalLink, Megaphone, Play, RefreshCw, Search, ShieldCheck, Sparkles } from "lucide-react";
 import { AdminAppIcon } from "./admin-app-icon";
+import { adminAppBackground } from "./admin-app-background";
 
 type App = { app_name: string; tenant_id: string; icon_url?: string | null };
 type Target = { id: string; app_name: string; tenant_id: string; socials: Record<string, string>; cadence: "off" | "daily" | "weekly" | "monthly"; hour: number; minute: number; weekday: number; monthday: number; timezone: string; next_due_at?: string | null };
@@ -37,6 +38,7 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
   const [targets, setTargets] = useState<Target[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [selected, setSelected] = useState("");
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [query, setQuery] = useState("");
   const [socials, setSocials] = useState<Record<string, string>>({});
   const [cadence, setCadence] = useState<Target["cadence"]>("off");
@@ -72,7 +74,8 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
   }, []);
 
   useEffect(() => { void refresh(); const id = window.setInterval(() => void refresh(), 15000); return () => window.clearInterval(id); }, [refresh]);
-  const appOptions = useMemo(() => apps.filter((app) => `${app.app_name} ${organizations.find((org) => org.id === app.tenant_id)?.name || ""}`.toLowerCase().includes(query.toLowerCase())), [apps, organizations, query]);
+  const activeOrganizationId = selectedOrganizationId || organizations[0]?.id || "";
+  const appOptions = useMemo(() => apps.filter((app) => app.tenant_id === activeOrganizationId && app.app_name.toLowerCase().includes(query.toLowerCase())), [apps, activeOrganizationId, query]);
   const app = apps.find((item) => `${item.tenant_id}:${item.app_name.toLowerCase()}` === selected);
   const target = targets.find((item) => item.id === selected);
   const appRuns = runs.filter((item) => item.target_id === selected);
@@ -137,16 +140,17 @@ export function MarketingStudio({ organizations }: { organizations: { id: string
       <div className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${online ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300" : "bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300"}`}><span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-500" : "bg-amber-500"}`}/>{online ? workerLocation === "mac_bridge" ? "Mac bridge online" : workerLocation === "cloud" ? "Cloud collector online" : "Collector online" : "Collector unavailable"}</div>
     </div>
 
-    <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+    <div className="space-y-5">
       <aside className={`${panel} self-start overflow-hidden rounded-[22px]`}>
-        <div className="border-b border-slate-200/80 p-5 dark:border-white/10"><div className="text-sm font-semibold">Apps</div><div className="mt-1 text-xs text-slate-500">Select the organization’s app to configure.</div>
-          <div className="relative mt-4"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400"/><input aria-label="Search apps" className={`${field} pl-9`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search apps or organizations"/></div>
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200/80 px-5 py-4 dark:border-white/10"><span className="mr-2 text-[11px] font-bold uppercase tracking-[.15em] text-slate-500">Organization</span>{organizations.map((organization) => <button key={organization.id} onClick={() => { setSelectedOrganizationId(organization.id); choose(""); setQuery(""); }} aria-pressed={activeOrganizationId === organization.id} className={`rounded-full px-4 py-2 text-xs font-semibold transition ${activeOrganizationId === organization.id ? 'bg-[#242038] text-white dark:bg-white dark:text-[#242038]' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10'}`}>{organization.name}</button>)}</div>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 p-5 dark:border-white/10"><div><div className="text-sm font-semibold">Apps in {organizations.find((organization) => organization.id === activeOrganizationId)?.name || 'this organization'}</div><div className="mt-1 text-xs text-slate-500">Choose one to configure its social sources and snapshots.</div></div>
+          <div className="relative w-full sm:w-[260px]"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400"/><input aria-label="Search apps" className={`${field} pl-9`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search this organization"/></div>
         </div>
-        <div className="max-h-[680px] overflow-y-auto p-2">
-          {appOptions.map((item) => { const id = `${item.tenant_id}:${item.app_name.toLowerCase()}`; const configured = targets.some((entry) => entry.id === id); return <button key={id} onClick={() => choose(id)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition ${selected === id ? "bg-violet-100/80 dark:bg-violet-400/15" : "hover:bg-slate-100 dark:hover:bg-white/5"}`}>
-            <AdminAppIcon appName={item.app_name} iconUrl={item.icon_url} /><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{item.app_name}</div><div className="truncate text-xs text-slate-500 dark:text-slate-400">{organizations.find((org) => org.id === item.tenant_id)?.name || "Organization"}</div></div>{configured && <Check className="h-4 w-4 text-emerald-500"/>}
+        <div className="flex gap-2 overflow-x-auto p-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {appOptions.map((item) => { const id = `${item.tenant_id}:${item.app_name.toLowerCase()}`; const configured = targets.some((entry) => entry.id === id); return <button key={id} onClick={() => choose(id)} aria-pressed={selected === id} style={{ background: adminAppBackground(item.app_name) }} className={`flex min-h-[86px] w-[210px] shrink-0 items-center gap-3 rounded-[14px] border px-4 py-3 text-left shadow-sm transition hover:-translate-y-0.5 ${selected === id ? "border-violet-300 ring-2 ring-violet-400/50" : "border-white/10"}`}>
+            <AdminAppIcon appName={item.app_name} iconUrl={item.icon_url} className="h-12 w-12 shrink-0 rounded-[12px]" /><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-white">{item.app_name}</div><div className="truncate text-xs text-white/65">{configured ? "Socials configured" : "Set up socials"}</div></div>{configured && <Check className="h-4 w-4 shrink-0 text-emerald-200"/>}
           </button>; })}
-          {!appOptions.length && <div className="px-4 py-8 text-center text-sm text-slate-500">No matching apps.</div>}
+          {!appOptions.length && <div className="px-4 py-8 text-center text-sm text-slate-500">No matching apps in this organization.</div>}
         </div>
       </aside>
 
