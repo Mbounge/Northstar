@@ -13,6 +13,12 @@ type Artifact = { path: string; bytes: number; sha256: string };
 type Source = { files: Artifact[]; fingerprint: string; canonical_screens: number; audit_status: string; app_store: { stage: string; title?: string; seller?: string } };
 type Checkpoint = { stage: "uploading" | "complete"; run_id: string; tenant_id: string; app_name: string; fingerprint: string; files: Artifact[]; cursor: number; audit_status: string; started_at: string; completed_at?: string };
 
+function resolveRunId(request: Request, params: { runId?: string }): string {
+  const pathRunId = new URL(request.url).pathname.match(/^\/api\/admin\/capture-runs\/([0-9a-f-]{36})\/publication\/?$/i)?.[1];
+  if (typeof params.runId === "string" && UUID.test(params.runId)) return params.runId;
+  return pathRunId && UUID.test(pathRunId) ? pathRunId : "";
+}
+
 async function context(runId: string) {
   if (!UUID.test(runId)) return { error: NextResponse.json({ error: "Invalid run" }, { status: 400 }) };
   const session = await createSessionClient();
@@ -70,7 +76,7 @@ function validateSource(source: Source) {
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
-  const { runId } = await params;
+  const runId = resolveRunId(request, await params);
   const access = await context(runId);
   if (access.error) return access.error;
   const tenantId = new URL(request.url).searchParams.get("tenant_id") || "";
@@ -80,7 +86,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ runId: string }> }) {
-  const { runId } = await params;
+  const runId = resolveRunId(request, await params);
   const access = await context(runId);
   if (access.error) return access.error;
   const { admin } = access;
