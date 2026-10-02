@@ -5,7 +5,9 @@ export const stagedPreviewApps = [
   { name: "AntennaPod", packageName: "de.danoeh.antennapod", iconUrl: "/preview-app-icons/antennapod.png" },
 ] as const;
 
-export function permittedPreviewApps(assignments: readonly { package_name: string; tenant_id: string | null; enabled: boolean }[], tenantId: string) {
-  const packages = new Set(assignments.filter((row) => row.enabled && (row.tenant_id === null || row.tenant_id === tenantId)).map((row) => row.package_name));
-  return stagedPreviewApps.filter((app) => packages.has(app.packageName));
+export function permittedPreviewApps(tenantApps: readonly { app_name: string }[]) {
+  // The tenant's existing app catalog is the access decision. The staged list
+  // only says which of those apps has a provisioned Android preview APK.
+  const names = new Set(tenantApps.map((row) => row.app_name.trim().toLocaleLowerCase("en-US")));
+  return stagedPreviewApps.filter((app) => names.has(app.name.toLocaleLowerCase("en-US")));
 }

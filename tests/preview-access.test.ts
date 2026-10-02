@@ -2,14 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { permittedPreviewApps } from "../lib/preview/staged-apps";
 
-test("preview app assignments isolate tenants and combine with the shared pool", () => {
-  const rows = [
-    { package_name: "org.wikipedia", tenant_id: null, enabled: true },
-    { package_name: "de.danoeh.antennapod", tenant_id: "tenant-a", enabled: true },
-    { package_name: "de.danoeh.antennapod", tenant_id: "tenant-b", enabled: false },
-    { package_name: "malicious.unstaged", tenant_id: null, enabled: true },
-  ];
-  assert.deepEqual(permittedPreviewApps(rows, "tenant-a").map((app) => app.packageName), ["org.wikipedia", "de.danoeh.antennapod"]);
-  assert.deepEqual(permittedPreviewApps(rows, "tenant-b").map((app) => app.packageName), ["org.wikipedia"]);
-  assert.deepEqual(permittedPreviewApps(rows, "tenant-c").map((app) => app.packageName), ["org.wikipedia"]);
+test("only provisioned apps already assigned to the tenant can be previewed", () => {
+  const packages = (names: string[]) => permittedPreviewApps(names.map((app_name) => ({ app_name }))).map((app) => app.packageName);
+  assert.deepEqual(packages(["Wikipedia", "AntennaPod"]), ["org.wikipedia", "de.danoeh.antennapod"]);
+  assert.deepEqual(packages([" wikipedia ", "Unstaged app"]), ["org.wikipedia"]);
+  assert.deepEqual(packages(["Unstaged app"]), []);
+  assert.deepEqual(packages([]), []);
 });

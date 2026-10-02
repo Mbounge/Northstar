@@ -34,12 +34,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Preview access is not configured" }, { status: 503 });
   }
   const admin = createAdminClient(url, key, { auth: { persistSession: false } });
-  const { data: assignments, error: accessError } = await admin.from("preview_app_entitlements")
-    .select("package_name,tenant_id,enabled").or(`tenant_id.is.null,tenant_id.eq.${profile.customer_id}`);
-  if (accessError || !assignments) {
+  const { data: tenantApps, error: accessError } = await admin.from("target_apps")
+    .select("app_name").eq("tenant_id", profile.customer_id);
+  if (accessError || !tenantApps) {
     return NextResponse.json({ error: "Could not check preview access" }, { status: 503 });
   }
-  const permitted = permittedPreviewApps(assignments, profile.customer_id);
+  const permitted = permittedPreviewApps(tenantApps);
   const expiresAt = Math.floor(Date.now() / 1000) + 300;
   const payload = {
     v: 1,
