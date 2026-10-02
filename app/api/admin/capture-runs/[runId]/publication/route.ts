@@ -119,10 +119,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     }
     if (!checkpoint) throw new Error("Start a reviewed delivery first");
     if (checkpoint.stage === "complete") return NextResponse.json({ publication: checkpoint });
-    const source = (await (await fromRunner(access as { runner: string; token: string }, runId, "artifacts")).json()).artifacts as Source;
-    validateSource(source);
-    if (source.fingerprint !== checkpoint.fingerprint) throw new Error("The source evidence changed after delivery started");
     if (body.action === "step") {
+      // The checkpoint fixes the reviewed artifact list. Every transferred file is
+      // checked against its saved hash; rescanning the entire run per batch would
+      // rehash hundreds of screenshots and make a large delivery needlessly slow.
       const next = checkpoint.files.slice(checkpoint.cursor, checkpoint.cursor + 10);
       await Promise.all(next.map(async (item) => {
         const response = await fromRunner(access as { runner: string; token: string }, runId, `artifact/${item.path}`);
@@ -138,6 +138,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     }
     if (body.action === "finalize") {
       if (checkpoint.cursor !== checkpoint.files.length) throw new Error("Evidence transfer is not finished");
+      const source = (await (await fromRunner(access as { runner: string; token: string }, runId, "artifacts")).json()).artifacts as Source;
+      validateSource(source);
+      if (source.fingerprint !== checkpoint.fingerprint) throw new Error("The source evidence changed after delivery started");
       const expectedByFolder = new Map<string, Set<string>>();
       for (const item of checkpoint.files) {
         const split = item.path.lastIndexOf("/");
