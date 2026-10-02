@@ -178,16 +178,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
       if (previousError) throw new Error("Could not read tenant app record");
       const icon = `${access.url}/storage/v1/object/public/reviews/${tenantId}/${encodeURIComponent(checkpoint.app_name)}/app_store/icons/app_icon_512x512.png`;
       const category = intelligence.competitive_profile?.micro_niche || store.raw_data?.app_info?.Category || previous?.category || "Unclassified";
+      const appRecord = { tenant_id: tenantId, app_name: checkpoint.app_name,
+        category, icon_url: icon, rank: previous?.rank || "?", revenue: previous?.revenue || "?",
+        employees: previous?.employees || "?", last_scan: new Date().toISOString() };
+      // app_sessions has a foreign key to target_apps. Create the parent first,
+      // and remove it if registering the session fails on a new tenant app.
+      if (!previous) {
+        const { error: createError } = await admin.from("target_apps").insert(appRecord);
+        if (createError) throw new Error(`Could not register tenant app: ${createError.message}`);
+      }
       const { error: sessionError } = await admin.from("app_sessions").upsert({ tenant_id: tenantId,
         app_name: checkpoint.app_name, platform: "mobile", session_type: "browsing",
         ux_grade: intelligence.ux_quality_assessment?.ux_grade || "N/A", total_screens: entries.length,
         session_intel: intelligence, flows_data: flows, steps_data: steps },
       { onConflict: "tenant_id, app_name, platform, session_type" });
-      if (sessionError) throw new Error(`Could not register app flows: ${sessionError.message}`);
-      const { error: appError } = await admin.from("target_apps").upsert({ tenant_id: tenantId, app_name: checkpoint.app_name,
-        category, icon_url: icon, rank: previous?.rank || "?", revenue: previous?.revenue || "?",
-        employees: previous?.employees || "?", last_scan: new Date().toISOString() }, { onConflict: "tenant_id, app_name" });
-      if (appError) throw new Error(`Could not register tenant app: ${appError.message}`);
+      if (sessionError) {
+        if (!previous) await admin.from("target_apps").delete().eq("tenant_id", tenantId).eq("app_name", checkpoint.app_name);
+        throw new Error(`Could not register app flows: ${sessionError.message}`);
+      }
+      if (previous) {
+        const { error: appError } = await admin.from("target_apps").update(appRecord).eq("tenant_id", tenantId).ilike("app_name", checkpoint.app_name);
+        if (appError) throw new Error(`Could not update tenant app: ${appError.message}`);
+      }
       checkpoint.stage = "complete";
       checkpoint.completed_at = new Date().toISOString();
       await saveCheckpoint(admin, checkpoint);
