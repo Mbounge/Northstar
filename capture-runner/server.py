@@ -142,6 +142,13 @@ def _pipeline_status(run: dict) -> dict:
     store = _app_store_status(session, run["id"])
     result["app_store"] = store or {"stage": "not_started"}
     taxonomy = _json_file(session / "flows/flows.json")
+    def leaves(nodes):
+        for node in nodes:
+            children = node.get("children") or []
+            if children:
+                yield from leaves(children)
+            elif node.get("spine") or node.get("branches"):
+                yield node
     result["lanes"] = [{"name": lane.get("label") or lane.get("subview") or "Flow",
                         "root": root.get("label") or "App",
                         "screens": lane.get("screen_count") or 0,
@@ -154,7 +161,7 @@ def _pipeline_status(run: dict) -> dict:
                                 for screen in branch.get("screenshots") or []]
                             if isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9_.-]+\.png", Path(item).name)), None)}
                        for root in taxonomy.get("taxonomy") or [] if isinstance(root, dict)
-                       for lane in root.get("children") or [] if isinstance(lane, dict)]
+                       for lane in leaves(root.get("children") or []) if isinstance(lane, dict)]
     return result
 
 
@@ -330,7 +337,8 @@ def _generated_flow_summary(run: dict) -> dict:
         first = screen_name(indices) or next((child["first_screen"] for child in children if child["first_screen"]), None)
         return {"label": str(node.get("label") or "Flow")[:120],
                 "description": str(node.get("description") or "")[:600],
-                "screens": len(indices), "first_screen": first, "children": children}
+                "screens": len(indices), "first_screen": first, "children": children,
+                "is_nav_tab": bool(node.get("is_nav_tab"))}
 
     return {"summary": flows.get("summary") or {},
             "roots": [summarize(root) for root in roots if isinstance(root, dict)]}

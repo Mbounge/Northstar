@@ -280,12 +280,17 @@ def perform(run: dict):
         run_script("social_researcher.py", env, log, 420)
         if not roster.exists():
             raise RuntimeError("Researcher did not produce a roster")
+    people = read_json(roster, [])
+    count = sum(1 for person in people if isinstance(person, dict) and person.get("type") == "Person")
+    linkedin_target = bool(target["socials"].get("linkedin"))
+    incomplete = linkedin_target and count < 15
+    warning = ("LinkedIn people could not be verified; only the official brand profiles were saved."
+               if count == 0 else f"Only {count} of 15 targeted LinkedIn people were saved; review their identities before using the roster.") if incomplete else None
+    record(run["id"], roster_count=count, people_target=15 if linkedin_target else 0,
+           research_warning=warning)
     if run["kind"] == "research":
-        people = read_json(roster, [])
-        count = max(0, len(people) - 1)
-        blocked = bool(target["socials"].get("linkedin")) and count == 0
-        record(run["id"], status="needs_review" if blocked else "completed", finished_at=now(), roster_count=count,
-               error="LinkedIn people could not be verified; only the official brand profiles were saved." if blocked else None)
+        record(run["id"], status="needs_review" if incomplete else "completed", finished_at=now(),
+               error=warning)
         return
     run_script("social_monitor.py", env, log, 420)
     feed_path = work / "capture" / "master_feed.json"

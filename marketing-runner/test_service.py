@@ -150,7 +150,7 @@ class MarketingRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             target = service.validate_target({"tenant_id": TENANT, "app_name": "Example", "socials": {"twitter": "https://x.com/example"}})
-            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=True):
+            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "CHROME_DATA_DIR", ""), patch.object(service, "linkedin_browser_connected", return_value=True):
                 service.write_json(service.TARGETS, {target["id"]: target})
                 first = service.queue_run(target["id"], "snapshot", "manual")
                 self.assertEqual(first["status"], "queued")
@@ -226,7 +226,7 @@ class MarketingRunnerTests(unittest.TestCase):
             root = Path(directory)
             target = service.validate_target({"tenant_id": TENANT, "app_name": "Example",
                 "socials": {"linkedin": "https://www.linkedin.com/company/example/"}})
-            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "linkedin_browser_connected", return_value=True):
+            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "CHROME_DATA_DIR", ""), patch.object(service, "linkedin_browser_connected", return_value=True):
                 service.write_json(service.TARGETS, {target["id"]: target})
                 run = service.queue_run(target["id"], "research", "manual")
 
@@ -241,6 +241,29 @@ class MarketingRunnerTests(unittest.TestCase):
                 self.assertEqual(result["status"], "needs_review")
                 self.assertEqual(result["roster_count"], 0)
                 self.assertIn("could not be verified", result["error"])
+
+    def test_short_people_roster_is_reported_as_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = service.validate_target({"tenant_id": TENANT, "app_name": "Example",
+                "socials": {"linkedin": "https://www.linkedin.com/company/example/"}})
+            with patch.object(service, "ROOT", root), patch.object(service, "TARGETS", root / "targets.json"), patch.object(service, "RUNS", root / "runs.json"), patch.object(service, "CHROME_DATA_DIR", ""), patch.object(service, "linkedin_browser_connected", return_value=True):
+                service.write_json(service.TARGETS, {target["id"]: target})
+                run = service.queue_run(target["id"], "research", "manual")
+
+                def short_roster(_script, env, _log, _timeout):
+                    roster = Path(env["NORTHSTAR_MARKETING_ROSTER_FILE"])
+                    roster.parent.mkdir(parents=True, exist_ok=True)
+                    roster.write_text(json.dumps([{"name": "Example", "type": "Brand"},
+                                                  {"name": "Person One", "type": "Person"}]))
+
+                with patch.object(service, "run_script", side_effect=short_roster):
+                    service.perform({**run, "work_dir": str(root / "runs" / run["id"])})
+                result = service.read_json(service.RUNS, {})[run["id"]]
+                self.assertEqual(result["status"], "needs_review")
+                self.assertEqual(result["roster_count"], 1)
+                self.assertEqual(result["people_target"], 15)
+                self.assertIn("Only 1 of 15", result["error"])
 
 
 if __name__ == "__main__":

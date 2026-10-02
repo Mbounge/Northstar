@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from processing_pipeline import _enrichment_valid, inspect, prepare, run
+from processing_pipeline import _enrichment_valid, _reconcile_flow_roots, inspect, prepare, run
 
 
 class ProcessingPipelineTests(unittest.TestCase):
@@ -51,6 +51,26 @@ class ProcessingPipelineTests(unittest.TestCase):
                 "status": "running"}}))
             with self.assertRaisesRegex(ValueError, "must be finished"):
                 inspect(session)
+
+    def test_existing_generated_flow_roots_reconcile_without_reprocessing(self):
+        with tempfile.TemporaryDirectory() as root:
+            session, _ = self.fixture(root)
+            (session / "agent_memory.json").write_text(json.dumps({"tab_index_map": {"0": "Home"}}))
+            enriched = session / "enriched"
+            enriched.mkdir()
+            flow_file = enriched / "flows.json"
+            flow_file.write_text(json.dumps({"summary": {"total_root_flows": 3}, "taxonomy": [
+                {"label": "Home", "screens": [1], "children": []},
+                {"label": "Search Panel", "screens": [2], "children": []},
+                {"label": "Search Panel", "screens": [3], "children": []},
+            ]}))
+            _reconcile_flow_roots(session)
+            first = flow_file.read_bytes()
+            roots = json.loads(first)["taxonomy"]
+            self.assertEqual([node["label"] for node in roots], ["Home", "Other app surfaces"])
+            self.assertEqual(roots[1]["children"][0]["screens"], [2, 3])
+            _reconcile_flow_roots(session)
+            self.assertEqual(flow_file.read_bytes(), first)
 
     def test_changed_manifest_cannot_reuse_previous_processing_checkpoints(self):
         with tempfile.TemporaryDirectory() as root:

@@ -7,6 +7,7 @@ import os
 import time
 import re
 import random
+from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 from google import genai
 from google.genai import types
@@ -209,6 +210,29 @@ class SocialResearcher:
     # ------------------------------------------------------------------
     # LINKEDIN EMPLOYEE PARSING HELPERS
     # ------------------------------------------------------------------
+    def linkedin_person_url(self, value):
+        """Accept only a direct LinkedIn member URL, never a company/search link."""
+        try:
+            parsed = urlparse(value or "")
+            parts = [part for part in parsed.path.split("/") if part]
+            if (parsed.scheme != "https" or parsed.hostname not in
+                    {"linkedin.com", "www.linkedin.com"} or len(parts) != 2
+                    or parts[0] != "in" or not parts[1]):
+                return None
+            return f"https://www.linkedin.com/in/{parts[1]}"
+        except (TypeError, ValueError):
+            return None
+
+    def person_name_matches_page(self, candidate, page_title):
+        """A captured profile must identify the selected person, not a nearby card."""
+        def tokens(value):
+            value = re.split(r"\s*[|·–-]\s*LinkedIn", value or "", 1)[0]
+            return [part.casefold() for part in re.findall(r"[\wÀ-ÿ]+", value)
+                    if len(part) > 1 and part.casefold() not in {"linkedin", "profile"}]
+        name = tokens(candidate)
+        title = tokens(page_title)
+        return len(name) >= 2 and all(part in title for part in name[:2])
+
     def score_employee_text(self, text):
         """Heuristic fallback when the AI returns fewer than TARGET_PEOPLE_COUNT."""
         t = (text or "").lower()
@@ -238,6 +262,7 @@ class SocialResearcher:
         junk = re.compile(r"^(1st|2nd|3rd|premium|follow|connect|message|view|open|see more|shared connection|\d+[\d,]* followers?)", re.I)
         clean = [p for p in parts if not junk.search(p)]
         name = clean[0] if clean else "Unknown"
+        name = re.sub(r"\s*[·|]\s*(?:1st|2nd|3rd)\+?.*$", "", name, flags=re.I).strip()
         role = "Unknown"
         for part in clean[1:]:
             if len(part) > 3 and not re.search(r"associated members|employees|followers", part, re.I):
@@ -255,7 +280,8 @@ class SocialResearcher:
         seen_urls = {c.get("profile_url") for c in existing if c.get("profile_url")}
         candidates = []
         for url, text in unique_employees.items():
-            if url in seen_urls:
+            url = self.linkedin_person_url(url)
+            if not url or url in seen_urls:
                 continue
             parsed = self.parse_employee_card(url, text)
             if parsed["name"] == "Unknown":
@@ -372,7 +398,10 @@ class SocialResearcher:
         }
         """
         raw_employees = await page.evaluate(js_extract)
-        unique_employees = {emp['url']: emp['text'] for emp in raw_employees}
+        unique_employees = {
+            url: emp['text'] for emp in raw_employees
+            if (url := self.linkedin_person_url(emp.get('url')))
+        }
         print(f"   ✅ Found {len(unique_employees)} visible employees.")
 
         if not unique_employees:
@@ -401,8 +430,10 @@ class SocialResearcher:
         merged = []
         seen_urls = set()
         for c in ai_candidates:
-            url = c.get("profile_url")
-            if url and url not in seen_urls:
+            if not isinstance(c, dict):
+                continue
+            url = self.linkedin_person_url(c.get("profile_url"))
+            if url in unique_employees and url not in seen_urls:
                 merged.append({
                     "name": c.get("name", "Unknown"),
                     "role": c.get("role", "Unknown"),
@@ -444,6 +475,10 @@ class SocialResearcher:
                 await self.fast_goto(page, url)
                 await self.human_delay(1.5, 3.0)
                 await self.simulate_human(page)
+                page_title = await page.title()
+                if not self.person_name_matches_page(name, page_title):
+                    print(f"      ⚠️ Profile identity did not match selected card; skipping {name}.")
+                    continue
 
                 safe_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
                 person_dir = f"{self.profiles_dir}/{safe_name}"

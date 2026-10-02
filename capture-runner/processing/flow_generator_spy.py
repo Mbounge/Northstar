@@ -39,6 +39,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Set, Tuple
 from openai_processing_client import ProcessingClient, MODEL, environment_key
+from navigation_taxonomy import normalize_navigation_roots
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger("TeardownFlowGen")
@@ -338,7 +339,13 @@ class TeardownFlowGenerator:
                     **lane_metadata,
                 })
             else:
-                if parent in parent_map:
+                if parent in parent_map or any(item["parent_tab"] == parent and item.get("sub_view") for item in skeleton):
+                    if parent not in parent_map:
+                        parent_map[parent] = {
+                            "label": parent, "id": self._slugify(parent),
+                            "description": f"The {parent} section of {self.app_name}",
+                            "screenshot_steps": [], "sub_views": [], "canonical_lanes": [],
+                        }
                     p = parent_map[parent]
                     p["screenshot_steps"].extend(entry["screenshot_steps"])
                     lane_metadata = {
@@ -977,6 +984,7 @@ OUTPUT JSON:
 
         # Keep manifest root tabs fixed. AI may organize and label within each tab.
         taxonomy, changes = await self._validate_and_refine(taxonomy)
+        taxonomy = normalize_navigation_roots(taxonomy, self.agent_memory)
         assigned_steps = set()
         self._collect_all_screens(taxonomy, assigned_steps)
         if assigned_steps != expected_steps:

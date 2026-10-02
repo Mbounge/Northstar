@@ -23,6 +23,7 @@ PROCESSING = Path(__file__).with_name("processing")
 sys.path.insert(0, str(PROCESSING))
 from flow_maker_spy import (build_and_save_taxonomy_json,
                             build_deterministic_structures, generate_html)
+from navigation_taxonomy import normalize_navigation_roots
 
 FINISHED = {"complete", "finished_early"}
 
@@ -152,17 +153,17 @@ def prepare(session: Path) -> dict:
     taxonomy = out / "flows.json"
     pending = out / ".flows.json.pending"
     build_and_save_taxonomy_json(info["manifest"].get("app") or session.name,
-                                 info["flows"], pending)
+                                 info["flows"], pending,
+                                 _read(session / "agent_memory.json"))
     generated = _read(pending)
-    generated_refs = {
-        Path(path).name
-        for root in generated.get("taxonomy") or []
-        for lane in root.get("children") or []
-        for path in ((lane.get("spine") or []) + [
-            item for branch in lane.get("branches") or []
-            for item in branch.get("screenshots") or []
-        ])
-    }
+    generated_refs = set()
+    def collect_refs(nodes):
+        for node in nodes:
+            generated_refs.update(Path(path).name for path in node.get("spine") or [])
+            for branch in node.get("branches") or []:
+                generated_refs.update(Path(path).name for path in branch.get("screenshots") or [])
+            collect_refs(node.get("children") or [])
+    collect_refs(generated.get("taxonomy") or [])
     if generated_refs != _flow_refs(info["flows"]):
         pending.unlink(missing_ok=True)
         raise ValueError("Saved taxonomy omitted canonical screenshot evidence")
@@ -234,6 +235,20 @@ def _flows_valid(session: Path, expected: set[str]) -> bool:
     return assigned == set(range(1, len(expected) + 1))
 
 
+def _reconcile_flow_roots(session: Path) -> None:
+    """Update navigation labels without rerunning expensive screen analysis."""
+    path = session / "enriched/flows.json"
+    result = _read(path)
+    roots = result.get("taxonomy")
+    if not isinstance(roots, list) or not roots:
+        return
+    normalized = normalize_navigation_roots(roots, _read(session / "agent_memory.json"))
+    if normalized != roots:
+        result["taxonomy"] = normalized
+        result.setdefault("summary", {})["total_root_flows"] = len(normalized)
+        _atomic(path, result)
+
+
 def run(session: Path) -> dict:
     session = session.resolve()
     info = inspect(session)
@@ -266,6 +281,7 @@ def run(session: Path) -> dict:
                                         stderr=subprocess.STDOUT, check=False)
                 if result.returncode or not _flows_valid(session, expected):
                     raise RuntimeError("Generated flow taxonomy omitted canonical screens")
+            _reconcile_flow_roots(session)
         if _evidence_sha256(_canonical_refs(info["manifest"], session)) != info["source_screens_sha256"]:
             raise RuntimeError("Canonical screenshots changed during processing")
         return _status(session, stage="ready_for_review", error=None,

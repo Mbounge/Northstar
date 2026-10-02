@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
+from navigation_taxonomy import normalize_navigation_roots
 
 try:
     from PIL import Image
@@ -388,7 +389,8 @@ def copy_screenshots_figma(flows: List[dict], out_dir: Path) -> List[dict]:
 # EXPORT DUAL-COMPATIBLE V1/V2 SCHEMAS
 # =============================================================================
 
-def build_and_save_taxonomy_json(app_name: str, flows: List[dict], out_path: Path):
+def build_and_save_taxonomy_json(app_name: str, flows: List[dict], out_path: Path,
+                                 agent_memory: dict | None = None):
     """
     Constructs and exports a flows.json that strictly respects the legacy V1 taxonomy
     format while containing full V2 Spine and Branches parallel lanes in metadata.
@@ -463,7 +465,7 @@ def build_and_save_taxonomy_json(app_name: str, flows: List[dict], out_path: Pat
         r_node["children"].sort(key=lambda c: (0 if c["is_pristine"] else 1, c["screens"][0] if c["screens"] else 0))
         taxonomy_list.append(r_node)
 
-    taxonomy_list.sort(key=lambda r: r["nav_order"])
+    taxonomy_list = normalize_navigation_roots(taxonomy_list, agent_memory)
 
     # Save legacy/dual flows.json
     output_payload = {
