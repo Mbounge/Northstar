@@ -20,11 +20,13 @@ async function administrator() {
   return { admin: createAdminClient(url, key, { auth: { persistSession: false } }) };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const tenantId = new URL(request.url).searchParams.get("tenant_id");
+  if (!tenantId || !UUID.test(tenantId)) return NextResponse.json({ error: "Select an organization" }, { status: 400 });
   const access = await administrator();
   if (access.error) return access.error;
   const { data, error } = await access.admin.from("preview_app_entitlements")
-    .select("package_name,tenant_id,enabled");
+    .select("package_name,tenant_id,enabled").or(`tenant_id.is.null,tenant_id.eq.${tenantId}`);
   if (error) return NextResponse.json({ error: "Preview access has not been configured in the database" }, { status: 503 });
   return NextResponse.json({ apps: stagedPreviewApps, assignments: data }, { headers: { "Cache-Control": "no-store" } });
 }

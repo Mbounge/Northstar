@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Globe2, Loader2, LockKeyhole, RefreshCw } from "lucide-react";
 import { AdminAppIcon } from "./admin-app-icon";
 
@@ -13,20 +13,25 @@ export function PreviewAccessPanel({ tenantId, tenantName }: { tenantId: string;
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
+  const requestNumber = useRef(0);
 
   const refresh = useCallback(async () => {
+    if (!tenantId) return;
+    const request = ++requestNumber.current;
     setLoading(true);
     try {
-      const response = await fetch("/api/admin/preview-access", { cache: "no-store" });
+      const response = await fetch(`/api/admin/preview-access?tenant_id=${tenantId}`, { cache: "no-store" });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not load preview access");
-      setApps(result.apps);
-      setAssignments(result.assignments);
-      setError("");
+      if (request === requestNumber.current) {
+        setApps(result.apps);
+        setAssignments(result.assignments);
+        setError("");
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not load preview access");
-    } finally { setLoading(false); }
-  }, []);
+      if (request === requestNumber.current) setError(cause instanceof Error ? cause.message : "Could not load preview access");
+    } finally { if (request === requestNumber.current) setLoading(false); }
+  }, [tenantId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
