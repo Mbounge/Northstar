@@ -123,7 +123,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
       // The checkpoint fixes the reviewed artifact list. Every transferred file is
       // checked against its saved hash; rescanning the entire run per batch would
       // rehash hundreds of screenshots and make a large delivery needlessly slow.
-      const next = checkpoint.files.slice(checkpoint.cursor, checkpoint.cursor + 10);
+      const next = checkpoint.files.slice(checkpoint.cursor, checkpoint.cursor + 20);
       await Promise.all(next.map(async (item) => {
         const response = await fromRunner(access as { runner: string; token: string }, runId, `artifact/${item.path}`);
         const bytes = Buffer.from(await response.arrayBuffer());
