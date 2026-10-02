@@ -18,7 +18,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from capture_progress import build_progress
 
@@ -261,8 +261,8 @@ def _publication_files(run: dict) -> dict:
             raise ValueError("Invalid enriched screenshot entry")
         screenshot = Path(str(item.get("screenshot") or "")).name
         enriched = str(item.get("enriched_file") or "")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+\.png", screenshot) or not re.fullmatch(
-                r"[A-Za-z0-9_.-]+\.json", enriched):
+        if not re.fullmatch(r"[\w.-]+\.png", screenshot) or not re.fullmatch(
+                r"[\w.-]+\.json", enriched):
             raise ValueError("Unsafe screenshot or analysis path")
         files.add("browsing/screenshots/" + screenshot)
         files.add("browsing/enriched/" + enriched)
@@ -746,7 +746,7 @@ class Handler(BaseHTTPRequestHandler):
             if (len(parts) >= 6 and parts[3:5] == ["pipeline", "artifact"]):
                 try:
                     allowed = {item["path"] for item in _publication_files(run)["files"]}
-                    relative = "/".join(parts[5:])
+                    relative = "/".join(unquote(part) for part in parts[5:])
                     if relative not in allowed:
                         return self._send(404, {"error": "Artifact not found"})
                     path = (_run_dir(parts[2]) / relative.removeprefix("browsing/")).resolve() if relative.startswith("browsing/") else (_run_dir(parts[2]) / relative).resolve()

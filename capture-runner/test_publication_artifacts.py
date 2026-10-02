@@ -61,6 +61,18 @@ class PublicationArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing publication artifact"):
             server._publication_files(self.run)
 
+    def test_unicode_article_name_is_safe_publication_evidence(self):
+        self.fixture()
+        old = "step_01"
+        new = "choir_of_the_málaga_cathedral"
+        (self.session / f"screenshots/{old}.png").rename(self.session / f"screenshots/{new}.png")
+        (self.session / f"enriched/{old}_enriched.json").rename(self.session / f"enriched/{new}_enriched.json")
+        self.write("enriched/enriched_manifest.json", {"enriched_screenshots": [
+            {"screenshot": f"{new}.png", "enriched_file": f"{new}_enriched.json"}]})
+        paths = {item["path"] for item in server._publication_files(self.run)["files"]}
+        self.assertIn(f"browsing/screenshots/{new}.png", paths)
+        self.assertIn(f"browsing/enriched/{new}_enriched.json", paths)
+
     def test_original_agent_manifest_and_competitor_icons_are_published(self):
         self.fixture()
         (self.session / "app_store/itunes_lookup.json").unlink()
