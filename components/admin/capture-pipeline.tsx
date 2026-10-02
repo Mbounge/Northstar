@@ -33,6 +33,7 @@ function flowDescendants(root: GeneratedFlow): GeneratedFlow[] {
 export function CapturePipeline({ runId, appName, packageName, appStoreRequired, organizations, organizationId, onShowGaps }: { runId: string; appName: string; packageName: string; appStoreRequired: boolean; organizations: Organization[]; organizationId: string; onShowGaps: () => void }) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [error, setError] = useState("");
+  const [statusError, setStatusError] = useState("");
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -56,12 +57,12 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
       const response = await fetch(`${api}/${runId}/pipeline`, { cache: "no-store" });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "Could not load processing status");
-      if (currentRunId.current === runId) { setPipeline(body.pipeline); setError(""); }
-    } catch (cause) { if (currentRunId.current === runId) setError(cause instanceof Error ? cause.message : "Could not load processing status"); }
+      if (currentRunId.current === runId) { setPipeline(body.pipeline); setStatusError(""); }
+    } catch (cause) { if (currentRunId.current === runId) setStatusError(cause instanceof Error ? cause.message : "Could not load processing status"); }
   }, [runId]);
 
   useEffect(() => {
-    setPipeline(null); setError(""); setExpanded(false); setShowLog(false); setLogs([]); setShowStoreLog(false); setStoreLogs([]); setStoreQuery(appName); setStoreCandidates([]); setTenantId(organizationId); setPublication(null); setGenerated(null); setGeneratedError("");
+    setPipeline(null); setError(""); setStatusError(""); setExpanded(false); setShowLog(false); setLogs([]); setShowStoreLog(false); setStoreLogs([]); setStoreQuery(appName); setStoreCandidates([]); setTenantId(organizationId); setPublication(null); setGenerated(null); setGeneratedError("");
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
@@ -203,6 +204,7 @@ export function CapturePipeline({ runId, appName, packageName, appStoreRequired,
   const hasMap = Boolean(pipeline?.lanes?.length);
   const showGaps = pipeline?.audit_status && pipeline.audit_status !== "complete";
   return <div className="space-y-5 text-[#24212e] dark:text-[#f4f1fa]">
+    {statusError && <div role="alert" className="flex gap-2 rounded-[12px] border border-rose-500/20 bg-rose-500/[.08] px-4 py-3 text-[13px] leading-5 text-rose-700 dark:text-rose-200"><CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />{statusError}</div>}
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div><div className="text-[11px] font-bold uppercase tracking-[.16em] text-violet-700 dark:text-violet-300">Evidence pipeline</div><h3 className="m-0 mt-1 text-[24px] font-semibold tracking-[-.04em]">From capture to flow map</h3><p className="m-0 mt-1 max-w-2xl text-[13px] leading-5 text-[#746d80] dark:text-[#b8b0c5]">Review the saved evidence for {appName}, then prepare its canonical screen lanes. Processing reads those lanes and keeps the original capture intact.</p></div>
       <button type="button" onClick={() => void refresh()} aria-label="Refresh pipeline" className="rounded-[10px] border border-black/10 p-2.5 text-[#6d6479] transition hover:bg-black/[.04] dark:border-white/15 dark:text-[#c9bfd8] dark:hover:bg-white/[.06]"><RefreshCw className="h-4 w-4" /></button>

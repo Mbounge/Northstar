@@ -2,25 +2,19 @@ import { createHash } from "node:crypto";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/admin/uuid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const APP = /^[\p{L}\p{N}][\p{L}\p{N} ._&+()-]{0,79}$/u;
 type Artifact = { path: string; bytes: number; sha256: string };
 type Source = { files: Artifact[]; fingerprint: string; canonical_screens: number; audit_status: string; app_store: { stage: string; title?: string; seller?: string } };
 type Checkpoint = { stage: "uploading" | "complete"; run_id: string; tenant_id: string; app_name: string; fingerprint: string; files: Artifact[]; cursor: number; audit_status: string; started_at: string; completed_at?: string };
 
-function resolveRunId(request: Request, params: { runId?: string }): string {
-  const pathRunId = new URL(request.url).pathname.match(/^\/api\/admin\/capture-runs\/([0-9a-f-]{36})\/publication\/?$/i)?.[1];
-  if (typeof params.runId === "string" && UUID.test(params.runId)) return params.runId;
-  return pathRunId && UUID.test(pathRunId) ? pathRunId : "";
-}
-
 async function context(runId: string) {
-  if (!UUID.test(runId)) return { error: NextResponse.json({ error: "Invalid run" }, { status: 400 }) };
+  if (!isUuid(runId)) return { error: NextResponse.json({ error: "Invalid run" }, { status: 400 }) };
   const session = await createSessionClient();
   const { data: { user } } = await session.auth.getUser();
   if (!user) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
@@ -76,24 +70,24 @@ function validateSource(source: Source) {
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
-  const runId = resolveRunId(request, await params);
+  const { runId } = await params;
   const access = await context(runId);
   if (access.error) return access.error;
   const tenantId = new URL(request.url).searchParams.get("tenant_id") || "";
-  if (!UUID.test(tenantId)) return NextResponse.json({ error: "Choose an organization" }, { status: 400 });
+  if (!isUuid(tenantId)) return NextResponse.json({ error: "Choose an organization" }, { status: 400 });
   const checkpoint = await readCheckpoint(access.admin, runId, tenantId);
   return NextResponse.json({ publication: checkpoint }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ runId: string }> }) {
-  const runId = resolveRunId(request, await params);
+  const { runId } = await params;
   const access = await context(runId);
   if (access.error) return access.error;
   const { admin } = access;
   let body: Record<string, unknown>;
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid request" }, { status: 400 }); }
   const tenantId = body.tenant_id;
-  if (typeof tenantId !== "string" || !UUID.test(tenantId)) return NextResponse.json({ error: "Choose an organization" }, { status: 400 });
+  if (!isUuid(tenantId)) return NextResponse.json({ error: "Choose an organization" }, { status: 400 });
   try {
     let checkpoint = await readCheckpoint(admin, runId, tenantId);
     if (body.action === "start") {
