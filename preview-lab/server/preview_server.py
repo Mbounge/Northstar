@@ -168,6 +168,7 @@ async def create_session(request):
 
 async def end_session(request):
     check_origin(request)
+    check_broker(request)
     try:
         payload = await request.json()
     except (ValueError, TypeError):

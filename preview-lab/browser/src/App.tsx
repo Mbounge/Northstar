@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import './style.css';
 
 type PreviewMessage =
@@ -20,6 +20,7 @@ const parentOrigins = new Set(['https://www.usenorthstar.ai', 'http://127.0.0.1:
 const asset = (name: string) => `${embedded ? '/preview/' : '/'}${name}`;
 const brokerUrl = () => embedded ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/preview/api/allocate` : 'ws://127.0.0.1:18082/allocate';
 const catalogUrl = () => embedded ? `${location.origin}/preview/api/catalog` : 'http://127.0.0.1:18082/catalog';
+const releaseUrl = () => embedded ? `${location.origin}/preview/api/release` : 'http://127.0.0.1:18082/release';
 const streamUrl = (port: number) => embedded
   ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/preview/worker/${port === 18081 ? '2' : '1'}/stream`
   : `ws://127.0.0.1:${port}/stream`;
@@ -75,6 +76,7 @@ function allocate(): Promise<Assignment> {
 
 function PreviewApp() {
   const socket = useRef<WebSocket | null>(null);
+  const assignmentRef = useRef<Assignment | null>(pooled ? savedAssignment() : null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const pressed = useRef(false);
   const lastPointer = useRef({ x: 540, y: 1200 });
@@ -109,6 +111,26 @@ function PreviewApp() {
   const [appIcon, setAppIcon] = useState<string>(pooled ? requestedApp.icon : directWorker === '2' ? 'antennapod.png' : 'wikipedia.png');
   const [deviceLabel, setDeviceLabel] = useState(pooled ? '' : directWorker);
   const [unsupported, setUnsupported] = useState(false);
+
+  const markEnded = useCallback(() => {
+    endingRef.current = false;
+    endedRef.current = true;
+    activeAssignment = null;
+    assignmentRef.current = null;
+    if (!embedded) sessionStorage.removeItem(pooled ? assignmentKey : sessionKey);
+    setEnding(false);
+    setEnded(true);
+    setHasFrame(false);
+    setFrameRate(null);
+    setLatencyMs(null);
+    const context = canvas.current?.getContext('2d');
+    if (context) {
+      context.fillStyle = '#f9f9f9';
+      context.fillRect(0, 0, 540, 1200);
+    }
+    setError('');
+    setNotice('Session ended. The device is returning to a clean state.');
+  }, []);
 
   useEffect(() => {
     document.title = `${appName} live preview · Northstar`;
@@ -179,6 +201,7 @@ function PreviewApp() {
         if (pooled) {
           assignment = await allocate();
           if (disposed) return;
+          assignmentRef.current = assignment;
           setWaitingForDevice(false);
           setAppName(assignment.app);
           setAppIcon(assignment.icon);
@@ -217,22 +240,7 @@ function PreviewApp() {
               if (typeof message.app === 'string') setAppName(message.app);
             }
             if (message.type === 'session_ending') {
-              endingRef.current = false;
-              endedRef.current = true;
-              activeAssignment = null;
-              if (!embedded) sessionStorage.removeItem(pooled ? assignmentKey : sessionKey);
-              setEnding(false);
-              setEnded(true);
-              setHasFrame(false);
-              setFrameRate(null);
-              setLatencyMs(null);
-              const context = canvas.current?.getContext('2d');
-              if (context) {
-                context.fillStyle = '#f9f9f9';
-                context.fillRect(0, 0, 540, 1200);
-              }
-              setError('');
-              setNotice('Session ended. The device is returning to a clean state.');
+              markEnded();
             }
             if (message.type === 'error') {
               const occupied = pooled && typeof message.message === 'string' && message.message.includes('in use');
@@ -301,7 +309,7 @@ function PreviewApp() {
       socket.current?.close();
       socket.current = null;
     };
-  }, [instance, ended]);
+  }, [instance, ended, markEnded]);
 
   useEffect(() => () => {
     if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
@@ -442,9 +450,30 @@ function PreviewApp() {
     setInstance(value => value + 1);
   };
 
-  const endSession = () => {
-    const token = pooled ? savedAssignment()?.token : sessionStorage.getItem(sessionKey);
-    if (!token) return;
+  const endSession = async () => {
+    const assignment = pooled ? assignmentRef.current : null;
+    const token = assignment?.token ?? (pooled ? null : sessionStorage.getItem(sessionKey));
+    if (!token || ending) return;
+    if (assignment) {
+      endingRef.current = true;
+      setEnding(true);
+      setError('');
+      try {
+        const response = await fetch(releaseUrl(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worker: assignment.worker, token }),
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error('The device could not confirm its reset. Try again when the connection returns.');
+        markEnded();
+      } catch (cause) {
+        endingRef.current = false;
+        setEnding(false);
+        setError(cause instanceof Error ? cause.message : 'The device could not confirm its reset.');
+      }
+      return;
+    }
     if (socket.current?.readyState === WebSocket.OPEN) {
       endingRef.current = true;
       setEnding(true);
@@ -481,7 +510,7 @@ function PreviewApp() {
           <button type="button" disabled={!interactive} onClick={() => send({ type: 'key', key: 'GoHome' })}>⌂ <span>Device Home</span></button>
           <button type="button" onClick={() => setExpanded(value => !value)}>{expanded ? '↙' : '↗'} <span>{expanded ? 'Fit view' : 'Enlarge'}</span></button>
           <button type="button" onClick={ended ? () => { endedRef.current = false; setEnded(false); setError(''); setNotice(''); setInstance(value => value + 1); } : reconnect}>↻ <span>{ended ? 'Start preview' : 'Reconnect'}</span></button>
-          {!ended && <button type="button" className="end-session" disabled={!interactive || ending} onClick={endSession}>End session</button>}
+          {!ended && <button type="button" className="end-session" disabled={ending || (pooled ? !assignmentRef.current : !interactive)} onClick={() => void endSession()}>{ending ? 'Ending…' : 'End session'}</button>}
           {pooled && ended && !embedded && <a className="pool-link" href="?pool=1">Choose another app</a>}
         </div>
         <div className="viewer-guidance"><p className="hint">Tap, swipe or scroll inside the phone. Click it first to type. If the app asks you to sign in, use your own account; this device is wiped after your session.</p>

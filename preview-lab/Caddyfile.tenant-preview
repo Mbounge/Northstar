@@ -8,6 +8,7 @@ capture.49-12-126-233.sslip.io {
     }
     handle_path /preview/* {
         header Content-Security-Policy "frame-ancestors https://www.usenorthstar.ai http://127.0.0.1:3000 http://localhost:3000"
+        header Cache-Control "no-store"
         header Referrer-Policy "no-referrer"
         root * /srv/northstar-preview
         file_server

@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
@@ -186,6 +187,52 @@ async def catalog_preflight(request):
     })
 
 
+async def release_session(request):
+    """Release a lease even when its video WebSocket cannot reconnect.
+
+    The unpredictable worker token is the capability to end this session. A
+    five-minute catalog grant must not prevent a longer-running visitor from
+    cleaning up their own device.
+    """
+    origin = checked_origin(request)
+    try:
+        payload = await request.json()
+    except (ValueError, TypeError):
+        payload = None
+    worker_id = payload.get("worker") if isinstance(payload, dict) else None
+    token = payload.get("token") if isinstance(payload, dict) else None
+    if not isinstance(worker_id, str) or not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{40,100}", token):
+        raise web.HTTPBadRequest(text="Invalid preview session")
+    worker = next((item for item in request.app["workers"] if item["id"] == worker_id), None)
+    if worker is None:
+        raise web.HTTPNotFound(text="Preview device not found")
+    headers = {"Authorization": "Bearer " + request.app["worker_secret"].decode("ascii")} if request.app["worker_secret"] else {}
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=8)) as client:
+            async with client.post(f"http://127.0.0.1:{worker['port']}/sessions/end", json={"token": token}, headers=headers) as response:
+                if response.status != 200:
+                    raise web.HTTPConflict(text="The device could not confirm the reset")
+    except (ClientError, OSError, asyncio.TimeoutError):
+        raise web.HTTPServiceUnavailable(text="The device is reconnecting") from None
+    response_headers = {"Cache-Control": "no-store", "Vary": "Origin"}
+    if origin is not None:
+        response_headers["Access-Control-Allow-Origin"] = origin
+    return web.json_response({"ending": True}, headers=response_headers)
+
+
+async def release_preflight(request):
+    origin = checked_origin(request)
+    if origin is None:
+        raise web.HTTPForbidden(text="Preview origin required")
+    return web.Response(status=204, headers={
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "POST",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "600",
+        "Vary": "Origin",
+    })
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--workers", type=Path, required=True)
@@ -211,6 +258,8 @@ def main():
     app.router.add_get("/health", health)
     app.router.add_get("/catalog", catalog)
     app.router.add_options("/catalog", catalog_preflight)
+    app.router.add_post("/release", release_session)
+    app.router.add_options("/release", release_preflight)
     web.run_app(app, host="127.0.0.1", port=args.port, access_log=None)
 
 
