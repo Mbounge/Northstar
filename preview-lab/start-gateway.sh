@@ -61,6 +61,21 @@ if [[ "$("$adb" -s "$device" shell getprop sys.boot_completed 2>/dev/null || tru
   exit 1
 fi
 
+# Android can report boot_completed before PackageManager accepts installs.
+# A wiped guest must finish bringing that service up before we stage the app.
+package_manager_ready=false
+for attempt in {1..45}; do
+  if "$adb" -s "$device" shell pm path com.android.vending 2>/dev/null | grep -q '^package:'; then
+    package_manager_ready=true
+    break
+  fi
+  sleep 2
+done
+if [[ "$package_manager_ready" != true ]]; then
+  echo "Preview emulator package manager did not become ready" >&2
+  exit 1
+fi
+
 account_dump="$("$adb" -s "$device" shell dumpsys account)"
 account_count="$(grep -c 'Account {' <<< "$account_dump" || true)"
 if [[ "$account_count" != "0" ]]; then
@@ -68,7 +83,18 @@ if [[ "$account_count" != "0" ]]; then
   exit 1
 fi
 
-python3 /opt/northstar/preview-lab/app_catalog.py install "$package" --serial "$device"
+installed=false
+for attempt in {1..3}; do
+  if python3 /opt/northstar/preview-lab/app_catalog.py install "$package" --serial "$device"; then
+    installed=true
+    break
+  fi
+  sleep 5
+done
+if [[ "$installed" != true ]]; then
+  echo "Preview app installation failed after retry" >&2
+  exit 1
+fi
 python3 /opt/northstar/preview-lab/prepare_headless_input.py --ensure "$device"
 # This emulator has no Bluetooth packet streamer. Its Google Bluetooth process
 # repeatedly crashes on cold boots and covers the app with an error dialog.

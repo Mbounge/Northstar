@@ -57,6 +57,12 @@ def stage(package: str, serial: str) -> None:
             encoding="utf-8",
         )
         os.chmod(temporary_path, 0o700)
+        # Operators may provision as root, while the isolated preview gateway
+        # runs as the catalog owner. Keep each package private but readable by
+        # that gateway after the atomic rename.
+        if os.geteuid() == 0:
+            catalog_owner = CATALOG.stat()
+            os.chown(temporary_path, catalog_owner.st_uid, catalog_owner.st_gid)
         temporary_path.rename(target)
     print(f"Staged {package}: {len(splits)} APK file(s)")
 

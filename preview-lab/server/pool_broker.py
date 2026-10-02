@@ -126,7 +126,10 @@ async def allocate(request):
         last_position = 0
         deadline = time.monotonic() + 240
         try:
-            async with ClientSession(timeout=ClientTimeout(total=30)) as client:
+            # Switching to a newly staged app can require uninstall, split-APK
+            # verification/install, and first launch. Keep the broker request
+            # alive through that work so it does not abandon an acquired lease.
+            async with ClientSession(timeout=ClientTimeout(total=180)) as client:
                 while not reader.done() and not ws.closed and time.monotonic() < deadline:
                     position = queue.index(ticket) + 1
                     if position != last_position:
