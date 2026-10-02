@@ -27,6 +27,7 @@ APP_CATALOG = Path(os.environ.get("PREVIEW_APP_CATALOG", "/opt/northstar/preview
 BROKER_SECRET_FILE = os.environ.get("PREVIEW_BROKER_SECRET_FILE")
 PORT = int(os.environ.get("PREVIEW_PORT", "18080"))
 RESET_REQUEST = Path(os.environ.get("PREVIEW_RESET_REQUEST", "/var/lib/northstar-preview/reset-request"))
+LAST_PACKAGE = Path(os.environ.get("PREVIEW_STATE_DIR", "/var/lib/northstar-preview")) / "last-package"
 ALLOWED_ORIGINS = {origin.strip() for origin in os.environ.get("PREVIEW_ALLOWED_ORIGINS", "http://127.0.0.1:5173").split(",") if origin.strip()}
 FRAME_WIDTH = 540
 FRAME_HEIGHT = 1200
@@ -90,6 +91,15 @@ async def provision_app(app, package):
 async def reset_device(app):
     for viewer in tuple(app["stream_state"]["viewers"]):
         await viewer.close(code=1001, message=b"Session ended")
+    package = app["runtime"]["active_package"]
+    if package in ALLOWED_PACKAGES:
+        try:
+            temporary = LAST_PACKAGE.with_suffix(".tmp")
+            temporary.write_text(package + "\n", encoding="ascii")
+            temporary.replace(LAST_PACKAGE)
+        except OSError:
+            # A warm-app hint must never prevent the clean device reset.
+            logging.warning("Could not retain preview package for next clean boot")
     # The emulator console kill command can succeed without stopping this AVD.
     # A root-owned path unit observes only this request file and restarts only
     # the dedicated preview emulator service, which boots with -wipe-data.

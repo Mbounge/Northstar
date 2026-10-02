@@ -5,7 +5,16 @@ emulator_service="${PREVIEW_EMULATOR_SERVICE:-northstar-preview-emulator.service
 device="${PREVIEW_DEVICE:-emulator-5560}"
 package="${PREVIEW_PACKAGE:-org.wikipedia}"
 state_dir="${PREVIEW_STATE_DIR:-/var/lib/northstar-preview}"
+if [[ -r "$state_dir/last-package" ]]; then
+  last_package=""
+  IFS= read -r last_package < "$state_dir/last-package" || true
+  if [[ "$last_package" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] &&
+     [[ ",${PREVIEW_ALLOWED_PACKAGES:-$package}," == *",$last_package,"* ]]; then
+    package="$last_package"
+  fi
+fi
 export PREVIEW_DEVICE="$device"
+export PREVIEW_PACKAGE="$package"
 export PREVIEW_APP_NAME="${PREVIEW_APP_NAME:-Wikipedia}"
 export PREVIEW_PORT="${PREVIEW_PORT:-18080}"
 export PREVIEW_RESET_REQUEST="$state_dir/reset-request"
