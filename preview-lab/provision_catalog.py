@@ -51,6 +51,9 @@ def publish_json(path: Path, data: list[dict]) -> None:
             Path(output.name).unlink(missing_ok=True)
             raise
     os.chmod(temporary, 0o644)
+    if os.geteuid() == 0:
+        owner = path.parent.stat()
+        os.chown(temporary, owner.st_uid, owner.st_gid)
     temporary.replace(path)
 
 
@@ -58,7 +61,12 @@ def provision(package: str, name: str, serial: str, icon_source: Path | None = N
     if not PACKAGE_RE.fullmatch(package) or not NAME_RE.fullmatch(name) or name != name.strip():
         raise ValueError("Invalid preview package or app name")
     ROOT.mkdir(parents=True, exist_ok=True)
-    with (ROOT / "catalog.lock").open("a+") as lock:
+    lock_path = ROOT / "catalog.lock"
+    lock_path.touch(exist_ok=True)
+    if os.geteuid() == 0:
+        owner = ROOT.stat()
+        os.chown(lock_path, owner.st_uid, owner.st_gid)
+    with lock_path.open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not (CATALOG / package).exists():
             stage(package, serial)
