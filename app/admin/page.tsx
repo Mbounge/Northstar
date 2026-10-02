@@ -17,10 +17,12 @@ const unbounded = Unbounded({ subsets: ["latin"], weight: ["200", "300", "400", 
 
 type ActionType = "approve" | "reject" | "revoke";
 type ToastType = "success" | "error" | "info";
+type AdminTab = "requests" | "directory" | "customers" | "tenants" | "captures" | "marketing";
+const adminTabs = new Set<AdminTab>(["requests", "directory", "customers", "tenants", "captures", "marketing"]);
 
 export default function AdminDashboard() {
   const supabase = createClient();
-  const [activeTab, setActiveTab] = useState<"requests" | "directory" | "customers" | "tenants" | "captures" | "marketing">("tenants");
+  const [activeTab, setActiveTab] = useState<AdminTab>("tenants");
   
   // Real DB State
   const [users, setUsers] = useState<any[]>([]);
@@ -81,9 +83,22 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested === "tenants" || requested === "captures" || requested === "marketing" || requested === "customers" || requested === "directory" || requested === "requests") setActiveTab(requested);
+    const readTab = () => {
+      const requested = new URLSearchParams(window.location.search).get("tab") as AdminTab | null;
+      setActiveTab(requested && adminTabs.has(requested) ? requested : "tenants");
+    };
+    readTab();
+    window.addEventListener("popstate", readTab);
+    return () => window.removeEventListener("popstate", readTab);
   }, []);
+
+  const selectAdminTab = (tab: AdminTab) => {
+    if (tab === activeTab) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", tab);
+    window.history.pushState(null, "", url);
+    setActiveTab(tab);
+  };
 
   // Filtered views
   const pendingUsers = users.filter(u => u.status === "pending");
@@ -396,10 +411,10 @@ export default function AdminDashboard() {
       <div className="relative z-10 w-full max-w-[1640px] mx-auto px-5 sm:px-10 xl:px-14 mb-9">
         <nav aria-label="Admin sections" className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3 border-b border-black/10 dark:border-white/10 pb-3">
           <div className="flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-x-auto rounded-[15px] border border-black/[.07] bg-white/45 p-1 shadow-sm backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden dark:border-white/[.08] dark:bg-white/[.055] sm:w-auto">
-            {([['tenants', 'Apps & tenants', FolderOpen], ['captures', 'Captures', Smartphone], ['marketing', 'Marketing', Megaphone]] as const).map(([id, label, Icon]) => <button key={id} onClick={() => setActiveTab(id)} aria-current={activeTab === id ? 'page' : undefined} className={`flex shrink-0 items-center gap-2 rounded-[11px] px-3 py-2.5 text-[12px] font-semibold transition-colors sm:px-4 sm:text-[13px] ${activeTab === id ? 'bg-[#211c37] text-white shadow-[0_8px_24px_rgba(36,25,73,.22)] dark:bg-white/15 dark:text-white' : 'text-slate-600 hover:bg-white/70 dark:text-white/60 dark:hover:bg-white/10'}`}><Icon className="h-4 w-4" />{label}</button>)}
+            {([['tenants', 'Apps & tenants', FolderOpen], ['captures', 'Captures', Smartphone], ['marketing', 'Marketing', Megaphone]] as const).map(([id, label, Icon]) => <button key={id} onClick={() => selectAdminTab(id)} aria-current={activeTab === id ? 'page' : undefined} className={`flex shrink-0 items-center gap-2 rounded-[11px] px-3 py-2.5 text-[12px] font-semibold transition-colors sm:px-4 sm:text-[13px] ${activeTab === id ? 'bg-[#211c37] text-white shadow-[0_8px_24px_rgba(36,25,73,.22)] dark:bg-white/15 dark:text-white' : 'text-slate-600 hover:bg-white/70 dark:text-white/60 dark:hover:bg-white/10'}`}><Icon className="h-4 w-4" />{label}</button>)}
           </div>
           <div className="flex w-full flex-nowrap items-center justify-between gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:w-auto sm:justify-start">
-            {([['customers', 'Organizations', Building2], ['directory', 'People', Users], ['requests', 'Requests', ShieldAlert]] as const).map(([id, label, Icon]) => <button key={id} onClick={() => setActiveTab(id)} aria-current={activeTab === id ? 'page' : undefined} className={`flex items-center gap-2 rounded-[10px] px-3 py-2.5 text-[12px] font-semibold transition-colors ${activeTab === id ? 'bg-violet-600/10 text-violet-800 dark:bg-violet-300/15 dark:text-violet-200' : 'text-slate-500 hover:bg-black/5 dark:text-white/45 dark:hover:bg-white/10'}`}><Icon className="h-3.5 w-3.5" />{label}{id === 'requests' && pendingUsers.length > 0 && <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[10px] leading-none text-white">{pendingUsers.length}</span>}</button>)}
+            {([['customers', 'Organizations', Building2], ['directory', 'People', Users], ['requests', 'Requests', ShieldAlert]] as const).map(([id, label, Icon]) => <button key={id} onClick={() => selectAdminTab(id)} aria-current={activeTab === id ? 'page' : undefined} className={`flex items-center gap-2 rounded-[10px] px-3 py-2.5 text-[12px] font-semibold transition-colors ${activeTab === id ? 'bg-violet-600/10 text-violet-800 dark:bg-violet-300/15 dark:text-violet-200' : 'text-slate-500 hover:bg-black/5 dark:text-white/45 dark:hover:bg-white/10'}`}><Icon className="h-3.5 w-3.5" />{label}{id === 'requests' && pendingUsers.length > 0 && <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[10px] leading-none text-white">{pendingUsers.length}</span>}</button>)}
           </div>
         </nav>
       </div>
