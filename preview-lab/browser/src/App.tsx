@@ -44,18 +44,22 @@ function savedAssignment(): Assignment | null {
   } catch { return null; }
 }
 
-function allocate(): Promise<Assignment> {
+function allocate(onQueued?: (position: number) => void): Promise<Assignment> {
   const saved = savedAssignment();
   if (saved) return Promise.resolve(saved);
   if (pendingAllocation) return pendingAllocation;
   pendingAllocation = new Promise<Assignment>((resolve, reject) => {
     const ws = new WebSocket(brokerUrl());
-    const timeout = window.setTimeout(() => { ws.close(); reject(new Error('The preview pool did not respond.')); }, 120000);
+    const timeout = window.setTimeout(() => { ws.close(); reject(new Error('The preview pool did not respond.')); }, 260000);
     ws.onopen = () => ws.send(JSON.stringify({ package: requestedApp.package, ...(embedded ? { grant: currentGrant } : {}) }));
     ws.onmessage = event => {
       try {
         const message = JSON.parse(event.data);
         if (message.type === 'preparing') return;
+        if (message.type === 'queued' && Number.isInteger(message.position) && message.position > 0) {
+          onQueued?.(message.position);
+          return;
+        }
         if (message.type === 'allocated' && message.package === requestedApp.package &&
             typeof message.token === 'string' && typeof message.worker === 'string' &&
             (message.port === 18080 || message.port === 18081) && typeof message.icon === 'string') {
@@ -78,6 +82,7 @@ function PreviewApp() {
   const socket = useRef<WebSocket | null>(null);
   const assignmentRef = useRef<Assignment | null>(pooled ? savedAssignment() : null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const textInput = useRef<HTMLTextAreaElement>(null);
   const pressed = useRef(false);
   const lastPointer = useRef({ x: 540, y: 1200 });
   const pendingMove = useRef<{ x: number; y: number } | null>(null);
@@ -103,6 +108,7 @@ function PreviewApp() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [waitingForDevice, setWaitingForDevice] = useState(false);
+  const [queuePosition, setQueuePosition] = useState<number | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
@@ -199,10 +205,11 @@ function PreviewApp() {
       let assignment: Assignment | null = null;
       try {
         if (pooled) {
-          assignment = await allocate();
+          assignment = await allocate(position => { setQueuePosition(position); setWaitingForDevice(true); });
           if (disposed) return;
           assignmentRef.current = assignment;
           setWaitingForDevice(false);
+          setQueuePosition(null);
           setAppName(assignment.app);
           setAppIcon(assignment.icon);
           setDeviceLabel(assignment.worker.replace('preview-', ''));
@@ -379,6 +386,13 @@ function PreviewApp() {
     textBuffer.current = '';
   };
 
+  const appendText = (value: string) => {
+    if (!value || !/^[\x20-\x7E]+$/.test(value)) return;
+    if (textBuffer.current.length + value.length > 190) flushText();
+    textBuffer.current += value;
+    if (textTimer.current === null) textTimer.current = setTimeout(flushText, 40);
+  };
+
   const locate = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     return {
@@ -431,11 +445,18 @@ function PreviewApp() {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     event.preventDefault();
     if (event.key.length === 1 && event.key.charCodeAt(0) < 128) {
-      if (textBuffer.current.length >= 190) flushText();
-      textBuffer.current += event.key;
-      if (textTimer.current === null) textTimer.current = setTimeout(flushText, 40);
+      appendText(event.key);
       return;
     }
+    flushText();
+    if (event.key === 'Backspace' || event.key === 'Escape') send({ type: 'key', key: event.key === 'Escape' ? 'GoBack' : 'Backspace' });
+    else if (event.key === 'Enter' || event.key.startsWith('Arrow')) send({ type: 'key', key: event.key });
+  };
+
+  const onTextKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.key === 'Tab') return;
+    if (event.key.length === 1) return; // Text and IME insertions arrive through onInput.
+    event.preventDefault();
     flushText();
     if (event.key === 'Backspace' || event.key === 'Escape') send({ type: 'key', key: event.key === 'Escape' ? 'GoBack' : 'Backspace' });
     else if (event.key === 'Enter' || event.key.startsWith('Arrow')) send({ type: 'key', key: event.key });
@@ -494,14 +515,14 @@ function PreviewApp() {
     <section className="preview-shell" aria-label={`${appName} live app preview`}>
       <div className="preview-heading">
         <div className="app-identity">{appIcon ? <img className="app-icon" src={asset(appIcon)} alt="" /> : <span className="app-icon app-icon-fallback">{appName.slice(0, 1)}</span>}<div><p className="overline">LIVE APP PREVIEW</p><h1>{appName}</h1><p className="app-meta">Android · {deviceLabel ? `Private device ${deviceLabel}` : 'Device assigned when available'}</p></div></div>
-        <div className="status" aria-live="polite"><span className={`status-dot ${ended ? 'ended' : ending ? 'ending' : connection}`} />{ended ? 'Ended' : ending ? 'Ending…' : connection === 'connected' ? 'Live' : waitingForDevice ? 'Waiting for a device' : connection === 'disconnected' && hasFrame ? 'Reconnecting…' : 'Preparing device…'}</div>
+        <div className="status" aria-live="polite"><span className={`status-dot ${ended ? 'ended' : ending ? 'ending' : connection}`} />{ended ? 'Ended' : ending ? 'Ending…' : connection === 'connected' ? 'Live' : waitingForDevice ? `Waiting for a device${queuePosition ? ` · ${queuePosition} in queue` : ''}` : connection === 'disconnected' && hasFrame ? 'Reconnecting…' : 'Preparing device…'}</div>
       </div>
 
       <div className="viewer-stage">
         <div className={`phone ${expanded ? 'expanded' : ''}`}>
-          <div className="screen"><canvas ref={canvas} width={540} height={1200} tabIndex={0} aria-label={`Interactive ${appName} Android preview`} aria-disabled={!interactive} onPointerDown={event => { if (!interactive) return; pressed.current = true; lastPointer.current = locate(event); event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus(); send({ type: 'touch', action: 'down', ...lastPointer.current }); }} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onKeyDown={onKeyDown} onPaste={event => { const value = event.clipboardData.getData('text'); if (value && value.length <= 200 && /^[\x20-\x7E]+$/.test(value)) { event.preventDefault(); flushText(); send({ type: 'text', value }); } }} /></div>
+          <div className="screen"><canvas ref={canvas} width={540} height={1200} tabIndex={0} aria-label={`Interactive ${appName} Android preview`} aria-disabled={!interactive} onPointerDown={event => { if (!interactive) return; event.preventDefault(); pressed.current = true; lastPointer.current = locate(event); event.currentTarget.setPointerCapture(event.pointerId); textInput.current?.focus({ preventScroll: true }); send({ type: 'touch', action: 'down', ...lastPointer.current }); }} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onKeyDown={onKeyDown} onPaste={event => { const value = event.clipboardData.getData('text'); if (value && value.length <= 200 && /^[\x20-\x7E]+$/.test(value)) { event.preventDefault(); flushText(); send({ type: 'text', value }); } }} /><textarea ref={textInput} className="input-capture" tabIndex={-1} aria-label="Type in Android preview" autoCapitalize="off" autoCorrect="off" spellCheck={false} onKeyDown={onTextKeyDown} onInput={event => { const value = event.currentTarget.value; event.currentTarget.value = ''; appendText(value); }} onPaste={event => { const value = event.clipboardData.getData('text'); if (value && value.length <= 200 && /^[\x20-\x7E]+$/.test(value)) { event.preventDefault(); flushText(); send({ type: 'text', value }); } }} onBlur={flushText} /></div>
         </div>
-        {!hasFrame && <div className="frame-notice">{ended ? 'Session ended' : waitingForDevice ? 'All devices for this app are in use or resetting. We’ll retry.' : 'Starting a clean Android device…'}</div>}
+        {!hasFrame && <div className="frame-notice">{ended ? 'Session ended' : waitingForDevice ? `Your private device is being prepared${queuePosition ? ` · queue position ${queuePosition}` : ''}.` : 'Starting a clean Android device…'}</div>}
       </div>
 
       <div className="viewer-footer">

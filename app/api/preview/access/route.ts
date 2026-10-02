@@ -2,13 +2,30 @@ import { createHmac } from "node:crypto";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { permittedPreviewApps } from "@/lib/preview/staged-apps";
+import { permittedPreviewApps, type ProvisionedApp } from "@/lib/preview/staged-apps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function base64url(value: Buffer | string) {
   return Buffer.from(value).toString("base64url");
+}
+
+async function provisionedApps(secret: string): Promise<ProvisionedApp[]> {
+  const authorization = createHmac("sha256", secret).update("northstar-preview-inventory-v1").digest("hex");
+  const response = await fetch("https://capture.49-12-126-233.sslip.io/preview/api/inventory", {
+    headers: { Authorization: `Bearer ${authorization}` }, cache: "no-store", signal: AbortSignal.timeout(6000),
+  });
+  if (!response.ok) throw new Error("Preview app inventory is unavailable");
+  const payload = await response.json();
+  if (!Array.isArray(payload.apps) || payload.apps.length > 500 || payload.apps.some((app: unknown) =>
+    !app || typeof app !== "object" ||
+    typeof (app as ProvisionedApp).package !== "string" ||
+    typeof (app as ProvisionedApp).name !== "string" ||
+    typeof (app as ProvisionedApp).icon !== "string")) {
+    throw new Error("Preview app inventory is invalid");
+  }
+  return payload.apps;
 }
 
 export async function POST(request: Request) {
@@ -34,12 +51,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Preview access is not configured" }, { status: 503 });
   }
   const admin = createAdminClient(url, key, { auth: { persistSession: false } });
-  const { data: tenantApps, error: accessError } = await admin.from("target_apps")
-    .select("app_name").eq("tenant_id", profile.customer_id);
-  if (accessError || !tenantApps) {
+  const [appsQuery, sessionsQuery, inventory] = await Promise.all([
+    admin.from("target_apps").select("app_name,icon_url").eq("tenant_id", profile.customer_id),
+    admin.from("app_sessions").select("app_name,android_package:flows_data->northstar_release->>android_package").eq("tenant_id", profile.customer_id).eq("platform", "mobile").eq("session_type", "browsing"),
+    provisionedApps(secret).catch(() => null),
+  ]);
+  if (appsQuery.error || !appsQuery.data || sessionsQuery.error || inventory === null) {
     return NextResponse.json({ error: "Could not check preview access" }, { status: 503 });
   }
-  const permitted = permittedPreviewApps(tenantApps);
+  const tenantApps = appsQuery.data;
+  const permitted = permittedPreviewApps(tenantApps, inventory, sessionsQuery.data || []);
+  const readyNames = new Set(permitted.map((app) => app.name.trim().toLocaleLowerCase("en-US")));
+  const pending = tenantApps.filter((app) => !readyNames.has(app.app_name.trim().toLocaleLowerCase("en-US")))
+    .map((app) => ({ name: app.app_name, iconUrl: app.icon_url || null, reason: "Android package not provisioned yet" }));
   const expiresAt = Math.floor(Date.now() / 1000) + 300;
   const payload = {
     v: 1,
@@ -51,7 +75,7 @@ export async function POST(request: Request) {
   };
   const encoded = base64url(JSON.stringify(payload));
   const mac = createHmac("sha256", secret).update(encoded).digest("base64url");
-  return NextResponse.json({ grant: `${encoded}.${mac}`, apps: permitted, assigned_count: tenantApps.length, expires_at: expiresAt }, {
+  return NextResponse.json({ grant: `${encoded}.${mac}`, apps: permitted, pending, assigned_count: tenantApps.length, expires_at: expiresAt }, {
     headers: { "Cache-Control": "no-store" },
   });
 }

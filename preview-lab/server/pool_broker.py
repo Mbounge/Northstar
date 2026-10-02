@@ -6,9 +6,12 @@ matching workers and returns the first one that atomically grants a session.
 
 import argparse
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
@@ -25,13 +28,13 @@ def checked_origin(request):
     return origin
 
 
-def permitted_packages(app, grant: str | None) -> set[str]:
+def permitted_packages(app, grant: str | None, apps: dict[str, dict]) -> set[str]:
     secret = app["grant_secret"]
     if secret is None:
         # Private, loopback-only lab mode. Never use this when exposing the
         # broker to Northstar visitors.
-        return set(app["apps"])
-    payload = verify_grant(grant or "", secret, set(app["apps"]))
+        return set(apps)
+    payload = verify_grant(grant or "", secret, set(apps))
     return set(payload["packages"])
 
 
@@ -73,6 +76,16 @@ def load_apps(path: Path) -> dict[str, dict]:
     return result
 
 
+def worker_supports(worker: dict, package: str) -> bool:
+    return "*" in worker["packages"] or package in worker["packages"]
+
+
+def current_apps(app) -> dict[str, dict]:
+    # The provisioner replaces this file atomically. New APKs become available
+    # without restarting a leased worker or wiping a visitor's device.
+    return load_apps(app["apps_path"])
+
+
 async def allocate(request):
     checked_origin(request)
     ws = web.WebSocketResponse(max_msg_size=4096, heartbeat=20, compress=False)
@@ -86,43 +99,73 @@ async def allocate(request):
         except ValueError:
             payload = {}
         package = payload.get("package") if isinstance(payload, dict) else None
-        if not isinstance(package, str) or package not in request.app["apps"]:
+        apps = current_apps(request.app)
+        if not isinstance(package, str) or package not in apps:
             await ws.send_json({"type": "error", "message": "This app is not in the preview pool."})
             return ws
         try:
-            permitted = permitted_packages(request.app, payload.get("grant"))
+            permitted = permitted_packages(request.app, payload.get("grant"), apps)
         except GrantInvalid:
             await ws.send_json({"type": "error", "message": "Your preview access has expired. Refresh Northstar and try again."})
             return ws
         if package not in permitted:
             await ws.send_json({"type": "error", "message": "This app is not available to your workspace."})
             return ws
-        matching = [worker for worker in request.app["workers"] if package in worker["packages"]]
+        matching = [worker for worker in request.app["workers"] if worker_supports(worker, package)]
         if not matching:
             await ws.send_json({"type": "unavailable", "message": "No test device is configured for this app."})
             return ws
-        await ws.send_json({"type": "preparing", "app": request.app["apps"][package]["name"]})
-        async with ClientSession(timeout=ClientTimeout(total=90)) as client:
-            for worker in matching:
-                try:
-                    headers = {"Authorization": "Bearer " + request.app["worker_secret"].decode("ascii")} if request.app["worker_secret"] else {}
-                    async with client.post(f"http://127.0.0.1:{worker['port']}/sessions", json={"package": package}, headers=headers) as response:
-                        if response.status != 200:
-                            continue
-                        result = await response.json()
-                        await ws.send_json({
-                            "type": "allocated",
-                            "worker": worker["id"],
-                            "port": worker["port"],
-                            "package": package,
-                            "app": result["app"],
-                            "icon": request.app["apps"][package]["icon"],
-                            "token": result["token"],
-                        })
-                        return ws
-                except (ClientError, OSError, asyncio.TimeoutError):
-                    continue
-        await ws.send_json({"type": "unavailable", "message": "All devices for this app are occupied or preparing."})
+        await ws.send_json({"type": "preparing", "app": apps[package]["name"]})
+        ticket = object()
+        queue = request.app["waiters"]
+        if len(queue) >= 20:
+            await ws.send_json({"type": "unavailable", "message": "The preview queue is full. Try again shortly."})
+            return ws
+        queue.append(ticket)
+        reader = asyncio.create_task(ws.receive())
+        last_position = 0
+        deadline = time.monotonic() + 240
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=30)) as client:
+                while not reader.done() and not ws.closed and time.monotonic() < deadline:
+                    position = queue.index(ticket) + 1
+                    if position != last_position:
+                        await ws.send_json({"type": "queued", "position": position})
+                        last_position = position
+                    if position == 1:
+                        try:
+                            # Queued grants cannot outlive their signed access.
+                            if package not in permitted_packages(request.app, payload.get("grant"), current_apps(request.app)):
+                                raise GrantInvalid("Preview access changed")
+                        except GrantInvalid:
+                            await ws.send_json({"type": "error", "message": "Your preview access expired. Refresh and try again."})
+                            return ws
+                        for worker in matching:
+                            try:
+                                headers = {"Authorization": "Bearer " + request.app["worker_secret"].decode("ascii")} if request.app["worker_secret"] else {}
+                                async with client.post(f"http://127.0.0.1:{worker['port']}/sessions", json={"package": package}, headers=headers) as response:
+                                    if response.status != 200:
+                                        continue
+                                    result = await response.json()
+                                    await ws.send_json({
+                                        "type": "allocated", "worker": worker["id"], "port": worker["port"],
+                                        "package": package, "app": result["app"], "icon": apps[package]["icon"],
+                                        "token": result["token"],
+                                    })
+                                    return ws
+                            except (ClientError, OSError, asyncio.TimeoutError):
+                                continue
+                    await asyncio.sleep(3)
+            if not reader.done() and not ws.closed:
+                await ws.send_json({"type": "unavailable", "message": "The wait is taking longer than expected. We’ll try again."})
+        finally:
+            reader.cancel()
+            try:
+                await reader
+            except asyncio.CancelledError:
+                pass
+            if ticket in queue:
+                queue.remove(ticket)
     except asyncio.TimeoutError:
         await ws.send_json({"type": "error", "message": "Preview request timed out."})
     finally:
@@ -136,10 +179,11 @@ async def health(request):
 
 async def catalog(request):
     origin = checked_origin(request)
+    apps = current_apps(request.app)
     try:
         authorization = request.headers.get("Authorization", "")
         grant = authorization[7:] if authorization.startswith("Bearer ") else None
-        permitted = permitted_packages(request.app, grant)
+        permitted = permitted_packages(request.app, grant, apps)
     except GrantInvalid:
         raise web.HTTPUnauthorized(text="Preview access expired") from None
     async with ClientSession(timeout=ClientTimeout(total=2)) as client:
@@ -154,11 +198,11 @@ async def catalog(request):
             return "offline"
 
         states = await asyncio.gather(*(status(worker) for worker in request.app["workers"]))
-    apps = []
-    for package, metadata in request.app["apps"].items():
+    visible_apps = []
+    for package, metadata in apps.items():
         if package not in permitted:
             continue
-        supported = [state for worker, state in zip(request.app["workers"], states) if package in worker["packages"]]
+        supported = [state for worker, state in zip(request.app["workers"], states) if worker_supports(worker, package)]
         if "available" in supported:
             availability = "available"
         elif "leased" in supported:
@@ -167,11 +211,24 @@ async def catalog(request):
             availability = "resetting"
         else:
             availability = "offline"
-        apps.append({"package": package, "app": metadata["name"], "icon": metadata["icon"], "status": availability})
+        visible_apps.append({"package": package, "app": metadata["name"], "icon": metadata["icon"], "status": availability})
     headers = {"Vary": "Origin", "Cache-Control": "no-store"}
     if origin is not None:
         headers["Access-Control-Allow-Origin"] = origin
-    return web.json_response({"apps": apps}, headers=headers)
+    return web.json_response({"apps": visible_apps}, headers=headers)
+
+
+async def inventory(request):
+    """Server-to-server list for Northstar's authenticated tenant access route."""
+    secret = request.app["grant_secret"]
+    if secret is None:
+        raise web.HTTPNotFound()
+    supplied = request.headers.get("Authorization", "")
+    expected = hmac.new(secret, b"northstar-preview-inventory-v1", hashlib.sha256).hexdigest()
+    if not supplied.startswith("Bearer ") or not hmac.compare_digest(supplied[7:], expected):
+        raise web.HTTPForbidden(text="Inventory authorization required")
+    apps = current_apps(request.app)
+    return web.json_response({"apps": list(apps.values())}, headers={"Cache-Control": "no-store"})
 
 
 async def catalog_preflight(request):
@@ -243,7 +300,9 @@ def main():
     args = parser.parse_args()
     app = web.Application()
     app["workers"] = load_workers(args.workers)
-    app["apps"] = load_apps(args.apps)
+    app["waiters"] = []
+    app["apps_path"] = args.apps
+    apps = load_apps(args.apps)
     app["grant_secret"] = args.grant_secret_file.read_bytes().strip() if args.grant_secret_file else None
     app["worker_secret"] = args.worker_secret_file.read_bytes().strip() if args.worker_secret_file else None
     if app["grant_secret"] is not None and len(app["grant_secret"]) < 32:
@@ -252,11 +311,12 @@ def main():
         raise ValueError("Tenant mode requires a separate broker-to-worker secret")
     if app["worker_secret"] is not None and (len(app["worker_secret"]) < 32 or not app["worker_secret"].isascii()):
         raise ValueError("Preview worker secret must be at least 32 ASCII bytes")
-    if any(package not in app["apps"] for worker in app["workers"] for package in worker["packages"]):
+    if any(package != "*" and package not in apps for worker in app["workers"] for package in worker["packages"]):
         raise ValueError("Worker refers to an unregistered preview app")
     app.router.add_get("/allocate", allocate)
     app.router.add_get("/health", health)
     app.router.add_get("/catalog", catalog)
+    app.router.add_get("/inventory", inventory)
     app.router.add_options("/catalog", catalog_preflight)
     app.router.add_post("/release", release_session)
     app.router.add_options("/release", release_preflight)

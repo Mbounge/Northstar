@@ -9,7 +9,9 @@ if [[ -r "$state_dir/last-package" ]]; then
   last_package=""
   IFS= read -r last_package < "$state_dir/last-package" || true
   if [[ "$last_package" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] &&
-     [[ ",${PREVIEW_ALLOWED_PACKAGES:-$package}," == *",$last_package,"* ]]; then
+     [[ -f "/opt/northstar/preview-lab/apks/$last_package/manifest.json" ]] &&
+     { [[ "${PREVIEW_ALLOWED_PACKAGES:-$package}" == "*" ]] ||
+       [[ ",${PREVIEW_ALLOWED_PACKAGES:-$package}," == *",$last_package,"* ]]; }; then
     package="$last_package"
   fi
 fi
@@ -76,6 +78,16 @@ python3 /opt/northstar/preview-lab/prepare_headless_input.py --ensure "$device"
 "$adb" -s "$device" shell am force-stop com.google.android.bluetooth
 "$adb" -s "$device" shell input keyevent 4
 "$adb" -s "$device" shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 >/dev/null
+# The Bluetooth process can crash during the wiped boot before its package is
+# disabled. Android may surface that queued error after the app launches. Only
+# dismiss this exact system crash; never hide an error from the previewed app.
+for attempt in {1..10}; do
+  focus="$("$adb" -s "$device" shell dumpsys window 2>/dev/null | grep 'mCurrentFocus=' | head -1 || true)"
+  if [[ "$focus" == *"Application Error: com.google.android.bluetooth"* ]]; then
+    "$adb" -s "$device" shell input keyevent 4
+  fi
+  sleep 1
+done
 
 exec /opt/northstar/preview-lab/venv/bin/python \
   /opt/northstar/preview-lab/server/preview_server.py \

@@ -70,7 +70,7 @@ async def run_checked(*command, timeout=90):
 
 
 async def provision_app(app, package):
-    if package not in ALLOWED_PACKAGES or package not in app["catalog"]:
+    if not package_allowed(app, package):
         raise ValueError("This app is not permitted on this preview worker")
     async with app["provision_lock"]:
         active = app["runtime"]["active_package"]
@@ -92,7 +92,7 @@ async def reset_device(app):
     for viewer in tuple(app["stream_state"]["viewers"]):
         await viewer.close(code=1001, message=b"Session ended")
     package = app["runtime"]["active_package"]
-    if package in ALLOWED_PACKAGES:
+    if package_allowed(app, package):
         try:
             temporary = LAST_PACKAGE.with_suffix(".tmp")
             temporary.write_text(package + "\n", encoding="ascii")
@@ -107,12 +107,40 @@ async def reset_device(app):
 
 
 async def sweep_sessions(app):
+    ticks = 0
     while True:
         await asyncio.sleep(5)
+        ticks += 1
         try:
             await app["sessions"].expire_idle()
         except RuntimeError:
             logging.exception("Preview reset failed; device remains unavailable")
+        if ticks % 3 == 0:
+            await dismiss_bluetooth_crash()
+
+
+async def dismiss_bluetooth_crash():
+    """Remove only a known AVD system overlay, never an app error dialog."""
+    process = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            ADB, "-s", DEVICE, "shell", "dumpsys", "window", stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
+        if bluetooth_crash_focused(stdout):
+            await adb_input("keyevent", "4")
+            logging.warning("Dismissed known Bluetooth crash overlay on preview AVD")
+    except (OSError, RuntimeError, asyncio.TimeoutError):
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
+        logging.warning("Could not inspect preview AVD system overlay")
+
+
+def bluetooth_crash_focused(window_dump: bytes) -> bool:
+    focus = next((line for line in window_dump.splitlines() if b"mCurrentFocus=" in line), b"")
+    return b"Application Error: com.google.android.bluetooth" in focus
 
 
 async def health(request):
@@ -124,6 +152,26 @@ async def health(request):
         "app": request.app["catalog"].get(request.app["runtime"]["active_package"] or DEFAULT_PACKAGE, {"name": APP_NAME})["name"],
         "mode": "tenant" if request.app["broker_secret"] is not None else "private_lab",
     })
+
+
+def package_allowed(app, package):
+    return package in app["catalog"] and ("*" in ALLOWED_PACKAGES or package in ALLOWED_PACKAGES)
+
+
+def refresh_catalog(app):
+    # Atomic publication means a request sees either the prior complete list or
+    # the next one. The provisioner verifies each APK before adding its entry.
+    catalog = json.loads(APP_CATALOG.read_text(encoding="utf-8"))
+    if not isinstance(catalog, list):
+        raise ValueError("Preview catalog is invalid")
+    validated = {}
+    for entry in catalog:
+        if (not isinstance(entry, dict) or set(entry) != {"package", "name", "icon"}
+                or not all(isinstance(value, str) and value for value in entry.values())
+                or entry["package"] in validated):
+            raise ValueError("Preview catalog has invalid entries")
+        validated[entry["package"]] = entry
+    app["catalog"] = validated
 
 
 def check_origin(request):
@@ -155,6 +203,10 @@ async def create_session(request):
     check_origin(request)
     check_broker(request)
     try:
+        refresh_catalog(request.app)
+    except (OSError, ValueError):
+        return browser_json({"error": "Preview app catalog is being updated."}, status=503)
+    try:
         payload = await request.json()
     except (ValueError, TypeError):
         payload = {}
@@ -162,7 +214,7 @@ async def create_session(request):
     package = payload.get("package", DEFAULT_PACKAGE) if isinstance(payload, dict) else DEFAULT_PACKAGE
     if resume_token is not None and (not isinstance(resume_token, str) or len(resume_token) > 100):
         raise web.HTTPBadRequest(text="Invalid session token")
-    if not isinstance(package, str) or package not in ALLOWED_PACKAGES or package not in request.app["catalog"]:
+    if not isinstance(package, str) or not package_allowed(request.app, package):
         return browser_json({"error": "This app is not staged for this worker."}, status=400)
     try:
         token = await request.app["sessions"].acquire(resume_token)
@@ -459,12 +511,11 @@ async def stream(request):
 
 
 async def init_connection(app):
-    catalog = json.loads(APP_CATALOG.read_text(encoding="utf-8"))
-    app["catalog"] = {entry["package"]: entry for entry in catalog}
+    refresh_catalog(app)
     app["broker_secret"] = Path(BROKER_SECRET_FILE).read_bytes().strip() if BROKER_SECRET_FILE else None
     if app["broker_secret"] is not None and len(app["broker_secret"]) < 32:
         raise RuntimeError("Preview broker secret must be at least 32 bytes")
-    if DEFAULT_PACKAGE not in app["catalog"] or not ALLOWED_PACKAGES <= app["catalog"].keys():
+    if DEFAULT_PACKAGE not in app["catalog"] or ("*" not in ALLOWED_PACKAGES and not ALLOWED_PACKAGES <= app["catalog"].keys()):
         raise RuntimeError("Preview worker app catalog is incomplete")
     app["runtime"] = {"active_package": None}
     app["provision_lock"] = asyncio.Lock()

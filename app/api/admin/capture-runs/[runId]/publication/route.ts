@@ -172,6 +172,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
       if (flows.screen_catalog.some((entry: any) => !String(entry.screenshot_file).startsWith(prefix))) throw new Error("Generated flows reference missing screenshots");
       flows.northstar_release = { source_run_id: runId, source_fingerprint: source.fingerprint,
         capture_audit: checkpoint.audit_status, store_identity: store.track_id || store.package_id,
+        android_package: typeof store.package_id === "string" && /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(store.package_id) ? store.package_id : null,
         renamed_artifacts: checkpoint.files.filter((item) => storageArtifactPath(item.path) !== item.path).map((item) => ({ source: item.path, storage: storageArtifactPath(item.path) })),
         published_at: new Date().toISOString() };
       const { data: previous, error: previousError } = await admin.from("target_apps").select("rank,revenue,employees,category,icon_url").eq("tenant_id", tenantId).ilike("app_name", checkpoint.app_name).maybeSingle();

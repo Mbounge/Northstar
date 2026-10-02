@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for newly captured apps to provision into Northstar preview
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+Unit=northstar-preview-provision.service
+
+[Install]
+WantedBy=timers.target
+

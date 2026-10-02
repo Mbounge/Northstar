@@ -15,11 +15,12 @@ import { ExecutiveReport } from "@/components/executive-report";
 import { FlowsViewer } from "@/components/flows-viewer";
 import { BrandKitViewer } from "@/components/brand-kit-viewer";
 import { AppStoreViewer } from "@/components/app-store-viewer";
+import { ProductAppPreview } from "@/components/preview/product-app-preview";
 import { Smartphone, Globe } from "lucide-react";
 
 type Platform = "mobile" | "web";
 type Mode = "browsing" | "onboarding";
-type ProductTab = "overview" | "viewer" | "mobbin" | "brand_kit" | "app_store";
+type ProductTab = "overview" | "preview" | "viewer" | "mobbin" | "brand_kit" | "app_store";
 
 function makeSessionKey(platform: Platform, mode: Mode) {
   return `${platform}:${mode}`;
@@ -463,7 +464,6 @@ export function UnifiedDashboard({
       timers.push(timer);
     };
 
-    scheduleWarmup(500, "viewer");
     scheduleWarmup(900, "brand_kit");
     scheduleWarmup(1200, "app_store");
     scheduleWarmup(1800, "mobbin");
@@ -538,7 +538,7 @@ export function UnifiedDashboard({
 
   const subTabs: { value: ProductTab; label: string }[] = [
     { value: "overview", label: "Overview" },
-    { value: "viewer", label: "Screen viewer" },
+    ...(hasMobile ? [{ value: "preview" as ProductTab, label: "Preview" }] : []),
     { value: "mobbin", label: "Flows" },
     ...(hasBrandKit ? [{ value: "brand_kit" as ProductTab, label: "Brand kit" }] : []),
     ...(hasAppStore ? [{ value: "app_store" as ProductTab, label: "App store" }] : []),
@@ -635,6 +635,10 @@ export function UnifiedDashboard({
             ) : null}
           </div>
         </TabsContent>
+
+        {hasMobile && <TabsContent value="preview" forceMount className="m-0 outline-none data-[state=inactive]:hidden px-4 pt-2 sm:px-8">
+          <ProductAppPreview appName={appData.appName} active={activeTab === "preview"} />
+        </TabsContent>}
 
         <TabsContent value="viewer" className="flex flex-col h-[calc(100vh-320px)] min-h-[700px] m-0 outline-none data-[state=inactive]:hidden pb-2 pt-2">
           <div className="flex-1 relative z-50 bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 overflow-hidden rounded-2xl">

@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UnifiedDashboard } from "@/components/unified-dashboard";
+import { ProductAppPreview } from "@/components/preview/product-app-preview";
 import { BusinessViewer } from "@/components/business-viewer";
 import { MarketingFeed } from "@/components/marketing-feed";
 import { SnapshotSelector } from "@/components/snapshot-selector";
@@ -391,21 +392,22 @@ export function CompanyDashboardTabs({
       <div className="flex flex-col mt-6 relative z-10 pl-10 pr-[84px] pb-12">
         <TabsContent
           value="product"
+          forceMount
           className="flex flex-col m-0 outline-none data-[state=inactive]:hidden"
         >
           {productData && (productData.mobile || productData.web) ? (
             <UnifiedDashboard
+              key={productData.appName}
               appData={productData}
               header={header}
               tenantId={tenantId}
             />
-          ) : (
-            <div className="flex h-full items-center justify-center pt-24">
-              <p className="bg-white/10 dark:bg-black/10 backdrop-blur-md border border-white/20 dark:border-white/10 px-6 py-3 text-zinc-600 dark:text-zinc-400 text-sm shadow-none rounded-none">
-                No active product teardowns for this target.
-              </p>
+          ) : productData?.appName ? (
+            <div className="flex flex-col gap-8">
+              <div className="h-[136px] border border-white/20 bg-white/20 backdrop-blur-md dark:border-white/10 dark:bg-white/5">{header}</div>
+              <ProductAppPreview key={productData.appName} appName={productData.appName} active={activeTab === "product"} />
             </div>
-          )}
+          ) : null}
         </TabsContent>
 
         <TabsContent

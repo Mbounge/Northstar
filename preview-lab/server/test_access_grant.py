@@ -5,7 +5,7 @@ import json
 import unittest
 
 from access_grant import GrantInvalid, verify_grant
-from pool_broker import permitted_packages
+from pool_broker import permitted_packages, worker_supports
 
 
 SECRET = b"preview-test-secret-longer-than-32-bytes"
@@ -48,24 +48,29 @@ class GrantTests(unittest.TestCase):
             verify_grant(sign(self.payload), SECRET, KNOWN, now=1000)
 
     def test_broker_restricts_catalog_to_signed_packages(self):
-        app = {"grant_secret": SECRET, "apps": {package: {} for package in KNOWN}}
+        app = {"grant_secret": SECRET}
         # Use a grant with a lifetime inside the verifier's 15-minute limit.
         import time
         self.payload["exp"] = int(time.time()) + 300
-        self.assertEqual(permitted_packages(app, sign(self.payload)), {"org.wikipedia"})
+        self.assertEqual(permitted_packages(app, sign(self.payload), {package: {} for package in KNOWN}), {"org.wikipedia"})
         with self.assertRaises(GrantInvalid):
-            permitted_packages(app, None)
+            permitted_packages(app, None, {package: {} for package in KNOWN})
 
     def test_different_tenant_grants_cannot_cross_their_app_assignments(self):
         import time
-        app = {"grant_secret": SECRET, "apps": {package: {} for package in KNOWN}}
+        app = {"grant_secret": SECRET}
         self.payload["exp"] = int(time.time()) + 300
         tenant_a = sign(self.payload)
         self.payload["tenant"] = "tenant-b"
         self.payload["packages"] = ["de.danoeh.antennapod"]
         tenant_b = sign(self.payload)
-        self.assertEqual(permitted_packages(app, tenant_a), {"org.wikipedia"})
-        self.assertEqual(permitted_packages(app, tenant_b), {"de.danoeh.antennapod"})
+        self.assertEqual(permitted_packages(app, tenant_a, {package: {} for package in KNOWN}), {"org.wikipedia"})
+        self.assertEqual(permitted_packages(app, tenant_b, {package: {} for package in KNOWN}), {"de.danoeh.antennapod"})
+
+    def test_catalog_worker_accepts_newly_staged_packages_without_config_edit(self):
+        worker = {"packages": ["*"]}
+        self.assertTrue(worker_supports(worker, "com.example.newapp"))
+        self.assertFalse(worker_supports({"packages": ["org.wikipedia"]}, "com.example.newapp"))
 
 
 if __name__ == "__main__":

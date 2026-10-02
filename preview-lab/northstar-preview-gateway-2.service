@@ -13,7 +13,7 @@ Environment=PREVIEW_EMULATOR_SERVICE=northstar-preview-emulator-2.service
 Environment=PREVIEW_DEVICE=emulator-5562
 Environment=PREVIEW_PACKAGE=de.danoeh.antennapod
 Environment=PREVIEW_APP_NAME=AntennaPod
-Environment=PREVIEW_ALLOWED_PACKAGES=de.danoeh.antennapod,org.wikipedia
+Environment=PREVIEW_ALLOWED_PACKAGES=*
 Environment=PREVIEW_PORT=18081
 Environment=PREVIEW_STATE_DIR=/var/lib/northstar-preview-2
 StateDirectory=northstar-preview-2
