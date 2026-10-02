@@ -24,6 +24,14 @@ export function reviewScreenshotFileName(value?: string): string | undefined {
   return file?.trim() || undefined;
 }
 
+/** Match flow references to screenshot URLs, including percent-encoded Unicode names. */
+export function reviewScreenshotKey(value?: string | null): string {
+  const file = reviewScreenshotFileName(value || undefined);
+  if (!file) return "";
+  try { return decodeURIComponent(file).normalize("NFC").toLocaleLowerCase("en-US"); }
+  catch { return file.normalize("NFC").toLocaleLowerCase("en-US"); }
+}
+
 export function reviewScreenshotBaseUrl(input: ReviewScreenshotLocation): string | undefined {
   const base = input.supabaseUrl?.replace(/\/$/, "");
   if (!base || !input.sessionType.trim()) return undefined;

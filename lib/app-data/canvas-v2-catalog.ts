@@ -3,6 +3,7 @@ import {
   canonicalReviewScreenshotUrl,
   isAbsoluteReviewMediaUrl,
   resolveReviewScreenshotStoragePrefix,
+  reviewScreenshotKey,
 } from "@/lib/app-data/review-media";
 
 type UnknownRecord = Record<string, unknown>;
@@ -115,7 +116,7 @@ function sourceScreens(session: UnknownRecord): UnknownRecord[] {
 }
 
 function fileKey(value?: string): string {
-  return value?.split("/").pop()?.toLowerCase() ?? "";
+  return reviewScreenshotKey(value);
 }
 
 function rawScreenKey(screen: UnknownRecord, fallback: number): string {

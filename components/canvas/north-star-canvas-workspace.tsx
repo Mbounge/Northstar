@@ -129,6 +129,7 @@ import {
   normalizeNorthstarContentSize,
 } from "@/lib/canvas-artifacts/content-size-coordinator";
 import { cn } from "@/lib/utils";
+import { reviewScreenshotKey } from "@/lib/app-data/review-media";
 import {
   broadcastNorthstarRunCoordinationMessage,
   type NorthstarSharedCreativeLease,
@@ -5577,8 +5578,7 @@ function getWorkspaceFlowDescription(sessionRow: UnknownRecord) {
 }
 
 function getFileKey(value?: string | null) {
-  if (!value || typeof value !== "string") return "";
-  return value.split("/").pop()?.toLowerCase() || value.toLowerCase();
+  return reviewScreenshotKey(value);
 }
 
 function getNumberArrayValue(value: unknown) {

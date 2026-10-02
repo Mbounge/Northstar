@@ -3,6 +3,7 @@ import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { createClient as createSessionClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/admin/uuid";
+import { storageArtifactPath } from "@/lib/admin/publication-path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -127,7 +128,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
         const response = await fromRunner(access as { runner: string; token: string }, runId, `artifact/${item.path}`);
         const bytes = Buffer.from(await response.arrayBuffer());
         if (bytes.length !== item.bytes || createHash("sha256").update(bytes).digest("hex") !== item.sha256) throw new Error(`Artifact changed after review: ${item.path}`);
-        const { error } = await admin.storage.from("reviews").upload(`${tenantId}/${checkpoint!.app_name}/${item.path}`, bytes,
+        const { error } = await admin.storage.from("reviews").upload(`${tenantId}/${checkpoint!.app_name}/${storageArtifactPath(item.path)}`, bytes,
           { upsert: true, contentType: contentType(item.path) });
         if (error) throw new Error(`Could not upload ${item.path}: ${error.message}`);
       }));
@@ -142,7 +143,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
         const split = item.path.lastIndexOf("/");
         const folder = item.path.slice(0, split);
         const names = expectedByFolder.get(folder) || new Set<string>();
-        names.add(item.path.slice(split + 1));
+        names.add(storageArtifactPath(item.path).slice(split + 1));
         expectedByFolder.set(folder, names);
       }
       for (const [folder, names] of expectedByFolder) {
@@ -157,15 +158,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
       const entries = manifest.enriched_screenshots;
       if (!Array.isArray(entries) || entries.length !== source.canonical_screens || !Array.isArray(flows.screen_catalog) || flows.screen_catalog.length !== entries.length || !intelligence.executive_summary || !(store.track_id || store.package_id)) throw new Error("Final evidence validation failed");
       const prefix = `${access.url}/storage/v1/object/public/reviews/${tenantId}/${encodeURIComponent(checkpoint.app_name)}/browsing/screenshots/`;
+      const storageName = (folder: string, value: unknown) => storageArtifactPath(`${folder}/${String(value || "").split("/").pop() || ""}`).split("/").pop() || "";
       const steps = entries.map((entry: any) => ({ step: entry.step || entry.timeline_step, phase: entry.phase,
-        screen_type: entry.screen_type, enriched_file: entry.enriched_file,
-        imagePath: prefix + encodeURIComponent(String(entry.screenshot || "").split("/").pop() || "") }));
-      const urlByName = new Map(steps.map((item: any) => [decodeURIComponent(item.imagePath.split("/").pop() || ""), item.imagePath]));
+        screen_type: entry.screen_type, enriched_file: storageName("browsing/enriched", entry.enriched_file),
+        imagePath: prefix + encodeURIComponent(storageName("browsing/screenshots", entry.screenshot)) }));
+      const urlByName = new Map(entries.map((entry: any, index: number) => [String(entry.screenshot || "").split("/").pop() || "", steps[index].imagePath]));
       flows.screen_catalog = flows.screen_catalog.map((entry: any) => ({ ...entry,
+        enriched_file: entry.enriched_file ? storageName("browsing/enriched", entry.enriched_file) : entry.enriched_file,
         screenshot_file: urlByName.get(String(entry.screenshot_file || "").split("/").pop() || "") || entry.screenshot_file }));
       if (flows.screen_catalog.some((entry: any) => !String(entry.screenshot_file).startsWith(prefix))) throw new Error("Generated flows reference missing screenshots");
       flows.northstar_release = { source_run_id: runId, source_fingerprint: source.fingerprint,
         capture_audit: checkpoint.audit_status, store_identity: store.track_id || store.package_id,
+        renamed_artifacts: checkpoint.files.filter((item) => storageArtifactPath(item.path) !== item.path).map((item) => ({ source: item.path, storage: storageArtifactPath(item.path) })),
         published_at: new Date().toISOString() };
       const { data: previous, error: previousError } = await admin.from("target_apps").select("rank,revenue,employees,category,icon_url").eq("tenant_id", tenantId).ilike("app_name", checkpoint.app_name).maybeSingle();
       if (previousError) throw new Error("Could not read tenant app record");

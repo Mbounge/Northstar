@@ -22,6 +22,7 @@ import {
   Link,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { reviewScreenshotKey } from "@/lib/app-data/review-media";
 import { PanoramicMockup } from "./PanoramicMockup";
 import { BrowserMockup } from "./BrowserMockup";
 
@@ -136,8 +137,7 @@ function getLeafFlows(node: FlowNode): FlowNode[] {
 }
 
 function getFileKey(value?: string | null) {
-  if (!value || typeof value !== "string") return "";
-  return value.split("/").pop()?.toLowerCase() || value.toLowerCase();
+  return reviewScreenshotKey(value);
 }
 
 function buildCatalogIndexes(catalog: Screen[] = []): CatalogIndexes {

@@ -5,8 +5,15 @@ import test from "node:test";
 import { normalizeAppDataRows, type AppDataCatalog } from "../lib/app-data/canvas-v2-catalog";
 import {
   canonicalReviewScreenshotUrl,
+  reviewScreenshotKey,
   resolveReviewScreenshotStoragePrefix,
 } from "../lib/app-data/review-media";
+
+test("flow screenshot references match encoded Unicode storage URLs", () => {
+  const name = "s0214_child_landing_choir_of_the_málaga_cathedral__671654.png";
+  assert.equal(reviewScreenshotKey(name), reviewScreenshotKey(`https://example.test/reviews/${encodeURIComponent(name)}`));
+  assert.equal(reviewScreenshotKey("bad%escape.png"), "bad%escape.png");
+});
 import { runCanvasV2Research } from "../lib/canvas-v2/research-adapter";
 import { readAccountTools } from "../lib/canvas-v2/account-tools";
 import { canvasV2CompleteFlowScreens } from "../lib/canvas-v2/flow-insertion";
