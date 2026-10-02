@@ -43,7 +43,7 @@ cd /Users/mbounge/Documents/Codex/2026-09-05/do-x20/work/northstar-admin-mobile-
 ./run-local.sh
 ```
 
-On Hetzner, the private route needs `northstar-preview-emulator-2.service`, `northstar-preview-gateway-2.service`, `northstar-preview-reset-2.path`, and `northstar-preview-tenant-broker.service`. The local diagnostic pool separately uses the worker 1 emulator/gateway/reset units and `northstar-preview-broker.service`; start those only when testing it. Preview services are isolated from capture services. The app catalog installs the assigned package after every wiped boot.
+On Hetzner, the private route needs `northstar-preview-emulator-2.service`, `northstar-preview-gateway-2.service`, `northstar-preview-reset-2.path`, and `northstar-preview-tenant-broker.service`. All four and Caddy were verified active and enabled at boot on 2026-10-02; a future host reboot still needs a live smoke check. The local diagnostic pool separately uses the worker 1 emulator/gateway/reset units and `northstar-preview-broker.service`; start those only when testing it. Preview services are isolated from capture services. The app catalog installs the assigned package after every wiped boot.
 
 ## Architecture
 
