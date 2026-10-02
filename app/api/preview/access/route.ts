@@ -51,7 +51,7 @@ export async function POST(request: Request) {
   };
   const encoded = base64url(JSON.stringify(payload));
   const mac = createHmac("sha256", secret).update(encoded).digest("base64url");
-  return NextResponse.json({ grant: `${encoded}.${mac}`, apps: permitted, expires_at: expiresAt }, {
+  return NextResponse.json({ grant: `${encoded}.${mac}`, apps: permitted, assigned_count: tenantApps.length, expires_at: expiresAt }, {
     headers: { "Cache-Control": "no-store" },
   });
 }
