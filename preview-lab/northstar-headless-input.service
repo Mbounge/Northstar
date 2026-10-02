@@ -1,0 +1,9 @@
+[Unit]
+Description=Keep Northstar Android emulators in ADB-only input mode
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=northstar
+Group=northstar
+ExecStart=/usr/bin/python3 /opt/northstar/preview-lab/prepare_headless_input.py --ensure emulator-5554 emulator-5556 emulator-5558 emulator-5560

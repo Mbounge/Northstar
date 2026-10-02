@@ -1,0 +1,21 @@
+capture.49-12-126-233.sslip.io {
+    handle_path /preview/api/* {
+        reverse_proxy 127.0.0.1:18083
+    }
+    handle /preview/worker/2/stream {
+        rewrite * /stream
+        reverse_proxy 127.0.0.1:18081
+    }
+    handle_path /preview/* {
+        header Content-Security-Policy "frame-ancestors https://www.usenorthstar.ai http://127.0.0.1:3000 http://localhost:3000"
+        header Referrer-Policy "no-referrer"
+        root * /srv/northstar-preview
+        file_server
+    }
+    handle_path /marketing/* {
+        reverse_proxy 127.0.0.1:8790
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8787
+    }
+}

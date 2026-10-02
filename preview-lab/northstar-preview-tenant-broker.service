@@ -1,0 +1,19 @@
+[Unit]
+Description=Northstar tenant Android preview allocator
+After=network-online.target northstar-preview-gateway-2.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+WorkingDirectory=/opt/northstar/preview-lab
+Environment=PREVIEW_ALLOWED_ORIGINS=https://capture.49-12-126-233.sslip.io
+ExecStart=/opt/northstar/preview-lab/venv/bin/python /opt/northstar/preview-lab/server/pool_broker.py --workers=/opt/northstar/preview-lab/workers-tenant.json --apps=/opt/northstar/preview-lab/apps.json --grant-secret-file=/etc/northstar-preview/grant-secret --worker-secret-file=/etc/northstar-preview/worker-secret --port=18083
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

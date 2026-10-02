@@ -1,0 +1,18 @@
+[Unit]
+Description=Northstar local Android preview pool allocator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=northstar
+Group=northstar
+WorkingDirectory=/opt/northstar/preview-lab
+ExecStart=/opt/northstar/preview-lab/venv/bin/python /opt/northstar/preview-lab/server/pool_broker.py --workers=/opt/northstar/preview-lab/workers.json --apps=/opt/northstar/preview-lab/apps.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

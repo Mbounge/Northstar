@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+emulator_service="${PREVIEW_EMULATOR_SERVICE:-northstar-preview-emulator.service}"
+device="${PREVIEW_DEVICE:-emulator-5560}"
+package="${PREVIEW_PACKAGE:-org.wikipedia}"
+state_dir="${PREVIEW_STATE_DIR:-/var/lib/northstar-preview}"
+export PREVIEW_DEVICE="$device"
+export PREVIEW_APP_NAME="${PREVIEW_APP_NAME:-Wikipedia}"
+export PREVIEW_PORT="${PREVIEW_PORT:-18080}"
+export PREVIEW_RESET_REQUEST="$state_dir/reset-request"
+
+emulator_pid="$(systemctl show --property=MainPID --value "$emulator_service")"
+if [[ ! "$emulator_pid" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Preview emulator is not running" >&2
+  exit 1
+fi
+
+discovery_file="/opt/northstar/.android/avd/running/pid_${emulator_pid}.ini"
+adb="/opt/android-sdk/platform-tools/adb"
+for attempt in {1..30}; do
+  if [[ -f "$discovery_file" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ ! -f "$discovery_file" ]]; then
+  echo "Preview emulator discovery file did not appear" >&2
+  exit 1
+fi
+
+boot_marker="$state_dir/served-emulator-pid"
+if [[ -f "$boot_marker" && "$(cat "$boot_marker")" == "$emulator_pid" ]]; then
+  echo "Gateway restarted on a previously served device; forcing a clean boot" >&2
+  : > "$PREVIEW_RESET_REQUEST"
+  exit 1
+fi
+printf '%s\n' "$emulator_pid" > "$boot_marker"
+
+for attempt in {1..300}; do
+  if [[ "$("$adb" -s "$device" shell getprop sys.boot_completed 2>/dev/null || true)" == "1" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$("$adb" -s "$device" shell getprop sys.boot_completed 2>/dev/null || true)" != "1" ]]; then
+  echo "Preview emulator did not finish booting" >&2
+  exit 1
+fi
+
+account_dump="$("$adb" -s "$device" shell dumpsys account)"
+account_count="$(grep -c 'Account {' <<< "$account_dump" || true)"
+if [[ "$account_count" != "0" ]]; then
+  echo "Preview emulator contains an Android account; refusing to serve it" >&2
+  exit 1
+fi
+
+python3 /opt/northstar/preview-lab/app_catalog.py install "$package" --serial "$device"
+python3 /opt/northstar/preview-lab/prepare_headless_input.py --ensure "$device"
+# This emulator has no Bluetooth packet streamer. Its Google Bluetooth process
+# repeatedly crashes on cold boots and covers the app with an error dialog.
+# Keep this workaround confined to the standalone preview AVD.
+"$adb" -s "$device" shell settings put global bluetooth_on 0
+"$adb" -s "$device" shell pm disable-user --user 0 com.google.android.bluetooth >/dev/null
+"$adb" -s "$device" shell am force-stop com.google.android.bluetooth
+"$adb" -s "$device" shell input keyevent 4
+"$adb" -s "$device" shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 >/dev/null
+
+exec /opt/northstar/preview-lab/venv/bin/python \
+  /opt/northstar/preview-lab/server/preview_server.py \
+  --discovery-file="$discovery_file"

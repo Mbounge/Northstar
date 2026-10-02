@@ -1,0 +1,8 @@
+[Unit]
+Description=Reset only the second Northstar preview emulator
+ConditionPathExists=/var/lib/northstar-preview-2/reset-request
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/rm -f /var/lib/northstar-preview-2/reset-request
+ExecStart=/usr/bin/systemctl restart northstar-preview-emulator-2.service

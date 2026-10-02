@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for an isolated Northstar preview reset request
+
+[Path]
+PathExists=/var/lib/northstar-preview/reset-request
+Unit=northstar-preview-reset.service
+
+[Install]
+WantedBy=multi-user.target

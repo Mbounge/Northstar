@@ -1,0 +1,106 @@
+:root {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #252637;
+  background: #f5f6fa;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+button { font: inherit; }
+
+.page { max-width: 1180px; min-height: 100dvh; margin: auto; padding: 0 28px 36px; }
+.page.embedded { max-width: none; min-height: 0; padding: 0; }
+.page.embedded .preview-shell { margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+.page.embedded .screen { height: min(58dvh, 510px); }
+.topbar { height: 67px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid #e4e5ed; }
+.wordmark { display: flex; align-items: center; gap: 9px; font-size: 19px; font-weight: 760; letter-spacing: -.045em; white-space: nowrap; }
+.star { color: #6946e8; font-size: 24px; margin-right: 1px; }
+.divider { height: 19px; width: 1px; background: #d5d5df; margin: 0 7px; }
+.preview-label { font-size: 15px; color: #77798d; font-weight: 550; letter-spacing: -.015em; }
+.private-label { font-size: 11px; color: #8e8fa1; font-weight: 680; letter-spacing: .06em; text-transform: uppercase; }
+
+.preview-shell { margin-top: 23px; overflow: hidden; background: #fff; border: 1px solid #e4e5ec; border-radius: 24px; box-shadow: 0 15px 45px #25243c0a; }
+.preview-heading { min-height: 89px; padding: 17px 25px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid #ececf1; }
+.app-identity { display: flex; align-items: center; gap: 15px; min-width: 0; }
+.app-icon { width: 50px; height: 50px; flex: 0 0 50px; object-fit: cover; border-radius: 14px; }
+.app-icon-fallback { display: grid; place-items: center; color: white; background: #6d49db; font-size: 24px; font-weight: 750; }
+.overline { margin: 0 0 3px; color: #8a72dd; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+.app-identity h1 { margin: 0; font-size: 22px; line-height: 1.15; font-weight: 730; letter-spacing: -.035em; }
+.app-meta { margin: 3px 0 0; color: #87899a; font-size: 12px; }
+.status { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; color: #626477; background: #f8f9fb; border: 1px solid #eaebf0; border-radius: 999px; padding: 9px 12px; font-size: 12px; font-weight: 680; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #c6a55e; box-shadow: 0 0 0 3px #efdfba80; }
+.status-dot.connected { background: #27a973; box-shadow: 0 0 0 3px #c3ebd9; }
+.status-dot.disconnected { background: #d95c70; box-shadow: 0 0 0 3px #f7d8dd; }
+.status-dot.ended { background: #a2a4b0; box-shadow: 0 0 0 3px #e6e7ec; }
+.status-dot.ending { background: #c6a55e; box-shadow: 0 0 0 3px #efdfba80; }
+
+.viewer-stage { position: relative; display: grid; place-items: center; min-height: 0; padding: 22px; background: radial-gradient(circle at 50% 42%, #fcfcff 0, #f3f4fa 70%); }
+.phone { width: fit-content; padding: 7px; border-radius: 31px; background: #191923; box-shadow: 0 18px 40px #16162128; transition: box-shadow .2s; }
+.phone:focus-within { box-shadow: 0 18px 40px #16162128, 0 0 0 3px #bdaeff; }
+.screen { height: min(60dvh, 600px); aspect-ratio: 9 / 20; overflow: hidden; border-radius: 24px; background: #f9f9f9; }
+.phone.expanded .screen { height: min(82dvh, 900px); }
+.screen canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; cursor: default; }
+.frame-notice { position: absolute; bottom: 29px; color: #77798c; font-size: 12px; background: #ffffffeb; padding: 9px 13px; border-radius: 999px; box-shadow: 0 3px 12px #2221; }
+
+.viewer-footer { min-height: 77px; padding: 14px 23px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-top: 1px solid #ececf1; }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.controls button { display: inline-flex; align-items: center; justify-content: center; gap: 3px; min-height: 39px; padding: 8px 13px; color: #39394a; background: #f6f6f9; border: 1px solid #e9e9ef; border-radius: 10px; font-size: 12px; font-weight: 680; cursor: pointer; transition: background .12s, border-color .12s; }
+.controls button:hover { background: #eee9ff; border-color: #d6cafb; }
+.controls button:disabled { color: #a9aab5; background: #f8f8fa; border-color: #ececf1; cursor: not-allowed; }
+.controls button:disabled:hover { background: #f8f8fa; border-color: #ececf1; }
+.controls .end-session { color: #765f77; background: #fff; border-color: #ebe2ee; }
+.controls .end-session:hover { color: #65416b; background: #faf3fc; border-color: #dfcbe5; }
+.controls button:focus-visible { outline: 2px solid #704ceb; outline-offset: 2px; }
+.controls .pool-link { display: inline-flex; align-items: center; min-height: 39px; padding: 8px 12px; color: #6850bd; font-size: 12px; font-weight: 680; text-decoration: none; }
+.controls .pool-link:hover { text-decoration: underline; }
+.controls .pool-link:focus-visible { outline: 2px solid #704ceb; outline-offset: 2px; }
+.hint { margin: 0; color: #8c8e9e; font-size: 12px; line-height: 1.4; text-align: right; }
+.viewer-guidance { text-align: right; }
+.live-metrics { margin: 3px 0 0; color: #a1a2ae; font-size: 11px; font-variant-numeric: tabular-nums; }
+.error { margin: 0; padding: 10px 23px 15px; color: #b64452; font-size: 12px; }
+.session-notice { margin: 0; padding: 10px 23px 15px; color: #55745f; font-size: 12px; }
+
+.pool-shell { max-width: 850px; margin: clamp(44px, 9vh, 95px) auto 0; padding: clamp(26px, 5vw, 54px); background: #fff; border: 1px solid #e4e5ec; border-radius: 26px; box-shadow: 0 18px 55px #25243c0b; }
+.pool-shell h1 { margin: 7px 0 10px; font-size: clamp(31px, 4vw, 45px); line-height: 1.08; letter-spacing: -.055em; }
+.pool-intro { max-width: 560px; margin: 0; color: #717487; font-size: 15px; line-height: 1.65; }
+.app-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 35px; }
+.app-choice { display: flex; align-items: center; gap: 15px; min-height: 112px; padding: 18px; color: #262637; background: #fbfbfd; border: 1px solid #e6e6ef; border-radius: 19px; text-decoration: none; transition: background .15s, border-color .15s, transform .15s; }
+.app-choice:hover { background: #f8f5ff; border-color: #cbbcf8; transform: translateY(-2px); }
+.app-choice:focus-visible { outline: 3px solid #a996f3; outline-offset: 3px; }
+.app-choice img { width: 55px; height: 55px; border-radius: 14px; object-fit: cover; }
+.choice-copy { display: grid; gap: 4px; }
+.app-choice strong { font-size: 17px; letter-spacing: -.025em; }
+.app-choice small { color: #9193a1; font-size: 12px; }
+.choice-status { margin-left: auto; padding: 5px 8px; border-radius: 999px; background: #f0f1f5; color: #77798c; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.choice-status.available { background: #e4f5ed; color: #23865f; }
+.choice-status.leased, .choice-status.resetting { background: #fcf1e0; color: #9d7231; }
+.choice-status.offline { background: #fde8eb; color: #ac5260; }
+.choice-arrow { align-self: flex-start; color: #8a72dd; font-size: 23px; }
+.pool-footnote { margin: 23px 0 0; color: #9596a6; font-size: 12px; }
+.back-to-pool { display: inline-block; margin-top: 24px; color: #6b4fd0; font-size: 14px; font-weight: 720; text-decoration: none; }
+.back-to-pool:hover { text-decoration: underline; }
+
+@media (max-width: 720px) {
+  .page { padding: 0 15px 22px; }
+  .topbar { height: 58px; }
+  .private-label { display: none; }
+  .preview-shell { margin-top: 15px; border-radius: 19px; }
+  .preview-heading { min-height: 80px; padding: 14px 16px; }
+  .app-icon { width: 43px; height: 43px; flex-basis: 43px; font-size: 25px; border-radius: 12px; }
+  .app-identity { gap: 11px; }
+  .app-identity h1 { font-size: 19px; }
+  .status { padding: 7px 9px; font-size: 11px; }
+  .viewer-stage { padding: 14px; }
+  .screen { height: min(59dvh, 560px); }
+  .viewer-footer { display: block; padding: 12px; }
+  .controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .controls button { padding: 8px 10px; font-size: 11px; }
+  .viewer-guidance { text-align: center; margin-top: 10px; }
+  .pool-shell { margin-top: 28px; border-radius: 19px; }
+  .app-grid { grid-template-columns: 1fr; gap: 10px; margin-top: 25px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phone, .controls button { transition: none; }
+}

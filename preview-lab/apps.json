@@ -1,0 +1,4 @@
+[
+  {"package": "org.wikipedia", "name": "Wikipedia", "icon": "wikipedia.png"},
+  {"package": "de.danoeh.antennapod", "name": "AntennaPod", "icon": "antennapod.png"}
+]
