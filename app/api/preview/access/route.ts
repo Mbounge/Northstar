@@ -11,7 +11,11 @@ function base64url(value: Buffer | string) {
   return Buffer.from(value).toString("base64url");
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const origin = request.headers.get("origin");
+  if (origin && origin !== new URL(request.url).origin) {
+    return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
+  }
   const secret = process.env.NORTHSTAR_PREVIEW_GRANT_SECRET;
   if (!secret || Buffer.byteLength(secret) < 32) {
     return NextResponse.json({ error: "Preview access is not configured" }, { status: 503 });
@@ -20,8 +24,8 @@ export async function POST() {
   const { data: { user }, error: userError } = await db.auth.getUser();
   if (userError || !user) return NextResponse.json({ error: "Sign in to Northstar first" }, { status: 401 });
   const { data: profile, error: profileError } = await db.from("user_profiles")
-    .select("customer_id").eq("id", user.id).single();
-  if (profileError || !profile?.customer_id) {
+    .select("customer_id,status").eq("id", user.id).single();
+  if (profileError || !profile?.customer_id || profile.status !== "approved") {
     return NextResponse.json({ error: "Workspace access required" }, { status: 403 });
   }
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
