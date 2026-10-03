@@ -2,7 +2,7 @@
 import type { NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { CreativeArtifacts } from "./creative-artifacts";
 import { ModelThinkingPicker } from "./model-thinking-picker";
-import { chronologicalManagedTurns } from '@/lib/canvas-v2/managed-agent/chat-timeline';
+import { chronologicalManagedTurns, steeringReceiptLabel } from '@/lib/canvas-v2/managed-agent/chat-timeline';
 import { CanvasV2MarkdownMessage } from "./canvas-v2-markdown-message";
 import type { CanvasV2ChatEvidenceReference } from '@/lib/canvas-v2/chat-evidence';
 
@@ -195,6 +195,7 @@ function PendingDots({ reconnecting }: { reconnecting?: boolean }) {
 function ChatTurn({
   artifacts,
   turn,
+  receipt,
   busy,
   onContinue,
   onOpenImage,
@@ -202,6 +203,7 @@ function ChatTurn({
 }: {
   artifacts: NorthstarArtifact[];
   turn: CanvasV2ChatTurn & { earlierSegment?: boolean };
+  receipt?: string;
   busy: boolean;
   onContinue: (turnId: string) => void;
   onOpenImage: (attachment: CanvasV2ChatImageAttachment) => void;
@@ -210,6 +212,7 @@ function ChatTurn({
   const active = turn.status === "routing" || turn.status === "running";
   const progress = <>{!turn.loop && turn.activity?.length ? <ActivityFeed items={turn.activity} active={active} /> : null}{turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}</>;
   const hasProgress = Boolean(turn.activity?.length || (turn.route && turn.canvasInstruction));
+  const showAssistant = !turn.feedbackFor || Boolean(receipt || hasProgress || turn.answer || turn.artifacts?.length || turn.routeSummary || turn.loop?.finalSummary || turn.loop?.clarification || turn.error);
   return <article className="space-y-3" data-chat-turn={turn.id}>
     <div className="ml-10 text-[13px] leading-[1.55] text-[#37314f] dark:text-[#e2ddfb]">
       {turn.attachments?.length ? <div className="mb-2 flex snap-x snap-mandatory items-start gap-1.5 overflow-x-auto [scrollbar-width:thin]" data-testid="canvas-v2-sent-images" aria-label={`${turn.attachments.length} sent attachments`}>
@@ -228,7 +231,7 @@ function ChatTurn({
       </div> : null}
       <div className="rounded-[20px] rounded-br-md bg-[#ece8ff] px-4 py-3 dark:bg-[#302b4a]">{turn.message}</div>
     </div>
-    <div className="flex items-start gap-3">
+    {showAssistant && <div className="flex items-start gap-3">
       <div className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-lg bg-[#171721] text-[10px] font-black text-white dark:bg-[#6d59ed]">N</div>
       <div className="min-w-0 flex-1 pt-0.5">
         {active && !turn.earlierSegment && <PendingDots reconnecting={Boolean(turn.retry)} />}
@@ -240,7 +243,7 @@ function ChatTurn({
           <div className="pt-3">{progress}</div>
         </details>}
         {active && progress}
-        {turn.feedbackState && <p className="text-[12px] text-[#777085]" data-testid="canvas-v2-feedback-state">{turn.feedbackState === "queued" ? "Sending feedback…" : turn.feedbackState === "accepted" ? "Sent to agent" : turn.feedbackState === "incorporated" ? "Feedback incorporated" : turn.steeringBoundary ? "Delivery could not be confirmed" : "Feedback was not incorporated before stopping"}</p>}
+        {receipt && <p className="text-[12px] text-[#777085]" role="status" data-testid="canvas-v2-feedback-state">{receipt}</p>}
         {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.answer} artifacts={[...(turn.artifacts ?? []), ...artifacts]} evidenceReferences={turn.evidenceReferences} onOpenEvidence={onOpenEvidence} /></div>}
         {!!turn.artifacts?.length && <CreativeArtifacts artifacts={turn.artifacts} onOpenImage={onOpenImage} />}
         {turn.routeSummary && !turn.answer && !turn.loop?.finalSummary && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
@@ -257,7 +260,7 @@ function ChatTurn({
         {turn.status === "stopped" && !turn.earlierSegment && <div data-testid="canvas-v2-turn-stopped" className="mt-3 text-xs text-[#777789]">Stopped.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-3 text-[#6d59ed] hover:underline disabled:opacity-40 dark:text-[#b3a8ff]">Continue</button>}</div>}
         {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && turn.loop && turn.loop.deliveryMode !== "chat" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
       </div>
-    </div>
+    </div>}
   </article>;
 }
 
@@ -299,6 +302,7 @@ export function CanvasV2ChatPanel({
     setShowLatest(false);
     area?.scrollTo({ top: area.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
+  const displayedTurns = chronologicalManagedTurns(chat.turns);
   useEffect(() => {
     const area = scrollAreaRef.current;
     if (!area) return;
@@ -417,7 +421,7 @@ export function CanvasV2ChatPanel({
         <Sparkles aria-hidden="true" className="mb-5 h-7 w-7 text-[#aaa5b6] dark:text-[#66616f]" />
         <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
       </div>}
-      <div className="space-y-7">{chronologicalManagedTurns(chat.turns).map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} onOpenEvidence={screen => setExpandedImage({ name: screen.label, dataUrl: screen.url })} />)}</div>
+      <div className="space-y-7">{displayedTurns.map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} receipt={steeringReceiptLabel(displayedTurns, turn)} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} onOpenEvidence={screen => setExpandedImage({ name: screen.label, dataUrl: screen.url })} />)}</div>
       {flowPlacement && <p role={flowPlacement.error ? 'alert' : 'status'} className={'mt-4 px-1 text-xs ' + (flowPlacement.error ? 'text-red-700 dark:text-red-300' : 'text-[#6254bd] dark:text-[#c5baff]')}>{flowPlacement.message}</p>}
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Rendering the manual revision…</div>}
       {engine.manualNotice && <div className="mt-5 text-xs font-semibold leading-5 text-[#6e6b7b]">{engine.manualNotice}</div>}

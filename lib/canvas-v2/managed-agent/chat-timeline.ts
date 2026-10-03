@@ -39,3 +39,15 @@ export function chronologicalManagedTurns(turns: readonly CanvasV2ChatTurn[]): A
   }
   return turns.map(turn => projections.get(turn.id) ?? turn);
 }
+
+/** Delivery receipts belong to the live handoff, not the permanent chat history. */
+export function steeringReceiptLabel(turns: readonly CanvasV2ChatTurn[], turn: CanvasV2ChatTurn): string | undefined {
+  if (turn.feedbackState === 'cancelled') return turn.steeringBoundary ? 'Delivery could not be confirmed' : 'Feedback was not incorporated before stopping';
+  if (turn.feedbackState !== 'queued' && turn.feedbackState !== 'accepted') return undefined;
+  const root = turns.find(item => item.id === turn.feedbackFor);
+  if (!root || (root.status !== 'routing' && root.status !== 'running')) return undefined;
+  const latestSteer = turns.findLast(item => item.feedbackFor === root.id);
+  if (latestSteer?.id !== turn.id) return undefined;
+  if (turn.feedbackState === 'accepted' && turn.activity?.length) return undefined;
+  return turn.feedbackState === 'queued' ? 'Sending feedback…' : 'Sent to agent';
+}
