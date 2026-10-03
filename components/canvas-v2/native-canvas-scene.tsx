@@ -410,6 +410,22 @@ interface NativeRemovalPreviewSnapshot {
 // remains behind its shapes without becoming unclickable behind the canvas.
 const CANVAS_V2_NATIVE_STACK_BASE = 1_000;
 
+const CANVAS_EVIDENCE_IMAGE_WIDTHS = [128, 256, 384, 640, 1080, 1920] as const;
+
+function optimizedCanvasEvidenceImage(node: CanvasV2NativeSceneNode): { srcSet: string; sizes: string } | undefined {
+  const src = node.attributes.src;
+  if (!src || node.geometry.width <= 0) return undefined;
+  try {
+    const url = new URL(src);
+    if (url.protocol !== "https:" || !url.hostname.endsWith(".supabase.co") || !url.pathname.startsWith("/storage/v1/object/public/")) return undefined;
+    const sizes = `${Math.ceil(node.geometry.width * 1.25)}px`;
+    const srcSet = CANVAS_EVIDENCE_IMAGE_WIDTHS.map((width) => `/_next/image?url=${encodeURIComponent(src)}&w=${width}&q=75 ${width}w`).join(", ");
+    return { srcSet, sizes };
+  } catch {
+    return undefined;
+  }
+}
+
 function restoreNativeTransientStyle(snapshot: NativeTransientStyleSnapshot): void {
   for (const [property, original] of Object.entries(snapshot.properties)) {
     if (original.value) snapshot.element.style.setProperty(property, original.value, original.priority);
@@ -430,8 +446,9 @@ const NativeNode = memo(function NativeNode({
   if (!canvasV2NativeSceneNodeHasRenderableNamespace(node, parent)) return null;
   const narrowSelectable = node.selectable && node.namespace === "html" && (node.geometry.width <= 6 || node.geometry.height <= 6);
   const hostOwnsBackground = canvasV2NativeSceneNodeUsesHostBackground(node);
-  const eagerCanonicalEvidenceImage = node.kind === "image"
+  const canonicalEvidenceImage = node.kind === "image"
     && (node.canonicalEvidence || node.attributes["data-canvas-v2-evidence-role"] === "canonical");
+  const optimizedImage = canonicalEvidenceImage ? optimizedCanvasEvidenceImage(node) : undefined;
   const safeInlineStyle = normalizeCanvasV2ReactInlineStyle(node.inlineStyle);
   const style = Object.fromEntries(Object.entries(safeInlineStyle).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
   const runtimeStyle = {
@@ -468,15 +485,13 @@ const NativeNode = memo(function NativeNode({
     } : {}),
     ...(node.kind === "image" ? {
       draggable: false,
-      // Canonical rails are the visible source record, not scroll-driven
-      // gallery content. Request every grounded screen immediately so a rail
-      // never appears incomplete until the user pans the canvas. Other image
-      // objects retain lazy loading for normal workspace performance.
-      loading: eagerCanonicalEvidenceImage ? "eager" : node.attributes.loading ?? "lazy",
-      // Let the browser decode full-resolution screens without blocking the
-      // main thread. Every source screen remains visible while panning.
+      // Grounded rails can contain hundreds of phone captures. Keep the
+      // original src as a fallback, but decode a viewport-sized copy near
+      // the screen instead of every full-resolution capture at board load.
+      ...(optimizedImage ?? {}),
+      loading: canonicalEvidenceImage ? "lazy" : node.attributes.loading ?? "lazy",
       decoding: "async",
-      fetchPriority: eagerCanonicalEvidenceImage ? "high" : "auto",
+      fetchPriority: "auto",
     } : {}),
     suppressContentEditableWarning: true,
   };
