@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,8 +26,9 @@ class ProvisionCatalogTests(unittest.TestCase):
                 self.assertEqual(serial, "emulator-5554")
                 staged = apks / package
                 staged.mkdir()
-                content = b"test-apk-binary"
-                (staged / "base.apk").write_bytes(content)
+                with zipfile.ZipFile(staged / "base.apk", "w") as archive:
+                    archive.writestr("classes.dex", b"Lcom/pairip/licensecheck/LicenseActivity;" if package.endswith("protected") else b"test-dex")
+                content = (staged / "base.apk").read_bytes()
                 (staged / "manifest.json").write_text(json.dumps({
                     "package": package,
                     "splits": [{"file": "base.apk", "sha256": hashlib.sha256(content).hexdigest()}],
@@ -38,10 +40,13 @@ class ProvisionCatalogTests(unittest.TestCase):
                 self.assertEqual(provision_catalog.provision("com.example.app", "Example", "emulator-5554"), "ready")
                 self.assertEqual(json.loads(registry.read_text())[0]["package"], "com.example.app")
                 self.assertEqual(provision_catalog.provision("com.example.app", "Example", "emulator-5554"), "ready")
+                self.assertEqual(provision_catalog.provision("com.example.protected", "Protected", "emulator-5554"), "ready")
+                protected = next(app for app in json.loads(registry.read_text()) if app["package"] == "com.example.protected")
+                self.assertEqual(protected["launch_gate"], "google_play")
                 (apks / "com.example.app" / "base.apk").write_bytes(b"corrupt")
                 with self.assertRaises(ValueError):
                     provision_catalog.provision("com.example.app", "Example", "emulator-5554")
-                self.assertEqual(len(json.loads(registry.read_text())), 1)
+                self.assertEqual(len(json.loads(registry.read_text())), 2)
 
 
 if __name__ == "__main__":

@@ -69,6 +69,38 @@ async def run_checked(*command, timeout=90):
         raise RuntimeError("App provisioning failed")
 
 
+async def foreground_window():
+    process = await asyncio.create_subprocess_exec(
+        ADB, "-s", DEVICE, "shell", "dumpsys", "window",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), timeout=8)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        return ""
+    if process.returncode:
+        return ""
+    return next((line.decode("utf-8", "replace").strip() for line in output.splitlines()
+                 if b"mCurrentFocus=" in line), "")
+
+
+async def launch_app(package):
+    # A clean boot can finish with the launcher in front even after monkey
+    # reports success. Never hand that Android Home screen to a visitor.
+    for attempt in range(2):
+        await run_checked(ADB, "-s", DEVICE, "shell", "monkey", "-p", package,
+                          "-c", "android.intent.category.LAUNCHER", "1", timeout=30)
+        for _ in range(5):
+            await asyncio.sleep(2)
+            focus = await foreground_window()
+            if focus and "mCurrentFocus=null" not in focus and "nexuslauncher/" not in focus and "launcher3/" not in focus:
+                return
+        logging.warning("Preview app returned to Android Home after launch attempt %d: %s", attempt + 1, package)
+    raise RuntimeError("App did not remain open on the preview device")
+
+
 async def provision_app(app, package):
     if not package_allowed(app, package):
         raise ValueError("This app is not permitted on this preview worker")
@@ -84,7 +116,7 @@ async def provision_app(app, package):
         if package != DEFAULT_PACKAGE:
             await run_checked(ADB, "-s", DEVICE, "uninstall", DEFAULT_PACKAGE, timeout=30)
             await run_checked("python3", "/opt/northstar/preview-lab/app_catalog.py", "install", package, "--serial", DEVICE, timeout=90)
-            await run_checked(ADB, "-s", DEVICE, "shell", "monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1", timeout=30)
+        await launch_app(package)
         app["runtime"]["active_package"] = package
 
 
@@ -166,8 +198,10 @@ def refresh_catalog(app):
         raise ValueError("Preview catalog is invalid")
     validated = {}
     for entry in catalog:
-        if (not isinstance(entry, dict) or set(entry) != {"package", "name", "icon"}
-                or not all(isinstance(value, str) and value for value in entry.values())
+        if (not isinstance(entry, dict) or not {"package", "name", "icon"} <= set(entry)
+                or set(entry) - {"package", "name", "icon", "launch_gate"}
+                or not all(isinstance(entry[key], str) and entry[key] for key in ("package", "name", "icon"))
+                or ("launch_gate" in entry and entry["launch_gate"] != "google_play")
                 or entry["package"] in validated):
             raise ValueError("Preview catalog has invalid entries")
         validated[entry["package"]] = entry

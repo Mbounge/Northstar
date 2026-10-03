@@ -68,9 +68,11 @@ def load_apps(path: Path) -> dict[str, dict]:
         raise ValueError("Preview app catalog is empty")
     result = {}
     for app in apps:
-        if not isinstance(app, dict) or set(app) != {"package", "name", "icon"}:
+        if not isinstance(app, dict) or not {"package", "name", "icon"} <= set(app) or set(app) - {"package", "name", "icon", "launch_gate"}:
             raise ValueError("Invalid preview app metadata")
-        if not all(isinstance(value, str) and value for value in app.values()) or app["package"] in result:
+        if (not all(isinstance(app[key], str) and app[key] for key in ("package", "name", "icon"))
+                or ("launch_gate" in app and app["launch_gate"] != "google_play")
+                or app["package"] in result):
             raise ValueError("Invalid or duplicate preview app")
         result[app["package"]] = app
     return result

@@ -1,4 +1,4 @@
-export type ProvisionedApp = { package: string; name: string; icon: string };
+export type ProvisionedApp = { package: string; name: string; icon: string; launch_gate?: "google_play" };
 export type TenantApp = { app_name: string; icon_url?: string | null };
 export type PublishedSession = { app_name: string; android_package?: string | null };
 
@@ -17,7 +17,7 @@ export function permittedPreviewApps(tenantApps: readonly TenantApp[], provision
     else provisionedByName.set(name, app);
   }
   const published = new Map(sessions.map((session) => [key(session.app_name), session.android_package]));
-  const result: { name: string; packageName: string; iconUrl: string }[] = [];
+  const result: { name: string; packageName: string; iconUrl: string; launchGate?: "google_play" }[] = [];
   const seen = new Set<string>();
   for (const tenantApp of tenantApps) {
     const boundPackage = published.get(key(tenantApp.app_name));
@@ -27,7 +27,8 @@ export function permittedPreviewApps(tenantApps: readonly TenantApp[], provision
     if (!app || seen.has(app.package)) continue;
     seen.add(app.package);
     const iconUrl = tenantApp.icon_url || (safeIcon.test(app.icon) ? `${previewOrigin}/preview/${app.icon}` : `${previewOrigin}/preview/app-placeholder.svg`);
-    result.push({ name: tenantApp.app_name, packageName: app.package, iconUrl });
+    result.push({ name: tenantApp.app_name, packageName: app.package, iconUrl,
+      ...(app.launch_gate === "google_play" ? { launchGate: "google_play" as const } : {}) });
   }
   return result;
 }

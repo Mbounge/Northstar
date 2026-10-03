@@ -84,13 +84,21 @@ def ensure(serial):
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         print(f"{serial}: unavailable; skipped", flush=True)
         return
-    try:
-        verify(serial)
-    except RuntimeError:
-        print(f"{serial}: headless input drift detected; repairing", flush=True)
-        apply(serial, dismiss_overlay=False)
-        verify(serial)
-    print(f"{serial}: verified", flush=True)
+    # A wiped AVD can re-enable its IME during late boot, even after
+    # sys.boot_completed and PackageManager report ready. Reapply in place
+    # while those system services settle rather than forcing another wipe.
+    for attempt in range(10):
+        try:
+            verify(serial)
+            print(f"{serial}: verified", flush=True)
+            return
+        except RuntimeError:
+            if attempt == 9:
+                raise
+            if attempt == 0:
+                print(f"{serial}: headless input drift detected; repairing", flush=True)
+            apply(serial, dismiss_overlay=False)
+            time.sleep(3)
 
 
 def main():

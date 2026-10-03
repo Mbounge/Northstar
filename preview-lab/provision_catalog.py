@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import zipfile
 
 from app_catalog import CATALOG, PACKAGE_RE, checksum, stage
 
@@ -36,6 +37,22 @@ def verify_staged(package: str) -> None:
                 or checksum(folder / name) != expected):
             raise ValueError("Staged APK failed integrity verification")
         names.add(name)
+
+
+def requires_google_play(package: str) -> bool:
+    """Detect the Play licensing component in staged APK code, if present."""
+    marker = (b"com/pairip/licensecheck", b"com.pairip.licensecheck")
+    folder = CATALOG / package
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    for split in manifest["splits"]:
+        apk = folder / split["file"]
+        with zipfile.ZipFile(apk) as archive:
+            for name in archive.namelist():
+                if name.startswith("classes") and name.endswith(".dex"):
+                    code = archive.read(name)
+                    if any(value in code for value in marker):
+                        return True
+    return False
 
 
 def publish_json(path: Path, data: list[dict]) -> None:
@@ -94,6 +111,8 @@ def provision(package: str, name: str, serial: str, icon_source: Path | None = N
             temporary.replace(target)
             icon = f"icons/{package}.png"
         entry = {"package": package, "name": name, "icon": icon}
+        if requires_google_play(package):
+            entry["launch_gate"] = "google_play"
         next_apps = [entry if item.get("package") == package else item for item in apps]
         if prior is None:
             next_apps.append(entry)

@@ -16,4 +16,7 @@ test("only provisioned apps already assigned to the tenant can be previewed", ()
   assert.deepEqual(permittedPreviewApps([{ app_name: "Wikipedia" }], [
     ...staged, { name: "Wikipedia", package: "org.wikipedia.clone", icon: "clone.png" },
   ]), []);
+  assert.equal(permittedPreviewApps([{ app_name: "JobGet" }], [
+    { name: "JobGet", package: "com.jobget", icon: "icons/com.jobget.png", launch_gate: "google_play" },
+  ])[0]?.launchGate, "google_play");
 });
