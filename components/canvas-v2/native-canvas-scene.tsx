@@ -1185,6 +1185,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       filter:none!important;
       box-shadow:0 10px 22px rgba(32,24,80,.09)!important;
     }
+    [data-canvas-v2-native-scene="true"] img.canvas-v2-evidence-packet__image {
+      filter:none!important;
+      box-shadow:0 10px 20px rgba(32,24,80,.08)!important;
+    }
     /* Camera-only paint culling. Layout, source URLs, native bounds and the
        private full-document renderer remain unchanged. */
     [data-canvas-v2-native-scene="true"] img[data-canvas-v2-image-offscreen]:not([data-canvas-v2-evidence-role="canonical"]) {

@@ -51,7 +51,7 @@ export const CANVAS_V2_EVIDENCE_PACKET_CSS = `
 .canvas-v2-evidence-packet__media { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); align-items:start; gap:20px; }
 .canvas-v2-evidence-capture { min-width:0; margin:0; padding:0; border:0; border-radius:0; background:transparent; }
 .canvas-v2-evidence-capture--marketing { padding:0; box-shadow:none; }
-.canvas-v2-evidence-packet__image { display:block; width:100%; height:320px; max-width:100%; border-radius:12px; object-fit:contain; background:var(--canvas-v2-packet-soft); filter:drop-shadow(0 10px 20px rgba(32,24,80,.08)); }
+.canvas-v2-evidence-packet__image { display:block; width:100%; height:320px; max-width:100%; border-radius:12px; object-fit:contain; background:var(--canvas-v2-packet-soft); box-shadow:0 10px 20px rgba(32,24,80,.08); }
 .canvas-v2-evidence-capture--marketing .canvas-v2-evidence-packet__image { height:460px; }
 .canvas-v2-evidence-capture__caption { display:grid; gap:5px; margin-top:13px; color:var(--canvas-v2-packet-muted); font-size:11px; font-weight:560; line-height:1.45; }
 .canvas-v2-evidence-capture__caption strong { color:var(--canvas-v2-packet-ink); font-size:13px; }
