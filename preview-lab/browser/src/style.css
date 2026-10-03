@@ -72,8 +72,12 @@ html.embedded-preview, html.embedded-preview body { background: transparent; }
 .session-notice { margin: 0; padding: 12px 24px; color: #b4e5cb; background: #315a4430; font-size: 12px; }
 
 html.embedded-preview[data-theme="light"] .page.embedded { color: #252438; }
-html.embedded-preview[data-theme="light"] .page.embedded .viewer-stage { background: radial-gradient(ellipse 43% 58% at 48% 52%, #797de329, transparent 84%); }
+html.embedded-preview[data-theme="light"] .page.embedded .viewer-stage { background: transparent; }
 html.embedded-preview[data-theme="light"] .page.embedded .viewer-stage::before { background: linear-gradient(90deg, #615a8a05 1px, transparent 1px), linear-gradient(#615a8a05 1px, transparent 1px); background-size: 64px 64px; }
+html.embedded-preview[data-theme="light"] .page.embedded .device-area::before { display: none; }
+html.embedded-preview[data-theme="light"] .page.embedded .phone { box-shadow: 0 0 0 1px #232332; }
+html.embedded-preview[data-theme="light"] .page.embedded .phone:focus-within { box-shadow: 0 0 0 2px #8e75e5; }
+html.embedded-preview[data-theme="light"] .page.embedded .frame-notice { color: #4e4b62; background: #ffffffeb; border-color: #d9d8e6; box-shadow: none; }
 html.embedded-preview[data-theme="light"] .page.embedded .stage-intro > p:not(.overline) { color: #5f6174; }
 html.embedded-preview[data-theme="light"] .page.embedded .stage-intro .stage-footnote { color: #86869d !important; }
 html.embedded-preview[data-theme="light"] .page.embedded .session-panel { border-color: #ffffffd9; background: linear-gradient(145deg, #fffffff0, #f4f3fbdd); box-shadow: 0 18px 50px #5b5d8a21; }
