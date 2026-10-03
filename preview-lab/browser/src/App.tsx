@@ -513,30 +513,37 @@ function PreviewApp() {
     </header>}
 
     <section className="preview-shell" aria-label={`${appName} live app preview`}>
-      <div className="preview-heading">
+      {!embedded && <div className="preview-heading">
         <div className="app-identity">{appIcon ? <img className="app-icon" src={asset(appIcon)} alt="" /> : <span className="app-icon app-icon-fallback">{appName.slice(0, 1)}</span>}<div><p className="overline">LIVE APP PREVIEW</p><h1>{appName}</h1><p className="app-meta">Android · {deviceLabel ? `Private device ${deviceLabel}` : 'Device assigned when available'}</p></div></div>
-        <div className="status" aria-live="polite"><span className={`status-dot ${ended ? 'ended' : ending ? 'ending' : connection}`} />{ended ? 'Ended' : ending ? 'Ending…' : connection === 'connected' ? 'Live' : waitingForDevice ? `Waiting for a device${queuePosition ? ` · ${queuePosition} in queue` : ''}` : connection === 'disconnected' && hasFrame ? 'Reconnecting…' : 'Preparing device…'}</div>
-      </div>
+      </div>}
 
-      <div className="viewer-stage">
-        <div className={`phone ${expanded ? 'expanded' : ''}`}>
+      <div className={`viewer-stage ${expanded ? 'is-expanded' : ''}`}>
+        <div className="stage-intro">
+          <p className="overline">INTERACTIVE PREVIEW</p>
+          <h2>Explore the real app.</h2>
+          <p>Tap, swipe, scroll and type directly on the device.</p>
+          <span className="stage-rule" aria-hidden="true" />
+          <p className="stage-footnote">A private Android session for your workspace.</p>
+        </div>
+        <div className="device-area"><div className={`phone ${expanded ? 'expanded' : ''}`}>
           <div className="screen"><canvas ref={canvas} width={540} height={1200} tabIndex={0} aria-label={`Interactive ${appName} Android preview`} aria-disabled={!interactive} onPointerDown={event => { if (!interactive) return; event.preventDefault(); pressed.current = true; lastPointer.current = locate(event); event.currentTarget.setPointerCapture(event.pointerId); textInput.current?.focus({ preventScroll: true }); send({ type: 'touch', action: 'down', ...lastPointer.current }); }} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onKeyDown={onKeyDown} onPaste={event => { const value = event.clipboardData.getData('text'); if (value && value.length <= 200 && /^[\x20-\x7E]+$/.test(value)) { event.preventDefault(); flushText(); send({ type: 'text', value }); } }} /><textarea ref={textInput} className="input-capture" tabIndex={-1} aria-label="Type in Android preview" autoCapitalize="off" autoCorrect="off" spellCheck={false} onKeyDown={onTextKeyDown} onInput={event => { const value = event.currentTarget.value; event.currentTarget.value = ''; appendText(value); }} onPaste={event => { const value = event.clipboardData.getData('text'); if (value && value.length <= 200 && /^[\x20-\x7E]+$/.test(value)) { event.preventDefault(); flushText(); send({ type: 'text', value }); } }} onBlur={flushText} /></div>
-        </div>
+        </div></div>
         {!hasFrame && <div className="frame-notice">{ended ? 'Session ended' : waitingForDevice ? `Your private device is being prepared${queuePosition ? ` · queue position ${queuePosition}` : ''}.` : 'Starting a clean Android device…'}</div>}
-      </div>
-
-      <div className="viewer-footer">
-        <div className="controls">
-          <button type="button" disabled={!interactive} onClick={() => send({ type: 'key', key: 'GoBack' })}>← <span>Back</span></button>
-          <button type="button" disabled={!interactive} onClick={() => send({ type: 'key', key: 'GoHome' })}>⌂ <span>Device Home</span></button>
-          <button type="button" onClick={() => setExpanded(value => !value)}>{expanded ? '↙' : '↗'} <span>{expanded ? 'Fit view' : 'Enlarge'}</span></button>
-          <button type="button" onClick={ended ? () => { endedRef.current = false; setEnded(false); setError(''); setNotice(''); setInstance(value => value + 1); } : reconnect}>↻ <span>{ended ? 'Start preview' : 'Reconnect'}</span></button>
-          {!ended && <button type="button" className="end-session" disabled={ending || (pooled ? !assignmentRef.current : !interactive)} onClick={() => void endSession()}>{ending ? 'Ending…' : 'End session'}</button>}
+        <aside className="session-panel" aria-label="Preview session controls">
+          <div className="session-panel-heading"><span className="overline">YOUR SESSION</span><span className="session-index">ANDROID{deviceLabel ? ` · ${deviceLabel}` : ''}</span></div>
+          <div className="status" aria-live="polite"><span className={`status-dot ${ended ? 'ended' : ending ? 'ending' : connection}`} />{ended ? 'Session ended' : ending ? 'Ending session…' : connection === 'connected' ? 'Live device' : waitingForDevice ? `Waiting for device${queuePosition ? ` · ${queuePosition} in queue` : ''}` : connection === 'disconnected' && hasFrame ? 'Reconnecting…' : 'Preparing device…'}</div>
+          <div className="controls">
+          <button type="button" disabled={!interactive} onClick={() => send({ type: 'key', key: 'GoBack' })}><span className="control-glyph" aria-hidden="true">←</span><span>Back</span></button>
+          <button type="button" disabled={!interactive} onClick={() => send({ type: 'key', key: 'GoHome' })}><span className="control-glyph" aria-hidden="true">⌂</span><span>Device home</span></button>
+          <button type="button" onClick={() => setExpanded(value => !value)}><span className="control-glyph" aria-hidden="true">{expanded ? '↙' : '↗'}</span><span>{expanded ? 'Fit view' : 'Enlarge'}</span></button>
+          <button type="button" onClick={ended ? () => { endedRef.current = false; setEnded(false); setError(''); setNotice(''); setInstance(value => value + 1); } : reconnect}><span className="control-glyph" aria-hidden="true">↻</span><span>{ended ? 'Start preview' : 'Reconnect'}</span></button>
+          {!ended && <button type="button" className="end-session" disabled={ending || (pooled ? !assignmentRef.current : !interactive)} onClick={() => void endSession()}><span className="control-glyph" aria-hidden="true">×</span><span>{ending ? 'Ending…' : 'End session'}</span></button>}
           {pooled && ended && !embedded && <a className="pool-link" href="?pool=1">Choose another app</a>}
+          </div>
+          <p className="session-help">If the app asks you to sign in, use your own account. This device is erased when your session ends.</p>
+          {!ended && <p className="live-metrics">{frameRate === null ? 'Connecting stream…' : `${frameRate} frames/s`}{latencyMs !== null && ` · ${latencyMs} ms response`}</p>}
+        </aside>
         </div>
-        <div className="viewer-guidance"><p className="hint">Tap, swipe or scroll inside the phone. Click it first to type. If the app asks you to sign in, use your own account; this device is wiped after your session.</p>
-          {!ended && <p className="live-metrics">{frameRate === null ? 'Measuring video…' : `${frameRate} frames/s`}{latencyMs !== null && ` · ${latencyMs} ms input to next frame`}</p>}</div>
-      </div>
       {error && <p className="error" role="alert">{error}</p>}
       {notice && <p className="session-notice" role="status">{notice}</p>}
     </section>
