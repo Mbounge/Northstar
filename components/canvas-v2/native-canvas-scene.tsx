@@ -1237,6 +1237,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     () => scopeCanvasV2ArtifactCss(renderedScene?.css ?? revision.document.css),
     [renderedScene?.css, revision.document.css],
   );
+  const renderedRootNodes = useMemo(() => renderedScene?.rootIds.map((rootId) => {
+    const node = byId.get(rootId);
+    return node ? <NativeNode key={node.id} node={node} byId={byId} /> : null;
+  }), [renderedScene, byId]);
 
   return (
     <div className="relative" style={{ width, height, pointerEvents: framePointerEvents }}>
@@ -1309,10 +1313,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       >
         <style data-canvas-v2-artifact-styles="scoped">{publicSceneCss}</style>
         <style>{nativeLayoutGuard}</style>
-        {renderedScene?.rootIds.map((rootId) => {
-          const node = byId.get(rootId);
-          return node ? <NativeNode key={node.id} node={node} byId={byId} /> : null;
-        })}
+        {renderedRootNodes}
       </div>
       {activeEditable && <CanvasV2RichTextToolbar editable={activeEditable} finish={() => finishTextEditingRef.current()} />}
       {compileError && <div role="alert" className="absolute left-6 top-6 rounded-lg bg-red-950 px-4 py-3 text-sm text-white">Native scene compilation failed: {compileError}</div>}
