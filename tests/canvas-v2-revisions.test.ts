@@ -31,6 +31,26 @@ test("a candidate is a separate immutable transition from its committed parent",
   assert.notEqual(candidate.evidence, first.evidence);
 });
 
+test("geometry-only revisions retain research memory without rescanning authored content", () => {
+  const parent = createCanvasV2CommittedRevision({
+    id: "geometry-parent",
+    document: { html: '<div data-canvas-v2-node-id="card" style="left:10px">Same claim</div>', css: "" },
+    evidence: [],
+    createdAt: "2026-08-11T12:00:00.000Z",
+  });
+  const candidate = createCanvasV2CandidateRevision({
+    id: "geometry-next",
+    parent,
+    document: { html: '<div data-canvas-v2-node-id="card" style="left:20px">Same claim</div>', css: "" },
+    geometryOnly: true,
+    createdAt: "2026-08-11T12:01:00.000Z",
+  });
+  assert.equal(candidate.discoveryGraph?.revisionId, candidate.id);
+  assert.equal(candidate.discoveryGraph?.nodes, parent.discoveryGraph?.nodes);
+  assert.deepEqual(candidate.discoveryGraph?.changeSet, { addedNodeIds: [], updatedNodeIds: [], historicalNodeIds: [], addedEdgeIds: [] });
+  assert.equal(parent.discoveryGraph?.revisionId, parent.id);
+});
+
 test("commit rejects a stale parent and preserves revision identity", () => {
   const candidate = createCanvasV2CandidateRevision({
     id: "revision-2",

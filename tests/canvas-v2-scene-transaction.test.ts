@@ -4,10 +4,12 @@ import test from "node:test";
 import {
   assertCanvasV2SceneTransaction,
   compileCanvasV2SceneTransaction,
+  compileCanvasV2NativeSceneTransaction,
   normalizeCanvasV2SceneObjectIdentities,
   reconcileCanvasV2ObjectAuthorship,
 } from "../lib/canvas-v2/scene-transaction";
 import type { CanvasV2WorkingContext } from "../lib/canvas-v2/working-context";
+import { CANVAS_V2_NATIVE_SCENE_SCHEMA, applyCanvasV2NativeSceneMutation, serializeCanvasV2NativeScene } from "../lib/canvas-v2/native-scene";
 
 function workingContext(input: { policy?: "modify" | "reference"; editable?: string[]; protected?: string[] } = {}): CanvasV2WorkingContext {
   const selectedNodeIds = ["human-note"];
@@ -56,6 +58,42 @@ test("one transaction describes the full visible scene delta", () => {
   assert.ok(transaction.mutations.some((mutation) => mutation.nodeId === "title-a" && mutation.kind === "update"));
   assert.ok(transaction.mutations.some((mutation) => mutation.nodeId === "body-a" && mutation.kind === "create"));
   assertCanvasV2SceneTransaction({ transaction, baseRevisionId: "revision-1", previous, next });
+});
+
+test("native gesture ledger matches the serialized scene on consecutive edits", () => {
+  const empty = { schema: CANVAS_V2_NATIVE_SCENE_SCHEMA, revisionId: "revision-1", width: 1200, height: 800, rootIds: [], nodes: [], css: "" };
+  const initial = applyCanvasV2NativeSceneMutation(empty, { kind: "batch", label: "Two cards", mutations: [
+    { kind: "create", primitive: "shape", nodeId: "first", x: 100, y: 100, width: 100, height: 80 },
+    { kind: "create", primitive: "shape", nodeId: "second", x: 300, y: 100, width: 100, height: 80 },
+  ] });
+  const gestures = [
+    { kind: "move", nodeId: "first", deltaX: 40, deltaY: 20 },
+    { kind: "resize", nodeId: "second", width: 125, height: 95 },
+    { kind: "rotate", nodeId: "first", rotation: 18 },
+    { kind: "move", nodeId: "second", deltaX: -18, deltaY: 44 },
+  ] as const;
+  let previousScene = initial;
+  for (const gesture of gestures) {
+    const nextScene = applyCanvasV2NativeSceneMutation(previousScene, gesture);
+    const previous = serializeCanvasV2NativeScene(previousScene);
+    const next = serializeCanvasV2NativeScene(nextScene);
+    const transaction = compileCanvasV2NativeSceneTransaction({ baseRevisionId: "revision-1", previousScene, nextScene, previous, next });
+    assertCanvasV2SceneTransaction({ transaction, baseRevisionId: "revision-1", previous, next });
+    assert.equal(transaction.mutations.find((item) => item.nodeId === gesture.nodeId)?.kind, "update");
+    previousScene = nextScene;
+  }
+});
+
+test("native ledger records content and style edits without assuming geometry only", () => {
+  const empty = { schema: CANVAS_V2_NATIVE_SCENE_SCHEMA, revisionId: "revision-1", width: 1200, height: 800, rootIds: [], nodes: [], css: "" };
+  const initial = applyCanvasV2NativeSceneMutation(empty, { kind: "create", primitive: "text", nodeId: "note", x: 100, y: 100, width: 200, height: 80 });
+  const edited = applyCanvasV2NativeSceneMutation(initial, { kind: "text", nodeId: "note", text: "Edited note" });
+  const previous = serializeCanvasV2NativeScene(initial);
+  const next = serializeCanvasV2NativeScene(edited);
+  const transaction = compileCanvasV2NativeSceneTransaction({ baseRevisionId: "revision-1", previousScene: initial, nextScene: edited, previous, next });
+  assertCanvasV2SceneTransaction({ transaction, baseRevisionId: "revision-1", previous, next });
+  assert.equal(transaction.mutations.find((item) => item.nodeId === "note")?.kind, "update");
+  assert.equal(transaction.geometryOnly, undefined);
 });
 
 test("AI scene authorship cannot silently replace a human-edited object", () => {

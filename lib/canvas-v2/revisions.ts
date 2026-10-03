@@ -100,6 +100,7 @@ export function createCanvasV2CandidateRevision(input: {
   discoveryState?: CanvasV2DiscoveryState;
   createdAt: string;
   sceneTransaction?: CanvasV2ArtifactRevision["sceneTransaction"];
+  geometryOnly?: boolean;
 }): CanvasV2ArtifactRevision {
   if (input.parent.state !== "committed") {
     throw new Error("A Canvas V2 candidate must be based on a committed revision.");
@@ -109,7 +110,19 @@ export function createCanvasV2CandidateRevision(input: {
   }
 
   const evidencePackets = cloneEvidencePackets(input.evidencePackets ?? input.parent.evidencePackets);
-  const discoveryGraph = syncCanvasV2DiscoveryGraph({
+  // Geometry-only gestures change the board's placement, not its research
+  // claims, source lineage, or readable content. Rebuilding the full graph on
+  // pointer-up stalls the next gesture on screenshot-rich canvases.
+  const carriedGraph = input.geometryOnly && input.parent.discoveryGraph
+    ? {
+        ...input.parent.discoveryGraph,
+        version: input.parent.discoveryGraph.version + 1,
+        revisionId: input.id,
+        updatedAt: input.createdAt,
+        changeSet: { addedNodeIds: [], updatedNodeIds: [], historicalNodeIds: [], addedEdgeIds: [] },
+      }
+    : undefined;
+  const discoveryGraph = carriedGraph ?? syncCanvasV2DiscoveryGraph({
     previous: input.discoveryGraph ?? input.parent.discoveryGraph,
     revisionId: input.id,
     updatedAt: input.createdAt,

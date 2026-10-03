@@ -1,5 +1,6 @@
 import type { CanvasV2ArtifactDocument, CanvasV2IslandExecutionContract } from "@/lib/canvas-v2/types";
 import type { CanvasV2ObjectOrigin, CanvasV2WorkingContext } from "@/lib/canvas-v2/working-context";
+import type { CanvasV2NativeSceneDocument, CanvasV2NativeSceneNode } from "@/lib/canvas-v2/native-scene";
 
 export const CANVAS_V2_SCENE_TRANSACTION_SCHEMA = "canvas-v2.scene-transaction.v1" as const;
 
@@ -31,6 +32,7 @@ export interface CanvasV2SceneTransaction {
   beforeObjectCount: number;
   afterObjectCount: number;
   stylesheetChanged: boolean;
+  geometryOnly?: boolean;
   targeting?: Pick<CanvasV2WorkingContext, "scope" | "selectionPolicy" | "selectedNodeIds" | "editableNodeIds" | "protectedNodeIds" | "visibleBounds">;
 }
 
@@ -341,6 +343,109 @@ export function compileCanvasV2SceneTransaction(input: {
       protectedNodeIds: input.workingContext.protectedNodeIds,
       visibleBounds: input.workingContext.visibleBounds,
     } } : {}),
+  };
+}
+
+/**
+ * Manual edits already have an immutable native scene on each side of the
+ * change. Build their ledger from that scene instead of parsing and hashing
+ * the entire serialized HTML on the pointer-up path. An unchanged node keeps
+ * its object identity through applyCanvasV2NativeSceneMutation.
+ */
+export function compileCanvasV2NativeSceneTransaction(input: {
+  baseRevisionId: string;
+  previousScene: CanvasV2NativeSceneDocument;
+  nextScene: CanvasV2NativeSceneDocument;
+  previous: CanvasV2ArtifactDocument;
+  next: CanvasV2ArtifactDocument;
+}): CanvasV2SceneTransaction {
+  const before = new Map(input.previousScene.nodes.map((node) => [node.id, node]));
+  const after = new Map(input.nextScene.nodes.map((node) => [node.id, node]));
+  const beforeBySourceId = new Map(input.previousScene.nodes.filter((node) => node.sourceNodeId).map((node) => [node.sourceNodeId!, node]));
+  const afterBySourceId = new Map(input.nextScene.nodes.filter((node) => node.sourceNodeId).map((node) => [node.sourceNodeId!, node]));
+  const sourceParent = (node: CanvasV2NativeSceneNode, nodes: Map<string, CanvasV2NativeSceneNode>): string | undefined => {
+    let parentId = node.detachedFromParentId ?? node.parentId;
+    const seen = new Set<string>();
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = nodes.get(parentId);
+      if (!parent) break;
+      if (parent.sourceNodeId) return parent.sourceNodeId;
+      parentId = parent.detachedFromParentId ?? parent.parentId;
+    }
+  };
+  const changed = new Set<string>();
+  const ids = new Set([...beforeBySourceId.keys(), ...afterBySourceId.keys()]);
+  for (const nodeId of ids) {
+    const oldNode = beforeBySourceId.get(nodeId);
+    const newNode = afterBySourceId.get(nodeId);
+    if (!oldNode || !newNode || oldNode !== newNode
+      || sourceParent(oldNode, before) !== sourceParent(newNode, after)) changed.add(nodeId);
+  }
+  // A serialized parent contains its descendants. A changed child therefore
+  // changes the parent's source fingerprint even when the parent value itself
+  // was reused by the native scene.
+  for (const nodeId of [...changed]) {
+    for (const [node, nodes] of [[beforeBySourceId.get(nodeId), before], [afterBySourceId.get(nodeId), after]] as const) {
+      if (!node) continue;
+      let parentId = sourceParent(node, nodes);
+      const seen = new Set<string>();
+      while (parentId && !seen.has(parentId)) {
+        seen.add(parentId);
+        changed.add(parentId);
+        const parent = (nodes === before ? beforeBySourceId : afterBySourceId).get(parentId);
+        parentId = parent ? sourceParent(parent, nodes) : undefined;
+      }
+    }
+  }
+  const islandId = (node: CanvasV2NativeSceneNode, nodes: Map<string, CanvasV2NativeSceneNode>): string | undefined => {
+    let current: CanvasV2NativeSceneNode | undefined = node;
+    const seen = new Set<string>();
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      if (current.attributes["data-canvas-v2-island-id"]) return current.attributes["data-canvas-v2-island-id"];
+      current = nodes.get(current.detachedFromParentId ?? current.parentId ?? "");
+    }
+  };
+  const metadata = (node: CanvasV2NativeSceneNode, nodes: Map<string, CanvasV2NativeSceneNode>) => ({
+    parentNodeId: sourceParent(node, nodes),
+    tagName: node.tagName,
+    userEdited: node.userEdited,
+    islandId: islandId(node, nodes),
+    visualRole: node.attributes["data-canvas-v2-visual-role"],
+    evidenceId: node.attributes["data-canvas-v2-evidence-id"],
+    origin: (["user", "northstar", "research", "imported"].includes(node.attributes["data-canvas-v2-origin"])
+      ? node.attributes["data-canvas-v2-origin"] : undefined) as CanvasV2ObjectOrigin | undefined,
+    lastAuthor: node.lastAuthor,
+    editVersion: node.editVersion,
+    locked: node.locked,
+    hidden: node.hidden,
+  });
+  const mutations: CanvasV2SceneMutation[] = [...ids].sort().map((nodeId) => {
+    const oldNode = beforeBySourceId.get(nodeId);
+    const newNode = afterBySourceId.get(nodeId);
+    const node = newNode ?? oldNode!;
+    return {
+      kind: !oldNode ? "create" : !newNode ? "remove" : changed.has(nodeId) ? "update" : "preserve",
+      nodeId,
+      ...metadata(node, newNode ? after : before),
+    };
+  });
+  // The native compiler intentionally omits this non-rendering metadata node.
+  // It remains in both serialized documents and in the transaction inventory.
+  if (input.previous.html.includes('data-canvas-v2-node-id="canvas-root"') || input.next.html.includes('data-canvas-v2-node-id="canvas-root"')) {
+    mutations.push({ kind: "preserve", nodeId: "canvas-root", tagName: "template", userEdited: false, editVersion: 0, locked: false, hidden: false });
+    mutations.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  }
+  return {
+    schema: CANVAS_V2_SCENE_TRANSACTION_SCHEMA,
+    origin: "user",
+    baseRevisionId: input.baseRevisionId,
+    mutations,
+    protectedUserNodeIds: [...beforeBySourceId.values()].filter((node) => node.userEdited).map((node) => node.sourceNodeId!),
+    beforeObjectCount: beforeBySourceId.size + (mutations.some((mutation) => mutation.nodeId === "canvas-root") ? 1 : 0),
+    afterObjectCount: afterBySourceId.size + (mutations.some((mutation) => mutation.nodeId === "canvas-root") ? 1 : 0),
+    stylesheetChanged: input.previous.css !== input.next.css,
   };
 }
 

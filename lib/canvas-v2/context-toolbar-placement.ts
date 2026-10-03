@@ -19,11 +19,9 @@ function intersectionArea(first: CanvasV2ScreenRect, second: CanvasV2ScreenRect)
 
 /**
  * Place the contextual inspector in real screen space. The active selection
- * is the one obstacle that may never be covered. The inspector remains
- * visually attached to that object: centered above when possible, immediately
- * below when the upper edge/chrome is occupied, and only then beside/docked.
- * Other board content may sit under a floating inspector; avoiding unrelated
- * content must never make the controls look detached from their selection.
+ * is the one obstacle that may never be covered. Prefer a nearby clear space
+ * over a toolbar laid across another selectable object: that object must stay
+ * available for the very next click or drag.
  */
 export function resolveCanvasV2ContextToolbarPosition(input: {
   selection: CanvasV2ScreenRect;
@@ -75,9 +73,9 @@ export function resolveCanvasV2ContextToolbarPosition(input: {
   }).sort((left, right) => (
     left.selectionOverlap - right.selectionOverlap
     || left.chromeOverlap - right.chromeOverlap
+    || left.environmentOverlap - right.environmentOverlap
     || left.candidate.preference - right.candidate.preference
     || left.distance - right.distance
-    || left.environmentOverlap - right.environmentOverlap
     || left.candidate.top - right.candidate.top
     || left.candidate.center - right.candidate.center
   ));

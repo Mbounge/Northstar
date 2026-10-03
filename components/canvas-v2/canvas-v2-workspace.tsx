@@ -2054,14 +2054,16 @@ export function CanvasV2Workspace({
         : clearsSelection
           ? []
           : selectedElements.map((item) => item.nodeId);
-      if (!engine.applyManualDocument(document, describeCanvasV2ManualMutation(mutation), undefined, nextNativeScene, {
+      const accepted = engine.applyManualDocument(document, describeCanvasV2ManualMutation(mutation), undefined, nextNativeScene, {
         // Model turns must retain their grounded sources. An explicit human
         // delete is different: user ownership wins, including for a canonical
         // screenshot or an entire selected set of screenshots.
         allowEvidenceRemoval: mutation.kind === "delete"
           || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete")),
         selectionNodeIds: historySelectionNodeIds,
-      })) {
+        fastNativeTransaction: Boolean(nextNativeScene && atomicMutations.every((item) => item.kind === "move" || item.kind === "resize" || item.kind === "rotate" || item.kind === "transform")),
+      });
+      if (!accepted) {
         setMutationError(engine.readManualFailure() ?? (atomicMutations.some(item => item.kind === "text")
           ? "This edit could not be committed yet. Your text stays open so you can retry without losing it."
           : "This edit could not be committed yet. Please try again."));

@@ -40,7 +40,7 @@ test("the contextual toolbar never trades covering the selection for a cleaner e
   assert.equal(overlapWidth * overlapHeight, 0);
 });
 
-test("nearby canvas content cannot detach the inspector from its selected object", () => {
+test("nearby canvas content stays clickable when no attached placement is clear", () => {
   const placement = resolveCanvasV2ContextToolbarPosition({
     selection: { left: 540, top: 460, right: 760, bottom: 490 },
     toolbar: { width: 336, height: 56 },
@@ -52,9 +52,21 @@ test("nearby canvas content cannot detach the inspector from its selected object
     chrome: [],
   });
 
-  assert.equal(placement.placement, "above");
+  assert.equal(placement.placement, "dock");
   assert.equal(placement.center, 650);
-  assert.equal(placement.top, 384);
+  assert.equal(placement.top, 18);
+});
+
+test("a newly moved object does not put its toolbar over the next object", () => {
+  const placement = resolveCanvasV2ContextToolbarPosition({
+    selection: { left: 470, top: 200, right: 518, bottom: 307 },
+    toolbar: { width: 312, height: 42 },
+    viewport: { left: 442, top: 18, right: 1_060, bottom: 620 },
+    obstacles: [{ left: 520, top: 88, right: 570, bottom: 198 }],
+    chrome: [],
+  });
+  assert.equal(placement.placement, "below");
+  assert.equal(placement.top, 327);
 });
 
 test("a top-edge selection flips to the immediately connected row below", () => {

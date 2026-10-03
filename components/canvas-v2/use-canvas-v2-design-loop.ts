@@ -39,6 +39,7 @@ import {
 } from "@/lib/canvas-v2/types";
 import {
   assertCanvasV2SceneTransaction,
+  compileCanvasV2NativeSceneTransaction,
   compileCanvasV2SceneTransaction,
   reconcileCanvasV2ObjectAuthorship,
 } from "@/lib/canvas-v2/scene-transaction";
@@ -232,6 +233,9 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
   // React state remains the render subscription, not the transaction lock.
   const committedRef = useRef<CanvasV2ArtifactRevision>(initial);
   const nativeSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
+  // The saved source corresponds to this scene, while later public layout
+  // measurements may adjust native paint geometry before the next gesture.
+  const serializedNativeSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
   const inspectionScenesRef = useRef(new Map<string, CanvasV2NativeSceneDocument>());
   const transactionalHistoryRef = useRef<CanvasV2TransactionalHistory>(initialHistory);
   const observationsRef = useRef<Record<string, CanvasV2RenderObservation>>({});
@@ -971,13 +975,13 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     summary: string,
     evidence?: readonly CanvasV2EvidenceAsset[],
     nativeSceneRevision?: CanvasV2NativeSceneDocument,
-    options: { focusIslandId?: string; execution?: CanvasV2IslandExecutionContract; workingContext?: CanvasV2WorkingContext; onPrepared?: (revisionId: string) => void; origin?: "user" | "northstar"; allowEvidenceRemoval?: boolean; selectionNodeIds?: readonly string[]; evidencePackets?: CanvasV2ArtifactRevision["evidencePackets"] } = {},
+    options: { focusIslandId?: string; execution?: CanvasV2IslandExecutionContract; workingContext?: CanvasV2WorkingContext; onPrepared?: (revisionId: string) => void; origin?: "user" | "northstar"; allowEvidenceRemoval?: boolean; selectionNodeIds?: readonly string[]; evidencePackets?: CanvasV2ArtifactRevision["evidencePackets"]; fastNativeTransaction?: boolean } = {},
   ): boolean => {
     // Native object edits already carry measured, finite-canvas geometry. They
     // do not need to wait for the compatibility HTML compiler to rediscover
     // geometry the native scene owns. Keeping them in the candidate pipeline
     // made the canvas look ready while a hidden transaction still rejected a
-    // quick follow-up resize/group action. Validate source safety, then commit
+    // quick follow-up resize/group action. Commit
     // native truth synchronously; the off-screen compiler remains a verifier.
     const currentCommitted = committedRef.current;
     manualFailureRef.current = undefined;
@@ -988,30 +992,53 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     if (pendingManualEdit || (!nativeSceneRevision && !observationsRef.current[currentCommitted.id])) return false;
     if (nativeSceneRevision && nativeSceneRevision.revisionId !== currentCommitted.id) return false;
     try {
-      const safeDocument = assertCanvasV2ArtifactDocument(options.origin === 'northstar'
+      const nativeGeometryEdit = Boolean(options.fastNativeTransaction && nativeSceneRevision && !evidence && !options.allowEvidenceRemoval);
+      // A geometry gesture is generated from the already validated native
+      // scene. It changes no evidence binding or authored content, so repeating
+      // source/evidence scans here only delays the next pointer action.
+      const safeDocument = nativeGeometryEdit ? document : assertCanvasV2ArtifactDocument(options.origin === 'northstar'
         ? reconcileCanvasV2ObjectAuthorship({ previous: currentCommitted.document, next: document, origin: 'northstar' }) : document);
       const nextEvidence = evidence ?? currentCommitted.evidence;
-      const failures = [
+      const failures = nativeGeometryEdit ? [] : [
         ...validateCanvasV2EvidenceBindings(safeDocument, nextEvidence),
         ...validateCanvasV2EvidenceContinuity(currentCommitted.document, safeDocument, nextEvidence, {
           allowUserEvidenceRemoval: options.allowEvidenceRemoval,
         }),
       ];
       if (failures.length) throw new Error(Array.from(new Set(failures)).join(" "));
+      // The first gesture may start from model-authored HTML. That one source
+      // needs a full ledger as it is normalized to native serialization;
+      // subsequent gestures compare two native revisions directly.
+      // Once a native scene has been serialized into the committed document,
+      // every subsequent native edit can use its immutable node delta. Content
+      // edits still run the normal validation and discovery-graph sync below.
+      const useNativeLedger = Boolean(nativeSceneRevision
+        && serializedNativeSceneRef.current?.revisionId === currentCommitted.id);
+      const sceneTransaction = useNativeLedger
+        ? compileCanvasV2NativeSceneTransaction({
+            baseRevisionId: currentCommitted.id,
+            previousScene: serializedNativeSceneRef.current!,
+            nextScene: nativeSceneRevision!,
+            previous: currentCommitted.document,
+            next: safeDocument,
+          })
+        : compileCanvasV2SceneTransaction({
+            origin: options.origin ?? "user",
+            baseRevisionId: currentCommitted.id,
+            previous: currentCommitted.document,
+            next: safeDocument,
+            execution: options.execution, focusIslandId: options.focusIslandId, workingContext: options.workingContext,
+          });
+      if (nativeGeometryEdit) sceneTransaction.geometryOnly = true;
       const nextCandidate = createCanvasV2CandidateRevision({
         id: id("manual-revision"),
         parent: currentCommitted,
         document: safeDocument,
         evidence: nextEvidence,
         evidencePackets: options.evidencePackets,
+        geometryOnly: nativeGeometryEdit,
         createdAt: new Date().toISOString(),
-        sceneTransaction: compileCanvasV2SceneTransaction({
-          origin: options.origin ?? "user",
-          baseRevisionId: currentCommitted.id,
-          previous: currentCommitted.document,
-          next: safeDocument,
-          execution: options.execution, focusIslandId: options.focusIslandId, workingContext: options.workingContext,
-        }),
+        sceneTransaction,
       });
       options.onPrepared?.(nextCandidate.id);
       setManualError(undefined);
@@ -1019,6 +1046,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       if (nativeSceneRevision) {
         const nextCommitted = commitCanvasV2Candidate({ candidate: nextCandidate, expectedParentId: currentCommitted.id });
         const nextNativeScene = { ...nativeSceneRevision, revisionId: nextCommitted.id };
+        serializedNativeSceneRef.current = nextNativeScene;
         nativeSceneRef.current = nextNativeScene;
         setNativeScene(nextNativeScene);
         acceptCommittedRevision(nextCommitted, `user:${nextCommitted.id}`, options.selectionNodeIds);
@@ -1453,6 +1481,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       : undefined;
     setHistoryIndex(nextHistory.index);
     committedRef.current = revision;
+    serializedNativeSceneRef.current = undefined;
     nativeSceneRef.current = restoredNativeScene;
     setNativeScene(restoredNativeScene);
     setCommitted(revision);

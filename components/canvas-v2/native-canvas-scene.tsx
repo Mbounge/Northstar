@@ -446,6 +446,10 @@ const NativeNode = memo(function NativeNode({
   node: CanvasV2NativeSceneNode;
   byId: Map<string, CanvasV2NativeSceneNode>;
 }) {
+  const imageResourceRef = useRef<{ source?: string; optimized?: { srcSet: string; sizes: string } }>({});
+  if (imageResourceRef.current.source !== node.attributes.src) {
+    imageResourceRef.current = { source: node.attributes.src, optimized: node.kind === "image" ? optimizedCanvasEvidenceImage(node) : undefined };
+  }
   const parent = node.parentId ? byId.get(node.parentId) : undefined;
   if (!canvasV2NativeSceneNodeHasRenderableNamespace(node, parent)) return null;
   const narrowSelectable = node.selectable && node.namespace === "html" && (node.geometry.width <= 6 || node.geometry.height <= 6);
@@ -454,7 +458,10 @@ const NativeNode = memo(function NativeNode({
     && (node.canonicalEvidence || node.attributes["data-canvas-v2-evidence-role"] === "canonical");
   const evidenceRole = node.attributes["data-canvas-v2-evidence-role"];
   const optimizedImage = node.kind === "image" && (canonicalEvidenceImage || evidenceRole === "analysis-copy")
-    ? optimizedCanvasEvidenceImage(node)
+    // Retain the already decoded source while geometry changes. Updating
+    // `sizes` during a resize can make the browser request another variant and
+    // briefly paint an empty image inside otherwise responsive handles.
+    ? imageResourceRef.current.optimized
     : undefined;
   const safeInlineStyle = normalizeCanvasV2ReactInlineStyle(node.inlineStyle);
   const style = Object.fromEntries(Object.entries(safeInlineStyle).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
@@ -543,6 +550,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const compileSequenceRef = useRef(0);
   const reconciledSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
   const publicThemeStateRef = useRef(createCanvasV2ArtifactThemeState());
+  const lastAppliedThemeRef = useRef<typeof theme | undefined>(undefined);
   const transientStyleSnapshotsRef = useRef(new Map<string, NativeTransientStyleSnapshot>());
   const transientConnectorIdsRef = useRef(new Set<string>());
   const transientSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
@@ -622,8 +630,12 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   useLayoutEffect(() => {
     const root = publicSceneRef.current;
     if (!root || !renderedScene) return;
+    // A geometry gesture reuses the same painted object styles. Rechecking
+    // every visible descendant on each pointer-up blocks the next click.
+    if (revision.sceneTransaction?.geometryOnly && lastAppliedThemeRef.current === theme) return;
     applyCanvasV2ArtifactThemeToElement(root, theme, publicThemeStateRef.current);
-  }, [renderedScene, theme]);
+    lastAppliedThemeRef.current = theme;
+  }, [renderedScene, revision.sceneTransaction?.geometryOnly, theme]);
 
   const applyTransientGeometry = useCallback((nextTransientGeometry?: Readonly<Record<string, CanvasV2TransientGeometry>>) => {
     const root = publicSceneRef.current;
