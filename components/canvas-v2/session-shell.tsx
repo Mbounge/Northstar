@@ -85,10 +85,11 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
     if(active===item.frameId){if(rest.length)select(rest[rest.length-1]);else{setActive('');setSidebar(true);history.replaceState(null,'',testMode ? '/canvas?sessionTest=1':'/canvas');}}
   };
   return <main className="fixed inset-0 overflow-hidden bg-[#10101a] text-[#ecebf1]">
+    {/* An inactive run must keep painting: hiding its frame can throttle work inside it. */}
     {opened.map(item=><iframe key={item.frameId} ref={node=>{if(node)frames.current.set(item.frameId,node);else frames.current.delete(item.frameId);}}
       title={`Canvas: ${item.title}`} src={`${path}workspace=${encodeURIComponent(item.frameId)}${item.originalTemporary?'&temporary=1':''}`}
       aria-hidden={active!==item.frameId} tabIndex={active===item.frameId?0:-1}
-      inert={active!==item.frameId} className="absolute top-0 h-full w-full border-0" style={{left:0,zIndex:active===item.frameId?1:0,pointerEvents:active===item.frameId?'auto':'none',visibility:active===item.frameId?'visible':'hidden'}}/>) }
+      inert={active!==item.frameId} className="absolute top-0 h-full w-full border-0" style={{left:0,zIndex:active===item.frameId?1:0,pointerEvents:active===item.frameId?'auto':'none',visibility:active===item.frameId || item.busy?'visible':'hidden'}}/>) }
     {!current && <div className="flex h-full flex-col items-center justify-center gap-4 bg-[radial-gradient(ellipse_at_top_left,#282052,transparent_65%)]"><p role="status" className="text-sm text-white/50">{error ? 'Saved sessions are unavailable. You can retry or open a temporary canvas.' : sidebar && !creating ? 'Choose a session from History or start a new one.' : 'Opening your canvas…'}</p>{error && <button onClick={()=>void add(true)} className="rounded-xl border border-white/10 px-5 py-3">Open temporary canvas</button>}</div>}
     {current?.temporary && <span className="fixed right-4 top-20 z-30 rounded-full bg-[#e9e3ff] px-2.5 py-1 text-xs font-semibold text-[#48359f] shadow-sm dark:bg-[#342a60] dark:text-[#ded5ff]">Temporary</span>}
     {sidebar && <><button aria-label="Close sessions" className="fixed inset-0 z-40 bg-black/20" onClick={()=>setSidebar(false)}/>
