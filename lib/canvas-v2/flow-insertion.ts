@@ -21,7 +21,7 @@ const FLOW_CSS = `
 .canvas-v2-flow-app { margin:0; color:var(--northstar-ink); font-size:18px; font-weight:850; letter-spacing:-.02em; }
 .canvas-v2-flow-meta { margin:3px 0 0; max-width:118px; color:var(--northstar-muted); font-size:12px; font-weight:580; line-height:1.35; }
 .canvas-v2-flow-sequence { display:flex; flex-flow:row nowrap; align-items:flex-end; width:max-content; min-width:0; max-width:none; column-gap:10px; padding-right:0; overflow:visible; }
-.canvas-v2-flow-screen { display:block; width:auto; height:235px; max-width:none; flex:none; object-fit:contain; filter:drop-shadow(0 12px 20px rgba(32,24,80,.09)); }
+.canvas-v2-flow-screen { display:block; width:auto; height:235px; max-width:none; flex:none; object-fit:contain; box-shadow:0 10px 22px rgba(32,24,80,.09); }
 .canvas-v2-flow-segment { box-sizing:border-box; display:grid; grid-template-columns:1px minmax(0,1fr); column-gap:14px; width:132px; height:235px; flex:none; align-items:start; color:var(--northstar-muted); font-size:10px; font-weight:820; line-height:1.45; letter-spacing:.08em; text-transform:uppercase; }
 .canvas-v2-flow-segment-rule { width:1px; height:235px; background:var(--northstar-line); }
 .canvas-v2-flow-segment-label { display:-webkit-box; max-width:102px; margin-top:12px; overflow:hidden; overflow-wrap:normal; word-break:normal; -webkit-box-orient:vertical; -webkit-line-clamp:4; }

@@ -448,7 +448,10 @@ const NativeNode = memo(function NativeNode({
   const hostOwnsBackground = canvasV2NativeSceneNodeUsesHostBackground(node);
   const canonicalEvidenceImage = node.kind === "image"
     && (node.canonicalEvidence || node.attributes["data-canvas-v2-evidence-role"] === "canonical");
-  const optimizedImage = canonicalEvidenceImage ? optimizedCanvasEvidenceImage(node) : undefined;
+  const evidenceRole = node.attributes["data-canvas-v2-evidence-role"];
+  const optimizedImage = node.kind === "image" && (canonicalEvidenceImage || evidenceRole === "analysis-copy")
+    ? optimizedCanvasEvidenceImage(node)
+    : undefined;
   const safeInlineStyle = normalizeCanvasV2ReactInlineStyle(node.inlineStyle);
   const style = Object.fromEntries(Object.entries(safeInlineStyle).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
   const runtimeStyle = {
@@ -1174,6 +1177,13 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     [data-canvas-v2-native-scene="true"] img[data-canvas-v2-native-runtime-node="true"] {
       -webkit-user-drag:none!important;
       user-select:none!important;
+    }
+    /* Hundreds of CSS drop-shadow filters force separate image effects while
+       moving a dense evidence board. These captures are rectangular, so a
+       box shadow keeps the same depth without filtering every image. */
+    [data-canvas-v2-native-scene="true"] img.canvas-v2-flow-screen[data-canvas-v2-evidence-role="canonical"] {
+      filter:none!important;
+      box-shadow:0 10px 22px rgba(32,24,80,.09)!important;
     }
     /* Camera-only paint culling. Layout, source URLs, native bounds and the
        private full-document renderer remain unchanged. */
