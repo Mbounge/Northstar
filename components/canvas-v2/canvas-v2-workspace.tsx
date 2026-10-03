@@ -181,6 +181,7 @@ interface DirectGesture {
   draftBounds: CanvasV2InspectableElement["bounds"];
   draftElementBounds: Record<string, CanvasV2InspectableElement["bounds"]>;
   draftRotations: Record<string, number>;
+  snapBounds?: CanvasV2InspectableElement["bounds"][];
   hasDragged: boolean;
   clickSelection?: CanvasV2InspectableElement[];
 }
@@ -1672,8 +1673,7 @@ export function CanvasV2Workspace({
         // ends. The small screen-space threshold also absorbs pointer jitter.
         if (!directGesture.hasDragged && Math.hypot(clientX - directGesture.startX, clientY - directGesture.startY) < 3) return true;
         directGesture.hasDragged = true;
-        const selectedIds = new Set(directGesture.originals.map((item) => item.nodeId));
-        const snapped = snapCanvasV2ObjectDelta({ moving: directGesture.original, deltaX, deltaY, others: sceneElementsRef.current.filter((item) => item.nodeId !== "canvas" && !selectedIds.has(item.nodeId)).map((item) => item.bounds), threshold: 8 / currentViewport.scale });
+        const snapped = snapCanvasV2ObjectDelta({ moving: directGesture.original, deltaX, deltaY, others: directGesture.snapBounds ?? [], threshold: 8 / currentViewport.scale });
         // A gesture translates the selection as one rigid set and the finite
         // canvas owns the final coordinates. The previous unbounded helper
         // allowed negative x/y values, so objects progressively clipped at an
@@ -1858,6 +1858,9 @@ export function CanvasV2Workspace({
       const ownsConnector = connectorGestureRef.current?.pointerId === event.pointerId;
       const ownsDrawing = drawingGestureRef.current?.pointerId === event.pointerId;
       if (!ownsDirect && !ownsConnector && !ownsDrawing) return;
+      // The workspace's React handler owns events inside it. This fallback is
+      // only for the pointer crossing onto floating chrome outside the canvas.
+      if (workspaceRef.current?.contains(event.target as Node)) return;
       event.preventDefault();
       if (ownsDrawing) updateDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
       else if (ownsConnector) updateConnectorGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
@@ -1890,9 +1893,13 @@ export function CanvasV2Workspace({
     const selectionBounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
     if (!mutable.length || !selectionBounds || engine.applyingManualEdit) return false;
     const elementBounds = Object.fromEntries(mutable.map((item) => [item.nodeId, item.bounds]));
+    const selectedIds = new Set(mutable.map((item) => item.nodeId));
+    const snapBounds = kind === "move"
+      ? sceneElementsRef.current.filter((item) => item.nodeId !== "canvas" && !selectedIds.has(item.nodeId)).map((item) => item.bounds)
+      : undefined;
     const pointer = workspacePoint(clientX, clientY);
     const center = { x: selectionBounds.x + selectionBounds.width / 2, y: selectionBounds.y + selectionBounds.height / 2 };
-    directGestureRef.current = { kind, handle, pointerId, startX: clientX, startY: clientY, original: selectionBounds, originals: mutable, startRotation: kind === "rotate" ? canvasV2RotationFromPointer(center, pointer) : undefined, draftBounds: selectionBounds, draftElementBounds: elementBounds, draftRotations: {}, hasDragged: false, clickSelection };
+    directGestureRef.current = { kind, handle, pointerId, startX: clientX, startY: clientY, original: selectionBounds, originals: mutable, startRotation: kind === "rotate" ? canvasV2RotationFromPointer(center, pointer) : undefined, draftBounds: selectionBounds, draftElementBounds: elementBounds, draftRotations: {}, snapBounds, hasDragged: false, clickSelection };
     if (contextualToolbarRef.current) contextualToolbarRef.current.style.visibility = "hidden";
     return true;
   };

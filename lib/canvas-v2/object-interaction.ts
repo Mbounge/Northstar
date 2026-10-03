@@ -133,10 +133,14 @@ export function snapCanvasV2ObjectDelta(input: {
   let distanceY = threshold + 1;
   let guideX: CanvasV2SnapGuide | undefined;
   let guideY: CanvasV2SnapGuide | undefined;
+  const movingX = anchors(moved, "x");
+  const movingY = anchors(moved, "y");
 
   for (const other of input.others) {
-    for (const movingAnchor of anchors(moved, "x")) {
-      for (const targetAnchor of anchors(other, "x")) {
+    const targetX = anchors(other, "x");
+    const targetY = anchors(other, "y");
+    for (const movingAnchor of movingX) {
+      for (const targetAnchor of targetX) {
         const distance = Math.abs(targetAnchor - movingAnchor);
         if (distance <= threshold && distance < distanceX) {
           distanceX = distance;
@@ -145,8 +149,8 @@ export function snapCanvasV2ObjectDelta(input: {
         }
       }
     }
-    for (const movingAnchor of anchors(moved, "y")) {
-      for (const targetAnchor of anchors(other, "y")) {
+    for (const movingAnchor of movingY) {
+      for (const targetAnchor of targetY) {
         const distance = Math.abs(targetAnchor - movingAnchor);
         if (distance <= threshold && distance < distanceY) {
           distanceY = distance;

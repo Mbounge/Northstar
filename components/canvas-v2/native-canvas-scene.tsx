@@ -3,6 +3,7 @@
 import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 import { observeCanvasV2ImageVisibility } from "./native-image-visibility";
+import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
 
 import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
 
@@ -502,7 +503,7 @@ const NativeNode = memo(function NativeNode({
   if (VOID_TAGS.has(node.tagName)) return createElement(node.tagName, props);
   if (canvasV2NativeSceneNodeSupportsTextEditing(node, byId)) return createElement(node.tagName, { ...props, dangerouslySetInnerHTML: { __html: canvasV2NativeTextMarkup(node, byId) } });
   return createElement(node.tagName, props, ...content);
-});
+}, (previous, next) => sameCanvasV2NativeRenderedSubtree(previous.node, next.node, previous.byId, next.byId));
 
 export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHandle, CanvasV2NativeCanvasSceneProps>(function CanvasV2NativeCanvasScene({
   revision,
@@ -555,6 +556,19 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const renderedScene = sceneOverride ?? scene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
   const bySourceId = useMemo(() => renderedScene ? canvasV2NativeSceneSourceNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
+  const connectorsByEndpoint = useMemo(() => {
+    const index = new Map<string, CanvasV2NativeSceneNode[]>();
+    for (const connector of renderedScene?.nodes ?? []) {
+      if (connector.kind !== "connector" || !connector.sourceNodeId) continue;
+      for (const endpoint of [connector.attributes["data-canvas-v2-connector-from"], connector.attributes["data-canvas-v2-connector-to"]]) {
+        if (!endpoint) continue;
+        const attached = index.get(endpoint) ?? [];
+        attached.push(connector);
+        index.set(endpoint, attached);
+      }
+    }
+    return index;
+  }, [renderedScene]);
 
   useEffect(() => {
     const root = publicSceneRef.current;
@@ -621,10 +635,12 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     for (const [nodeId, geometry] of Object.entries(nextTransientGeometry ?? {})) {
       const node = bySourceId.get(nodeId);
       if (!node) continue;
-      const selectorId = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(nodeId) : nodeId.replaceAll('"', '\\"');
-      const element = root.querySelector<HTMLElement>(`[data-canvas-v2-node-id="${selectorId}"]`);
-      if (!element) continue;
       let snapshot = snapshots.get(nodeId);
+      const selectorId = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(nodeId) : nodeId.replaceAll('"', '\\"');
+      const element = snapshot?.element.isConnected
+        ? snapshot.element
+        : root.querySelector<HTMLElement>(`[data-canvas-v2-node-id="${selectorId}"]`);
+      if (!element) continue;
       if (!snapshot || snapshot.element !== element) {
         if (snapshot) restoreNativeTransientStyle(snapshot);
         snapshot = {
@@ -636,8 +652,6 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           }])),
         };
         snapshots.set(nodeId, snapshot);
-      } else {
-        restoreNativeTransientStyle(snapshot);
       }
       element.setAttribute("data-canvas-v2-native-transient", "true");
       if (node.layoutMode === "absolute") {
@@ -671,11 +685,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     }
     const transientById = nextTransientGeometry ?? {};
     const affectedConnectorIds = new Set<string>();
-    for (const connector of renderedScene.nodes) {
-      if (connector.kind !== "connector" || !connector.sourceNodeId || transientById[connector.sourceNodeId]) continue;
-      const fromId = connector.attributes["data-canvas-v2-connector-from"];
-      const toId = connector.attributes["data-canvas-v2-connector-to"];
-      if ((fromId && transientById[fromId]) || (toId && transientById[toId])) affectedConnectorIds.add(connector.id);
+    for (const nodeId of Object.keys(transientById)) {
+      for (const connector of connectorsByEndpoint.get(nodeId) ?? []) {
+        if (connector.sourceNodeId && !transientById[connector.sourceNodeId]) affectedConnectorIds.add(connector.id);
+      }
     }
     const connectorIdsToPaint = new Set([...transientConnectorIdsRef.current, ...affectedConnectorIds]);
     const previewBounds = (target: CanvasV2NativeSceneNode) => {
@@ -758,7 +771,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       }
     }
     transientConnectorIdsRef.current = affectedConnectorIds;
-  }, [byId, bySourceId, renderedScene]);
+  }, [byId, bySourceId, connectorsByEndpoint, renderedScene]);
 
   const restoreNodeRemovalPreview = useCallback(() => {
     for (const snapshot of removalPreviewSnapshotsRef.current) {
