@@ -2,7 +2,7 @@
 
 import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
-import { observeCanvasV2ImageVisibility } from "./native-image-visibility";
+import { observeCanvasV2ImageVisibility, type CanvasV2ImageVisibilityObserver } from "./native-image-visibility";
 import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
 
 import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
@@ -383,6 +383,8 @@ const NATIVE_TRANSIENT_PROPERTIES = [
   "--canvas-v2-native-y",
   "--canvas-v2-native-delta-x",
   "--canvas-v2-native-delta-y",
+  "--canvas-v2-native-preview-x",
+  "--canvas-v2-native-preview-y",
   "--canvas-v2-native-width",
   "--canvas-v2-native-height",
   "--canvas-v2-native-rotation",
@@ -392,6 +394,7 @@ const NATIVE_TRANSIENT_PROPERTIES = [
   "max-height",
   "font-size",
   "line-height",
+  "will-change",
 ] as const;
 
 interface NativeTransientStyleSnapshot {
@@ -466,6 +469,8 @@ const NativeNode = memo(function NativeNode({
     "--canvas-v2-native-y": `${node.geometry.y}px`,
     "--canvas-v2-native-delta-x": "0px",
     "--canvas-v2-native-delta-y": "0px",
+    "--canvas-v2-native-preview-x": "0px",
+    "--canvas-v2-native-preview-y": "0px",
     "--canvas-v2-native-width": `${node.geometry.width}px`,
     "--canvas-v2-native-height": `${node.geometry.height}px`,
     "--canvas-v2-native-rotation": `${node.geometry.rotation}deg`,
@@ -547,6 +552,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const [compiledRevisionId, setCompiledRevisionId] = useState<string>();
   const activePointerRef = useRef<{ pointerId: number; element?: CanvasV2InspectableElement } | undefined>(undefined);
   const hoveredPointerNodeRef = useRef<string | undefined>(undefined);
+  const imageVisibilityRef = useRef<CanvasV2ImageVisibilityObserver | undefined>(undefined);
   // Native edits/history already contain measured geometry. Rebuilding a second
   // image-heavy canvas for them stalls the main thread without adding truth.
   // New authored revisions still pass through compilation, and private model
@@ -570,10 +576,17 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     return index;
   }, [renderedScene]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = publicSceneRef.current;
-    if (root && renderedScene) return observeCanvasV2ImageVisibility(root);
+    if (!root || !renderedScene) return;
+    if (!imageVisibilityRef.current) imageVisibilityRef.current = observeCanvasV2ImageVisibility(root);
+    else imageVisibilityRef.current.refresh();
   }, [renderedScene]);
+
+  useEffect(() => () => {
+    imageVisibilityRef.current?.dispose();
+    imageVisibilityRef.current = undefined;
+  }, []);
 
   const compile = useCallback(async () => {
     const sequence = ++compileSequenceRef.current;
@@ -621,7 +634,16 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     if (transientSceneRef.current !== renderedScene) {
       // The new revision replaces preview geometry, including its temporary
       // sizing lock. Leaving this marker behind disables text auto-height.
-      for (const snapshot of snapshots.values()) snapshot.element.removeAttribute("data-canvas-v2-native-transient");
+      for (const snapshot of snapshots.values()) {
+        // React sees the same default preview variables before and after a
+        // commit, so it will not reset an imperative drag offset for us.
+        snapshot.element.style.setProperty("--canvas-v2-native-preview-x", "0px");
+        snapshot.element.style.setProperty("--canvas-v2-native-preview-y", "0px");
+        const originalWillChange = snapshot.properties["will-change"];
+        if (originalWillChange?.value) snapshot.element.style.setProperty("will-change", originalWillChange.value, originalWillChange.priority);
+        else snapshot.element.style.removeProperty("will-change");
+        snapshot.element.removeAttribute("data-canvas-v2-native-transient");
+      }
       snapshots.clear();
       transientSceneRef.current = renderedScene;
     }
@@ -655,8 +677,11 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       }
       element.setAttribute("data-canvas-v2-native-transient", "true");
       if (node.layoutMode === "absolute") {
-        element.style.setProperty("--canvas-v2-native-x", `${node.geometry.x + (geometry.deltaX ?? 0)}px`);
-        element.style.setProperty("--canvas-v2-native-y", `${node.geometry.y + (geometry.deltaY ?? 0)}px`);
+        // Translate only the active object. Mutating left/top on every pointer
+        // move forces layout and repaints a large screenshot board behind it.
+        element.style.setProperty("--canvas-v2-native-preview-x", `${geometry.deltaX ?? 0}px`);
+        element.style.setProperty("--canvas-v2-native-preview-y", `${geometry.deltaY ?? 0}px`);
+        element.style.setProperty("will-change", "translate");
       } else {
         element.style.setProperty("--canvas-v2-native-delta-x", `${geometry.deltaX ?? 0}px`);
         element.style.setProperty("--canvas-v2-native-delta-y", `${geometry.deltaY ?? 0}px`);
@@ -1170,7 +1195,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       max-height:none!important;
       margin:0!important;
       transform:none!important;
-      translate:none!important;
+      translate:var(--canvas-v2-native-preview-x) var(--canvas-v2-native-preview-y)!important;
       rotate:var(--canvas-v2-native-rotation)!important;
       transform-origin:center!important;
     }

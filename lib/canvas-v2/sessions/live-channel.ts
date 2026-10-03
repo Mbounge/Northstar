@@ -1,6 +1,6 @@
 import type { LiveSessionState, NorthstarSnapshot, SessionCommand } from './types';
 
-type Message = {kind:'hello'} | {kind:'state'; full:boolean; state:{snapshot:Partial<NorthstarSnapshot>;busy:boolean;title:string}}
+type Message = {kind:'hello'; known:boolean} | {kind:'state'; full:boolean; state:{snapshot:Partial<NorthstarSnapshot>;busy:boolean;title:string}}
   | {kind:'command'; id:string; command:SessionCommand} | {kind:'ack'; id:string; error?:string};
 type Port = Pick<BroadcastChannel,'postMessage'|'close'> & {onmessage:((event:MessageEvent<Message>)=>void)|null};
 
@@ -10,14 +10,18 @@ export class LiveSessionChannel {
   private pending = new Map<string,{command:SessionCommand; resolve:()=>void; reject:(error:Error)=>void}>();
   private previous?:LiveSessionState;
   private received?:LiveSessionState;
-  private receivedAt=0;
+  private followerUntil=0;
+  private lastHelloAt=0;
   constructor(private port:Port, private handlers:{
     owns:()=>boolean; read:()=>LiveSessionState|undefined;
     receive:(state:LiveSessionState)=>void;
     execute:(command:SessionCommand)=>Promise<void>;
   }) { port.onmessage=event=>{void this.receive(event.data);}; }
   request() {
-    if(!this.received || Date.now()-this.receivedAt>10000)this.port.postMessage({kind:'hello'});
+    if(!this.handlers.owns() && (!this.received || Date.now()-this.lastHelloAt>5000)) {
+      this.lastHelloAt=Date.now();
+      this.port.postMessage({kind:'hello',known:Boolean(this.received)});
+    }
     for(const [id,pending] of this.pending) {
       if(this.handlers.owns())void this.receive({kind:'command',id,command:pending.command});
       else this.port.postMessage({kind:'command',id,command:pending.command});
@@ -25,6 +29,11 @@ export class LiveSessionChannel {
   }
   publish(full=false) {
     const state=this.handlers.read();if(!this.handlers.owns() || !state)return;
+    // BroadcastChannel clones the complete revision on the caller's main
+    // thread. A large canvas can freeze input for seconds even when this is
+    // the only open tab. Followers announce themselves with `hello`; until
+    // then there is nobody to receive an unsolicited snapshot.
+    if(!full && Date.now()>this.followerUntil)return;
     full ||= !this.previous;
     const snapshot:Partial<NorthstarSnapshot>={...state.snapshot};
     if(!full && this.previous) {
@@ -46,11 +55,14 @@ export class LiveSessionChannel {
   }
   private async receive(message:Message) {
     if(message.kind==='state' && !this.handlers.owns()) {
-      if(!message.full && !this.received){this.port.postMessage({kind:'hello'});return;}
+      if(!message.full && !this.received){this.port.postMessage({kind:'hello',known:false});return;}
       this.received={...message.state,snapshot:{...this.received?.snapshot,...message.state.snapshot} as NorthstarSnapshot};
-      this.receivedAt=Date.now();this.handlers.receive(this.received);
+      this.handlers.receive(this.received);
     }
-    if(message.kind==='hello')this.publish(true);
+    if(message.kind==='hello'){
+      this.followerUntil=Date.now()+15000;
+      if(!message.known || !this.previous)this.publish(true);
+    }
     if(message.kind==='ack') {
       const pending=this.pending.get(message.id);this.pending.delete(message.id);
       if(message.error)pending?.reject(new Error(message.error));else pending?.resolve();

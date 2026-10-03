@@ -729,6 +729,7 @@ export function CanvasV2Workspace({
   const workspaceSurfaceRef = useRef<HTMLDivElement>(null);
   const canvasSceneRef = useRef<CanvasV2CanvasSceneHandle>(null);
   const selectionOverlayRef = useRef<HTMLDivElement>(null);
+  const selectionRequestEpochRef = useRef(0);
   const selectionMemberOverlayRefs = useRef(new Map<string, HTMLDivElement>());
   const snapGuideRefs = useRef<Array<HTMLDivElement | null>>([]);
   const marqueeElementRef = useRef<HTMLDivElement>(null);
@@ -891,6 +892,7 @@ export function CanvasV2Workspace({
     return () => workspace.removeEventListener("scroll", restoreCanvasAuthority);
   }, []);
   const selectElement = useCallback((element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => {
+    selectionRequestEpochRef.current += 1;
     // The source document keeps a permanent compatibility root for revision
     // and observation bookkeeping, but that identity is not a canvas object.
     // A stale layer click or hot-refresh must never turn it into a selectable,
@@ -1627,6 +1629,12 @@ export function CanvasV2Workspace({
     pendingGesturePreviewRef.current = undefined;
   };
 
+  const flushDirectGesturePreview = (gesture: DirectGesture) => {
+    const pending = pendingGesturePreviewRef.current;
+    cancelDirectGesturePreview();
+    if (pending) paintSelectionPreview(gesture, pending);
+  };
+
   const updateDirectGesture = (pointerId: number, clientX: number, clientY: number, constrain = false) => {
     const directGesture = directGestureRef.current;
     if (directGesture?.pointerId === pointerId) {
@@ -1718,8 +1726,10 @@ export function CanvasV2Workspace({
   const finishDirectGesture = (pointerId: number) => {
     const directGesture = directGestureRef.current;
     if (directGesture?.pointerId !== pointerId) return false;
+    // Paint the final pointer position before committing. Dropping the last
+    // queued frame makes the object trail its handles on a fast release.
+    flushDirectGesturePreview(directGesture);
     directGestureRef.current = undefined;
-    cancelDirectGesturePreview();
     if (directGesture.kind === "rotate") {
       const mutations = directGesture.originals.flatMap((item) => {
         const rotation = directGesture.draftRotations[item.nodeId];
@@ -1874,7 +1884,10 @@ export function CanvasV2Workspace({
       event.preventDefault();
       if (ownsDrawing) finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
       else if (ownsConnector) finishConnectorGestureHandlerRef.current(event.pointerId);
-      else finishDirectGestureHandlerRef.current(event.pointerId);
+      else {
+        if (event.type === "pointerup") updateDirectGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY, event.shiftKey);
+        finishDirectGestureHandlerRef.current(event.pointerId);
+      }
       workspaceRef.current?.focus({ preventScroll: true });
     };
     window.addEventListener("pointermove", move, { capture: true, passive: false });
@@ -1932,6 +1945,7 @@ export function CanvasV2Workspace({
       return;
     }
     if (tool !== "select" || event.button !== 0) return;
+    selectionRequestEpochRef.current += 1;
     setLayersOpen(false);
     const additive = Boolean(event.shiftKey || event.metaKey);
     const selectedNodeIds = selectedElements.map((item) => item.nodeId);
@@ -3352,6 +3366,14 @@ export function CanvasV2Workspace({
   const requestedSelectionNodeIds = historySelectionRestore?.revisionId === engine.committed.id
     ? historySelectionRestore.nodeIds
     : selectionNodeIds;
+  // A scene commit can finish after the person has already pressed another
+  // object. Its queued selection refresh belongs to the prior selection and
+  // must not replace that new click with the object just moved or resized.
+  const selectionRefreshEpoch = selectionRequestEpochRef.current;
+  const guardedRefreshSelection = useCallback((elements: CanvasV2InspectableElement[]) => {
+    if (selectionRequestEpochRef.current !== selectionRefreshEpoch) return;
+    refreshSelection(elements);
+  }, [refreshSelection, selectionRefreshEpoch]);
   const activeSelectionBounds = unionCanvasV2ObjectBounds(selectedElements.map((item) => item.bounds));
   const compactResizeHandles = Boolean(activeSelectionBounds && (
     activeSelectionBounds.width * viewport.scale < 18
@@ -3710,7 +3732,7 @@ export function CanvasV2Workspace({
               selectedNodeIds={requestedSelectionNodeIds}
               onElementHover={hoverElement}
               onElementSelect={selectCanvasElement}
-              onSelectionRefresh={refreshSelection}
+              onSelectionRefresh={guardedRefreshSelection}
               onSceneSnapshot={receiveScene}
               onNativeScene={cropDraft || tidyDraft ? undefined : engine.receiveNativeScene}
               nativeSceneOverride={tidyPreviewScene ?? cropPreviewScene ?? engine.nativeScene}

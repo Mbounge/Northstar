@@ -43,6 +43,22 @@ test('live views receive progress and retries execute each user command once on 
  assert.equal(received?.busy,false);owner.close();follower.close();
 });
 
+test('a lone canvas does not clone its full revision on every edit, but a follower receives current state',async()=>{
+ type Port=ConstructorParameters<typeof LiveSessionChannel>[0];
+ const ports:Port[]=[];let messages=0;
+ const port=():Port=>{const p:Port={onmessage:null,close:()=>{},postMessage:data=>{messages++;for(const other of ports)if(other!==p)queueMicrotask(()=>other.onmessage?.({data} as MessageEvent));}};ports.push(p);return p;};
+ const state:LiveSessionState={title:'Dense canvas',busy:false,snapshot:{schema:1,revision:createCanvasV2CommittedRevision({id:'dense',document:{html:'<div data-canvas-v2-node-id="one">One</div>',css:''},evidence:[],createdAt:new Date().toISOString()}),turns:[],draft:'',model:'gpt-5.6-luna',effort:'high',viewport:{x:0,y:0,scale:1}}};
+ const owner=new LiveSessionChannel(port(),{owns:()=>true,read:()=>state,receive:()=>assert.fail('owner cannot mirror itself'),execute:async()=>{}});
+ owner.publish();owner.publish();assert.equal(messages,0);
+ let received:LiveSessionState|undefined;
+ const follower=new LiveSessionChannel(port(),{owns:()=>false,read:()=>undefined,receive:value=>{received=value;},execute:async()=>{}});
+ follower.request();await new Promise(setImmediate);
+ assert.equal(received?.snapshot.revision.id,'dense');
+ const before=messages;state.busy=true;owner.publish();await new Promise(setImmediate);
+ assert.ok(messages>before);assert.equal(received?.busy,true);
+ owner.close();follower.close();
+});
+
 test('autosave serializes writes and retains the latest change arriving during an upload',async()=>{
  const first=deferred();const writes:number[]=[];const states:string[]=[];
  const queue=new SnapshotQueue<number>(async value=>{writes.push(value);if(value===1)await first.promise;},value=>states.push(value));

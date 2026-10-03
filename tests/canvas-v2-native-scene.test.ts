@@ -29,6 +29,31 @@ import {
   type CanvasV2NativeSceneDocument,
 } from "../lib/canvas-v2/native-scene";
 
+test("a native edit preserves untouched node identities without mutating earlier revisions", () => {
+  const empty: CanvasV2NativeSceneDocument = {
+    schema: CANVAS_V2_NATIVE_SCENE_SCHEMA,
+    revisionId: "initial",
+    width: 1200,
+    height: 800,
+    rootIds: [],
+    nodes: [],
+    css: "",
+  };
+  const original = applyCanvasV2NativeSceneMutation(empty, { kind: "batch", label: "Two cards", mutations: [
+    { kind: "create", primitive: "shape", nodeId: "first", x: 100, y: 100, width: 100, height: 80 },
+    { kind: "create", primitive: "shape", nodeId: "second", x: 300, y: 100, width: 100, height: 80 },
+  ] });
+  const first = original.nodes.find((node) => node.id === "first")!;
+  const second = original.nodes.find((node) => node.id === "second")!;
+  const moved = applyCanvasV2NativeSceneMutation(original, { kind: "move", nodeId: "first", deltaX: 40, deltaY: 20 });
+  assert.notStrictEqual(moved.nodes.find((node) => node.id === "first"), first);
+  assert.strictEqual(moved.nodes.find((node) => node.id === "second"), second);
+  assert.deepEqual(first.geometry, { x: 100, y: 100, width: 100, height: 80, rotation: 0, zIndex: 0 });
+  const movedAgain = applyCanvasV2NativeSceneMutation(moved, { kind: "move", nodeId: "first", deltaX: 10, deltaY: 0 });
+  assert.equal(movedAgain.nodes.find((node) => node.id === "first")?.geometry.x, 150);
+  assert.equal(original.nodes.find((node) => node.id === "first")?.geometry.x, 100);
+});
+
 test("explicit style longhands remain authoritative in the public React scene", () => {
   assert.deepEqual(normalizeCanvasV2ReactInlineStyle({
     background: "var(--northstar-surface)",

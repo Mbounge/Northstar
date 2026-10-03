@@ -16,6 +16,22 @@ export function decodeSnapshot(value: unknown): NorthstarSnapshot {
 
 /** Blob URLs belong to one document. Persist their bytes before that document closes. */
 export async function encodeSnapshot(snapshot: NorthstarSnapshot): Promise<Blob> {
+  if (typeof window !== 'undefined' && typeof Worker !== 'undefined') {
+    return new Promise<Blob>((resolve, reject) => {
+      const worker = new Worker(new URL('./snapshot-encode.worker.ts', import.meta.url));
+      worker.onmessage = (event: MessageEvent<{blob?: Blob; error?: string}>) => {
+        worker.terminate();
+        if (event.data.blob) resolve(event.data.blob);
+        else reject(new Error(event.data.error || 'Could not save this canvas.'));
+      };
+      worker.onerror = () => {
+        worker.terminate();
+        reject(new Error('Could not prepare this canvas for saving. Please retry.'));
+      };
+      try { worker.postMessage(snapshot); }
+      catch (error) { worker.terminate(); reject(error); }
+    });
+  }
   let text = JSON.stringify(snapshot);
   const urls = [...new Set(text.match(/blob:https?:[^\s"'<>\\]+/g) ?? [])];
   for (const url of urls) {

@@ -7,6 +7,7 @@ import { CANVAS_V2_WORKSPACE, type CanvasV2WorkspacePoint } from "@/lib/canvas-v
 import { canvasV2ShapeVariantStyle, type CanvasV2ManualMutation, type CanvasV2ShapeVariant } from "@/lib/canvas-v2/manual-mutations";
 import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorRouteRetraces, readCanvasV2ConnectorAnchor, canvasV2ConnectorAttachmentPoint, canvasV2ConnectorRelativeAnchor, readCanvasV2ConnectorWaypoints, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, type CanvasV2ConnectorCap, canvasV2ConnectorBendFromPoint, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { findCanvasV2OpenPlacement } from "@/lib/canvas-v2/multiplayer-placement";
+import { sameCanvasV2NativeNodeValue } from "./native-scene-subtree-equality";
 
 export const CANVAS_V2_NATIVE_SCENE_SCHEMA = "canvas-v2.native-scene.v1" as const;
 
@@ -3468,6 +3469,14 @@ export function applyCanvasV2NativeSceneMutation(
   if (atomic.some(item => ["move", "resize", "transform", "create"].includes(item.kind) || (item.kind === "group" && item.section))) reconcileHumanSectionMembership(scene);
   reconcileCanvasV2NativeConnectors(scene);
   scene.nodes.forEach((node, order) => { node.order = order; });
+  // The mutation works on a private clone, but most nodes on a screenshot-rich
+  // board are untouched. Reuse those immutable values in the finished scene so
+  // React can skip their native subtrees after every move, resize or text edit.
+  const sourceNodes = canvasV2NativeSceneNodeMap(source);
+  scene.nodes = scene.nodes.map((node) => {
+    const previous = sourceNodes.get(node.id);
+    return previous && sameCanvasV2NativeNodeValue(previous, node) ? previous : node;
+  });
   return scene;
 }
 
