@@ -16,6 +16,7 @@ const apps = [
 ] as const;
 const query = new URLSearchParams(window.location.search);
 const embedded = query.get('embed') === '1';
+if (embedded) document.documentElement.classList.add('embedded-preview');
 const parentOrigins = new Set(['https://www.usenorthstar.ai', 'http://127.0.0.1:3000', 'http://localhost:3000']);
 const asset = (name: string) => `${embedded ? '/preview/' : '/'}${name}`;
 const brokerUrl = () => embedded ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/preview/api/allocate` : 'ws://127.0.0.1:18082/allocate';
@@ -582,7 +583,7 @@ function PoolLanding() {
 
 function UnsupportedApp() {
   useEffect(() => { document.title = 'App unavailable · Northstar Preview Lab'; }, []);
-  return <main className="page"><header className="topbar"><div className="wordmark"><span className="star">✦</span> Northstar <span className="divider" /> <span className="preview-label">Preview lab</span></div></header><section className="pool-shell"><p className="overline">LIVE APP PREVIEW</p><h1>This app is not in the test pool.</h1><p className="pool-intro">Choose one of the staged apps to continue.</p><a className="back-to-pool" href="?pool=1">Choose an app →</a></section></main>;
+  return <main className={`page ${embedded ? 'embedded' : ''}`}>{!embedded && <header className="topbar"><div className="wordmark"><span className="star">✦</span> Northstar <span className="divider" /> <span className="preview-label">Preview lab</span></div></header>}<section className="pool-shell"><p className="overline">LIVE APP PREVIEW</p><h1>This app is not in the test pool.</h1><p className="pool-intro">Choose one of the staged apps to continue.</p>{!embedded && <a className="back-to-pool" href="?pool=1">Choose an app →</a>}</section></main>;
 }
 
 export default function App() {
@@ -591,6 +592,10 @@ export default function App() {
     if (!embedded) return;
     const receive = (event: MessageEvent) => {
       if (!parentOrigins.has(event.origin) || event.source !== window.parent) return;
+      if (event.data?.type === 'northstar-preview-theme') {
+        if (event.data.theme === 'light' || event.data.theme === 'dark') document.documentElement.dataset.theme = event.data.theme;
+        return;
+      }
       if (event.data?.type !== 'northstar-preview-grant' || typeof event.data.grant !== 'string' || event.data.grant.length > 4096) return;
       currentGrant = event.data.grant;
       setHasGrant(true);
@@ -599,7 +604,7 @@ export default function App() {
     window.parent.postMessage({ type: 'northstar-preview-ready' }, '*');
     return () => window.removeEventListener('message', receive);
   }, []);
-  if (!hasGrant) return <main className="page"><div className="pool-shell"><p className="overline">LIVE APP PREVIEW</p><h1>Connecting to Northstar…</h1><p className="pool-intro">Open this preview from your Northstar workspace.</p></div></main>;
+  if (!hasGrant) return embedded ? <main className="page embedded"><div className="embedded-connecting" role="status">Connecting to North Star…</div></main> : <main className="page"><div className="pool-shell"><p className="overline">LIVE APP PREVIEW</p><h1>Connecting to Northstar…</h1><p className="pool-intro">Open this preview from your Northstar workspace.</p></div></main>;
   if (query.has('pool')) return <PoolLanding />;
   if (pooled && !validApp) return <UnsupportedApp />;
   return <PreviewApp />;
