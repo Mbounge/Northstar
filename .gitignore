@@ -60,3 +60,6 @@ next-env.d.ts
 capture-runner/__pycache__/
 capture-runner/**/__pycache__/
 marketing-runner/**/__pycache__/
+
+# Local onboarding-agent sessions (screens, private video bursts, edit plans)
+capture-runner/agents/data/

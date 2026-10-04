@@ -749,6 +749,7 @@ class Persona:
 class DeviceController:
     def __init__(self, package_name):
         self.package_name = package_name
+        self.local_video_recorder = None
         self.screen_size = self._get_screen_size()
         self._gmail_package = "com.google.android.gm"
         self._browser_packages = [
@@ -758,6 +759,9 @@ class DeviceController:
         ]
 
     def adb(self, cmd, timeout=20):
+        recorder = self.local_video_recorder
+        if recorder is not None:
+            recorder.before_command(cmd)
         try:
             r = subprocess.run(
                 f"adb shell {cmd}", shell=True,
@@ -768,6 +772,9 @@ class DeviceController:
         except subprocess.TimeoutExpired:
             print(f"      ⚠️ ADB command timed out after {timeout}s: {cmd[:100]}")
             return ""
+        finally:
+            if recorder is not None:
+                recorder.after_command(cmd)
 
     def _get_screen_size(self):
         o = self.adb("wm size")
@@ -5739,6 +5746,21 @@ class OnboardingSpy:
         )
 
         self.phase = "EXPLORE"
+        self.local_video_recorder = None
+        if "--local-video-bursts" in sys.argv:
+            from local_onboarding_video import OnboardingBurstRecorder
+            self.local_video_recorder = OnboardingBurstRecorder(
+                self.data_dir,
+                PACKAGE_NAME,
+                context=lambda: {
+                    "phase": self.phase,
+                    "timeline_sequence": (
+                        self.timeline[-1].get("timeline_sequence")
+                        if self.timeline else None
+                    ),
+                },
+            )
+            self.device.local_video_recorder = self.local_video_recorder
         self.signup_found = False
         self.consecutive_unknowns = 0
         self.exploration_depth = 0
@@ -11159,6 +11181,8 @@ class OnboardingSpy:
         resume file access, CAPTCHA classification). They do not compete with
         the main planner for ordinary screen decisions.
         """
+        if self.local_video_recorder is not None:
+            self.local_video_recorder.enabled = True  # Opening the app is the first beat.
         # ---------- Startup / resume ----------
         if self.resume_path:
             if self._auto_reused_session:
@@ -11195,6 +11219,8 @@ class OnboardingSpy:
         same_screen_steps = 0
 
         while step < MAX_STEPS and self.status == "INITIALIZING":
+            if self.local_video_recorder is not None:
+                self.local_video_recorder.enabled = False
             step += 1
             print(f"\n{'=' * 60}")
             print(f"   📍 STEP {step}/{MAX_STEPS} | Phase: {self.phase}")
@@ -11592,6 +11618,11 @@ class OnboardingSpy:
                     break
 
             # ---------- EXECUTE EXACTLY ONE ACTION ----------
+            if self.local_video_recorder is not None:
+                self.local_video_recorder.enabled = action in {
+                    "CLICK", "FILL_FIELD", "SCROLL_DOWN", "SCROLL_UP",
+                    "SWIPE_LEFT", "PRESS_BACK", "UPLOAD_RESUME",
+                }
             self._arm_action_transition(
                 screen_sig,
                 screen_desc,
@@ -11873,6 +11904,8 @@ class OnboardingSpy:
                 action_result = "unsupported_action"
 
             # ---------- REPORTING ONLY ----------
+            if self.local_video_recorder is not None:
+                self.local_video_recorder.enabled = False
             if self.phase == "POST_AUTH":
                 self.post_auth_handler.record_step(
                     step_num=step,
@@ -12221,3 +12254,6 @@ if __name__ == "__main__":
             print(f"   💾 Continuation state preserved in: {agent.data_dir}")
         except Exception as e:
             print(f"   ⚠️ Could not persist interrupt state: {e}")
+    finally:
+        if agent.local_video_recorder is not None:
+            agent.local_video_recorder.close()
