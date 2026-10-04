@@ -321,6 +321,26 @@ export function syncCanvasV2DiscoveryGraph(input: CanvasV2DiscoveryGraphSyncInpu
   graph.changeSet = { addedNodeIds: [], updatedNodeIds: [], historicalNodeIds: [], addedEdgeIds: [] };
   const byId = new Map(graph.nodes.map((node) => [node.id, node]));
   const edgeById = new Map(graph.edges.map((edge) => [edge.id, edge]));
+  // A text or style edit must preserve the entire discovery graph. Looking
+  // through every graph node for every canvas object made that edit quadratic
+  // on large boards and held the main thread before the next pointer action.
+  const activeBySemantic = new Map<string, Set<CanvasV2DiscoveryNode>>();
+  const semanticIndexKey = (node: Pick<CanvasV2DiscoveryNode, "kind" | "semanticKey">) => `${node.kind}\0${node.semanticKey}`;
+  const addActive = (node: CanvasV2DiscoveryNode) => {
+    if (node.status !== "active") return;
+    const key = semanticIndexKey(node);
+    const group = activeBySemantic.get(key) ?? new Set<CanvasV2DiscoveryNode>();
+    group.add(node);
+    activeBySemantic.set(key, group);
+  };
+  const removeActive = (node: CanvasV2DiscoveryNode) => {
+    const key = semanticIndexKey(node);
+    const group = activeBySemantic.get(key);
+    group?.delete(node);
+    if (group?.size === 0) activeBySemantic.delete(key);
+  };
+  graph.nodes.forEach(addActive);
+  const activeMatches = (node: Pick<CanvasV2DiscoveryNode, "kind" | "semanticKey">) => activeBySemantic.get(semanticIndexKey(node)) ?? new Set<CanvasV2DiscoveryNode>();
 
   const upsert = (candidate: Omit<CanvasV2DiscoveryNode, "createdAt" | "updatedAt" | "lastSeenRevisionId">) => {
     const current = byId.get(candidate.id);
@@ -333,14 +353,17 @@ export function syncCanvasV2DiscoveryGraph(input: CanvasV2DiscoveryGraphSyncInpu
       };
       graph.nodes.push(node);
       byId.set(node.id, node);
+      addActive(node);
       graph.changeSet.addedNodeIds.push(node.id);
       return node;
     }
     const changed = current.contentHash !== candidate.contentHash || current.status !== candidate.status;
+    removeActive(current);
     Object.assign(current, candidate, {
       updatedAt: changed ? input.updatedAt : current.updatedAt,
       lastSeenRevisionId: input.revisionId,
     });
+    addActive(current);
     if (changed) graph.changeSet.updatedNodeIds.push(current.id);
     return current;
   };
@@ -356,17 +379,13 @@ export function syncCanvasV2DiscoveryGraph(input: CanvasV2DiscoveryGraphSyncInpu
   };
   const markHistorical = (node: CanvasV2DiscoveryNode) => {
     if (node.status === "historical") return;
+    removeActive(node);
     node.status = "historical";
     node.updatedAt = input.updatedAt;
     graph.changeSet.historicalNodeIds.push(node.id);
   };
   const supersedeActive = (candidate: Pick<CanvasV2DiscoveryNode, "id" | "kind" | "semanticKey">) => {
-    const previous = graph.nodes.filter((node) => (
-      node.kind === candidate.kind
-      && node.semanticKey === candidate.semanticKey
-      && node.status === "active"
-      && node.id !== candidate.id
-    ));
+    const previous = [...activeMatches(candidate)].filter((node) => node.id !== candidate.id);
     previous.forEach(markHistorical);
     return previous;
   };
@@ -525,7 +544,7 @@ export function syncCanvasV2DiscoveryGraph(input: CanvasV2DiscoveryGraphSyncInpu
       const key = scopedClaimSemanticKey("fact", fact.label, packet);
       const contentHash = hash(JSON.stringify({ value: fact.value, authority: fact.authority, description: fact.description, sourceAssetIds: fact.sourceAssetIds, sourceHash }));
       const id = `fact:${packet.id}:${packetMemberIdentity(packet.id, fact.id)}:${contentHash}`;
-      const superseded = graph.nodes.filter((node) => node.kind === "fact" && node.packetId === packet.id && node.semanticKey === key && node.status === "active" && node.id !== id);
+      const superseded = [...activeMatches({ kind: "fact", semanticKey: key })].filter((node) => node.packetId === packet.id && node.id !== id);
       for (const previous of superseded) {
         markHistorical(previous);
       }
@@ -565,7 +584,7 @@ export function syncCanvasV2DiscoveryGraph(input: CanvasV2DiscoveryGraphSyncInpu
       const value = `${metric.value}${metric.unit ? ` ${metric.unit}` : ""}`;
       const contentHash = hash(JSON.stringify({ value, definition: metric.definition, authority: metric.authority, timeRange: metric.timeRange, filters: metric.filters, sourceHash }));
       const id = `metric:${packet.id}:${packetMemberIdentity(packet.id, metric.id)}:${contentHash}`;
-      const superseded = graph.nodes.filter((node) => node.kind === "metric" && node.packetId === packet.id && node.semanticKey === key && node.status === "active" && node.id !== id);
+      const superseded = [...activeMatches({ kind: "metric", semanticKey: key })].filter((node) => node.packetId === packet.id && node.id !== id);
       for (const previous of superseded) {
         markHistorical(previous);
       }
@@ -628,6 +647,17 @@ export function syncCanvasV2DiscoveryGraph(input: CanvasV2DiscoveryGraphSyncInpu
   const pendingRelations: Array<{ from: string; toCanvasNodeId: string }> = [];
   const currentCanvasNodeIds = new Set<string>();
   const currentCanvasGraphNodeIdByCanvasNodeId = new Map<string, string>();
+  const activeAssetNodeIdByEvidenceId = new Map<string, string>();
+  const activePacketNodeIdByPacketId = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.status !== "active") continue;
+    if (node.kind === "asset" && node.evidenceId && !activeAssetNodeIdByEvidenceId.has(node.evidenceId)) {
+      activeAssetNodeIdByEvidenceId.set(node.evidenceId, node.id);
+    }
+    if (node.kind === "packet" && node.packetId && !activePacketNodeIdByPacketId.has(node.packetId)) {
+      activePacketNodeIdByPacketId.set(node.packetId, node.id);
+    }
+  }
   const canvasTextById = canvasObjectTextById(input.document.html);
   const canvasEvidenceLineageById = canvasObjectEvidenceLineageById(input.document.html);
   for (const match of input.document.html.matchAll(/<([a-z][\w:-]*)\b([^>]*\bdata-canvas-v2-node-id\s*=\s*["'][^"']+["'][^>]*)>/gi)) {
@@ -672,11 +702,11 @@ export function syncCanvasV2DiscoveryGraph(input: CanvasV2DiscoveryGraphSyncInpu
     currentCanvasGraphNodeIdByCanvasNodeId.set(canvasNodeId, id);
     for (const previous of supersededObjects) edge("supersedes", id, previous.id);
     if (evidenceId) {
-      const assetNodeId = graph.nodes.find((node) => node.kind === "asset" && node.evidenceId === evidenceId && node.status === "active")?.id;
+      const assetNodeId = activeAssetNodeIdByEvidenceId.get(evidenceId);
       if (assetNodeId) edge("represented-by", assetNodeId, id);
     }
     if (packetId) {
-      const packetNodeId = graph.nodes.find((node) => node.kind === "packet" && node.packetId === packetId && node.status === "active")?.id;
+      const packetNodeId = activePacketNodeIdByPacketId.get(packetId);
       if (packetNodeId) edge("represented-by", packetNodeId, id);
     }
     for (const targetNodeId of relationshipTargets) pendingRelations.push({ from: id, toCanvasNodeId: targetNodeId });

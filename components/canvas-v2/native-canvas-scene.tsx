@@ -6,6 +6,7 @@ import { observeCanvasV2ImageVisibility, type CanvasV2ImageVisibilityObserver } 
 import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
 
 import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
+import type { CanvasV2ElementBounds } from "@/lib/canvas-v2/types";
 
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { CanvasV2PlayableMediaObject } from "./playable-media";
@@ -72,6 +73,7 @@ export interface CanvasV2NativeCanvasSceneProps {
   onSceneSnapshot?: (elements: CanvasV2InspectableElement[]) => void;
   onNativeScene?: (scene: CanvasV2NativeSceneDocument) => void;
   sceneOverride?: CanvasV2NativeSceneDocument;
+  visibleBounds?: CanvasV2ElementBounds;
   onBeforeUserEdit?: () => void;
   onAfterUserEdit?: () => void;
   onTableAction?: (cellId: string, action: "next" | "previous" | "paste", text?: string) => void;
@@ -218,25 +220,66 @@ function roundSceneMetric(value: number): number {
 function reconcilePublicSceneGeometry(
   scene: CanvasV2NativeSceneDocument,
   root: HTMLElement,
+  previous?: CanvasV2NativeSceneDocument,
 ): CanvasV2NativeSceneDocument {
   const rootRect = root.getBoundingClientRect();
   const scaleX = rootRect.width / scene.width;
   const scaleY = rootRect.height / scene.height;
   if (!Number.isFinite(scaleX) || scaleX <= 0 || !Number.isFinite(scaleY) || scaleY <= 0) return scene;
+  const sceneNodes = canvasV2NativeSceneNodeMap(scene);
+  const affected = previous ? (() => {
+    const before = canvasV2NativeSceneNodeMap(previous);
+    const ids = new Set<string>();
+    const addSubtree = (node: CanvasV2NativeSceneNode) => {
+      if (ids.has(node.id)) return;
+      ids.add(node.id);
+      for (const childId of node.childIds) {
+        const child = sceneNodes.get(childId);
+        if (child) addSubtree(child);
+      }
+    };
+    for (const node of scene.nodes) {
+      if (before.get(node.id) === node) continue;
+      addSubtree(node);
+      let child = node;
+      let parent = child.parentId ? sceneNodes.get(child.parentId) : undefined;
+      while (parent) {
+        ids.add(parent.id);
+        // A changed flow child may shift its siblings. An absolute child does
+        // not participate in the parent's flow, so the search stops there.
+        if (child.layoutMode === "flow") for (const siblingId of parent.childIds) {
+          const sibling = sceneNodes.get(siblingId);
+          if (sibling?.layoutMode === "flow") addSubtree(sibling);
+        }
+        if (parent.layoutMode === "absolute") break;
+        child = parent;
+        parent = parent.parentId ? sceneNodes.get(parent.parentId) : undefined;
+      }
+    }
+    return ids;
+  })() : undefined;
   const elements = new Map<string, HTMLElement>();
-  for (const element of root.querySelectorAll<HTMLElement>("[data-canvas-v2-native-scene-id]")) {
+  if (!affected || affected.size > 64) for (const element of root.querySelectorAll<HTMLElement>("[data-canvas-v2-native-scene-id]")) {
     const id = element.dataset.canvasV2NativeSceneId;
     if (id && !elements.has(id)) elements.set(id, element);
   }
+  const elementFor = (id: string): HTMLElement | undefined => {
+    const cached = elements.get(id);
+    if (cached || !affected) return cached;
+    const selectorId = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(id) : id.replaceAll('"', '\\"');
+    const element = root.querySelector<HTMLElement>(`[data-canvas-v2-native-scene-id="${selectorId}"]`);
+    if (element) elements.set(id, element);
+    return element ?? undefined;
+  };
   let changed = false;
-  const sceneNodes = canvasV2NativeSceneNodeMap(scene);
   const nodes = scene.nodes.map((node) => {
+    if (affected && !affected.has(node.id)) return node;
     // Absolute canvas objects already have authoritative world geometry from
     // the native scene. Reading their painted browser pixels back through the
     // camera scale quantizes sub-pixel coordinates and silently moves an
     // untouched collaborator on every later AI commit. Reconciliation exists
     // only to materialize browser-owned normal-flow layout.
-    const element = elements.get(node.id);
+    const element = elementFor(node.id);
     const textMode = node.attributes["data-canvas-v2-text-mode"];
     if (element && (textMode === "point" || textMode === "area") && !element.hasAttribute("data-canvas-v2-native-transient")) {
       // Auto-sizing text owns intrinsic dimensions, while the human still
@@ -263,7 +306,7 @@ function reconcilePublicSceneGeometry(
     if (node.layoutMode === "absolute") return node;
     if (!element || node.geometry.rotation !== 0) return node;
     const rect = canvasV2ElementPaintBounds(element);
-    const parentRect = node.parentId ? elements.get(node.parentId)?.getBoundingClientRect() : rootRect;
+    const parentRect = node.parentId ? elementFor(node.parentId)?.getBoundingClientRect() : rootRect;
     if (!parentRect || rect.width <= 0 || rect.height <= 0) return node;
     const geometry = {
       ...node.geometry,
@@ -439,12 +482,65 @@ function restoreNativeTransientStyle(snapshot: NativeTransientStyleSnapshot): vo
   else snapshot.element.removeAttribute("data-canvas-v2-native-transient");
 }
 
+// A dense evidence board can place hundreds of objects under one root. If a
+// single object changes, reconciling every sibling's React fiber still blocks
+// the next pointer event even though their DOM is unchanged. Fragments group
+// siblings without introducing a layout box, so only the changed group enters
+// React's child reconciliation.
+const NATIVE_CHILD_CHUNK_SIZE = 32;
+const NATIVE_CULL_MARGIN = 900;
+
+function outsideVisibleCanvas(node: CanvasV2NativeSceneNode, parent: CanvasV2NativeSceneNode | undefined, visibleBounds: CanvasV2ElementBounds | undefined): boolean {
+  if (!visibleBounds || !parent || parent.parentId || node.layoutMode !== "absolute"
+    || node.geometry.width <= 0 || node.geometry.height <= 0) return false;
+  // Only independent children of a scene root can be omitted without
+  // disturbing flow layout. The private compiler and native model remain full.
+  const x = node.geometry.x + parent.geometry.x;
+  const y = node.geometry.y + parent.geometry.y;
+  return x + node.geometry.width < visibleBounds.x - NATIVE_CULL_MARGIN
+    || y + node.geometry.height < visibleBounds.y - NATIVE_CULL_MARGIN
+    || x > visibleBounds.x + visibleBounds.width + NATIVE_CULL_MARGIN
+    || y > visibleBounds.y + visibleBounds.height + NATIVE_CULL_MARGIN;
+}
+
+const NativeChildChunk = memo(function NativeChildChunk({
+  items,
+  byId,
+  visibleBounds,
+  protectedNodeIds,
+}: {
+  items: CanvasV2NativeSceneNode["content"];
+  byId: Map<string, CanvasV2NativeSceneNode>;
+  visibleBounds?: CanvasV2ElementBounds;
+  protectedNodeIds: ReadonlySet<string>;
+}) {
+  return <>{items.map((item, index) => {
+    if (item.kind === "text") return item.value;
+    const child = byId.get(item.id);
+    return child ? <NativeNode key={child.id} node={child} byId={byId} visibleBounds={visibleBounds} protectedNodeIds={protectedNodeIds} /> : <span key={`missing-${index}`} />;
+  })}</>;
+}, (previous, next) => previous.visibleBounds === next.visibleBounds && previous.items.length === next.items.length
+  && previous.items.every((item, index) => {
+    const current = next.items[index];
+    if (item.kind !== current.kind) return false;
+    if (item.kind === "text" || current.kind === "text") return item.kind === "text" && current.kind === "text" && item.value === current.value;
+    const oldChild = previous.byId.get(item.id);
+    const newChild = next.byId.get(current.id);
+    return Boolean(oldChild && newChild
+      && previous.protectedNodeIds.has(oldChild.id) === next.protectedNodeIds.has(newChild.id)
+      && sameCanvasV2NativeRenderedSubtree(oldChild, newChild, previous.byId, next.byId));
+  }));
+
 const NativeNode = memo(function NativeNode({
   node,
   byId,
+  visibleBounds,
+  protectedNodeIds,
 }: {
   node: CanvasV2NativeSceneNode;
   byId: Map<string, CanvasV2NativeSceneNode>;
+  visibleBounds?: CanvasV2ElementBounds;
+  protectedNodeIds: ReadonlySet<string>;
 }) {
   const imageResourceRef = useRef<{ source?: string; optimized?: { srcSet: string; sizes: string } }>({});
   if (imageResourceRef.current.source !== node.attributes.src) {
@@ -452,6 +548,7 @@ const NativeNode = memo(function NativeNode({
   }
   const parent = node.parentId ? byId.get(node.parentId) : undefined;
   if (!canvasV2NativeSceneNodeHasRenderableNamespace(node, parent)) return null;
+  if (!protectedNodeIds.has(node.id) && outsideVisibleCanvas(node, parent, visibleBounds)) return null;
   const narrowSelectable = node.selectable && node.namespace === "html" && (node.geometry.width <= 6 || node.geometry.height <= 6);
   const hostOwnsBackground = canvasV2NativeSceneNodeUsesHostBackground(node);
   const canonicalEvidenceImage = node.kind === "image"
@@ -483,11 +580,14 @@ const NativeNode = memo(function NativeNode({
     "--canvas-v2-native-rotation": `${node.geometry.rotation}deg`,
     zIndex: CANVAS_V2_NATIVE_STACK_BASE + node.geometry.zIndex,
   } as CSSProperties;
-  const content = node.content.map((item, index) => {
-    if (item.kind === "text") return item.value;
-    const child = byId.get(item.id);
-    return child ? <NativeNode key={child.id} node={child} byId={byId} /> : <span key={`missing-${index}`} />;
-  });
+  const content = node.content.length > NATIVE_CHILD_CHUNK_SIZE * 2
+    ? Array.from({ length: Math.ceil(node.content.length / NATIVE_CHILD_CHUNK_SIZE) }, (_, index) =>
+        <NativeChildChunk key={index} items={node.content.slice(index * NATIVE_CHILD_CHUNK_SIZE, (index + 1) * NATIVE_CHILD_CHUNK_SIZE)} byId={byId} visibleBounds={visibleBounds} protectedNodeIds={protectedNodeIds} />)
+    : node.content.map((item, index) => {
+        if (item.kind === "text") return item.value;
+        const child = byId.get(item.id);
+        return child ? <NativeNode key={child.id} node={child} byId={byId} visibleBounds={visibleBounds} protectedNodeIds={protectedNodeIds} /> : <span key={`missing-${index}`} />;
+      });
   const props: Record<string, unknown> = {
     ...reactAttributes(node),
     "data-canvas-v2-native-runtime-node": "true",
@@ -515,7 +615,10 @@ const NativeNode = memo(function NativeNode({
   if (VOID_TAGS.has(node.tagName)) return createElement(node.tagName, props);
   if (canvasV2NativeSceneNodeSupportsTextEditing(node, byId)) return createElement(node.tagName, { ...props, dangerouslySetInnerHTML: { __html: canvasV2NativeTextMarkup(node, byId) } });
   return createElement(node.tagName, props, ...content);
-}, (previous, next) => sameCanvasV2NativeRenderedSubtree(previous.node, next.node, previous.byId, next.byId));
+}, (previous, next) => previous.visibleBounds === next.visibleBounds
+  && (previous.protectedNodeIds === next.protectedNodeIds || (previous.node.parentId !== undefined
+    && previous.protectedNodeIds.has(previous.node.id) === next.protectedNodeIds.has(next.node.id)))
+  && sameCanvasV2NativeRenderedSubtree(previous.node, next.node, previous.byId, next.byId));
 
 export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHandle, CanvasV2NativeCanvasSceneProps>(function CanvasV2NativeCanvasScene({
   revision,
@@ -532,6 +635,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   onSceneSnapshot,
   onNativeScene,
   sceneOverride,
+  visibleBounds,
   onBeforeUserEdit,
   onAfterUserEdit,
   onTableAction,
@@ -558,9 +662,10 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const [scene, setScene] = useState<CanvasV2NativeSceneDocument>();
   const [compileError, setCompileError] = useState<string>();
   const [compiledRevisionId, setCompiledRevisionId] = useState<string>();
-  const activePointerRef = useRef<{ pointerId: number; element?: CanvasV2InspectableElement } | undefined>(undefined);
+  const activePointerRef = useRef<{ pointerId: number; startX: number; startY: number; captured?: boolean; element?: CanvasV2InspectableElement } | undefined>(undefined);
   const hoveredPointerNodeRef = useRef<string | undefined>(undefined);
   const imageVisibilityRef = useRef<CanvasV2ImageVisibilityObserver | undefined>(undefined);
+  const inspectableSnapshotRef = useRef<{ byId: Map<string, CanvasV2NativeSceneNode>; inspected: Map<string, CanvasV2InspectableElement> } | undefined>(undefined);
   // Native edits/history already contain measured geometry. Rebuilding a second
   // image-heavy canvas for them stalls the main thread without adding truth.
   // New authored revisions still pass through compilation, and private model
@@ -570,6 +675,19 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const renderedScene = sceneOverride ?? scene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
   const bySourceId = useMemo(() => renderedScene ? canvasV2NativeSceneSourceNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
+  const protectedNodeKey = JSON.stringify([selectedNodeId, selectedNodeIds]);
+  const protectedNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const sourceId of [selectedNodeId, ...(selectedNodeIds ?? [])]) {
+      let node = sourceId ? bySourceId.get(sourceId) : undefined;
+      while (node && !ids.has(node.id)) {
+        ids.add(node.id);
+        node = node.parentId ? byId.get(node.parentId) : undefined;
+      }
+    }
+    return ids;
+  }, [byId, bySourceId, protectedNodeKey]);
+  const cullBounds = byId.size > 300 ? visibleBounds : undefined;
   const connectorsByEndpoint = useMemo(() => {
     const index = new Map<string, CanvasV2NativeSceneNode[]>();
     for (const connector of renderedScene?.nodes ?? []) {
@@ -849,6 +967,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     removalPreviewSnapshotsRef.current = snapshots;
   }, [restoreNodeRemovalPreview]);
 
+
   const commitNodeRemovalPreview = useCallback(() => {
     // The accepted native scene removes these nodes. Dropping the snapshots
     // without restoring their styles prevents a flash of the retired DOM while
@@ -878,7 +997,15 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   useLayoutEffect(() => {
     if (!renderedScene || reconciledSceneRef.current === renderedScene) return;
     const root = publicSceneRef.current;
-    const reconciled = root ? reconcilePublicSceneGeometry(renderedScene, root) : renderedScene;
+    // A native geometry transaction has already measured its starting scene
+    // and committed exact object bounds. Re-reading every painted node here
+    // forces a full layout pass before the next pointerdown on dense boards.
+    // Authored/content revisions still need public-font reconciliation.
+    const reconciled = root && !(sceneOverride && revision.sceneTransaction?.geometryOnly)
+      ? reconcilePublicSceneGeometry(renderedScene, root, sceneOverride && revision.sceneTransaction?.origin === "user" && !revision.sceneTransaction.stylesheetChanged
+        ? reconciledSceneRef.current
+        : undefined)
+      : renderedScene;
     reconciledSceneRef.current = reconciled;
     // A committed override is already native truth for absolute objects, but
     // its still-flowing text and layout children were first measured in the
@@ -919,12 +1046,36 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
 
   const allInspectable = useCallback(() => {
     if (!renderedScene) return [];
-    const elementsBySourceId = new Map(Array.from(publicSceneRef.current?.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]") ?? [])
-      .flatMap((element) => element.dataset.canvasV2NodeId ? [[element.dataset.canvasV2NodeId, element] as const] : []));
-    return renderedScene.nodes.flatMap((node) => {
+    const previous = inspectableSnapshotRef.current;
+    const placementUnchanged = new Map<string, boolean>();
+    const unchanged = (node: CanvasV2NativeSceneNode): boolean => {
+      const cached = placementUnchanged.get(node.id);
+      if (cached !== undefined) return cached;
+      const sameNode = previous?.byId.get(node.id) === node;
+      const parent = node.parentId ? byId.get(node.parentId) : undefined;
+      const same = Boolean(sameNode && (!parent || unchanged(parent)));
+      placementUnchanged.set(node.id, same);
+      return same;
+    };
+    const changed = renderedScene.nodes.filter((node) => node.selectable && node.sourceNodeId
+      && (!unchanged(node) || !previous?.inspected.get(node.id)));
+    const elementsBySourceId = changed.length > 64
+      ? new Map(Array.from(publicSceneRef.current?.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]") ?? [])
+        .flatMap((element) => element.dataset.canvasV2NodeId ? [[element.dataset.canvasV2NodeId, element] as const] : []))
+      : undefined;
+    const inspected = new Map<string, CanvasV2InspectableElement>();
+    const result = renderedScene.nodes.flatMap((node) => {
       if (!node.selectable || !node.sourceNodeId) return [];
-      return [inspectNativeNode(node, byId, elementsBySourceId.get(node.sourceNodeId))];
+      const reused = unchanged(node) ? previous?.inspected.get(node.id) : undefined;
+      const element = reused ? undefined : elementsBySourceId
+        ? elementsBySourceId.get(node.sourceNodeId)
+        : publicSceneRef.current?.querySelector<HTMLElement>(`[data-canvas-v2-node-id="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(node.sourceNodeId) : node.sourceNodeId.replaceAll('"', '\\"')}"]`);
+      const value = reused ?? inspectNativeNode(node, byId, element);
+      inspected.set(node.id, value);
+      return [value];
     });
+    inspectableSnapshotRef.current = { byId, inspected };
+    return result;
   }, [byId, renderedScene]);
 
   useEffect(() => {
@@ -963,7 +1114,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     }
     const targetResult = inspectionEnabled ? targetNode(event.target) : undefined;
     const inspected = targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined;
-    activePointerRef.current = { pointerId: event.pointerId, ...(inspected ? { element: inspected } : {}) };
+    activePointerRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, ...(inspected ? { element: inspected } : {}) };
     // Text objects need the browser's compatibility click sequence so a
     // physical double-click can produce click/dblclick after object selection.
     // The scene already disables ordinary text selection until edit mode, so
@@ -989,6 +1140,13 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     if (inspectionEnabled && !activePointerRef.current && !navigating) inspectHoverTarget(event.target);
     const active = activePointerRef.current;
     if (!active || active.pointerId !== event.pointerId) return;
+    // Preserve the authored text's native click/double-click sequence. Once
+    // movement becomes a real drag, capture on the stable scene root so a
+    // selection re-render or an iframe boundary cannot strand the gesture.
+    if (!active.captured && Math.hypot(event.clientX - active.startX, event.clientY - active.startY) > 4) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      active.captured = true;
+    }
     if (active.element && onElementPointer) onElementPointer({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: active.element });
     else onWorkspacePointer?.({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
   };
@@ -1293,8 +1451,8 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   );
   const renderedRootNodes = useMemo(() => renderedScene?.rootIds.map((rootId) => {
     const node = byId.get(rootId);
-    return node ? <NativeNode key={node.id} node={node} byId={byId} /> : null;
-  }), [renderedScene, byId]);
+    return node ? <NativeNode key={node.id} node={node} byId={byId} visibleBounds={cullBounds} protectedNodeIds={protectedNodeIds} /> : null;
+  }), [renderedScene, byId, cullBounds, protectedNodeIds]);
 
   return (
     <div className="relative" style={{ width, height, pointerEvents: framePointerEvents }}>

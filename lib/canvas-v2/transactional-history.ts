@@ -44,6 +44,8 @@ export function commitCanvasV2HistoryTransaction(input: {
   transactionId: string;
   selectionNodeIds?: readonly string[];
   nativeScene?: CanvasV2NativeSceneDocument;
+  /** Only for a newly produced immutable native transaction scene. */
+  shareNativeScene?: boolean;
   limit?: number;
 }): CanvasV2TransactionalHistory {
   if (input.revision.state !== "committed") {
@@ -70,7 +72,9 @@ export function commitCanvasV2HistoryTransaction(input: {
   if (input.nativeScene && input.nativeScene.revisionId !== input.revision.id) {
     throw new Error("Canvas V2 history scene and revision identities must match.");
   }
-  const nativeScene = input.nativeScene ? structuredClone(input.nativeScene) : undefined;
+  const nativeScene = input.nativeScene
+    ? input.shareNativeScene ? input.nativeScene : structuredClone(input.nativeScene)
+    : undefined;
   const nativeScenes = replacesCurrentTransaction
     ? [...branchNativeScenes.slice(0, -1), nativeScene]
     : [...branchNativeScenes, nativeScene];

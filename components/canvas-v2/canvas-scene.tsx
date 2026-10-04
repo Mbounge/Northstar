@@ -60,6 +60,7 @@ export interface CanvasV2CanvasSceneProps {
   onSceneSnapshot?: (elements: CanvasV2InspectableElement[]) => void;
   onNativeScene?: (scene: CanvasV2NativeSceneDocument) => void;
   nativeSceneOverride?: CanvasV2NativeSceneDocument;
+  visibleBounds?: CanvasV2ElementBounds;
   placementReferenceScene?: CanvasV2NativeSceneDocument;
   /** Existing AI-owned roots that an explicit whole-board recompose may move. */
   relocatablePlacementNodeIds?: readonly string[];
@@ -944,6 +945,7 @@ export const CanvasV2CanvasScene = forwardRef<CanvasV2CanvasSceneHandle, CanvasV
         onSceneSnapshot={props.onSceneSnapshot}
         onNativeScene={props.onNativeScene}
         sceneOverride={props.nativeSceneOverride}
+        visibleBounds={props.visibleBounds}
         onBeforeUserEdit={props.onBeforeUserEdit}
         onAfterUserEdit={props.onAfterUserEdit}
         editTextRequest={props.editTextRequest}

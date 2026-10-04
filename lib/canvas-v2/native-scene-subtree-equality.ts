@@ -26,6 +26,11 @@ export function sameCanvasV2NativeRenderedSubtree(
   previousById: Map<string, CanvasV2NativeSceneNode>,
   nextById: Map<string, CanvasV2NativeSceneNode>,
 ): boolean {
+  // Selection and hover re-render the canvas chrome without changing native
+  // scene truth. In that case the immutable node map itself proves the whole
+  // subtree is unchanged; traversing thousands of descendants here delays
+  // the next pointer gesture for no visual work.
+  if (previous === next && previousById === nextById) return true;
   if (previous.id !== next.id) return false;
   let byNext = comparisons.get(previousById);
   if (!byNext) {

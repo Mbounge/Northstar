@@ -338,6 +338,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     revision: CanvasV2ArtifactRevision,
     transactionId = `user:${revision.id}`,
     selectionNodeIds: readonly string[] = [],
+    shareNativeScene = false,
   ) => {
     committedRef.current = revision;
     // Compute and publish history synchronously. A state-updater callback is
@@ -350,6 +351,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       transactionId,
       selectionNodeIds,
       nativeScene: nativeSceneRef.current?.revisionId === revision.id ? nativeSceneRef.current : undefined,
+      shareNativeScene,
     });
     transactionalHistoryRef.current = nextHistory;
     setCommitted(revision);
@@ -1049,7 +1051,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
         serializedNativeSceneRef.current = nextNativeScene;
         nativeSceneRef.current = nextNativeScene;
         setNativeScene(nextNativeScene);
-        acceptCommittedRevision(nextCommitted, `user:${nextCommitted.id}`, options.selectionNodeIds);
+        acceptCommittedRevision(nextCommitted, `user:${nextCommitted.id}`, options.selectionNodeIds, nativeGeometryEdit);
         setManualNotice(summary);
         return true;
       }
@@ -1529,6 +1531,10 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     canUndo: historyIndex > 0 && !pendingManualEdit,
     canRedo: historyIndex < history.length - 1 && !pendingManualEdit,
     ready: Boolean(observations[committed.id]),
+    // A direct native edit commits its scene synchronously. Its fresh render
+    // observation can arrive later; the person should still be able to start
+    // the next gesture or place another object on the very next pointerdown.
+    interactionReady: Boolean(observations[committed.id] || nativeScene?.revisionId === committed.id),
     displayedObservation: observations[displayed.id],
     beginHumanEdit: () => {
       humanEditing.current = true;

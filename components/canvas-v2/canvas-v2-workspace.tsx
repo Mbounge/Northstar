@@ -1379,6 +1379,15 @@ export function CanvasV2Workspace({
     contentInsets(),
   ), [contentInsets, viewport, workspaceSize]);
 
+  // Keep viewport culling independent of the selection and chat renders.
+  // A generous margin lets a fast pan reveal the next tiles without waiting
+  // for the next committed camera frame.
+  const renderedCanvasBounds = useMemo(() => canvasV2VisibleWorkspaceBounds(
+    viewport,
+    workspaceSize,
+    CANVAS_V2_EMPTY_INSETS,
+  ), [viewport, workspaceSize]);
+
   const zoomAtCenter = (factor: number) => {
     const camera = workspaceSizeRef.current;
     const insets = contentInsets();
@@ -2137,7 +2146,7 @@ export function CanvasV2Workspace({
   };
 
   const startDrawingGesture = (pointerId: number, clientX: number, clientY: number) => {
-    if (drawingGestureRef.current || !engine.ready || engine.applyingManualEdit) return false;
+    if (drawingGestureRef.current || !engine.interactionReady || engine.applyingManualEdit) return false;
     selectElement(undefined);
     const gesture = { pointerId, points: [drawingPoint(clientX, clientY)] };
     drawingGestureRef.current = gesture;
@@ -3004,7 +3013,7 @@ export function CanvasV2Workspace({
     }
     try {
       const prepared = await prepareCanvasV2CanvasImages(replaceNodeId ? images.slice(0, 1) : images);
-      if (!engine.ready || engine.applyingManualEdit) return false;
+      if (!engine.interactionReady || engine.applyingManualEdit) return false;
       return addPreparedCanvasImages(prepared, origin, replaceNodeId);
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : "The image could not be prepared.");
@@ -3055,7 +3064,7 @@ export function CanvasV2Workspace({
   const dropOnCanvas = (event: ReactDragEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!engine.ready || engine.applyingManualEdit) return;
+    if (!engine.interactionReady || engine.applyingManualEdit) return;
     const origin = workspacePoint(event.clientX, event.clientY);
     const imageFiles = Array.from(event.dataTransfer.files).filter((file) => (file.type.startsWith("image/") || file.type.startsWith("video/")));
     clearPrimitiveDrag();
@@ -3245,7 +3254,7 @@ export function CanvasV2Workspace({
   workspacePasteHandlerRef.current = (event: ClipboardEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
-    if (!engine.ready || engine.applyingManualEdit) return;
+    if (!engine.interactionReady || engine.applyingManualEdit) return;
     const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => (file.type.startsWith("image/") || file.type.startsWith("video/")));
     const itemFiles = directFiles.length ? [] : Array.from(event.clipboardData?.items ?? [])
       .filter((item) => item.kind === "file" && (item.type.startsWith("image/") || item.type.startsWith("video/")))
@@ -3415,6 +3424,7 @@ export function CanvasV2Workspace({
   const selectedLineStyle = selectedVisualStyle?.borderStyle === "dashed" ? "dashed" : selectedVisualStyle?.borderStyle === "none" || Number.parseFloat(selectedVisualStyle?.borderWidth || "0") <= 0 ? "none" : "solid";
   const fillTriggerPaintMode = canvasV2PaintMode(selectedVisualStyle?.backgroundColor);
   const sourceNodes = useMemo(() => {
+    if (!layersOpen) return [];
     const selectableIds = new Set(sceneElements.map((element) => element.nodeId));
     const sourceGraph = readCanvasV2BoardObjectGraph(engine.committed.document);
     const sourceById = new Map(sourceGraph.map((node) => [node.nodeId, node]));
@@ -3447,7 +3457,7 @@ export function CanvasV2Workspace({
       }];
     });
     return [...authored, ...nativeOnly];
-  }, [engine.committed, sceneElements]);
+  }, [engine.committed, layersOpen, sceneElements]);
   const contextualToolbarPosition = useMemo(() => {
     if (!activeSelectionBounds) return undefined;
     const availableWidth = workspaceRef.current?.clientWidth ?? 1_440;
@@ -3621,11 +3631,11 @@ export function CanvasV2Workspace({
               const payload = { primitive, ...(shapeVariant ? { shapeVariant } : {}), ...(connectorVariant ? { connectorVariant } : {}) };
               const silhouette = primitiveSilhouette(payload);
               const relationship = primitive === "line" || primitive === "connector";
-              if (primitive === "drawing") return <button key={label} type="button" aria-label="Drawing" aria-pressed={tool === "draw"} onClick={() => { selectElement(undefined); setTool("draw"); setChatOpen(false); }} disabled={!engine.ready || engine.applyingManualEdit} className={`group flex h-[108px] flex-col items-center justify-center bg-transparent text-center transition disabled:opacity-35 ${tool === "draw" ? "text-[#5d49da]" : ""}`}><span className="grid h-[78px] w-full place-items-center"><span className="block h-[54px] w-[96px] transition duration-200 group-hover:scale-110 group-active:scale-95"><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Drawing</span><span aria-hidden className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">Select, then paint</span></button>;
-              return <button key={label} type="button" draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, shapeVariant, connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, { shapeVariant, connectorVariant })} disabled={!engine.ready || engine.applyingManualEdit} className={`group flex cursor-grab flex-col items-center justify-center bg-transparent text-center transition active:cursor-grabbing disabled:opacity-35 ${relationship ? "h-[132px]" : "h-[108px]"}`}><span className={`grid w-full place-items-center ${relationship ? "h-[92px]" : "h-[78px]"}`}><span className="block transition duration-200 group-hover:scale-110 group-active:scale-95" style={{ width: relationship ? 104 : Math.min(96, silhouette.width * 0.76), height: relationship ? 48 : Math.min(72, silhouette.height * 0.76) }}><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">{label}</span>{relationship && <span className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">{primitive === "connector" ? "2 attachable ends" : "Independent"}</span>}</button>;
+              if (primitive === "drawing") return <button key={label} type="button" aria-label="Drawing" aria-pressed={tool === "draw"} onClick={() => { selectElement(undefined); setTool("draw"); setChatOpen(false); }} disabled={!engine.interactionReady || engine.applyingManualEdit} className={`group flex h-[108px] flex-col items-center justify-center bg-transparent text-center transition disabled:opacity-35 ${tool === "draw" ? "text-[#5d49da]" : ""}`}><span className="grid h-[78px] w-full place-items-center"><span className="block h-[54px] w-[96px] transition duration-200 group-hover:scale-110 group-active:scale-95"><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Drawing</span><span aria-hidden className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">Select, then paint</span></button>;
+              return <button key={label} type="button" draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, shapeVariant, connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, { shapeVariant, connectorVariant })} disabled={!engine.interactionReady || engine.applyingManualEdit} className={`group flex cursor-grab flex-col items-center justify-center bg-transparent text-center transition active:cursor-grabbing disabled:opacity-35 ${relationship ? "h-[132px]" : "h-[108px]"}`}><span className={`grid w-full place-items-center ${relationship ? "h-[92px]" : "h-[78px]"}`}><span className="block transition duration-200 group-hover:scale-110 group-active:scale-95" style={{ width: relationship ? 104 : Math.min(96, silhouette.width * 0.76), height: relationship ? 48 : Math.min(72, silhouette.height * 0.76) }}><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">{label}</span>{relationship && <span className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">{primitive === "connector" ? "2 attachable ends" : "Independent"}</span>}</button>;
             })}
-            {authoringTab === "media" && <button type="button" onClick={() => chooseLocalImage()} disabled={!engine.ready || engine.applyingManualEdit} className="group flex h-[108px] flex-col items-center justify-center bg-transparent text-center disabled:opacity-35"><span className="grid h-[78px] w-full place-items-center"><span className="block h-[64px] w-[88px] transition duration-200 group-hover:scale-110"><CanvasV2PrimitiveThumbnail input={{ primitive: "image" }} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Image</span></button>}
-            {authoringTab === "media" && <CanvasV2MediaInsert disabled={!engine.ready || engine.applyingManualEdit} onFiles={files => addPlayableFiles(files)} onUrl={(url, type) => addPlayableMedia(url, type === "gif" ? "Linked GIF" : "Linked video", type)}/>}
+            {authoringTab === "media" && <button type="button" onClick={() => chooseLocalImage()} disabled={!engine.interactionReady || engine.applyingManualEdit} className="group flex h-[108px] flex-col items-center justify-center bg-transparent text-center disabled:opacity-35"><span className="grid h-[78px] w-full place-items-center"><span className="block h-[64px] w-[88px] transition duration-200 group-hover:scale-110"><CanvasV2PrimitiveThumbnail input={{ primitive: "image" }} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Image</span></button>}
+            {authoringTab === "media" && <CanvasV2MediaInsert disabled={!engine.interactionReady || engine.applyingManualEdit} onFiles={files => addPlayableFiles(files)} onUrl={(url, type) => addPlayableMedia(url, type === "gif" ? "Linked GIF" : "Linked video", type)}/>}
           </div>
           <div className="flex items-center justify-center gap-2 pb-1 pt-2 text-[10px] text-[#94929f] dark:text-[#8f8b99]">{authoringTab === "media" ? <><Pencil className="h-3.5 w-3.5 text-[#7461ea]" />Select Drawing, then paint on canvas</> : <><MousePointer2 className="h-3.5 w-3.5 text-[#7461ea]" />Drag to preview and place precisely</>}</div>
         </div>}
@@ -3738,6 +3748,7 @@ export function CanvasV2Workspace({
               onSceneSnapshot={receiveScene}
               onNativeScene={cropDraft || tidyDraft ? undefined : engine.receiveNativeScene}
               nativeSceneOverride={tidyPreviewScene ?? cropPreviewScene ?? engine.nativeScene}
+              visibleBounds={renderedCanvasBounds}
               preferredPlacement={preferredAiPlacement}
               onElementDoubleClick={(element) => { if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
               onBeforeUserEdit={engine.beginHumanEdit}
@@ -4119,10 +4130,10 @@ export function CanvasV2Workspace({
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
         <button onClick={() => { cancelDrawingGesture(); setTool("select"); }} title="Select" aria-pressed={tool === "select"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "select" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><MousePointer2 className="h-[19px] w-[19px]" /></button>
         <button onClick={() => { cancelDrawingGesture(); setTool("pan"); }} title="Pan" aria-pressed={tool === "pan"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "pan" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Hand className="h-[19px] w-[19px]" /></button>
-        <button onClick={() => { selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.ready || engine.applyingManualEdit} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
+        <button onClick={() => { selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.interactionReady || engine.applyingManualEdit} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
-        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} aria-pressed={tool === "place" && placementTool?.primitive === primitive} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, options)} disabled={!engine.ready || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
-        <button title="Upload image, GIF, or video · or drop a file on canvas" aria-label="Upload image, GIF, or video" onClick={() => chooseLocalImage(undefined, true)} disabled={!engine.ready || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
+        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} aria-pressed={tool === "place" && placementTool?.primitive === primitive} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, options)} disabled={!engine.interactionReady || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
+        <button title="Upload image, GIF, or video · or drop a file on canvas" aria-label="Upload image, GIF, or video" onClick={() => chooseLocalImage(undefined, true)} disabled={!engine.interactionReady || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
         <button title="More creation tools" onClick={() => { setPanel("shapes"); setChatOpen(true); }} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Plus className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
         <button aria-label="Layers" title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>

@@ -2099,8 +2099,8 @@ export function pasteCanvasV2NativeClipboard(
   return { scene, nodeIds: snapshot.rootIds.map((id) => ids.get(id)!) };
 }
 
-function sourceNode(scene: CanvasV2NativeSceneDocument, nodeId: string): CanvasV2NativeSceneNode {
-  const node = scene.nodes.find((candidate) => candidate.sourceNodeId === nodeId);
+function sourceNode(scene: CanvasV2NativeSceneDocument, nodeId: string, sourceIndex?: ReadonlyMap<string, CanvasV2NativeSceneNode>): CanvasV2NativeSceneNode {
+  const node = sourceIndex ? sourceIndex.get(nodeId) : scene.nodes.find((candidate) => candidate.sourceNodeId === nodeId);
   if (!node) throw new Error(`Canvas V2 expected one native scene node named ${nodeId}.`);
   if (node.kind === "root") throw new Error("The workspace root is permanent. Select an element inside it instead.");
   return node;
@@ -2957,6 +2957,7 @@ function translateGroupedConnectorCoordinates(scene: CanvasV2NativeSceneDocument
 function applyAtomicNativeMutation(
   scene: CanvasV2NativeSceneDocument,
   mutation: Exclude<CanvasV2ManualMutation, { kind: "batch" }>,
+  sourceIndex?: ReadonlyMap<string, CanvasV2NativeSceneNode>,
 ): void {
   if (mutation.kind === "create") {
     if (scene.nodes.some((node) => node.sourceNodeId === mutation.nodeId)) throw new Error("A created node requires a unique identity.");
@@ -3023,7 +3024,7 @@ function applyAtomicNativeMutation(
     scene.rootIds.push(group.id);
     return;
   }
-  const node = sourceNode(scene, mutation.nodeId);
+  const node = sourceNode(scene, mutation.nodeId, sourceIndex);
   if (mutation.kind === "table-edit") {
     editNativeTable(scene, node, mutation);
   } else if (mutation.kind === "image-crop") {
@@ -3463,7 +3464,12 @@ export function applyCanvasV2NativeSceneMutation(
   // cannot carry a child that the user had already pulled away.
   normalizeUserDetachedNodes(scene);
   if (mutation.kind === "batch") {
-    for (const item of mutation.mutations) applyAtomicNativeMutation(scene, item);
+    // A multi-selection move/resize only changes existing nodes. Resolve all
+    // targets once instead of searching the entire board for every object.
+    const sourceIndex = mutation.mutations.every((item) => item.kind === "move" || item.kind === "resize" || item.kind === "transform")
+      ? canvasV2NativeSceneSourceNodeMap(scene)
+      : undefined;
+    for (const item of mutation.mutations) applyAtomicNativeMutation(scene, item, sourceIndex);
   } else applyAtomicNativeMutation(scene, mutation);
   const atomic = mutation.kind === "batch" ? mutation.mutations : [mutation];
   if (atomic.some(item => ["move", "resize", "transform", "create"].includes(item.kind) || (item.kind === "group" && item.section))) reconcileHumanSectionMembership(scene);
@@ -3609,6 +3615,7 @@ export function serializeCanvasV2NativeScene(scene: CanvasV2NativeSceneDocument)
  * authoritative even when a stale compiler reports different coordinates.
  */
 export function reconcileCanvasV2NativeSceneMeasurement(current: CanvasV2NativeSceneDocument, measured: CanvasV2NativeSceneDocument): CanvasV2NativeSceneDocument {
+  if (current === measured) return current;
   if (current.revisionId !== measured.revisionId) return current;
   const byId = new Map(measured.nodes.map(node => [node.id, node]));
   const currentById = canvasV2NativeSceneNodeMap(current);
