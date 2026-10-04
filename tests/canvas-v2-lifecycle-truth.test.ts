@@ -48,7 +48,9 @@ test("a new chat turn carries the committed composition ledger into a new undo t
   const loop = readFileSync("lib/canvas-v2/design-loop.ts", "utf8");
   assert.match(chat, /const previousLoop = \[\.\.\.turns\]\.reverse\(\)\.find\(\(item\) => item\.loop\)\?\.loop/);
   assert.match(chat, /canvasV2NewTurnContinuation\(previousLoop/);
-  assert.match(chat, /input\.engine\.start\(canvasInstruction, input\.engine\.displayedObservation, newTurnContinuation/);
+  assert.match(chat, /const observation = await input\.engine\.ensureObservation\(abort\.signal\)/);
+  assert.match(chat, /observation\.revisionId !== observedRevision\.id/);
+  assert.match(chat, /input\.engine\.start\(canvasInstruction, observation, newTurnContinuation/);
   assert.match(loop, /if \(!previous\) return undefined/);
   assert.match(loop, /historyTransactionId: input\.continuation\?\.historyTransactionId \?\? input\.id/);
 });

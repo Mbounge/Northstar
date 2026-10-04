@@ -76,8 +76,11 @@ export interface CanvasV2ChatTurn {
 
 interface DesignEngine {
   ready: boolean;
+  interactionReady: boolean;
   committed: CanvasV2ArtifactRevision;
   displayedObservation?: CanvasV2RenderObservation;
+  ensureObservation: (signal?: AbortSignal) => Promise<CanvasV2RenderObservation>;
+  readCommittedRevision: () => CanvasV2ArtifactRevision;
   loop?: CanvasV2LoopState;
   running: boolean;
   applyingManualEdit: boolean;
@@ -169,6 +172,9 @@ export function useCanvasV2Chat(input: {
     const abort = new AbortController();
     controller.current = { sequence, turnId, abortController: abort };
     try {
+      const observation = await input.engine.ensureObservation(abort.signal);
+      const observedRevision = input.engine.readCommittedRevision();
+      if (observation.revisionId !== observedRevision.id) throw new Error("The canvas changed during this read. Try again.");
       let payload: { decision?: CanvasV2InteractionDecision; providerAttempts?: CanvasV2ProviderAttemptAudit[]; error?: string };
       const routingAttempts: CanvasV2ProviderAttemptAudit[] = [];
       do {
@@ -185,8 +191,8 @@ export function useCanvasV2Chat(input: {
         policy: CANVAS_V2_ROUTING_REQUEST_POLICY,
         body: {
           message: effectiveMessage,
-          revision: input.engine.committed,
-          observation: input.engine.displayedObservation,
+          revision: observedRevision,
+          observation,
           selection: input.selection,
           selections: input.selections,
           workingContext: input.getWorkingContext?.("none"),
@@ -232,7 +238,7 @@ export function useCanvasV2Chat(input: {
         workingContext,
         discoveryState: decision.discoveryState ?? latestDiscoveryState,
       });
-      const runId = input.engine.start(canvasInstruction, input.engine.displayedObservation, newTurnContinuation, decision.researchTargets, decision.researchMode, modelSelection, workingContext, decision.discoveryState ?? latestDiscoveryState, canvasV2ProviderUsageFromAttempts(payload.providerAttempts), submittedAttachments, payload.providerAttempts, decision.route === "research-conversation" ? "chat" : "canvas");
+      const runId = input.engine.start(canvasInstruction, observation, newTurnContinuation, decision.researchTargets, decision.researchMode, modelSelection, workingContext, decision.discoveryState ?? latestDiscoveryState, canvasV2ProviderUsageFromAttempts(payload.providerAttempts), submittedAttachments, payload.providerAttempts, decision.route === "research-conversation" ? "chat" : "canvas");
       if (!runId) throw new Error("The canvas is not ready to begin another design run.");
       activeRoutingTurnId.current = undefined;
       activeDesignTurnId.current = turnId;
@@ -268,12 +274,12 @@ export function useCanvasV2Chat(input: {
     const handoff = input.gatewayHandoff;
     if (!handoff || !handoff.autoSubmit || submittedGatewayHandoffId.current === handoff.id) return;
     setDraft(handoff.prompt);
-    if (!input.engine.ready || busy) return;
+    if (!input.engine.interactionReady || busy) return;
     // Mark before invoking the async route so React Strict Mode and engine
     // lifecycle renders can never replay the same home-page inquiry.
     submittedGatewayHandoffId.current = handoff.id;
     gatewaySubmit.current(handoff.prompt);
-  }, [busy, input.engine.ready, input.gatewayHandoff]);
+  }, [busy, input.engine.interactionReady, input.gatewayHandoff]);
 
   const addAttachments = (next: readonly CanvasV2ChatAttachment[]) => {
     if (!next.length) return;

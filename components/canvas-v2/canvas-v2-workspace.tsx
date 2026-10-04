@@ -1037,12 +1037,12 @@ export function CanvasV2Workspace({
   }, [engine.committed, chat.turns, chat.draft, chat.attachments, chat.modelSelection, chat.reasoningEffort, viewport, chat.busy]);
 
   useEffect(() => {
-    if (!gatewayHandoff || gatewayHandoff.autoSubmit || !engine.ready) return;
+    if (!gatewayHandoff || gatewayHandoff.autoSubmit || !engine.interactionReady) return;
     const frame = window.requestAnimationFrame(() => {
       document.getElementById("canvas-v2-message")?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [engine.ready, gatewayHandoff]);
+  }, [engine.interactionReady, gatewayHandoff]);
 
   const applyViewportVisual = useCallback((next: CanvasV2WorkspaceViewport) => {
     const surface = workspaceSurfaceRef.current;
@@ -1278,7 +1278,7 @@ export function CanvasV2Workspace({
   };
 
   useEffect(() => {
-    if (loadingChatFlowRef.current || !engine.ready || engine.running || engine.applyingManualEdit || chat.busy) return;
+    if (loadingChatFlowRef.current || !engine.interactionReady || engine.running || engine.applyingManualEdit || chat.busy) return;
     const flows = chat.turns.flatMap((turn) => turn.status === 'responded'
       ? Object.values(turn.evidenceReferences ?? {}).filter((reference): reference is Extract<CanvasV2ChatEvidenceReference, { kind: 'flow' }> => reference.kind === 'flow').map((reference) => ({ turnId: turn.id, reference }))
       : []);
@@ -1308,6 +1308,7 @@ export function CanvasV2Workspace({
         const flow = result?.flows.find((item) => item.id === reference.id);
         if (!result || !app || !flow) throw new Error('The account flow is no longer available.');
         const packet = result.packets.find((item) => item.kind === 'screenshot-sequence' && item.appId === app.id);
+        await engine.ensureObservation();
         const revision = engine.readCommittedRevision();
         const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: result.evidence, packet });
         const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((item) => item.id === packet.id) ? [packet] : [])];
@@ -1323,7 +1324,7 @@ export function CanvasV2Workspace({
         setFlowQueueTick((tick) => tick + 1);
       }
     })();
-  }, [accountEndpoint, chat.busy, chat.turns, engine.applyingManualEdit, engine.committed.id, engine.ready, engine.running, flowQueueTick]);
+  }, [accountEndpoint, chat.busy, chat.turns, engine.applyingManualEdit, engine.committed.id, engine.interactionReady, engine.running, flowQueueTick]);
 
   const showLatestComposition = () => {
     const transaction = engine.committed.sceneTransaction;
@@ -3109,11 +3110,13 @@ export function CanvasV2Workspace({
     });
   };
 
-  const insertResearchFlow = (app: AppDataApp, flow: AppDataFlow, result: CanvasV2ResearchResult) => {
+  const insertResearchFlow = async (app: AppDataApp, flow: AppDataFlow, result: CanvasV2ResearchResult) => {
     try {
+      await engine.ensureObservation();
+      const revision = engine.readCommittedRevision();
       const packet = result.packets.find((candidate) => candidate.kind === "screenshot-sequence" && candidate.appId === app.id);
-      const insertion = insertCanvasV2CanonicalFlow({ document: engine.committed.document, currentEvidence: engine.committed.evidence, app, flow, evidence: result.evidence, packet });
-      const evidencePackets = [...(engine.committed.evidencePackets ?? []), ...(packet && !engine.committed.evidencePackets?.some((candidate) => candidate.id === packet.id) ? [packet] : [])];
+      const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: result.evidence, packet });
+      const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((candidate) => candidate.id === packet.id) ? [packet] : [])];
       if (!engine.applyManualDocument(insertion.document, `Inserted the complete ordered ${app.name} ${flow.name} evidence flow.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error("Wait for the current revision to finish rendering.");
       setPanel("chat");
       setSelectionTarget(insertion.laneNodeId);
@@ -3123,11 +3126,13 @@ export function CanvasV2Workspace({
     }
   };
 
-  const insertResearchScreen = (result: CanvasV2ResearchResult, index: number) => {
+  const insertResearchScreen = async (result: CanvasV2ResearchResult, index: number) => {
     const asset = result.evidence.find((candidate) => candidate.id === `screen:${result.screens[index]?.id}`);
     if (!asset) return setMutationError("That screenshot does not have a renderable evidence asset.");
     try {
-      const insertion = insertCanvasV2EvidenceAsset({ document: engine.committed.document, currentEvidence: engine.committed.evidence, asset, nodeId: `evidence-${Date.now().toString(36)}` });
+      await engine.ensureObservation();
+      const revision = engine.readCommittedRevision();
+      const insertion = insertCanvasV2EvidenceAsset({ document: revision.document, currentEvidence: revision.evidence, asset, nodeId: `evidence-${Date.now().toString(36)}` });
       if (!engine.applyManualDocument(insertion.document, `Inserted ${asset.label} as exact grounded evidence.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.nodeId] })) throw new Error("Wait for the current revision to finish rendering.");
       setPanel("chat");
       setSelectionTarget(insertion.nodeId);
@@ -3907,7 +3912,7 @@ export function CanvasV2Workspace({
         )}
       </section>
 
-      {!engine.displayedObservation && (
+      {!engine.displayedObservation && (engine.observationRequested || engine.running) && (
         <div
           aria-hidden="true"
           data-testid="canvas-v2-committed-observation-surface"

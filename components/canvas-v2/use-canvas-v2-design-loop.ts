@@ -239,6 +239,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
   const inspectionScenesRef = useRef(new Map<string, CanvasV2NativeSceneDocument>());
   const transactionalHistoryRef = useRef<CanvasV2TransactionalHistory>(initialHistory);
   const observationsRef = useRef<Record<string, CanvasV2RenderObservation>>({});
+  // The initial board needs an observation. Subsequent human gestures do not:
+  // a full private screenshot blocks the main thread for seconds on large boards.
+  const [requestedObservationRevisionId, setRequestedObservationRevisionId] = useState<string | undefined>(initial.id);
+  const observationWaiters = useRef(new Set<{
+    revisionId: string;
+    resolve: (observation: CanvasV2RenderObservation) => void;
+    reject: (error: Error) => void;
+  }>());
   const [instruction, setInstruction] = useState("");
   const [loop, setLoop] = useState<CanvasV2LoopState>();
   const loopRef = useRef<CanvasV2LoopState | undefined>(undefined);
@@ -327,6 +335,31 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     return current?.revisionId === committedRef.current.id ? current : undefined;
   }, []);
 
+  const ensureObservation = useCallback((signal?: AbortSignal): Promise<CanvasV2RenderObservation> => {
+    const revisionId = committedRef.current.id;
+    const existing = observationsRef.current[revisionId];
+    if (existing) return Promise.resolve(existing);
+    if (signal?.aborted) return Promise.reject(new Error("The canvas read was stopped."));
+    return new Promise((resolve, reject) => {
+      const waiter = { revisionId, resolve: (observation: CanvasV2RenderObservation) => {
+        cleanup(); resolve(observation);
+      }, reject: (error: Error) => { cleanup(); reject(error); } };
+      const cleanup = () => {
+        observationWaiters.current.delete(waiter);
+        signal?.removeEventListener("abort", abort);
+        clearTimeout(timeout);
+        if (!observationWaiters.current.size && !canvasV2LoopIsActive(loopRef.current)) {
+          setRequestedObservationRevisionId((current) => current === revisionId ? undefined : current);
+        }
+      };
+      const abort = () => waiter.reject(new Error("The canvas read was stopped."));
+      const timeout = setTimeout(() => waiter.reject(new Error("The canvas observation timed out. Try reading it again.")), 30_000);
+      observationWaiters.current.add(waiter);
+      signal?.addEventListener("abort", abort, { once: true });
+      setRequestedObservationRevisionId(revisionId);
+    });
+  }, []);
+
   const publishLoop = (next: CanvasV2LoopState | undefined) => {
     if (next && next.id === loopRef.current?.id) next = { ...next, activity: loopRef.current.activity };
     const refreshed = next ? refreshCanvasV2MountOlympusReceipt(next) : undefined;
@@ -340,6 +373,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     selectionNodeIds: readonly string[] = [],
     shareNativeScene = false,
   ) => {
+    setRequestedObservationRevisionId(undefined);
+    for (const waiter of observationWaiters.current) {
+      if (waiter.revisionId === revision.id) continue;
+      observationWaiters.current.delete(waiter);
+      waiter.reject(new Error("The canvas changed while its observation was being prepared. Read the latest revision."));
+    }
     committedRef.current = revision;
     // Compute and publish history synchronously. A state-updater callback is
     // not a transaction lock: several direct gestures can finish before React
@@ -923,6 +962,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       : observationsRef.current[currentCommitted.id];
     if (!observation) {
       pendingInitialRequest.current = { runId: nextLoop.id, revisionId: currentCommitted.id };
+      setRequestedObservationRevisionId(currentCommitted.id);
       return nextLoop.id;
     }
     enqueueModelRequest(nextLoop, currentCommitted, observation);
@@ -1091,6 +1131,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       : { ...projectedObservation, railDetails: previousObservation.railDetails };
     observationsRef.current = { ...observationsRef.current, [observation.revisionId]: factualObservation };
     setObservations((current) => ({ ...current, [observation.revisionId]: factualObservation }));
+    if (observation.revisionId === publicCommitted.id) {
+      setRequestedObservationRevisionId(undefined);
+      for (const waiter of observationWaiters.current) {
+        if (waiter.revisionId === observation.revisionId) waiter.resolve(factualObservation);
+      }
+    }
     if (!candidate
       && activeLoop
       && activeRunId.current === activeLoop.id
@@ -1437,6 +1483,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
   };
 
   const captureFailed = (message: string) => {
+    if (requestedObservationRevisionId === committedRef.current.id) {
+      setRequestedObservationRevisionId(undefined);
+      for (const waiter of observationWaiters.current) {
+        if (waiter.revisionId === committedRef.current.id) waiter.reject(new Error(message));
+      }
+    }
     const activeLoop = loopRef.current;
     if (pendingManualEdit && candidate) {
       discardInspectionScene(candidate.id);
@@ -1448,6 +1500,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       return;
     }
     if (activeRunId.current !== activeLoop?.id) return;
+    if (activeLoop && pendingInitialRequest.current?.runId === activeLoop.id) {
+      pendingInitialRequest.current = undefined;
+      activeRunId.current = undefined;
+      publishLoop(failCanvasV2Loop(activeLoop, message));
+      return;
+    }
     if (!activeLoop || activeLoop.status !== "rendering") return;
     discardInspectionScene(candidate?.id);
     setCandidate(undefined);
@@ -1482,7 +1540,11 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       ? structuredClone(nextHistory.nativeScenes[nextHistory.index])
       : undefined;
     setHistoryIndex(nextHistory.index);
+    for (const waiter of observationWaiters.current) {
+      if (waiter.revisionId !== revision.id) waiter.reject(new Error("The canvas changed during this read. Read it again."));
+    }
     committedRef.current = revision;
+    setRequestedObservationRevisionId(!restoredNativeScene && !observationsRef.current[revision.id] ? revision.id : undefined);
     serializedNativeSceneRef.current = undefined;
     nativeSceneRef.current = restoredNativeScene;
     setNativeScene(restoredNativeScene);
@@ -1531,6 +1593,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     canUndo: historyIndex > 0 && !pendingManualEdit,
     canRedo: historyIndex < history.length - 1 && !pendingManualEdit,
     ready: Boolean(observations[committed.id]),
+    observationRequested: requestedObservationRevisionId === committed.id,
+    ensureObservation,
     // A direct native edit commits its scene synchronously. Its fresh render
     // observation can arrive later; the person should still be able to start
     // the next gesture or place another object on the very next pointerdown.
@@ -1547,7 +1611,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       const revision = committedRef.current;
       const observation = observationsRef.current[revision.id];
       if (observation) { pendingInitialRequest.current = undefined; enqueueModelRequest(current, revision, observation); }
-      else pendingInitialRequest.current = { runId: current.id, revisionId: revision.id };
+      else { pendingInitialRequest.current = { runId: current.id, revisionId: revision.id }; setRequestedObservationRevisionId(revision.id); }
     },
     start,
     steer,
@@ -1560,6 +1624,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       setCandidate(undefined);setPendingManualEdit(undefined);
       nativeSceneRef.current=undefined;setNativeScene(undefined);
       acceptCommittedRevision(revision,`shared:${revision.id}`);
+      if (!observationsRef.current[revision.id]) setRequestedObservationRevisionId(revision.id);
     },
     readCompositionFeedback: () => compositionFeedbackRef.current?.revisionId === committedRef.current.id
       ? compositionFeedbackRef.current : undefined,
