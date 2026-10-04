@@ -16,6 +16,8 @@ import {
   canvasV2NativeSceneNodeOwnsVisibleSurface,
   canvasV2NativeSceneNodeUsesHostBackground,
   canvasV2NativeSceneSelectionContainsTarget,
+  canvasV2NativeObservationDocument,
+  patchCanvasV2NativeDocument,
   canvasV2FollowerYAfterRootGrowth,
   canvasV2PreferredRootPlacement,
   materializeCanvasV2NativeScenePaintedEdges,
@@ -2037,4 +2039,37 @@ test("edited note text expands its measured bounds without moving or replacing i
   const image = { ...note, kind: "image" as const, tagName: "img", content: [], directText: undefined };
   const images = { ...source, nodes: [image] };
   assert.equal(reconcileCanvasV2NativeSceneMeasurement(images, measured), images);
+});
+
+test("private observation rebases a world-space edit without changing the visible scene", () => {
+  const source = scene();
+  source.nodes[0].geometry.x = 61_500;
+  source.nodes[0].geometry.y = 62_400;
+  const persisted = serializeCanvasV2NativeScene(source);
+  const observation = canvasV2NativeObservationDocument(source);
+  assert.match(persisted.html, /--canvas-v2-scene-x:61500px/);
+  assert.match(observation.html, /--canvas-v2-scene-x:48px/);
+  assert.match(observation.html, /--canvas-v2-scene-y:48px/);
+  assert.match(observation.html, /A finding/);
+  assert.equal(source.nodes[0].geometry.x, 61_500);
+  assert.equal(source.nodes[0].geometry.y, 62_400);
+});
+
+test("fast native opening-tag patch matches full serialization through consecutive moves", () => {
+  const source = scene();
+  const first = applyCanvasV2NativeSceneMutation(source, { kind: "move", nodeId: "note", deltaX: 30, deltaY: 20 });
+  const firstDocument = patchCanvasV2NativeDocument(serializeCanvasV2NativeScene(source), source, first);
+  assert.deepEqual(firstDocument, serializeCanvasV2NativeScene(first));
+  const second = applyCanvasV2NativeSceneMutation(first, { kind: "move", nodeId: "note", deltaX: -8, deltaY: 17 });
+  assert.deepEqual(patchCanvasV2NativeDocument(firstDocument!, first, second), serializeCanvasV2NativeScene(second));
+});
+
+test("native opening-tag patch falls back when an edit changes structure or content", () => {
+  const source = scene();
+  const original = serializeCanvasV2NativeScene(source);
+  const hidden = applyCanvasV2NativeSceneMutation(source, { kind: "visibility", nodeId: "note", hidden: true });
+  assert.equal(patchCanvasV2NativeDocument(original, source, hidden), undefined);
+  const changedText = structuredClone(source);
+  changedText.nodes[0].content = [{ kind: "text", value: "A different finding" }];
+  assert.equal(patchCanvasV2NativeDocument(original, source, changedText), undefined);
 });

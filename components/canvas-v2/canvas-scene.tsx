@@ -1,9 +1,9 @@
 "use client";
 
-import { toJpeg } from "html-to-image";
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { buildCanvasV2RuntimeDocument } from "@/lib/canvas-v2/runtime-document";
+import { toCooperativeJpeg } from "@/lib/canvas-v2/cooperative-capture";
 import { canvasV2VisibleEvidenceIds } from "@/lib/canvas-v2/artifact-safety";
 import {
   applyCanvasV2ArtifactTheme,
@@ -154,7 +154,7 @@ async function compactCanonicalImagesForPrivateCapture(frameDocument: Document):
   };
 }
 
-async function captureCanonicalRailDetails(frameDocument: Document): Promise<NonNullable<CanvasV2RenderObservation["railDetails"]>> {
+async function captureCanonicalRailDetails(frameDocument: Document, isCurrent: () => boolean): Promise<NonNullable<CanvasV2RenderObservation["railDetails"]>> {
   const details: NonNullable<CanvasV2RenderObservation["railDetails"]> = [];
   const lanes = Array.from(frameDocument.querySelectorAll<HTMLElement>("[data-canvas-v2-canonical-flow]"));
   for (const lane of lanes) {
@@ -183,14 +183,14 @@ async function captureCanonicalRailDetails(frameDocument: Document): Promise<Non
       });
       frameDocument.body.append(strip);
       try {
-        const screenshotDataUrl = await toJpeg(strip, {
+        const screenshotDataUrl = await toCooperativeJpeg(strip, {
           backgroundColor: "#ffffff",
           cacheBust: false,
           pixelRatio: 1,
           quality: 0.76,
           skipFonts: true,
           style: { position: "static", left: "auto", top: "auto" },
-        });
+        }, isCurrent);
         details.push({
           laneNodeId,
           label: `${appName} screens ${startIndex + 1}–${startIndex + chunk.length}`,
@@ -210,6 +210,7 @@ async function captureCanonicalRailDetails(frameDocument: Document): Promise<Non
 async function captureAuthoredDesignDetails(
   frameDocument: Document,
   backgroundColor: string,
+  isCurrent: () => boolean,
 ): Promise<NonNullable<CanvasV2RenderObservation["designDetails"]>> {
   const canvas = frameDocument.body;
   const canvasRect = canvas.getBoundingClientRect();
@@ -235,13 +236,13 @@ async function captureAuthoredDesignDetails(
     if (!nodeId || rect.width < 2 || rect.height < 2) continue;
     const scale = Math.min(1, 1_800 / rect.width, 1_800 / rect.height, Math.sqrt(2_500_000 / (rect.width * rect.height)));
     const heading = region.querySelector<HTMLElement>("h1,h2,h3")?.textContent?.trim();
-    const screenshotDataUrl = await toJpeg(region, {
+    const screenshotDataUrl = await toCooperativeJpeg(region, {
       backgroundColor,
       cacheBust: false,
       pixelRatio: Math.max(0.1, scale),
       quality: 0.82,
       skipFonts: true,
-    });
+    }, isCurrent);
     details.push({
       nodeId,
       label: region.getAttribute("aria-label")?.trim() || heading || "Authored design region",
@@ -785,7 +786,7 @@ function CanvasV2ObservationScene({
           ? await compactCanonicalImagesForPrivateCapture(frameDocument)
           : undefined;
         try {
-          screenshotDataUrl = await toJpeg(frameDocument.documentElement, {
+          screenshotDataUrl = await toCooperativeJpeg(frameDocument.documentElement, {
             cacheBust: false,
             pixelRatio: 1,
             width: geometry.width,
@@ -795,7 +796,7 @@ function CanvasV2ObservationScene({
             backgroundColor: theme === "dark" ? "#111117" : "#ffffff",
             quality: attempt.quality,
             skipFonts: true,
-          });
+          }, captureIsCurrent);
           break;
         } catch (captureError) {
           wholeBoardCaptureError = captureError;
@@ -813,8 +814,8 @@ function CanvasV2ObservationScene({
       const hiddenLocalRepair = /^(?:type-floor-recovery|relationship-recovery)-revision-/.test(revision.id);
       const intermediateResearchCommit = revision.id.startsWith("research-fast-revision-");
       const [railDetailResult, designDetailResult] = await Promise.allSettled([
-        hiddenLocalRepair || intermediateResearchCommit ? Promise.resolve([]) : captureCanonicalRailDetails(frameDocument),
-        captureAuthoredDesignDetails(frameDocument, theme === "dark" ? "#111117" : "#ffffff"),
+        hiddenLocalRepair || intermediateResearchCommit ? Promise.resolve([]) : captureCanonicalRailDetails(frameDocument, captureIsCurrent),
+        captureAuthoredDesignDetails(frameDocument, theme === "dark" ? "#111117" : "#ffffff", captureIsCurrent),
       ]);
       const railDetails = railDetailResult.status === "fulfilled" ? railDetailResult.value : [];
       const designDetails = designDetailResult.status === "fulfilled" ? designDetailResult.value : [];
@@ -862,7 +863,7 @@ function CanvasV2ObservationScene({
       // the hidden left edge. Compile and project before publishing factual
       // observation so placement, collision, and narrative checks all share
       // the shared large-world canvas coordinate system.
-      const candidateScene = compileCanvasV2NativeScene({
+      const candidateScene = onNativeScene ? compileCanvasV2NativeScene({
         document: frameDocument,
         revision,
         width: CANVAS_V2_WORKSPACE.width,
@@ -870,10 +871,10 @@ function CanvasV2ObservationScene({
         placementReferenceScene,
         relocatablePlacementNodeIds,
         preferredPlacement,
-      });
+      }) : undefined;
       if (!captureIsCurrent()) return;
-      onNativeScene?.(candidateScene);
-      onObservation(projectCanvasV2ObservationToNativeScene(compatibilityObservation, candidateScene));
+      if (candidateScene) onNativeScene?.(candidateScene);
+      onObservation(candidateScene ? projectCanvasV2ObservationToNativeScene(compatibilityObservation, candidateScene) : compatibilityObservation);
     } catch (captureError) {
       if (!captureIsCurrent()) return;
       const message = canvasV2CaptureErrorMessage(captureError);

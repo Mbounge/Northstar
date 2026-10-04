@@ -1686,7 +1686,33 @@ export function projectCanvasV2ObservationToNativeScene(
   if (observation.revisionId !== scene.revisionId) return observation;
   const nativeById = canvasV2NativeSceneNodeMap(scene);
   const nativeBySourceId = canvasV2NativeSceneSourceNodeMap(scene);
-  const projectBounds = (bounds: CanvasV2ElementBounds, nodeId: string) => canvasV2NativeSceneAbsoluteBounds(scene, nodeId) ?? bounds;
+  // A full board can have thousands of nodes. The public helper rebuilds its
+  // maps and scans the node array for each lookup; use the maps above once for
+  // the entire observation so projection stays linear after an agent capture.
+  const nativeBoundsCache = new Map<string, CanvasV2ElementBounds>();
+  const nativeAbsoluteBounds = (sourceNodeId: string | undefined): CanvasV2ElementBounds | undefined => {
+    if (!sourceNodeId) return undefined;
+    const cached = nativeBoundsCache.get(sourceNodeId);
+    if (cached) return cached;
+    const node = nativeBySourceId.get(sourceNodeId);
+    if (!node) return undefined;
+    let x = node.geometry.x;
+    let y = node.geometry.y;
+    let parentId = node.parentId;
+    const seen = new Set<string>();
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = nativeById.get(parentId);
+      if (!parent) break;
+      x += parent.geometry.x;
+      y += parent.geometry.y;
+      parentId = parent.parentId;
+    }
+    const bounds = { nodeId: sourceNodeId, x: round(x), y: round(y), width: node.geometry.width, height: node.geometry.height };
+    nativeBoundsCache.set(sourceNodeId, bounds);
+    return bounds;
+  };
+  const projectBounds = (bounds: CanvasV2ElementBounds, nodeId: string) => nativeAbsoluteBounds(nodeId) ?? bounds;
   const projectedParentNodeId = (nodeId: string, fallback?: string): string | undefined => {
     const native = nativeBySourceId.get(nodeId);
     if (!native) return fallback;
@@ -1726,7 +1752,7 @@ export function projectCanvasV2ObservationToNativeScene(
     const descendantBounds = nativeDescendantIds(root.id).flatMap((id) => {
       const node = nativeById.get(id);
       if (!node || node.hidden || !node.sourceNodeId) return [];
-      const projected = canvasV2NativeSceneAbsoluteBounds(scene, node.sourceNodeId);
+      const projected = nativeAbsoluteBounds(node.sourceNodeId);
       return projected ? [projected] : [];
     });
     const painted = unionNativeBounds(descendantBounds);
@@ -1741,7 +1767,7 @@ export function projectCanvasV2ObservationToNativeScene(
   const projectedTextPaint = (nodeId: string): CanvasV2ElementBounds[] | undefined => {
     const native = nativeBySourceId.get(nodeId);
     const paint = native?.textPaint;
-    const bounds = native && canvasV2NativeSceneAbsoluteBounds(scene, nodeId);
+    const bounds = native && nativeAbsoluteBounds(nodeId);
     if (!native || !paint || !bounds || native.geometry.rotation !== 0 || paint.text !== (native.directText ?? "")
       || Math.abs(paint.width - native.geometry.width) > 0.1 || Math.abs(paint.height - native.geometry.height) > 0.1) return undefined;
     return paint.rects.map(rect => ({ ...rect, x: bounds.x + rect.x, y: bounds.y + rect.y }));
@@ -1764,7 +1790,7 @@ export function projectCanvasV2ObservationToNativeScene(
   const observedIds = new Set(projectedNodes.map((node) => node.nodeId));
   for (const native of scene.nodes) {
     if (!native.sourceNodeId || native.hidden || !native.selectable || observedIds.has(native.sourceNodeId)) continue;
-    const bounds = canvasV2NativeSceneAbsoluteBounds(scene, native.sourceNodeId);
+    const bounds = nativeAbsoluteBounds(native.sourceNodeId);
     if (!bounds) continue;
     const surfaceOwnerNodeId = native.attributes["data-canvas-v2-surface-owner"];
     projectedNodes.push({
@@ -1792,7 +1818,7 @@ export function projectCanvasV2ObservationToNativeScene(
     const start = readPoint("from"); const end = readPoint("to");
     const anchor = (nodeId: string | undefined, point: CanvasV2ConnectorPoint) => {
       const node = nodeId ? nativeBySourceId.get(nodeId) : undefined;
-      const bounds = nodeId ? canvasV2NativeSceneAbsoluteBounds(scene, nodeId) : undefined;
+      const bounds = nodeId ? nativeAbsoluteBounds(nodeId) : undefined;
       if (!node || !bounds) return undefined;
       const radians = -node.geometry.rotation * Math.PI / 180;
       const dx = point.x - bounds.x - bounds.width / 2; const dy = point.y - bounds.y - bounds.height / 2;
@@ -1880,7 +1906,7 @@ export function projectCanvasV2ObservationToNativeScene(
   }));
   const canonicalLanes = scene.nodes.flatMap((node) => {
     if (!node.sourceNodeId || node.attributes["data-canvas-v2-canonical-flow"] === undefined) return [];
-    const bounds = canvasV2NativeSceneAbsoluteBounds(scene, node.sourceNodeId);
+    const bounds = nativeAbsoluteBounds(node.sourceNodeId);
     return bounds ? [{ nodeId: node.sourceNodeId, bounds }] : [];
   });
   const projectedCanonicalLaneBounds = unionNativeBounds(canonicalLanes.map((lane) => lane.bounds))
@@ -3605,6 +3631,77 @@ export function serializeCanvasV2NativeScene(scene: CanvasV2NativeSceneDocument)
       .join("")}`,
     css: `${css}\n${geometryGuard}`,
   };
+}
+
+/** Rebase world-space native HTML for the private, bounded observation frame.
+ * The public scene remains in world coordinates; only screenshot pixels use
+ * this local origin. Spatial observations are projected back to native space.
+ */
+export function canvasV2NativeObservationDocument(scene: CanvasV2NativeSceneDocument): CanvasV2ArtifactDocument {
+  const roots = scene.nodes.filter((node) => scene.rootIds.includes(node.id) && !node.hidden);
+  if (!roots.length) return serializeCanvasV2NativeScene(scene);
+  const minX = Math.min(...roots.map((node) => node.geometry.x));
+  const minY = Math.min(...roots.map((node) => node.geometry.y));
+  const offsetX = Math.max(0, minX - 48);
+  const offsetY = Math.max(0, minY - 48);
+  if (!offsetX && !offsetY) return serializeCanvasV2NativeScene(scene);
+  const rootIds = new Set(scene.rootIds);
+  return serializeCanvasV2NativeScene({
+    ...scene,
+    nodes: scene.nodes.map((node) => rootIds.has(node.id)
+      ? { ...node, geometry: { ...node.geometry, x: node.geometry.x - offsetX, y: node.geometry.y - offsetY } }
+      : node),
+  });
+}
+
+/** Patch opening tags for non-structural native edits. This preserves the exact
+ * serialized document while avoiding a full traversal on every pointerup.
+ * Structural/content changes fall back to the complete serializer.
+ */
+export function patchCanvasV2NativeDocument(
+  previousDocument: CanvasV2ArtifactDocument,
+  previousScene: CanvasV2NativeSceneDocument,
+  nextScene: CanvasV2NativeSceneDocument,
+): CanvasV2ArtifactDocument | undefined {
+  if (!previousDocument.css.includes("canvas-v2-native-scene-geometry-v1")
+    || previousScene.nodes.length !== nextScene.nodes.length
+    || previousScene.css !== nextScene.css
+    || previousScene.rootIds.length !== nextScene.rootIds.length
+    || previousScene.rootIds.some((id, index) => id !== nextScene.rootIds[index])) return undefined;
+  const nextById = canvasV2NativeSceneNodeMap(nextScene);
+  let html = previousDocument.html;
+  for (let index = 0; index < nextScene.nodes.length; index += 1) {
+    const before = previousScene.nodes[index];
+    const after = nextScene.nodes[index];
+    if (before === after) continue;
+    const sameChildren = before.childIds.length === after.childIds.length
+      && before.childIds.every((id, childIndex) => id === after.childIds[childIndex]);
+    const sameContent = before.content.length === after.content.length
+      && before.content.every((item, contentIndex) => {
+        const next = after.content[contentIndex];
+        return item.kind === next.kind && (item.kind === "text"
+          ? item.value === (next.kind === "text" ? next.value : undefined)
+          : item.id === (next.kind === "node" ? next.id : undefined));
+      });
+    if (before.id !== after.id || before.tagName !== after.tagName || before.namespace !== after.namespace
+      || before.sourceNodeId !== after.sourceNodeId || before.hidden !== after.hidden || before.order !== after.order
+      || before.parentId !== after.parentId || before.detachedFromParentId !== after.detachedFromParentId
+      || before.detachedFromParentIndex !== after.detachedFromParentIndex
+      || !sameChildren || !sameContent || !after.sourceNodeId) return undefined;
+    const needle = `data-canvas-v2-node-id="${escapeHtml(after.sourceNodeId)}"`;
+    const match = html.indexOf(needle);
+    if (match < 0 || html.indexOf(needle, match + needle.length) >= 0) return undefined;
+    const openingStart = html.lastIndexOf("<", match);
+    const openingEnd = html.indexOf(">", match) + 1;
+    if (openingStart < 0 || openingEnd <= match || !html.slice(openingStart, match).startsWith(`<${after.tagName}`)) return undefined;
+    const parent = after.parentId ? nextById.get(after.parentId) : undefined;
+    const followSurfaceOwner = Boolean(parent && after.attributes["data-canvas-v2-surface-owner"] === parent.sourceNodeId
+      && !after.userEdited && !after.locked && !after.detachedFromParentId);
+    const attributes = serializeAttributes(after, followSurfaceOwner);
+    const opening = `<${after.tagName}${attributes ? ` ${attributes}` : ""}>`;
+    html = html.slice(0, openingStart) + opening + html.slice(openingEnd);
+  }
+  return { ...previousDocument, html };
 }
 
 

@@ -64,7 +64,7 @@ export function CanvasStressPerfProbe() {
       delete window.__northstarCanvasPerf;
     };
   }, []);
-  return <button type="button" onClick={() => {
+  return <><button type="button" onClick={() => window.dispatchEvent(new Event("northstar:e2e:observe"))} style={{ position: "fixed", right: 12, top: 125, zIndex: 99999, padding: 6, fontSize: 11, background: "#6cf0bb", color: "#111" }}>Observe canvas</button><button type="button" onClick={() => {
     document.body.dataset.canvasPerfReport = JSON.stringify(window.__northstarCanvasPerf?.records ?? []);
-  }} style={{ position: "fixed", right: 12, top: 90, zIndex: 99999, padding: 6, fontSize: 11, background: "#ffe75e", color: "#111" }}>Perf report</button>;
+  }} style={{ position: "fixed", right: 12, top: 90, zIndex: 99999, padding: 6, fontSize: 11, background: "#ffe75e", color: "#111" }}>Perf report</button></>;
 }

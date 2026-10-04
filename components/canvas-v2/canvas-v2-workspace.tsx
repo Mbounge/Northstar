@@ -75,6 +75,7 @@ import { CanvasV2ResearchPanel } from "@/components/canvas-v2/canvas-v2-research
 import { useNorthstarManagedChat } from "@/components/canvas-v2/use-northstar-managed-chat";
 import { useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
 import { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
+import { waitForCanvasInputQuiet } from "@/lib/canvas-v2/capture-input-scheduler";
 import { useTheme } from "@/components/theme-provider";
 import { insertCanvasV2EvidenceAsset } from "@/lib/canvas-v2/evidence-insertion";
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
@@ -108,6 +109,8 @@ import {
   type CanvasV2NativeClipboard,
   canvasV2NativeSceneSelectionContainsTarget,
   serializeCanvasV2NativeScene,
+  canvasV2NativeObservationDocument,
+  patchCanvasV2NativeDocument,
   type CanvasV2NativeSceneDocument,
 } from "@/lib/canvas-v2/native-scene";
 import {
@@ -659,6 +662,40 @@ export function CanvasV2Workspace({
   }, []);
 
   const engine = useCanvasV2DesignLoop(designEndpoint, initialSnapshot?.revision);
+  const [observationMountRevisionId, setObservationMountRevisionId] = useState<string>();
+  const [candidateMountRevisionId, setCandidateMountRevisionId] = useState<string>();
+  useEffect(() => {
+    if (engine.displayedObservation || (!engine.observationRequested && !engine.running)) return;
+    let cancelled = false;
+    void waitForCanvasInputQuiet().then(() => {
+      if (!cancelled) setObservationMountRevisionId(engine.displayed.id);
+    });
+    return () => { cancelled = true; };
+  }, [engine.displayed.id, engine.displayedObservation, engine.observationRequested, engine.running]);
+  useEffect(() => {
+    const revisionId = engine.inspectionCandidate?.id;
+    if (!revisionId) return;
+    let cancelled = false;
+    void waitForCanvasInputQuiet().then(() => {
+      if (!cancelled) setCandidateMountRevisionId(revisionId);
+    });
+    return () => { cancelled = true; };
+  }, [engine.inspectionCandidate?.id]);
+  const committedObservationRevision = useMemo(() => {
+    const scene = engine.nativeScene;
+    const revision = engine.displayed;
+    return scene?.revisionId === revision.id && revision.document.css.includes("canvas-v2-native-scene-geometry-v1")
+      ? { ...revision, document: canvasV2NativeObservationDocument(scene) }
+      : revision;
+  }, [engine.displayed, engine.nativeScene]);
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" || !window.location.pathname.startsWith("/canvas-v2-e2e/")) return;
+    const observe = () => { void engine.ensureObservation().then((result) => {
+      document.body.dataset.canvasObservationResult = JSON.stringify({ revisionId: result.revisionId, bytes: result.screenshotDataUrl.length, spatial: Boolean(result.spatial) });
+    }).catch((error) => { document.body.dataset.canvasObservationResult = String(error); }); };
+    window.addEventListener("northstar:e2e:observe", observe);
+    return () => window.removeEventListener("northstar:e2e:observe", observe);
+  }, [engine]);
   const { theme, toggleTheme } = useTheme();
   const [panel, setPanel] = useState<Panel>("chat");
   const floatingPanel = useFloatingPanel();
@@ -2046,8 +2083,11 @@ export function CanvasV2Workspace({
       // not build from a stale revision and snap back on release.
       const sourceScene = engine.readNativeScene();
       const nextNativeScene = sourceScene ? applyCanvasV2NativeSceneMutation(sourceScene, mutation) : undefined;
+      const geometryOnly = atomicMutations.every((item) => item.kind === "move" || item.kind === "resize" || item.kind === "rotate" || item.kind === "transform");
       const document = nextNativeScene
-        ? serializeCanvasV2NativeScene(nextNativeScene)
+        ? (geometryOnly && sourceScene
+          ? patchCanvasV2NativeDocument(engine.readCommittedRevision().document, sourceScene, nextNativeScene)
+          : undefined) ?? serializeCanvasV2NativeScene(nextNativeScene)
         : applyCanvasV2ManualMutation(engine.committed.document, mutation);
       const createdSelection = atomicMutations.flatMap((item) => item.kind === "create"
         ? [item.nodeId]
@@ -2071,7 +2111,7 @@ export function CanvasV2Workspace({
         allowEvidenceRemoval: mutation.kind === "delete"
           || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete")),
         selectionNodeIds: historySelectionNodeIds,
-        fastNativeTransaction: Boolean(nextNativeScene && atomicMutations.every((item) => item.kind === "move" || item.kind === "resize" || item.kind === "rotate" || item.kind === "transform")),
+        fastNativeTransaction: Boolean(nextNativeScene && geometryOnly),
       });
       if (!accepted) {
         setMutationError(engine.readManualFailure() ?? (atomicMutations.some(item => item.kind === "text")
@@ -3912,7 +3952,7 @@ export function CanvasV2Workspace({
         )}
       </section>
 
-      {!engine.displayedObservation && (engine.observationRequested || engine.running) && (
+      {!engine.displayedObservation && (engine.observationRequested || engine.running) && observationMountRevisionId === engine.displayed.id && (
         <div
           aria-hidden="true"
           data-testid="canvas-v2-committed-observation-surface"
@@ -3920,7 +3960,7 @@ export function CanvasV2Workspace({
           style={PRIVATE_RENDER_SURFACE_STYLE}
         >
           <CanvasV2CanvasScene
-            revision={engine.displayed}
+            revision={committedObservationRevision}
             theme={theme}
             onObservation={engine.receiveObservation}
             onCaptureError={engine.captureFailed}
@@ -3931,7 +3971,7 @@ export function CanvasV2Workspace({
         </div>
       )}
 
-      {engine.inspectionCandidate && (
+      {engine.inspectionCandidate && candidateMountRevisionId === engine.inspectionCandidate.id && (
         <div
           aria-hidden="true"
           data-testid="canvas-v2-candidate-inspection-surface"
