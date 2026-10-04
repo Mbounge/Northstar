@@ -600,6 +600,30 @@ const CANVAS_V2_DRAWING_CURSOR = canvasV2SvgCursor(`<svg xmlns="http://www.w3.or
   <path filter="url(#s)" d="m10 36 4.4-13.3L28.2 8.9a2.2 2.2 0 0 1 3.1 0l4 4a2.2 2.2 0 0 1 0 3.1L21.5 29.8 10 36Z" fill="#07080a" stroke="#fff" stroke-opacity=".9" stroke-width="1.8" stroke-linejoin="round"/>
 </svg>`, { x: 10, y: 36 }, "crosshair");
 
+const activeCanvasClickPulses = new Set<HTMLElement>();
+
+function showCanvasClickPulse(clientX: number, clientY: number, theme: "dark" | "light") {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const color = theme === "dark" ? "255, 183, 100" : "107, 77, 255";
+  const pulse = document.createElement("span");
+  pulse.setAttribute("aria-hidden", "true");
+  pulse.dataset.canvasV2ClickPulse = theme;
+  pulse.style.cssText = `position:fixed;left:0;top:0;width:84px;height:84px;border-radius:50%;pointer-events:none;z-index:9999;will-change:transform,opacity;background:radial-gradient(circle,rgba(${color},.6) 0%,rgba(${color},.46) 9%,rgba(${color},.22) 27%,rgba(${color},.09) 47%,rgba(${color},0) 72%)`;
+  if (activeCanvasClickPulses.size >= 4) {
+    const oldest = activeCanvasClickPulses.values().next().value;
+    oldest?.remove();
+    if (oldest) activeCanvasClickPulses.delete(oldest);
+  }
+  activeCanvasClickPulses.add(pulse);
+  document.body.appendChild(pulse);
+  const position = `translate3d(${clientX - 42}px,${clientY - 42}px,0)`;
+  const animation = pulse.animate([
+    { transform: `${position} scale(.26)`, opacity: .88 },
+    { transform: `${position} scale(1.5)`, opacity: 0 },
+  ], { duration: 540, easing: "cubic-bezier(.16,.68,.2,1)", fill: "forwards" });
+  animation.onfinish = () => { pulse.remove(); activeCanvasClickPulses.delete(pulse); };
+}
+
 export function CanvasV2Workspace({
   designEndpoint = "/api/canvas-v2/design",
   researchEndpoint = "/api/canvas-v2/research",
@@ -3723,6 +3747,13 @@ export function CanvasV2Workspace({
             : "inset 0 1px 0 rgba(112,91,237,.13)",
         } as CSSProperties}
         onPointerDown={pointerDown}
+        onPointerDownCapture={(event) => {
+          if (tool !== "select" || spacePan || event.button !== 0 || event.pointerType === "touch") return;
+          const target = event.target as Element;
+          if (target === event.currentTarget || target.closest("[data-canvas-v2-workspace-content]")) {
+            showCanvasClickPulse(event.clientX, event.clientY, theme);
+          }
+        }}
         onPointerMove={pointerMove}
         onPointerUp={pointerUp}
         onPointerCancel={pointerUp}
