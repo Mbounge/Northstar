@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Opt-in, Mac-local onboarding motion proof. Never publishes video to Northstar.
 
-The onboarding agent calls OnboardingBurstRecorder around device input. A reviewer
-then selects real, chronological clips in an edit plan before rendering an MP4.
+The onboarding agent calls OnboardingBurstRecorder around device input. The
+automatic editor selects the forward journey and checks the finished MP4.
 No synthetic screen transitions or inferred interactions are generated here.
 """
 
@@ -35,8 +35,8 @@ class OnboardingBurstRecorder:
 
     Android's screenrecord is started just before an input and stopped after a
     quiet post-roll. Closely spaced inputs remain in one clip. Text entry and
-    external verification interrupt recording. Raw clips stay local and require
-    human review; the edit-plan generator does not publish them automatically.
+    external verification interrupt recording. Raw clips stay local; the editor
+    never publishes them automatically.
     """
 
     def __init__(self, session_dir: str | Path, package: str, *, context=None,
@@ -328,6 +328,124 @@ def create_plan(session: Path, *, force: bool = False) -> Path:
     return target
 
 
+def _is_placeholder_burst(path: Path) -> bool:
+    """Detect a burst made almost entirely of blank or loading placeholders."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as exc:
+        raise ValueError("OpenCV and NumPy are required for automatic visual checks") from exc
+    capture = cv2.VideoCapture(str(path))
+    try:
+        count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        if count < 2:
+            return True
+        placeholder = 0
+        observed = 0
+        for position in (0.08, 0.28, 0.5, 0.72, 0.92):
+            capture.set(cv2.CAP_PROP_POS_FRAMES, min(count - 1, int(count * position)))
+            ok, frame = capture.read()
+            if not ok:
+                continue
+            gray = cv2.cvtColor(cv2.resize(frame, (270, 600)), cv2.COLOR_BGR2GRAY)
+            edge_ratio = float(np.mean(cv2.Canny(gray, 60, 140) > 0))
+            bright_ratio = float(np.mean(gray > 225))
+            dark_ratio = float(np.mean(gray < 30))
+            # Actual UI has edges from controls and text; skeletons and blank
+            # transitions are nearly featureless even when light or dark.
+            placeholder += edge_ratio < 0.006 and (bright_ratio > 0.9 or dark_ratio > 0.9)
+            observed += 1
+        return observed >= 4 and placeholder / observed >= 0.8
+    finally:
+        capture.release()
+
+
+def create_automatic_plan(session: Path) -> Path:
+    """Select a complete, chronological first-run journey without a reviewer.
+
+    A completed home is required. Reverse scrolls on the same screen are an
+    exploration detour, not a second onboarding step. Repeated taps on an
+    unchanged source screen are retries, so only the successful last attempt
+    belongs in the film. The full decision record stays in the plan.
+    """
+    session = session.expanduser().resolve()
+    manifest = json.loads((session / "onboarding_manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("result", {}).get("status") != "COMPLETED_SETTLED":
+        raise ValueError("Automatic edit requires a completed, settled onboarding run")
+    plan_path = create_plan(session, force=True)
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    clips = plan["clips"]
+    if not clips:
+        raise ValueError("No eligible in-app motion bursts were captured")
+
+    timeline = {}
+    journal = session / "timeline_journal.jsonl"
+    for line in journal.read_text(encoding="utf-8").splitlines():
+        try:
+            item = json.loads(line)
+            timeline[int(item["timeline_sequence"])] = item
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            continue
+
+    def action_for(clip: dict) -> dict:
+        first = (clip.get("actions") or [{}])[0]
+        return timeline.get(first.get("timeline_sequence"), {})
+
+    omit = {}
+    # A launch burst often begins on Android's launcher. The first tap burst
+    # begins on the app's welcome screen and still shows the first transition.
+    if any((c.get("actions") or [{}])[0].get("kind") == "tap" for c in clips):
+        for clip in clips:
+            if (clip.get("actions") or [{}])[0].get("kind") == "launch":
+                omit[clip["number"]] = "launcher_or_splash_before_first_action"
+
+    # Ignore only an adjacent out-and-back scroll on one logical screen. A
+    # one-way scroll may be needed to expose the next action and stays in.
+    opposites = {("SCROLL_DOWN", "SCROLL_UP"), ("SCROLL_UP", "SCROLL_DOWN"),
+                 ("SCROLL_LEFT", "SCROLL_RIGHT"), ("SCROLL_RIGHT", "SCROLL_LEFT")}
+    for left, right in zip(clips, clips[1:]):
+        a, b = action_for(left), action_for(right)
+        if (left.get("screen_state") == right.get("screen_state")
+                and (a.get("action"), b.get("action")) in opposites):
+            omit[left["number"]] = "reversed_exploratory_scroll"
+            omit[right["number"]] = "reversed_exploratory_scroll"
+
+    # When the agent retries the same control on the identical source pixels,
+    # the earlier attempt did not advance the film.
+    for left, right in zip(clips, clips[1:]):
+        a, b = action_for(left), action_for(right)
+        if (a.get("action") == b.get("action") == "CLICK"
+                and a.get("target") == b.get("target")
+                and a.get("screenshot") == b.get("screenshot")):
+            omit[left["number"]] = "repeated_unchanged_action"
+
+    for clip in clips:
+        if clip["number"] not in omit and _is_placeholder_burst(session / clip["file"]):
+            omit[clip["number"]] = "loading_or_placeholder_only"
+
+    for clip in clips:
+        number = clip["number"]
+        clip["include"] = number not in omit
+        clip["label"] = str(action_for(clip).get("target") or "app launch")
+        if clip["include"] and _duration(session / clip["file"]) < 0.45:
+            raise ValueError(f"Selected burst {number} is too short to show an action")
+
+    chosen = [c for c in clips if c["include"]]
+    if not chosen or not any(action_for(c).get("action") == "CLICK" for c in chosen):
+        raise ValueError("Automatic edit cannot establish a visible onboarding journey")
+    if not any(c.get("screen_state") in {"OVERLAY/POPUP", "HOME", "DASHBOARD"}
+               for c in chosen[-2:]):
+        raise ValueError("Automatic edit has no visible transition to the usable home")
+    plan["automatic_checks"] = {
+        "status": "passed",
+        "terminal_status": "COMPLETED_SETTLED",
+        "selected_bursts": [c["number"] for c in chosen],
+        "omitted_bursts": [{"number": n, "reason": reason} for n, reason in sorted(omit.items())],
+    }
+    plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    return plan_path
+
+
 def _duration(path: Path) -> float:
     probe = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                   "-of", "default=noprint_wrappers=1:nokey=1", str(path)], timeout=20)
@@ -340,8 +458,8 @@ def render(session: Path, *, output: Path | None = None) -> Path:
     session = session.expanduser().resolve()
     plan_path = session / "local_video_edit_plan.json"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    if plan.get("reviewed") is not True:
-        raise ValueError("Set reviewed=true only after checking the selected clips for sequence and private content")
+    if plan.get("reviewed") is not True and plan.get("automatic_checks", {}).get("status") != "passed":
+        raise ValueError("A reviewed or automatically checked edit plan is required")
     selected = [clip for clip in plan.get("clips", []) if clip.get("include") is True]
     if not selected:
         raise ValueError("Select at least one reviewed clip in local_video_edit_plan.json")
@@ -398,6 +516,63 @@ def render(session: Path, *, output: Path | None = None) -> Path:
     return output
 
 
+def automatic_edit(session: Path, *, output: Path | None = None) -> Path:
+    """Build the plan, cut the film, and validate its playable output locally."""
+    session = session.expanduser().resolve()
+    plan_path = create_automatic_plan(session)
+    result = render(session, output=output)
+    probe = _run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                  "-show_entries", "stream=width,height,nb_frames",
+                  "-show_entries", "format=duration",
+                  "-of", "json", str(result)], timeout=20)
+    if probe.returncode != 0:
+        result.unlink(missing_ok=True)
+        raise ValueError("Rendered onboarding film failed ffprobe validation")
+    info = json.loads(probe.stdout)
+    stream = (info.get("streams") or [{}])[0]
+    seconds = float(info.get("format", {}).get("duration") or 0)
+    if (int(stream.get("width") or 0), int(stream.get("height") or 0)) != (720, 1280) or seconds < 2:
+        result.unlink(missing_ok=True)
+        raise ValueError("Rendered onboarding film has invalid size or duration")
+    # The terminal label alone is insufficient: the last actual video frame
+    # must resemble the agent's settled-home screenshot.
+    import cv2
+    import numpy as np
+    home_ref = None
+    for line in (session / "timeline_journal.jsonl").read_text(encoding="utf-8").splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if item.get("state") in {"HOME", "DASHBOARD"} and item.get("screenshot"):
+            home_ref = session / "screenshots" / Path(item["screenshot"]).name
+    reference = cv2.imread(str(home_ref)) if home_ref and home_ref.is_file() else None
+    capture = cv2.VideoCapture(str(result))
+    capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) - 2))
+    frame_ok, frame = capture.read()
+    capture.release()
+    if reference is None or not frame_ok:
+        result.unlink(missing_ok=True)
+        raise ValueError("Automatic edit cannot verify the final home frame")
+    height, width = frame.shape[:2]
+    crop_width = min(width, round(height * reference.shape[1] / reference.shape[0]))
+    frame = frame[:, (width - crop_width) // 2:(width + crop_width) // 2]
+    a = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 142)).astype(float)
+    b = cv2.resize(cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY), (64, 142)).astype(float)
+    home_delta = float(np.mean(np.abs(a - b)) / 255)
+    if home_delta > 0.22:
+        result.unlink(missing_ok=True)
+        raise ValueError("Rendered film does not finish on the confirmed home screen")
+    report = {
+        "status": "passed", "output": str(result), "duration_seconds": seconds,
+        "width": 720, "height": 1280, "final_home_pixel_delta": round(home_delta, 4),
+        "selection": json.loads(plan_path.read_text(encoding="utf-8"))["automatic_checks"],
+    }
+    (session / "onboarding_local_proof_qa.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -407,10 +582,17 @@ def main() -> int:
     render_parser = commands.add_parser("render", help="Render reviewed clips into one local MP4")
     render_parser.add_argument("session", type=Path)
     render_parser.add_argument("--output", type=Path)
+    auto_parser = commands.add_parser("auto", help="Select, render, and validate the onboarding film automatically")
+    auto_parser.add_argument("session", type=Path)
+    auto_parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
-        path = create_plan(args.session, force=args.force) if args.command == "plan" else render(
-            args.session, output=args.output)
+        if args.command == "plan":
+            path = create_plan(args.session, force=args.force)
+        elif args.command == "render":
+            path = render(args.session, output=args.output)
+        else:
+            path = automatic_edit(args.session, output=args.output)
         print(path)
         return 0
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:

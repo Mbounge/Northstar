@@ -24,6 +24,12 @@ ANDROID_SERIAL=emulator-5554 /opt/anaconda3/bin/python3 onboarding_mobile2.py \
   --app-name 'Chosen App' --package 'com.example.app' --local-video-bursts
 ```
 
+For a local proof of an app's guest first-run journey, add
+`--local-video-guest-path`. This is opt-in for the local video experiment; it
+lets the agent finish at a usable guest home without creating an account.
+Give any factual onboarding answers through a clearly marked synthetic test
+profile if no real identity is intended.
+
 Configure `OPENAI_API_KEY`, `ONBOARDING_EMAIL`, `ONBOARDING_PASSWORD`, and an
 identity profile if the chosen app needs them, exactly as for an ordinary local
 onboarding run. The agent creates `data/onboarding_<app>_<date>/` by default.
@@ -32,34 +38,25 @@ The proof adds `local_video_bursts/` and `local_video_bursts.jsonl` there.
 
 The recorder skips external verification and text-entry commands, and discards
 a burst if another app has focus at its end. A burst can still contain personal
-details displayed *inside* the app. Review every clip before selecting it; do
-not upload or publish raw proof files.
+details displayed *inside* the app. Keep this experiment on a synthetic test
+account and do not upload or publish raw proof files.
 
-## Edit and render
+## Automatic edit and render
 
-Create a review plan after the run:
+After a completed local run, the agent automatically selects the forward
+journey, skips launch footage when the first app action is available, removes
+paired exploratory scrolls and repeated unchanged actions, renders the film,
+and validates its format and duration. It writes `onboarding_local_proof.mp4`,
+`onboarding_local_proof_sources.json`, and `onboarding_local_proof_qa.json` in
+the session. Incomplete or uncertain runs fail closed without a finished film.
 
-```sh
-python3 local_onboarding_video.py plan data/onboarding_<app>_<date>
-```
-
-Open the clips and `local_video_edit_plan.json`. Each candidate starts with
-`include: false`. Choose one chronological journey: select only the distinct
-steps that show a clear action and result; trim dead time with `trim_in` and
-`trim_out` in seconds. Omit retries, duplicate screens, account secrets, Gmail,
-and transitions outside the app. Then set `reviewed: true` and render:
+To rerun the automatic editor on a saved completed session:
 
 ```sh
-python3 local_onboarding_video.py render data/onboarding_<app>_<date>
+/opt/anaconda3/bin/python3 local_onboarding_video.py auto data/onboarding_<app>_<date>
 ```
 
-This writes `onboarding_local_proof.mp4` and
-`onboarding_local_proof_sources.json`. The latter traces every shot back to
-its raw burst. The renderer rejects duplicate or reordered clips and refuses
-unreviewed plans. It normalizes all clips to 720 × 1280 at 30 fps. This is a
-first editorial cut for local assessment; it does not claim that a coherent or
-beautiful sequence can be guaranteed without inspecting the real footage.
-
-Once we choose the app and run it, we can judge the capture quality, edit the
-journey, and improve the pacing and presentation before integrating anything
-into the product.
+The source manifest traces each shot back to its original burst. The editor
+rejects duplicate or reordered clips and normalizes to 720 × 1280 at 30 fps.
+The local proof remains separate from Northstar production until the automated
+quality bar has been demonstrated on more than one onboarding flow.

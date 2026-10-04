@@ -5747,6 +5747,10 @@ class OnboardingSpy:
 
         self.phase = "EXPLORE"
         self.local_video_recorder = None
+        self.local_video_guest_path = (
+            "--local-video-bursts" in sys.argv
+            and "--local-video-guest-path" in sys.argv
+        )
         if "--local-video-bursts" in sys.argv:
             from local_onboarding_video import OnboardingBurstRecorder
             self.local_video_recorder = OnboardingBurstRecorder(
@@ -7592,24 +7596,52 @@ class OnboardingSpy:
                 "missing requirement or choose a different visible control."
             )
 
+        if self.local_video_guest_path:
+            run_goal = (
+                "Complete the app's visible first-run onboarding through its "
+                "Get started / continue-as-guest path until the ordinary usable "
+                "home is reached. Do not enter Sign in or Sign up when guest "
+                "onboarding is available."
+            )
+            account_checkpoint = (
+                "LOCAL VIDEO GUEST PROOF: A settled guest home IS completion "
+                "of this local onboarding capture. Do not seek account creation "
+                "or external verification. Finish all blocking in-app setup "
+                "steps, then choose SETTLED_HOME on the ordinary usable home."
+            )
+            settled_rule = "the ordinary usable guest product home is reached"
+            prefer_settled_rule = (
+                "When the primary product is usable, prefer SETTLED_HOME over "
+                "chasing optional account or profile-improvement cards."
+            )
+        else:
+            run_goal = (
+                "Complete signup/registration and all onboarding until the "
+                "ordinary returning-user home/feed/dashboard is reached."
+            )
+            account_checkpoint = (
+                f"Account creation confirmed: {self.flow_tracker.account_creation_detected}. "
+                "A usable guest home is not completion of this account-onboarding run. "
+                "If no account has been created, inspect visible account/profile/menu "
+                "entry points for Log in, Join, Register, or Create an account. "
+                "Follow that path before choosing SETTLED_HOME. If the app genuinely "
+                "offers no account path after inspecting its entry points, use STOP "
+                "with screen_type=ACCOUNT_UNAVAILABLE and describe the inspected places."
+            )
+            settled_rule = "account creation has been confirmed for this run"
+            prefer_settled_rule = (
+                "When the primary product is usable and an account has been "
+                "created, prefer SETTLED_HOME over chasing optional profile cards."
+            )
+
         res = await self._ai_call(f"""
         UNIVERSAL ANDROID ONBOARDING PLANNER — ONE ACTION ONLY.
 
         Goal:
-        Complete signup/registration and all onboarding until the ordinary
-        returning-user home/feed/dashboard is reached.
+        {run_goal}
 
         ACCOUNT CHECKPOINT:
-        Account creation confirmed: {self.flow_tracker.account_creation_detected}.
-        A usable guest home is not completion of this account-onboarding run.
-        If no account has been created, inspect the visible account/profile/menu
-        entry points (including profile, settings, and More menus) for Log in, Join, Register, or Create an
-        account. Follow that path before choosing SETTLED_HOME. Do not infer
-        that an app has no account flow merely because guest browsing works.
-        If the app genuinely offers no account path after inspecting its
-        available entry points, use STOP with screen_type=ACCOUNT_UNAVAILABLE
-        and describe the inspected places. This yields a reviewable guest-only
-        outcome; do not loop or pretend an account was created.
+        {account_checkpoint}
 
         APP:
         {APP_NAME} ({PACKAGE_NAME})
@@ -7710,7 +7742,7 @@ class OnboardingSpy:
           use CLICK on that row/card first. Observe again before UPLOAD_RESUME.
         - SETTLED_HOME: use when this is the ordinary returning-user product
           home/feed/dashboard, the primary product is already usable, AND
-          account creation has been confirmed for this run.
+          {settled_rule}.
           Optional profile-enrichment cards such as "Add your resume",
           "Complete your profile", "Add job preferences", or visibility/settings
           suggestions embedded inside a real dashboard do NOT prevent SETTLED_HOME.
@@ -7753,11 +7785,7 @@ class OnboardingSpy:
           entering/using the product. However, optional profile-completion or
           profile-improvement CTAs embedded inside an already usable home/feed
           do NOT block SETTLED_HOME.
-        - When the primary product is already usable (real feed/content +
-          persistent product navigation), an account has been created, and only
-          OPTIONAL profile-improvement
-          cards remain, PREFER SETTLED_HOME instead of chasing those optional
-          cards merely to make the profile more complete.
+        - {prefer_settled_rule}
         - If a value/action missed mechanically, one fresh re-grounded retry is
           allowed. If RECENT ACTION -> RESULT shows the exact action/target
           produced NO CHANGE twice on this viewport, DO NOT repeat it again.
@@ -10544,6 +10572,9 @@ class OnboardingSpy:
         st = str(screen_type or "UNKNOWN").upper()
 
         if st in ("AUTH_CHOICE", "SIGNUP_METHOD", "LOGIN"):
+            if self.local_video_guest_path:
+                self.phase = "ONBOARDING"
+                return
             if not self.flow_tracker.account_creation_detected:
                 self.phase = "SIGNUP"
             return
@@ -11797,7 +11828,8 @@ class OnboardingSpy:
                         break
 
             elif action == "SETTLED_HOME":
-                if not self.flow_tracker.account_creation_detected:
+                if (not self.local_video_guest_path
+                        and not self.flow_tracker.account_creation_detected):
                     self.settled_count += 1
                     action_result = "guest_home_not_account_completion"
                     self.memory.add_thought(
@@ -12116,6 +12148,7 @@ class OnboardingSpy:
                 "reasoning_effort": OPENAI_REASONING_EFFORT,
                 "image_detail": OPENAI_IMAGE_DETAIL,
                 "response_storage": False,
+                "local_video_guest_path": bool(self.local_video_guest_path),
             },
             "result": {
                 "status": self.status,
@@ -12257,3 +12290,10 @@ if __name__ == "__main__":
     finally:
         if agent.local_video_recorder is not None:
             agent.local_video_recorder.close()
+            if agent.status == "COMPLETED_SETTLED":
+                try:
+                    from local_onboarding_video import automatic_edit
+                    film = automatic_edit(agent.data_dir)
+                    print(f"   🎞️ Automatic local onboarding film: {film}")
+                except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                    print(f"   ⚠️ Automatic local video edit did not pass: {exc}")
