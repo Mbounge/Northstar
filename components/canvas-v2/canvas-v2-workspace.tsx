@@ -585,6 +585,7 @@ const TEXT_STYLE_OPTIONS = [
 
 const TEXT_SIZE_OPTIONS = [12, 16, 20, 24, 28, 32, 40, 48, 64, 80] as const;
 const CANVAS_V2_GRID_PREFERENCE_KEY = "northstar.canvas-v2.show-grid.v1";
+const CANVAS_V2_CLICK_PULSE_PREFERENCE_KEY = "northstar.canvas-v2.click-pulse.v1";
 
 function canvasV2SvgCursor(svg: string, hotspot: { x: number; y: number }, fallback: string) {
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${hotspot.x} ${hotspot.y}, ${fallback}`;
@@ -727,6 +728,7 @@ export function CanvasV2Workspace({
   const [chatOpen, setChatOpen] = useState(true);
   const [northStarMenuOpen, setNorthStarMenuOpen] = useState(false);
   const [showCanvasGrid, setShowCanvasGrid] = useState(false);
+  const [showClickPulse, setShowClickPulse] = useState(true);
   const [tool, setTool] = useState<CanvasTool>("select");
   const hoverOutlineRef = useRef<HTMLDivElement>(null);
   const [hoveredElement, setHoveredElement] = useState<CanvasV2InspectableElement>();
@@ -854,8 +856,9 @@ export function CanvasV2Workspace({
   useEffect(() => {
     try {
       setShowCanvasGrid(window.localStorage.getItem(CANVAS_V2_GRID_PREFERENCE_KEY) === "true");
+      setShowClickPulse(window.localStorage.getItem(CANVAS_V2_CLICK_PULSE_PREFERENCE_KEY) !== "false");
     } catch {
-      // A restricted storage environment keeps the intentional default: off.
+      // Restricted storage keeps the grid off and the click pulse on.
     }
   }, []);
 
@@ -901,6 +904,18 @@ export function CanvasV2Workspace({
       window.localStorage.setItem(CANVAS_V2_GRID_PREFERENCE_KEY, String(visible));
     } catch {
       // The visual preference still applies for the current session.
+    }
+  }, []);
+  const setClickPulseVisible = useCallback((visible: boolean) => {
+    setShowClickPulse(visible);
+    if (!visible) {
+      for (const pulse of activeCanvasClickPulses) pulse.remove();
+      activeCanvasClickPulses.clear();
+    }
+    try {
+      window.localStorage.setItem(CANVAS_V2_CLICK_PULSE_PREFERENCE_KEY, String(visible));
+    } catch {
+      // Keep the choice for this session when storage is unavailable.
     }
   }, []);
   useLayoutEffect(() => {
@@ -3683,6 +3698,22 @@ export function CanvasV2Workspace({
               <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${showCanvasGrid ? "translate-x-6" : "translate-x-1"}`} />
             </span>
           </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showClickPulse}
+            onClick={() => setClickPulseVisible(!showClickPulse)}
+            className="mt-2 flex w-full items-center gap-3 rounded-[16px] border border-[#e8e7f0] bg-[#fafaff] px-3 py-3 text-left transition hover:border-[#cfc8ff] hover:bg-[#f5f2ff] dark:border-white/[.08] dark:bg-white/[.045] dark:hover:border-[#7665d8] dark:hover:bg-white/[.075]"
+          >
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-[#ece8ff] text-[#6653e8] dark:bg-[#423326] dark:text-[#f0b873]"><MousePointer2 className="h-4 w-4" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-bold text-[#333340] dark:text-[#f0eef5]">Ambient click pulse</span>
+              <span className="mt-0.5 block text-[10px] leading-4 text-[#82818f] dark:text-[#a6a2af]">A soft glow from the cursor tip when you click.</span>
+            </span>
+            <span aria-hidden="true" className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${showClickPulse ? "bg-[#6d59ed] dark:bg-[#c58b4f]" : "bg-[#d7d6df] dark:bg-[#4a4755]"}`}>
+              <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${showClickPulse ? "translate-x-6" : "translate-x-1"}`} />
+            </span>
+          </button>
         </div>
       )}
 
@@ -3748,7 +3779,7 @@ export function CanvasV2Workspace({
         } as CSSProperties}
         onPointerDown={pointerDown}
         onPointerDownCapture={(event) => {
-          if (tool !== "select" || spacePan || event.button !== 0 || event.pointerType === "touch") return;
+          if (!showClickPulse || tool !== "select" || spacePan || event.button !== 0 || event.pointerType === "touch") return;
           const target = event.target as Element;
           if (target === event.currentTarget || target.closest("[data-canvas-v2-workspace-content]")) {
             showCanvasClickPulse(event.clientX, event.clientY, theme);
