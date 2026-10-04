@@ -928,6 +928,22 @@ export function CanvasV2Workspace({
     workspace.addEventListener("scroll", restoreCanvasAuthority, { passive: true });
     return () => workspace.removeEventListener("scroll", restoreCanvasAuthority);
   }, []);
+
+  useEffect(() => {
+    // macOS sends a two-finger horizontal pan as viewport overscroll once the
+    // canvas reaches an edge. Stop Chrome's history swipe at the viewport root,
+    // while the canvas wheel listener continues to own both pan directions.
+    const roots = [document.documentElement, document.body];
+    const previous = roots.map((root) => ({
+      value: root.style.getPropertyValue("overscroll-behavior-x"),
+      priority: root.style.getPropertyPriority("overscroll-behavior-x"),
+    }));
+    roots.forEach((root) => root.style.setProperty("overscroll-behavior-x", "none"));
+    return () => roots.forEach((root, index) => {
+      if (previous[index].value) root.style.setProperty("overscroll-behavior-x", previous[index].value, previous[index].priority);
+      else root.style.removeProperty("overscroll-behavior-x");
+    });
+  }, []);
   const selectElement = useCallback((element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => {
     selectionRequestEpochRef.current += 1;
     // The source document keeps a permanent compatibility root for revision

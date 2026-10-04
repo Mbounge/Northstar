@@ -6,6 +6,15 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { canvasV2LocalEvaluationEnabled } from '@/lib/canvas-v2/local-evaluation'
 
 export async function proxy(request: NextRequest) {
+  // The optimized-build performance harness has no account data. It is
+  // reachable only from this machine when explicitly enabled for local E2E.
+  if (process.env.NODE_ENV === "production"
+    && process.env.NORTHSTAR_E2E === "1"
+    && process.env.NORTHSTAR_LOCAL_PRODUCTION_PROBE === "1"
+    && request.nextUrl.pathname === "/canvas-v2-e2e/stress"
+    && /^((127\.0\.0\.1)|(localhost)):\d+$/.test(request.headers.get("host") ?? "")) {
+    return NextResponse.next({ request })
+  }
   // This exact server-to-server endpoint authenticates its own bearer token.
   // A Supabase browser session is neither available nor required for the collector.
   if (request.nextUrl.pathname === '/api/internal/marketing-publish') {

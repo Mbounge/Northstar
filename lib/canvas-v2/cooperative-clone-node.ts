@@ -295,5 +295,8 @@ export async function cloneNode<T extends HTMLElement>(
     .then((clonedNode) => cloneSingleNode(clonedNode, options, budget) as Promise<T>)
     .then((clonedNode) => cloneChildren(node, clonedNode, options, budget))
     .then((clonedNode) => decorate(node, clonedNode, options))
-    .then((clonedNode) => ensureSVGSymbols(clonedNode, options, budget))
+    // Descendant clones are assembled into the final tree first. Scanning each
+    // partial subtree for <use> references repeats the same walk at every
+    // ancestor and becomes quadratic on screenshot-rich boards.
+    .then((clonedNode) => isRoot ? ensureSVGSymbols(clonedNode, options, budget) : clonedNode)
 }
