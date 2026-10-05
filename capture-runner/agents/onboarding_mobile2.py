@@ -9411,6 +9411,19 @@ class OnboardingSpy:
 
         pre_fill_snapshot = self._snapshot_field_values(input_fields)
 
+        if self.local_video_recorder is not None and not is_password:
+            rect = target_field.get("rect") if target_field else None
+            if rect is None and field_coords:
+                # Compose sometimes exposes a tappable center without an
+                # EditText rectangle. Hide the entire horizontal input row.
+                x, y = map(int, field_coords)
+                width, height = self.device.screen_size
+                rect = (0, max(0, y - 75), width, min(height, y + 75))
+            if rect is not None:
+                self.local_video_recorder.mark_field_redaction(
+                    rect, self.device.screen_size
+                )
+
         # Field entry deliberately uses a small closed loop:
         # tap -> is requested field active? -> retry if not -> type.
         #
@@ -11256,6 +11269,19 @@ class OnboardingSpy:
             self.device.launch_app()
             time.sleep(1.0)
 
+        if self.local_video_recorder is not None:
+            # A captured run must begin inside the target app. In particular,
+            # a previously open Gmail window must never become step one of a
+            # new onboarding film if Android fails to foreground the launch.
+            for _ in range(2):
+                if self.device.is_package_in_foreground(PACKAGE_NAME):
+                    break
+                self.device.bring_to_front(PACKAGE_NAME)
+            else:
+                raise RuntimeError(
+                    "Local video capture could not foreground the target app"
+                )
+
         step = 0
         last_screen_hash = None
         same_screen_steps = 0
@@ -11661,6 +11687,7 @@ class OnboardingSpy:
 
             # ---------- EXECUTE EXACTLY ONE ACTION ----------
             if self.local_video_recorder is not None:
+                self.local_video_recorder.prepare_action(action)
                 self.local_video_recorder.enabled = action in {
                     "CLICK", "FILL_FIELD", "SCROLL_DOWN", "SCROLL_UP",
                     "SWIPE_LEFT", "PRESS_BACK", "UPLOAD_RESUME",

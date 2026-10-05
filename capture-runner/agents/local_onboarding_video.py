@@ -34,9 +34,9 @@ class OnboardingBurstRecorder:
     """Record short real-device bursts without changing the agent's decisions.
 
     Android's screenrecord is started just before an input and stopped after a
-    quiet post-roll. Closely spaced inputs remain in one clip. Text entry and
-    external verification interrupt recording. Raw clips stay local; the editor
-    never publishes them automatically.
+    quiet post-roll. Closely spaced inputs remain in one clip. Planned field
+    entry can be recorded with a mandatory redaction region; external
+    verification interrupts recording. Raw clips stay local.
     """
 
     def __init__(self, session_dir: str | Path, package: str, *, context=None,
@@ -57,6 +57,9 @@ class OnboardingBurstRecorder:
         self._remote: str | None = None
         self._started_at: float | None = None
         self._actions: list[dict] = []
+        self._action_type = ""
+        self._field_redaction: dict | None = None
+        self._redactions: list[dict] = []
         self._closed = False
         self.enabled = False
         self._next_number = self._read_next_number()
@@ -101,7 +104,32 @@ class OnboardingBurstRecorder:
             return "swipe"
         if cmd == "input keyevent 4":
             return "back"
+        if cmd.startswith("input text "):
+            return "text"
+        if cmd.startswith("input keyevent "):
+            return "edit_key"
         return None
+
+    def prepare_action(self, action: str) -> None:
+        """Keep a field-entry burst separate from neighboring navigation."""
+        with self._lock:
+            if action == "FILL_FIELD" or self._action_type == "FILL_FIELD":
+                self._finish_locked("action_boundary")
+            self._action_type = action
+            self._field_redaction = None
+
+    def mark_field_redaction(self, rect: tuple[int, int, int, int],
+                             screen_size: tuple[int, int] | list[int]) -> None:
+        """Require a grounded input rectangle before recording any text bytes."""
+        with self._lock:
+            width, height = map(int, screen_size)
+            x1, y1, x2, y2 = map(int, rect)
+            if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
+                return
+            region = {"rect": [x1, y1, x2, y2], "screen_size": [width, height]}
+            self._field_redaction = region
+            if self._process is not None and region not in self._redactions:
+                self._redactions.append(region)
 
     def before_command(self, cmd: str) -> None:
         """Called before every agent ADB command; failures never block input."""
@@ -109,9 +137,11 @@ class OnboardingBurstRecorder:
             with self._lock:
                 if self._closed:
                     return
-                if cmd.startswith("input text "):
-                    # Do not record the agent typing account values.
-                    self._finish_locked("text_entry")
+                kind = self._kind(cmd)
+                if kind in {"text", "edit_key"} and (
+                    self._action_type != "FILL_FIELD" or self._field_redaction is None
+                ):
+                    self._finish_locked("unredacted_text_entry")
                     return
                 if cmd.startswith("monkey -p ") and not cmd.startswith(f"monkey -p {self.package} "):
                     self._finish_locked("external_launch")
@@ -124,10 +154,11 @@ class OnboardingBurstRecorder:
                     if cmd.startswith("input "):
                         self._finish_locked("outside_planned_action")
                     return
-                kind = self._kind(cmd)
                 if kind is None:
                     return
-                if kind != "launch" and not self._focused_on_app():
+                if (kind != "launch" and not (
+                    kind in {"text", "edit_key"} and self._process is not None
+                ) and not self._focused_on_app()):
                     self._finish_locked("external_app")
                     return
                 if self._process is not None and self._process.poll() is not None:
@@ -140,6 +171,8 @@ class OnboardingBurstRecorder:
                     "phase": details.get("phase"),
                     "timeline_sequence": details.get("timeline_sequence"),
                 })
+                if kind in {"text", "edit_key"} and self._field_redaction not in self._redactions:
+                    self._redactions.append(self._field_redaction)
                 if self._timer is not None:
                     self._timer.cancel()
                     self._timer = None
@@ -193,6 +226,11 @@ class OnboardingBurstRecorder:
             self._remote = remote
             self._started_at = time.time()
             self._actions = []
+            self._redactions = (
+                [self._field_redaction]
+                if self._action_type == "FILL_FIELD" and self._field_redaction
+                else []
+            )
             return True
         except (OSError, subprocess.TimeoutExpired) as exc:
             if process is not None and process.poll() is None:
@@ -217,9 +255,11 @@ class OnboardingBurstRecorder:
             return
         pid, remote, started_at = self._pid, self._remote, self._started_at
         actions = list(self._actions)
+        redactions = list(self._redactions)
         self._process = None
         self._pid = self._remote = self._started_at = None
         self._actions = []
+        self._redactions = []
         number = self._next_number
         self._next_number += 1
         output = self.burst_dir / f"burst_{number:04d}.mp4"
@@ -256,6 +296,7 @@ class OnboardingBurstRecorder:
             "ended_at": time.time(),
             "file": str(output.relative_to(self.session)) if output.exists() else None,
             "actions": actions,
+            "redactions": redactions,
             "eligible": bool(output.exists() and actions and in_app_at_end),
             "stop_reason": reason,
             "error": error or ("external_app_at_end" if not in_app_at_end else None),
@@ -288,8 +329,8 @@ def _read_bursts(session: Path) -> list[dict]:
     return sorted(bursts, key=lambda item: int(item.get("number", 0)))
 
 
-def create_plan(session: Path, *, force: bool = False) -> Path:
-    session = session.expanduser().resolve()
+def create_plan(session: Path | str, *, force: bool = False) -> Path:
+    session = Path(session).expanduser().resolve()
     target = session / "local_video_edit_plan.json"
     if target.exists() and not force:
         raise ValueError(f"Edit plan already exists: {target} (pass --force to replace it)")
@@ -320,7 +361,9 @@ def create_plan(session: Path, *, force: bool = False) -> Path:
             "label": "",
             "screen_state": screen.get("state", ""),
             "screen_screenshot": screen.get("screenshot"),
+            "started_at": item.get("started_at"),
             "actions": item.get("actions", []),
+            "redactions": item.get("redactions", []),
         })
     plan = {"version": 1, "purpose": "local onboarding video proof",
             "reviewed": False, "clips": clips}
@@ -459,10 +502,11 @@ def _private_or_verification_step(clip: dict, action: dict) -> bool:
     phase = str((clip.get("actions") or [{}])[0].get("phase") or "").upper()
     verb = str(action.get("action") or "").upper()
     description = str(action.get("screen_desc") or "")
-    if state in {"VERIFICATION", "VERIFICATION_RESULT", "FIELD_FILLED",
-                 "FORM", "LOGIN", "DATE_PICKER"} or phase == "VERIFICATION":
+    if state in {"VERIFICATION", "VERIFICATION_RESULT", "DATE_PICKER"} or phase == "VERIFICATION":
         return True
-    if verb in {"FILL_FIELD", "UPLOAD_RESUME"}:
+    if verb == "FILL_FIELD":
+        return not bool(clip.get("redactions"))
+    if state in {"FIELD_FILLED", "FORM", "LOGIN"} or verb == "UPLOAD_RESUME":
         return True
     if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", description, re.I):
         return True
@@ -471,7 +515,7 @@ def _private_or_verification_step(clip: dict, action: dict) -> bool:
     return False
 
 
-def create_automatic_plan(session: Path) -> Path:
+def create_automatic_plan(session: Path | str) -> Path:
     """Select a complete, chronological first-run journey without a reviewer.
 
     A completed home is required. Reverse scrolls on the same screen are an
@@ -479,7 +523,7 @@ def create_automatic_plan(session: Path) -> Path:
     unchanged source screen are retries, so only the successful last attempt
     belongs in the film. The full decision record stays in the plan.
     """
-    session = session.expanduser().resolve()
+    session = Path(session).expanduser().resolve()
     manifest = json.loads((session / "onboarding_manifest.json").read_text(encoding="utf-8"))
     if manifest.get("result", {}).get("status") != "COMPLETED_SETTLED":
         raise ValueError("Automatic edit requires a completed, settled onboarding run")
@@ -543,11 +587,22 @@ def create_automatic_plan(session: Path) -> Path:
         number = clip["number"]
         if number not in omit:
             visible_ranges = _visible_ranges(session / clip["file"])
+            # Text-entry pauses carry the real agent's typing rhythm. Do not
+            # collapse them as though they were idle static screens. Cut the
+            # preparatory clear-field keypresses before the first typed byte.
+            typed = [item for item in clip.get("actions", []) if item.get("kind") == "text"]
+            if typed:
+                ranges = visible_ranges
+                if clip.get("started_at"):
+                    first = max(0.0, float(typed[0]["at"]) - float(clip["started_at"]) - 0.35)
+                    last = float(typed[-1]["at"]) - float(clip["started_at"]) + 0.8
+                    ranges = [(max(start, first), min(end, last))
+                              for start, end in ranges if min(end, last) - max(start, first) >= 0.18]
+            else:
+                ranges = _compress_static_ranges(session / clip["file"], visible_ranges)
             clip["keep_ranges"] = [
                 {"trim_in": start, "trim_out": end}
-                for start, end in _compress_static_ranges(
-                    session / clip["file"], visible_ranges
-                )
+                for start, end in ranges
             ]
             if not clip["keep_ranges"]:
                 omit[number] = "loading_or_placeholder_only"
@@ -582,8 +637,59 @@ def _duration(path: Path) -> float:
     return float(probe.stdout.strip())
 
 
-def render(session: Path, *, output: Path | None = None) -> Path:
-    session = session.expanduser().resolve()
+def _redaction_geometry(region: dict) -> tuple[int, int, int, int]:
+    try:
+        x1, y1, x2, y2 = map(int, region["rect"])
+        source_w, source_h = map(int, region["screen_size"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("A recorded text field has invalid redaction metadata") from None
+    if not (0 <= x1 < x2 <= source_w and 0 <= y1 < y2 <= source_h):
+        raise ValueError("A recorded text field has out-of-bounds redaction metadata")
+    scale = min(720 / source_w, 1280 / source_h)
+    pad_x = (720 - source_w * scale) / 2
+    pad_y = (1280 - source_h * scale) / 2
+    # Cover the grounded field, including its cursor and a small margin.
+    left = max(0, int(pad_x + (x1 - 18) * scale))
+    right = min(720, int(pad_x + (x2 + 18) * scale))
+    top = max(0, int(pad_y + (y1 - 35) * scale))
+    bottom = min(1280, int(pad_y + (y2 + 55) * scale))
+    return left, top, max(left + 1, right), max(top + 1, bottom)
+
+
+def _redaction_filters(regions: list[dict]) -> list[str]:
+    """Map grounded device-field bounds to the normalized portrait film."""
+    return [
+        f"drawbox=x={left}:y={top}:w={right - left}:h={bottom - top}:"
+        "color=0x171725:t=fill"
+        for left, top, right, bottom in map(_redaction_geometry, regions)
+    ]
+
+
+def _typing_progress_filters(source: dict, start: float, end: float) -> list[str]:
+    """Show the cadence of real typed characters without revealing their text."""
+    regions = source.get("redactions") or []
+    typed = [item for item in source.get("actions", []) if item.get("kind") == "text"]
+    if not regions or not typed or not source.get("started_at"):
+        return []
+    left, top, right, bottom = _redaction_geometry(regions[0])
+    events = [float(item["at"]) - float(source["started_at"]) - start for item in typed]
+    slots = min(18, len(events), max(1, (right - left - 36) // 18))
+    dot_y = max(top + 8, (top + bottom - 10) // 2)
+    filters = []
+    for slot in range(slots):
+        event_index = min(len(events) - 1, ((slot + 1) * len(events) - 1) // slots)
+        at = max(0.0, events[event_index])
+        if at >= end - start:
+            continue
+        filters.append(
+            f"drawbox=x={left + 18 + slot * 18}:y={dot_y}:w=9:h=9:"
+            f"color=0xc5adff:t=fill:enable='gte(t,{at:.3f})'"
+        )
+    return filters
+
+
+def render(session: Path | str, *, output: Path | None = None) -> Path:
+    session = Path(session).expanduser().resolve()
     plan_path = session / "local_video_edit_plan.json"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     if plan.get("reviewed") is not True and plan.get("automatic_checks", {}).get("status") != "passed":
@@ -614,6 +720,9 @@ def render(session: Path, *, output: Path | None = None) -> Path:
             if not path.is_relative_to(session) or not path.is_file():
                 raise ValueError(f"Clip {number} is missing or outside the session")
             duration = _duration(path)
+            regions = source.get("redactions") or []
+            if any(item.get("kind") == "text" for item in source.get("actions", [])) and not regions:
+                raise ValueError(f"Recorded text in clip {number} has no grounded redaction")
             spans = clip.get("keep_ranges") or [{
                 "trim_in": clip.get("trim_in") or 0,
                 "trim_out": duration if clip.get("trim_out") is None else clip["trim_out"],
@@ -625,10 +734,16 @@ def render(session: Path, *, output: Path | None = None) -> Path:
                     raise ValueError(f"Clip {number} has an invalid trim range")
                 segment_number += 1
                 segment = temp_dir / f"segment_{segment_number:04d}.mp4"
+                visual_filters = [
+                    "fps=30", "scale=720:1280:force_original_aspect_ratio=decrease",
+                    "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x10111f",
+                    *_redaction_filters(regions),
+                    *_typing_progress_filters(source, start, end),
+                    "format=yuv420p",
+                ]
                 command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                            "-ss", str(start), "-i", str(path), "-t", str(end - start),
-                           "-vf", "fps=30,scale=720:1280:force_original_aspect_ratio=decrease,"
-                                  "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x10111f,format=yuv420p",
+                           "-vf", ",".join(visual_filters),
                            "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                            "-movflags", "+faststart", str(segment)]
                 result = _run(command, timeout=120)
@@ -637,6 +752,7 @@ def render(session: Path, *, output: Path | None = None) -> Path:
                 segments.append(segment)
                 provenance.append({"number": number, "source": str(path),
                                    "trim_in": start, "trim_out": end,
+                                   "redacted_fields": len(regions),
                                    "label": clip.get("label", "")})
         concat = temp_dir / "concat.txt"
         concat.write_text("".join(f"file '{segment}'\n" for segment in segments), encoding="utf-8")
@@ -694,9 +810,9 @@ def _scan_rendered_privacy(path: Path) -> int:
     return checked
 
 
-def automatic_edit(session: Path, *, output: Path | None = None) -> Path:
+def automatic_edit(session: Path | str, *, output: Path | None = None) -> Path:
     """Build the plan, cut the film, and validate its playable output locally."""
-    session = session.expanduser().resolve()
+    session = Path(session).expanduser().resolve()
     plan_path = create_automatic_plan(session)
     result = render(session, output=output)
     probe = _run(["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -751,11 +867,20 @@ def automatic_edit(session: Path, *, output: Path | None = None) -> Path:
     except ValueError:
         result.unlink(missing_ok=True)
         raise
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    selected = [clip for clip in plan["clips"] if clip["include"]]
+    interactions = {
+        "tap_events": sum(item.get("kind") == "tap" for clip in selected
+                          for item in clip.get("actions", [])),
+        "typed_input_events": sum(item.get("kind") == "text" for clip in selected
+                                  for item in clip.get("actions", [])),
+        "redacted_field_bursts": sum(bool(clip.get("redactions")) for clip in selected),
+    }
     report = {
         "status": "passed", "output": str(result), "duration_seconds": seconds,
         "width": 720, "height": 1280, "final_home_pixel_delta": round(home_delta, 4),
         "privacy_frames_checked": privacy_frames,
-        "selection": json.loads(plan_path.read_text(encoding="utf-8"))["automatic_checks"],
+        "interactions": interactions, "selection": plan["automatic_checks"],
     }
     (session / "onboarding_local_proof_qa.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8")

@@ -36,22 +36,25 @@ onboarding run. The agent creates `data/onboarding_<app>_<date>/` by default.
 The proof adds `local_video_bursts/` and `local_video_bursts.jsonl` there.
 `--local-video-bursts` is never passed by the production supervisor.
 
-The recorder skips external verification and text-entry commands, and discards
-a burst if another app has focus at its end. A burst can still contain personal
-details displayed *inside* the app. Keep this experiment on a synthetic test
-account and do not upload or publish raw proof files.
+The recorder skips external verification and discards a burst if another app
+has focus at its end. Planned text entry stays in the motion recording so the
+agent's real typing time is preserved. A grounded input row is mandatory;
+the editor covers that row in the finished film before its privacy check.
+Raw bursts can contain personal details displayed *inside* the app. Keep this
+experiment on a synthetic test account and do not upload or publish raw files.
 
 ## Automatic edit and render
 
 After a completed local run, the agent automatically selects the forward
 journey, skips launch footage when the first app action is available, removes
-paired exploratory scrolls, repeated unchanged actions, credential and
-verification steps, and placeholder-only clips. Static holds and loading gaps
+paired exploratory scrolls, repeated unchanged actions, ungrounded credential
+steps, external verification, and placeholder-only clips. Static holds and loading gaps
 are trimmed within the selected bursts. It then renders the film and validates
 its format, duration, final Home frame, and sampled frames for visible account
 identifiers or verification-code entry. It writes `onboarding_local_proof.mp4`,
 `onboarding_local_proof_sources.json`, and `onboarding_local_proof_qa.json` in
 the session. Incomplete or uncertain runs fail closed without a finished film.
+The QA file records the taps and typed-input events that actually made the cut.
 
 To rerun the automatic editor on a saved completed session:
 

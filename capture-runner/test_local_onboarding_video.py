@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 from local_onboarding_video import (
     OnboardingBurstRecorder, _is_placeholder_burst, _private_or_verification_step,
-    _scan_rendered_privacy,
+    _redaction_filters, _scan_rendered_privacy,
     automatic_edit, create_plan, render,
 )
 
@@ -25,8 +25,8 @@ class LocalOnboardingVideoTests(unittest.TestCase):
             "monkey -p com.example.app -c android.intent.category.LAUNCHER 1"), "launch")
         self.assertEqual(OnboardingBurstRecorder._kind("input tap 50 70"), "tap")
         self.assertEqual(OnboardingBurstRecorder._kind("input swipe 1 2 3 4 500"), "swipe")
-        self.assertIsNone(OnboardingBurstRecorder._kind("input text 'password'"))
-        self.assertIsNone(OnboardingBurstRecorder._kind("input keyevent 67"))
+        self.assertEqual(OnboardingBurstRecorder._kind("input text 'password'"), "text")
+        self.assertEqual(OnboardingBurstRecorder._kind("input keyevent 67"), "edit_key")
 
     def test_recorder_only_arms_for_planned_app_action(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,7 +43,23 @@ class LocalOnboardingVideoTests(unittest.TestCase):
             recorder._start_locked.assert_called_once()
             self.assertEqual([item["kind"] for item in recorder._actions], ["tap"])
             recorder.before_command("input text 'secret'")
-            recorder._finish_locked.assert_called_with("text_entry")
+            recorder._finish_locked.assert_called_with("unredacted_text_entry")
+
+    def test_planned_field_entry_records_timing_without_storing_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder = OnboardingBurstRecorder(tmp, "com.example.app",
+                                               context=lambda: {"phase": "SIGNUP"})
+            recorder.enabled = True
+            recorder.prepare_action("FILL_FIELD")
+            recorder.mark_field_redaction((40, 300, 680, 450), (720, 1280))
+            recorder._focused_on_app = Mock(return_value=True)
+            recorder._start_locked = Mock(side_effect=lambda: (
+                setattr(recorder, "_process", Mock(poll=lambda: None)) or True))
+            recorder.before_command("input text 'private@example.invalid'")
+            self.assertEqual(recorder._actions[0]["kind"], "text")
+            self.assertNotIn("private@example.invalid", json.dumps(recorder._actions))
+            self.assertEqual(len(recorder._redactions), 1)
+            self.assertTrue(_redaction_filters(recorder._redactions))
 
     def test_plan_requires_review_and_render_preserves_source_order(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -128,10 +144,11 @@ class LocalOnboardingVideoTests(unittest.TestCase):
             with patch("local_onboarding_video._is_placeholder_burst", return_value=False), \
                  patch("local_onboarding_video._visible_ranges", return_value=[(0.0, 1.2)]), \
                  patch("local_onboarding_video._compress_static_ranges", return_value=[(0.0, 1.2)]):
-                video = automatic_edit(session)
+                video = automatic_edit(str(session))
             self.assertTrue(video.is_file())
             qa = json.loads((session / "onboarding_local_proof_qa.json").read_text())
             self.assertEqual(qa["selection"]["selected_bursts"], [2, 5])
+            self.assertEqual(qa["interactions"]["tap_events"], 2)
             self.assertEqual([item["number"] for item in qa["selection"]["omitted_bursts"]],
                              [1, 3, 4])
 
@@ -153,6 +170,10 @@ class LocalOnboardingVideoTests(unittest.TestCase):
         self.assertTrue(_private_or_verification_step(filled_email, {
             "action": "CLICK", "screen_desc": "Email already entered: test@example.com",
         }))
+        self.assertFalse(_private_or_verification_step({
+            **filled_email, "redactions": [{"rect": [0, 200, 720, 350],
+                                            "screen_size": [720, 1280]}],
+        }, {"action": "FILL_FIELD", "screen_desc": "Enter email"}))
         self.assertFalse(_private_or_verification_step({
             "screen_state": "AUTH_CHOICE", "actions": [{"phase": "SIGNUP"}],
         }, {"action": "CLICK", "screen_desc": "Welcome with Sign in or sign up"}))
@@ -177,6 +198,41 @@ class LocalOnboardingVideoTests(unittest.TestCase):
                            check=True, timeout=30)
             with self.assertRaisesRegex(ValueError, "account identifier"):
                 _scan_rendered_privacy(film)
+
+    def test_render_masks_a_real_recorded_field_before_privacy_check(self):
+        if not all(shutil.which(name) for name in ("ffmpeg", "ffprobe", "tesseract")):
+            self.skipTest("video tooling is unavailable")
+        font_path = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
+        if not font_path.is_file():
+            self.skipTest("system font is unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            session = Path(tmp)
+            burst_dir = session / "local_video_bursts"
+            burst_dir.mkdir()
+            still = session / "account.png"
+            clip = burst_dir / "burst_0001.mp4"
+            image = Image.new("RGB", (720, 1280), "white")
+            ImageDraw.Draw(image).text((40, 420), "demo@example.invalid", fill="black",
+                                       font=ImageFont.truetype(str(font_path), 44))
+            image.save(still)
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                            "-loop", "1", "-i", str(still), "-t", "1",
+                            "-r", "30", "-pix_fmt", "yuv420p", str(clip)],
+                           check=True, timeout=30)
+            entry = {"number": 1, "eligible": True, "file": str(clip.relative_to(session)),
+                     "started_at": 100.0,
+                     "actions": [{"kind": "text", "timeline_sequence": 1,
+                                  "at": at} for at in (100.2, 100.5, 100.7)],
+                     "redactions": [{"rect": [0, 380, 720, 500],
+                                     "screen_size": [720, 1280]}]}
+            (session / "local_video_bursts.jsonl").write_text(json.dumps(entry) + "\n")
+            plan = create_plan(session)
+            data = json.loads(plan.read_text())
+            data["reviewed"] = True
+            data["clips"][0]["include"] = True
+            plan.write_text(json.dumps(data))
+            output = render(session)
+            self.assertGreaterEqual(_scan_rendered_privacy(output), 2)
 
 
 if __name__ == "__main__":
