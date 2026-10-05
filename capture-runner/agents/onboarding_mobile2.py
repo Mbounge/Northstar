@@ -5728,8 +5728,8 @@ class OnboardingSpy:
             ai_call_fn=self._ai_call,
             atomic_click_fn=self._verification_atomic_click,
             capture_screen_fn=self._capture_active_screen,
-            persona_email=IDENTITY_EMAIL,
-            persona_password=IDENTITY_PASSWORD,
+            persona_email=self.persona.email,
+            persona_password=self.persona.password,
             app_name=APP_NAME,
             target_package=PACKAGE_NAME,
             screenshot_dir=self.screenshot_dir,
@@ -10508,7 +10508,18 @@ class OnboardingSpy:
         action to execute before any external email/SMS/OAuth handoff.
         """
         action = str(strategy.get("action", "") or "").upper()
-        target = str(strategy.get("target_desc", "") or "").strip()
+        target = str(strategy.get("target_desc", "") or "").strip().casefold()
+        screen_desc = str(strategy.get("screen_description", "") or "").casefold()
+        # Once a code has been sent, resend/back/code entry are not a reason to
+        # bypass the inbox resource. The handler must first try the configured
+        # accessible inbox; it may request a fresh code if that fails.
+        if any(word in target for word in ("resend", "back", "verification code", "otp", "one-time code")):
+            return False
+        if "code" in screen_desc and any(phrase in screen_desc for phrase in (
+            "code was sent", "code has been sent", "sent by email",
+            "enter the code", "enter verification code", "code required",
+        )):
+            return False
         return bool(
             action in {"CLICK", "FILL_FIELD", "PRESS_BACK"}
             and target
@@ -12295,5 +12306,5 @@ if __name__ == "__main__":
                     from local_onboarding_video import automatic_edit
                     film = automatic_edit(agent.data_dir)
                     print(f"   🎞️ Automatic local onboarding film: {film}")
-                except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                except Exception as exc:
                     print(f"   ⚠️ Automatic local video edit did not pass: {exc}")

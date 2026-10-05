@@ -7,7 +7,7 @@ The normal capture runner and Northstar product do not read or publish these fil
 
 ## Before starting
 
-Install/confirm `adb`, `ffmpeg`, `ffprobe`, and the Python dependencies already
+Install/confirm `adb`, `ffmpeg`, `ffprobe`, `tesseract`, and the Python dependencies already
 needed by `onboarding_mobile2.py`. On this Mac, `/opt/anaconda3/bin/python3`
 has the agent's OpenAI, Pillow, NumPy, and OpenCV dependencies; the Homebrew
 `python3` currently does not have OpenAI installed. Start one emulator, install the chosen app,
@@ -45,8 +45,11 @@ account and do not upload or publish raw proof files.
 
 After a completed local run, the agent automatically selects the forward
 journey, skips launch footage when the first app action is available, removes
-paired exploratory scrolls and repeated unchanged actions, renders the film,
-and validates its format and duration. It writes `onboarding_local_proof.mp4`,
+paired exploratory scrolls, repeated unchanged actions, credential and
+verification steps, and placeholder-only clips. Static holds and loading gaps
+are trimmed within the selected bursts. It then renders the film and validates
+its format, duration, final Home frame, and sampled frames for visible account
+identifiers or verification-code entry. It writes `onboarding_local_proof.mp4`,
 `onboarding_local_proof_sources.json`, and `onboarding_local_proof_qa.json` in
 the session. Incomplete or uncertain runs fail closed without a finished film.
 

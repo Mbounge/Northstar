@@ -360,6 +360,117 @@ def _is_placeholder_burst(path: Path) -> bool:
         capture.release()
 
 
+def _visible_ranges(path: Path) -> list[tuple[float, float]]:
+    """Keep real UI frames while cutting sustained blank/loading intervals."""
+    import cv2
+    import numpy as np
+    capture = cv2.VideoCapture(str(path))
+    try:
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+        if frame_count < 2 or fps <= 0:
+            return []
+        duration = frame_count / fps
+        step = 0.1
+        samples = []
+        for index in range(max(1, int(duration / step))):
+            at = min(duration - 1 / fps, index * step)
+            capture.set(cv2.CAP_PROP_POS_MSEC, at * 1000)
+            ok, frame = capture.read()
+            if not ok:
+                continue
+            gray = cv2.cvtColor(cv2.resize(frame, (270, 600)), cv2.COLOR_BGR2GRAY)
+            edges = float(np.mean(cv2.Canny(gray, 60, 140) > 0))
+            blank = edges < 0.009 and (
+                float(np.mean(gray > 225)) > 0.95
+                or float(np.mean(gray < 30)) > 0.96
+            )
+            samples.append((at, not blank))
+        if not samples:
+            return []
+        ranges = []
+        start = None
+        for at, visible in samples:
+            if visible and start is None:
+                start = at
+            if not visible and start is not None:
+                end = min(duration, at + 0.04)
+                if end - start >= 0.18:
+                    ranges.append((max(0.0, start - 0.04), end))
+                start = None
+        if start is not None and duration - start >= 0.18:
+            ranges.append((max(0.0, start - 0.04), duration))
+        # A momentary low-detail animation is not worth a hard cut.
+        merged = []
+        for start, end in ranges:
+            if merged and start - merged[-1][1] < 0.25:
+                merged[-1] = (merged[-1][0], end)
+            else:
+                merged.append((start, end))
+        return [(round(a, 3), round(b, 3)) for a, b in merged]
+    finally:
+        capture.release()
+
+
+def _compress_static_ranges(path: Path, ranges: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Remove the middle of long unchanged holds, retaining both context ends."""
+    import cv2
+    import numpy as np
+    capture = cv2.VideoCapture(str(path))
+    try:
+        result = []
+        for outer_start, outer_end in ranges:
+            samples = []
+            for at in np.arange(outer_start, outer_end, 0.15):
+                capture.set(cv2.CAP_PROP_POS_MSEC, float(at) * 1000)
+                ok, frame = capture.read()
+                if ok:
+                    gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 142))
+                    samples.append((float(at), gray.astype(float)))
+            cuts = []
+            still_start = None
+            for (previous_at, previous), (at, current) in zip(samples, samples[1:]):
+                changed = float(np.mean(np.abs(current - previous)) / 255) >= 0.005
+                if not changed and still_start is None:
+                    still_start = previous_at
+                if changed and still_start is not None:
+                    if previous_at - still_start >= 1.0:
+                        cuts.append((still_start + 0.4, previous_at - 0.3))
+                    still_start = None
+            if still_start is not None and samples[-1][0] - still_start >= 1.0:
+                cuts.append((still_start + 0.4, samples[-1][0] - 0.3))
+            cursor = outer_start
+            for cut_start, cut_end in cuts:
+                if cut_end <= cut_start:
+                    continue
+                if cut_start - cursor >= 0.18:
+                    result.append((cursor, cut_start))
+                cursor = max(cursor, cut_end)
+            if outer_end - cursor >= 0.18:
+                result.append((cursor, outer_end))
+        return [(round(a, 3), round(b, 3)) for a, b in result]
+    finally:
+        capture.release()
+
+
+def _private_or_verification_step(clip: dict, action: dict) -> bool:
+    """Keep account credentials and external verification out of the film."""
+    state = str(clip.get("screen_state") or "").upper()
+    phase = str((clip.get("actions") or [{}])[0].get("phase") or "").upper()
+    verb = str(action.get("action") or "").upper()
+    description = str(action.get("screen_desc") or "")
+    if state in {"VERIFICATION", "VERIFICATION_RESULT", "FIELD_FILLED",
+                 "FORM", "LOGIN", "DATE_PICKER"} or phase == "VERIFICATION":
+        return True
+    if verb in {"FILL_FIELD", "UPLOAD_RESUME"}:
+        return True
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", description, re.I):
+        return True
+    if re.search(r"\b(?:code|otp|password|phone number)\b", description, re.I):
+        return True
+    return False
+
+
 def create_automatic_plan(session: Path) -> Path:
     """Select a complete, chronological first-run journey without a reviewer.
 
@@ -392,6 +503,9 @@ def create_automatic_plan(session: Path) -> Path:
         return timeline.get(first.get("timeline_sequence"), {})
 
     omit = {}
+    for clip in clips:
+        if _private_or_verification_step(clip, action_for(clip)):
+            omit[clip["number"]] = "account_or_verification_private_step"
     # A launch burst often begins on Android's launcher. The first tap burst
     # begins on the app's welcome screen and still shows the first transition.
     if any((c.get("actions") or [{}])[0].get("kind") == "tap" for c in clips):
@@ -405,7 +519,8 @@ def create_automatic_plan(session: Path) -> Path:
                  ("SCROLL_LEFT", "SCROLL_RIGHT"), ("SCROLL_RIGHT", "SCROLL_LEFT")}
     for left, right in zip(clips, clips[1:]):
         a, b = action_for(left), action_for(right)
-        if (left.get("screen_state") == right.get("screen_state")
+        if (left["number"] not in omit and right["number"] not in omit
+                and left.get("screen_state") == right.get("screen_state")
                 and (a.get("action"), b.get("action")) in opposites):
             omit[left["number"]] = "reversed_exploratory_scroll"
             omit[right["number"]] = "reversed_exploratory_scroll"
@@ -414,7 +529,8 @@ def create_automatic_plan(session: Path) -> Path:
     # the earlier attempt did not advance the film.
     for left, right in zip(clips, clips[1:]):
         a, b = action_for(left), action_for(right)
-        if (a.get("action") == b.get("action") == "CLICK"
+        if (left["number"] not in omit and right["number"] not in omit
+                and a.get("action") == b.get("action") == "CLICK"
                 and a.get("target") == b.get("target")
                 and a.get("screenshot") == b.get("screenshot")):
             omit[left["number"]] = "repeated_unchanged_action"
@@ -425,9 +541,21 @@ def create_automatic_plan(session: Path) -> Path:
 
     for clip in clips:
         number = clip["number"]
+        if number not in omit:
+            visible_ranges = _visible_ranges(session / clip["file"])
+            clip["keep_ranges"] = [
+                {"trim_in": start, "trim_out": end}
+                for start, end in _compress_static_ranges(
+                    session / clip["file"], visible_ranges
+                )
+            ]
+            if not clip["keep_ranges"]:
+                omit[number] = "loading_or_placeholder_only"
         clip["include"] = number not in omit
         clip["label"] = str(action_for(clip).get("target") or "app launch")
-        if clip["include"] and _duration(session / clip["file"]) < 0.45:
+        if clip["include"] and sum(
+            span["trim_out"] - span["trim_in"] for span in clip["keep_ranges"]
+        ) < 0.18:
             raise ValueError(f"Selected burst {number} is too short to show an action")
 
     chosen = [c for c in clips if c["include"]]
@@ -476,7 +604,8 @@ def render(session: Path, *, output: Path | None = None) -> Path:
         temp_dir = Path(temp)
         segments = []
         provenance = []
-        for index, clip in enumerate(selected, 1):
+        segment_number = 0
+        for clip in selected:
             number = int(clip["number"])
             source = burst_by_number.get(number)
             if not source or not source.get("eligible") or source.get("file") != clip.get("file"):
@@ -485,24 +614,30 @@ def render(session: Path, *, output: Path | None = None) -> Path:
             if not path.is_relative_to(session) or not path.is_file():
                 raise ValueError(f"Clip {number} is missing or outside the session")
             duration = _duration(path)
-            start = float(clip.get("trim_in") or 0)
-            end = float(duration if clip.get("trim_out") is None else clip["trim_out"])
-            if not (0 <= start < end <= duration + 0.05):
-                raise ValueError(f"Clip {number} has an invalid trim range")
-            segment = temp_dir / f"segment_{index:04d}.mp4"
-            command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                       "-ss", str(start), "-i", str(path), "-t", str(end - start),
-                       "-vf", "fps=30,scale=720:1280:force_original_aspect_ratio=decrease,"
-                              "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x10111f,format=yuv420p",
-                       "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                       "-movflags", "+faststart", str(segment)]
-            result = _run(command, timeout=120)
-            if result.returncode != 0:
-                raise ValueError(f"ffmpeg failed on clip {number}: {result.stderr.strip()}")
-            segments.append(segment)
-            provenance.append({"number": number, "source": str(path),
-                               "trim_in": start, "trim_out": end,
-                               "label": clip.get("label", "")})
+            spans = clip.get("keep_ranges") or [{
+                "trim_in": clip.get("trim_in") or 0,
+                "trim_out": duration if clip.get("trim_out") is None else clip["trim_out"],
+            }]
+            for span in spans:
+                start = float(span["trim_in"])
+                end = float(span["trim_out"])
+                if not (0 <= start < end <= duration + 0.05):
+                    raise ValueError(f"Clip {number} has an invalid trim range")
+                segment_number += 1
+                segment = temp_dir / f"segment_{segment_number:04d}.mp4"
+                command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                           "-ss", str(start), "-i", str(path), "-t", str(end - start),
+                           "-vf", "fps=30,scale=720:1280:force_original_aspect_ratio=decrease,"
+                                  "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x10111f,format=yuv420p",
+                           "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                           "-movflags", "+faststart", str(segment)]
+                result = _run(command, timeout=120)
+                if result.returncode != 0:
+                    raise ValueError(f"ffmpeg failed on clip {number}: {result.stderr.strip()}")
+                segments.append(segment)
+                provenance.append({"number": number, "source": str(path),
+                                   "trim_in": start, "trim_out": end,
+                                   "label": clip.get("label", "")})
         concat = temp_dir / "concat.txt"
         concat.write_text("".join(f"file '{segment}'\n" for segment in segments), encoding="utf-8")
         result = _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -514,6 +649,49 @@ def render(session: Path, *, output: Path | None = None) -> Path:
         json.dumps({"rendered_at": _utc_now(), "output": str(output),
                     "clips": provenance}, indent=2) + "\n", encoding="utf-8")
     return output
+
+
+def _scan_rendered_privacy(path: Path) -> int:
+    """OCR sampled frames and fail closed if an inbox address/code UI survives."""
+    if not shutil.which("tesseract"):
+        raise ValueError("Tesseract is required for automatic account-video privacy checks")
+    import cv2
+    import tempfile
+    capture = cv2.VideoCapture(str(path))
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+    count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    if fps <= 0 or count <= 0:
+        capture.release()
+        raise ValueError("Cannot read the rendered film for privacy checks")
+    checked = 0
+    try:
+        with tempfile.TemporaryDirectory(prefix="northstar_video_privacy_") as tmp:
+            frame_path = Path(tmp) / "frame.png"
+            # Four samples per second catch short-lived account screens that
+            # a once-per-second check could skip between edit boundaries.
+            for frame_index in range(0, count, max(1, round(fps / 4))):
+                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ok, frame = capture.read()
+                if not ok:
+                    continue
+                enlarged = cv2.resize(frame, None, fx=2, fy=2,
+                                       interpolation=cv2.INTER_CUBIC)
+                cv2.imwrite(str(frame_path), enlarged)
+                ocr = _run(["tesseract", str(frame_path), "stdout", "--psm", "11"], timeout=25)
+                if ocr.returncode != 0:
+                    raise ValueError("OCR privacy check could not read a rendered frame")
+                visible = ocr.stdout
+                # OCR can insert spaces around a dot even when the address is
+                # rendered without any; accept that spacing and fail closed.
+                if (re.search(r"[A-Z0-9._%+-]+\s*@\s*[A-Z0-9-]+(?:\s*\.\s*[A-Z0-9-]+)+", visible, re.I)
+                        or re.search(r"enter (?:the )?(?:verification )?code", visible, re.I)):
+                    raise ValueError("Rendered onboarding film contains an account identifier or code-entry screen")
+                checked += 1
+    finally:
+        capture.release()
+    if checked < 2:
+        raise ValueError("Too few frames were checked for account privacy")
+    return checked
 
 
 def automatic_edit(session: Path, *, output: Path | None = None) -> Path:
@@ -548,8 +726,13 @@ def automatic_edit(session: Path, *, output: Path | None = None) -> Path:
             home_ref = session / "screenshots" / Path(item["screenshot"]).name
     reference = cv2.imread(str(home_ref)) if home_ref and home_ref.is_file() else None
     capture = cv2.VideoCapture(str(result))
-    capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) - 2))
-    frame_ok, frame = capture.read()
+    count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_ok, frame = False, None
+    for offset in (2, 5, 10, 15):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, count - offset))
+        frame_ok, frame = capture.read()
+        if frame_ok:
+            break
     capture.release()
     if reference is None or not frame_ok:
         result.unlink(missing_ok=True)
@@ -563,9 +746,15 @@ def automatic_edit(session: Path, *, output: Path | None = None) -> Path:
     if home_delta > 0.22:
         result.unlink(missing_ok=True)
         raise ValueError("Rendered film does not finish on the confirmed home screen")
+    try:
+        privacy_frames = _scan_rendered_privacy(result)
+    except ValueError:
+        result.unlink(missing_ok=True)
+        raise
     report = {
         "status": "passed", "output": str(result), "duration_seconds": seconds,
         "width": 720, "height": 1280, "final_home_pixel_delta": round(home_delta, 4),
+        "privacy_frames_checked": privacy_frames,
         "selection": json.loads(plan_path.read_text(encoding="utf-8"))["automatic_checks"],
     }
     (session / "onboarding_local_proof_qa.json").write_text(
