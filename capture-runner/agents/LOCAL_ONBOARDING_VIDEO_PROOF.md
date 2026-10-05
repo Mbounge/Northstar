@@ -66,6 +66,9 @@ local run writes `splash_local_proof.mp4`, `splash_local_poster.png`, and
 `splash_local_proof_qa.json`. The splash remains separate from onboarding and
 is available even if onboarding later stops. If the launch does not contain a
 verifiable app-only splash, no splash asset is fabricated.
+The splash export keeps the device screen's aspect ratio and original launch
+timing. It discards launch-transition edge artifacts and does not pad the
+picture or hold extra frames before or after the captured splash.
 
 To rerun the automatic editor on a saved completed session:
 

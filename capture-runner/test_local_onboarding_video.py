@@ -101,6 +101,8 @@ class LocalOnboardingVideoTests(unittest.TestCase):
                         cv2.circle(frame, (90, 160), 44, (105, 38, 55), -1)
                         cv2.putText(frame, "M", (74, 175), cv2.FONT_HERSHEY_SIMPLEX,
                                     1.2, (255, 255, 255), 3)
+                        if index < 20:
+                            frame[:, :5] = 240  # fading previous app at the edge
                     else:
                         frame = np.full((320, 180, 3), 235, dtype=np.uint8)
                         for row in range(5):
@@ -121,6 +123,15 @@ class LocalOnboardingVideoTests(unittest.TestCase):
             self.assertGreaterEqual(qa["trim_in"], .5)
             self.assertLess(qa["trim_out"], 1.3)
             self.assertGreaterEqual(qa["privacy_frames_checked"], 2)
+            self.assertGreaterEqual(qa["start_frame"], 20)
+            self.assertLess(qa["duration_seconds"], .6)
+            video = cv2.VideoCapture(str(result))
+            self.assertEqual(int(video.get(cv2.CAP_PROP_FRAME_WIDTH)), 720)
+            self.assertEqual(int(video.get(cv2.CAP_PROP_FRAME_HEIGHT)), 1280)
+            ok, first = video.read()
+            video.release()
+            self.assertTrue(ok)
+            self.assertLess(float(first[:, :10].mean()), 30)
 
     def test_plan_requires_review_and_render_preserves_source_order(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):

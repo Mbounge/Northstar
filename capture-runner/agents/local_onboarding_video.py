@@ -935,6 +935,19 @@ def export_splash(session: Path | str) -> Path:
             outer = np.concatenate((body[:, :40].ravel(), body[:, 230:].ravel()))
             center = body[170:370, 65:205]
             contrast = abs(float(center.mean()) - float(outer.mean()))
+            # A launch transition may leave a bright strip of the previous
+            # surface at the edge while the app logo is already visible.
+            # Wait until both edges match the adjoining app background.
+            edge_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            edge_body = edge_gray[round(frame.shape[0] * .1):round(frame.shape[0] * .9)]
+            edge_width = max(2, round(frame.shape[1] * .02))
+            inner_width = max(edge_width + 2, round(frame.shape[1] * .07))
+            edge_delta = max(
+                abs(float(edge_body[:, :edge_width].mean())
+                    - float(edge_body[:, edge_width:inner_width].mean())),
+                abs(float(edge_body[:, -edge_width:].mean())
+                    - float(edge_body[:, -inner_width:-edge_width].mean())),
+            )
             changed_from_launch = float(np.mean(np.abs(gray.astype(float)
                                                         - first_gray.astype(float))) / 255)
             candidates.append(
@@ -942,6 +955,7 @@ def export_splash(session: Path | str) -> Path:
                 and float(outer.std()) < 25
                 and contrast > 9
                 and changed_from_launch > 0.11
+                and edge_delta < 1.5
             )
     finally:
         capture.release()
@@ -964,15 +978,21 @@ def export_splash(session: Path | str) -> Path:
     if not runs:
         raise ValueError("No distinct app-only splash and following screen were verified")
     start_frame, end_frame = runs[0]
-    # Stop before the next screen starts to draw; the final frame is held for
-    # playback, so even one leaked welcome frame would dominate the export.
-    end_frame = max(start_frame + max(6, round(fps * 0.25)),
-                    end_frame - round(fps * 0.1))
-    start, end = start_frame / fps, end_frame / fps
+    # The candidate run ends at the first non-splash frame. Keep the actual
+    # splash through its final frame, without an artificial cloned hold.
+    timestamps_result = _run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "frame=best_effort_timestamp_time", "-of", "csv=p=0", str(source),
+    ], timeout=30)
+    if timestamps_result.returncode != 0:
+        raise ValueError("Could not read launch frame timing")
+    timestamps = [float(line) for line in timestamps_result.stdout.splitlines() if line.strip()]
+    if len(timestamps) <= end_frame:
+        raise ValueError("Launch frame timing is incomplete")
+    start, end = timestamps[start_frame], timestamps[end_frame]
     output = session / "splash_local_proof.mp4"
     poster = session / "splash_local_poster.png"
-    scale = "scale=720:1280:force_original_aspect_ratio=decrease,"
-    scale += "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x10111f"
+    scale = "scale=-2:1280"
     with tempfile.TemporaryDirectory(prefix="northstar_splash_", dir=session) as temp:
         temp_dir = Path(temp)
         film_temp = temp_dir / "splash.mp4"
@@ -980,10 +1000,8 @@ def export_splash(session: Path | str) -> Path:
         result = _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                        "-i", str(source),
                        "-vf", f"trim=start_frame={start_frame}:end_frame={end_frame},"
-                       "setpts=N/(30*TB)," + scale + ","
-                       "tpad=start_mode=clone:start_duration=0.2:"
-                       "stop_mode=clone:stop_duration=0.45,format=yuv420p",
-                       "-an", "-r", "30", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                       "setpts=PTS-STARTPTS," + scale + ",format=yuv420p",
+                       "-an", "-fps_mode", "vfr", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                        "-movflags", "+faststart", str(film_temp)], timeout=120)
         if result.returncode != 0:
             raise ValueError(f"Could not render app splash: {result.stderr.strip()}")
@@ -994,20 +1012,16 @@ def export_splash(session: Path | str) -> Path:
         if not poster_ok:
             raise ValueError("Could not render the splash poster")
         height, width = poster_frame.shape[:2]
-        ratio = min(720 / width, 1280 / height)
-        resized = cv2.resize(poster_frame, (round(width * ratio), round(height * ratio)))
-        poster_canvas = np.full((1280, 720, 3), (31, 17, 16), dtype=np.uint8)
-        top = (1280 - resized.shape[0]) // 2
-        left = (720 - resized.shape[1]) // 2
-        poster_canvas[top:top + resized.shape[0], left:left + resized.shape[1]] = resized
-        if not cv2.imwrite(str(poster_temp), poster_canvas):
+        poster_width = round((width * 1280 / height) / 2) * 2
+        poster_frame = cv2.resize(poster_frame, (poster_width, 1280))
+        if not cv2.imwrite(str(poster_temp), poster_frame):
             raise ValueError("Could not save the splash poster")
         ocr = _run(["tesseract", str(poster_temp), "stdout", "--psm", "11"], timeout=25)
         if ocr.returncode != 0 or _contains_private_text(ocr.stdout):
             raise ValueError("Splash poster did not pass the account privacy check")
         duration = _duration(film_temp)
         checked = _scan_rendered_privacy(film_temp)
-        if duration < 0.5 or checked < 2:
+        if duration < 0.25 or checked < 2:
             raise ValueError("Splash output did not pass duration or privacy checks")
         os.replace(film_temp, output)
         os.replace(poster_temp, poster)
