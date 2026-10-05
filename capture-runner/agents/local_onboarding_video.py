@@ -443,10 +443,11 @@ def _visible_ranges(path: Path) -> list[tuple[float, float]]:
                 start = None
         if start is not None and duration - start >= 0.18:
             ranges.append((max(0.0, start - 0.04), duration))
-        # A momentary low-detail animation is not worth a hard cut.
+        # A momentary low-detail animation is part of the page change, not a
+        # gap to excise. Removing it produced visible jumps within one tap.
         merged = []
         for start, end in ranges:
-            if merged and start - merged[-1][1] < 0.25:
+            if merged and start - merged[-1][1] < 0.9:
                 merged[-1] = (merged[-1][0], end)
             else:
                 merged.append((start, end))
@@ -599,7 +600,11 @@ def create_automatic_plan(session: Path | str) -> Path:
                     ranges = [(max(start, first), min(end, last))
                               for start, end in ranges if min(end, last) - max(start, first) >= 0.18]
             else:
-                ranges = _compress_static_ranges(session / clip["file"], visible_ranges)
+                # Short device bursts already contain the tap and its real
+                # response. Cutting a brief still moment can remove the only
+                # frames that connect two screens. Compress only long waits.
+                ranges = (visible_ranges if _duration(session / clip["file"]) < 4
+                          else _compress_static_ranges(session / clip["file"], visible_ranges))
             clip["keep_ranges"] = [
                 {"trim_in": start, "trim_out": end}
                 for start, end in ranges
@@ -711,6 +716,9 @@ def render(session: Path | str, *, output: Path | None = None) -> Path:
         segments = []
         provenance = []
         segment_number = 0
+        dissolve = 0.38
+        previous_real_duration = None
+        previous_number = None
         for clip in selected:
             number = int(clip["number"])
             source = burst_by_number.get(number)
@@ -734,15 +742,25 @@ def render(session: Path | str, *, output: Path | None = None) -> Path:
                     raise ValueError(f"Clip {number} has an invalid trim range")
                 segment_number += 1
                 segment = temp_dir / f"segment_{segment_number:04d}.mp4"
+                real_duration = end - start
+                # Some Android screenrecords have under a second of media
+                # despite a much longer real capture. Hold the next burst's
+                # first settled frame long enough to read before its tap.
+                lead = (dissolve if previous_real_duration is None or previous_number == number else
+                        max(dissolve, min(1.25, 1.8 - previous_real_duration)))
                 visual_filters = [
                     "fps=30", "scale=720:1280:force_original_aspect_ratio=decrease",
                     "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x10111f",
                     *_redaction_filters(regions),
                     *_typing_progress_filters(source, start, end),
+                    # Blend only held, already-redacted boundary frames. The
+                    # real tap and app animation remain at their recorded pace.
+                    f"tpad=start_mode=clone:start_duration={lead:.3f}:"
+                    f"stop_mode=clone:stop_duration={dissolve}",
                     "format=yuv420p",
                 ]
                 command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                           "-ss", str(start), "-i", str(path), "-t", str(end - start),
+                           "-ss", str(start), "-t", str(end - start), "-i", str(path),
                            "-vf", ",".join(visual_filters),
                            "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                            "-movflags", "+faststart", str(segment)]
@@ -752,18 +770,54 @@ def render(session: Path | str, *, output: Path | None = None) -> Path:
                 segments.append(segment)
                 provenance.append({"number": number, "source": str(path),
                                    "trim_in": start, "trim_out": end,
+                                   "lead_seconds": round(lead, 3),
                                    "redacted_fields": len(regions),
                                    "label": clip.get("label", "")})
-        concat = temp_dir / "concat.txt"
-        concat.write_text("".join(f"file '{segment}'\n" for segment in segments), encoding="utf-8")
-        result = _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                       "-f", "concat", "-safe", "0", "-i", str(concat),
-                       "-c", "copy", "-movflags", "+faststart", str(output)], timeout=120)
+                previous_real_duration = real_duration
+                previous_number = number
+        if len(segments) == 1:
+            shutil.copyfile(segments[0], output)
+            result = subprocess.CompletedProcess([], 0, "", "")
+        else:
+            inputs = [part for segment in segments for part in ("-i", str(segment))]
+            graph = []
+            transitions = []
+            elapsed = _duration(segments[0])
+            previous = "[0:v]"
+            for index, segment in enumerate(segments[1:], 1):
+                label = f"[blend{index}]"
+                offset = elapsed - dissolve
+                prior_source = burst_by_number[provenance[index - 1]["number"]]
+                next_source = burst_by_number[provenance[index]["number"]]
+                omitted_seconds = (float(next_source["started_at"])
+                                   - float(prior_source["ended_at"])
+                                   if next_source.get("started_at") and prior_source.get("ended_at")
+                                   else 0)
+                # A long private verification gap is a real edit in time.
+                # Dip through the app's dark background instead of visually
+                # superimposing account entry and the post-auth screen.
+                transition = "fadeblack" if omitted_seconds > 60 else "fade"
+                graph.append(
+                    f"{previous}[{index}:v]xfade=transition={transition}:"
+                    f"duration={dissolve}:offset={offset:.6f}{label}"
+                )
+                transitions.append({"from": provenance[index - 1]["number"],
+                                    "to": provenance[index]["number"],
+                                    "style": transition})
+                previous = label
+                elapsed = offset + _duration(segment)
+            graph.append(f"{previous}tpad=stop_mode=clone:stop_duration=0.7,format=yuv420p[v]")
+            result = _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                           *inputs, "-filter_complex", ";".join(graph),
+                           "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "medium",
+                           "-crf", "18", "-movflags", "+faststart", str(output)], timeout=240)
         if result.returncode != 0:
-            raise ValueError(f"ffmpeg could not join selected clips: {result.stderr.strip()}")
+            raise ValueError(f"ffmpeg could not blend selected clips: {result.stderr.strip()}")
     (session / "onboarding_local_proof_sources.json").write_text(
         json.dumps({"rendered_at": _utc_now(), "output": str(output),
-                    "clips": provenance}, indent=2) + "\n", encoding="utf-8")
+                    "clips": provenance,
+                    "transitions": transitions if len(segments) > 1 else []},
+                   indent=2) + "\n", encoding="utf-8")
     return output
 
 

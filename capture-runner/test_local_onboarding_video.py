@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 from local_onboarding_video import (
-    OnboardingBurstRecorder, _is_placeholder_burst, _private_or_verification_step,
+    OnboardingBurstRecorder, _duration, _is_placeholder_burst, _private_or_verification_step,
     _redaction_filters, _scan_rendered_privacy,
     automatic_edit, create_plan, render,
 )
@@ -97,8 +97,27 @@ class LocalOnboardingVideoTests(unittest.TestCase):
             result = render(session)
             self.assertTrue(result.is_file())
             self.assertGreater(result.stat().st_size, 1000)
+            # A page change must blend through real held boundary frames,
+            # without truncating the source action to make room for the edit.
+            self.assertGreater(_duration(result), 2.7)
+            import cv2
+            capture = cv2.VideoCapture(str(result))
+            capture.set(cv2.CAP_PROP_POS_MSEC, 1570)
+            ok, midpoint = capture.read()
+            capture.release()
+            self.assertTrue(ok)
+            self.assertGreater(float(midpoint[:, :, 0].mean()), 30)  # blue
+            self.assertGreater(float(midpoint[:, :, 2].mean()), 30)  # red
             provenance = json.loads((session / "onboarding_local_proof_sources.json").read_text())
             self.assertEqual([clip["number"] for clip in provenance["clips"]], [1, 2])
+            self.assertEqual(provenance["transitions"][0]["style"], "fade")
+            entries[0]["ended_at"] = 10.0
+            entries[1]["started_at"] = 100.0
+            (session / "local_video_bursts.jsonl").write_text(
+                "".join(json.dumps(entry) + "\n" for entry in entries))
+            render(session)
+            provenance = json.loads((session / "onboarding_local_proof_sources.json").read_text())
+            self.assertEqual(provenance["transitions"][0]["style"], "fadeblack")
             plan["clips"].reverse()
             plan_path.write_text(json.dumps(plan))
             with self.assertRaisesRegex(ValueError, "original capture order"):
