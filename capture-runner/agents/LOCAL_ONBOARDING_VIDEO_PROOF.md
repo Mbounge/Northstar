@@ -35,6 +35,9 @@ identity profile if the chosen app needs them, exactly as for an ordinary local
 onboarding run. The agent creates `data/onboarding_<app>_<date>/` by default.
 The proof adds `local_video_bursts/` and `local_video_bursts.jsonl` there.
 `--local-video-bursts` is never passed by the production supervisor.
+Before recording a launch, the local recorder confirms Android Home has
+replaced the previous foreground app. This keeps another app's content out of
+new launch bursts.
 
 The recorder skips external verification and discards a burst if another app
 has focus at its end. Planned text entry stays in the motion recording so the
@@ -48,18 +51,32 @@ experiment on a synthetic test account and do not upload or publish raw files.
 After a completed local run, the agent automatically selects the forward
 journey, skips launch footage when the first app action is available, removes
 paired exploratory scrolls, repeated unchanged actions, ungrounded credential
-steps, external verification, and placeholder-only clips. Static holds and loading gaps
-are trimmed within the selected bursts. It then renders the film and validates
+steps, external verification, and placeholder-only clips. Brief in-app page
+changes stay intact; the editor gives short bursts enough time to read and
+blends across separate recordings. It then renders the film and validates
 its format, duration, final Home frame, and sampled frames for visible account
 identifiers or verification-code entry. It writes `onboarding_local_proof.mp4`,
 `onboarding_local_proof_sources.json`, and `onboarding_local_proof_qa.json` in
 the session. Incomplete or uncertain runs fail closed without a finished film.
 The QA file records the taps and typed-input events that actually made the cut.
 
+The launch is also checked independently for a short, distinct app splash.
+When it can be isolated from Android Home and the first settled screen, the
+local run writes `splash_local_proof.mp4`, `splash_local_poster.png`, and
+`splash_local_proof_qa.json`. The splash remains separate from onboarding and
+is available even if onboarding later stops. If the launch does not contain a
+verifiable app-only splash, no splash asset is fabricated.
+
 To rerun the automatic editor on a saved completed session:
 
 ```sh
 /opt/anaconda3/bin/python3 local_onboarding_video.py auto data/onboarding_<app>_<date>
+```
+
+To export or recheck just the splash from a saved launch burst:
+
+```sh
+/opt/anaconda3/bin/python3 local_onboarding_video.py splash data/onboarding_<app>_<date>
 ```
 
 The source manifest traces each shot back to its original burst. The editor

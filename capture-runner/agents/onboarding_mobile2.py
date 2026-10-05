@@ -12328,6 +12328,12 @@ if __name__ == "__main__":
     finally:
         if agent.local_video_recorder is not None:
             agent.local_video_recorder.close()
+            try:
+                from local_onboarding_video import export_splash
+                splash = export_splash(agent.data_dir)
+                print(f"   ✨ Automatic local app splash: {splash}")
+            except Exception as exc:
+                print(f"   ⚠️ Local app splash was not verified: {exc}")
             if agent.status == "COMPLETED_SETTLED":
                 try:
                     from local_onboarding_video import automatic_edit

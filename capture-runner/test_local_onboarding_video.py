@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 from local_onboarding_video import (
     OnboardingBurstRecorder, _duration, _is_placeholder_burst, _private_or_verification_step,
     _redaction_filters, _scan_rendered_privacy,
-    automatic_edit, create_plan, render,
+    automatic_edit, create_plan, export_splash, render,
 )
 
 
@@ -60,6 +60,67 @@ class LocalOnboardingVideoTests(unittest.TestCase):
             self.assertNotIn("private@example.invalid", json.dumps(recorder._actions))
             self.assertEqual(len(recorder._redactions), 1)
             self.assertTrue(_redaction_filters(recorder._redactions))
+
+    def test_launch_records_only_after_android_home_replaces_previous_app(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for previous in ("old.app/Main", "launcher/Home"):
+                recorder = OnboardingBurstRecorder(tmp, "com.example.app")
+                recorder.enabled = True
+                recorder._current_focus = Mock(side_effect=[previous, "launcher/Home"])
+                recorder._start_locked = Mock(side_effect=lambda: (
+                    setattr(recorder, "_process", Mock(poll=lambda: None)) or True))
+                with patch("local_onboarding_video._run",
+                           return_value=subprocess.CompletedProcess([], 0, "", "")) as command:
+                    recorder.before_command(
+                        "monkey -p com.example.app -c android.intent.category.LAUNCHER 1")
+                command.assert_called_once()
+                self.assertEqual(command.call_args.args[0][-4:],
+                                 ["shell", "input", "keyevent", "3"])
+                recorder._start_locked.assert_called_once()
+
+    def test_splash_export_excludes_previous_app_and_saves_separate_poster(self):
+        if not all(shutil.which(name) for name in ("ffmpeg", "ffprobe", "tesseract")):
+            self.skipTest("video tooling is unavailable")
+        import cv2
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            session = Path(tmp)
+            burst_dir = session / "local_video_bursts"
+            burst_dir.mkdir()
+            source = burst_dir / "burst_0001.mp4"
+            writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"mp4v"),
+                                     30, (180, 320))
+            try:
+                for index in range(60):
+                    if index < 15:
+                        frame = np.full((320, 180, 3), 255, dtype=np.uint8)
+                        cv2.putText(frame, "verification code", (5, 150),
+                                    cv2.FONT_HERSHEY_SIMPLEX, .45, (0, 0, 0), 1)
+                    elif index < 35:
+                        frame = np.zeros((320, 180, 3), dtype=np.uint8)
+                        cv2.circle(frame, (90, 160), 44, (105, 38, 55), -1)
+                        cv2.putText(frame, "M", (74, 175), cv2.FONT_HERSHEY_SIMPLEX,
+                                    1.2, (255, 255, 255), 3)
+                    else:
+                        frame = np.full((320, 180, 3), 235, dtype=np.uint8)
+                        for row in range(5):
+                            cv2.rectangle(frame, (15, 60 + row * 38),
+                                          (165, 85 + row * 38), (40, 40, 40), 2)
+                    writer.write(frame)
+            finally:
+                writer.release()
+            (session / "local_video_bursts.jsonl").write_text(json.dumps({
+                "number": 1, "eligible": True,
+                "file": str(source.relative_to(session)),
+                "actions": [{"kind": "launch"}],
+            }) + "\n")
+            result = export_splash(session)
+            self.assertTrue(result.is_file())
+            self.assertTrue((session / "splash_local_poster.png").is_file())
+            qa = json.loads((session / "splash_local_proof_qa.json").read_text())
+            self.assertGreaterEqual(qa["trim_in"], .5)
+            self.assertLess(qa["trim_out"], 1.3)
+            self.assertGreaterEqual(qa["privacy_frames_checked"], 2)
 
     def test_plan_requires_review_and_render_preserves_source_order(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):

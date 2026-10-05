@@ -78,14 +78,17 @@ class OnboardingBurstRecorder:
                     continue
         return max(numbers, default=0) + 1
 
-    def _focused_on_app(self) -> bool:
+    def _current_focus(self) -> str:
         try:
             result = _run(self._adb("shell", "dumpsys", "window"), timeout=8)
-            focused = next((line for line in result.stdout.splitlines()
-                            if "mCurrentFocus=" in line), "")
-            return result.returncode == 0 and self.package in focused
+            return (next((line for line in result.stdout.splitlines()
+                          if "mCurrentFocus=" in line), "")
+                    if result.returncode == 0 else "")
         except (OSError, subprocess.TimeoutExpired):
-            return False
+            return ""
+
+    def _focused_on_app(self) -> bool:
+        return self.package in self._current_focus()
 
     def _screenrecord_pids(self) -> set[str]:
         try:
@@ -163,6 +166,23 @@ class OnboardingBurstRecorder:
                     return
                 if self._process is not None and self._process.poll() is not None:
                     self._finish_locked("screenrecord_ended")
+                if kind == "launch" and self._process is None:
+                    # The previous foreground app may contain private account
+                    # content. Put Android Home underneath the launch before
+                    # recording; the splash extractor will discard Home.
+                    previous = self._current_focus()
+                    home = _run(self._adb("shell", "input", "keyevent", "3"), timeout=5)
+                    if not previous or home.returncode != 0:
+                        return
+                    for _ in range(12):
+                        focus = self._current_focus()
+                        is_home = "launcher" in focus.lower() or "/home" in focus.lower()
+                        if focus and is_home and self.package not in focus:
+                            break
+                        time.sleep(0.1)
+                    else:
+                        print("      ⚠️ Local splash skipped: Android Home was not confirmed")
+                        return
                 if self._process is None and not self._start_locked():
                     return
                 self._actions.append({
@@ -853,8 +873,7 @@ def _scan_rendered_privacy(path: Path) -> int:
                 visible = ocr.stdout
                 # OCR can insert spaces around a dot even when the address is
                 # rendered without any; accept that spacing and fail closed.
-                if (re.search(r"[A-Z0-9._%+-]+\s*@\s*[A-Z0-9-]+(?:\s*\.\s*[A-Z0-9-]+)+", visible, re.I)
-                        or re.search(r"enter (?:the )?(?:verification )?code", visible, re.I)):
+                if _contains_private_text(visible):
                     raise ValueError("Rendered onboarding film contains an account identifier or code-entry screen")
                 checked += 1
     finally:
@@ -862,6 +881,146 @@ def _scan_rendered_privacy(path: Path) -> int:
     if checked < 2:
         raise ValueError("Too few frames were checked for account privacy")
     return checked
+
+
+def _contains_private_text(visible: str) -> bool:
+    return bool(
+        re.search(r"[A-Z0-9._%+-]+\s*@\s*[A-Z0-9-]+(?:\s*\.\s*[A-Z0-9-]+)+", visible, re.I)
+        or re.search(r"(?:enter (?:the )?|your |copy )(?:verification )?code", visible, re.I)
+    )
+
+
+def export_splash(session: Path | str) -> Path:
+    """Save the real app splash separately, never the preceding foreground app.
+
+    A launch recording can contain Android Home or an older app before the
+    package appears. Only a distinct, temporary, low-detail branded interval
+    qualifies. Uncertain launches produce no asset rather than a false splash.
+    """
+    import cv2
+    import numpy as np
+    import tempfile
+
+    session = Path(session).expanduser().resolve()
+    launch = next((item for item in _read_bursts(session)
+                   if item.get("eligible") and item.get("file")
+                   and any(action.get("kind") == "launch" for action in item.get("actions", []))), None)
+    if launch is None:
+        raise ValueError("No eligible in-app launch burst was recorded")
+    source = (session / launch["file"]).resolve()
+    if not source.is_relative_to(session) or not source.is_file():
+        raise ValueError("Launch burst is missing or outside the session")
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        raise ValueError("ffmpeg and ffprobe are required to export a splash")
+
+    capture = cv2.VideoCapture(str(source))
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+    count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    if fps <= 0 or count < 12:
+        capture.release()
+        raise ValueError("Launch burst is too short to isolate a splash")
+    first_gray = None
+    candidates = []
+    try:
+        for index in range(count):
+            ok, frame = capture.read()
+            if not ok:
+                break
+            small = cv2.resize(frame, (270, 600))
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            if first_gray is None:
+                first_gray = gray
+            body = gray[30:570]
+            edges = float(np.mean(cv2.Canny(body, 60, 140) > 0))
+            outer = np.concatenate((body[:, :40].ravel(), body[:, 230:].ravel()))
+            center = body[170:370, 65:205]
+            contrast = abs(float(center.mean()) - float(outer.mean()))
+            changed_from_launch = float(np.mean(np.abs(gray.astype(float)
+                                                        - first_gray.astype(float))) / 255)
+            candidates.append(
+                0.001 < edges < 0.022
+                and float(outer.std()) < 25
+                and contrast > 9
+                and changed_from_launch > 0.11
+            )
+    finally:
+        capture.release()
+
+    runs = []
+    beginning = None
+    for index, accepted in enumerate(candidates + [False]):
+        if accepted and beginning is None:
+            beginning = index
+        elif not accepted and beginning is not None:
+            if runs and beginning - runs[-1][1] <= round(fps * 0.15):
+                runs[-1] = (runs[-1][0], index)
+            else:
+                runs.append((beginning, index))
+            beginning = None
+    # The first settled app screen must follow the splash in the same burst.
+    runs = [(start, end) for start, end in runs
+            if end - start >= max(6, round(fps * 0.25))
+            and end < len(candidates) - round(fps * 0.1)]
+    if not runs:
+        raise ValueError("No distinct app-only splash and following screen were verified")
+    start_frame, end_frame = runs[0]
+    # Stop before the next screen starts to draw; the final frame is held for
+    # playback, so even one leaked welcome frame would dominate the export.
+    end_frame = max(start_frame + max(6, round(fps * 0.25)),
+                    end_frame - round(fps * 0.1))
+    start, end = start_frame / fps, end_frame / fps
+    output = session / "splash_local_proof.mp4"
+    poster = session / "splash_local_poster.png"
+    scale = "scale=720:1280:force_original_aspect_ratio=decrease,"
+    scale += "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=0x10111f"
+    with tempfile.TemporaryDirectory(prefix="northstar_splash_", dir=session) as temp:
+        temp_dir = Path(temp)
+        film_temp = temp_dir / "splash.mp4"
+        poster_temp = temp_dir / "poster.png"
+        result = _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                       "-i", str(source),
+                       "-vf", f"trim=start_frame={start_frame}:end_frame={end_frame},"
+                       "setpts=N/(30*TB)," + scale + ","
+                       "tpad=start_mode=clone:start_duration=0.2:"
+                       "stop_mode=clone:stop_duration=0.45,format=yuv420p",
+                       "-an", "-r", "30", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                       "-movflags", "+faststart", str(film_temp)], timeout=120)
+        if result.returncode != 0:
+            raise ValueError(f"Could not render app splash: {result.stderr.strip()}")
+        poster_capture = cv2.VideoCapture(str(source))
+        poster_capture.set(cv2.CAP_PROP_POS_FRAMES, (start_frame + end_frame) // 2)
+        poster_ok, poster_frame = poster_capture.read()
+        poster_capture.release()
+        if not poster_ok:
+            raise ValueError("Could not render the splash poster")
+        height, width = poster_frame.shape[:2]
+        ratio = min(720 / width, 1280 / height)
+        resized = cv2.resize(poster_frame, (round(width * ratio), round(height * ratio)))
+        poster_canvas = np.full((1280, 720, 3), (31, 17, 16), dtype=np.uint8)
+        top = (1280 - resized.shape[0]) // 2
+        left = (720 - resized.shape[1]) // 2
+        poster_canvas[top:top + resized.shape[0], left:left + resized.shape[1]] = resized
+        if not cv2.imwrite(str(poster_temp), poster_canvas):
+            raise ValueError("Could not save the splash poster")
+        ocr = _run(["tesseract", str(poster_temp), "stdout", "--psm", "11"], timeout=25)
+        if ocr.returncode != 0 or _contains_private_text(ocr.stdout):
+            raise ValueError("Splash poster did not pass the account privacy check")
+        duration = _duration(film_temp)
+        checked = _scan_rendered_privacy(film_temp)
+        if duration < 0.5 or checked < 2:
+            raise ValueError("Splash output did not pass duration or privacy checks")
+        os.replace(film_temp, output)
+        os.replace(poster_temp, poster)
+
+    (session / "splash_local_proof_qa.json").write_text(json.dumps({
+        "status": "passed", "source_burst": int(launch["number"]),
+        "source": str(source), "trim_in": round(start, 3), "trim_out": round(end, 3),
+        "start_frame": start_frame, "end_frame": end_frame,
+        "duration_seconds": round(duration, 3), "privacy_frames_checked": checked,
+        "poster_privacy_checked": True,
+        "output": str(output), "poster": str(poster),
+    }, indent=2) + "\n", encoding="utf-8")
+    return output
 
 
 def automatic_edit(session: Path | str, *, output: Path | None = None) -> Path:
@@ -953,14 +1112,22 @@ def main() -> int:
     auto_parser = commands.add_parser("auto", help="Select, render, and validate the onboarding film automatically")
     auto_parser.add_argument("session", type=Path)
     auto_parser.add_argument("--output", type=Path)
+    splash_parser = commands.add_parser("splash", help="Export a verified app-only splash and poster")
+    splash_parser.add_argument("session", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "plan":
             path = create_plan(args.session, force=args.force)
         elif args.command == "render":
             path = render(args.session, output=args.output)
+        elif args.command == "splash":
+            path = export_splash(args.session)
         else:
             path = automatic_edit(args.session, output=args.output)
+            try:
+                export_splash(args.session)
+            except ValueError as exc:
+                print(f"Local splash not exported: {exc}", file=sys.stderr)
         print(path)
         return 0
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
