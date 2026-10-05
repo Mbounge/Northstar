@@ -12,6 +12,7 @@ import React, {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SessionViewer } from "@/components/session-viewer";
 import { ExecutiveReport } from "@/components/executive-report";
+import { VideoOverview } from "@/components/video-overview";
 import { FlowsViewer } from "@/components/flows-viewer";
 import { BrandKitViewer } from "@/components/brand-kit-viewer";
 import { AppStoreViewer } from "@/components/app-store-viewer";
@@ -433,6 +434,23 @@ export function UnifiedDashboard({
     loadViewerData,
   ]);
 
+  const hasVideoOverview =
+    mode === "onboarding" &&
+    Array.isArray(activeData?.media) &&
+    activeData.media.some(
+      (asset: any) =>
+        asset?.role === "onboarding_journey" &&
+        asset?.kind === "video" &&
+        typeof asset?.url === "string" &&
+        asset.url.startsWith("https://")
+    );
+
+  useEffect(() => {
+    if (activeTab === "overview" && hasVideoOverview && !activeData?.flowsData) {
+      void loadFlowsData({ visible: false });
+    }
+  }, [activeTab, activeData?.flowsData, hasVideoOverview, loadFlowsData]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -624,14 +642,27 @@ export function UnifiedDashboard({
         </div>
 
         <TabsContent value="overview" className="m-0 outline-none data-[state=inactive]:hidden pt-2">
-          <div className="max-w-6xl mx-auto w-full pb-16">
+          <div className={`${hasVideoOverview ? "max-w-7xl" : "max-w-6xl"} mx-auto w-full pb-16 px-4 sm:px-6`}>
             {canRenderOverview ? (
-              <ExecutiveReport
-                key={`exec-${platform}-${mode}`}
-                intel={activeData.sessionIntel}
-                steps={activeData.steps || []}
-                mode={mode}
-              />
+              hasVideoOverview ? (
+                <VideoOverview
+                  key={`video-overview-${platform}-${mode}`}
+                  appName={appData.appName}
+                  intel={activeData.sessionIntel}
+                  media={activeData.media}
+                  flowsData={activeData.flowsData}
+                  steps={activeData.steps || []}
+                  onOpenFlows={() => handleSubTabChange("mobbin")}
+                  onOpenResearch={() => { void loadViewerData({ visible: false }); }}
+                />
+              ) : (
+                <ExecutiveReport
+                  key={`exec-${platform}-${mode}`}
+                  intel={activeData.sessionIntel}
+                  steps={activeData.steps || []}
+                  mode={mode}
+                />
+              )
             ) : null}
           </div>
         </TabsContent>

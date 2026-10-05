@@ -32,6 +32,7 @@ export interface SessionData {
   sessionIntel: any;
   flowsData: any;
   steps: any[];
+  media?: Array<{ role: string; kind: string; url?: string; duration_seconds?: number }>;
 }
 
 export interface PlatformViews {
@@ -520,7 +521,7 @@ export async function getAppDetails(
   const [sessionsResult, appMetaResult] = await Promise.all([
     supabase
       .from("app_sessions")
-      .select("platform, session_type, ux_grade, total_screens, session_intel")
+      .select("platform, session_type, ux_grade, total_screens, session_intel, media:flows_data->media")
       .eq("tenant_id", tenantId)
       .ilike("app_name", appName),
 
@@ -552,6 +553,7 @@ export async function getAppDetails(
     sessionIntel: sess.session_intel || null,
     flowsData: null,
     steps: [],
+    media: Array.isArray(sess.media) ? sess.media : [],
   });
 
   const getSessByPlatformAndType = (

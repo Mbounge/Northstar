@@ -23,9 +23,11 @@ function Badge({ children, className }: { children: React.ReactNode; className?:
   );
 }
 
-function Pill({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+function Pill({ active, onClick, icon, label, editorial = false }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; editorial?: boolean }) {
   return (
-    <button onClick={onClick} className={cn("flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all duration-200 whitespace-nowrap", active ? "bg-white shadow-sm text-zinc-900 border-zinc-200 dark:bg-white/[0.07] dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] dark:border-white/10" : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/50 dark:hover:text-zinc-300 dark:hover:bg-white/[0.03] border border-transparent")}>
+    <button onClick={onClick} className={editorial
+      ? cn("flex shrink-0 items-center gap-2 border-b-2 px-1 pb-4 pt-2 text-[13px] font-semibold transition-colors whitespace-nowrap", active ? "border-[#7655bb] text-[#301d58] dark:border-[#ba9cff] dark:text-white" : "border-transparent text-[#7a718c] hover:text-[#392760] dark:text-[#9e95ad] dark:hover:text-white")
+      : cn("flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all duration-200 whitespace-nowrap", active ? "bg-white shadow-sm text-zinc-900 border-zinc-200 dark:bg-white/[0.07] dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] dark:border-white/10" : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/50 dark:hover:text-zinc-300 dark:hover:bg-white/[0.03] border border-transparent")}>
       {icon} {label}
     </button>
   );
@@ -49,7 +51,7 @@ function StatBlock({ label, value, sub, accent }: { label: string; value: string
   );
 }
 
-export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps?: any[], mode: "onboarding" | "browsing" }) {
+export function ExecutiveReport({ intel, steps = [], mode, presentation = "standard" }: { intel: any, steps?: any[], mode: "onboarding" | "browsing"; presentation?: "standard" | "editorial" }) {
   const [tab, setTab] = useState<"strategy" | "friction" | "patterns" | "glossary">("strategy");
   const [viewingScreens, setViewingScreens] = useState<number[] | null>(null);
   const [showAllFeatures, setShowAllFeatures] = useState(false);
@@ -212,7 +214,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
   };
 
   return (
-    <div className="max-w-[1400px] mx-auto font-[system-ui] text-zinc-900 dark:text-zinc-100 pb-12 relative flex flex-col gap-6 transition-colors duration-300">
+    <div className={cn("max-w-[1400px] mx-auto font-[system-ui] text-zinc-900 dark:text-zinc-100 pb-12 relative flex flex-col transition-colors duration-300", presentation === "editorial" ? "gap-9 video-overview-analysis" : "gap-6")}>
       
       {/* DEVICE MOCKUP SCREEN MODAL */}
       {viewingScreens && (
@@ -245,15 +247,15 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
       )}
 
       {/* NAVIGATION TABS */}
-      <nav className="flex gap-1 overflow-x-auto pb-1 shrink-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <Pill active={tab === "strategy"} onClick={() => setTab("strategy")} icon={<Target className="w-3.5 h-3.5 text-violet-500 dark:text-violet-400" />} label="Strategy & Architecture" />
-        <Pill active={tab === "friction"} onClick={() => setTab("friction")} icon={<Activity className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />} label={isTeardown ? "UX Quality Score" : "UX & Grade"} />
-        <Pill active={tab === "patterns"} onClick={() => setTab("patterns")} icon={<Layers className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" />} label="UX & Dark Patterns" />
-        <Pill active={tab === "glossary"} onClick={() => setTab("glossary")} icon={<BookOpen className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />} label="Glossary" />
+      <nav className={cn("flex overflow-x-auto shrink-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]", presentation === "editorial" ? "gap-7 border-b border-[#3d2b60]/15 dark:border-white/10" : "gap-1 pb-1")} aria-label="Research sections">
+        <Pill editorial={presentation === "editorial"} active={tab === "strategy"} onClick={() => setTab("strategy")} icon={<Target className="w-3.5 h-3.5 text-violet-500 dark:text-violet-400" />} label={presentation === "editorial" ? "Strategy" : "Strategy & Architecture"} />
+        <Pill editorial={presentation === "editorial"} active={tab === "friction"} onClick={() => setTab("friction")} icon={<Activity className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />} label={presentation === "editorial" ? "Experience" : isTeardown ? "UX Quality Score" : "UX & Grade"} />
+        <Pill editorial={presentation === "editorial"} active={tab === "patterns"} onClick={() => setTab("patterns")} icon={<Layers className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" />} label={presentation === "editorial" ? "Patterns" : "UX & Dark Patterns"} />
+        <Pill editorial={presentation === "editorial"} active={tab === "glossary"} onClick={() => setTab("glossary")} icon={<BookOpen className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />} label={presentation === "editorial" ? "Terms" : "Glossary"} />
       </nav>
 
       {/* EXECUTIVE SUMMARY */}
-      <section className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-blue-50 via-white to-slate-50 dark:from-[#0c1425] dark:via-[#0f1a2e] dark:to-[#111827] border border-black/[0.06] dark:border-white/[0.04] shadow-lg dark:shadow-xl shrink-0 p-6 transition-colors duration-300">
+      {presentation === "standard" && <section className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-blue-50 via-white to-slate-50 dark:from-[#0c1425] dark:via-[#0f1a2e] dark:to-[#111827] border border-black/[0.06] dark:border-white/[0.04] shadow-lg dark:shadow-xl shrink-0 p-6 transition-colors duration-300">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(59,130,246,0.12),transparent)] dark:bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(59,130,246,0.08),transparent)]" />
           <div className="flex items-start gap-4 relative">
             <div className="shrink-0 w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 flex items-center justify-center"><FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" /></div>
@@ -262,7 +264,7 @@ export function ExecutiveReport({ intel, steps = [], mode }: { intel: any, steps
                 <p className="text-[14px] leading-relaxed text-zinc-800 dark:text-blue-50/90 font-medium max-w-5xl">{executive_summary}</p>
             </div>
           </div>
-      </section>
+      </section>}
 
       {/* ============================================================== */}
       {/* 1. STRATEGY & ARCHITECTURE TAB                                 */}
