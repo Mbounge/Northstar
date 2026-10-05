@@ -40,7 +40,7 @@ class OnboardingBurstRecorder:
     """
 
     def __init__(self, session_dir: str | Path, package: str, *, context=None,
-                 post_roll: float = 2.5, adb: str | None = None):
+                 post_roll: float = 4.0, adb: str | None = None):
         self.session = Path(session_dir).expanduser().resolve()
         self.burst_dir = self.session / "local_video_bursts"
         self.burst_dir.mkdir(parents=True, exist_ok=True)
