@@ -650,7 +650,6 @@ export function UnifiedDashboard({
                   appName={appData.appName}
                   intel={activeData.sessionIntel}
                   media={activeData.media}
-                  flowsData={activeData.flowsData}
                   steps={activeData.steps || []}
                   onOpenFlows={() => handleSubTabChange("mobbin")}
                   onOpenResearch={() => { void loadViewerData({ visible: false }); }}

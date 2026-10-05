@@ -8,14 +8,7 @@ type VideoAsset = {
   role: string;
   kind: string;
   url?: string;
-  duration_seconds?: number;
 };
-
-function formatDuration(seconds?: number) {
-  if (!Number.isFinite(seconds)) return null;
-  const rounded = Math.round(seconds as number);
-  return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
-}
 
 function firstThought(value: unknown) {
   if (typeof value !== "string") return null;
@@ -25,12 +18,11 @@ function firstThought(value: unknown) {
 }
 
 export function VideoOverview({
-  appName, intel, media, flowsData, steps, onOpenFlows, onOpenResearch,
+  appName, intel, media, steps, onOpenFlows, onOpenResearch,
 }: {
   appName: string;
   intel: any;
   media: VideoAsset[];
-  flowsData: any;
   steps: any[];
   onOpenFlows: () => void;
   onOpenResearch: () => void;
@@ -42,6 +34,8 @@ export function VideoOverview({
   const [isPlaying, setIsPlaying] = useState(true);
   const [showFullSummary, setShowFullSummary] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const readSectionRef = useRef<HTMLElement>(null);
+  const summaryWasExpanded = useRef(false);
   const researchLoaded = useRef(false);
   const activeAsset = reel ?? (segment === "splash" ? splash : journey);
   const insight = firstThought(intel?.app_architecture?.key_architectural_insight)
@@ -49,14 +43,27 @@ export function VideoOverview({
     ?? firstThought(intel?.executive_summary);
   const summary = typeof intel?.executive_summary === "string" ? intel.executive_summary.trim() : "";
   const summaryLead = summary.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ") || insight;
-  const screenCount = Number(flowsData?.screen_catalog?.length) || null;
-  const duration = reel?.duration_seconds ?? (splash?.duration_seconds ?? 0) + (journey?.duration_seconds ?? 0);
 
   useEffect(() => {
     if (researchLoaded.current) return;
     researchLoaded.current = true;
     onOpenResearch();
   }, [onOpenResearch]);
+
+  useEffect(() => {
+    if (showFullSummary) {
+      summaryWasExpanded.current = true;
+      return;
+    }
+    if (!summaryWasExpanded.current) return;
+    const frame = requestAnimationFrame(() => {
+      readSectionRef.current?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "start",
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showFullSummary]);
 
   if (!journey) return null;
 
@@ -80,11 +87,7 @@ export function VideoOverview({
           </div>
           <h1 className="max-w-[12ch] text-[clamp(2.8rem,5vw,5.2rem)] font-semibold leading-[1.04] tracking-[-0.065em]">{appName}, from the first tap.</h1>
           <p className="mt-7 max-w-[54ch] text-[16px] leading-[1.7] text-[#49425e] dark:text-[#c4bdd8] sm:text-[17px]">{insight || "Watch the captured onboarding experience, then explore the screens and research behind it."}</p>
-          <div className="mt-9 flex flex-wrap gap-x-7 gap-y-3 text-[12px] font-medium text-[#655e77] dark:text-[#a9a1bd]">
-            {screenCount !== null && <span><strong className="mr-1 text-[#241a42] dark:text-[#e9e2ff]">{screenCount}</strong> captured screens</span>}
-            {formatDuration(duration) && <span><strong className="mr-1 text-[#241a42] dark:text-[#e9e2ff]">{formatDuration(duration)}</strong> edited film</span>}
-          </div>
-          <button type="button" onClick={onOpenFlows} className="group mt-10 inline-flex min-h-11 items-center gap-3 rounded-full bg-[#5b3da5] px-6 text-[13px] font-semibold text-white transition-colors hover:bg-[#4b2f91] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[#5b3da5] dark:bg-[#ad92f7] dark:text-[#160c31] dark:hover:bg-[#c2adff]">
+          <button type="button" onClick={onOpenFlows} className="group mt-9 inline-flex min-h-11 items-center gap-3 rounded-full bg-[#5b3da5] px-6 text-[13px] font-semibold text-white transition-colors hover:bg-[#4b2f91] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[#5b3da5] dark:bg-[#ad92f7] dark:text-[#160c31] dark:hover:bg-[#c2adff]">
             Explore the full flow <ArrowRight aria-hidden="true" className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </button>
         </div>
@@ -100,7 +103,7 @@ export function VideoOverview({
           </div>
         </div>
       </section>
-      <section className="grid gap-8 border-b border-[#261c43]/10 py-16 dark:border-white/10 lg:grid-cols-[minmax(230px,0.36fr)_minmax(0,1fr)] lg:gap-16" aria-labelledby="overview-read-heading">
+      <section ref={readSectionRef} className="grid scroll-mt-6 gap-8 border-b border-[#261c43]/10 py-16 dark:border-white/10 lg:grid-cols-[minmax(230px,0.36fr)_minmax(0,1fr)] lg:gap-16" aria-labelledby="overview-read-heading">
         <div>
           <div className="mb-4 text-[11px] font-bold uppercase tracking-[0.22em] text-[#7054aa] dark:text-[#bda6ff]">The read</div>
           <h2 id="overview-read-heading" className="max-w-[13ch] text-[clamp(2rem,3vw,3.25rem)] font-semibold leading-[1.12] tracking-[-0.05em]">What the experience reveals.</h2>
