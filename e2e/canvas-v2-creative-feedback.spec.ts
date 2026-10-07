@@ -73,3 +73,10 @@ test('adding an inspiration rail retains saved native screen coordinates and liv
   expect(await position()).toEqual(before);
   await expect(page.frameLocator('iframe[title="GRAET · creative review"]').getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
 });
+
+test('runtime checks reject clipped, transparent and covered controls and hold short transitions', async ({ page }) => {
+  await page.goto('/canvas-v2-e2e/codex');
+  await page.getByLabel('Message North Star').fill('screen reachability');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('Hidden and covered controls were rejected; the reachable control produced three distinct 80ms motion frames.', { exact: true })).toBeVisible({ timeout: 90000 });
+});

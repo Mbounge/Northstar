@@ -52,6 +52,31 @@ test('product review keeps current screen/reference pixels instead of exhausting
   assert.equal(context.hasProductWork(), false);
   assert.deepEqual(JSON.parse(context.packet('Deleted').text).productWork, []);
 });
+
+test('opening and completion motion evidence coexist, with a bounded sequence history', () => {
+  const context = new DiscoveryReviewContext();
+  const text = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });
+  context.tool('canvas_screen', {}, [text({ committed: true, nodeId: 'screen-multi' })]);
+  const capture = (trigger: string, revision = 0) => {
+    for (const progress of [0, 0.5, 1]) context.tool('canvas_screen_motion_review', { triggerSelector: trigger }, [text({ nodeId: 'screen-multi', motionFrame: progress, state: {} }), { type: 'inputImage', imageUrl: `data:image/png;base64,${trigger}-${revision}-${progress}` }]);
+  };
+  capture('.goal-head'); capture('[data-action="save"]');
+  let packet = context.packet('Opening and completion reviewed');
+  assert.equal(packet.images.length, 6);
+  assert.deepEqual(JSON.parse(packet.text).productWork[0].motionSequences.map((sequence: { trigger: string }) => sequence.trigger), ['.goal-head', '[data-action="save"]']);
+  capture('.goal-head', 1);
+  packet = context.packet('Opening refreshed');
+  assert.equal(packet.images.length, 6);
+  assert.ok(packet.images.some(image => image.type === 'image' && image.url.includes('.goal-head-1-')));
+  assert.ok(!packet.images.some(image => image.type === 'image' && image.url.includes('.goal-head-0-')));
+  capture('#third'); capture('#fourth');
+  packet = context.packet('Bounded history');
+  assert.equal(packet.images.length, 9);
+  assert.equal(JSON.parse(packet.text).productWork[0].motionSequences.length, 3);
+  context.tool('canvas_screen_element', {}, [text({ committed: true, nodeId: 'screen-multi' })]);
+  assert.equal(context.packet('Source changed').images.length, 0);
+  assert.deepEqual(JSON.parse(context.packet('Source changed').text).productWork[0].motionSequences, []);
+});
 test('registered simulations remain references rather than authored screen repair targets', () => {
   const context = new DiscoveryReviewContext();
   context.tool('canvas_insert_simulation', { appName: 'GRAET' }, [{ type: 'inputText', text: JSON.stringify({ committed: true, nodeId: 'original' }) }]);

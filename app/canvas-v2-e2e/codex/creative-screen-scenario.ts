@@ -6,12 +6,13 @@ export class CreativeScreenScenario {
   private step = 0;
   private nodeId = '';
   private flowId = '';
-  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false) {}
+  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false) {}
   start() { this.peer.tool('canvas_read', {}); }
   reply(result: JsonObject) {
     const parts = Array.isArray(result.contentItems) ? result.contentItems.map(object) : [];
     let value: JsonObject = {};
     try { value = object(JSON.parse(string(parts[0]?.text))); } catch { /* fail below */ }
+    if (this.reachability) { this.checkReachability(result, parts, value); return; }
     if (!result.success || value.committed === false) { this.peer.finish('Creative screen failed: ' + (string(parts[0]?.text) || JSON.stringify(value))); return; }
     if (this.flow) {
       switch (this.step++) {
@@ -40,6 +41,24 @@ export class CreativeScreenScenario {
         if (parts.filter(part => part.type === 'inputImage').length !== 3 || new Set(parts.filter(part => part.type === 'inputImage').map(part => part.imageUrl)).size !== 3) { this.peer.finish('Creative screen failed: distinct motion frames missing'); return; }
         this.peer.tool('canvas_review', { nodeId: this.nodeId }); break;
       default: this.peer.finish('Created the screen with a saved product identity and reviewed three distinct motion frames.');
+    }
+  }
+  private checkReachability(result: JsonObject, parts: JsonObject[], value: JsonObject) {
+    if ([3, 4, 5].includes(this.step)) {
+      if (result.success !== false || !string(parts[0]?.text).includes('visible control')) { this.peer.finish('Reachability failed: a hidden or covered control was allowed'); return; }
+    } else if (!result.success || value.committed === false) { this.peer.finish('Reachability failed: ' + string(parts[0]?.text)); return; }
+    switch (this.step++) {
+      case 0: this.peer.tool('canvas_screen', { title: 'Reachability check', width: 390, height: 844, html: '<main><h1>Reachable controls</h1><div class="clip"><button id="clipped">Clipped control</button></div><div class="transparent"><button id="transparent">Transparent control</button></div><button id="covered">Covered control</button><div class="cover">Fixed navigation</div><button id="real">Open highlight</button><div id="highlight"></div></main>', css: 'main{padding:24px}.clip{height:0;overflow:hidden}.clip button{width:200px;height:40px}.transparent{opacity:0}#covered,.cover{position:absolute;left:24px;top:180px;width:200px;height:50px}.cover{z-index:2;background:#ddd}#real{margin-top:180px;padding:16px}#highlight{width:40px;height:40px;background:#1554d7;transform:translateX(0);transition:transform 80ms linear}#highlight.active{transform:translateX(200px)}', javascript: "document.querySelector('#real').addEventListener('click',()=>document.querySelector('#highlight').classList.toggle('active'))", referenceAssetIds: [], summary: 'Create a runtime reachability check' }); break;
+      case 1: this.nodeId = string(value.nodeId); this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'inspect' }); break;
+      case 2:
+        if ((value.controls as JsonObject[]).some(control => ['clipped','transparent','covered'].includes(string(control.id)))) { this.peer.finish('Reachability failed: hidden controls were listed as visible'); return; }
+        this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#clipped' }); break;
+      case 3: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#transparent' }); break;
+      case 4: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#covered' }); break;
+      case 5: this.peer.tool('canvas_screen_motion_review', { nodeId: this.nodeId, triggerSelector: '#real' }); break;
+      default:
+        if (parts.filter(part => part.type === 'inputImage').length !== 3 || new Set(parts.filter(part => part.type === 'inputImage').map(part => part.imageUrl)).size !== 3) { this.peer.finish('Reachability failed: short transition was missed'); return; }
+        this.peer.finish('Hidden and covered controls were rejected; the reachable control produced three distinct 80ms motion frames.');
     }
   }
 }

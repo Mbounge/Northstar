@@ -209,13 +209,21 @@ export class DiscoveryReviewContext {
           this.productScreens.set(id, { ...previous, nodeId: id, title: input.title ?? previous?.title,
             referenceAssetIds: input.referenceAssetIds ?? previous?.referenceAssetIds ?? [],
             simulation: name === 'canvas_insert_simulation' ? { appName: input.appName } : previous?.simulation,
-            reviewed: false, motionFrames: [] });
+            reviewed: false, motionFrames: [], motionSequences: [] });
           // A revised source must not be approved using its previous render.
           for (const key of this.images.keys()) if (key.startsWith(`screen:${id}:`)) this.removeImage(key);
         }
         if (name === 'canvas_screen_motion_review' && value.nodeId && typeof value.motionFrame === 'number') {
-          captureNode = string(value.nodeId); nextImageKey = `screen:${captureNode}:motion:${value.motionFrame}`;
-          this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), motion: object(value.state).motion, motionMethod: object(object(value.state).motionSample).method });
+          captureNode = string(value.nodeId);
+          const trigger = string(object(args).triggerSelector).slice(0, 1000) || 'ongoing';
+          nextImageKey = `screen:${captureNode}:motion:${encodeURIComponent(trigger)}:${value.motionFrame}`;
+          const previous = this.productScreens.get(captureNode);
+          const sequences = (Array.isArray(previous?.motionSequences) ? previous.motionSequences : []).map(object);
+          const current = sequences.find(sequence => sequence.trigger === trigger);
+          const retained = [...sequences.filter(sequence => sequence.trigger !== trigger), { trigger, frames: Array.isArray(current?.frames) ? current.frames : [] }].slice(-3);
+          const triggers = new Set(retained.map(sequence => encodeURIComponent(string(sequence.trigger))));
+          for (const key of this.images.keys()) if (key.startsWith(`screen:${captureNode}:motion:`) && !triggers.has(key.split(':').at(-2)!)) this.removeImage(key);
+          this.productScreens.set(captureNode, { ...previous, motionSequences: retained, motion: object(value.state).motion, motionMethod: object(object(value.state).motionSample).method });
         }
         else if (name === 'canvas_review' && value.nodeId && value.viewport) {
           captureNode = string(value.nodeId); nextImageKey = `screen:${captureNode}:render`;
@@ -229,7 +237,11 @@ export class DiscoveryReviewContext {
       if (part.type === 'inputImage' && url.startsWith('data:image/')) {
         const key = nextImageKey || url;
         const retained = this.image(key, { type: 'image', url }, url.length);
-        if (captureNode && key.includes(':motion:') && retained) { const previous = this.productScreens.get(captureNode); this.productScreens.set(captureNode, { ...previous, motionFrames: [...new Set([...(Array.isArray(previous?.motionFrames) ? previous.motionFrames : []), Number(key.split(':').at(-1))])] }); }
+        if (captureNode && key.includes(':motion:') && retained) {
+          const previous = this.productScreens.get(captureNode), progress = Number(key.split(':').at(-1)), trigger = decodeURIComponent(key.split(':').at(-2)!);
+          this.productScreens.set(captureNode, { ...previous, motionFrames: [...new Set([...(Array.isArray(previous?.motionFrames) ? previous.motionFrames : []), progress])],
+            motionSequences: (Array.isArray(previous?.motionSequences) ? previous.motionSequences : []).map(raw => { const sequence = object(raw); return sequence.trigger === trigger ? { ...sequence, frames: [...new Set([...(Array.isArray(sequence.frames) ? sequence.frames : []), progress])] } : sequence; }) });
+        }
         if (captureNode && key.endsWith(':render') && retained) this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), reviewed: true });
         nextImageKey = '';
       }
