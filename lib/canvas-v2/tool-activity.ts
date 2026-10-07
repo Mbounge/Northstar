@@ -90,6 +90,8 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
         .replace(/\bfrom \.[a-z][\w-]+/gi, 'on the selected control')
         .replace(/\b(?:zero|no) errors?(?:, no| or) overflow(?:, and no active animations)?\b/gi, 'no visible clipping')
         .replace(/\bTokens for\b/g, 'Colors for')
+        .replace(/\bTokens:\s*/g, 'Palette: ')
+        .replace(/`color`/g, '')
         .replace(/#(?:[a-f0-9]{6}|[a-f0-9]{3})\b/gi, 'color')
         .replace(/\bremain (?:at )?\d+(?:\.\d+)?\s*[×x]\s*\d+(?:\.\d+)?(?:\s*px)?/g, 'remain the same size')
         .replace(/\b\d+\s*px gaps\b/gi, 'comfortable spacing')

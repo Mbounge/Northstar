@@ -46,5 +46,6 @@ test("presentation keeps reference links, product names and useful evidence limi
   assert.equal(canvasV2ReadableAgentText('I’m making the last suggestion easier to reach.'), 'I’m making the last suggestion easier to reach.');
   assert.equal(canvasV2TechnicalDetailRequested('Explain how the CSS animation works.'), true);
   assert.equal(canvasV2TechnicalDetailRequested('Make the motion calmer.'), false);
+  assert.equal(canvasV2ReadableAgentText('Tokens: blue `#1251dc`, background `#f1f4f8`.'), 'Palette: blue, background.');
   assert.equal(canvasV2ReadableAgentText('The CSS uses SVG icons.', true), 'The CSS uses SVG icons.');
 });
