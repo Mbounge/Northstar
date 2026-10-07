@@ -1,3 +1,4 @@
+import { canvasV2ScreenBoundAssets, type CanvasV2InteractiveScreen } from '../interactive-screen';
 import { statSync } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -200,7 +201,7 @@ export class DiscoveryReviewContext {
             const hasSource = typeof source.html === 'string';
             this.productScreens.set(id, { ...previous, nodeId: id, title: screen.title, width: screen.width, height: screen.height,
               simulation: screen.simulation, productIdentityId: screen.productIdentityId, referenceAssetIds: screen.referenceAssetIds,
-              ...(hasSource ? { boundAssetIds: [...new Set((string(source.html) + string(source.css) + string(source.javascript)).match(/northstar-asset:[\w:.-]+/g) ?? [])] } : {}) });
+              ...(hasSource ? { boundAssetIds: canvasV2ScreenBoundAssets(source as unknown as CanvasV2InteractiveScreen) } : {}) });
           }
         }
         if ((name === 'canvas_screen' || name === 'canvas_screen_element' || name === 'canvas_insert_simulation') && value.committed === true && value.nodeId) {

@@ -663,6 +663,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const transientSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
   const removalPreviewSnapshotsRef = useRef<NativeRemovalPreviewSnapshot[]>([]);
   const [scene, setScene] = useState<CanvasV2NativeSceneDocument>();
+  const placementReferenceSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
   const [compileError, setCompileError] = useState<string>();
   const [compiledRevisionId, setCompiledRevisionId] = useState<string>();
   const activePointerRef = useRef<{ pointerId: number; startX: number; startY: number; captured?: boolean; element?: CanvasV2InspectableElement } | undefined>(undefined);
@@ -676,6 +677,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const needsCompiler = sceneOverride?.revisionId !== revision.id && compiledRevisionId !== revision.id;
   const runtimeDocument = useMemo(() => needsCompiler ? buildCanvasV2RuntimeDocument(revision) : "", [needsCompiler, revision]);
   const renderedScene = sceneOverride ?? scene;
+  if (renderedScene) placementReferenceSceneRef.current = renderedScene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
   const bySourceId = useMemo(() => renderedScene ? canvasV2NativeSceneSourceNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
   const protectedNodeKey = JSON.stringify([selectedNodeId, selectedNodeIds]);
@@ -732,7 +734,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       if (sequence !== compileSequenceRef.current
         || compilerRef.current?.contentDocument !== document
         || document.documentElement.dataset.canvasV2RevisionId !== revision.id) return;
-      const next = compileCanvasV2NativeScene({ document, revision, width, height });
+      const next = compileCanvasV2NativeScene({ document, revision, width, height, placementReferenceScene: placementReferenceSceneRef.current });
       setScene(next);
       setCompileError(undefined);
       // The compiler is a measurement boundary, not a second live canvas.

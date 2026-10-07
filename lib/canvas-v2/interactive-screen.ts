@@ -3,6 +3,21 @@ import { simulatorForApp } from '../preview/simulator-registry';
 import type { CanvasV2EvidenceAsset } from './types';
 
 export const SCREEN_ATTRIBUTE = 'data-canvas-v2-screen';
+export const SCREEN_ASSET_PATTERN = /northstar-asset:([\w%~.!*:-]+)/g;
+export const isCanvasV2ScreenAssetId = (id: unknown): id is string => typeof id === 'string' && Boolean(id.trim()) && id.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(id);
+export function canvasV2ScreenAssetToken(id: string) { return encodeURIComponent(id).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()); }
+function normalizeScreenAssetTokens(source: string, ids: readonly string[]) {
+  for (const id of [...ids].sort((a,b) => b.length-a.length)) {
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    source = source.replace(new RegExp('northstar-asset:' + escaped + '(?![\\w%~.!*:-])', 'g'), 'northstar-asset:' + canvasV2ScreenAssetToken(id));
+  }
+  return source;
+}
+export function canvasV2ScreenBoundAssets(screen: CanvasV2InteractiveScreen) {
+  const tokens = new Map((screen.referenceAssetIds ?? []).flatMap(id => [[id,id], [canvasV2ScreenAssetToken(id),id]] as Array<[string,string]>));
+  return [...new Set([...(screen.html+'\n'+screen.css+'\n'+screen.javascript).matchAll(SCREEN_ASSET_PATTERN)].flatMap(match => tokens.has(match[1]) ? [tokens.get(match[1])!] : []))];
+}
+
 export interface CanvasV2InteractiveScreen {
   version: 1;
   productIdentityId?: string;
@@ -38,7 +53,7 @@ export function encodeCanvasV2Screen(screen: CanvasV2InteractiveScreen): string 
   return btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(''));
 }
 export function parseCanvasV2Screen(raw: string): CanvasV2InteractiveScreen {
-  if (raw.length > 240_000 || !/^[A-Za-z0-9+/=]+$/.test(raw)) throw new Error('Invalid interactive screen source.');
+  if (raw.length > 1_000_000 || !/^[A-Za-z0-9+/=]+$/.test(raw)) throw new Error('Invalid interactive screen source.');
   return validateCanvasV2Screen(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(raw), c => c.charCodeAt(0)))));
 }
 export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScreen {
@@ -50,7 +65,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
     || typeof screen.css !== 'string' || screen.css.length > 40_000
     || typeof screen.javascript !== 'string' || screen.javascript.length > 40_000
     || !Array.isArray(screen.referenceAssetIds) || screen.referenceAssetIds.length > 100
-    || screen.referenceAssetIds.some(id => typeof id !== 'string' || !/^[\w:.-]{1,240}$/.test(id))) throw new Error('Invalid interactive screen. Use finite viewport dimensions and bounded HTML/CSS/JavaScript.');
+    || screen.referenceAssetIds.some(id => !isCanvasV2ScreenAssetId(id)) || screen.referenceAssetIds.reduce((size,id) => size + (typeof id === 'string' ? id.length : 0), 0) > 24000) throw new Error('Invalid interactive screen. Use finite viewport dimensions and bounded HTML/CSS/JavaScript.');
   if (screen.simulation && (screen.simulation.appName !== 'GRAET' || !simulatorForApp(screen.simulation.appName) || !isGraetPreviewSection(screen.simulation.section) || screen.html !== '<div></div>' || screen.css || screen.javascript || screen.referenceAssetIds.length || screen.width !== 383 || screen.height !== 820)) throw new Error('Registered simulations use their approved runtime and fixed logical viewport; do not supply executable source or URLs.');
   if (screen.productIdentityId !== undefined && (typeof screen.productIdentityId !== 'string' || !/^[\w.-]{1,80}$/.test(screen.productIdentityId) || screen.simulation)) throw new Error('Use an existing product identity for authored screens.');
   // Only the host constructs the document and its sandbox. Source assets remain
@@ -58,10 +73,13 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   if (/<\s*(?:script|iframe|object|embed|base|link|meta|html|head|body)\b|\son[a-z]+\s*=|javascript\s*:/i.test(screen.html)) throw new Error('Use a body HTML fragment, CSS and event listeners in javascript. Embedded documents, scripts and event attributes are not supported.');
   if (/@import|<\/style/i.test(screen.css) || /blob:|data:image\/(?:png|jpe?g|webp|gif);base64/i.test(screen.html + screen.css + screen.javascript)) throw new Error('Use registered northstar-asset handles for images; external stylesheets and temporary image URLs cannot be retained.');
   const refs = new Set(screen.referenceAssetIds);
-  for (const match of (screen.html + '\n' + screen.css + '\n' + screen.javascript).matchAll(/northstar-asset:([\w:.-]+)/g)) {
-    if (!refs.has(match[1])) throw new Error(`Declare referenced image ${match[1]} in referenceAssetIds.`);
+  const html = normalizeScreenAssetTokens(screen.html, [...refs]), css = normalizeScreenAssetTokens(screen.css, [...refs]), javascript = normalizeScreenAssetTokens(screen.javascript, [...refs]);
+  if (html.length > 64000 || css.length > 40000 || javascript.length > 40000) throw new Error('The normalized screen source exceeds its HTML/CSS/JavaScript size budget.');
+  const tokens = new Set([...refs].map(canvasV2ScreenAssetToken));
+  for (const match of (html + '\n' + css + '\n' + javascript).matchAll(SCREEN_ASSET_PATTERN)) {
+    if (!tokens.has(match[1])) throw new Error('Declare and retain the exact asset handle before binding it in a screen.');
   }
-  return { version: 1, ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html: screen.html, css: screen.css, javascript: screen.javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
+  return { version: 1, ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
 }
 export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
   return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { encodeCanvasV2Screen, parseCanvasV2Screen, readCanvasV2Screens, SCREEN_ATTRIBUTE, canvasV2ScreenReviewAssets, validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
-import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, canvasV2ScreenPatch } from '../lib/canvas-v2/interactive-screen-patch';
+import { encodeCanvasV2Screen, parseCanvasV2Screen, readCanvasV2Screens, SCREEN_ATTRIBUTE, canvasV2ScreenReviewAssets, canvasV2ScreenAssetToken, canvasV2ScreenBoundAssets, validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
+import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, canvasV2ScreenPatch, validateCanvasV2ScreenJavaScript } from '../lib/canvas-v2/interactive-screen-patch';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
 import { validateCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from '../lib/canvas-v2/artifact-safety';
 import { applyCanvasV2SourcePatch } from '../lib/canvas-v2/source-patch';
@@ -123,4 +123,34 @@ test('native screen source revision preserves geometry and every neighboring obj
   assert.throws(() => reviseCanvasV2NativeScreen(scene, 'deleted', changed), /deleted/);
   scene.nodes[0].locked = true;
   assert.throws(() => reviseCanvasV2NativeScreen(scene, 'a', changed), /locked/);
+});
+
+
+test('opaque encoded account references survive screen validation, identity binding and actual raster substitution', () => {
+  const id = 'screen:tenant:graet:managing%20career%20tools:' + 'nested%3Aflow:'.repeat(30) + "athlete's(card)";
+  assert.ok(id.length > 240);
+  const input = { ...screen, html: `<img alt="Authentic captured mark" src="northstar-asset:${id}">`, css: `main{background-image:url("northstar-asset:${id}")}`, javascript: '', referenceAssetIds: [id] };
+  const validated = validateCanvasV2Screen(input);
+  assert.equal(validated.html, `<img alt="Authentic captured mark" src="northstar-asset:${canvasV2ScreenAssetToken(id)}">`);
+  assert.deepEqual(validateCanvasV2Screen(validated), validated);
+  assert.deepEqual(parseCanvasV2Screen(encodeCanvasV2Screen(validated)), validated);
+  assert.deepEqual(canvasV2ScreenBoundAssets(validated), [id]);
+  const raster = 'data:image/png;base64,iVBORw0KGgo=';
+  const runtime = buildCanvasV2ScreenRuntime(validated, new Map([[id, raster]]), 'opaque-test');
+  assert.ok(runtime.includes(`src="${raster}"`));
+  assert.ok(runtime.includes(`url("${raster}")`));
+  assert.throws(() => buildCanvasV2ScreenRuntime(validated, new Map(), 'opaque-test'), /retained pixels/);
+  assert.throws(() => validateCanvasV2Screen({ ...input, referenceAssetIds: ['screen:tenant:graet'] }), /exact asset/);
+  assert.throws(() => validateCanvasV2Screen({ ...input, html: '<img src="northstar-asset:photo-extra">', referenceAssetIds: ['photo'] }), /exact asset/);
+});
+
+
+test('screen commits reject JavaScript syntax faults without evaluating the script or hiding saved source', () => {
+  const broken = "const expand=()=>{}document.querySelector('button')";
+  assert.throws(() => validateCanvasV2ScreenJavaScript(broken), /JavaScript syntax error/);
+  assert.throws(() => canvasV2ScreenPatch(root, { ...screen, javascript: broken }, [], { x: 100, y: 100 }), /JavaScript syntax error/);
+  assert.doesNotThrow(() => parseCanvasV2Screen(encodeCanvasV2Screen({ ...screen, javascript: broken })));
+  delete (globalThis as Record<string, unknown>).northstarSyntaxSideEffect;
+  assert.doesNotThrow(() => validateCanvasV2ScreenJavaScript('globalThis.northstarSyntaxSideEffect=true;'));
+  assert.equal((globalThis as Record<string, unknown>).northstarSyntaxSideEffect, undefined);
 });

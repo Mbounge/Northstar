@@ -50,3 +50,26 @@ test('precise feedback preserves live input, saved state, source scope and camer
   await expect(page.getByText('Choose an element to give feedback · Esc to cancel')).toHaveCount(0);
   await expect(page.getByTestId('screen-feedback-target')).toHaveCount(0);
 });
+
+
+test('adding an inspiration rail retains saved native screen coordinates and live state', async ({ page }) => {
+  test.setTimeout(120000);
+  await page.goto('/canvas-v2-e2e/codex');
+  const send = async (message: string) => { await page.getByLabel('Message North Star').fill(message); await page.getByRole('button', { name: 'Send message', exact: true }).click(); };
+  await send('screen creative');
+  await expect(page.getByText('Created the screen with a saved product identity and reviewed three distinct motion frames.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Show on canvas', exact: true }).click();
+  const screen = page.locator('[data-canvas-v2-screen]');
+  const position = () => screen.evaluate(el => [el.style.getPropertyValue('--canvas-v2-native-x'), el.style.getPropertyValue('--canvas-v2-native-y')]);
+  const before = await position();
+  await page.frameLocator('iframe[title="GRAET · creative review"]').getByRole('button', { name: 'Save team', exact: true }).click();
+  await send('creative flow preserve');
+  await expect(page.getByText('Added the full inspiration flow without moving the existing screen.', { exact: true })).toBeVisible({ timeout: 90000 });
+  expect(await position()).toEqual(before);
+  await expect(page.locator('[data-canvas-v2-canonical-flow]')).toHaveCount(1);
+  await send('creative flow preserve');
+  await expect(page.getByText('Added the full inspiration flow without moving the existing screen.', { exact: true })).toHaveCount(2);
+  await expect(page.locator('[data-canvas-v2-canonical-flow]')).toHaveCount(1);
+  expect(await position()).toEqual(before);
+  await expect(page.frameLocator('iframe[title="GRAET · creative review"]').getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+});

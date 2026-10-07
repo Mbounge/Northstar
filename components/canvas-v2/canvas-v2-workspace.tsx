@@ -1489,6 +1489,11 @@ export function CanvasV2Workspace({
         const revision = sharedEngine.current.readCommittedRevision();
         const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: result.evidence, packet });
         const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((item) => item.id === packet.id) ? [packet] : [])];
+        if (insertion.alreadyInserted) {
+          attemptedChatFlowsRef.current.add(key);
+          setFlowPlacement({ message: `${app.name} ${flow.name} is already represented by its complete source rail.` });
+          return;
+        }
         if (!sharedEngine.current.applyManualDocument(insertion.document, `Placed all ${flow.screens.length} ordered ${app.name} ${flow.name} screens on canvas.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error(sharedEngine.current.readManualFailure() || 'The canvas is still finishing another edit.');
         pendingFlowPlacementRef.current = { id: flow.id, key, appName: app.name, flowName: flow.name, screenCount: flow.screens.length };
         setFlowPlacement({ message: `Rendering all ${flow.screens.length} ${app.name} ${flow.name} screens on canvas…` });

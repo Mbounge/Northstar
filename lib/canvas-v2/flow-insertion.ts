@@ -7,6 +7,7 @@ export interface CanvasV2FlowInsertion {
   evidence: CanvasV2EvidenceAsset[];
   regionNodeId: string;
   laneNodeId: string;
+  alreadyInserted?: boolean;
 }
 
 const FLOW_CSS = `
@@ -79,6 +80,16 @@ export function insertCanvasV2CanonicalFlow(input: {
   const screenEvidence = canvasV2CompleteFlowScreens(input.flow, input.evidence);
 
   const parsed = new DOMParser().parseFromString(`<body>${input.document.html}</body>`, "text/html");
+  // Taxonomy paths and complete-session handles can name the same captured
+  // journey. Reuse its ordered source pixels rather than leaving two rails.
+  const expectedSources = screenEvidence.map(asset => asset.url);
+  const sameJourney = [...parsed.querySelectorAll<HTMLElement>('[data-canvas-v2-canonical-flow]')].find(lane => {
+    if (lane.dataset.canvasV2CanonicalFlow === input.flow.id) return true;
+    if (lane.querySelector('.canvas-v2-flow-app')?.textContent?.trim() !== input.app.name) return false;
+    const sources = [...lane.querySelectorAll<HTMLImageElement>('.canvas-v2-flow-screen')].map(image => image.getAttribute('src'));
+    return sources.length === expectedSources.length && sources.every((source, index) => source === expectedSources[index]);
+  });
+  if (sameJourney?.dataset.canvasV2NodeId) return { document: input.document, evidence: mergeEvidence(input.currentEvidence, input.evidence), regionNodeId: sameJourney.closest<HTMLElement>('[data-canvas-v2-evidence-region=canonical]')?.dataset.canvasV2NodeId ?? 'grounded-evidence', laneNodeId: sameJourney.dataset.canvasV2NodeId, alreadyInserted: true };
   const host = parsed.querySelector<HTMLElement>('[data-canvas-v2-node-id="canvas"]') ?? parsed.querySelector<HTMLElement>("main") ?? parsed.body;
   if (host !== parsed.body) host.classList.add("canvas-v2-canvas--evidence-wide");
   let region = parsed.querySelector<HTMLElement>("[data-canvas-v2-evidence-region=canonical]");

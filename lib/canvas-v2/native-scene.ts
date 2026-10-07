@@ -1412,7 +1412,7 @@ export function compileCanvasV2NativeScene(input: {
   const viewportPlacedRoot = fullWorkspaceRoot?.attributes["data-canvas-v2-viewport-placed"] === "true";
   const cohortPlacedNodeIds = new Set<string>();
   const absoluteCohort = fullWorkspaceRoot && !viewportPlacedRoot
-    ? visiblePlacementNodes.filter((node) => !referencedNodeIds.has(node.id) && node.layoutMode === "absolute")
+    ? visiblePlacementNodes.filter((node) => !referencedNodeIds.has(node.id) && node.layoutMode === "absolute" && !node.attributes["data-canvas-v2-scene-layout"])
     : [];
   if (fullWorkspaceRoot && absoluteCohort.length && absoluteCohort.length === visiblePlacementNodes.length - referencedNodeIds.size) {
     const left = Math.min(...absoluteCohort.map((node) => node.geometry.x));

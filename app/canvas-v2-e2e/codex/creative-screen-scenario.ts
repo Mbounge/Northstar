@@ -5,13 +5,24 @@ import { object, string, type JsonObject } from '@/lib/canvas-v2/managed-agent/p
 export class CreativeScreenScenario {
   private step = 0;
   private nodeId = '';
-  constructor(private peer: FixtureCodex, private feedback: boolean) {}
+  private flowId = '';
+  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false) {}
   start() { this.peer.tool('canvas_read', {}); }
   reply(result: JsonObject) {
     const parts = Array.isArray(result.contentItems) ? result.contentItems.map(object) : [];
     let value: JsonObject = {};
     try { value = object(JSON.parse(string(parts[0]?.text))); } catch { /* fail below */ }
     if (!result.success || value.committed === false) { this.peer.finish('Creative screen failed: ' + (string(parts[0]?.text) || JSON.stringify(value))); return; }
+    if (this.flow) {
+      switch (this.step++) {
+        case 0: this.peer.tool('account_read', { operation: 'list-flows', appId: 'app:awin', sessionType: 'onboarding', platform: 'mobile' }); break;
+        case 1: this.flowId = string(object((value.flows as unknown[])[0]).id); this.peer.tool('account_read', { operation: 'flow-screens', appId: 'app:awin', flowId: this.flowId }); break;
+        case 2: this.peer.tool('canvas_read', {}); break;
+        case 3: this.peer.tool('canvas_insert_flow', { flowId: this.flowId, summary: 'Added the complete inspiration rail beside existing screens' }); break;
+        default: this.peer.finish('Added the full inspiration flow without moving the existing screen.');
+      }
+      return;
+    }
     if (this.feedback) {
       if (this.step++ === 0) {
         this.nodeId = string(object(value.screenFeedback).nodeId);

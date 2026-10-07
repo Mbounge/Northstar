@@ -1,3 +1,4 @@
+import { isCanvasV2ScreenAssetId } from './interactive-screen';
 import type { CanvasV2EvidenceAsset } from './types';
 
 /** Design decisions are scoped to the saved canvas, never a global brand preset. */
@@ -22,7 +23,7 @@ export function validateCanvasV2ProductIdentity(value: unknown, evidence?: reado
   }
   if (!input.tokens || typeof input.tokens !== 'object' || Array.isArray(input.tokens) || Object.keys(input.tokens).length > 60
     || Object.entries(input.tokens).some(([key, value]) => !/^--[a-zA-Z][\w-]{0,60}$/.test(key) || typeof value !== 'string' || !value.trim() || value.length > 240 || /[{};<>]|url\s*\(|@import|expression\s*\(/i.test(value))) throw new Error('Use bounded CSS custom properties for product tokens.');
-  if (!Array.isArray(input.referenceAssetIds) || input.referenceAssetIds.length > 100 || input.referenceAssetIds.some(id => typeof id !== 'string' || !/^[\w:.-]{1,240}$/.test(id))) throw new Error('Use retained reference asset IDs for the product identity.');
+  if (!Array.isArray(input.referenceAssetIds) || input.referenceAssetIds.length > 100 || input.referenceAssetIds.some(id => !isCanvasV2ScreenAssetId(id)) || input.referenceAssetIds.reduce((size,id) => size + (typeof id === 'string' ? id.length : 0),0) > 24000) throw new Error('Use retained reference asset IDs for the product identity.');
   if (evidence) for (const id of input.referenceAssetIds) {
     const asset = evidence.find(asset => asset.id === id);
     if (!asset || asset.source?.permission === 'unavailable' || asset.mediaType === 'video') throw new Error('Inspect and retain product references before saving their design identity.');

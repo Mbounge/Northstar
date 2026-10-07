@@ -1,8 +1,17 @@
 import { canvasV2ProductTokenCss, type CanvasV2ProductIdentity } from './product-identity';
+import { parse } from 'next/dist/compiled/acorn';
 import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from './types';
 import { findCanvasV2SourceNodeRange, type CanvasV2SourcePatchOperation } from './source-patch';
 import { canvasV2NativeSceneAbsoluteBounds, type CanvasV2NativeSceneDocument } from './native-scene';
 import { SCREEN_ATTRIBUTE, readCanvasV2Screens, parseCanvasV2Screen, validateCanvasV2Screen, validateCanvasV2ScreenAssets, encodeCanvasV2Screen } from './interactive-screen';
+
+/** Parse without executing model code. Keep saved broken screens readable so
+ * review can diagnose and repair them, but reject new syntax faults at commit. */
+export function validateCanvasV2ScreenJavaScript(source: string) {
+  if (!source.trim()) return;
+  try { parse(source, { ecmaVersion: 'latest', sourceType: 'script' }); }
+  catch (error) { throw new Error(`Screen JavaScript syntax error: ${error instanceof Error ? error.message : 'Invalid browser script'}. Repair the script before committing; existing canvas work is unchanged.`); }
+}
 
 /** A targeted revision changes source only: the user's position/size stay intact. */
 export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: Record<string, unknown>, evidence: readonly CanvasV2EvidenceAsset[], placement: { x: number; y: number }, identities: readonly CanvasV2ProductIdentity[] = []): { nodeId: string; operations: CanvasV2SourcePatchOperation[] } {
@@ -21,6 +30,7 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
     html: input.html ?? previous?.screen.html, css: !previous && identity ? canvasV2ProductTokenCss(identity) + '\n' + css : css, javascript: input.javascript ?? previous?.screen.javascript ?? '',
     referenceAssetIds: [...new Set([...(input.referenceAssetIds ?? previous?.screen.referenceAssetIds ?? []) as string[], ...(!previous && identity ? identity.referenceAssetIds : [])])] });
   validateCanvasV2ScreenAssets(screen, evidence);
+  validateCanvasV2ScreenJavaScript(screen.javascript);
   const encoded = encodeCanvasV2Screen(screen);
   if (previous) {
     const range = findCanvasV2SourceNodeRange(document.html, nodeId);

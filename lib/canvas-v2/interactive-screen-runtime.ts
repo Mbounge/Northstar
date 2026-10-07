@@ -1,4 +1,4 @@
-import { validateCanvasV2Screen, type CanvasV2InteractiveScreen } from './interactive-screen';
+import { validateCanvasV2Screen, canvasV2ScreenAssetToken, SCREEN_ASSET_PATTERN, type CanvasV2InteractiveScreen } from './interactive-screen';
 
 export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'patch-element'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; motionSessionId?: string };
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
@@ -7,8 +7,10 @@ export const SCREEN_PROTOCOL = 'northstar-screen-v1';
  * image bytes are substituted by the host; model code never receives their URLs. */
 export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string) {
   const screen = validateCanvasV2Screen(input);
-  const bind = (source: string) => source.replace(/northstar-asset:([\w:.-]+)/g, (_, id: string) => {
-    const bytes = imageBytes.get(id);
+  const tokens = new Map(screen.referenceAssetIds.map(id => [canvasV2ScreenAssetToken(id), id]));
+  const bind = (source: string) => source.replace(SCREEN_ASSET_PATTERN, (_, token: string) => {
+    const id = tokens.get(token);
+    const bytes = id ? imageBytes.get(id) : undefined;
     if (!bytes || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(bytes)) throw new Error(`Image ${id} has no retained pixels.`);
     return bytes;
   });
@@ -16,6 +18,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
   const boot = `(() => {
     const token=${JSON.stringify(token)}, protocol=${JSON.stringify(SCREEN_PROTOCOL)};
     const errors=[];
+    // Offscreen/background frames can suspend RAF. Review must still respond
+    // without moving the user's camera or tab. Force layout and bound settling.
+    const settle = () => new Promise(resolve => {const timer=setTimeout(resolve,120);requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve()}))});
     let feedbackMode=false, feedbackOutline, motionSession;
     const releaseMotion = () => {const session=motionSession;motionSession=undefined;if(!session)return;clearTimeout(session.timer);for(const {a,time,state,rate} of session.saved){try{if(a.playState==='idle')continue;a.playbackRate=rate;if(state==='idle')a.cancel();else{a.currentTime=time;if(state==='running')a.play();else if(state==='finished')a.finish();else a.pause()}}catch{a.cancel()}}};
     const selectorFor = el => {
@@ -72,7 +77,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         if(command.action==='motion-begin'){
           releaseMotion();
           if(command.selector){const trigger=document.querySelector(command.selector);if(!trigger||!visible(trigger)||trigger.disabled)throw Error('Choose a visible motion trigger.');trigger.click()}
-          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          await settle();void document.body.offsetHeight;
           const saved=document.getAnimations().filter(a=>a.effect instanceof KeyframeEffect && ['running','paused'].includes(a.playState)).slice(0,80).map(a=>({a,time:a.currentTime,state:a.playState,rate:a.playbackRate}));
           for(const {a} of saved)a.pause();
           const id=String(requestId);motionSession={id,saved,timer:setTimeout(releaseMotion,30000)};
@@ -92,7 +97,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         else if(command.action==='fill'){if(!el||!visible(el)||el.disabled||el.readOnly)throw Error('Choose a visible, editable field.');if(!(el instanceof HTMLInputElement||el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement))throw Error('Choose a form field.');el.value=String(command.value??'');el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}
         else if(command.action==='scroll'){(el||window).scrollTo(Number(command.x)||0,Number(command.y)||0)}
         else if(!['inspect','snapshot'].includes(command.action))throw Error('Unknown screen action.');
-        await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+        await settle();void document.body.offsetHeight;
         parent.postMessage({protocol,token,requestId,result:command.action==='snapshot'?snapshot():{...inspect(),element:el?describe(el):undefined}},'*');
       } catch(error){parent.postMessage({protocol,token,requestId,error:String(error)},'*')}
     });
