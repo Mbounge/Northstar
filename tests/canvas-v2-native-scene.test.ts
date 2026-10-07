@@ -23,6 +23,7 @@ import {
   materializeCanvasV2NativeScenePaintedEdges,
   materializeCanvasV2NativeSceneSurfaces,
   normalizeCanvasV2ReactInlineStyle,
+  pruneCanvasV2EmptyGeneratedWrappers,
   promoteCanvasV2AuthoredRelationships,
   projectCanvasV2ObservationToNativeScene,
   reconcileCanvasV2NativeConnectors,
@@ -2125,4 +2126,54 @@ test('product comparisons retain explicit breathing room instead of touching aft
     previous:{placed:{x:100,y:100,width:390,height:844},authored:{x:100,y:100,width:390,height:844},newlyPlaced:false} };
   assert.deepEqual(canvasV2PreferredRootPlacement({...placement,relation:'right'}), {x:586,y:100});
   assert.deepEqual(canvasV2PreferredRootPlacement({...placement,relation:'below'}), {x:100,y:1040});
+});
+
+
+function emptyFlowWrapperFixture() {
+  const source = scene();
+  const leaf = source.nodes[0];
+  leaf.id = leaf.sourceNodeId = 'label'; leaf.parentId = 'identity';
+  const wrapper = (id: string, parentId?: string) => ({ ...structuredClone(leaf), id, sourceNodeId: id, parentId, tagName:'div', kind:'object' as const, childIds:[] as string[], directText:'', content:[] as typeof leaf.content, canonicalEvidence:true, attributes:{'data-canvas-v2-node-id':id,'data-canvas-v2-origin':'research'}, geometry:{...leaf.geometry,width:1900,height:270} });
+  const lane = wrapper('lane'); lane.tagName='article'; lane.attributes['data-canvas-v2-canonical-flow' as keyof typeof lane.attributes]='flow-id';
+  const identity = wrapper('identity','lane'); const sequence=wrapper('sequence','lane');
+  identity.childIds=['label']; identity.content=[{kind:'node',id:'label'}];
+  lane.childIds=['identity','sequence']; lane.content=lane.childIds.map(id=>({kind:'node' as const,id}));
+  source.nodes=[lane,identity,sequence,leaf]; source.rootIds=['lane'];
+  return source;
+}
+
+test('deleting the final flow content removes generated wrappers from scene, source and selection', () => {
+  const source=emptyFlowWrapperFixture();
+  const deleted=applyCanvasV2NativeSceneMutation(source,{kind:'delete',nodeId:'label'});
+  assert.deepEqual(deleted.nodes,[]); assert.deepEqual(deleted.rootIds,[]);
+  assert.doesNotMatch(serializeCanvasV2NativeScene(deleted).html,/identity|sequence|flow-id/);
+  assert.equal(source.nodes.length,4); // Undo retains the complete earlier version.
+});
+
+test('older saved empty flow scaffolds are retired without deleting user frames or other flows', () => {
+  const source=emptyFlowWrapperFixture();
+  source.nodes=source.nodes.filter(node=>node.id!=='label');
+  const identity=source.nodes.find(node=>node.id==='identity')!;identity.childIds=[];identity.content=[];
+  const userFrame={...structuredClone(identity),id:'frame',sourceNodeId:'frame',parentId:undefined,kind:'frame' as const,attributes:{'data-canvas-v2-node-id':'frame','data-canvas-v2-origin':'user'}};
+  const note={...scene().nodes[0],id:'other',sourceNodeId:'other'};
+  source.nodes.push(userFrame,note);source.rootIds.push('frame','other');
+  const removed=pruneCanvasV2EmptyGeneratedWrappers(source);
+  assert.deepEqual(new Set(removed),new Set(['lane','identity','sequence']));
+  assert.deepEqual(source.nodes.map(node=>node.id),['frame','other']);
+  assert.deepEqual(pruneCanvasV2EmptyGeneratedWrappers(source),[]);
+});
+
+test('wrapper cleanup preserves real content, hidden content, painted surfaces and detached human work', () => {
+  for (const state of ['text','hidden','paint','detached']) {
+    const source=emptyFlowWrapperFixture();const leaf=source.nodes.find(node=>node.id==='label')!;
+    if(state==='hidden')leaf.hidden=true;
+    if(state==='paint'){leaf.directText='';leaf.content=[];leaf.inlineStyle={'background-color':'#3366ff'};}
+    if(state==='detached'){
+      const identity=source.nodes.find(node=>node.id==='identity')!;identity.childIds=[];identity.content=[];
+      leaf.parentId=undefined;leaf.detachedFromParentId='identity';source.rootIds.push('label');
+    }
+    pruneCanvasV2EmptyGeneratedWrappers(source);
+    assert.ok(source.nodes.some(node=>node.id==='lane'),state);
+    assert.ok(source.nodes.some(node=>node.id==='label'),state);
+  }
 });

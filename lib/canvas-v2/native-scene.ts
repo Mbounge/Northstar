@@ -1555,6 +1555,7 @@ export function compileCanvasV2NativeScene(input: {
   // root-level canvas object and must not follow its former group later.
   normalizeUserDetachedNodes(compiledScene);
   promoteCanvasV2AuthoredRelationships(compiledScene, authoredRelationshipPromotions);
+  pruneCanvasV2EmptyGeneratedWrappers(compiledScene);
   reconcileCanvasV2NativeConnectors(compiledScene);
   return compiledScene;
 }
@@ -2178,6 +2179,63 @@ function removeNativeSubtree(scene: CanvasV2NativeSceneDocument, id: string): vo
   removeNodeReference(scene, id);
   scene.rootIds = scene.rootIds.filter((rootId) => !remove.has(rootId));
   scene.nodes = scene.nodes.filter((node) => !remove.has(node.id));
+}
+
+/** Retire generated layout scaffolding once it owns no content or paint.
+ * User-created frames/shapes and intentionally hidden content remain real objects.
+ * Applied at deletion and compilation so older saved canvases recover too.
+ */
+export function pruneCanvasV2EmptyGeneratedWrappers(scene: CanvasV2NativeSceneDocument): string[] {
+  const byId = canvasV2NativeSceneNodeMap(scene);
+  const detached = new Map<string, string[]>();
+  for (const node of scene.nodes) if (node.detachedFromParentId) {
+    const children = detached.get(node.detachedFromParentId) ?? [];
+    children.push(node.id); detached.set(node.detachedFromParentId, children);
+  }
+  const payload = new Map<string, boolean>();
+  const checking = new Set<string>();
+  const children = (node: CanvasV2NativeSceneNode) => [...node.childIds, ...(detached.get(node.id) ?? [])];
+  const hasPayload = (id: string): boolean => {
+    if (payload.has(id)) return payload.get(id)!;
+    if (checking.has(id)) return true; // Keep malformed cycles for normal validation.
+    const node = byId.get(id); if (!node) return false;
+    checking.add(id);
+    const keep = Boolean(node.hidden || node.directText?.trim() || node.content.some(part => part.kind === "text" && part.value.trim())
+      || node.evidence || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MEDIA_ATTRIBUTE]
+      || node.attributes["data-canvas-v2-primitive"] || node.attributes["data-canvas-v2-writable"] === "true"
+      || node.attributes["data-canvas-v2-user-edited"]?.includes("create") || node.kind === "frame" || node.locked
+      || ["image", "shape", "connector", "table", "evidence"].includes(node.kind)
+      || canvasV2NativeSceneNodeOwnsVisibleSurface(node)
+      || (!canvasV2NativeSceneNodeUsesHostBackground(node) && (canvasV2CssPaintIsVisible(node.inlineStyle.background ?? node.inlineStyle["background-color"])
+        || canvasV2CssPaintIsVisible(node.resolvedStyle?.["background-color"]) || canvasV2CssPaintIsVisible(node.resolvedStyle?.["background-image"])))
+      || canvasV2NativeScenePaintedEdges(node).length
+      || children(node).some(hasPayload));
+    checking.delete(id); payload.set(id, keep); return keep;
+  };
+  const removed = new Set<string>();
+  const collect = (id: string) => {
+    if (removed.has(id)) return;
+    removed.add(id); const node = byId.get(id); if (node) children(node).forEach(collect);
+  };
+  for (const node of scene.nodes) {
+    const generated = node.canonicalEvidence || node.attributes["data-canvas-v2-canonical-flow"] !== undefined
+      || node.attributes["data-canvas-v2-island-id"] !== undefined || node.attributes["data-canvas-v2-design-region"] !== undefined
+      || ["northstar", "research"].includes(node.attributes["data-canvas-v2-origin"]);
+    if (generated && !node.locked && node.kind !== "root" && ["div", "section", "article", "header", "main", "aside", "nav"].includes(node.tagName)
+      && !hasPayload(node.id)) collect(node.id);
+  }
+  if (!removed.size) return [];
+  // A relationship attached to a retired wrapper has no endpoint left.
+  const sourceIds = new Set([...removed].flatMap(id => byId.get(id)?.sourceNodeId ? [byId.get(id)!.sourceNodeId!] : []));
+  for (const node of scene.nodes) if (node.kind === "connector"
+    && (sourceIds.has(node.attributes["data-canvas-v2-connector-from"]) || sourceIds.has(node.attributes["data-canvas-v2-connector-to"]))) collect(node.id);
+  scene.rootIds = scene.rootIds.filter(id => !removed.has(id));
+  scene.nodes = scene.nodes.filter(node => !removed.has(node.id));
+  for (const node of scene.nodes) {
+    node.childIds = node.childIds.filter(id => !removed.has(id));
+    node.content = node.content.filter(part => part.kind !== "node" || !removed.has(part.id));
+  }
+  return [...removed];
 }
 
 function freezeFlowSiblings(scene: CanvasV2NativeSceneDocument, node: CanvasV2NativeSceneNode): void {
@@ -3508,6 +3566,7 @@ export function applyCanvasV2NativeSceneMutation(
   } else applyAtomicNativeMutation(scene, mutation);
   const atomic = mutation.kind === "batch" ? mutation.mutations : [mutation];
   if (atomic.some((item) => item.kind === "delete")) {
+    pruneCanvasV2EmptyGeneratedWrappers(scene);
     // Connectors are often siblings of the objects they reference, so removing
     // an object's subtree alone leaves a painted, detached relationship behind.
     const survivingIds = new Set(scene.nodes.map((node) => node.sourceNodeId).filter(Boolean));
