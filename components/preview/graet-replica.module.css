@@ -810,3 +810,7 @@
 .playerProfileTabs{display:flex;height:58px;background:white}
 .playerProfileTabs button{width:33.33%;border:0;border-bottom:2px solid transparent;background:white;color:#727b89;font-size:16px;font-weight:700;cursor:pointer}
 .playerProfileTabs button.active{color:#003ce5;border-bottom-color:#003ce5}
+
+/* Canvas uses the simulation’s native viewport; the preview-tab scale stays unchanged. */
+.stageCanvas{width:383px;height:820px;min-height:820px;padding:0;background:transparent}
+.stageCanvas .phone{width:383px;height:820px;min-height:820px;max-height:none;flex:none;border:4px solid #070b17;border-radius:48px;box-shadow:none;transform:none;margin:0}

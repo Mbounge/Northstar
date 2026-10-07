@@ -6,6 +6,8 @@ import { useFloatingPanel } from "./use-floating-panel";
 import { canvasV2PanelAwareInsets } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { CanvasV2MediaInsert } from "./media-insert";
 import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia, measureCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
+import { SCREEN_ATTRIBUTE } from '@/lib/canvas-v2/interactive-screen';
+import { CANVAS_V2_SCREEN_COMMAND } from './interactive-screen';
 import { Play, Pause } from "lucide-react";
 
 import { useCanvasV2PopoverViewport } from "./use-popover-viewport";
@@ -3368,7 +3370,7 @@ export function CanvasV2Workspace({
   };
   workspaceKeydownHandlerRef.current = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+      if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-screen-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
       const command = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (!command && event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
@@ -3465,7 +3467,7 @@ export function CanvasV2Workspace({
   };
   workspacePasteHandlerRef.current = (event: ClipboardEvent) => {
     const target = event.target as HTMLElement | null;
-    if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+    if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-screen-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
     if (!engine.interactionReady || engine.applyingManualEdit) return;
     const snapshot = decodeCanvasV2Clipboard(event.clipboardData?.getData("text/html") ?? "");
     if (snapshot) { event.preventDefault(); internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); return; }
@@ -3621,6 +3623,11 @@ export function CanvasV2Workspace({
   ));
   const selectionIsImage = selectedElements.length === 1 && selectedElement?.kind === "image";
   const selectionHasStroke = selectedElements.length === 1 && (selectedElement?.kind === "line" || selectedElement?.kind === "connector" || selectedElement?.kind === "drawing");
+  const selectedScreen = selectedElements.length === 1 && engine.nativeScene?.nodes.find(node => node.sourceNodeId === selectedElement?.nodeId)?.attributes[SCREEN_ATTRIBUTE];
+  const screenCommand = (command: string) => {
+    const node = workspaceRef.current?.querySelector(`[data-canvas-v2-interactive-screen="${CSS.escape(selectedElement?.nodeId ?? "")}"]`);
+    node?.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND, { detail: command }));
+  };
   const selectionCanFill = selectedElements.length === 1 && !selectionIsText && !selectionIsImage && !selectionHasStroke && !selectionPermanent;
   const selectedVisualStyle = selectedElement?.visualStyle;
   activeSelectionBoundsRef.current = activeSelectionBounds;
@@ -4197,6 +4204,11 @@ export function CanvasV2Workspace({
         className="absolute z-50 flex min-h-10 flex-nowrap whitespace-nowrap [&>button]:shrink-0 [&>span]:shrink-0 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[12px] border border-white/[.08] bg-[#1c1c20]/[.98] px-1.5 text-white shadow-[0_6px_20px_rgba(0,0,0,.22)] backdrop-blur-xl"
         style={contextualToolbarPosition.style}
       >
+        {selectedScreen && <>
+          <button aria-label="Move selected screen" title="Drag to move the screen" onPointerDown={event => beginDirectGesture('move', event)} className="h-7 cursor-move rounded-lg px-2 text-xs hover:bg-white/10">Move</button>
+          <button aria-label="Review screen quality" onClick={() => screenCommand('review')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Review</button>
+          <button aria-label="Reset screen" title="Reset mock data" onClick={() => screenCommand('reset')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Reset</button>
+        </>}
         {selectedElements.length > 1 && <>
           <span className="shrink-0 whitespace-nowrap px-2 text-[11px] font-medium text-white/60">{selectedElements.length} selected</span>
           <div className="mx-0.5 h-5 w-px shrink-0 bg-white/12" />
@@ -4239,7 +4251,7 @@ export function CanvasV2Workspace({
           <button title="Align right" aria-label="Align text right" onClick={() => styleSelection("text-align", "right")} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><AlignRight className="h-4 w-4" /></button>
         </>}
 
-        {selectionCanFill && !selectedElements.some(item => engine.nativeScene?.nodes.find(node => node.sourceNodeId === item.nodeId)?.attributes[MEDIA_ATTRIBUTE]) && <>
+        {selectionCanFill && !selectedScreen && !selectedElements.some(item => engine.nativeScene?.nodes.find(node => node.sourceNodeId === item.nodeId)?.attributes[MEDIA_ATTRIBUTE]) && <>
           {selectionIsShape && <>
             <button title="Shape" aria-label="Change shape" onClick={() => setToolbarMenu((current) => current === "shape" ? undefined : "shape")} className="flex h-7 items-center gap-1.5 rounded-lg px-2 hover:bg-white/[.1]">
               <span className="block h-6 w-6"><CanvasV2PrimitiveThumbnail input={{ primitive: "shape", shapeVariant: selectedElement.shapeVariant }} /></span>

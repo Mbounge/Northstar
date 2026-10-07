@@ -1,3 +1,4 @@
+import { SCREEN_ATTRIBUTE, parseCanvasV2Screen } from './interactive-screen';
 import { canvasV2TextPaintRects, canvasV2TextPaintIntersection, canvasV2ElementPaintBounds } from "./text-paint-bounds";
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { CANVAS_V2_RICH_TEXT_TAGS, canvasV2RichTextStyle, canvasV2SafeTextLink } from "./rich-text";
@@ -254,7 +255,7 @@ export function materializeCanvasV2NativeSceneSurfaces(source: CanvasV2NativeSce
     if (!owner.sourceNodeId || owner.namespace !== "html" || owner.hidden || owner.kind === "root"
       || owner.kind === "group" || owner.attributes["data-canvas-v2-group"] === "true"
       || owner.attributes["data-canvas-v2-section"] === "true"
-      || owner.attributes[MEDIA_ATTRIBUTE] || owner.attributes["data-canvas-v2-crop-frame"] === "true"
+      || owner.attributes[MEDIA_ATTRIBUTE] || owner.attributes[SCREEN_ATTRIBUTE] || owner.attributes["data-canvas-v2-crop-frame"] === "true"
       || owner.attributes["data-canvas-v2-surface-owner"] || canvasV2NativeSceneNodeIsWritable(owner)
       || ["table", "td", "th"].includes(owner.tagName)
       || !owner.childIds.some(id => byId.get(id)?.sourceNodeId)
@@ -476,7 +477,7 @@ export function canvasV2NativeSceneNodeSupportsTextEditing(
   node: CanvasV2NativeSceneNode,
   byId: ReadonlyMap<string, CanvasV2NativeSceneNode>,
 ): boolean {
-  if (node.attributes[MEDIA_ATTRIBUTE]) return false;
+  if ((node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE])) return false;
   if (!node.selectable || node.locked || node.namespace !== "html" || !CANVAS_V2_TEXT_CONTAINER_TAGS.has(node.tagName)) return false;
   const inlineSubtree = (candidate: CanvasV2NativeSceneNode, seen: Set<string>): boolean => {
     if (seen.has(candidate.id)) return false;
@@ -825,7 +826,7 @@ function measureCanvasV2AuthoredRelationship(
 }
 
 function kindFor(element: Element): CanvasV2BoardObjectKind {
-  if (element.hasAttribute(MEDIA_ATTRIBUTE)) return "object";
+  if (element.hasAttribute(MEDIA_ATTRIBUTE) || element.hasAttribute(SCREEN_ATTRIBUTE)) return "object";
   const html = element as HTMLElement;
   const nodeId = html.dataset?.canvasV2NodeId;
   if (html.dataset?.canvasV2WorkspaceRoot === "true" || html.dataset?.canvasV2PermanentRoot === "true" || nodeId === "canvas") return "root";
@@ -2053,7 +2054,7 @@ export function copyCanvasV2NativeSelection(
     delete node.attributes["data-canvas-v2-detached-from"];
     delete node.attributes["data-canvas-v2-detached-index"];
   }
-  const evidenceIds = new Set(snapshot.nodes.flatMap((node) => [...(node.evidence?.id || node.attributes["data-canvas-v2-evidence-id"] ? [node.evidence?.id ?? node.attributes["data-canvas-v2-evidence-id"]] : []), ...(node.attributes[MEDIA_ATTRIBUTE] ? [parseCanvasV2PlayableMedia(node.attributes[MEDIA_ATTRIBUTE]).evidenceId] : [])]));
+  const evidenceIds = new Set(snapshot.nodes.flatMap((node) => [...(node.evidence?.id || node.attributes["data-canvas-v2-evidence-id"] ? [node.evidence?.id ?? node.attributes["data-canvas-v2-evidence-id"]] : []), ...(node.attributes[MEDIA_ATTRIBUTE] ? [parseCanvasV2PlayableMedia(node.attributes[MEDIA_ATTRIBUTE]).evidenceId] : []), ...(node.attributes[SCREEN_ATTRIBUTE] ? parseCanvasV2Screen(node.attributes[SCREEN_ATTRIBUTE]).referenceAssetIds : [])]));
   return { scene: snapshot, evidenceAssets: structuredClone(evidenceAssets.filter((asset) => evidenceIds.has(asset.id))) };
 }
 

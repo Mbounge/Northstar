@@ -1,3 +1,4 @@
+import { readCanvasV2Screens, validateCanvasV2ScreenAssets } from './interactive-screen';
 import { readCanvasV2PlayableMedia } from "./canvas-media";
 import {
   readCanvasV2CanonicalFlowManifests,
@@ -67,6 +68,7 @@ export function validateCanvasV2ArtifactDocument(
       if (!/^<div\b/i.test(match[0])) failures.push("Playable media must use an ordinary div object.");
     }
   } catch (error) { failures.push(error instanceof Error ? error.message : "Invalid playable media."); }
+  try { readCanvasV2Screens(document.html); } catch (error) { failures.push(error instanceof Error ? error.message : "Invalid interactive screen."); }
   const seen = new Set<string>();
   for (const nodeId of nodeIds) {
     if (!nodeId.trim()) failures.push("Stable node identities cannot be empty.");
@@ -85,6 +87,7 @@ export function validateCanvasV2EvidenceBindings(
 ): string[] {
   const failures: string[] = [];
   const approved = new Map(evidence.map((asset) => [asset.id, asset.url]));
+  try { for (const item of readCanvasV2Screens(document.html)) validateCanvasV2ScreenAssets(item.screen, evidence); } catch (error) { failures.push(error instanceof Error ? error.message : "Invalid screen assets."); }
   try { for (const media of readCanvasV2PlayableMedia(document.html)) {
     const asset = evidence.find(item => item.id === media.evidenceId);
     // Inspected GIF pixels are retained as data for model/image placement;

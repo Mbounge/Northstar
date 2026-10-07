@@ -1,6 +1,7 @@
 // Adapted from html-to-image 1.11.13 (MIT). The library's recursive clone
 // monopolizes the main thread on large boards; this version yields between
 // bounded batches while retaining its DOM/style/pseudo-element behavior.
+import { canvasV2ScreenCaptureForClone } from './interactive-screen-capture'
 import type { Options } from 'html-to-image/lib/types'
 import { clonePseudoElements } from 'html-to-image/lib/clone-pseudos'
 import {
@@ -291,6 +292,16 @@ export async function cloneNode<T extends HTMLElement>(
   }
 
   await yieldForInput(budget)
+  if (node instanceof HTMLElement && (node.hasAttribute('data-canvas-v2-screen') || node.hasAttribute('data-canvas-v2-interactive-screen'))) {
+    const pixels = await canvasV2ScreenCaptureForClone(node)
+    if (pixels) {
+      const image = await createImage(pixels)
+      cloneCSSStyle<HTMLElement>(node, image, options)
+      image.style.objectFit = 'contain'
+      image.style.objectPosition = 'top left'
+      return image as unknown as T
+    }
+  }
   return Promise.resolve(node)
     .then((clonedNode) => cloneSingleNode(clonedNode, options, budget) as Promise<T>)
     .then((clonedNode) => cloneChildren(node, clonedNode, options, budget))

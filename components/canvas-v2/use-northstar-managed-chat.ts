@@ -23,6 +23,14 @@ import { mergeCanvasV2EvidencePackets } from '@/lib/canvas-v2/evidence-packets';
 import { insertCanvasV2CanonicalFlow } from '@/lib/canvas-v2/flow-insertion';
 import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
 import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
+import { simulatorForApp } from '@/lib/preview/simulator-registry';
+import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
+import { readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
+import { canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
+import { inspectCanvasV2Screen, captureCanvasV2Screen } from './interactive-screen';
+import type { ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
+import { findCanvasV2OpenPlacement } from '@/lib/canvas-v2/multiplayer-placement';
+import { CANVAS_V2_WORKSPACE } from '@/lib/canvas-v2/workspace-coordinate-space';
 import { citedChatEvidence } from '@/lib/canvas-v2/chat-evidence';
 
 export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; initial?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot; enabled: boolean; endpoint?: string; accountEndpoint?: string; gatewayHandoff?: CanvasV2GatewayHandoff; selectedNodeIds?: string[]; getWorkingContext?: (policy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined; base: ReturnType<typeof useCanvasV2Chat>; engine: ReturnType<typeof useCanvasV2DesignLoop> }) {
@@ -112,7 +120,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             }
           }
         }
-        return accountResultForModel(result, query.limit);
+        return { ...accountResultForModel(result, query.limit), simulations: result.apps.filter(app => simulatorForApp(app.name)).map(app => ({ appName: app.name, sections: ['onboarding', 'home', 'explore', 'ai', 'chat', 'profile'] })) };
       }
       if (action.name === 'inspect_asset') {
         const asset = assets.current.get(string(args.evidenceId)) ?? engine.readCommittedRevision().evidence.find(a => a.id === args.evidenceId);
@@ -148,7 +156,23 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           sourceMedia: sourceMedia.current, viewport: codexCompositionViewport(current.current.getWorkingContext?.("reference")), islands: buildCanvasV2IslandRegistry({ observation }), collaboration: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), previousDirections: compositionHistory.current.map(p => ({ islandId: p.execution.target.islandId, direction: p.direction })), grammar: CODEX_NATIVE_CANVAS_GRAMMAR,
           authoring: 'Use the returned target islandId as both data-canvas-v2-node-id and data-canvas-v2-island-id on a transparent section with data-canvas-v2-design-region, data-canvas-v2-story-role and data-canvas-v2-territory-relation matching the contract. Keep full-composition child wrappers transparent too: the Northstar canvas supplies the backdrop, so do not enclose the composition in a grey sheet, panel, border or shadow. Use local fills only where they help individual objects communicate; honor explicit requests for a standalone page or poster. Keep child objects independently identified. For researched compositions, include inspected source multimedia alongside the ideas it enriches. If retained research assets are empty, read relevant source pages and inspect candidates before composing; try another source if one fails. Representative imagery can enrich the story without proving an exact claim; label it accordingly. Choose typography, dimensions, spacing and hierarchy for the visual story and intended reading scale. Use natural heights and inspect the rendered result for readability. Size and typography suggestions are advisory. Fix text spilling outside cards, clipped content, readable-text collisions and overlaps between independent islands; backgrounds and intentional layers within an object may overlap. These are authoring units, not a command to change the user camera. Place new independent islands near the visible workspace; use an explicit existing anchor only when the narrative needs adjacency. Preserve the strongest insights from the conversation when choosing the visual form. Choose heading structure to suit the composition; a separate title island is optional. Commit one island transaction at a time; choose any number of islands. Use canvas_review to inspect the committed render before developing the next section.' };
       }
+      if (action.name === 'canvas_screen_interact') {
+        const revision = engine.readCommittedRevision();
+        requireCodexCanvasReadRevision(readRevision.current, revision.id);
+        const item = readCanvasV2Screens(revision.document.html).find(item => item.nodeId === args.nodeId);
+        if (!item) throw new Error('That screen no longer exists. Read the current canvas.');
+        const result = await inspectCanvasV2Screen(item.nodeId, item.encoded, { action: string(args.action) as ScreenAction['action'], selector: typeof args.selector === 'string' ? args.selector : undefined, value: typeof args.value === 'string' ? args.value : undefined, x: typeof args.x === 'number' ? args.x : undefined, y: typeof args.y === 'number' ? args.y : undefined }, signal);
+        if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this screen action. Read it again.');
+        return { nodeId: item.nodeId, revisionId: revision.id, ...result };
+      }
       if (action.name === 'canvas_review') {
+        const screenRevision = engine.readCommittedRevision();
+        const screen = args.nodeId ? readCanvasV2Screens(screenRevision.document.html).find(item => item.nodeId === args.nodeId) : undefined;
+        if (screen) {
+          const capture = await captureCanvasV2Screen(screen.nodeId, screen.encoded, signal);
+          if (engine.readCommittedRevision().id !== screenRevision.id) throw new Error('The canvas changed during this capture. Read it again.');
+          return [{ type: 'input_text', text: JSON.stringify({ nodeId: screen.nodeId, revisionId: screenRevision.id, viewport: { width: screen.screen.width, height: screen.screen.height }, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, boundAssetIds: [...new Set((screen.screen.html + screen.screen.css + screen.screen.javascript).match(/northstar-asset:[\w:.-]+/g) ?? [])], qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with workspace_run and retain with workspace_export, then bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }];
+        }
         const observation = await engine.ensureObservation(signal);
         const revision = engine.readCommittedRevision();
         if (!observation || observation.revisionId !== revision.id) throw new Error('The current canvas is still rendering.');
@@ -170,17 +194,19 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const registered = [...new Map([...revision.evidence, ...assets.current.values()].map(a => [a.id, a])).values()];
         accountHandles.current.remember({ apps: [], flows: [], evidence: registered });
         for (const asset of registered) html = html.replaceAll(asset.url, `northstar-asset:${asset.id}`);
+        html = html.replace(/(data-canvas-v2-screen\s*=\s*["'])[^"']*/gi, '$1[Use canvas_read(nodeId) for decoded screen source]');
         const range = args.nodeId ? findCanvasV2SourceNodeRange(html, string(args.nodeId)) : undefined;
         if (args.nodeId && !range) throw new Error('This canvas object no longer exists. Read the current canvas.');
         readRevision.current = revision.id;
-        return { theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: buildCanvasV2IslandRegistry({ observation }), selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
+        const screens = readCanvasV2Screens(revision.document.html).map(({ nodeId, screen }) => ({ nodeId, title: screen.title, width: screen.width, height: screen.height, referenceAssetIds: screen.referenceAssetIds, simulation: screen.simulation, ...(args.nodeId === nodeId ? { source: screen } : {}) }));
+        return { screens, theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: buildCanvasV2IslandRegistry({ observation }), selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
           truncated: !range && html.length > 48_000,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),
           evidence: registered.map(({ id, url, originalUrl, label, mediaType, mimeType, source }) => ({ id, mediaType, mimeType, source, url: `northstar-asset:${id}`, originalUrl: originalUrl ?? (url.startsWith("data:") ? undefined : url), playbackUrl: mediaType === "gif" ? originalUrl : mediaType === "video" ? url : undefined, label })),
           observation: { nodes: observation.spatial.nodes.slice(0, 80), connectors: canvasV2MeasuredConnectorDirectory(observation.spatial.nodes) },
         };
       }
-      if (action.name === 'canvas_edit' || action.name === 'canvas_insert_flow') {
+      if (action.name === 'canvas_edit' || action.name === 'canvas_insert_flow' || action.name === 'canvas_screen' || action.name === 'canvas_insert_simulation') {
         try {
         if (signal.aborted) throw new Error('This action was stopped.');
         if (editActive.current) throw new Error('Another canvas edit is still committing. Read the canvas after it finishes.');
@@ -191,8 +217,32 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const canonical = action.name === 'canvas_insert_flow' ? accountFlows.current.get(string(args.flowId)) : undefined;
         if (action.name === 'canvas_insert_flow' && !canonical) throw new Error('Read the complete flow with account_read flow-screens before inserting it.');
         const insertion = canonical ? insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: evidence, ...canonical, evidence, packet: accountPackets.current.find(p => p.source.sourceId === canonical.flow.id) }) : undefined;
-        const operations = insertion ? [] : parseCodexCanvasPatch(string(args.patch), evidence);
-        const plan = insertion || args.selectionPolicy === 'modify' ? undefined : compositionPlan.current;
+        const isSimulation = action.name === 'canvas_insert_simulation';
+        if (isSimulation) {
+          if (!simulatorForApp(string(args.appName))) throw new Error('There is no registered simulation for this app. You can build a requested screen from its references with canvas_screen.');
+          const response = await fetch(current.current.accountEndpoint ?? '/api/canvas-v2/account', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operation: 'list-apps', query: string(args.appName), limit: 60 }), signal });
+          if (response.redirected) throw new Error('Sign in to access this simulation.');
+          const body = object(await response.json());
+          if (!response.ok || !(body.result as AccountResult | undefined)?.apps.some(app => app.name.toLowerCase() === string(args.appName).toLowerCase())) throw new Error('This app is not available in your account.');
+          if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this action. Read it again.');
+          const section = args.section ?? 'onboarding';
+          if (!isGraetPreviewSection(section)) throw new Error('Choose an available simulation section.');
+          Object.assign(args, { title: 'GRAET · interactive simulation', width: 383, height: 820, html: '<div></div>', css: '', javascript: '', referenceAssetIds: [], simulation: { appName: 'GRAET', section } });
+        }
+        const isScreen = action.name === 'canvas_screen' || isSimulation;
+        const placementContext = current.current.getWorkingContext?.('reference');
+        const placementObservation = isScreen && !args.nodeId ? await engine.ensureObservation(signal) : undefined;
+        if (placementObservation && placementObservation.revisionId !== revision.id) throw new Error('The canvas changed during screen placement. Read it again.');
+        const placement = isScreen && !args.nodeId ? findCanvasV2OpenPlacement({
+          preferred: { x: (placementContext?.visibleBounds.x ?? CANVAS_V2_WORKSPACE.aiAuthoringOriginX) + 80, y: (placementContext?.visibleBounds.y ?? CANVAS_V2_WORKSPACE.aiAuthoringOriginY) + 100 },
+          bounds: { x: 0, y: 0, width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height },
+          footprint: { width: typeof args.width === 'number' ? args.width : 390, height: typeof args.height === 'number' ? args.height + 48 : 892 },
+          obstacles: placementObservation?.spatial.authoredSurface?.placementOccupants?.map(node => node.bounds) ?? [], gap: 96,
+        }) : { x: 0, y: 0 };
+        if (!placement) throw new Error('There is no available space for this screen.');
+        const screenPatch = isScreen ? canvasV2ScreenPatch(revision.document, args, evidence, placement) : undefined;
+        const operations = screenPatch?.operations ?? (insertion ? [] : parseCodexCanvasPatch(string(args.patch), evidence));
+        const plan = isScreen || insertion || args.selectionPolicy === 'modify' ? undefined : compositionPlan.current;
         const planObservation = plan ? await engine.ensureObservation(signal) : undefined;
         if (operations.some(op => 'html' in op && /data-canvas-v2-design-region/.test(op.html)) && !plan) throw new Error('Plan the composition with canvas_plan before authoring its islands.');
         const authored = insertion?.document ?? applyCanvasV2SourcePatch({ previous: revision.document, operations, evidence, workingContext });
@@ -212,7 +262,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
               if (plan) compositionHistory.current = [...compositionHistory.current.filter(p => p.execution.target.islandId !== plan.execution.target.islandId), plan];
               readRevision.current = latest.id;
               compositionPlan.current = undefined;
-              return { committed: true, revisionId: latest.id, summary: string(args.summary), layoutFeedback: current.current.engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, next: 'Inspect the rendered result with canvas_review. Plan the next island or a repair only if needed.' };
+              return { committed: true, ...(screenPatch ? { nodeId: screenPatch.nodeId } : {}), revisionId: latest.id, summary: string(args.summary), layoutFeedback: current.current.engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, next: screenPatch ? 'Use canvas_review(nodeId) for live screen pixels and canvas_screen_interact to test controls. Revise only actual defects.' : 'Inspect the rendered result with canvas_review. Plan the next island or a repair only if needed.' };
             }
             const failure = current.current.engine.readManualFailure(); if (failure) throw new Error(failure);
             await new Promise(resolve => setTimeout(resolve, 50));

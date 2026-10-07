@@ -10,6 +10,8 @@ import type { CanvasV2ElementBounds } from "@/lib/canvas-v2/types";
 
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { CanvasV2PlayableMediaObject } from "./playable-media";
+import { SCREEN_ATTRIBUTE } from "@/lib/canvas-v2/interactive-screen";
+import { CanvasV2InteractiveScreenObject, CanvasV2ScreenAssets, CanvasV2ScreenTheme } from "./interactive-screen";
 
 import {
   createElement,
@@ -548,7 +550,7 @@ const NativeNode = memo(function NativeNode({
   }
   const parent = node.parentId ? byId.get(node.parentId) : undefined;
   if (!canvasV2NativeSceneNodeHasRenderableNamespace(node, parent)) return null;
-  if (!protectedNodeIds.has(node.id) && outsideVisibleCanvas(node, parent, visibleBounds)) return null;
+  if (!node.attributes[SCREEN_ATTRIBUTE] && !protectedNodeIds.has(node.id) && outsideVisibleCanvas(node, parent, visibleBounds)) return null;
   const narrowSelectable = node.selectable && node.namespace === "html" && (node.geometry.width <= 6 || node.geometry.height <= 6);
   const hostOwnsBackground = canvasV2NativeSceneNodeUsesHostBackground(node);
   const canonicalEvidenceImage = node.kind === "image"
@@ -561,10 +563,10 @@ const NativeNode = memo(function NativeNode({
     ? imageResourceRef.current.optimized
     : undefined;
   const safeInlineStyle = normalizeCanvasV2ReactInlineStyle(node.inlineStyle);
-  const style = Object.fromEntries(Object.entries(safeInlineStyle).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
+  const style = Object.fromEntries(Object.entries(safeInlineStyle).filter(([property]) => !(node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE]) || !/^(?:background|border|padding)(?:-|$)|^box-shadow$/.test(property)).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
   const runtimeStyle = {
     ...style,
-    ...(node.attributes[MEDIA_ATTRIBUTE] ? { background: "transparent", backgroundColor: "transparent", border: "none", borderRadius: 0, boxShadow: "none", padding: 0 } : {}),
+    ...((node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE]) ? { background: "transparent", border: "none", borderRadius: 0, boxShadow: "none", padding: 0 } : {}),
     ...(hostOwnsBackground ? {
       background: "transparent",
       boxShadow: "none",
@@ -611,6 +613,7 @@ const NativeNode = memo(function NativeNode({
     } : {}),
     suppressContentEditableWarning: true,
   };
+  if (node.attributes[SCREEN_ATTRIBUTE]) return createElement("div", props, <CanvasV2InteractiveScreenObject nodeId={node.sourceNodeId ?? node.id} encoded={node.attributes[SCREEN_ATTRIBUTE]} />);
   if (node.attributes[MEDIA_ATTRIBUTE]) return createElement("div", props, <CanvasV2PlayableMediaObject nodeId={node.sourceNodeId ?? node.id} key={node.attributes[MEDIA_ATTRIBUTE]} media={parseCanvasV2PlayableMedia(node.attributes[MEDIA_ATTRIBUTE])} />);
   if (VOID_TAGS.has(node.tagName)) return createElement(node.tagName, props);
   if (canvasV2NativeSceneNodeSupportsTextEditing(node, byId)) return createElement(node.tagName, { ...props, dangerouslySetInnerHTML: { __html: canvasV2NativeTextMarkup(node, byId) } });
@@ -1098,7 +1101,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
-    if ((event.target as Element).closest('[data-canvas-v2-media-control]')) {
+    if ((event.target as Element).closest('[data-canvas-v2-media-control], [data-canvas-v2-screen-control]')) {
       const target = targetNode(event.target);
       if (target && inspectionEnabled) onElementSelect?.(inspectNativeNode(target.node, byId, target.element), { additive: false, range: false, directEdit: false });
       activePointerRef.current = undefined;
@@ -1496,7 +1499,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           onElementHover?.(undefined);
         }}
         onClickCapture={(event) => {
-          if ((event.target as Element).closest("[data-canvas-v2-media-control]")) return;
+          if ((event.target as Element).closest("[data-canvas-v2-media-control], [data-canvas-v2-screen-control]")) return;
           const link = (event.target as Element).closest("a[href]");
           if (link) {
             // A canvas click selects; a double-click edits. Neither may unload
@@ -1515,7 +1518,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
         // freshly mounted selection chrome can consume the second click. The
         // public native scene—not arbitrary model HTML—owns entry into edit
         // mode, so every editable AI text leaf follows one deterministic path.
-        onDoubleClickCapture={event => { if (!(event.target as Element).closest("[data-canvas-v2-media-control]")) doubleClick(event); }}
+        onDoubleClickCapture={event => { if (!(event.target as Element).closest("[data-canvas-v2-media-control], [data-canvas-v2-screen-control]")) doubleClick(event); }}
         onWheel={wheel}
         onKeyDown={(event) => {
           if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "a" || (event.target as HTMLElement).closest('[contenteditable="true"], [contenteditable="plaintext-only"]')) return;
@@ -1525,7 +1528,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       >
         <style data-canvas-v2-artifact-styles="scoped">{publicSceneCss}</style>
         <style>{nativeLayoutGuard}</style>
-        {renderedRootNodes}
+        <CanvasV2ScreenTheme.Provider value={theme}><CanvasV2ScreenAssets.Provider value={revision.evidence}>{renderedRootNodes}</CanvasV2ScreenAssets.Provider></CanvasV2ScreenTheme.Provider>
       </div>
       {activeEditable && <CanvasV2RichTextToolbar editable={activeEditable} finish={() => finishTextEditingRef.current()} />}
       {compileError && <div role="alert" className="absolute left-6 top-6 rounded-lg bg-red-950 px-4 py-3 text-sm text-white">Native scene compilation failed: {compileError}</div>}

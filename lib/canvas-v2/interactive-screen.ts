@@ -1,0 +1,61 @@
+import { isGraetPreviewSection, type GraetPreviewSection } from '../preview/graet-navigation';
+import { simulatorForApp } from '../preview/simulator-registry';
+import type { CanvasV2EvidenceAsset } from './types';
+
+export const SCREEN_ATTRIBUTE = 'data-canvas-v2-screen';
+export interface CanvasV2InteractiveScreen {
+  version: 1;
+  simulation?: { appName: 'GRAET'; section: GraetPreviewSection };
+  title: string;
+  width: number;
+  height: number;
+  html: string;
+  css: string;
+  javascript: string;
+  referenceAssetIds: string[];
+}
+
+/** Source travels with the native object, not a separate mutable runtime record. */
+export function encodeCanvasV2Screen(screen: CanvasV2InteractiveScreen): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(validateCanvasV2Screen(screen)));
+  return btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(''));
+}
+export function parseCanvasV2Screen(raw: string): CanvasV2InteractiveScreen {
+  if (raw.length > 240_000 || !/^[A-Za-z0-9+/=]+$/.test(raw)) throw new Error('Invalid interactive screen source.');
+  return validateCanvasV2Screen(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(raw), c => c.charCodeAt(0)))));
+}
+export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScreen {
+  const screen = input as CanvasV2InteractiveScreen;
+  if (!screen || screen.version !== 1 || typeof screen.title !== 'string' || !screen.title.trim() || screen.title.length > 180
+    || !Number.isInteger(screen.width) || screen.width < 240 || screen.width > 1920
+    || !Number.isInteger(screen.height) || screen.height < 240 || screen.height > 1600
+    || typeof screen.html !== 'string' || !screen.html.trim() || screen.html.length > 64_000
+    || typeof screen.css !== 'string' || screen.css.length > 40_000
+    || typeof screen.javascript !== 'string' || screen.javascript.length > 40_000
+    || !Array.isArray(screen.referenceAssetIds) || screen.referenceAssetIds.length > 100
+    || screen.referenceAssetIds.some(id => typeof id !== 'string' || !/^[\w:.-]{1,240}$/.test(id))) throw new Error('Invalid interactive screen. Use finite viewport dimensions and bounded HTML/CSS/JavaScript.');
+  if (screen.simulation && (screen.simulation.appName !== 'GRAET' || !simulatorForApp(screen.simulation.appName) || !isGraetPreviewSection(screen.simulation.section) || screen.html !== '<div></div>' || screen.css || screen.javascript || screen.referenceAssetIds.length || screen.width !== 383 || screen.height !== 820)) throw new Error('Registered simulations use their approved runtime and fixed logical viewport; do not supply executable source or URLs.');
+  // Only the host constructs the document and its sandbox. Source assets remain
+  // opaque handles, so saved objects never hide expiring blob/signed URLs.
+  if (/<\s*(?:script|iframe|object|embed|base|link|meta|html|head|body)\b|\son[a-z]+\s*=|javascript\s*:/i.test(screen.html)) throw new Error('Use a body HTML fragment, CSS and event listeners in javascript. Embedded documents, scripts and event attributes are not supported.');
+  if (/@import|<\/style/i.test(screen.css) || /blob:|data:image\/(?:png|jpe?g|webp|gif);base64/i.test(screen.html + screen.css + screen.javascript)) throw new Error('Use registered northstar-asset handles for images; external stylesheets and temporary image URLs cannot be retained.');
+  const refs = new Set(screen.referenceAssetIds);
+  for (const match of (screen.html + '\n' + screen.css + '\n' + screen.javascript).matchAll(/northstar-asset:([\w:.-]+)/g)) {
+    if (!refs.has(match[1])) throw new Error(`Declare referenced image ${match[1]} in referenceAssetIds.`);
+  }
+  return { version: 1, title: screen.title.trim(), width: screen.width, height: screen.height, html: screen.html, css: screen.css, javascript: screen.javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
+}
+export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
+  return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {
+    const nodeId = /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(match[0])?.[1];
+    if (!/^<div\b/i.test(match[0]) || !nodeId) throw new Error('Interactive screens must be ordinary div objects with a stable node identity.');
+    if (!/^\s*<\/div\s*>/i.test(html.slice(match.index! + match[0].length))) throw new Error('A screen is one native object; place its entire interface inside the screen source, never as invisible canvas children.');
+    return { nodeId, encoded: match[2], screen: parseCanvasV2Screen(match[2]) };
+  });
+}
+export function validateCanvasV2ScreenAssets(screen: CanvasV2InteractiveScreen, evidence: readonly CanvasV2EvidenceAsset[]) {
+  for (const id of screen.referenceAssetIds) {
+    const asset = evidence.find(asset => asset.id === id);
+    if (!asset || asset.source?.permission === 'unavailable' || asset.mediaType === 'video') throw new Error(`Read and retain image ${id} before using it in a screen.`);
+  }
+}
