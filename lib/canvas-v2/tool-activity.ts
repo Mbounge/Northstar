@@ -42,12 +42,17 @@ export function canvasV2ActivitySummary(items: readonly CanvasV2Activity[], acti
  * Keep useful reasoning, decisions and source links; translate implementation vocabulary.
  * Explicit requests about code may retain that vocabulary in answers, never raw diagnostics.
  */
-export function canvasV2ReadableAgentText(text: string, technicalRequested = false): string {
+export function canvasV2ReadableAgentText(text: string, technicalRequested = false, internalNames: readonly { id: string; name: string }[] = []): string {
   const links: string[] = [];
   const protectedText = text.replace(/\[[^\]\n]*\]\([^\s)]+\)|https?:\/\/[^\s)]+/g, link => {
     links.push(link); return `\uE000${links.length - 1}\uE001`;
   });
-  const paragraphs = protectedText.split(/\n\s*\n/).flatMap(paragraph => {
+  let namedText = protectedText.replace(/(?:\*\*|__)?\bID:(?:\*\*|__)?\s*`?[\w-]+`?\s*/g, '');
+  for (const { id, name } of internalNames) {
+    if (!id || id === name) continue;
+    namedText = namedText.replaceAll(`(${id})`, '').replaceAll(`(\`${id}\`)`, '').replaceAll(id, () => name);
+  }
+  const paragraphs = namedText.split(/\n\s*\n/).flatMap(paragraph => {
     // These are harness notices, not findings about the user's product or evidence.
     if (/^(?:The (?:additional check|final visual review) (?:was unavailable|could not finish)|I reached the review limit)/i.test(paragraph.trim())) return [];
     if (/\b(?:Traceback \(most recent|stack trace|credential secret|ECONNRESET|ECONNREFUSED)\b/i.test(paragraph)) return [];
@@ -58,7 +63,8 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
       let readable = sentence
         .replace(/\b(?:data-canvas-v2-[\w-]+|baseRevisionId|sourceVersion|nodeId|appId|flowId|callId|requestId)\b(?:\s*[:=]\s*[`"']?[\w-]+[`"']?)?/g, 'the selected item')
         .replace(/(?:screen-|node-|asset-|flow-|revision-|request-|turn-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, 'the selected item')
-        .replace(/\bID:\s*[\w-]+\s*/g, '')
+        .replace(/(?:\*\*|__)?\bID:(?:\*\*|__)?\s*`?[\w-]+`?\s*/g, '')
+        .replace(/`?[a-z][a-z0-9]*(?:-[a-z0-9]+){2,}`? (?=identity\b)/g, 'product ')
         .replace(/\b(?:canvas_(?:read|edit|review|plan|screen(?:_\w+)?|insert_\w+|arrange_screens|product_identity)|workspace_(?:run|export)|prepare_asset|inspect_asset|generate_image|account_read)\b/g, 'the canvas');
       if (!technicalRequested) readable = readable
         .replace(/\b(?:code-native reference-like|inline SVG|code-native|SVG) icons\b/gi, 'icons')
@@ -82,7 +88,8 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
         .replace(/\b(?:aria-hidden|disabled):?\s*(?:true|false)\b/gi, 'visibility and availability')
         .replace(/\baria-hidden\b/g, 'hidden')
         .replace(/\bfrom \.[a-z][\w-]+/gi, 'on the selected control')
-        .replace(/\b(?:zero|no) errors?, no overflow(?:, and no active animations)?\b/gi, 'no visible clipping')
+        .replace(/\b(?:zero|no) errors?(?:, no| or) overflow(?:, and no active animations)?\b/gi, 'no visible clipping')
+        .replace(/\bTokens for\b/g, 'Colors for')
         .replace(/#(?:[a-f0-9]{6}|[a-f0-9]{3})\b/gi, 'color')
         .replace(/\bremain (?:at )?\d+(?:\.\d+)?\s*[×x]\s*\d+(?:\.\d+)?(?:\s*px)?/g, 'remain the same size')
         .replace(/\b\d+\s*px gaps\b/gi, 'comfortable spacing')
@@ -91,14 +98,14 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
     });
     return sentences.length ? [sentences.join(' ')] : [];
   });
-  return paragraphs.join('\n\n').trim().replace(/\uE000(\d+)\uE001/g, (_, index: string) => links[Number(index)]);
+  return paragraphs.join('\n\n').trim().replace(/ +([,.;:])/g, '$1').replace(/\uE000(\d+)\uE001/g, (_, index: string) => links[Number(index)]);
 }
 
-export function canvasV2ReadableActivity(item: CanvasV2Activity): string {
+export function canvasV2ReadableActivity(item: CanvasV2Activity, internalNames: readonly { id: string; name: string }[] = []): string {
   // Failed attempts remain visible as work being undertaken, never as successful receipts.
-  const label = canvasV2ReadableAgentText(item.label);
+  const label = canvasV2ReadableAgentText(item.label, false, internalNames);
   if (item.status === 'failed' || item.status === 'cancelled') return label;
-  const detail = item.detail && !/^https?:\/\//i.test(item.detail) ? canvasV2ReadableAgentText(item.detail) : '';
+  const detail = item.detail && !/^https?:\/\//i.test(item.detail) ? canvasV2ReadableAgentText(item.detail, false, internalNames) : '';
   return detail || label;
 }
 

@@ -37,6 +37,9 @@ test("presentation keeps reference links, product names and useful evidence limi
   assert.equal(canvasV2ReadableAgentText(answer), answer);
   const findings = 'The source is incomplete. Use a 3×5 grid. The measured delay is 200 ms.';
   assert.equal(canvasV2ReadableAgentText(findings), findings);
+  assert.equal(canvasV2ReadableAgentText('GRAET Career mobile **ID:** `graet-career-mobile` Platform: Mobile',false,[{id:'graet-career-mobile',name:'GRAET Career mobile'}]), 'GRAET Career mobile Platform: Mobile');
+  assert.equal(canvasV2ReadableAgentText('The saved `my-product-mobile` identity remains intact.'), 'The saved product identity remains intact.');
+  assert.equal(canvasV2ReadableAgentText('The saved identity is Career mobile (my-product-mobile), for mobile screens.', false, [{id:'my-product-mobile',name:'Career mobile'}]), 'The saved identity is Career mobile, for mobile screens.');
   const deepLink = '[Screen](https://example.com/screens/1b6daf84-7d7a-44d3-993a-ecf4aeab39d4#abc)';
   assert.equal(canvasV2ReadableAgentText(deepLink), deepLink);
   assert.equal(canvasV2ReadableAgentText('The additional check was unavailable. Here is the latest answer; its review is unfinished.'), '');

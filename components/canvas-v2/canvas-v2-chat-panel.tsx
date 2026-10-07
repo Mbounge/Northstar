@@ -1,5 +1,6 @@
 "use client";
 import type { NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
+import { CanvasV2ScreenIdentities } from "./interactive-screen";
 import { CreativeArtifacts } from "./creative-artifacts";
 import { ModelThinkingPicker } from "./model-thinking-picker";
 import { chronologicalManagedTurns, steeringReceiptLabel } from '@/lib/canvas-v2/managed-agent/chat-timeline';
@@ -23,7 +24,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useContext, useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 
 import type { CanvasV2ChatTurn, useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
@@ -74,10 +75,11 @@ function AccountAppIcon({ app }: { app: { name: string; iconUrl?: string } }) {
 }
 
 function ActivityFeed({ items, active }: { items: NonNullable<CanvasV2ChatTurn["activity"]>; active: boolean }) {
+  const identities = useContext(CanvasV2ScreenIdentities);
   const currentId = active ? items.findLast(item => item.kind === "activity" && item.status === "started")?.id : undefined;
   const groups: Array<{ id: string; message?: string; sources?: (typeof items)[number]["sources"]; actions: typeof items }> = [];
   for (const item of items) {
-    if (item.kind === "progress" && canvasV2ReadableActivity(item)) groups.push({ id: item.id, message: canvasV2ReadableActivity(item), sources: item.sources, actions: [] });
+    if (item.kind === "progress" && canvasV2ReadableActivity(item, identities)) groups.push({ id: item.id, message: canvasV2ReadableActivity(item, identities), sources: item.sources, actions: [] });
     else if (item.kind !== "progress") {
       const previous = groups.at(-1);
       if (previous && !previous.message) previous.actions.push(item);
@@ -107,7 +109,7 @@ function ActivityFeed({ items, active }: { items: NonNullable<CanvasV2ChatTurn["
         </summary>
         <ol className="ml-1.5 mt-2 space-y-2 border-l border-current/15 pl-4">
           {compactActions.map(action => <li key={action.id}>
-            <p>{canvasV2ReadableActivity(action)}</p>
+            <p>{canvasV2ReadableActivity(action, identities)}</p>
             {action.sources?.length ? action.tool === "web-search" ? <details className="mt-1">
               <summary className="cursor-pointer text-[#a39baa]">{action.sources.length} search results · leads, not verified findings</summary>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{action.sources.map(source => <ActivitySource key={source.href} source={source} />)}</div>
@@ -207,7 +209,8 @@ function ChatTurn({
   onOpenImage: (attachment: CanvasV2ChatImageAttachment) => void;
   onOpenEvidence: (screen: Extract<CanvasV2ChatEvidenceReference, { kind: 'asset' }>) => void;
 }) {
-  const readable = (text: string) => canvasV2ReadableAgentText(text, canvasV2TechnicalDetailRequested(turn.message));
+  const identities = useContext(CanvasV2ScreenIdentities);
+  const readable = (text: string) => canvasV2ReadableAgentText(text, canvasV2TechnicalDetailRequested(turn.message), identities);
   const active = turn.status === "routing" || turn.status === "running";
   const progress = <>{!turn.loop && turn.activity?.length ? <ActivityFeed items={turn.activity} active={active} /> : null}{turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}</>;
   const hasProgress = Boolean(turn.activity?.length || (turn.route && turn.canvasInstruction));
