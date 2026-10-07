@@ -422,7 +422,6 @@ export function GraetReplica() {
   }, []);
 
   useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
     const requested = new URLSearchParams(window.location.search).get("screen");
     if (requested && [...flow, "premiumDetail", "premiumFeature", "featureTour", "notificationsCenter", "gameTracker", "colleges", "collegeDetail", "collegeFilters", "support", "feed", "coachProfile", "games", "gameList", "gameLeague", "gameMatch", "players", "playerSearch", "playerFilters", "playerProfile", "profile", "openings", "opening", "apply", "applications", "ai", "chat"].includes(requested)) setScreen(requested as Screen);
   }, []);
