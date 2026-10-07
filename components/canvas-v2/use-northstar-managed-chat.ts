@@ -37,6 +37,8 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const inspectedPixels = useRef(new Map<string, string>());
   const accountPackets = useRef<CanvasV2EvidencePacket[]>(input.initial?.memory?.accountPackets ?? []);
   const accountFlows = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlows ?? []));
+  const steerFlowBaseline = useRef<Set<string> | undefined>(undefined);
+  const [steeredFlowReads, setSteeredFlowReads] = useState<Array<{ app: AppDataApp; flow: AppDataFlow }>>([]);
   const accountFlowSummaries = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlowSummaries ?? input.initial?.memory?.accountFlows ?? []));
   const readRevision = useRef<string | undefined>(undefined);
   const sourceMedia = useRef<CodexSourceMediaCandidate[]>(input.initial?.memory?.sourceMedia ?? []);
@@ -103,7 +105,12 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         // Only a complete flow read authorizes canonical insertion; search subsets cannot masquerade as journeys.
         if (result.operation === 'flow-screens') for (const flow of result.flows) {
           const app = result.apps.find(a => a.name === flow.appName);
-          if (app) accountFlows.current.set(flow.id, { app, flow });
+          if (app) {
+            accountFlows.current.set(flow.id, { app, flow });
+            if (steerFlowBaseline.current && !steerFlowBaseline.current.has(flow.id)) {
+              setSteeredFlowReads((current) => current.some((item) => item.flow.id === flow.id) ? current : [...current, { app, flow }]);
+            }
+          }
         }
         return accountResultForModel(result, query.limit);
       }
@@ -236,7 +243,8 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     if (!message) return;
     const id = crypto.randomUUID();
     const feedback = busyRef.current;
-    if (!feedback) rootId.current = id;
+    if (!feedback) { rootId.current = id; steerFlowBaseline.current = undefined; setSteeredFlowReads([]); }
+    else if (!steerFlowBaseline.current) steerFlowBaseline.current = new Set(accountFlows.current.keys());
     const attachments = [...(supplied?.attachments ?? base.attachments)];
     for (const a of attachments) if (a.kind === 'image') assets.current.set(a.id, { id: a.id, url: a.dataUrl, label: a.name, authority: 'supplied', mimeType: a.mimeType, source: { providerId: 'user-upload', providerLabel: 'Uploaded material', sourceId: a.id, sourceType: 'uploaded', label: a.name, retrievedAt: new Date().toISOString(), permission: 'authorized' } });
     const steeringBoundary = feedback ? captureSteeringBoundary(client.current?.view.activity ?? []) : undefined;
@@ -269,5 +277,5 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const memory = () => ({ artifacts: [...artifacts.current.values()], assets: [...assets.current.values()], accountPackets: accountPackets.current, accountHandles: accountHandles.current.entries?.() ?? [],
     accountFlows: [...accountFlows.current.entries()], accountFlowSummaries: [...accountFlowSummaries.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
     compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
-  return { ...input.base, memory, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
+  return { ...input.base, memory, steeredFlowReads, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
 }

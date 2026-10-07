@@ -1,5 +1,25 @@
 import { expect, test } from '@playwright/test';
 
+test('an active steer naming another app adds its full flow lane without a model citation', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/canvas-v2-e2e/codex');
+  const scene = page.getByTestId('canvas-v2-native-scene');
+  const send = async (message: string) => {
+    await page.getByLabel('Message North Star').fill(message);
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  };
+
+  await send('Hold while I choose another app');
+  await expect(page.getByRole('button', { name: 'Stop current response' })).toBeVisible();
+  await send('Add Whop and include its onboarding flow on the canvas.');
+
+  const lane = scene.locator('[data-canvas-v2-canonical-flow="flow:whop:onboarding"]');
+  await expect(lane).toHaveCount(1, { timeout: 90_000 });
+  await expect(lane.locator('[data-canvas-v2-flow-index]')).toHaveCount(17);
+  await expect(page.getByRole('button', { name: 'Stop current response' })).toHaveCount(0);
+  await expect(lane).toHaveCount(1);
+});
+
 test('Codex continuation keeps the current page context and refresh creates a clean workspace', async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto('/canvas-v2-e2e/codex');

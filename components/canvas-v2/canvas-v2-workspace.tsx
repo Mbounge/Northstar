@@ -80,6 +80,7 @@ import { waitForCanvasInputQuiet } from "@/lib/canvas-v2/capture-input-scheduler
 import { useTheme } from "@/components/theme-provider";
 import { insertCanvasV2EvidenceAsset } from "@/lib/canvas-v2/evidence-insertion";
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
+import { appsNamedInSteer, flowLanesForSteer } from "@/lib/canvas-v2/steered-app-flows";
 import type { CanvasV2ChatEvidenceReference } from "@/lib/canvas-v2/chat-evidence";
 import type { AccountResult } from "@/lib/canvas-v2/account-tools";
 import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
@@ -768,10 +769,15 @@ export function CanvasV2Workspace({
   const [historySelectionRestore, setHistorySelectionRestore] = useState<{ revisionId: string; nodeIds: string[] }>();
   const [sceneElements, setSceneElements] = useState<CanvasV2InspectableElement[]>([]);
   const [flowPlacement, setFlowPlacement] = useState<{ message: string; error?: boolean }>();
-  const pendingFlowPlacementRef = useRef<{ id: string; appName: string; flowName: string; screenCount: number } | undefined>(undefined);
+  const pendingFlowPlacementRef = useRef<{ id: string; key: string; appName: string; flowName: string; screenCount: number } | undefined>(undefined);
   const attemptedChatFlowsRef = useRef(new Set<string>());
+  const flowPlacementAttemptsRef = useRef(new Map<string, number>());
   const loadingChatFlowRef = useRef(false);
   const [flowQueueTick, setFlowQueueTick] = useState(0);
+  const [steeredFlowRequests, setSteeredFlowRequests] = useState<Array<{ turnId: string; reference: Extract<CanvasV2ChatEvidenceReference, { kind: 'flow' }> }>>([]);
+  const processedSteersRef = useRef(new Set<string>());
+  const steeringDiscoveryActiveRef = useRef(false);
+  const steeringDiscoveryAttemptsRef = useRef(new Map<string, number>());
   const [marquee, setMarquee] = useState<MarqueeGesture>();
   const [mutationError, setMutationError] = useState<string>();
   const [layersOpen, setLayersOpen] = useState(false);
@@ -1359,11 +1365,14 @@ export function CanvasV2Workspace({
       if (engine.manualError) {
         pendingFlowPlacementRef.current = undefined;
         setFlowPlacement({ message: engine.manualError, error: true });
+        setFlowQueueTick((tick) => tick + 1);
       }
       return;
     }
     pendingFlowPlacementRef.current = undefined;
+    attemptedChatFlowsRef.current.add(pending.key);
     setFlowPlacement({ message: `Added all ${pending.screenCount} ${pending.appName} ${pending.flowName} screens to canvas.` });
+    setFlowQueueTick((tick) => tick + 1);
   }, [engine.committed, engine.manualError]);
 
   useEffect(() => {
@@ -1381,14 +1390,69 @@ export function CanvasV2Workspace({
   };
 
   useEffect(() => {
-    if (loadingChatFlowRef.current || !engine.interactionReady || engine.running || engine.applyingManualEdit || chat.busy) return;
-    const flows = chat.turns.flatMap((turn) => turn.status === 'responded'
+    if (!agentEndpoint || liveReplica || steeringDiscoveryActiveRef.current) return;
+    const pending = chat.turns.filter((turn) => turn.feedbackFor && turn.feedbackState === 'accepted' && !processedSteersRef.current.has(turn.id));
+    if (!pending.length) return;
+    steeringDiscoveryActiveRef.current = true;
+    void (async () => {
+      try {
+        const read = async (query: Record<string, unknown>): Promise<AccountResult> => {
+          const response = await fetch(accountEndpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(query) });
+          if (!response.ok || response.redirected) throw new Error('The account app catalog could not be loaded.');
+          const body = await response.json() as { result?: AccountResult };
+          if (!body.result) throw new Error('The account app catalog was unavailable.');
+          return body.result;
+        };
+        const apps: AppDataApp[] = [];
+        for (let offset: number | undefined = 0; offset !== undefined;) {
+          const page = await read({ operation: 'list-apps', offset, limit: 60 });
+          apps.push(...page.apps);
+          offset = page.pagination.nextOffset;
+        }
+        const requests: Array<{ turnId: string; reference: Extract<CanvasV2ChatEvidenceReference, { kind: 'flow' }> }> = [];
+        for (const turn of pending) {
+          for (const app of appsNamedInSteer(turn.message, apps)) {
+            const flows: AppDataFlow[] = [];
+            for (let offset: number | undefined = 0; offset !== undefined;) {
+              const page = await read({ operation: 'list-flows', appId: app.id, offset, limit: 60 });
+              flows.push(...page.flows);
+              offset = page.pagination.nextOffset;
+            }
+            for (const flow of flowLanesForSteer(turn.message, flows)) requests.push({ turnId: turn.id, reference: {
+              kind: 'flow', handle: `steer:${turn.id}:${flow.id}`, id: flow.id, label: flow.name,
+              appId: app.id, appName: app.name, screenCount: flow.screens.length || flow.sourceScreenCount || 0,
+            } });
+          }
+          processedSteersRef.current.add(turn.id);
+        }
+        if (requests.length) setSteeredFlowRequests((current) => [...new Map([...current, ...requests].map((item) => [`${item.turnId}:${item.reference.id}`, item])).values()]);
+      } catch (error) {
+        for (const turn of pending) {
+          const attempts = (steeringDiscoveryAttemptsRef.current.get(turn.id) ?? 0) + 1;
+          steeringDiscoveryAttemptsRef.current.set(turn.id, attempts);
+          if (attempts >= 3) processedSteersRef.current.add(turn.id);
+        }
+        setFlowPlacement({ message: error instanceof Error ? error.message : 'The requested app flows could not be loaded.', error: true });
+      } finally {
+        steeringDiscoveryActiveRef.current = false;
+        window.setTimeout(() => setFlowQueueTick((tick) => tick + 1), 600);
+      }
+    })();
+  }, [accountEndpoint, agentEndpoint, chat.turns, flowQueueTick, liveReplica]);
+
+  useEffect(() => {
+    const currentEngine = sharedEngine.current;
+    if (liveReplica || loadingChatFlowRef.current || pendingFlowPlacementRef.current || !currentEngine.interactionReady || currentEngine.running || currentEngine.applyingManualEdit || chat.busy) return;
+    const flows = [...chat.turns.flatMap((turn) => turn.status === 'responded'
       ? Object.values(turn.evidenceReferences ?? {}).filter((reference): reference is Extract<CanvasV2ChatEvidenceReference, { kind: 'flow' }> => reference.kind === 'flow').map((reference) => ({ turnId: turn.id, reference }))
-      : []);
-    const existing = new DOMParser().parseFromString(engine.readCommittedRevision().document.html, 'text/html');
+      : []), ...steeredFlowRequests, ...managedChat.steeredFlowReads.map(({ app, flow }) => ({ turnId: chat.turns.findLast((turn) => turn.feedbackFor)?.id ?? 'steer', reference: {
+        kind: 'flow' as const, handle: `steer-read:${flow.id}`, id: flow.id, label: flow.name,
+        appId: app.id, appName: app.name, screenCount: flow.screens.length || flow.sourceScreenCount || 0,
+      } }))];
+    const existing = new DOMParser().parseFromString(currentEngine.readCommittedRevision().document.html, 'text/html');
     const next = flows.find(({ turnId, reference }) => {
       const key = turnId + ':' + reference.id;
-      if (attemptedChatFlowsRef.current.has(key)) return false;
+      if (attemptedChatFlowsRef.current.has(key) || (flowPlacementAttemptsRef.current.get(key) ?? 0) >= 3) return false;
       if (Array.from(existing.querySelectorAll('[data-canvas-v2-canonical-flow]')).some((node) => node.getAttribute('data-canvas-v2-canonical-flow') === reference.id)) {
         attemptedChatFlowsRef.current.add(key);
         return false;
@@ -1397,7 +1461,8 @@ export function CanvasV2Workspace({
     });
     if (!next) return;
     const { reference, turnId } = next;
-    attemptedChatFlowsRef.current.add(turnId + ':' + reference.id);
+    const key = turnId + ':' + reference.id;
+    flowPlacementAttemptsRef.current.set(key, (flowPlacementAttemptsRef.current.get(key) ?? 0) + 1);
     loadingChatFlowRef.current = true;
     setFlowPlacement({ message: `Adding the complete ${reference.appName} ${reference.label} flow to canvas…` });
     void (async () => {
@@ -1411,22 +1476,23 @@ export function CanvasV2Workspace({
         const flow = result?.flows.find((item) => item.id === reference.id);
         if (!result || !app || !flow) throw new Error('The account flow is no longer available.');
         const packet = result.packets.find((item) => item.kind === 'screenshot-sequence' && item.appId === app.id);
-        await engine.ensureObservation();
-        const revision = engine.readCommittedRevision();
+        await sharedEngine.current.ensureObservation();
+        const revision = sharedEngine.current.readCommittedRevision();
         const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: result.evidence, packet });
         const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((item) => item.id === packet.id) ? [packet] : [])];
-        if (!engine.applyManualDocument(insertion.document, `Placed all ${flow.screens.length} ordered ${app.name} ${flow.name} screens on canvas.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error(engine.readManualFailure() || 'The canvas is still finishing another edit.');
-        pendingFlowPlacementRef.current = { id: flow.id, appName: app.name, flowName: flow.name, screenCount: flow.screens.length };
+        if (!sharedEngine.current.applyManualDocument(insertion.document, `Placed all ${flow.screens.length} ordered ${app.name} ${flow.name} screens on canvas.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error(sharedEngine.current.readManualFailure() || 'The canvas is still finishing another edit.');
+        pendingFlowPlacementRef.current = { id: flow.id, key, appName: app.name, flowName: flow.name, screenCount: flow.screens.length };
         setFlowPlacement({ message: `Rendering all ${flow.screens.length} ${app.name} ${flow.name} screens on canvas…` });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'The complete flow could not be placed.';
+        if (message.endsWith('already on the canvas.')) attemptedChatFlowsRef.current.add(key);
         setFlowPlacement({ message, error: !message.endsWith('already on the canvas.') });
       } finally {
         loadingChatFlowRef.current = false;
-        setFlowQueueTick((tick) => tick + 1);
+        window.setTimeout(() => setFlowQueueTick((tick) => tick + 1), 400);
       }
     })();
-  }, [accountEndpoint, chat.busy, chat.turns, engine.applyingManualEdit, engine.committed.id, engine.interactionReady, engine.running, flowQueueTick]);
+  }, [accountEndpoint, chat.busy, chat.turns, engine.applyingManualEdit, engine.committed.id, engine.interactionReady, engine.running, flowQueueTick, liveReplica, managedChat.steeredFlowReads, steeredFlowRequests]);
 
   const showLatestComposition = () => {
     const transaction = engine.committed.sceneTransaction;
