@@ -5,6 +5,7 @@ import type { CanvasV2EvidenceAsset } from './types';
 export const SCREEN_ATTRIBUTE = 'data-canvas-v2-screen';
 export interface CanvasV2InteractiveScreen {
   version: 1;
+  productIdentityId?: string;
   simulation?: { appName: 'GRAET'; section: GraetPreviewSection };
   title: string;
   width: number;
@@ -51,6 +52,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
     || !Array.isArray(screen.referenceAssetIds) || screen.referenceAssetIds.length > 100
     || screen.referenceAssetIds.some(id => typeof id !== 'string' || !/^[\w:.-]{1,240}$/.test(id))) throw new Error('Invalid interactive screen. Use finite viewport dimensions and bounded HTML/CSS/JavaScript.');
   if (screen.simulation && (screen.simulation.appName !== 'GRAET' || !simulatorForApp(screen.simulation.appName) || !isGraetPreviewSection(screen.simulation.section) || screen.html !== '<div></div>' || screen.css || screen.javascript || screen.referenceAssetIds.length || screen.width !== 383 || screen.height !== 820)) throw new Error('Registered simulations use their approved runtime and fixed logical viewport; do not supply executable source or URLs.');
+  if (screen.productIdentityId !== undefined && (typeof screen.productIdentityId !== 'string' || !/^[\w.-]{1,80}$/.test(screen.productIdentityId) || screen.simulation)) throw new Error('Use an existing product identity for authored screens.');
   // Only the host constructs the document and its sandbox. Source assets remain
   // opaque handles, so saved objects never hide expiring blob/signed URLs.
   if (/<\s*(?:script|iframe|object|embed|base|link|meta|html|head|body)\b|\son[a-z]+\s*=|javascript\s*:/i.test(screen.html)) throw new Error('Use a body HTML fragment, CSS and event listeners in javascript. Embedded documents, scripts and event attributes are not supported.');
@@ -59,7 +61,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   for (const match of (screen.html + '\n' + screen.css + '\n' + screen.javascript).matchAll(/northstar-asset:([\w:.-]+)/g)) {
     if (!refs.has(match[1])) throw new Error(`Declare referenced image ${match[1]} in referenceAssetIds.`);
   }
-  return { version: 1, title: screen.title.trim(), width: screen.width, height: screen.height, html: screen.html, css: screen.css, javascript: screen.javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
+  return { version: 1, ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html: screen.html, css: screen.css, javascript: screen.javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
 }
 export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
   return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {

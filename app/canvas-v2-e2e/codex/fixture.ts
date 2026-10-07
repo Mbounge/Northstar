@@ -1,3 +1,4 @@
+import { CreativeScreenScenario } from './creative-screen-scenario';
 import { ScreenScenario } from './screen-scenario';
 import { AppsScenario } from './apps-scenario';
 import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
@@ -10,6 +11,7 @@ import { object, string, type JsonObject } from '@/lib/canvas-v2/managed-agent/p
 /** Deterministic App Server protocol peer. No provider or model is called. */
 export class FixtureCodex implements CodexTransport {
   private appsScenario?: AppsScenario;
+  private creativeScreenScenario?: CreativeScreenScenario;
   private screenScenario?: ScreenScenario;
   calls: { method: string; params: JsonObject }[] = [];
   replies: { id: string | number; result: JsonObject }[] = [];
@@ -40,6 +42,7 @@ export class FixtureCodex implements CodexTransport {
       this.emit('item/completed', { turnId: this.turn, item: { id: `progress-${this.turn}`, type: 'agentMessage', text: 'I’m checking which differences change the explanation.', phase: 'commentary' } });
       this.emit('item/completed', { turnId: this.turn, item: { id: `search-${this.turn}`, type: 'webSearch', query: 'Compare the evidence', action: { type: 'search', query: 'Compare the evidence' }, results: [{ title: 'Example evidence', url: 'https://example.com/evidence' }] } });
       this.followupRepair = /repair parity/i.test(message); this.sourcePhoto = /research photo parity/i.test(message); this.mediaParity = /media parity/i.test(message) || this.sourcePhoto; this.mediaStep = 0; this.selectionEdit = /selection parity/i.test(message); this.oversized = /oversize parity/i.test(message); this.overlapParity = /overlap parity/i.test(message); this.parity = /composition parity|oversize parity|overlap parity/i.test(message); this.chapter = 0; this.repair = false; this.rejected = false;
+      this.creativeScreenScenario = /screen creative|precise feedback/i.test(message) ? new CreativeScreenScenario(this, /precise feedback/i.test(message)) : undefined;
       this.screenScenario = /screen parity|screen revision/i.test(message) ? new ScreenScenario(this, /screen revision/i.test(message)) : undefined;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
       if (/chat progress parity/i.test(message)) {
@@ -51,6 +54,7 @@ export class FixtureCodex implements CodexTransport {
         return { turn: { id: this.turn } };
       }
       if (/three-step plan/i.test(message)) { this.finish('1. Map the journeys.\n\n2. Compare the experience.\n\n3. Recommend changes.'); return { turn: { id: this.turn } }; }
+      if (this.creativeScreenScenario) { this.creativeScreenScenario.start(); return { turn: { id: this.turn } }; }
       if (this.screenScenario) { this.screenScenario.start(); return { turn: { id: this.turn } }; }
       if (this.appsScenario) { this.appsScenario.start(); return { turn: { id: this.turn } }; }
       if (this.mediaParity) this.tool('read_source', {url: this.sourcePhoto ? 'https://www.abrielle.ca/menus' : this.origin + '/canvas-v2-e2e/codex/media/article', focus: this.sourcePhoto ? 'breakfast restaurant' : 'reference'});
@@ -64,6 +68,7 @@ export class FixtureCodex implements CodexTransport {
   }
   reply(id: string | number, result: unknown) {
     const r = object(result); this.replies.push({ id, result: r });
+    if (this.creativeScreenScenario) { this.creativeScreenScenario.reply(r); return; }
     if (this.screenScenario) { this.screenScenario.reply(r); return; }
     if (this.appsScenario) { this.appsScenario.reply(r); return; }
     if (this.mediaParity) { this.mediaReply(String(id), r); return; }

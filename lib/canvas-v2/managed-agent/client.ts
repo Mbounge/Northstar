@@ -149,7 +149,7 @@ export class ManagedAgentClient {
   }
   private toolActivity(action: JsonObject, status: 'started' | 'completed' | 'failed', output?: unknown) {
     const id = `tool:${action.turn_id}:${action.call_id}`;
-    const names: Record<string, string> = { prepare_asset: 'Prepare a reference asset', workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect account evidence', canvas_insert_flow: 'Place an app flow', canvas_insert_simulation: 'Place an app simulation', canvas_arrange_screens: 'Arrange product screens', canvas_screen: 'Create or revise a screen', canvas_screen_interact: 'Test screen interactions', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
+    const names: Record<string, string> = { canvas_product_identity: 'Remember product design', canvas_screen_element: 'Refine the selected element', canvas_screen_motion_review: 'Review screen motion', prepare_asset: 'Prepare a reference asset', workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect account evidence', canvas_insert_flow: 'Place an app flow', canvas_insert_simulation: 'Place an app simulation', canvas_arrange_screens: 'Arrange product screens', canvas_screen: 'Create or revise a screen', canvas_screen_interact: 'Test screen interactions', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
     const previous = this.view.activity.find(a => a.id === id);
     const args = object(action.arguments);
     const result = object(output);
@@ -181,7 +181,7 @@ export class ManagedAgentClient {
         this.toolActivity(action, 'started');
         try {
           const output = await this.options.execute(action, signal);
-          result = ['canvas_edit', 'canvas_insert_flow', 'canvas_screen', 'canvas_insert_simulation', 'canvas_arrange_screens'].includes(string(action.name)) && object(output).committed === false
+          result = ['canvas_edit', 'canvas_insert_flow', 'canvas_screen', 'canvas_screen_element', 'canvas_insert_simulation', 'canvas_arrange_screens'].includes(string(action.name)) && object(output).committed === false
             ? { success: false, error: JSON.stringify(output) }
             : { success: true, output };
         }

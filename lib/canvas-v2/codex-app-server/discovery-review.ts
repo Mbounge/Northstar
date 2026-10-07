@@ -98,7 +98,7 @@ export function parseDiscoveryFeedback(text: string) {
 
 export const DISCOVERY_REVIEW_INSTRUCTIONS = `You are an independent thinking partner helping the primary model resolve the user's discovery question. You control successful completion: return substantive work when it remains, or an empty work list when the current answer is satisfactory. Help develop the answer, not merely police its wording. Do not write the final answer or request private reasoning.
 
-For product screens, prototypes and simulations, completion includes product quality by default. The user need not explicitly request logos, authentic assets, mobile dimensions, consistent components or visual review. Infer the platform and product identity from the actual reference pixels and brief; preserve them unless the user requested a different direction. Judge requested variations on their own brief, without demanding an exact layout copy when a new design is wanted. Functional controls and zero runtime errors do not establish visual quality. Compare the latest rendered screen pixels with the retained references: meaningful brand marks/photos, typography, spacing, alignment, image crops, navigation and legibility. A letter/emoji/rough mark standing in for a visible authentic logo, or missing meaningful reference imagery, is a material product defect even if the final answer never claims pixel fidelity. Return concrete work to retain/extract those authentic pixels with prepare_asset or workspace_run and bind them; use generation for suitable original assets when the brief calls for them. Ordinary native text and interface icons do not require raster assets. Retaining a reference ID alone does not mean its assets were used. Use productWork's current screen metadata and latest captures, not obsolete drafts. Preserve original registered simulations and human work; request local repairs to authored screens, never a speculative redesign or mandatory imagery quota. Missing relevant rendered states require inspection, not an invented verdict. For completed product edits, argumentChecks may be empty; substantive visual/interaction defects belong in work with concrete resolution signals. Approve only when the requested behavior and material product-quality requirements are addressed, or accurately bound a real unavailable input.
+For product screens, prototypes and simulations, completion includes product quality by default. The user need not explicitly request logos, authentic assets, mobile dimensions, consistent components or visual review. Infer the platform and product identity from the actual reference pixels and brief; preserve them unless the user requested a different direction. Judge requested variations on their own brief, without demanding an exact layout copy when a new design is wanted. Functional controls and zero runtime errors do not establish visual quality. Compare the latest rendered screen pixels with the retained references: meaningful brand marks/photos, typography, spacing, alignment, image crops, navigation and legibility. A letter/emoji/rough mark standing in for a visible authentic logo, or missing meaningful reference imagery, is a material product defect even if the final answer never claims pixel fidelity. Return concrete work to retain/extract those authentic pixels with prepare_asset or workspace_run and bind them; use generation for suitable original assets when the brief calls for them. Ordinary native text and interface icons do not require raster assets. Retaining a reference ID alone does not mean its assets were used. Use productWork's current screen metadata and latest captures, not obsolete drafts. Preserve original registered simulations and human work; request local repairs to authored screens, never a speculative redesign or mandatory imagery quota. Missing relevant rendered states require inspection, not an invented verdict. Use saved product identity and the user's precise feedback target to assess consistency and scope. An edit should preserve unrelated approved design and behavior. When motion matters, inspect retained beginning/middle/end motion frames and diagnostics; a static capture or zero errors does not prove temporal quality. Timeline samples cover CSS/Web Animations only, not frame rate, JavaScript loops, GIF/video, interrupted interactions or reduced-motion behavior. Ask for concrete missing checks without inventing defects from absent evidence. For completed product edits, argumentChecks may be empty; substantive visual/interaction defects belong in work with concrete resolution signals. Approve only when the requested behavior and material product-quality requirements are addressed, or accurately bound a real unavailable input.
 
 Read the actual question and the whole current draft first. Distinguish the author's assertions from quotations, conditional scenarios, questions and acknowledged unknowns. For every criticism, identify a short exact passage and the existing qualification elsewhere in the draft. When an explanation is missing, anchor the gap to the nearest passage that needs developing. If a qualification already resolves your concern, do not repeat that concern. Criticize only what remains after reading that qualification; a hypothetical possibility is not an asserted fact.
 
@@ -199,31 +199,36 @@ export class DiscoveryReviewContext {
             const previous = this.productScreens.get(id);
             const hasSource = typeof source.html === 'string';
             this.productScreens.set(id, { ...previous, nodeId: id, title: screen.title, width: screen.width, height: screen.height,
-              simulation: screen.simulation, referenceAssetIds: screen.referenceAssetIds,
+              simulation: screen.simulation, productIdentityId: screen.productIdentityId, referenceAssetIds: screen.referenceAssetIds,
               ...(hasSource ? { boundAssetIds: [...new Set((string(source.html) + string(source.css) + string(source.javascript)).match(/northstar-asset:[\w:.-]+/g) ?? [])] } : {}) });
           }
         }
-        if ((name === 'canvas_screen' || name === 'canvas_insert_simulation') && value.committed === true && value.nodeId) {
+        if ((name === 'canvas_screen' || name === 'canvas_screen_element' || name === 'canvas_insert_simulation') && value.committed === true && value.nodeId) {
           const id = string(value.nodeId), input = object(args), previous = this.productScreens.get(id);
           this.productScreens.set(id, { ...previous, nodeId: id, title: input.title ?? previous?.title,
             referenceAssetIds: input.referenceAssetIds ?? previous?.referenceAssetIds ?? [],
             simulation: name === 'canvas_insert_simulation' ? { appName: input.appName } : previous?.simulation,
-            reviewed: false });
+            reviewed: false, motionFrames: [] });
           // A revised source must not be approved using its previous render.
           for (const key of this.images.keys()) if (key.startsWith(`screen:${id}:`)) this.removeImage(key);
         }
-        if (name === 'canvas_review' && value.nodeId && value.viewport) {
+        if (name === 'canvas_screen_motion_review' && value.nodeId && typeof value.motionFrame === 'number') {
+          captureNode = string(value.nodeId); nextImageKey = `screen:${captureNode}:motion:${value.motionFrame}`;
+          this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), motion: object(value.state).motion, motionMethod: object(object(value.state).motionSample).method });
+        }
+        else if (name === 'canvas_review' && value.nodeId && value.viewport) {
           captureNode = string(value.nodeId); nextImageKey = `screen:${captureNode}:render`;
           const state = object(value.state);
           this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), nodeId: captureNode,
             viewport: value.viewport, referenceAssetIds: value.referenceAssetIds, reviewReferenceAssetIds: value.reviewReferenceAssetIds, boundAssetIds: value.boundAssetIds,
-            state: { scroll: state.scroll, overflow: state.overflow, errors: state.errors, images: Array.isArray(state.images) ? state.images.slice(0, 60) : undefined }, reviewed: false });
+            state: { scroll: state.scroll, overflow: state.overflow, errors: state.errors, motion: state.motion, images: Array.isArray(state.images) ? state.images.slice(0, 60) : undefined }, reviewed: false });
         } else if (captureNode && value.referenceAssetId) nextImageKey = `screen:${captureNode}:reference:${string(value.referenceAssetId)}`;
         else if (name === 'inspect_asset' && value.evidenceId) nextImageKey = `asset:${string(value.evidenceId)}`;
       }
       if (part.type === 'inputImage' && url.startsWith('data:image/')) {
         const key = nextImageKey || url;
         const retained = this.image(key, { type: 'image', url }, url.length);
+        if (captureNode && key.includes(':motion:') && retained) { const previous = this.productScreens.get(captureNode); this.productScreens.set(captureNode, { ...previous, motionFrames: [...new Set([...(Array.isArray(previous?.motionFrames) ? previous.motionFrames : []), Number(key.split(':').at(-1))])] }); }
         if (captureNode && key.endsWith(':render') && retained) this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), reviewed: true });
         nextImageKey = '';
       }

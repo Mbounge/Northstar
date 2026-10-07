@@ -258,6 +258,10 @@ export class CodexSessionHost {
       // Reconnect recovery obtains a snapshot; replaying old deltas would duplicate text.
       if (identity) for (const e of s.events) send(e);
       s.listeners.add(send); if (signal.aborted) abort();
+      // Flush an idle subscription immediately. The client subscribes before
+      // sending a follow-up; waiting for the first 15s keepalive stalls that
+      // send on HTTP adapters which do not flush headers without a body chunk.
+      if (!identity && !signal.aborted) controller.enqueue(encoder.encode(': connected\n\n'));
     }, cancel: () => remove() }), { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
   }
   async handle(body: JsonObject, options: { owner: string; key: string; signal: AbortSignal }): Promise<Response> {

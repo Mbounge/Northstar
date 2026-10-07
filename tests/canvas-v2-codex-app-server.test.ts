@@ -76,6 +76,20 @@ test('Codex runs the first prompt once, streams Markdown, and retains follow-up 
     assert.ok(t.client.view.activity.some(a => a.sources?.some(s => s.href === 'https://example.com/evidence')));
   } finally { t.close(); }
 });
+test('an idle follow-up subscription flushes immediately without replaying old turn content', async () => {
+  const t = await setup();
+  try {
+    await t.client.send('Explain', [], 'gpt-5.6-luna', 'r1'); await tick();
+    assert.equal(t.client.view.status, 'completed');
+    const signal = AbortSignal.timeout(1000);
+    const response = await t.host.handle({ op: 'stream', token: t.client.token }, { owner: 'alice', key: 'fake-test-key', signal });
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    assert.equal(new TextDecoder().decode(first.value), ': connected\n\n');
+    assert.equal(first.done, false);
+    await reader.cancel();
+  } finally { t.close(); }
+});
 test('active feedback uses turn/steer with the expected turn and Stop interrupts remotely', async () => {
   const t = await setup();
   try {

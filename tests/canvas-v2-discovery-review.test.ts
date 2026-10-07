@@ -7,6 +7,23 @@ import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
 import { object, string, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 25));
+test('motion review retains three latest timeline frames and invalidates them after a precise edit', () => {
+  const context = new DiscoveryReviewContext();
+  const text = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });
+  context.tool('canvas_screen', {}, [text({ committed: true, nodeId: 'screen-motion' })]);
+  for (let revision = 0; revision < 40; revision++) for (const progress of [0, 0.5, 1]) {
+    context.tool('canvas_screen_motion_review', {}, [text({ nodeId: 'screen-motion', viewport: { width: 390, height: 844 }, motionFrame: progress, state: { motion: { animations: [{ duration: 320 }] }, motionSample: { method: 'Timeline sample' } } }), { type: 'inputImage', imageUrl: `data:image/png;base64,${revision}-${progress}` }]);
+  }
+  const packet = context.packet('Motion inspected');
+  assert.equal(packet.images.length, 3);
+  assert.deepEqual(JSON.parse(packet.text).productWork[0].motionFrames, [0, 0.5, 1]);
+  assert.ok(packet.images.every(image => image.type === 'image' && image.url.includes('39-')));
+  context.tool('canvas_screen_element', { nodeId: 'screen-motion', text: 'Refined' }, [text({ committed: true, nodeId: 'screen-motion' })]);
+  assert.equal(context.packet('Revision').images.length, 0);
+  assert.deepEqual(JSON.parse(context.packet('Revision').text).productWork[0].motionFrames, []);
+  assert.equal(JSON.parse(context.packet('Revision').text).productWork[0].reviewed, false);
+});
+
 test('product review keeps current screen/reference pixels instead of exhausting its budget with obsolete drafts', () => {
   const context = new DiscoveryReviewContext();
   const result = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });

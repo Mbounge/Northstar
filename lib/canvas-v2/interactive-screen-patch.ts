@@ -1,21 +1,25 @@
+import { canvasV2ProductTokenCss, type CanvasV2ProductIdentity } from './product-identity';
 import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from './types';
 import { findCanvasV2SourceNodeRange, type CanvasV2SourcePatchOperation } from './source-patch';
 import { canvasV2NativeSceneAbsoluteBounds, type CanvasV2NativeSceneDocument } from './native-scene';
-import { SCREEN_ATTRIBUTE, readCanvasV2Screens, validateCanvasV2Screen, validateCanvasV2ScreenAssets, encodeCanvasV2Screen } from './interactive-screen';
+import { SCREEN_ATTRIBUTE, readCanvasV2Screens, parseCanvasV2Screen, validateCanvasV2Screen, validateCanvasV2ScreenAssets, encodeCanvasV2Screen } from './interactive-screen';
 
 /** A targeted revision changes source only: the user's position/size stay intact. */
-export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: Record<string, unknown>, evidence: readonly CanvasV2EvidenceAsset[], placement: { x: number; y: number }): { nodeId: string; operations: CanvasV2SourcePatchOperation[] } {
+export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: Record<string, unknown>, evidence: readonly CanvasV2EvidenceAsset[], placement: { x: number; y: number }, identities: readonly CanvasV2ProductIdentity[] = []): { nodeId: string; operations: CanvasV2SourcePatchOperation[] } {
   const nodeId = typeof input.nodeId === 'string' && input.nodeId ? input.nodeId : `screen-${crypto.randomUUID()}`;
   const previous = readCanvasV2Screens(document.html).find(item => item.nodeId === nodeId);
   if (input.nodeId && !previous) throw new Error('That interactive screen no longer exists. Read the current canvas before revising it.');
   if (previous?.screen.simulation) throw new Error('This is a registered reference simulation. Create a separate screen variant to iterate on its design.');
   if (input.cssMode !== undefined && !['merge', 'replace'].includes(String(input.cssMode))) throw new Error('Choose merge or replace for cssMode.');
+  const identityId = input.productIdentityId ?? previous?.screen.productIdentityId;
+  const identity = identityId ? identities.find(item => item.id === identityId) : undefined;
+  if (identityId && !identity && (!previous || input.productIdentityId !== undefined)) throw new Error('Read or save this product identity before using it.');
   const css = previous && typeof input.css === 'string' && input.cssMode !== 'replace'
     ? `${previous.screen.css}\n${input.css}` : input.css ?? previous?.screen.css ?? '';
-  const screen = validateCanvasV2Screen({ version: 1, simulation: input.simulation, title: input.title ?? previous?.screen.title,
+  const screen = validateCanvasV2Screen({ version: 1, productIdentityId: identityId, simulation: input.simulation, title: input.title ?? previous?.screen.title,
     width: input.width ?? previous?.screen.width ?? 390, height: input.height ?? previous?.screen.height ?? 844,
-    html: input.html ?? previous?.screen.html, css, javascript: input.javascript ?? previous?.screen.javascript ?? '',
-    referenceAssetIds: input.referenceAssetIds ?? previous?.screen.referenceAssetIds ?? [] });
+    html: input.html ?? previous?.screen.html, css: !previous && identity ? canvasV2ProductTokenCss(identity) + '\n' + css : css, javascript: input.javascript ?? previous?.screen.javascript ?? '',
+    referenceAssetIds: [...new Set([...(input.referenceAssetIds ?? previous?.screen.referenceAssetIds ?? []) as string[], ...(!previous && identity ? identity.referenceAssetIds : [])])] });
   validateCanvasV2ScreenAssets(screen, evidence);
   const encoded = encodeCanvasV2Screen(screen);
   if (previous) {
@@ -33,6 +37,19 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
   const x = Math.max(0, Math.round(placement.x)), y = Math.max(0, Math.round(placement.y));
   return { nodeId, operations: [{ op: 'append-html', targetNodeId,
     html: `<div data-canvas-v2-node-id="${nodeId}" ${SCREEN_ATTRIBUTE}="${encoded}"${relation} style="position:absolute;left:${x}px;top:${y}px;width:${screen.width}px;height:${screen.height}px;overflow:visible"></div>` }] };
+}
+
+/** Screen internals do not change native geometry. Avoid recompiling a second
+ * runtime during source edits: it cannot represent the user's live mock state. */
+export function reviseCanvasV2NativeScreen(scene: CanvasV2NativeSceneDocument, nodeId: string, encoded: string): CanvasV2NativeSceneDocument {
+  parseCanvasV2Screen(encoded);
+  const next = structuredClone(scene);
+  const node = next.nodes.find(node => (node.sourceNodeId ?? node.id) === nodeId);
+  if (!node || !node.attributes[SCREEN_ATTRIBUTE] || node.hidden || node.locked) throw new Error('The screen was deleted, hidden or locked. Read the current canvas.');
+  node.attributes[SCREEN_ATTRIBUTE] = encoded;
+  node.editVersion += 1;
+  node.lastAuthor = 'northstar';
+  return next;
 }
 
 /** Rearrangement changes only native geometry, so mounted runtimes keep their state. */

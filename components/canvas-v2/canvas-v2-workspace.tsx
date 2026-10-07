@@ -6,8 +6,8 @@ import { useFloatingPanel } from "./use-floating-panel";
 import { canvasV2PanelAwareInsets } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { CanvasV2MediaInsert } from "./media-insert";
 import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia, measureCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
-import { SCREEN_ATTRIBUTE } from '@/lib/canvas-v2/interactive-screen';
-import { CANVAS_V2_SCREEN_COMMAND } from './interactive-screen';
+import { SCREEN_ATTRIBUTE, parseCanvasV2Screen, readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
+import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenIdentities } from './interactive-screen';
 import { Play, Pause } from "lucide-react";
 
 import { useCanvasV2PopoverViewport } from "./use-popover-viewport";
@@ -1098,13 +1098,19 @@ export function CanvasV2Workspace({
     visibleBounds: canvasV2VisibleWorkspaceBounds(viewportRef.current, workspaceSizeRef.current, contentInsets()),
     viewport: viewportRef.current, selectionPolicy,
   }) });
+  useEffect(() => {
+    const feedback = () => { setPanel('chat'); setChatOpen(true); };
+    window.addEventListener('northstar-screen-feedback', feedback);
+    return () => window.removeEventListener('northstar-screen-feedback', feedback);
+  }, []);
   const localChat = agentEndpoint ? managedChat : legacyChat;
   const chat = liveReplica && sendSessionCommand ? {...localChat,turns:liveReplica.snapshot.turns,busy:liveReplica.busy,
     submit:async (override?:string)=>{
       const message=(override ?? localChat.draft).trim();if(!message && !localChat.attachments.length)return;
-      const sent=await sendSessionCommand({kind:'submit',message:message || 'Review the attached material.',attachments:localChat.attachments,model:localChat.modelSelection,effort:localChat.reasoningEffort}).then(()=>true,()=>false);
+      const feedbackScreen = localChat.screenFeedback && readCanvasV2Screens(liveReplica.snapshot.revision.document.html).find(item => item.nodeId === localChat.screenFeedback?.nodeId);
+      const sent=await sendSessionCommand({kind:'submit',...(feedbackScreen && localChat.screenFeedback ? {screenFeedback:{target:localChat.screenFeedback,encoded:feedbackScreen.encoded}} : {}),message:message || 'Review the attached material.',attachments:localChat.attachments,model:localChat.modelSelection,effort:localChat.reasoningEffort}).then(()=>true,()=>false);
       if(!sent)return;
-      localChat.setDraft('');for(const attachment of localChat.attachments)localChat.removeAttachment(attachment.id);
+      localChat.setDraft('');localChat.clearScreenFeedback();for(const attachment of localChat.attachments)localChat.removeAttachment(attachment.id);
     },stop:()=>{void sendSessionCommand({kind:'stop'}).catch(()=>{});},
     setRunConfiguration:(model:typeof localChat.modelSelection,effort:typeof localChat.reasoningEffort)=>{
       localChat.setRunConfiguration(model,effort);void sendSessionCommand({kind:'settings',model,effort}).catch(()=>{});
@@ -1141,10 +1147,11 @@ export function CanvasV2Workspace({
     if(replicaModel)sharedChat.current.setModelSelection(replicaModel);
     if(replicaEffort)sharedChat.current.setReasoningEffort(replicaEffort);
   },[replicaModel,replicaEffort]);
+  const managedMemory = useRef(managedChat.memory); managedMemory.current = managedChat.memory;
   const snapshotListener = useRef(onSnapshot); snapshotListener.current = onSnapshot;
   useEffect(() => {
     snapshotListener.current?.({ schema: 1, revision: engine.committed, turns: chat.turns, draft: chat.draft, attachments: chat.attachments,
-      model: chat.modelSelection, effort: chat.reasoningEffort, viewport, memory: managedChat.memory() }, chat.busy);
+      model: chat.modelSelection, effort: chat.reasoningEffort, viewport, memory: managedMemory.current() }, chat.busy);
   }, [engine.committed, chat.turns, chat.draft, chat.attachments, chat.modelSelection, chat.reasoningEffort, viewport, chat.busy]);
 
   useEffect(() => {
@@ -3740,7 +3747,7 @@ export function CanvasV2Workspace({
   }, [selectedElement, selectedElements.length, toolbarMenu]);
 
   return (
-    <main data-northstar-canvas-entry={gatewayEntry ? "true" : undefined} className="relative h-screen min-h-[680px] overflow-hidden bg-[#fafbff] text-[#181824] transition-colors duration-300 dark:bg-[#0d0e16] dark:text-[#f4f3f8]">
+    <CanvasV2ScreenIdentities.Provider value={liveReplica?.snapshot.memory?.productIdentities ?? managedChat.productIdentities}><main data-northstar-canvas-entry={gatewayEntry ? "true" : undefined} className="relative h-screen min-h-[680px] overflow-hidden bg-[#fafbff] text-[#181824] transition-colors duration-300 dark:bg-[#0d0e16] dark:text-[#f4f3f8]">
       <style>{`
         @keyframes northstarCanvasReveal {
           0% { opacity: 1; transform: scale(1.018); }
@@ -4205,6 +4212,7 @@ export function CanvasV2Workspace({
         style={contextualToolbarPosition.style}
       >
         {selectedScreen && <>
+          {!parseCanvasV2Screen(selectedScreen).simulation && <button aria-label="Give feedback on screen" onClick={() => screenCommand('feedback')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
           <button aria-label="Move selected screen" title="Drag to move the screen" onPointerDown={event => beginDirectGesture('move', event)} className="h-7 cursor-move rounded-lg px-2 text-xs hover:bg-white/10">Move</button>
           <button aria-label="Review screen quality" onClick={() => screenCommand('review')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Review</button>
           <button aria-label="Reset screen" title="Reset mock data" onClick={() => screenCommand('reset')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Reset</button>
@@ -4394,6 +4402,6 @@ export function CanvasV2Workspace({
           <button onClick={() => zoomAtCenter(1.2)} aria-label="Zoom in" title="Zoom in" className="grid h-9 w-9 place-items-center transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:hover:bg-white/[.07]"><Plus className="h-4 w-4" /></button>
         </div>
       </nav>
-    </main>
+    </main></CanvasV2ScreenIdentities.Provider>
   );
 }

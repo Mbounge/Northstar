@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { encodeCanvasV2Screen, parseCanvasV2Screen, readCanvasV2Screens, SCREEN_ATTRIBUTE, canvasV2ScreenReviewAssets, validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
-import { arrangeCanvasV2Screens, canvasV2ScreenPatch } from '../lib/canvas-v2/interactive-screen-patch';
+import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, canvasV2ScreenPatch } from '../lib/canvas-v2/interactive-screen-patch';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
 import { validateCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from '../lib/canvas-v2/artifact-safety';
 import { applyCanvasV2SourcePatch } from '../lib/canvas-v2/source-patch';
@@ -107,4 +107,20 @@ test('screen comparison rearrangement preserves runtimes, size, first anchor and
   assert.throws(() => arrangeCanvasV2Screens(scene, { nodeIds: ['a','a'] }), /distinct/);
   const blocked = applyCanvasV2NativeSceneMutation(scene, { kind: 'create', primitive: 'shape', nodeId: 'human', x: 580, y: 100, width: 500, height: 500 });
   assert.throws(() => arrangeCanvasV2Screens(blocked, { nodeIds: ['a','b','c'] }), /cover/);
+});
+
+
+test('native screen source revision preserves geometry and every neighboring object', () => {
+  const empty: CanvasV2NativeSceneDocument = { schema: 'canvas-v2.native-scene.v1', revisionId: 'live', width: 12000, height: 8000, nodes: [], rootIds: [], css: '' };
+  const scene = applyCanvasV2NativeSceneMutation(empty, { kind: 'batch', label: 'Work', mutations: ['a','b'].map((nodeId, i) => ({ kind: 'create' as const, primitive: 'shape' as const, nodeId, x: 100 + i * 500, y: 100, width: 390, height: 844 })) });
+  scene.nodes[0].attributes[SCREEN_ATTRIBUTE] = encodeCanvasV2Screen(screen);
+  const changed = encodeCanvasV2Screen({ ...screen, html: '<h1>Refined</h1>' });
+  const next = reviseCanvasV2NativeScreen(scene, 'a', changed);
+  assert.deepEqual(next.nodes[0].geometry, scene.nodes[0].geometry);
+  assert.deepEqual(next.nodes[1], scene.nodes[1]);
+  assert.equal(scene.nodes[0].attributes[SCREEN_ATTRIBUTE], encodeCanvasV2Screen(screen));
+  assert.equal(next.nodes[0].attributes[SCREEN_ATTRIBUTE], changed);
+  assert.throws(() => reviseCanvasV2NativeScreen(scene, 'deleted', changed), /deleted/);
+  scene.nodes[0].locked = true;
+  assert.throws(() => reviseCanvasV2NativeScreen(scene, 'a', changed), /locked/);
 });

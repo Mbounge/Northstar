@@ -46,6 +46,7 @@ import {
 import type { CanvasV2GatewayHandoff } from "@/lib/canvas-v2/gateway-handoff";
 
 export interface CanvasV2ChatTurn {
+  screenFeedback?: import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget;
   artifacts?: import('@/lib/canvas-v2/creative/types').NorthstarArtifact[];
   id: string;
   activity?: CanvasV2Activity[];
@@ -127,7 +128,7 @@ export function useCanvasV2Chat(input: {
       ? { ...turn, loop, status: canvasV2ChatStatusForLoop(loop), error: loop.error }
       : loop.incorporatedInputIds?.includes(turn.id) ? { ...turn, feedbackState: "incorporated" } : turn));
     if (canvasV2ChatStatusForLoop(loop) !== "running") activeDesignTurnId.current = undefined;
-  }, [input.engine.loop]);
+  }, [input.engine.loop, setTurns]);
 
   const latestDiscoveryState = useMemo(() => [...turns].reverse().find((turn) => turn.loop?.discoveryState)?.loop?.discoveryState
     ?? input.engine.committed.discoveryState, [turns, input.engine.committed.discoveryState]);
@@ -381,5 +382,5 @@ export function useCanvasV2Chat(input: {
 
   return {
     setRunConfiguration: (model:CanvasV2ModelSelection, effort:import('@/lib/canvas-v2/model-catalog').NorthstarEffort)=>{setModelSelection(model);setReasoningEffort(effort);},
-    reasoningEffort, setReasoningEffort, runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
+    screenFeedback: undefined as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget | undefined, clearScreenFeedback: (): void => {}, reasoningEffort, setReasoningEffort, runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
 }

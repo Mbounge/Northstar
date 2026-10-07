@@ -49,3 +49,14 @@ Live tests exercise actual hosted Python calculations and file exports, image ge
 Official API references:
 - https://developers.openai.com/api/docs/guides/tools-shell
 - https://developers.openai.com/api/docs/guides/image-generation
+
+
+## Product identity, precise feedback and motion review
+
+`canvas_product_identity` saves product-specific visual language, typography, component conventions, motion decisions, CSS custom properties and authentic reference handles in the private canvas snapshot. `canvas_read` returns those identities on later turns and after reload. Related new screens specify `productIdentityId` and receive its tokens and reference lineage. Updating an identity does not silently restyle existing or human-edited work. The current scope is the saved canvas, not a tenant-wide design-system library.
+
+Select an authored screen by its perimeter, choose **Feedback**, then click an element inside it. Normal clicking/scrolling remains direct outside this explicit mode. The composer shows a readable target; Escape cancels picking and the target can be cleared. Sending binds the exact screen source, selector, viewport bounds and computed styles to that turn, including a steer. A deleted or revised target cannot silently expand the edit to the whole screen. `canvas_screen_element` changes only that element's plain text or local styles; structural and behavior changes still use a minimal `canvas_screen` revision. Single-element text/style revisions update the live runtime without erasing entered values, event handlers, mock state or scrolling. Native source revisions retain measured wrapper geometry and avoid recompiling a second runtime. App/flow insertion and canonical source rails are unchanged.
+
+`canvas_screen_motion_review` samples authored CSS/Web Animations at 0%, 50% and 100%. `triggerSelector` clicks the relevant visible control and holds its short transition before it finishes. Playback resumes after capture, cancellation or an expiry; human input interrupts the held timeline. Each frame freezes computed styles and pseudo-elements so capture does not restart animations. The user can also inspect these frames from **Review → Review motion**. Latest motion frames are retained for independent quality review and invalidated after source changes.
+
+These are timeline samples, not a frame-rate benchmark. JavaScript animation loops, GIF/video playback, interruptions and reduced-motion behavior need separate checks; diagnostics report the actual reduced-motion preference and presence of authored reduced-motion styles without claiming those styles were exercised. Registered app simulations remain original references.
