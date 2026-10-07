@@ -21,7 +21,7 @@ type Session = {
   listeners: Set<(e: JsonObject) => void>; receipts: Map<string, { fingerprint: string; work: Promise<unknown> }>;
   model: string; effort: NorthstarEffort; capabilities: NorthstarModelCapability[];
   nativeTurnId: string; nativeActive: boolean; reviewRun?: DiscoveryReviewRun; reviewContext: DiscoveryReviewContext;
-  reviewReport?: { status: string; durationMs?: number; proposedAnswer?: string; feedback?: string; continuedAnswer?: string;
+  reviewReport?: { failureKind?: 'timeout'|'invalid_feedback'|'process_stopped'|'provider_or_transport'; status: string; durationMs?: number; proposedAnswer?: string; feedback?: string; continuedAnswer?: string;
     rounds?: Array<{ draft: string; feedback: string; rawFeedback?: string; durationMs: number; activity: ReturnType<DiscoveryReviewContext['activity']> }>;
     initialActivity?: ReturnType<DiscoveryReviewContext['activity']>; completedActivity?: ReturnType<DiscoveryReviewContext['activity']> };
   creative: NorthstarCreativeRuntime; commands: Promise<unknown>; lastUse: number; disconnectedAt?: number; closed: boolean;
@@ -216,10 +216,12 @@ export class CodexSessionHost {
       feedback = s.reviewContext.reconcileFeedback(rawFeedback);
       remainingWork = (parseDiscoveryFeedback(feedback).work as unknown[]).length;
     }
-    catch {
+    catch (error) {
       if (s.closed || s.reviewRun !== run || run.phase !== 'reviewing') return;
-      s.reviewReport = { ...s.reviewReport, status: 'unavailable', durationMs: Date.now() - started };
-      this.finishReviewedDraft(s, run, 'The additional check was unavailable. Here is the latest answer; its review is unfinished.'); return;
+      const message=error instanceof Error?error.message:'';
+      const failureKind=/timed out/i.test(message)?'timeout':/unusable feedback|supported format|actionable feedback/i.test(message)?'invalid_feedback':/stopped/i.test(message)?'process_stopped':'provider_or_transport';
+      s.reviewReport = { ...s.reviewReport, failureKind, status: 'unavailable', durationMs: Date.now() - started };
+      this.finishReviewedDraft(s, run, s.reviewContext.hasProductWork() ? 'The final visual review could not finish. The latest work is available, but its quality review is unfinished.' : 'The additional check was unavailable. Here is the latest answer; its review is unfinished.'); return;
     }
     const work = s.commands.then(async () => {
       if (s.closed || s.reviewRun !== run || run.phase !== 'reviewing') return;
@@ -242,7 +244,7 @@ export class CodexSessionHost {
   private finishReviewedDraft(s: Session, run: DiscoveryReviewRun, notice?: string) {
     run.stop();
     if (notice) this.progress(s, notice);
-    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: item.text }] } });
+    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: notice ? `${notice}\n\n${item.text}` : item.text }] } });
     this.emit(s, { type: 'agent.session.turn.completed', turn_id: run.publicTurnId });
   }
   private stream(s: Session, identity: boolean, signal: AbortSignal) {

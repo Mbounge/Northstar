@@ -165,7 +165,9 @@ test('review failure releases the original answer with an honest notice, no retr
   try {
     await t.client.send('Explain', [], 'gpt-5.6-luna', 'r1'); t.peer.finish('Original answer'); await tick();
     assert.equal(t.client.view.status, 'completed');
-    assert.equal(t.client.view.texts.at(-1)?.text, 'Original answer');
+    assert.ok(t.client.view.texts.at(-1)?.text.endsWith('Original answer'));
+    assert.match(t.client.view.texts.at(-1)?.text||'',/^The additional check was unavailable/);
+    assert.equal((await t.snapshot()).review.failureKind,'provider_or_transport');
     assert.ok(t.client.view.texts.some(x => /check was unavailable/.test(x.text)));
     assert.ok(!JSON.stringify(await t.snapshot()).includes('credential secret'));
     assert.equal(t.peer.calls.filter(c => c.method === 'turn/start').length, 1);
@@ -205,7 +207,8 @@ test('review ceiling releases the latest draft as unfinished, never as reviewer 
     assert.equal(reviews, 2); assert.equal((await t.snapshot()).review.status, 'budget_exhausted');
     assert.equal(t.peer.calls.filter(c => c.method === 'turn/start').length, 2);
     assert.ok(t.client.view.texts.some(x => /has not passed the full review/.test(x.text)));
-    assert.equal(t.client.view.texts.at(-1)?.text, 'Latest draft');
+    assert.ok(t.client.view.texts.at(-1)?.text.endsWith('Latest draft'));
+    assert.match(t.client.view.texts.at(-1)?.text||'',/has not passed the full review/);
     assert.ok(!t.client.view.texts.some(x => x.text === 'First draft'));
   } finally { t.close(); }
 });
@@ -493,4 +496,14 @@ test('feedback across existing screens requires review of every tagged authored 
   const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[];
   const result=JSON.parse(context.reconcileFeedback(JSON.stringify(feedback)));
   assert.deepEqual(result.work.map((work:{id:string})=>work.id),['product-quality:tagged']);
+});
+
+test('visual review retains source lineage and observations without duplicate encoded interface source',()=>{
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  const source={version:1,title:'Career',width:390,height:844,html:'<img src="northstar-asset:mark"><h1>Source content</h1>',css:'.private-interface-code{}',javascript:'privateBehavior()',referenceAssetIds:['ref','mark']};
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'screen',source}],document:{html:'<section data-canvas-v2-node-id="screen" data-canvas-v2-screen="YWFhYWFh"></section>',css:'.canvas-chrome{}'},productIdentities:[{id:'identity'}]})]);
+  context.tool('canvas_screen',{nodeId:'screen',html:source.html,css:source.css,javascript:source.javascript,summary:'Refined the header'},[text({committed:true,nodeId:'screen'})]);
+  const packet=context.packet('Ready');
+  assert.doesNotMatch(packet.text,/YWFhYWFh|privateBehavior|private-interface-code/);
+  assert.match(packet.text,/identity|Refined the header|boundAssetIds|mark/);
 });
