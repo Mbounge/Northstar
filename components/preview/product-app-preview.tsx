@@ -20,7 +20,7 @@ export function ProductAppPreview({ appName, active }: { appName: string; active
           Open full preview <ArrowUpRight className="h-3.5 w-3.5" />
         </a>
       </div>
-      {opened && <iframe title={`${appName} interactive simulator`} src={simulator.embedPath} className="block h-[900px] w-full border-0 bg-transparent" />}
+      {opened && <iframe title={`${appName} interactive simulator`} src={simulator.embedPath} className="block h-[660px] w-full border-0 bg-transparent" />}
     </> : <div className="flex min-h-64 flex-col justify-center px-7 py-14 sm:px-10">
       <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[#8666df] dark:text-[#af9af5]">App preview</p>
       <h3 className="m-0 text-2xl font-semibold tracking-[-0.04em]">Interactive simulator in preparation</h3>

@@ -4,7 +4,7 @@ const simulators: Record<string, Simulator> = {
   graet: {
     slug: "graet",
     path: "/preview-lab/replica/graet",
-    embedPath: "/preview-lab/replica/graet?embedded=1&screen=career",
+    embedPath: "/preview-lab/replica/graet?embedded=1",
   },
 };
 

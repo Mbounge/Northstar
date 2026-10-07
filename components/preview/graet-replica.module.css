@@ -15,6 +15,8 @@
 @font-face{font-family:GraetMona;src:url('/graet-replica/fonts/MonaSans-ExtraBold.ttf') format('truetype');font-weight:800;font-display:swap}
 @font-face{font-family:GraetMona;src:url('/graet-replica/fonts/MonaSans-Black.ttf') format('truetype');font-weight:900;font-display:swap}
 .stage{display:flex;align-items:center;justify-content:center;padding:20px;background:#0a0a17}
+.stageEmbedded{height:660px;min-height:660px;padding:0;background:radial-gradient(ellipse 40% 55% at 50% 52%,#7774d22b,transparent 84%)}
+.stageEmbedded .phone{width:383px;height:820px;min-height:820px;max-height:none;flex:none;border:4px solid #070b17;border-radius:48px;box-shadow:0 0 0 2px #c6d5ff80,0 34px 75px #0009,0 0 65px #5569ff20;transform:scale(.72);transform-origin:center center;margin:0}
 .phone{width:383px;height:820px;min-height:820px;max-height:none;flex:none;font-family:GraetMona,Arial,sans-serif}
 .phone button,.phone input,.phone textarea{font-family:inherit}
 .wordmark{font-family:GraetMona,Arial,sans-serif;font-weight:900;font-style:italic;font-size:56px;letter-spacing:-.105em;transform:skew(-7deg)}

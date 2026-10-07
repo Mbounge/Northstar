@@ -81,6 +81,11 @@
   }
 }
 
+html:has([data-graet-embedded]),
+body:has([data-graet-embedded]) {
+  background: transparent !important;
+}
+
 /* ── CUSTOM SCROLLBAR ── */
 ::-webkit-scrollbar {
   width: 8px;
