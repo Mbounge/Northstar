@@ -1,6 +1,0 @@
-browser/node_modules/
-browser/dist/
-.pytest_cache/
-__pycache__/
-**/__pycache__/
-*.pyc

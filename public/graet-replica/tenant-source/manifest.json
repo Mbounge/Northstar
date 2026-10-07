@@ -1,0 +1,807 @@
+[
+  {
+    "step": 1,
+    "lane": "onboarding",
+    "label": "GRAET",
+    "file": "s0001_onboarding_welcome_get_started.png",
+    "bytes": 1078830
+  },
+  {
+    "step": 2,
+    "lane": "onboarding",
+    "label": "Enter your email",
+    "file": "s0002_onboarding_email_form_empty.png",
+    "bytes": 89201
+  },
+  {
+    "step": 3,
+    "lane": "onboarding",
+    "label": "Enter your email",
+    "file": "s0003_onboarding_email_form_entered.png",
+    "bytes": 255354
+  },
+  {
+    "step": 4,
+    "lane": "onboarding",
+    "label": "Check your email",
+    "file": "s0004_onboarding_check_your_email.png",
+    "bytes": 120421
+  },
+  {
+    "step": 5,
+    "lane": "onboarding",
+    "label": "Tell us who you are",
+    "file": "s0005_onboarding_choose_your_role.png",
+    "bytes": 917234
+  },
+  {
+    "step": 6,
+    "lane": "onboarding",
+    "label": "What's your name?",
+    "file": "s0006_onboarding_name_form_empty.png",
+    "bytes": 82067
+  },
+  {
+    "step": 7,
+    "lane": "onboarding",
+    "label": "What's your name?",
+    "file": "s0007_onboarding_name_form_entered.png",
+    "bytes": 247449
+  },
+  {
+    "step": 8,
+    "lane": "onboarding",
+    "label": "When's your birthday?",
+    "file": "s0008_onboarding_birthday_form.png",
+    "bytes": 277894
+  },
+  {
+    "step": 9,
+    "lane": "onboarding",
+    "label": "What's your nationality?",
+    "file": "s0009_onboarding_nationality_selection.png",
+    "bytes": 81563
+  },
+  {
+    "step": 10,
+    "lane": "onboarding",
+    "label": "Select nationality",
+    "file": "s0010_onboarding_nationality_picker.png",
+    "bytes": 345219
+  },
+  {
+    "step": 11,
+    "lane": "onboarding",
+    "label": "Time to shine! Add your profile picture.",
+    "file": "s0011_onboarding_profile_picture_step.png",
+    "bytes": 100959
+  },
+  {
+    "step": 12,
+    "lane": "onboarding",
+    "label": "What are you looking for?",
+    "file": "s0012_onboarding_what_are_you_looking_for.png",
+    "bytes": 148051
+  },
+  {
+    "step": 13,
+    "lane": "onboarding",
+    "label": "Tell us about your search",
+    "file": "s0013_onboarding_team_search_preferences.png",
+    "bytes": 159011
+  },
+  {
+    "step": 14,
+    "lane": "onboarding",
+    "label": "Tell us about your search",
+    "file": "s0014_onboarding_playing_area_choice.png",
+    "bytes": 152218
+  },
+  {
+    "step": 15,
+    "lane": "onboarding",
+    "label": "Tell us about your search",
+    "file": "s0015_onboarding_preferred_regions.png",
+    "bytes": 202117
+  },
+  {
+    "step": 16,
+    "lane": "onboarding",
+    "label": "Which leagues should we prioritize for you?",
+    "file": "s0016_onboarding_priority_leagues.png",
+    "bytes": 221350
+  },
+  {
+    "step": 17,
+    "lane": "onboarding",
+    "label": "How your free 7-day trial works",
+    "file": "s0017_onboarding_premium_trial_offer_top.png",
+    "bytes": 187544
+  },
+  {
+    "step": 18,
+    "lane": "onboarding",
+    "label": "7-day trial works",
+    "file": "s0018_onboarding_premium_trial_offer_lower.png",
+    "bytes": 200028
+  },
+  {
+    "step": 19,
+    "lane": "onboarding",
+    "label": "Don't miss a thing",
+    "file": "s0019_onboarding_notification_opt_in.png",
+    "bytes": 224467
+  },
+  {
+    "step": 20,
+    "lane": "onboarding",
+    "label": "Hey, Bond",
+    "file": "s0020_onboarding_career_dashboard_landing.png",
+    "bytes": 358967
+  },
+  {
+    "step": 21,
+    "lane": "browsing",
+    "label": "Openings, Prospects & Shortlists",
+    "file": "s0021_home_feed_your_feed_top.png",
+    "bytes": 1897087
+  },
+  {
+    "step": 22,
+    "lane": "browsing",
+    "label": "Suggested Leagues",
+    "file": "s0022_home_games_games_suggested_leagues.png",
+    "bytes": 229540
+  },
+  {
+    "step": 23,
+    "lane": "browsing",
+    "label": "No notifications yet",
+    "file": "s0023_home_notifications_notifications_empty.png",
+    "bytes": 149986
+  },
+  {
+    "step": 24,
+    "lane": "browsing",
+    "label": "GRAET Premium",
+    "file": "s0024_home_feed_feed_premium_post_and_suggestions.png",
+    "bytes": 854824
+  },
+  {
+    "step": 25,
+    "lane": "browsing",
+    "label": "View opening",
+    "file": "s0025_home_feed_feed_coach_post.png",
+    "bytes": 917748
+  },
+  {
+    "step": 26,
+    "lane": "browsing",
+    "label": "Open positions",
+    "file": "s0026_home_feed_feed_opening_card_and_post.png",
+    "bytes": 702139
+  },
+  {
+    "step": 27,
+    "lane": "browsing",
+    "label": "Open positions",
+    "file": "s0027_home_feed_feed_opening_card_variation.png",
+    "bytes": 569865
+  },
+  {
+    "step": 28,
+    "lane": "browsing",
+    "label": "Open positions",
+    "file": "s0028_home_feed_feed_further_opening_and_post.png",
+    "bytes": 1159971
+  },
+  {
+    "step": 29,
+    "lane": "browsing",
+    "label": "Get on the radar",
+    "file": "s0029_feature_tour_get_on_the_radar.png",
+    "bytes": 1480042
+  },
+  {
+    "step": 30,
+    "lane": "browsing",
+    "label": "Team openings",
+    "file": "s0030_feature_tour_team_openings_tour_card.png",
+    "bytes": 662519
+  },
+  {
+    "step": 31,
+    "lane": "browsing",
+    "label": "Open to opportunities",
+    "file": "s0031_feature_tour_open_to_opportunities_tour_card.png",
+    "bytes": 624072
+  },
+  {
+    "step": 32,
+    "lane": "browsing",
+    "label": "Browse all players",
+    "file": "s0032_explore_players_player_grid_top.png",
+    "bytes": 1799733
+  },
+  {
+    "step": 33,
+    "lane": "browsing",
+    "label": "Players",
+    "file": "s0033_explore_players_player_grid_more_players.png",
+    "bytes": 2135388
+  },
+  {
+    "step": 34,
+    "lane": "browsing",
+    "label": "A later scroll position in Explore's searchable player di...",
+    "file": "s0034_explore_players_player_grid_later_cards.png",
+    "bytes": 2778859
+  },
+  {
+    "step": 35,
+    "lane": "browsing",
+    "label": "A scrollable, two-column player discovery directory with ...",
+    "file": "s0035_explore_players_player_grid_later_cards_ii.png",
+    "bytes": 2528638
+  },
+  {
+    "step": 36,
+    "lane": "browsing",
+    "label": "Team openings",
+    "file": "s0036_explore_openings_team_openings_top.png",
+    "bytes": 223332
+  },
+  {
+    "step": 37,
+    "lane": "browsing",
+    "label": "A vertically scrollable Explore listings view with team r...",
+    "file": "s0037_explore_openings_team_openings_more_listings.png",
+    "bytes": 210339
+  },
+  {
+    "step": 38,
+    "lane": "browsing",
+    "label": "A vertically scrollable hockey recruitment feed showing t...",
+    "file": "s0038_explore_openings_team_openings_more_listings_ii.png",
+    "bytes": 234469
+  },
+  {
+    "step": 39,
+    "lane": "browsing",
+    "label": "A scrolled Explore listings state showing hockey team rec...",
+    "file": "s0039_explore_openings_team_openings_later_listings.png",
+    "bytes": 211097
+  },
+  {
+    "step": 40,
+    "lane": "browsing",
+    "label": "Explore directory listing hockey players with action-phot...",
+    "file": "s0040_explore_player_search_browse_all_players_top.png",
+    "bytes": 569844
+  },
+  {
+    "step": 41,
+    "lane": "browsing",
+    "label": "Filter · 34,543 players",
+    "file": "s0041_explore_player_search_browse_all_players_middle.png",
+    "bytes": 590691
+  },
+  {
+    "step": 42,
+    "lane": "browsing",
+    "label": "Filter · 34,543 players",
+    "file": "s0042_explore_player_search_browse_all_players_lower.png",
+    "bytes": 582638
+  },
+  {
+    "step": 43,
+    "lane": "browsing",
+    "label": "Filters",
+    "file": "s0043_explore_player_search_player_filters_top.png",
+    "bytes": 164470
+  },
+  {
+    "step": 44,
+    "lane": "browsing",
+    "label": "Filters",
+    "file": "s0044_explore_player_search_player_filters_lower.png",
+    "bytes": 164797
+  },
+  {
+    "step": 45,
+    "lane": "browsing",
+    "label": "No applications yet",
+    "file": "s0045_explore_openings_my_applications_empty.png",
+    "bytes": 107300
+  },
+  {
+    "step": 46,
+    "lane": "browsing",
+    "label": "Minnesota Blue Ox",
+    "file": "s0046_explore_openings_minnesota_blue_ox_opening_top.png",
+    "bytes": 170653
+  },
+  {
+    "step": 47,
+    "lane": "browsing",
+    "label": "Opening",
+    "file": "s0047_explore_openings_minnesota_blue_ox_opening_details.png",
+    "bytes": 173829
+  },
+  {
+    "step": 48,
+    "lane": "browsing",
+    "label": "Apply",
+    "file": "s0048_explore_openings_apply_to_opening_unsent.png",
+    "bytes": 151393
+  },
+  {
+    "step": 49,
+    "lane": "browsing",
+    "label": "Get seen by scouts and reach a higher level",
+    "file": "s0049_ai_ai_premium_offer_top.png",
+    "bytes": 1236307
+  },
+  {
+    "step": 50,
+    "lane": "browsing",
+    "label": "Get 3× more views",
+    "file": "s0050_ai_ai_premium_offer_middle.png",
+    "bytes": 190689
+  },
+  {
+    "step": 51,
+    "lane": "browsing",
+    "label": "Premium for the whole family",
+    "file": "s0051_ai_ai_premium_offer_lower.png",
+    "bytes": 456958
+  },
+  {
+    "step": 52,
+    "lane": "browsing",
+    "label": "Get more messages",
+    "file": "s0052_chat_chats_all_empty.png",
+    "bytes": 324892
+  },
+  {
+    "step": 53,
+    "lane": "browsing",
+    "label": "Get more messages",
+    "file": "s0053_chat_chats_unread_empty.png",
+    "bytes": 324579
+  },
+  {
+    "step": 54,
+    "lane": "browsing",
+    "label": "Your career",
+    "file": "s0054_home_career_career_dashboard_lower.png",
+    "bytes": 332342
+  },
+  {
+    "step": 55,
+    "lane": "browsing",
+    "label": "AI Assistant",
+    "file": "s0055_home_career_career_dashboard_career_tools.png",
+    "bytes": 929987
+  },
+  {
+    "step": 56,
+    "lane": "browsing",
+    "label": "USPHL Premier",
+    "file": "s0056_home_games_all_games_usphl_premier_list.png",
+    "bytes": 245468
+  },
+  {
+    "step": 57,
+    "lane": "browsing",
+    "label": "Date-selectable hockey scores page showing completed matc...",
+    "file": "s0057_home_games_more_league_scores.png",
+    "bytes": 251453
+  },
+  {
+    "step": 58,
+    "lane": "browsing",
+    "label": "A vertically scrolling, date-selectable hockey scoreboard...",
+    "file": "s0058_home_games_czech_league_scores.png",
+    "bytes": 269541
+  },
+  {
+    "step": 59,
+    "lane": "browsing",
+    "label": "Czechia Extraliga",
+    "file": "s0059_home_games_czechia_extraliga_selected.png",
+    "bytes": 131150
+  },
+  {
+    "step": 60,
+    "lane": "browsing",
+    "label": "Czechia Extraliga",
+    "file": "s0060_home_games_sparta_praha_vs_energie_karlovy_vary.png",
+    "bytes": 297228
+  },
+  {
+    "step": 61,
+    "lane": "browsing",
+    "label": "Final 0 - 1",
+    "file": "s0061_home_games_match_details_events.png",
+    "bytes": 180886
+  },
+  {
+    "step": 62,
+    "lane": "browsing",
+    "label": "Stats",
+    "file": "s0062_home_games_match_statistics.png",
+    "bytes": 168397
+  },
+  {
+    "step": 63,
+    "lane": "browsing",
+    "label": "Hockey match detail view on the Lineups tab, with a home/...",
+    "file": "s0063_home_games_home_lineup_top.png",
+    "bytes": 166699
+  },
+  {
+    "step": 64,
+    "lane": "browsing",
+    "label": "Czechia Extraliga",
+    "file": "s0064_home_games_home_lineup_forwards.png",
+    "bytes": 302750
+  },
+  {
+    "step": 65,
+    "lane": "browsing",
+    "label": "A scrolled match Lineups view showing the home-side roste...",
+    "file": "s0065_home_games_home_lineup_defenders.png",
+    "bytes": 182429
+  },
+  {
+    "step": 66,
+    "lane": "browsing",
+    "label": "Defencemen",
+    "file": "s0066_home_games_home_lineup_goalie_and_legend.png",
+    "bytes": 179579
+  },
+  {
+    "step": 67,
+    "lane": "browsing",
+    "label": "Czechia Extraliga",
+    "file": "s0067_home_games_away_lineup_top.png",
+    "bytes": 310262
+  },
+  {
+    "step": 68,
+    "lane": "browsing",
+    "label": "Scrolled match Lineups tab showing the away team's forwar...",
+    "file": "s0068_home_games_away_lineup_forwards_and_defenders.png",
+    "bytes": 183225
+  },
+  {
+    "step": 69,
+    "lane": "browsing",
+    "label": "Scrolled hockey match Lineups view focused on the away te...",
+    "file": "s0069_home_games_away_lineup_goalie_and_legend.png",
+    "bytes": 178672
+  },
+  {
+    "step": 70,
+    "lane": "browsing",
+    "label": "Bond Sithoko",
+    "file": "s0070_home_menu_side_menu_open.png",
+    "bytes": 257350
+  },
+  {
+    "step": 71,
+    "lane": "browsing",
+    "label": "Graet Premium",
+    "file": "s0071_home_career_graet_premium_detail.png",
+    "bytes": 460728
+  },
+  {
+    "step": 72,
+    "lane": "browsing",
+    "label": "Track your games",
+    "file": "s0072_home_career_game_tracker_empty.png",
+    "bytes": 245333
+  },
+  {
+    "step": 73,
+    "lane": "browsing",
+    "label": "Find your school",
+    "file": "s0073_colleges_find_your_school_top.png",
+    "bytes": 453015
+  },
+  {
+    "step": 74,
+    "lane": "browsing",
+    "label": "A mid-scroll view of college program listings in the Care...",
+    "file": "s0074_colleges_college_list_middle.png",
+    "bytes": 371889
+  },
+  {
+    "step": 75,
+    "lane": "browsing",
+    "label": "Lower scroll position in a college discovery list, showin...",
+    "file": "s0075_colleges_college_list_lower.png",
+    "bytes": 359096
+  },
+  {
+    "step": 76,
+    "lane": "browsing",
+    "label": "A later-scroll view of the Career college-discovery list....",
+    "file": "s0076_colleges_college_list_later_cards.png",
+    "bytes": 363472
+  },
+  {
+    "step": 77,
+    "lane": "browsing",
+    "label": "A later-scroll view of Career college listings. Repeated ...",
+    "file": "s0077_colleges_college_list_later_cards_ii.png",
+    "bytes": 360843
+  },
+  {
+    "step": 78,
+    "lane": "browsing",
+    "label": "Hobart William Smith Colleges",
+    "file": "s0078_colleges_school_detail_header_and_fit.png",
+    "bytes": 1051641
+  },
+  {
+    "step": 79,
+    "lane": "browsing",
+    "label": "Hobart William Smith Colleges",
+    "file": "s0079_colleges_school_overview_top.png",
+    "bytes": 186574
+  },
+  {
+    "step": 80,
+    "lane": "browsing",
+    "label": "Hobart William Smith Colleges",
+    "file": "s0080_colleges_school_overview_paths.png",
+    "bytes": 199498
+  },
+  {
+    "step": 81,
+    "lane": "browsing",
+    "label": "Financials",
+    "file": "s0081_colleges_school_overview_financials.png",
+    "bytes": 202720
+  },
+  {
+    "step": 82,
+    "lane": "browsing",
+    "label": "Hobart William Smith Colleges",
+    "file": "s0082_colleges_school_academics_top.png",
+    "bytes": 1056975
+  },
+  {
+    "step": 83,
+    "lane": "browsing",
+    "label": "GPA & SAT",
+    "file": "s0083_colleges_school_academics_gpa_and_sat.png",
+    "bytes": 181944
+  },
+  {
+    "step": 84,
+    "lane": "browsing",
+    "label": "Hobart William Smith Colleges",
+    "file": "s0084_colleges_school_academics_additional_stats.png",
+    "bytes": 175534
+  },
+  {
+    "step": 85,
+    "lane": "browsing",
+    "label": "Filters",
+    "file": "s0085_colleges_college_filters_states.png",
+    "bytes": 204028
+  },
+  {
+    "step": 86,
+    "lane": "browsing",
+    "label": "Filters",
+    "file": "s0086_colleges_college_filters_proximity.png",
+    "bytes": 195587
+  },
+  {
+    "step": 87,
+    "lane": "browsing",
+    "label": "Filters",
+    "file": "s0087_colleges_college_filters_size_and_sat.png",
+    "bytes": 166514
+  },
+  {
+    "step": 88,
+    "lane": "browsing",
+    "label": "No support requests yet",
+    "file": "s0088_home_menu_support_no_requests.png",
+    "bytes": 115958
+  },
+  {
+    "step": 89,
+    "lane": "browsing",
+    "label": "Complete your profile",
+    "file": "s0089_home_feed_feed_complete_profile_banner.png",
+    "bytes": 1514868
+  },
+  {
+    "step": 90,
+    "lane": "browsing",
+    "label": "Trevor Daly",
+    "file": "s0090_coach_profiles_trevor_daly_profile_bio_top.png",
+    "bytes": 474329
+  },
+  {
+    "step": 91,
+    "lane": "browsing",
+    "label": "Trevor Daly",
+    "file": "s0091_coach_profiles_trevor_daly_bio_lower.png",
+    "bytes": 177678
+  },
+  {
+    "step": 92,
+    "lane": "browsing",
+    "label": "Trevor Daly",
+    "file": "s0092_coach_profiles_trevor_daly_wall_top.png",
+    "bytes": 712532
+  },
+  {
+    "step": 93,
+    "lane": "browsing",
+    "label": "Trevor Daly",
+    "file": "s0093_coach_profiles_trevor_daly_wall_post.png",
+    "bytes": 800326
+  },
+  {
+    "step": 94,
+    "lane": "browsing",
+    "label": "Tim Tobin",
+    "file": "s0094_coach_profiles_tim_tobin_profile_bio_top.png",
+    "bytes": 442051
+  },
+  {
+    "step": 95,
+    "lane": "browsing",
+    "label": "Tim Tobin",
+    "file": "s0095_coach_profiles_tim_tobin_bio_lower.png",
+    "bytes": 183190
+  },
+  {
+    "step": 96,
+    "lane": "browsing",
+    "label": "Tim Tobin",
+    "file": "s0096_coach_profiles_tim_tobin_wall_top.png",
+    "bytes": 711819
+  },
+  {
+    "step": 97,
+    "lane": "browsing",
+    "label": "Tim Tobin",
+    "file": "s0097_coach_profiles_tim_tobin_wall_post.png",
+    "bytes": 879992
+  },
+  {
+    "step": 98,
+    "lane": "browsing",
+    "label": "Browse all players",
+    "file": "s0098_explore_players_player_grid_new_visible_cards.png",
+    "bytes": 1994745
+  },
+  {
+    "step": 99,
+    "lane": "browsing",
+    "label": "Thomas Balogh",
+    "file": "s0099_player_profiles_thomas_balogh_profile_wall_top.png",
+    "bytes": 1753923
+  },
+  {
+    "step": 100,
+    "lane": "browsing",
+    "label": "Latest posts",
+    "file": "s0100_player_profiles_wall_clips_and_posts.png",
+    "bytes": 1454005
+  },
+  {
+    "step": 101,
+    "lane": "browsing",
+    "label": "Thomas Balogh",
+    "file": "s0101_player_profiles_wall_clip_post.png",
+    "bytes": 1935152
+  },
+  {
+    "step": 102,
+    "lane": "browsing",
+    "label": "Thomas Balogh",
+    "file": "s0102_player_profiles_wall_further_clips.png",
+    "bytes": 1539646
+  },
+  {
+    "step": 103,
+    "lane": "browsing",
+    "label": "A scrolled section of a hockey player's profile Wall, wit...",
+    "file": "s0103_player_profiles_wall_further_posts.png",
+    "bytes": 1239761
+  },
+  {
+    "step": 104,
+    "lane": "browsing",
+    "label": "More players",
+    "file": "s0104_player_profiles_wall_more_players.png",
+    "bytes": 1658552
+  },
+  {
+    "step": 105,
+    "lane": "browsing",
+    "label": "A vertically scrolling player-profile Wall view containin...",
+    "file": "s0105_player_profiles_related_player_cards.png",
+    "bytes": 1711825
+  },
+  {
+    "step": 106,
+    "lane": "browsing",
+    "label": "A lower scrolled portion of a player's Wall view showing ...",
+    "file": "s0106_player_profiles_related_player_cards_lower.png",
+    "bytes": 1669836
+  },
+  {
+    "step": 107,
+    "lane": "browsing",
+    "label": "Thomas Balogh",
+    "file": "s0107_player_profiles_profile_stats_top.png",
+    "bytes": 1746815
+  },
+  {
+    "step": 108,
+    "lane": "browsing",
+    "label": "A player profile's Stats tab displaying season and tourna...",
+    "file": "s0108_player_profiles_profile_stats_seasons.png",
+    "bytes": 169840
+  },
+  {
+    "step": 109,
+    "lane": "browsing",
+    "label": "Tournaments",
+    "file": "s0109_player_profiles_profile_stats_tournaments.png",
+    "bytes": 1412396
+  },
+  {
+    "step": 110,
+    "lane": "browsing",
+    "label": "A scrolled player-profile Stats view showing photo-led re...",
+    "file": "s0110_player_profiles_stats_related_players.png",
+    "bytes": 2185889
+  },
+  {
+    "step": 111,
+    "lane": "browsing",
+    "label": "Simon Delrosbil",
+    "file": "s0111_player_profiles_stats_related_players_lower.png",
+    "bytes": 1895749
+  },
+  {
+    "step": 112,
+    "lane": "browsing",
+    "label": "Thomas Balogh",
+    "file": "s0112_player_profiles_profile_bio_top.png",
+    "bytes": 1751647
+  },
+  {
+    "step": 113,
+    "lane": "browsing",
+    "label": "Center",
+    "file": "s0113_player_profiles_profile_bio_measurements.png",
+    "bytes": 171046
+  },
+  {
+    "step": 114,
+    "lane": "browsing",
+    "label": "Academic details",
+    "file": "s0114_player_profiles_profile_bio_academic_and_social.png",
+    "bytes": 731590
+  },
+  {
+    "step": 115,
+    "lane": "browsing",
+    "label": "A vertically scrolled player Bio view showing large photo...",
+    "file": "s0115_player_profiles_bio_related_players.png",
+    "bytes": 1959560
+  }
+]
