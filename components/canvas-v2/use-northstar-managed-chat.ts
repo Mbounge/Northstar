@@ -167,7 +167,13 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       }
       if (action.name === 'canvas_review') {
         const screenRevision = engine.readCommittedRevision();
-        const screen = args.nodeId ? readCanvasV2Screens(screenRevision.document.html).find(item => item.nodeId === args.nodeId) : undefined;
+        const screens = readCanvasV2Screens(screenRevision.document.html);
+        const authored = screens.filter(item => !item.screen.simulation);
+        const selected = current.current.selectedNodeIds ?? [];
+        const selectedScreen = selected.length === 1 ? screens.find(item => item.nodeId === selected[0]) : undefined;
+        // Review the actual product pixels, rather than a tiny canvas overview.
+        const screen = args.nodeId ? screens.find(item => item.nodeId === args.nodeId)
+          : selectedScreen ?? (authored.length === 1 ? authored[0] : screens.length === 1 ? screens[0] : undefined);
         if (screen) {
           const capture = await captureCanvasV2Screen(screen.nodeId, screen.encoded, signal);
           const references = await Promise.all(screen.screen.referenceAssetIds.slice(0, 3).map(async id => {
