@@ -1104,6 +1104,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
         sceneTransaction,
       });
       options.onPrepared?.(nextCandidate.id);
+      nextCandidate.summary = summary;
+      nextCandidate.updatedBy = options.origin ?? 'user';
       setManualError(undefined);
       setManualNotice(undefined);
       if (nativeSceneRevision) {

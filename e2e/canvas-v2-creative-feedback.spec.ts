@@ -17,7 +17,8 @@ test('precise feedback preserves live input, saved state, source scope and camer
   const source = JSON.parse(Buffer.from(encoded!, 'base64').toString());
   await select();
   await page.getByRole('button', { name: 'Give feedback on screen' }).click();
-  await expect(page.getByText('Choose an element to give feedback · Esc to cancel')).toBeVisible();
+  await expect(page.getByRole('button', { name:'Done selecting' })).toBeVisible();
+  await expect(page.getByText('Click items to add feedback')).toHaveCount(0);
   await frame.getByRole('heading', { name: 'Your next season.', exact: true }).click();
   await expect(page.getByTestId('screen-feedback-target')).toContainText('Your next season.');
   await send('precise feedback — change this headline only');
@@ -31,23 +32,21 @@ test('precise feedback preserves live input, saved state, source scope and camer
   expect(revised.javascript).toBe(source.javascript); expect(revised.css).toBe(source.css);
   expect(revised.productIdentityId).toBe('graet-test');
   await select();
-  await page.getByRole('button', { name: 'Review screen quality' }).click();
-  const review = page.getByRole('dialog', { name: 'Screen quality review' });
-  await review.getByRole('button', { name: 'Review motion', exact: true }).click();
-  await expect(review.getByAltText('Motion at 0%')).toBeVisible();
-  await expect(review.getByAltText('Motion at 50%')).toBeVisible();
-  await expect(review.getByAltText('Motion at 100%')).toBeVisible();
-  const images = await review.locator('img[alt^="Motion at"]').evaluateAll(images => images.map(image => image.getAttribute('src')));
-  expect(new Set(images).size).toBe(3);
-  await review.getByRole('button', { name: 'Close screen review' }).click();
-  await expect(frame.getByRole('textbox', { name: 'Your goal' })).toHaveValue('Score 24 goals');
-  await expect(frame.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name:'Move screen' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name:'Review screen quality' })).toHaveCount(0);
+  await page.getByRole('button', { name:'Screen version history' }).click();
+  const history = page.getByRole('dialog', { name:'Screen version history' });
+  await expect(history.getByRole('navigation', { name:'Screen versions' })).toContainText('Refined the selected headline');
+  await expect(history.getByRole('navigation', { name:'Screen versions' })).toContainText('Starting version');
+  await history.getByRole('button', { name:'Close version history' }).click();
+  await expect(frame.getByRole('textbox', { name:'Your goal' })).toHaveValue('Score 24 goals');
+  await expect(frame.getByRole('button', { name:'Saved',exact:true })).toBeVisible();
   await frame.getByRole('button', { name: 'Saved', exact: true }).click();
   await expect(frame.getByRole('button', { name: 'Save team', exact: true })).toBeVisible();
   await select();
   await page.getByRole('button', { name: 'Give feedback on screen' }).click();
   await frame.getByRole('heading', { name: 'Your next chapter.', exact: true }).press('Escape');
-  await expect(page.getByText('Choose an element to give feedback · Esc to cancel')).toHaveCount(0);
+  await expect(page.getByRole('button', { name:'Done selecting' })).toHaveCount(0);
   await expect(page.getByTestId('screen-feedback-target')).toHaveCount(0);
 });
 
@@ -79,4 +78,54 @@ test('runtime checks reject clipped, transparent and covered controls and hold s
   await page.getByLabel('Message North Star').fill('screen reachability');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByText('Hidden and covered controls were rejected; the reachable control produced three distinct 80ms motion frames.', { exact: true })).toBeVisible({ timeout: 90000 });
+});
+
+
+test('feedback spans screens and canvas references; restoring a version preserves siblings and geometry', async ({ page }) => {
+  test.setTimeout(180000);
+  await page.goto('/canvas-v2-e2e/codex');
+  const send = async (message: string) => { await page.getByLabel('Message North Star').fill(message); await page.getByRole('button',{name:'Send message',exact:true}).click(); };
+  for(let i=1;i<=2;i++) {
+    await send('screen creative');
+    await expect(page.getByText('Created the screen with a saved product identity and reviewed three distinct motion frames.',{exact:true})).toHaveCount(i,{timeout:90000});
+  }
+  await send('creative flow preserve');
+  await expect(page.getByText('Added the full inspiration flow without moving the existing screen.',{exact:true})).toBeVisible({timeout:90000});
+  await page.getByRole('button',{name:'Show on canvas',exact:true}).click();
+  const screens=page.locator('[data-canvas-v2-screen]');
+  const first=screens.nth(0), second=screens.nth(1);
+  const firstId=await first.getAttribute('data-canvas-v2-node-id'), secondId=await second.getAttribute('data-canvas-v2-node-id');
+  const frame1=page.frameLocator(`[data-canvas-v2-node-id="${firstId}"] iframe`), frame2=page.frameLocator(`[data-canvas-v2-node-id="${secondId}"] iframe`);
+  await frame1.getByRole('button',{name:'Save team',exact:true}).click();
+  await frame1.getByLabel('Your goal').fill('Score 24 goals');
+  const geometry1=await first.getAttribute('style'),geometry2=await second.getAttribute('style');
+  const canonical=page.locator('[data-canvas-v2-canonical-flow]'), reference=await canonical.getAttribute('data-canvas-v2-canonical-flow');
+  const select=async()=>{const b=await first.boundingBox();if(!b)throw Error('Screen missing');await page.mouse.click(b.x-3,b.y+b.height/2);};
+  await select();await page.getByRole('button',{name:'Give feedback on screen'}).click();
+  await frame1.getByRole('heading',{name:'Your next season.',exact:true}).click();
+  await frame2.getByRole('heading',{name:'Your next season.',exact:true}).click();
+  await page.getByRole('button',{name:'Done selecting'}).click();
+  const referenceLeaf=canonical.getByRole('img',{name:'Landing',exact:true});
+  await referenceLeaf.click();await page.getByRole('button',{name:'Give feedback on selection',exact:true}).click();
+  await expect(page.getByText('Feedback · 3 items',{exact:true})).toBeVisible();
+  await send('feedback collection');
+  await expect(page.getByText('Refined every tagged screen detail and retained the tagged canvas reference.',{exact:true})).toBeVisible({timeout:90000});
+  await expect(frame1.getByRole('heading',{name:'Refined detail 1',exact:true})).toBeVisible();
+  await expect(frame2.getByRole('heading',{name:'Refined detail 2',exact:true})).toBeVisible();
+  await expect(frame1.getByLabel('Your goal')).toHaveValue('Score 24 goals');
+  await expect(frame1.getByRole('button',{name:'Saved',exact:true})).toBeVisible();
+  expect(await canonical.getAttribute('data-canvas-v2-canonical-flow')).toBe(reference);
+  const sibling=await second.getAttribute('data-canvas-v2-screen');
+  await select();await page.getByRole('button',{name:'Screen version history'}).click();
+  const history=page.getByRole('dialog',{name:'Screen version history'});
+  await history.getByRole('button').filter({hasText:'Starting version'}).click();
+  await history.getByRole('button',{name:'Use this version',exact:true}).click();
+  await expect(history).toHaveCount(0);
+  await expect(frame1.getByRole('heading',{name:'Your next season.',exact:true})).toBeVisible();
+  await expect(frame1.getByRole('button',{name:'Save team',exact:true})).toBeVisible();
+  expect(await second.getAttribute('data-canvas-v2-screen')).toBe(sibling);
+  expect(await first.getAttribute('style')).toBe(geometry1);expect(await second.getAttribute('style')).toBe(geometry2);
+  await select();await page.getByRole('button',{name:'Screen version history'}).click();
+  await expect(history.getByText('On canvas',{exact:true})).toHaveCount(1);
+  await expect(history.getByRole('button',{name:'Applied on canvas',exact:true})).toBeDisabled();
 });

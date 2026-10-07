@@ -6,7 +6,11 @@ import { useFloatingPanel } from "./use-floating-panel";
 import { canvasV2PanelAwareInsets } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { CanvasV2MediaInsert } from "./media-insert";
 import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia, measureCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
-import { SCREEN_ATTRIBUTE, parseCanvasV2Screen, readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
+import { ScreenVersionHistory } from './screen-version-history';
+import { reviseCanvasV2NativeScreen, validateCanvasV2ScreenJavaScript } from '@/lib/canvas-v2/interactive-screen-patch';
+import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
+import { CANVAS_V2_FEEDBACK_PICKING, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking } from '@/lib/canvas-v2/screen-feedback';
+import { SCREEN_ATTRIBUTE, parseCanvasV2Screen, validateCanvasV2ScreenAssets, readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
 import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenIdentities } from './interactive-screen';
 import { Play, Pause } from "lucide-react";
 
@@ -768,6 +772,10 @@ export function CanvasV2Workspace({
   // never discard a routing request, transcript, selected model, or the turn
   // that is following the active design loop.
   const [selectionTarget, setSelectionTarget] = useState<string>();
+  const [versionHistoryNode, setVersionHistoryNode] = useState<string>();
+  const [feedbackPicking, setFeedbackPicking] = useState(false);
+  const feedbackPickingRef = useRef(false);
+  useEffect(() => { const receive = (event: Event) => { const active = Boolean((event as CustomEvent).detail); feedbackPickingRef.current = active; setFeedbackPicking(active); }; window.addEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); return () => window.removeEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); }, []);
   const [historySelectionRestore, setHistorySelectionRestore] = useState<{ revisionId: string; nodeIds: string[] }>();
   const [sceneElements, setSceneElements] = useState<CanvasV2InspectableElement[]>([]);
   const [flowPlacement, setFlowPlacement] = useState<{ message: string; error?: boolean }>();
@@ -1104,13 +1112,14 @@ export function CanvasV2Workspace({
     return () => window.removeEventListener('northstar-screen-feedback', feedback);
   }, []);
   const localChat = agentEndpoint ? managedChat : legacyChat;
-  const chat = liveReplica && sendSessionCommand ? {...localChat,turns:liveReplica.snapshot.turns,busy:liveReplica.busy,
+  const chat = liveReplica && sendSessionCommand ? {...localChat,screenVersions:liveReplica.snapshot.memory?.screenVersions ?? localChat.screenVersions,turns:liveReplica.snapshot.turns,busy:liveReplica.busy,
     submit:async (override?:string)=>{
       const message=(override ?? localChat.draft).trim();if(!message && !localChat.attachments.length)return;
-      const feedbackScreen = localChat.screenFeedback && readCanvasV2Screens(liveReplica.snapshot.revision.document.html).find(item => item.nodeId === localChat.screenFeedback?.nodeId);
-      const sent=await sendSessionCommand({kind:'submit',...(feedbackScreen && localChat.screenFeedback ? {screenFeedback:{target:localChat.screenFeedback,encoded:feedbackScreen.encoded}} : {}),message:message || 'Review the attached material.',attachments:localChat.attachments,model:localChat.modelSelection,effort:localChat.reasoningEffort}).then(()=>true,()=>false);
+      const screens = readCanvasV2Screens(liveReplica.snapshot.revision.document.html);
+      const feedbacks = localChat.screenFeedbackTargets.flatMap(target => { const screen = screens.find(screen => screen.nodeId === target.nodeId); return screen ? [{target,encoded:screen.encoded}] : []; });
+      const sent=await sendSessionCommand({kind:'submit',...(feedbacks.length ? {screenFeedbacks:feedbacks} : {}), objectFeedbacks:localChat.objectFeedbackTargets,message:message || 'Review the attached material.',attachments:localChat.attachments,model:localChat.modelSelection,effort:localChat.reasoningEffort}).then(()=>true,()=>false);
       if(!sent)return;
-      localChat.setDraft('');localChat.clearScreenFeedback();for(const attachment of localChat.attachments)localChat.removeAttachment(attachment.id);
+      setCanvasV2FeedbackPicking(false);localChat.setDraft('');localChat.clearScreenFeedback();for(const attachment of localChat.attachments)localChat.removeAttachment(attachment.id);
     },stop:()=>{void sendSessionCommand({kind:'stop'}).catch(()=>{});},
     setRunConfiguration:(model:typeof localChat.modelSelection,effort:typeof localChat.reasoningEffort)=>{
       localChat.setRunConfiguration(model,effort);void sendSessionCommand({kind:'settings',model,effort}).catch(()=>{});
@@ -1152,7 +1161,7 @@ export function CanvasV2Workspace({
   useEffect(() => {
     snapshotListener.current?.({ schema: 1, revision: engine.committed, turns: chat.turns, draft: chat.draft, attachments: chat.attachments,
       model: chat.modelSelection, effort: chat.reasoningEffort, viewport, memory: managedMemory.current() }, chat.busy);
-  }, [engine.committed, chat.turns, chat.draft, chat.attachments, chat.modelSelection, chat.reasoningEffort, viewport, chat.busy]);
+  }, [engine.committed, chat.turns, chat.draft, chat.attachments, chat.modelSelection, chat.reasoningEffort, viewport, chat.busy, managedChat.screenVersions]);
 
   useEffect(() => {
     if (!gatewayHandoff || gatewayHandoff.autoSubmit || !engine.interactionReady) return;
@@ -2096,7 +2105,16 @@ export function CanvasV2Workspace({
     startDirectGesture(kind, event.pointerId, event.clientX, event.clientY, selectedElements, handle);
   };
 
+  const tagCanvasElement = (element: CanvasV2InspectableElement) => {
+    const revision = engine.readCommittedRevision(), range = findCanvasV2SourceNodeRange(revision.document.html, element.nodeId);
+    if (!range || element.hidden) return;
+    const screen = readCanvasV2Screens(revision.document.html).find(screen => screen.nodeId === element.nodeId);
+    const label = screen?.screen.title || element.altText || element.textPreview || element.label || (element.kind === 'evidence' ? 'Reference screen' : element.kind || 'Canvas object');
+    window.dispatchEvent(new CustomEvent(CANVAS_V2_OBJECT_FEEDBACK, { detail: { nodeId: element.nodeId, label: label.slice(0,180), kind: element.kind || 'object', fingerprint: canvasV2FeedbackFingerprint(revision.document.html.slice(range.start, range.end)) } }));
+    setPanel('chat'); setChatOpen(true);
+  };
   const forwardedElementPointer = (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => {
+    if (feedbackPickingRef.current && !spacePan && tool !== "pan" && event.button === 0) { if (event.phase === 'down') tagCanvasElement(event.element); return; }
     if (tool === "draw" && !spacePan) {
       if (event.phase === "down" && event.button === 0) startDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
       else if (event.phase === "move") updateDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
@@ -3636,10 +3654,6 @@ export function CanvasV2Workspace({
   const selectionIsImage = selectedElements.length === 1 && selectedElement?.kind === "image";
   const selectionHasStroke = selectedElements.length === 1 && (selectedElement?.kind === "line" || selectedElement?.kind === "connector" || selectedElement?.kind === "drawing");
   const selectedScreen = selectedElements.length === 1 && engine.nativeScene?.nodes.find(node => node.sourceNodeId === selectedElement?.nodeId)?.attributes[SCREEN_ATTRIBUTE];
-  const screenCommand = (command: string) => {
-    const node = workspaceRef.current?.querySelector(`[data-canvas-v2-interactive-screen="${CSS.escape(selectedElement?.nodeId ?? "")}"]`);
-    node?.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND, { detail: command }));
-  };
   const selectionCanFill = selectedElements.length === 1 && !selectionIsText && !selectionIsImage && !selectionHasStroke && !selectionPermanent;
   const selectedVisualStyle = selectedElement?.visualStyle;
   activeSelectionBoundsRef.current = activeSelectionBounds;
@@ -3868,7 +3882,7 @@ export function CanvasV2Workspace({
           <button aria-label="Collapse North Star panel" onClick={() => setChatOpen(false)} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
         </div>
 
-        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} flowPlacement={flowPlacement} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} flowPlacement={flowPlacement} feedbackPicking={feedbackPicking} onPickFeedback={() => setCanvasV2FeedbackPicking(true)} onFinishFeedback={() => setCanvasV2FeedbackPicking(false)} onTagSelection={() => selectedElements.forEach(tagCanvasElement)} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
           <div className="flex items-end justify-between px-1"><div><span className="text-[10px] font-black uppercase tracking-[.18em] text-[#735fef] dark:text-[#aa9cff]">Object library</span><h2 className="mt-1 text-base font-black tracking-[-.02em]">Add to canvas</h2></div><span className="pb-0.5 text-[10px] font-semibold text-[#92919e] dark:text-[#8f8b99]">Click or drag</span></div>
           <div role="tablist" aria-label="Object library categories" className="mt-4 grid grid-cols-5 gap-1 rounded-[14px] bg-[#f2f1f6] p-1 dark:bg-white/[.05]">
             {HUMAN_AUTHORING_TABS.map((item) => <button key={item.id} type="button" role="tab" aria-selected={authoringTab === item.id} onClick={() => setAuthoringTab(item.id)} className={`h-8 rounded-[10px] text-[10px] font-black transition ${authoringTab === item.id ? "bg-white text-[#5545c8] shadow-[0_2px_9px_rgba(45,41,78,.1)] dark:bg-white/[.12] dark:text-[#c8c0ff]" : "text-[#858391] hover:text-[#4e4d58] dark:text-[#928e9d] dark:hover:text-[#d4d1da]"}`}>{item.label}</button>)}
@@ -4213,15 +4227,14 @@ export function CanvasV2Workspace({
           event.stopPropagation();
           navigateWorkspaceWheel(event);
         }}
-        className="absolute z-50 flex min-h-10 flex-nowrap whitespace-nowrap [&>button]:shrink-0 [&>span]:shrink-0 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[12px] border border-white/[.08] bg-[#1c1c20]/[.98] px-1.5 text-white shadow-[0_6px_20px_rgba(0,0,0,.22)] backdrop-blur-xl"
+        className="absolute z-50 flex min-h-10 flex-nowrap whitespace-nowrap [&>button]:shrink-0 [&>span]:shrink-0 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[12px] border border-[#ddd8e5] bg-white/[.98] px-1.5 text-[#514a60] dark:border-white/[.08] dark:bg-[#211d28]/[.98] dark:text-[#eee7f5] shadow-[0_6px_20px_rgba(0,0,0,.22)] backdrop-blur-xl"
         style={contextualToolbarPosition.style}
       >
         {selectedScreen && <>
-          {!parseCanvasV2Screen(selectedScreen).simulation && <button aria-label="Give feedback on screen" onClick={() => screenCommand('feedback')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
-          <button aria-label="Move selected screen" title="Drag to move the screen" onPointerDown={event => beginDirectGesture('move', event)} className="h-7 cursor-move rounded-lg px-2 text-xs hover:bg-white/10">Move</button>
-          <button aria-label="Review screen quality" onClick={() => screenCommand('review')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Review</button>
-          <button aria-label="Reset screen" title="Reset mock data" onClick={() => screenCommand('reset')} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Reset</button>
+          {!parseCanvasV2Screen(selectedScreen).simulation && <button aria-label="Give feedback on screen" onClick={() => { setCanvasV2FeedbackPicking(true); setPanel('chat'); setChatOpen(true); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
+          <button aria-label="Screen version history" onClick={() => { setCanvasV2FeedbackPicking(false); setVersionHistoryNode(selectedElement.nodeId); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">History</button>
         </>}
+        {!selectedScreen && <button aria-label="Give feedback on selection" onClick={() => { selectedElements.forEach(tagCanvasElement); setCanvasV2FeedbackPicking(true); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
         {selectedElements.length > 1 && <>
           <span className="shrink-0 whitespace-nowrap px-2 text-[11px] font-medium text-white/60">{selectedElements.length} selected</span>
           <div className="mx-0.5 h-5 w-px shrink-0 bg-white/12" />
@@ -4382,6 +4395,24 @@ export function CanvasV2Workspace({
         </> : <button role="menuitem" onClick={pasteClipboard} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Paste</span><kbd className="text-[10px] text-[#9694a2]">⌘V</kbd></button>}
       </div>}
 
+      {versionHistoryNode && (() => {
+        const screen = readCanvasV2Screens(engine.committed.document.html).find(screen => screen.nodeId === versionHistoryNode);
+        if (!screen) return null;
+        return <ScreenVersionHistory nodeId={versionHistoryNode} current={screen.encoded} versions={chat.screenVersions} onClose={() => setVersionHistoryNode(undefined)} onRestore={async version => {
+          const revision = engine.readCommittedRevision(), scene = engine.readNativeScene();
+          if (!scene || scene.revisionId !== revision.id) throw new Error('The canvas is finishing an update. Try again in a moment.');
+          const current = readCanvasV2Screens(revision.document.html).find(screen => screen.nodeId === version.nodeId);
+          if (!current) throw new Error('This screen was removed.');
+          const descriptor = parseCanvasV2Screen(version.encoded);
+          validateCanvasV2ScreenAssets(descriptor, revision.evidence); validateCanvasV2ScreenJavaScript(descriptor.javascript);
+          if (current.encoded === version.encoded) { workspaceRef.current?.querySelector(`[data-canvas-v2-interactive-screen="${CSS.escape(version.nodeId)}"]`)?.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND,{detail:'restart'})); return; }
+          const next = reviseCanvasV2NativeScreen(scene, version.nodeId, version.encoded);
+          if (!engine.applyManualDocument(serializeCanvasV2NativeScene(next), `Restored version ${chat.screenVersions.filter(entry => entry.nodeId === version.nodeId).findIndex(entry => entry.id === version.id)+1}`, revision.evidence, next, { origin:'user', selectionNodeIds:[version.nodeId] })) throw new Error(engine.readManualFailure() || 'The version could not be applied.');
+          let restored = false;
+          for (let i=0;i<40;i++) { const host = workspaceRef.current?.querySelector(`[data-canvas-v2-interactive-screen="${CSS.escape(version.nodeId)}"]`); if (host?.closest('[data-canvas-v2-screen]')?.getAttribute('data-canvas-v2-screen') === version.encoded) { await new Promise(resolve => setTimeout(resolve,25)); host.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND,{detail:'restart'})); restored = true; break; } await new Promise(resolve => setTimeout(resolve,25)); }
+          if (!restored) throw new Error('The version was saved; its preview is still updating. Close history and reopen this version.');
+        }}/>;
+      })()}
       {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Objects</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} style={{ paddingLeft: 8 + Math.min(4, node.depth) * 14 }} className={`flex items-center gap-2 rounded-xl py-2 pr-2 text-xs ${selectionNodeIds.includes(node.nodeId) ? "bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]" : "hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]"}`}><button onClick={(event) => { const element = sceneElements.find((item) => item.nodeId === node.nodeId); if (element) selectElement(element, { additive: event.shiftKey || event.metaKey, range: event.shiftKey, directEdit: false }); else { setSelectedElements([]); setSelectionTarget(node.nodeId); } setLayersOpen(false); }} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
 
       <div aria-label="Canvas tools" className="absolute bottom-[18px] left-1/2 z-40 flex -translate-x-1/2 items-center gap-0.5 rounded-[18px] border border-[#dedee8]/90 bg-white/92 p-1.5 shadow-[0_10px_34px_rgba(50,45,100,.15)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_14px_38px_rgba(0,0,0,.34)]">

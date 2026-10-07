@@ -8,7 +8,7 @@ export interface NorthstarSnapshot {
   schema: 1; revision: CanvasV2ArtifactRevision; turns: CanvasV2ChatTurn[]; draft: string;
   attachments?: import("../chat-attachments").CanvasV2ChatAttachment[];
   model: CanvasV2ModelSelection; effort: NorthstarEffort; viewport: CanvasV2WorkspaceViewport;
-  memory?: { productIdentities?: import('../product-identity').CanvasV2ProductIdentity[]; artifacts?: import('../creative/types').NorthstarArtifact[]; assets: CanvasV2EvidenceAsset[]; accountPackets: CanvasV2EvidencePacket[];
+  memory?: { screenVersions?: import('../screen-versions').CanvasV2ScreenVersion[]; productIdentities?: import('../product-identity').CanvasV2ProductIdentity[]; artifacts?: import('../creative/types').NorthstarArtifact[]; assets: CanvasV2EvidenceAsset[]; accountPackets: CanvasV2EvidencePacket[];
     accountFlows: [string, {app: AppDataApp; flow: AppDataFlow}][]; accountFlowSummaries?: [string, {app: AppDataApp; flow: AppDataFlow}][]; accountHandles?: [string, string][]; sourceMedia: CodexSourceMediaCandidate[];
     sourcePages: string[]; compositionHistory: CodexCompositionPlan[]; compositionSequence: number; };
 }
@@ -18,7 +18,7 @@ export interface NorthstarSession {
 }
 
 export type SessionCommand =
-  | {kind:'submit'; message:string; screenFeedback?: { target: import('../screen-feedback').CanvasV2ScreenFeedbackTarget; encoded: string }; attachments:import('../chat-attachments').CanvasV2ChatAttachment[]; model:CanvasV2ModelSelection; effort:NorthstarEffort}
+  | {kind:'submit'; message:string; screenFeedback?: { target: import('../screen-feedback').CanvasV2ScreenFeedbackTarget; encoded: string }; screenFeedbacks?: { target: import('../screen-feedback').CanvasV2ScreenFeedbackTarget; encoded: string }[]; objectFeedbacks?: import('../screen-feedback').CanvasV2ObjectFeedbackTarget[]; attachments:import('../chat-attachments').CanvasV2ChatAttachment[]; model:CanvasV2ModelSelection; effort:NorthstarEffort}
   | {kind:'stop'}
   | {kind:'title'; title:string}
   | {kind:'settings'; model:CanvasV2ModelSelection; effort:NorthstarEffort}

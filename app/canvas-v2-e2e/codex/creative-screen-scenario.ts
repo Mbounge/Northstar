@@ -6,13 +6,26 @@ export class CreativeScreenScenario {
   private step = 0;
   private nodeId = '';
   private flowId = '';
-  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false) {}
+  private multiTargets: JsonObject[] = [];
+  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false, private multiple = false) {}
   start() { this.peer.tool('canvas_read', {}); }
   reply(result: JsonObject) {
     const parts = Array.isArray(result.contentItems) ? result.contentItems.map(object) : [];
     let value: JsonObject = {};
     try { value = object(JSON.parse(string(parts[0]?.text))); } catch { /* fail below */ }
     if (this.reachability) { this.checkReachability(result, parts, value); return; }
+    if (this.multiple) {
+      if (!result.success || value.committed === false) { this.peer.finish('Multiple feedback failed: '+string(parts[0]?.text)); return; }
+      if (this.step++ === 0) {
+        const targets = (value.screenFeedbackTargets as JsonObject[]) ?? [];
+        if (targets.length < 2 || !Array.isArray(value.objectFeedbackTargets) || !value.objectFeedbackTargets.length) { this.peer.finish('Multiple feedback failed: screen and canvas tags missing'); return; }
+        this.multiTargets = targets;
+      }
+      const target = this.multiTargets[this.step-1];
+      if (target) this.peer.tool('canvas_screen_element', { nodeId:target.nodeId, selector:target.selector, text:'Refined detail '+this.step, summary:'Refined a tagged detail', selectionPolicy:'modify' });
+      else this.peer.finish('Refined every tagged screen detail and retained the tagged canvas reference.');
+      return;
+    }
     if (!result.success || value.committed === false) { this.peer.finish('Creative screen failed: ' + (string(parts[0]?.text) || JSON.stringify(value))); return; }
     if (this.flow) {
       switch (this.step++) {

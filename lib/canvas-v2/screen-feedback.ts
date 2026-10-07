@@ -1,4 +1,17 @@
 export const CANVAS_V2_SCREEN_FEEDBACK = 'northstar-screen-feedback';
+export const CANVAS_V2_FEEDBACK_PICKING = 'northstar-feedback-picking';
+export const CANVAS_V2_OBJECT_FEEDBACK = 'northstar-object-feedback';
+export const CANVAS_V2_MAX_FEEDBACK_TARGETS = 24;
+export interface CanvasV2ObjectFeedbackTarget { nodeId: string; label: string; kind: string; fingerprint: string }
+export function canvasV2FeedbackFingerprint(source: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+export function setCanvasV2FeedbackPicking(active: boolean) {
+  document.documentElement.dataset.canvasV2FeedbackPicking = String(active);
+  window.dispatchEvent(new CustomEvent(CANVAS_V2_FEEDBACK_PICKING, { detail: active }));
+}
 export interface CanvasV2ScreenFeedbackTarget {
   nodeId: string;
   title: string;

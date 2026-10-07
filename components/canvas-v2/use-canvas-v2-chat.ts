@@ -46,6 +46,8 @@ import {
 import type { CanvasV2GatewayHandoff } from "@/lib/canvas-v2/gateway-handoff";
 
 export interface CanvasV2ChatTurn {
+  screenFeedbackTargets?: import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[];
+  objectFeedbackTargets?: import('@/lib/canvas-v2/screen-feedback').CanvasV2ObjectFeedbackTarget[];
   screenFeedback?: import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget;
   artifacts?: import('@/lib/canvas-v2/creative/types').NorthstarArtifact[];
   id: string;
@@ -382,5 +384,5 @@ export function useCanvasV2Chat(input: {
 
   return {
     setRunConfiguration: (model:CanvasV2ModelSelection, effort:import('@/lib/canvas-v2/model-catalog').NorthstarEffort)=>{setModelSelection(model);setReasoningEffort(effort);},
-    screenFeedback: undefined as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget | undefined, clearScreenFeedback: (): void => {}, reasoningEffort, setReasoningEffort, runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
+    screenVersions: [] as import('@/lib/canvas-v2/screen-versions').CanvasV2ScreenVersion[], screenFeedbackTargets: [] as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[], objectFeedbackTargets: [] as import('@/lib/canvas-v2/screen-feedback').CanvasV2ObjectFeedbackTarget[], removeFeedbackTarget: (_nodeId: string, _selector?: string): void => { void _nodeId; void _selector; }, screenFeedback: undefined as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget | undefined, clearScreenFeedback: (): void => {}, reasoningEffort, setReasoningEffort, runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
 }

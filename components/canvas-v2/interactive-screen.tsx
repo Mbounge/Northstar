@@ -1,9 +1,5 @@
 'use client';
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
-import Image from 'next/image';
-import { CANVAS_V2_THEME_TOKENS } from '@/lib/canvas-v2/theme-context';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasV2ArtifactTheme } from '@/lib/canvas-v2/artifact-theme';
 import { parseCanvasV2Screen } from '@/lib/canvas-v2/interactive-screen';
 import { buildCanvasV2ScreenRuntime, SCREEN_PROTOCOL, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
@@ -15,7 +11,7 @@ import { inspectRegisteredSimulation } from '@/lib/canvas-v2/registered-simulati
 import { registerCanvasV2ScreenCapture } from '@/lib/canvas-v2/interactive-screen-capture';
 import type { CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
 import type { CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
-import { CANVAS_V2_SCREEN_FEEDBACK, parseCanvasV2ScreenFeedbackTarget, canvasV2ScreenLiveEdit, type CanvasV2ScreenLiveEdit } from '@/lib/canvas-v2/screen-feedback';
+import { CANVAS_V2_FEEDBACK_PICKING, setCanvasV2FeedbackPicking, CANVAS_V2_SCREEN_FEEDBACK, parseCanvasV2ScreenFeedbackTarget, canvasV2ScreenLiveEdit, type CanvasV2ScreenLiveEdit } from '@/lib/canvas-v2/screen-feedback';
 
 export const CANVAS_V2_SCREEN_COMMAND = 'northstar-screen-command';
 export const CanvasV2ScreenTheme = createContext<CanvasV2ArtifactTheme>('light');
@@ -112,13 +108,15 @@ export async function captureCanvasV2ScreenMotion(nodeId: string, encoded: strin
   }
 }
 
-export function CanvasV2InteractiveScreenObject({ nodeId, encoded }: { nodeId: string; encoded: string }) {
+export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption = true }: { nodeId: string; encoded: string; showCaption?: boolean }) {
   const evidence = useContext(CanvasV2ScreenAssets);
-  const identities = useContext(CanvasV2ScreenIdentities);
-  const theme = useContext(CanvasV2ScreenTheme);
+
+
   const screen = useMemo(() => parseCanvasV2Screen(encoded), [encoded]);
-  const identity = identities.find(identity => identity.id === screen.productIdentityId);
+
   const host = useRef<HTMLDivElement>(null), frame = useRef<HTMLIFrameElement>(null);
+  const [runtime, setRuntime] = useState(''), [error, setError] = useState('');
+  const [reload, setReload] = useState(0), [scale, setScale] = useState(1);
   const previousSource = useRef(encoded), runtimeSource = useRef(encoded);
   const pendingLiveEdit = useRef<{ encoded: string; edit: CanvasV2ScreenLiveEdit } | undefined>(undefined);
   if (previousSource.current !== encoded) {
@@ -134,44 +132,31 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded }: { nodeId: s
     const aborter = new AbortController();
     const done = controller.run({ action: 'patch-element', ...pending.edit }, aborter.signal).then(() => {
       if (!aborter.signal.aborted && controllers.get(nodeId) === controller) { controller.encoded = encoded; pendingLiveEdit.current = undefined; }
-    }).catch(() => { if (!aborter.signal.aborted) setError('This element changed while it was being edited. Reset the screen to load the saved revision.'); });
+    }).catch(() => { if (!aborter.signal.aborted) setError('This element changed while it was being edited. Choose the current version in History to start fresh.'); });
     controller.revisionReady = { encoded, done };
     return () => aborter.abort();
   }, [nodeId, encoded]);
   useEffect(() => registerCanvasV2ScreenCapture(nodeId, { encoded, image: async signal => (await captureCanvasV2Screen(nodeId, encoded, signal)).image }), [nodeId, encoded]);
-  const [runtime, setRuntime] = useState(''), [error, setError] = useState('');
   const lastHumanInput = useRef(0);
-  const [review, setReview] = useState<Awaited<ReturnType<typeof captureCanvasV2Screen>> | null>(null);
-  const [reviewing, setReviewing] = useState(false);
-  const [reviewError, setReviewError] = useState('');
-  const [feedbackMode, setFeedbackMode] = useState(false);
   const feedbackPicking = useRef(false);
-  const [motionReview, setMotionReview] = useState<Awaited<ReturnType<typeof captureCanvasV2ScreenMotion>>>([]);
-  const reviewAbort = useRef<AbortController | null>(null);
-  useEffect(() => { setReview(null); setMotionReview([]); setFeedbackMode(false); feedbackPicking.current = false; return () => reviewAbort.current?.abort(); }, [encoded]);
-  const openReview = async (motion = false) => {
-    reviewAbort.current?.abort(); const controller = new AbortController(); reviewAbort.current = controller;
-    setReviewing(true); setReviewError(''); setMotionReview([]);
-    try { const result = await captureCanvasV2Screen(nodeId, encoded, controller.signal); if (motion) { const frames = await captureCanvasV2ScreenMotion(nodeId, encoded, controller.signal); if (!controller.signal.aborted) setMotionReview(frames); } if (!controller.signal.aborted) setReview(result); }
-    catch (error) { if (!controller.signal.aborted) setReviewError(error instanceof Error ? error.message : 'Review could not be captured.'); }
-    finally { if (!controller.signal.aborted) setReviewing(false); }
-  };
   useEffect(() => {
-    const node = host.current;
+    const pick = (active: boolean) => {
+      if (screen.simulation) return;
+      feedbackPicking.current = active;
+      void inspectCanvasV2Screen(nodeId, encoded, { action: 'feedback-mode', value: active ? 'on' : 'off' }, new AbortController().signal).catch(() => { feedbackPicking.current = false; });
+    };
+    const receive = (event: Event) => pick(Boolean((event as CustomEvent).detail));
     const command = (event: Event) => {
       const action = (event as CustomEvent).detail;
-      if (action === 'review') void openReview();
-      else if (action === 'feedback') {
-        const aborter = new AbortController();
-        feedbackPicking.current = !feedbackMode;
-        void inspectCanvasV2Screen(nodeId, encoded, { action: 'feedback-mode', value: feedbackMode ? 'off' : 'on' }, aborter.signal).then(() => setFeedbackMode(value => !value)).catch(error => { feedbackPicking.current = false; setFeedbackMode(false); setReviewError(error instanceof Error ? error.message : 'Feedback is unavailable.'); });
-      }
-      else if (action === 'reset') { runtimeSource.current = encoded; setReload(value => value + 1); }
+      if (action === 'feedback') setCanvasV2FeedbackPicking(true);
+      if (action === 'restart') { runtimeSource.current = encoded; setReload(value => value + 1); }
     };
-    node?.addEventListener(CANVAS_V2_SCREEN_COMMAND, command);
-    return () => node?.removeEventListener(CANVAS_V2_SCREEN_COMMAND, command);
-  });
-  const [reload, setReload] = useState(0), [scale, setScale] = useState(1);
+    window.addEventListener(CANVAS_V2_FEEDBACK_PICKING, receive);
+    host.current?.addEventListener(CANVAS_V2_SCREEN_COMMAND, command);
+    if (document.documentElement.dataset.canvasV2FeedbackPicking === 'true') pick(true);
+    const node = host.current;
+    return () => { window.removeEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); node?.removeEventListener(CANVAS_V2_SCREEN_COMMAND, command); };
+  }, [nodeId, encoded, screen.simulation]);
   // Unrelated canvas revisions must not reset a running screen's mock state.
   const sources = JSON.stringify(screen.referenceAssetIds.map(id => { const asset = evidence.find(a => a.id === id); return { id, url: asset?.url }; }));
   useEffect(() => {
@@ -182,10 +167,10 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded }: { nodeId: s
     return () => observer.disconnect();
   }, [screen.width, screen.height]);
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { frame.current?.blur(); host.current?.focus({ preventScroll: true }); reviewAbort.current?.abort(); setReview(null); setReviewing(false); setReviewError(''); feedbackPicking.current = false; setFeedbackMode(false); void inspectCanvasV2Screen(nodeId, encoded, { action: 'feedback-mode', value: 'off' }, new AbortController().signal).catch(() => undefined); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { frame.current?.blur(); host.current?.focus({ preventScroll: true }); setCanvasV2FeedbackPicking(false); } };
     window.addEventListener('keydown', escape);
     return () => window.removeEventListener('keydown', escape);
-  }, [nodeId, encoded]);
+  }, []);
   useEffect(() => {
     const aborter = new AbortController();
     const runtimeScreen = parseCanvasV2Screen(runtimeEncoded);
@@ -208,16 +193,14 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded }: { nodeId: s
       if (event.data?.protocol !== SCREEN_PROTOCOL || event.data.token !== token) return;
       if (event.data.feedbackTarget) {
         if (!feedbackPicking.current) return;
-        feedbackPicking.current = false;
         try {
           const target = parseCanvasV2ScreenFeedbackTarget(event.data.feedbackTarget, nodeId, runtimeScreen.title);
-          setFeedbackMode(false);
           window.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_FEEDBACK, { detail: { target, encoded: controllers.get(nodeId)?.encoded ?? runtimeEncoded } }));
-        } catch { setFeedbackMode(false); }
+        } catch { feedbackPicking.current = false; }
         return;
       }
       if (event.data.userInput) { lastHumanInput.current = Date.now(); return; }
-      if (event.data.escape) { feedbackPicking.current = false; setFeedbackMode(false); frame.current?.blur(); host.current?.focus({ preventScroll: true }); return; }
+      if (event.data.escape) { setCanvasV2FeedbackPicking(false); frame.current?.blur(); host.current?.focus({ preventScroll: true }); return; }
       if (event.data.ready) { ready = true; return; }
       const request = pending.get(event.data.requestId);
       if (!request) return;
@@ -280,8 +263,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded }: { nodeId: s
     };
   }, [nodeId, runtimeEncoded, sources, reload, screen.width, screen.height, screen.simulation]);
   return <div ref={host} data-canvas-v2-interactive-screen={nodeId} tabIndex={-1} className="group relative h-full w-full" style={{ overflow: 'visible' }}>
-    <div aria-hidden="true" className="pointer-events-none absolute -top-9 left-0 w-full truncate text-lg font-medium" style={{ color: "var(--northstar-ink)", lineHeight: "24px" }}>{screen.title}</div>
-    {feedbackMode && <div role="status" data-canvas-v2-screen-control className="pointer-events-none absolute -bottom-12 left-0 z-10 rounded-xl bg-[#302b4a] px-3 py-2 text-sm text-white shadow-lg">Choose an element to give feedback · Esc to cancel</div>}
+    {showCaption && <div aria-hidden="true" title="Drag to move this screen" className="absolute -top-9 left-0 w-full cursor-grab truncate text-lg font-medium active:cursor-grabbing" style={{ color: "var(--northstar-ink)", lineHeight: "24px" }}>{screen.title}</div>}
     <div className="absolute inset-0 overflow-hidden rounded-xl bg-white shadow-sm">
       {(runtime || screen.simulation) && <iframe key={screen.simulation ? `${encoded}:${reload}` : undefined} ref={frame} title={screen.title} src={screen.simulation ? `${simulatorForApp(screen.simulation.appName)!.embedPath}&canvas=1` : undefined} srcDoc={screen.simulation ? undefined : runtime} sandbox={screen.simulation ? "allow-scripts allow-same-origin" : "allow-scripts allow-forms"} {...(screen.simulation ? {} : { credentialless: "" })} referrerPolicy="no-referrer" style={{ width: screen.width, height: screen.height, border: 0, display: 'block', transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'auto' }} />}
       {error && <div role="alert" className="absolute inset-0 grid place-content-center bg-white p-6 text-sm text-red-800">{error}</div>}
@@ -291,13 +273,6 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded }: { nodeId: s
     <div aria-hidden="true" title="Drag the screen edge to move" className="absolute -left-2 -bottom-2 h-2 w-[calc(100%+16px)] cursor-move" />
     <div aria-hidden="true" title="Drag the screen edge to move" className="absolute -left-2 top-0 h-full w-2 cursor-move" />
     <div aria-hidden="true" title="Drag the screen edge to move" className="absolute -right-2 top-0 h-full w-2 cursor-move" />
-    {(review || reviewing || reviewError) && createPortal(<div data-canvas-v2-screen-control style={{ ...CANVAS_V2_THEME_TOKENS[theme], colorScheme: theme } as CSSProperties} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-6" onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') { reviewAbort.current?.abort(); setReview(null); setReviewing(false); setReviewError(''); } }}>
-      <section role="dialog" aria-modal="true" aria-label="Screen quality review" className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--northstar-line)] bg-[var(--northstar-surface,#fff)] text-[var(--northstar-ink,#17171b)] shadow-xl">
-        <header className="flex items-center justify-between gap-4 border-b border-[var(--northstar-line)] px-6 py-4"><div><h2 className="text-lg font-semibold">{screen.title}</h2><p className="text-sm opacity-60">Current rendered state · {screen.width} × {screen.height}</p></div><button aria-label="Close screen review" onClick={() => { reviewAbort.current?.abort(); setReview(null); setReviewing(false); setReviewError(''); }}><X size={20}/></button></header>
-        <div className="flex min-h-0 flex-1 flex-wrap gap-6 overflow-auto p-6">
-          {reviewing ? <p>Capturing current screen…</p> : reviewError ? <p role="alert">{reviewError}</p> : review && <><Image unoptimized width={screen.width} height={screen.height} src={review.image} alt="Current interactive screen review" className="max-h-[65vh] max-w-full rounded-lg object-contain"/><div className="min-w-48 flex-1 text-sm"><h3 className="mb-2 font-semibold">Visual review</h3><p className="leading-relaxed opacity-75">Check spacing, alignment, text, image crops and the current interaction state against your references.</p>{identity && <div className="mt-5 rounded-xl border border-[var(--northstar-line)] p-3"><h3 className="font-semibold">{identity.name} design identity</h3><p className="mt-1 text-xs capitalize opacity-60">{identity.platform}</p><p className="mt-2 text-xs leading-relaxed opacity-80">{identity.visualLanguage}</p><details className="mt-3 text-xs"><summary className="cursor-pointer font-medium">Design decisions</summary><p className="mt-2 leading-relaxed">{identity.typography}</p><p className="mt-2 leading-relaxed">{identity.components}</p><p className="mt-2 leading-relaxed">{identity.motion}</p></details></div>}<p className="mt-4">{screen.referenceAssetIds.length} retained reference assets</p><p className="mt-2">Runtime errors: {Array.isArray(review.state.errors) ? review.state.errors.length : 0}</p>{Array.isArray(review.state.errors) && review.state.errors.map((error, index) => <p key={index} className="mt-2 text-red-600">{String(error)}</p>)}<p className="mt-4 text-xs opacity-60">This capture shows this state only. Interact with the screen to test other states and capture them again.</p><button className="mt-4 rounded-lg border border-[var(--northstar-line)] px-3 py-2" onClick={() => { void openReview(); }}>Capture again</button>{!screen.simulation && <button className="ml-2 mt-4 rounded-lg border border-[var(--northstar-line)] px-3 py-2" onClick={() => { void openReview(true); }}>Review motion</button>}{motionReview.length > 0 && <div className="mt-5"><h3 className="font-semibold">Motion timeline</h3><div className="mt-3 grid grid-cols-3 gap-2">{motionReview.map(frame => <button key={frame.progress} onClick={() => setReview(frame)} className="rounded-lg border border-[var(--northstar-line)] p-1"><Image unoptimized width={screen.width} height={screen.height} src={frame.image} alt={`Motion at ${Math.round(frame.progress * 100)}%`} className="w-full rounded object-contain"/><span className="text-xs">{Math.round(frame.progress * 100)}%</span></button>)}</div><p className="mt-3 text-xs leading-relaxed opacity-60">Samples CSS and Web Animations at the beginning, middle and end. Playback is restored after review. JavaScript loops, GIFs, performance and reduced-motion behavior require separate checks.</p></div>}</div></>}
-        </div>
-      </section>
-    </div>, document.body)}
+
   </div>;
 }
