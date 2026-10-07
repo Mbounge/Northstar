@@ -38,7 +38,7 @@ test("the chat exposes a natural resume only for genuinely interrupted work", ()
   assert.match(chat, /continueTurn/);
   assert.match(chat, /previousRunId: turn\.loop\.id/);
   assert.match(chat, /priorLoops/);
-  assert.match(panel, /Work was interrupted/);
+  assert.match(panel, /Continue from where we left off/);
   assert.match(panel, /Resume the work/);
   assert.doesNotMatch(panel, /Paused at a verified checkpoint|Continuation required|Continue from this canvas/);
 });

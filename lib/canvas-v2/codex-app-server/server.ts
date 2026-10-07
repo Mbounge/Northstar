@@ -221,7 +221,7 @@ export class CodexSessionHost {
       const message=error instanceof Error?error.message:'';
       const failureKind=/timed out/i.test(message)?'timeout':/unusable feedback|supported format|actionable feedback/i.test(message)?'invalid_feedback':/stopped/i.test(message)?'process_stopped':'provider_or_transport';
       s.reviewReport = { ...s.reviewReport, failureKind, status: 'unavailable', durationMs: Date.now() - started };
-      this.finishReviewedDraft(s, run, s.reviewContext.hasProductWork() ? 'The final visual review could not finish. The latest work is available, but its quality review is unfinished.' : 'The additional check was unavailable. Here is the latest answer; its review is unfinished.'); return;
+      this.finishReviewedDraft(s, run, true); return;
     }
     const work = s.commands.then(async () => {
       if (s.closed || s.reviewRun !== run || run.phase !== 'reviewing') return;
@@ -232,7 +232,7 @@ export class CodexSessionHost {
       if (!remainingWork) { s.reviewReport.status = 'completed'; this.finishReviewedDraft(s, run); return; }
       if (run.rounds >= this.maxReviewRounds) {
         s.reviewReport.status = 'budget_exhausted';
-        this.finishReviewedDraft(s, run, 'I reached the review limit with unresolved points. Here is the latest answer; it has not passed the full review.'); return;
+        this.finishReviewedDraft(s, run, true); return;
       }
       run.nextDraft(); s.reviewReport.status = 'continuing';
       const result = await s.rpc.request('turn/start', { threadId: s.threadId, model: s.model, effort: s.effort, input: [{ type: 'text', text: reviewContinuation(feedback), text_elements: [] }] });
@@ -241,10 +241,9 @@ export class CodexSessionHost {
     s.commands = work.catch(() => { this.close(s, 'The continuation could not start reliably. Start a new conversation.'); });
     await s.commands;
   }
-  private finishReviewedDraft(s: Session, run: DiscoveryReviewRun, notice?: string) {
+  private finishReviewedDraft(s: Session, run: DiscoveryReviewRun, unfinished = false) {
     run.stop();
-    if (notice) this.progress(s, notice);
-    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: notice ? `${notice}\n\n${item.text}` : item.text }] } });
+    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: unfinished ? (s.reviewContext.hasProductWork() ? 'The latest version is on your canvas. You can explore it and keep refining it.' : `Here’s what I found so far.\n\n${item.text}`) : item.text }] } });
     this.emit(s, { type: 'agent.session.turn.completed', turn_id: run.publicTurnId });
   }
   private stream(s: Session, identity: boolean, signal: AbortSignal) {

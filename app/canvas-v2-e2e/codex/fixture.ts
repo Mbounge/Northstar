@@ -16,6 +16,7 @@ export class FixtureCodex implements CodexTransport {
   calls: { method: string; params: JsonObject }[] = [];
   replies: { id: string | number; result: JsonObject }[] = [];
   turn = ''; count = 0; toolSequence = 0; private mediaParity = false; private sourcePhoto = false; private mediaStep = 0; private parity = false; private oversized = false; private overlapParity = false; private selectionEdit = false; private followupRepair = false; private chapter = 0; private canvas: JsonObject = {}; private plan: JsonObject = {}; private repair = false; private rejected = false; receive: (message: JsonObject) => void = () => {}; closed = false;
+  private readableChat = false;
   private ended: (error: Error) => void = () => {}; private timers: ReturnType<typeof setTimeout>[] = [];
   constructor(readonly cwd: string, readonly origin = 'http://127.0.0.1:3123') {}
   onMessage(handler: (message: JsonObject) => void) { this.receive = handler; }
@@ -45,6 +46,12 @@ export class FixtureCodex implements CodexTransport {
       this.creativeScreenScenario = /screen creative|precise feedback|creative flow preserve|screen reachability|feedback collection/i.test(message) ? new CreativeScreenScenario(this, /precise feedback/i.test(message), /creative flow preserve/i.test(message), /screen reachability/i.test(message), /feedback collection/i.test(message)) : undefined;
       this.screenScenario = /screen parity|screen revision/i.test(message) ? new ScreenScenario(this, /screen revision/i.test(message)) : undefined;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
+      this.readableChat = /chat readable parity/i.test(message);
+      if (this.readableChat) {
+        this.emit('item/completed', { turnId: this.turn, item: { id: `readable-${this.turn}`, type: 'agentMessage', phase: 'commentary', text: 'I’m comparing the navigation against the reference. I’ll update the CSS and preserve the DOM and JavaScript. The provider check failed. I’m keeping the approved visual direction.' } });
+        this.tool('canvas_read', { summary: 'Inspect DOM for nodeId=screen-1b6daf84-7d7a-44d3-993a-ecf4aeab39d4' });
+        return { turn: { id: this.turn } };
+      }
       if (/chat progress parity/i.test(message)) {
         const turnId = this.turn;
         for (let index = 0; index < 4; index++) this.timers.push(setTimeout(() => {
@@ -68,6 +75,7 @@ export class FixtureCodex implements CodexTransport {
   }
   reply(id: string | number, result: unknown) {
     const r = object(result); this.replies.push({ id, result: r });
+    if (this.readableChat) { this.finish('The comparison is ready. Your approved visual direction stays intact. [Reference](https://example.com/evidence).'); return; }
     if (this.creativeScreenScenario) { this.creativeScreenScenario.reply(r); return; }
     if (this.screenScenario) { this.screenScenario.reply(r); return; }
     if (this.appsScenario) { this.appsScenario.reply(r); return; }

@@ -37,7 +37,7 @@ import {
 } from "@/lib/canvas-v2/chat-attachments";
 import { canvasV2ElapsedLabel } from "@/lib/canvas-v2/chat-lifecycle";
 import { canvasV2VisibleProgressSteps } from "@/lib/canvas-v2/design-loop";
-import { canvasV2HasConfirmedWebSearch, canvasV2ActivitySummary } from "@/lib/canvas-v2/tool-activity";
+import { canvasV2HasConfirmedWebSearch, canvasV2ActivitySummary, canvasV2ReadableAgentText, canvasV2ReadableActivity, canvasV2TechnicalDetailRequested } from "@/lib/canvas-v2/tool-activity";
 import type { CanvasV2InspectableElement } from "@/lib/canvas-v2/element-inspection";
 import { canvasV2EvidenceSourceForSelection } from "@/lib/canvas-v2/evidence-packets";
 
@@ -77,8 +77,8 @@ function ActivityFeed({ items, active }: { items: NonNullable<CanvasV2ChatTurn["
   const currentId = active ? items.findLast(item => item.kind === "activity" && item.status === "started")?.id : undefined;
   const groups: Array<{ id: string; message?: string; sources?: (typeof items)[number]["sources"]; actions: typeof items }> = [];
   for (const item of items) {
-    if (item.kind === "progress") groups.push({ id: item.id, message: item.detail || item.label, sources: item.sources, actions: [] });
-    else {
+    if (item.kind === "progress" && canvasV2ReadableActivity(item)) groups.push({ id: item.id, message: canvasV2ReadableActivity(item), sources: item.sources, actions: [] });
+    else if (item.kind !== "progress") {
       const previous = groups.at(-1);
       if (previous && !previous.message) previous.actions.push(item);
       else groups.push({ id: item.id, actions: [item] });
@@ -100,14 +100,14 @@ function ActivityFeed({ items, active }: { items: NonNullable<CanvasV2ChatTurn["
       return <details key={group.id} className="group/activity text-[11px] leading-5 text-[#88818f] dark:text-[#a39baa]" data-testid="canvas-v2-tool-history">
         <summary className="flex cursor-pointer list-none items-start gap-2 marker:hidden">
           {running ? <Loader2 className="mt-1 h-3.5 w-3.5 shrink-0 animate-spin" /> : latest?.tool || group.actions.some(action => action.label === "Web research") ? <Globe2 className="mt-1 h-3.5 w-3.5 shrink-0" /> : <WandSparkles className="mt-1 h-3.5 w-3.5 shrink-0" />}
-          <span className="min-w-0 flex-1">{latest ? `${running ? latest.label + '…' : 'Work details'}` : canvasV2ActivitySummary(phases, active)}</span>
+          <span className="min-w-0 flex-1">{latest ? `${running ? canvasV2ReadableAgentText(latest.label) + '…' : 'Work details'}` : canvasV2ActivitySummary(phases, active)}</span>
           <span className="flex shrink-0 gap-1">{appBadges.map(app => <AccountAppIcon key={app.name} app={app} />)}</span>
           <span className="mt-1 flex shrink-0 gap-1" aria-hidden="true">{recentSources.map(source => <span key={source.href} title={source.label}><SourceIcon href={source.href} /></span>)}</span>
           <ChevronDown aria-hidden="true" className="mt-1 h-3 w-3 shrink-0 -rotate-90 transition-transform group-open/activity:rotate-0" />
         </summary>
         <ol className="ml-1.5 mt-2 space-y-2 border-l border-current/15 pl-4">
           {compactActions.map(action => <li key={action.id}>
-            <p>{action.detail || canvasV2ActivitySummary([action], active)}</p>
+            <p>{canvasV2ReadableActivity(action)}</p>
             {action.sources?.length ? action.tool === "web-search" ? <details className="mt-1">
               <summary className="cursor-pointer text-[#a39baa]">{action.sources.length} search results · leads, not verified findings</summary>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{action.sources.map(source => <ActivitySource key={source.href} source={source} />)}</div>
@@ -153,8 +153,8 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
       <Globe2 aria-hidden="true" className="h-3.5 w-3.5" />Web search used
     </div>}
     {progress && !loop?.activity?.length && !loop?.finalSummary && <div className="pb-3">
-      <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#7663e7] dark:text-[#aa9cff]">{progress.label}</div>
-      <p className="mt-1 text-[12px] leading-[1.55] text-[#5d596a] dark:text-[#bcb7c5]">{progress.detail}</p>
+      <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#7663e7] dark:text-[#aa9cff]">{canvasV2ReadableAgentText(progress.label)}</div>
+      <p className="mt-1 text-[12px] leading-[1.55] text-[#5d596a] dark:text-[#bcb7c5]">{canvasV2ReadableAgentText(progress.detail)}</p>
     </div>}
     {steps.length > 0 && <details className="group mb-2" data-testid="canvas-v2-activity-history">
       <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-[10px] font-semibold text-[#797383] marker:hidden dark:text-[#aaa3b5]">
@@ -172,13 +172,13 @@ function DesignProgress({ turn }: { turn: CanvasV2ChatTurn }) {
       data-canvas-v2-render-repair-audit={step.renderRepairFailures?.length ? JSON.stringify(step.renderRepairFailures) : undefined}
     >
       <span className="-ml-[20px] mt-0.5 grid h-3 w-3 shrink-0 place-items-center rounded-full bg-white ring-1 ring-[#8778ef] dark:bg-[#201e27]"><Check className="h-2 w-2 text-[#6552df]" /></span>
-      <p className="text-[12px] leading-[1.55] text-[#666172] dark:text-[#b8b3c0]">{step.summary}</p>
+      <p className="text-[12px] leading-[1.55] text-[#666172] dark:text-[#b8b3c0]">{canvasV2ReadableAgentText(step.summary)}</p>
     </div>)}
       </div>
     </details>}
     {(turn.status === "running" || turn.status === "routing") && !loop?.activity?.some(item => item.kind === "activity" && item.status === "started") && <div className="relative flex items-center gap-2 pb-1 text-[13px] text-[#747486]">
       <Loader2 className="h-3.5 w-3.5 animate-spin text-[#745fff]" />
-      {activeStatus}
+      {canvasV2ReadableAgentText(activeStatus)}
     </div>}
   </div>;
 }
@@ -207,6 +207,7 @@ function ChatTurn({
   onOpenImage: (attachment: CanvasV2ChatImageAttachment) => void;
   onOpenEvidence: (screen: Extract<CanvasV2ChatEvidenceReference, { kind: 'asset' }>) => void;
 }) {
+  const readable = (text: string) => canvasV2ReadableAgentText(text, canvasV2TechnicalDetailRequested(turn.message));
   const active = turn.status === "routing" || turn.status === "running";
   const progress = <>{!turn.loop && turn.activity?.length ? <ActivityFeed items={turn.activity} active={active} /> : null}{turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}</>;
   const hasProgress = Boolean(turn.activity?.length || (turn.route && turn.canvasInstruction));
@@ -236,28 +237,28 @@ function ChatTurn({
         {active && !turn.earlierSegment && <PendingDots reconnecting={Boolean(turn.retry)} />}
         {!active && (hasProgress || turn.elapsedMs !== undefined) && <details className="group/progress mb-3 text-[#88818f] dark:text-[#a39baa]" data-testid="canvas-v2-completed-progress">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-xs marker:hidden">
-            <span>{turn.earlierSegment ? 'Earlier activity' : `${turn.status === "failed" ? "Failed after" : turn.status === "stopped" ? "Stopped after" : turn.status === "incomplete" ? "Paused after" : "Worked for"} ${canvasV2ElapsedLabel(turn.elapsedMs ?? 0)}`}</span>
+            <span>{turn.earlierSegment ? 'Earlier activity' : `${turn.status === "stopped" ? "Stopped after" : turn.status === "incomplete" ? "Paused after" : "Worked for"} ${canvasV2ElapsedLabel(turn.elapsedMs ?? 0)}`}</span>
             <ChevronDown aria-hidden="true" className="h-3 w-3 -rotate-90 transition-transform group-open/progress:rotate-0" />
           </summary>
           <div className="pt-3">{progress}</div>
         </details>}
         {active && progress}
         {receipt && <p className="text-[12px] text-[#777085]" role="status" data-testid="canvas-v2-feedback-state">{receipt}</p>}
-        {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.answer} artifacts={[...(turn.artifacts ?? []), ...artifacts]} evidenceReferences={turn.evidenceReferences} onOpenEvidence={onOpenEvidence} /></div>}
+        {turn.answer && <div className="text-[13px] leading-[1.65] text-[#3f3f4d] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={readable(turn.answer)} artifacts={[...(turn.artifacts ?? []), ...artifacts]} evidenceReferences={turn.evidenceReferences} onOpenEvidence={onOpenEvidence} /></div>}
         {!!turn.artifacts?.length && <CreativeArtifacts artifacts={turn.artifacts} onOpenImage={onOpenImage} />}
-        {turn.routeSummary && !turn.answer && !turn.loop?.finalSummary && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{turn.routeSummary}</p>}
+        {turn.routeSummary && !turn.answer && !turn.loop?.finalSummary && <p className="text-[13px] leading-[1.6] text-[#454554] dark:text-[#d4d1da]">{readable(turn.routeSummary)}</p>}
         {turn.loop?.clarification && <div data-testid="canvas-v2-discovery-question" className="mt-4 border-t border-[#e9e5f7] pt-3 dark:border-white/[.09]">
           <div className="text-[9px] font-black uppercase tracking-[.14em] text-[#7663e7] dark:text-[#aa9cff]">Your judgment matters here</div>
-          <p className="mt-1.5 text-[13px] font-semibold leading-[1.6] text-[#3f3b4d] dark:text-[#e0dce7]">{turn.loop.clarification.question}</p>
-          <p className="mt-1 text-[11px] leading-[1.55] text-[#7a7585] dark:text-[#9e99a6]">{turn.loop.clarification.whyItMatters}</p>
+          <p className="mt-1.5 text-[13px] font-semibold leading-[1.6] text-[#3f3b4d] dark:text-[#e0dce7]">{readable(turn.loop.clarification.question)}</p>
+          <p className="mt-1 text-[11px] leading-[1.55] text-[#7a7585] dark:text-[#9e99a6]">{readable(turn.loop.clarification.whyItMatters)}</p>
         </div>}
-        {turn.loop?.finalSummary && <div data-testid="canvas-v2-final-summary" className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d] dark:border-white/[.08] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={turn.loop.finalSummary} /></div>}
+        {turn.loop?.finalSummary && <div data-testid="canvas-v2-final-summary" className="mt-3 border-t border-[#eceaf4] pt-3 text-[13px] leading-[1.6] text-[#3f3f4d] dark:border-white/[.08] dark:text-[#d4d1da]"><CanvasV2MarkdownMessage content={readable(turn.loop.finalSummary)} /></div>}
         {turn.status === "incomplete" && <div data-testid="canvas-v2-turn-recovery" className="mt-3 rounded-xl border border-[#e3ddff] bg-[#f8f6ff] px-3.5 py-3 text-xs leading-5 text-[#5d5870] dark:border-[#504477] dark:bg-[#272331] dark:text-[#c9c3d3]">
-          <p><span className="font-bold text-[#413a67] dark:text-[#e0daf0]">Work was interrupted.</span> {turn.loop?.pauseReason ?? "North Star did not finish the requested work."}</p>
+          <p>Continue from where we left off.</p>
           <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Resume the work</button>
         </div>}
         {turn.status === "stopped" && !turn.earlierSegment && <div data-testid="canvas-v2-turn-stopped" className="mt-3 text-xs text-[#777789]">Stopped.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-3 text-[#6d59ed] hover:underline disabled:opacity-40 dark:text-[#b3a8ff]">Continue</button>}</div>}
-        {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44] dark:bg-red-500/[.1] dark:text-red-300">{turn.error}{turn.status === "failed" && turn.loop && turn.loop.deliveryMode !== "chat" && <span className="mt-1 block font-semibold">The latest committed canvas remains visible.</span>}</div>}
+        {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 text-[13px] leading-5 text-[#777085] dark:text-[#aaa3b5]">Send a follow-up to pick up from here.</div>}
       </div>
     </div>}
   </article>;
@@ -422,10 +423,10 @@ export function CanvasV2ChatPanel({
         <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
       </div>}
       <div className="space-y-7">{displayedTurns.map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} receipt={steeringReceiptLabel(displayedTurns, turn)} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} onOpenEvidence={screen => setExpandedImage({ name: screen.label, dataUrl: screen.url })} />)}</div>
-      {flowPlacement && <p role={flowPlacement.error ? 'alert' : 'status'} className={'mt-4 px-1 text-xs ' + (flowPlacement.error ? 'text-red-700 dark:text-red-300' : 'text-[#6254bd] dark:text-[#c5baff]')}>{flowPlacement.message}</p>}
+      {flowPlacement && <p role='status' className="mt-4 px-1 text-xs text-[#6254bd] dark:text-[#c5baff]">{flowPlacement.error ? 'Try adding this flow again.' : canvasV2ReadableAgentText(flowPlacement.message)}</p>}
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Updating the canvas…</div>}
 
-      {engine.manualError && <div className="mt-5 rounded-xl bg-[#fff1f1] px-3 py-2.5 text-xs leading-5 text-[#a63a44]">{engine.manualError}</div>}
+      {engine.manualError && <p role="status" className="mt-5 text-xs leading-5 text-[#777085] dark:text-[#aaa3b5]">Try that change again.</p>}
       </div>
     </div>
     {showLatest && <button type="button" onClick={jumpToLatest} aria-label="Jump to latest response" title="Jump to latest response" className="absolute bottom-2 left-1/2 z-10 grid h-9 w-9 -translate-x-1/2 place-items-center rounded-full border border-black/10 bg-white text-[#655f70] shadow-md transition hover:bg-[#f3f0fa] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8976ee] dark:border-white/15 dark:bg-[#29262f] dark:text-[#d4cfdf] dark:hover:bg-[#35303f]" data-testid="canvas-v2-jump-to-latest"><ArrowDown aria-hidden="true" className="h-4 w-4" /></button>}

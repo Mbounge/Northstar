@@ -35,3 +35,20 @@ test('chat follows live content, respects scrolling away, and collapses complete
   await expect(page.getByTestId('canvas-v2-completed-progress').last()).toContainText('Stopped after');
   await expect(history.first().locator('summary').first()).toHaveText(timing);
 });
+
+
+test('reasoning and tool history remain readable without internal IDs or failure details', async ({ page }) => {
+  await page.goto('/canvas-v2-e2e/codex');
+  await page.getByLabel('Message North Star').fill('chat readable parity');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('The comparison is ready.', { exact: false })).toBeVisible();
+  const history = page.getByTestId('canvas-v2-completed-progress');
+  await history.locator('summary').first().click();
+  await expect(history).toContainText('I’m comparing the navigation against the reference.');
+  await expect(history).toContainText('I’m keeping the approved visual direction.');
+  await expect(history).not.toContainText(/CSS|DOM|JavaScript|provider check failed|nodeId=|screen-1b6daf84/);
+  await history.getByTestId('canvas-v2-tool-history').last().locator('summary').click();
+  await expect(history).toContainText('Inspect screen structure for the selected item');
+  await expect(history).not.toContainText(/nodeId=|screen-1b6daf84/);
+  await expect(page.getByRole('link', { name: 'Reference', exact: true })).toHaveAttribute('href', 'https://example.com/evidence');
+});

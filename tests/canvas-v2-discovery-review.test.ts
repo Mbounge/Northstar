@@ -87,7 +87,7 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 
 const feedbackFor = (gap?: string) => JSON.stringify({ question: 'Explain the difference', preserve: ['Established findings'], argumentChecks: [], sourceChecks: [], consistencyChecks: [], resolvedWork: gap ? [] : [{ id: 'gap', disposition: 'resolved', basis: 'The revised answer supplies the previously missing connection.' }], work: gap ? [{ id: 'gap', priority: 'central', gap, draftBasis: { passage: 'The available explanation', existingQualification: 'None in this fixture' }, whyItMatters: 'It changes the explanation.', reasoningToDevelop: 'Work through the missing cause and its consequence.', investigation: [], resolutionSignal: 'Explain the link or show why it does not apply.' }] : [], completionAssessment: gap ? 'Further substantive work remains.' : 'The explanation satisfactorily resolves the question.' });
 
-async function setup(review: DiscoveryReviewer, maxRounds = 6) {
+async function setup(review: DiscoveryReviewer, maxRounds = 6, toolOutput: unknown = { text: 'A useful source observation.' }) {
   const peer = await fixtureCodex();
   const request = peer.request.bind(peer);
   // Manual protocol peer: tests control the initial and continued turn independently.
@@ -100,7 +100,7 @@ async function setup(review: DiscoveryReviewer, maxRounds = 6) {
   const host = new CodexSessionHost(async () => peer, undefined, undefined, review, maxRounds);
   const calls: string[] = [];
   const client = new ManagedAgentClient({ endpoint: '/codex', fetcher: async (_url, init) => host.handle(object(JSON.parse(String(init?.body))), { owner: 'alice', key: 'fake', signal: init?.signal || new AbortController().signal }),
-    onView: () => {}, execute: async action => { calls.push(string(action.name)); return { text: 'A useful source observation.' }; } });
+    onView: () => {}, execute: async action => { calls.push(string(action.name)); return toolOutput; } });
   const snapshot = async () => (await host.handle({ op: 'snapshot', token: client.token }, { owner: 'alice', key: 'fake', signal: new AbortController().signal })).json();
   return { peer, host, client, calls, snapshot, close() { client.dispose(); host.dispose(); } };
 }
@@ -160,15 +160,15 @@ test('Stop during review aborts the supporting call and ignores late feedback', 
   } finally { t.close(); }
 });
 
-test('review failure releases the original answer with an honest notice, no retry loop', async () => {
+test('review failure keeps diagnostics internal and frames research as findings so far', async () => {
   const t = await setup(async () => { throw new Error('provider credential secret'); });
   try {
     await t.client.send('Explain', [], 'gpt-5.6-luna', 'r1'); t.peer.finish('Original answer'); await tick();
     assert.equal(t.client.view.status, 'completed');
     assert.ok(t.client.view.texts.at(-1)?.text.endsWith('Original answer'));
-    assert.match(t.client.view.texts.at(-1)?.text||'',/^The additional check was unavailable/);
+    assert.match(t.client.view.texts.at(-1)?.text||'',/^Here’s what I found so far/);
     assert.equal((await t.snapshot()).review.failureKind,'provider_or_transport');
-    assert.ok(t.client.view.texts.some(x => /check was unavailable/.test(x.text)));
+    assert.ok(!t.client.view.texts.some(x => /check was unavailable|credential|provider_or_transport/.test(x.text)));
     assert.ok(!JSON.stringify(await t.snapshot()).includes('credential secret'));
     assert.equal(t.peer.calls.filter(c => c.method === 'turn/start').length, 1);
   } finally { t.close(); }
@@ -206,9 +206,9 @@ test('review ceiling releases the latest draft as unfinished, never as reviewer 
     t.peer.finish('Latest draft'); await tick();
     assert.equal(reviews, 2); assert.equal((await t.snapshot()).review.status, 'budget_exhausted');
     assert.equal(t.peer.calls.filter(c => c.method === 'turn/start').length, 2);
-    assert.ok(t.client.view.texts.some(x => /has not passed the full review/.test(x.text)));
+    assert.ok(!t.client.view.texts.some(x => /review limit|has not passed the full review/.test(x.text)));
     assert.ok(t.client.view.texts.at(-1)?.text.endsWith('Latest draft'));
-    assert.match(t.client.view.texts.at(-1)?.text||'',/has not passed the full review/);
+    assert.match(t.client.view.texts.at(-1)?.text||'',/^Here’s what I found so far/);
     assert.ok(!t.client.view.texts.some(x => x.text === 'First draft'));
   } finally { t.close(); }
 });
@@ -506,4 +506,19 @@ test('visual review retains source lineage and observations without duplicate en
   const packet=context.packet('Ready');
   assert.doesNotMatch(packet.text,/YWFhYWFh|privateBehavior|private-interface-code/);
   assert.match(packet.text,/identity|Refined the header|boundAssetIds|mark/);
+});
+
+
+test('unfinished product review keeps failure diagnostics and unverified approval claims out of the answer', async () => {
+  const t = await setup(async () => { throw new Error('Review timed out'); }, 6, [{ type: 'inputText', text: JSON.stringify({ committed: true, nodeId: 'screen-test' }) }]);
+  try {
+    await t.client.send('Refine this screen', [], 'gpt-5.6-luna', 'r1');
+    t.peer.tool('canvas_screen', { title: 'Career home' }); await tick();
+    t.peer.finish('All visual checks passed.'); await tick();
+    assert.equal((await t.snapshot()).review.status, 'unavailable');
+    assert.equal((await t.snapshot()).review.failureKind, 'timeout');
+    assert.equal(t.client.view.texts.at(-1)?.text, 'The latest version is on your canvas. You can explore it and keep refining it.');
+    assert.ok(!t.client.view.texts.some(item => /timed out|all visual checks passed|review.*unfinished/i.test(item.text)));
+    assert.equal(t.client.view.status, 'completed');
+  } finally { t.close(); }
 });
