@@ -66,7 +66,14 @@ export function canvasV2ScreenLiveEdit(before: import('./interactive-screen').Ca
   let edit: CanvasV2ScreenLiveEdit | undefined;
   for (let i = 0; i < oldNodes.length; i++) {
     const a = oldNodes[i] as HTMLElement, b = newNodes[i] as HTMLElement;
-    if (a.tagName !== b.tagName || a.childNodes.length !== b.childNodes.length || !(a instanceof HTMLElement) || !(b instanceof HTMLElement)) return;
+    if (a.tagName !== b.tagName || a.namespaceURI !== b.namespaceURI || a.childNodes.length !== b.childNodes.length) return;
+    // Inline SVG icons are normal product markup. They need not be editable to
+    // survive a precise HTML edit; compare their parsed form without rebooting
+    // the live screen for unchanged self-closing path serialization.
+    if (!(a instanceof HTMLElement) || !(b instanceof HTMLElement)) {
+      if (a.outerHTML !== b.outerHTML) return;
+      continue;
+    }
     const attributes = (el: Element) => [...el.attributes].filter(attr => attr.name !== 'style').map(attr => [attr.name, attr.value]).sort();
     if (JSON.stringify(attributes(a)) !== JSON.stringify(attributes(b))) return;
     const textChanged = !a.children.length && a.textContent !== b.textContent;
