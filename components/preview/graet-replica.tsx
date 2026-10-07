@@ -9,6 +9,7 @@ import { capturedOpenings, type OpeningRecord } from "./graet-opening-data";
 import { PlayerProfilePage, type ProfileFacts } from "./graet-player-profile";
 import { StaffProfilePage, type StaffName } from "./graet-staff-profile";
 import { capturedColleges, collegeCardSlices, type CollegeRecord } from "./graet-college-data";
+import { GRAET_PREVIEW_NAVIGATE, GRAET_PREVIEW_SECTION, graetPreviewSections, isGraetPreviewSection } from "@/lib/preview/graet-navigation";
 
 type Screen = "welcome" | "email" | "verify" | "role" | "name" | "birthday" | "nationality" | "photo" | "interests" | "searchPreferences" | "leagues" | "trial" | "premiumDetail" | "premiumFeature" | "featureTour" | "notifications" | "notificationsCenter" | "career" | "gameTracker" | "colleges" | "collegeDetail" | "collegeFilters" | "support" | "feed" | "coachProfile" | "games" | "gameList" | "gameLeague" | "gameMatch" | "players" | "playerSearch" | "playerFilters" | "playerProfile" | "profile" | "openings" | "opening" | "apply" | "applications" | "ai" | "chat";
 type Tab = "home" | "explore" | "ai" | "chat" | "profile";
@@ -435,8 +436,22 @@ export function GraetReplica({ embedded = false }: { embedded?: boolean }) {
   const jump = useCallback((next: Screen) => {
     setHistory([]);
     restoreScrollRef.current = 0;
+    scrollRef.current?.scrollTo(0, 0);
     setScreen(next);
   }, []);
+  useEffect(() => {
+    if (!embedded) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent) return;
+      if (event.data?.type !== GRAET_PREVIEW_NAVIGATE || !isGraetPreviewSection(event.data.section)) return;
+      const destination = graetPreviewSections.find((section) => section.id === event.data.section);
+      if (!destination) return;
+      if (destination.id === "profile") setProfileTab("wall");
+      jump(destination.screen);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [embedded, jump]);
   const back = useCallback(() => {
     const previous = history.at(-1);
     if (previous) {
@@ -572,6 +587,9 @@ export function GraetReplica({ embedded = false }: { embedded?: boolean }) {
   const browsing = !flow.slice(0, -1).includes(screen);
   const playerOrigin = history.findLast((item) => item.screen !== "playerProfile")?.screen;
   const tab: Tab = screen === "premiumFeature" && premiumFeature === "AI Coach" ? "ai" : screen === "playerProfile" ? playerOrigin === "feed" || playerOrigin === "coachProfile" ? "home" : playerOrigin === "profile" ? "profile" : "explore" : ["career", "premiumDetail", "premiumFeature", "notificationsCenter", "gameTracker", "colleges", "collegeDetail", "collegeFilters", "feed", "coachProfile", "games", "gameList", "gameLeague", "gameMatch"].includes(screen) ? "home" : screen === "profile" ? "profile" : ["players", "playerSearch", "playerFilters", "openings", "opening", "apply", "applications"].includes(screen) ? "explore" : screen === "ai" ? "ai" : "chat";
+  useEffect(() => {
+    if (embedded) window.parent.postMessage({ type: GRAET_PREVIEW_SECTION, section: browsing ? tab : "onboarding" }, window.location.origin);
+  }, [embedded, browsing, tab]);
   const coachAsset = selectedCoach === "Matt Overeem" ? null : `coach-${selectedCoach === "Tim Tobin" ? "tim" : "trevor"}-${coachTab}`;
   const coachHeaderCollapsed = coachTab === "wall" && coachScrollTop > 355;
   const onboardingStatus = screen === "email" ? onboardingCaptureFiles[2] : screen === "verify" ? onboardingCaptureFiles[4] : screen === "name" ? onboardingCaptureFiles[6] : screen === "nationality" ? onboardingCaptureFiles[9] : screen === "photo" ? onboardingCaptureFiles[11] : screen === "interests" ? onboardingCaptureFiles[12] : screen === "leagues" ? onboardingCaptureFiles[16] : undefined;
