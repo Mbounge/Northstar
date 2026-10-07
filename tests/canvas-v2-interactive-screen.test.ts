@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { encodeCanvasV2Screen, parseCanvasV2Screen, readCanvasV2Screens, SCREEN_ATTRIBUTE, canvasV2ScreenReviewAssets, validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
-import { canvasV2ScreenPatch } from '../lib/canvas-v2/interactive-screen-patch';
+import { arrangeCanvasV2Screens, canvasV2ScreenPatch } from '../lib/canvas-v2/interactive-screen-patch';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
 import { validateCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from '../lib/canvas-v2/artifact-safety';
 import { applyCanvasV2SourcePatch } from '../lib/canvas-v2/source-patch';
@@ -88,4 +88,23 @@ test('registered simulations retain a fixed approved app runtime without accepti
   const document = applyCanvasV2SourcePatch({ previous: root, operations: patch.operations, evidence: [] });
   assert.throws(() => canvasV2ScreenPatch(document, { nodeId: patch.nodeId, html: '<b>new</b>' }, [], { x: 0, y: 0 }), /separate screen variant/);
   assert.throws(() => readCanvasV2Screens(document.html.replace('</div>', '<p data-canvas-v2-node-id="ghost">Invisible child</p></div>')), /invisible canvas children/);
+});
+
+test('screen comparison rearrangement preserves runtimes, size, first anchor and unrelated work', () => {
+  const empty: CanvasV2NativeSceneDocument = { schema: 'canvas-v2.native-scene.v1', revisionId: 'live', width: 12000, height: 8000, nodes: [], rootIds: [], css: '' };
+  const scene = applyCanvasV2NativeSceneMutation(empty, { kind: 'batch', label: 'Comparison set', mutations: ['a','b','c'].map((nodeId, i) => ({ kind: 'create' as const, primitive: 'shape' as const, nodeId, x: 100, y: 100 + i * 844, width: 390, height: 844 })) });
+  for (const node of scene.nodes) { node.attributes[SCREEN_ATTRIBUTE] = encodeCanvasV2Screen(screen); node.userEdited = false; node.lastAuthor = 'northstar'; }
+  const next = arrangeCanvasV2Screens(scene, { nodeIds: ['a','b','c'] });
+  assert.deepEqual(next.nodes.map(node => [node.geometry.x,node.geometry.y]), [[100,100],[586,100],[1072,100]]);
+  assert.deepEqual(scene.nodes.map(node => node.geometry.x), [100,100,100]);
+  assert.ok(next.nodes.every(node => node.attributes[SCREEN_ATTRIBUTE] === encodeCanvasV2Screen(screen) && node.geometry.width === 390 && node.geometry.height === 844));
+  const vertical = arrangeCanvasV2Screens(next, { nodeIds: ['a','b','c'], direction: 'vertical', gap: 120 });
+  assert.deepEqual(vertical.nodes.map(node => node.geometry.y), [100,1064,2028]);
+  const human = structuredClone(scene); human.nodes[1].userEdited = true;
+  assert.throws(() => arrangeCanvasV2Screens(human, { nodeIds: ['a','b'] }), /human-owned/);
+  assert.doesNotThrow(() => arrangeCanvasV2Screens(human, { nodeIds: ['a','b'] }, ['b']));
+  assert.throws(() => arrangeCanvasV2Screens(scene, { nodeIds: ['a','deleted'] }), /deleted/);
+  assert.throws(() => arrangeCanvasV2Screens(scene, { nodeIds: ['a','a'] }), /distinct/);
+  const blocked = applyCanvasV2NativeSceneMutation(scene, { kind: 'create', primitive: 'shape', nodeId: 'human', x: 580, y: 100, width: 500, height: 500 });
+  assert.throws(() => arrangeCanvasV2Screens(blocked, { nodeIds: ['a','b','c'] }), /cover/);
 });

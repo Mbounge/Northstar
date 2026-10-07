@@ -546,6 +546,7 @@ export function canvasV2PreferredRootPlacement(input: {
   authoredOrigin: CanvasV2WorkspacePoint;
   groundedOffset?: number;
   marginTop?: number;
+  minimumGap?: number;
   relation?: CanvasV2TerritoryRelation;
   previous?: {
     placed: CanvasV2AuthoredPlacementRect;
@@ -557,13 +558,14 @@ export function canvasV2PreferredRootPlacement(input: {
 }): CanvasV2WorkspacePoint {
   if (input.relation === "none") return { x: input.anchor.x, y: input.anchor.y };
   if (input.previous) {
-    const authoredGap = input.previous.newlyPlaced
+    const measuredGap = input.previous.newlyPlaced
       ? Math.max(0, input.authored.y - input.previous.authored.y - input.previous.authored.height)
       : Math.max(0, input.marginTop ?? 0, input.previous.marginBottom ?? 0);
+    const authoredGap = Math.max(input.minimumGap ?? 0, measuredGap);
     const authoredDeltaX = input.previous.newlyPlaced
       ? input.authored.x - input.previous.authored.x
       : 0;
-    const explicitGap = Math.max(CANVAS_V2_WORKSPACE.documentMargin, authoredGap);
+    const explicitGap = Math.max(input.minimumGap ?? CANVAS_V2_WORKSPACE.documentMargin, authoredGap);
     if (input.relation === "right") return {
       x: input.previous.placed.x + input.previous.placed.width + explicitGap,
       y: input.previous.placed.y,
@@ -1493,7 +1495,9 @@ export function compileCanvasV2NativeScene(input: {
         authoredOrigin: { x: measuredOriginX, y: measuredOriginY },
         groundedOffset: isGroundedEvidence && !previous ? 600 : 0,
         marginTop: margins?.top,
-        relation: node.attributes["data-canvas-v2-territory-relation"] as CanvasV2TerritoryRelation | undefined,
+        minimumGap: node.attributes[SCREEN_ATTRIBUTE] ? 96 : undefined,
+        relation: (node.attributes["data-canvas-v2-territory-relation"]
+          ?? (node.attributes[SCREEN_ATTRIBUTE] && previous?.attributes[SCREEN_ATTRIBUTE] ? "right" : undefined)) as CanvasV2TerritoryRelation | undefined,
         ...(previous && previousAuthored ? {
           previous: {
             placed: previous.geometry,
@@ -1512,7 +1516,7 @@ export function compileCanvasV2NativeScene(input: {
         // Consecutive document roots already express their intended spacing
         // through measured flow/margins. Keep that authored rhythm; unrelated
         // first roots still receive the normal multiplayer safety gap.
-        gap: previous && !previous.userEdited ? 0 : undefined,
+        gap: node.attributes[SCREEN_ATTRIBUTE] ? 96 : previous && !previous.userEdited ? 0 : undefined,
       });
       if (placement) {
         node.geometry.x = round(placement.x);

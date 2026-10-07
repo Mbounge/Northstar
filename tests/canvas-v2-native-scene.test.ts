@@ -2119,3 +2119,10 @@ test("native opening-tag patch falls back when an edit changes structure or cont
   changedText.nodes[0].content = [{ kind: "text", value: "A different finding" }];
   assert.equal(patchCanvasV2NativeDocument(original, source, changedText), undefined);
 });
+
+test('product comparisons retain explicit breathing room instead of touching after compilation', () => {
+  const placement = { anchor: {x:100,y:100}, authored: {x:500,y:100,width:390,height:844}, authoredOrigin: {x:100,y:100}, minimumGap:96,
+    previous:{placed:{x:100,y:100,width:390,height:844},authored:{x:100,y:100,width:390,height:844},newlyPlaced:false} };
+  assert.deepEqual(canvasV2PreferredRootPlacement({...placement,relation:'right'}), {x:586,y:100});
+  assert.deepEqual(canvasV2PreferredRootPlacement({...placement,relation:'below'}), {x:100,y:1040});
+});

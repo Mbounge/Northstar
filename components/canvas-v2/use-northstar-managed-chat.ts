@@ -26,10 +26,11 @@ import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas
 import { simulatorForApp } from '@/lib/preview/simulator-registry';
 import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
 import { readCanvasV2Screens, canvasV2ScreenReviewAssets } from '@/lib/canvas-v2/interactive-screen';
-import { canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
+import { arrangeCanvasV2Screens, canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
 import { inspectCanvasV2Screen, captureCanvasV2Screen } from './interactive-screen';
 import type { ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
 import { findCanvasV2OpenPlacement } from '@/lib/canvas-v2/multiplayer-placement';
+import { serializeCanvasV2NativeScene } from '@/lib/canvas-v2/native-scene';
 import { CANVAS_V2_WORKSPACE } from '@/lib/canvas-v2/workspace-coordinate-space';
 import { citedChatEvidence } from '@/lib/canvas-v2/chat-evidence';
 
@@ -232,6 +233,20 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           evidence: registered.map(({ id, url, originalUrl, label, mediaType, mimeType, source }) => ({ id, mediaType, mimeType, source, url: `northstar-asset:${id}`, originalUrl: originalUrl ?? (url.startsWith("data:") ? undefined : url), playbackUrl: mediaType === "gif" ? originalUrl : mediaType === "video" ? url : undefined, label })),
           observation: { nodes: observation.spatial.nodes.slice(0, 80), connectors: canvasV2MeasuredConnectorDirectory(observation.spatial.nodes) },
         };
+      }
+      if (action.name === 'canvas_arrange_screens') {
+        try {
+          signal.throwIfAborted();
+          const revision = engine.readCommittedRevision();
+          requireCodexCanvasReadRevision(readRevision.current, revision.id);
+          const scene = engine.readNativeScene();
+          if (editActive.current || !scene || scene.revisionId !== revision.id) throw new Error('Read the latest canvas after its current edit finishes.');
+          const authorized = args.selectionPolicy === 'modify' ? current.current.selectedNodeIds ?? [] : [];
+          const next = arrangeCanvasV2Screens(scene, args, authorized);
+          if (!engine.applyManualDocument(serializeCanvasV2NativeScene(next), string(args.summary) || 'Arranged screens', undefined, next, { origin: 'northstar', workingContext: current.current.getWorkingContext?.(args.selectionPolicy === 'modify' ? 'modify' : 'none'), selectionNodeIds: current.current.selectedNodeIds })) throw new Error(engine.readManualFailure() || 'The canvas changed. Read it again.');
+          readRevision.current = engine.readCommittedRevision().id;
+          return { committed: true, revisionId: readRevision.current, nodeIds: args.nodeIds, next: 'The screen source, sizes, mock state and camera are unchanged. Review the presentation at a useful reading scale.' };
+        } catch (error) { return rejectedCodexEdit(engine.readCommittedRevision().id, error); }
       }
       if (action.name === 'canvas_edit' || action.name === 'canvas_insert_flow' || action.name === 'canvas_screen' || action.name === 'canvas_insert_simulation') {
         try {

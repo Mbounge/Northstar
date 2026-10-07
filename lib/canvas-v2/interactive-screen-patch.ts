@@ -1,5 +1,6 @@
 import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from './types';
 import { findCanvasV2SourceNodeRange, type CanvasV2SourcePatchOperation } from './source-patch';
+import { canvasV2NativeSceneAbsoluteBounds, type CanvasV2NativeSceneDocument } from './native-scene';
 import { SCREEN_ATTRIBUTE, readCanvasV2Screens, validateCanvasV2Screen, validateCanvasV2ScreenAssets, encodeCanvasV2Screen } from './interactive-screen';
 
 /** A targeted revision changes source only: the user's position/size stay intact. */
@@ -27,7 +28,44 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
     ?? /<[^>]+\bdata-canvas-v2-node-id\s*=\s*["'](?:canvas|canvas-root)["'][^>]*>/i.exec(document.html)?.[0];
   const targetNodeId = root && /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(root)?.[1];
   if (!targetNodeId) throw new Error('Read the canvas to find its workspace root before creating a screen.');
+  if (input.placement !== undefined && !['right', 'below'].includes(String(input.placement))) throw new Error('Choose right or below for placement.');
+  const relation = input.placement ? ` data-canvas-v2-territory-relation="${input.placement}"` : '';
   const x = Math.max(0, Math.round(placement.x)), y = Math.max(0, Math.round(placement.y));
   return { nodeId, operations: [{ op: 'append-html', targetNodeId,
-    html: `<div data-canvas-v2-node-id="${nodeId}" ${SCREEN_ATTRIBUTE}="${encoded}" style="position:absolute;left:${x}px;top:${y}px;width:${screen.width}px;height:${screen.height}px;overflow:visible"></div>` }] };
+    html: `<div data-canvas-v2-node-id="${nodeId}" ${SCREEN_ATTRIBUTE}="${encoded}"${relation} style="position:absolute;left:${x}px;top:${y}px;width:${screen.width}px;height:${screen.height}px;overflow:visible"></div>` }] };
+}
+
+/** Rearrangement changes only native geometry, so mounted runtimes keep their state. */
+export function arrangeCanvasV2Screens(scene: CanvasV2NativeSceneDocument, input: Record<string, unknown>, authorizedHumanIds: readonly string[] = []): CanvasV2NativeSceneDocument {
+  const ids = input.nodeIds;
+  if (!Array.isArray(ids) || ids.length < 2 || ids.length > 20 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) throw new Error('Choose 2–20 distinct current screen IDs in reading order.');
+  const direction = input.direction ?? 'horizontal', gap = input.gap ?? 96;
+  if (!['horizontal', 'vertical'].includes(String(direction)) || typeof gap !== 'number' || !Number.isInteger(gap) || gap < 64 || gap > 320) throw new Error('Choose horizontal or vertical with a gap from 64 to 320.');
+  const next = structuredClone(scene);
+  const selected = ids.map(id => {
+    const node = next.nodes.find(node => (node.sourceNodeId ?? node.id) === id);
+    if (!node || !node.attributes[SCREEN_ATTRIBUTE] || node.hidden) throw new Error('A screen was deleted or is unavailable. Read the canvas again.');
+    if (node.locked || ((node.userEdited || node.lastAuthor === 'user') && !authorizedHumanIds.includes(id))) throw new Error('Preserve human-owned and locked screens. Select the intended screens and authorize their rearrangement.');
+    if (node.parentId && next.nodes.find(parent => parent.id === node.parentId)?.kind !== 'root') throw new Error('Arrange standalone screens without changing their composition group.');
+    return node;
+  });
+  const first = canvasV2NativeSceneAbsoluteBounds(next, ids[0])!;
+  let x = first.x, y = first.y;
+  const selectedIds = new Set(selected.map(node => node.id));
+  for (const node of selected) {
+    const current = canvasV2NativeSceneAbsoluteBounds(next, node.sourceNodeId ?? node.id)!;
+    const target = { x, y, width: current.width, height: current.height };
+    if (x < 0 || y < 36 || x + target.width > next.width || y + target.height > next.height) throw new Error('The arranged screens exceed the canvas bounds.');
+    const collision = next.nodes.some(other => {
+      if (selectedIds.has(other.id) || other.hidden || !other.selectable || other.kind === 'root') return false;
+      const bounds = canvasV2NativeSceneAbsoluteBounds(next, other.sourceNodeId ?? other.id);
+      return bounds && x < bounds.x + bounds.width + 32 && x + target.width + 32 > bounds.x && y - 36 < bounds.y + bounds.height + 32 && y + target.height + 32 > bounds.y;
+    });
+    if (collision) throw new Error('This arrangement would cover existing canvas work. Choose a clear area first.');
+    node.layoutMode = 'absolute';
+    node.geometry.x += x - current.x; node.geometry.y += y - current.y;
+    node.editVersion += 1; node.lastAuthor = 'northstar';
+    if (direction === 'horizontal') x += target.width + gap; else y += target.height + gap;
+  }
+  return next;
 }
