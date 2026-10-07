@@ -248,7 +248,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (screen) {
           const capture = await captureCanvasV2Screen(screen.nodeId, screen.encoded, signal);
           const reviewAssets = canvasV2ScreenReviewAssets(screen.screen, [...screenRevision.evidence, ...assets.current.values()]);
-          const references = await Promise.all(reviewAssets.slice(0, 3).map(async asset => {
+          const references = await Promise.all(reviewAssets.slice(0, 12).map(async asset => {
             const id = asset.id;
             if (!asset || asset.mediaType === 'video' || asset.source?.permission === 'unavailable') return [];
             try {
@@ -261,6 +261,11 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             }
           }));
           let imageBytes = capture.image.length;
+          const detailParts = capture.details.flatMap((detail,index) => {
+            if (imageBytes + detail.image.length > 8_000_000) return [];
+            imageBytes += detail.image.length;
+            return [{type:'input_text',text:JSON.stringify({nodeId:screen.nodeId,detailName:`${index+1}: ${detail.label}`,selector:detail.selector,note:'Magnified crop of these current rendered pixels. Compare glyph geometry, icon weight, imagery and component consistency with references.'})},{type:'input_image',image_url:detail.image}];
+          });
           const referenceParts = references.flat().map(part => {
             if ('image_url' in part && typeof part.image_url === 'string') {
               if (imageBytes + part.image_url.length > 8_000_000) return { type: 'input_text', text: 'An additional reference image was omitted from this capture to stay within the image transport budget. Use inspect_asset for its retained handle before judging it.' };
@@ -269,7 +274,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             return part;
           });
           if (engine.readCommittedRevision().id !== screenRevision.id) throw new Error('The canvas changed during this capture. Read it again.');
-          return [{ type: 'input_text', text: JSON.stringify({ nodeId: screen.nodeId, revisionId: screenRevision.id, viewport: { width: screen.screen.width, height: screen.screen.height }, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, reviewReferenceAssetIds: reviewAssets.map(asset => asset.id), boundAssetIds: canvasV2ScreenBoundAssets(screen.screen), qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with prepare_asset (or workspace_run/workspace_export for complex processing), inspect and bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...referenceParts];
+          return [{ type: 'input_text', text: JSON.stringify({ nodeId: screen.nodeId, revisionId: screenRevision.id, sourceVersion:canvasV2FeedbackFingerprint(screen.encoded), viewport: { width: screen.screen.width, height: screen.screen.height }, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, reviewReferenceAssetIds: reviewAssets.map(asset => asset.id), boundAssetIds: canvasV2ScreenBoundAssets(screen.screen), qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with prepare_asset (or workspace_run/workspace_export for complex processing), inspect and bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...detailParts, ...referenceParts];
         }
         const observation = await engine.ensureObservation(signal);
         const revision = engine.readCommittedRevision();
@@ -302,7 +307,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const range = requestedNodeId ? findCanvasV2SourceNodeRange(html, requestedNodeId) : undefined;
         if (requestedNodeId && !range) throw new Error('This canvas object no longer exists. Read the current canvas.');
         readRevision.current = revision.id;
-        const screens = readCanvasV2Screens(revision.document.html).map(({ nodeId, screen }) => ({ nodeId, title: screen.title, width: screen.width, height: screen.height, referenceAssetIds: screen.referenceAssetIds, productIdentityId: screen.productIdentityId, simulation: screen.simulation, ...(requestedNodeId === nodeId ? { source: screen } : {}) }));
+        const screens = readCanvasV2Screens(revision.document.html).map(({ nodeId, screen, encoded }) => ({ nodeId, title: screen.title, width: screen.width, height: screen.height, sourceVersion:canvasV2FeedbackFingerprint(encoded), referenceAssetIds: screen.referenceAssetIds, productIdentityId: screen.productIdentityId, simulation: screen.simulation, ...(requestedNodeId === nodeId ? { source: screen } : {}) }));
         return { screens, screenFeedbackTargets: activeScreenFeedback.current.filter(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded)).map(entry => entry.target), objectFeedbackTargets: activeObjectFeedback.current.filter(objectMatches), productIdentities: productIdentities.current, screenFeedback: activeScreenFeedback.current.find(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded))?.target, theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: observation ? buildCanvasV2IslandRegistry({ observation }) : [], nativeScreenBounds: nativeScreenRead && native ? canvasV2NativeSceneAbsoluteBounds(native, requestedNodeId) : undefined, selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
           truncated: !range && html.length > 48_000,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),

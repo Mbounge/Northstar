@@ -53,7 +53,9 @@ export class CreativeScreenScenario {
       case 3:
         if (parts.filter(part => part.type === 'inputImage').length !== 3 || new Set(parts.filter(part => part.type === 'inputImage').map(part => part.imageUrl)).size !== 3) { this.peer.finish('Creative screen failed: distinct motion frames missing'); return; }
         this.peer.tool('canvas_review', { nodeId: this.nodeId }); break;
-      default: this.peer.finish('Created the screen with a saved product identity and reviewed three distinct motion frames.');
+      case 4:
+        if (!parts.some(part=>part.type==='inputText' && string(part.text).includes('detailName')) || parts.filter(part=>part.type==='inputImage').length<2) { this.peer.finish('Creative screen failed: magnified component pixels missing'); return; }
+        this.peer.finish('Created the screen with a saved product identity and reviewed three distinct motion frames.'); break;
     }
   }
   private checkReachability(result: JsonObject, parts: JsonObject[], value: JsonObject) {

@@ -446,3 +446,51 @@ test('review contract disallows duplicate issue IDs, conflicting closure, and mi
   assert.throws(() => parseDiscoveryFeedback(JSON.stringify({ ...feedback, resolvedWork: [{ id: 'other', disposition: 'resolved', basis: ' ' }] })), /supported format/);
   assert.throws(() => parseDiscoveryFeedback(JSON.stringify({ ...feedback, argumentChecks: [{ argument: 'A mechanism', currentTreatment: 'A label', assessment: 'Qualified accurately' }] })), /supported format/);
 });
+
+test('product completion requires actual current component/reference pixels and explicit checks for each variant', () => {
+  const context=new DiscoveryReviewContext();
+  const text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  const baseline=JSON.parse(feedbackFor());baseline.resolvedWork=[];baseline.productChecks=[];
+  context.user([{type:'text',text:'Create two faithful mobile directions.',text_elements:[]}]);
+  context.tool('canvas_screen',{title:'First',referenceAssetIds:['ref']},[text({nodeId:'first',committed:true})]);
+  context.tool('canvas_screen',{title:'Second',referenceAssetIds:['ref']},[text({nodeId:'second',committed:true})]);
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,2);
+  const check=(id:string,numbers:number[])=>({nodeId:id,referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',evidenceImageNumbers:numbers,assessment:'Current navigation shapes, marks and spacing match the source.'});
+  baseline.productChecks=[check('first',[1]),check('second',[1])];
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,2); // Invented citations cannot pass.
+  for(const id of ['first','second'])context.tool('canvas_review',{},[text({nodeId:id,viewport:{width:390,height:844},sourceVersion:'one',reviewReferenceAssetIds:['ref'],state:{errors:[],images:[],overflow:{horizontal:false}}}),{type:'inputImage',imageUrl:'data:image/png;base64,render-'+id},text({detailName:'Navigation'}),{type:'inputImage',imageUrl:'data:image/png;base64,nav-'+id},text({referenceAssetId:'ref'}),{type:'inputImage',imageUrl:'data:image/png;base64,shared-ref'}]);
+  const packet=context.packet('Ready'),directory=JSON.parse(packet.text).imageDirectory;
+  assert.equal(packet.images.length,5); // Two renders, two details, one shared reference.
+  const evidence=(id:string)=>directory.filter((entry:{role:string;aliases?:string[]})=>(entry.aliases??[entry.role]).some(role=>role.startsWith(`screen:${id}:`))).map((entry:{imageNumber:number})=>entry.imageNumber);
+  baseline.productChecks=[check('first',evidence('first'))];
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,1);
+  baseline.productChecks.push(check('second',evidence('second')));
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,0);
+  baseline.productChecks[0].componentConsistency='revise';
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,1);
+  baseline.productChecks[0].componentConsistency='pass';
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'first',sourceVersion:'two'},{nodeId:'second',sourceVersion:'one'}]})]);
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,2); // Old image-directory citations are invalid after the source changes.
+  const currentDirectory=JSON.parse(context.packet('').text).imageDirectory;
+  baseline.productChecks[1]=check('second',currentDirectory.filter((entry:{role:string;aliases?:string[]})=>(entry.aliases??[entry.role]).some(role=>role.startsWith('screen:second:'))).map((entry:{imageNumber:number})=>entry.imageNumber));
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,1); // Only the changed screen remains unverified.
+  context.user([{type:'text',text:'Explain a separate research question.',text_elements:[]}]);
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,0); // Untouched historical screens cannot block another task.
+});
+
+test('identical reference pixels do not consume the independent image budget once per variant',()=>{
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  const reference='data:image/png;base64,'+'a'.repeat(4_000_000);
+  for(const id of ['one','two','three','four'])context.tool('canvas_review',{},[text({nodeId:id,viewport:{width:390,height:844},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,render-'+id},text({referenceAssetId:'shared'}),{type:'inputImage',imageUrl:reference}]);
+  const packet=context.packet('Ready');assert.equal(packet.images.length,5);
+  assert.equal(JSON.parse(packet.text).productWork.every((screen:{reviewed:boolean})=>screen.reviewed),true);
+  assert.equal(JSON.parse(packet.text).imageDirectory.find((entry:{aliases?:string[]})=>entry.aliases)?.aliases.length,4);
+});
+
+test('feedback across existing screens requires review of every tagged authored target, not unrelated saved work',()=>{
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'tagged',title:'Requested target'},{nodeId:'unrelated',title:'Existing work'},{nodeId:'original',simulation:{appName:'GRAET'}}],objectFeedbackTargets:[{nodeId:'tagged'},{nodeId:'original'}]})]);
+  const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[];
+  const result=JSON.parse(context.reconcileFeedback(JSON.stringify(feedback)));
+  assert.deepEqual(result.work.map((work:{id:string})=>work.id),['product-quality:tagged']);
+});

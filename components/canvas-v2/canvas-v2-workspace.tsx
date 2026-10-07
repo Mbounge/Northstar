@@ -11,7 +11,7 @@ import { reviseCanvasV2NativeScreen, validateCanvasV2ScreenJavaScript } from '@/
 import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
 import { CANVAS_V2_FEEDBACK_PICKING, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking } from '@/lib/canvas-v2/screen-feedback';
 import { SCREEN_ATTRIBUTE, parseCanvasV2Screen, validateCanvasV2ScreenAssets, readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
-import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenIdentities } from './interactive-screen';
+import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenAssets, CanvasV2ScreenIdentities } from './interactive-screen';
 import { Play, Pause } from "lucide-react";
 
 import { useCanvasV2PopoverViewport } from "./use-popover-viewport";
@@ -4398,7 +4398,7 @@ export function CanvasV2Workspace({
       {versionHistoryNode && (() => {
         const screen = readCanvasV2Screens(engine.committed.document.html).find(screen => screen.nodeId === versionHistoryNode);
         if (!screen) return null;
-        return <ScreenVersionHistory nodeId={versionHistoryNode} current={screen.encoded} versions={chat.screenVersions} onClose={() => setVersionHistoryNode(undefined)} onRestore={async version => {
+        return <CanvasV2ScreenAssets.Provider value={engine.committed.evidence}><ScreenVersionHistory nodeId={versionHistoryNode} current={screen.encoded} versions={chat.screenVersions} onClose={() => setVersionHistoryNode(undefined)} onRestore={async version => {
           const revision = engine.readCommittedRevision(), scene = engine.readNativeScene();
           if (!scene || scene.revisionId !== revision.id) throw new Error('The canvas is finishing an update. Try again in a moment.');
           const current = readCanvasV2Screens(revision.document.html).find(screen => screen.nodeId === version.nodeId);
@@ -4411,7 +4411,7 @@ export function CanvasV2Workspace({
           let restored = false;
           for (let i=0;i<40;i++) { const host = workspaceRef.current?.querySelector(`[data-canvas-v2-interactive-screen="${CSS.escape(version.nodeId)}"]`); if (host?.closest('[data-canvas-v2-screen]')?.getAttribute('data-canvas-v2-screen') === version.encoded) { await new Promise(resolve => setTimeout(resolve,25)); host.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND,{detail:'restart'})); restored = true; break; } await new Promise(resolve => setTimeout(resolve,25)); }
           if (!restored) throw new Error('The version was saved; its preview is still updating. Close history and reopen this version.');
-        }}/>;
+        }}/></CanvasV2ScreenAssets.Provider>;
       })()}
       {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Objects</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} style={{ paddingLeft: 8 + Math.min(4, node.depth) * 14 }} className={`flex items-center gap-2 rounded-xl py-2 pr-2 text-xs ${selectionNodeIds.includes(node.nodeId) ? "bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]" : "hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]"}`}><button onClick={(event) => { const element = sceneElements.find((item) => item.nodeId === node.nodeId); if (element) selectElement(element, { additive: event.shiftKey || event.metaKey, range: event.shiftKey, directEdit: false }); else { setSelectedElements([]); setSelectionTarget(node.nodeId); } setLayersOpen(false); }} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
 

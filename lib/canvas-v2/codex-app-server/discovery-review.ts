@@ -52,9 +52,12 @@ export const DISCOVERY_REVIEW_SCHEMA = {
       properties: { id: textField, disposition: { type: 'string', enum: ['resolved', 'no_longer_needed'] }, basis: textField },
       required: ['id', 'disposition', 'basis'],
     } },
+    productChecks: { type:'array', items:{type:'object',additionalProperties:false,properties:{
+      nodeId:textField, referenceComparison:{type:'string',enum:['pass','revise','unverified','not_applicable']}, componentConsistency:{type:'string',enum:['pass','revise','unverified']}, assetQuality:{type:'string',enum:['pass','revise','unverified']}, evidenceImageNumbers:{type:'array',items:{type:'integer',minimum:1}}, assessment:textField,
+    },required:['nodeId','referenceComparison','componentConsistency','assetQuality','evidenceImageNumbers','assessment']} },
     completionAssessment: textField,
   },
-  required: ['question', 'preserve', 'argumentChecks', 'sourceChecks', 'consistencyChecks', 'work', 'resolvedWork', 'completionAssessment'],
+  required: ['question', 'preserve', 'argumentChecks', 'sourceChecks', 'consistencyChecks', 'work', 'resolvedWork', 'productChecks', 'completionAssessment'],
 };
 
 /** Validate the supporting call's transport contract, not the quality of the primary answer. */
@@ -92,6 +95,9 @@ export function parseDiscoveryFeedback(text: string) {
     const resolution = object(rawResolution);
     return filled(resolution.id) && filled(resolution.basis) && ['resolved', 'no_longer_needed'].includes(string(resolution.disposition));
   })) return invalid();
+  if (feedback.productChecks !== undefined && (!Array.isArray(feedback.productChecks) || !feedback.productChecks.every(raw => {
+    const check=object(raw); return filled(check.nodeId) && filled(check.assessment) && ['pass','revise','unverified','not_applicable'].includes(string(check.referenceComparison)) && ['pass','revise','unverified'].includes(string(check.componentConsistency)) && ['pass','revise','unverified'].includes(string(check.assetQuality)) && Array.isArray(check.evidenceImageNumbers) && check.evidenceImageNumbers.every(number=>Number.isInteger(number) && Number(number)>0);
+  }))) return invalid();
   const ids = [...feedback.work, ...feedback.resolvedWork].map(item => string(object(item).id));
   if (new Set(ids).size !== ids.length) return invalid();
   return feedback;
@@ -100,6 +106,8 @@ export function parseDiscoveryFeedback(text: string) {
 export const DISCOVERY_REVIEW_INSTRUCTIONS = `You are an independent thinking partner helping the primary model resolve the user's discovery question. You control successful completion: return substantive work when it remains, or an empty work list when the current answer is satisfactory. Help develop the answer, not merely police its wording. Do not write the final answer or request private reasoning.
 
 For product screens, prototypes and simulations, completion includes product quality by default. The user need not explicitly request logos, authentic assets, mobile dimensions, consistent components or visual review. Infer the platform and product identity from the actual reference pixels and brief; preserve them unless the user requested a different direction. Judge requested variations on their own brief, without demanding an exact layout copy when a new design is wanted. Functional controls and zero runtime errors do not establish visual quality. Compare the latest rendered screen pixels with the retained references: meaningful brand marks/photos, typography, spacing, alignment, image crops, navigation and legibility. A letter/emoji/rough mark standing in for a visible authentic logo, or missing meaningful reference imagery, is a material product defect even if the final answer never claims pixel fidelity. Return concrete work to retain/extract those authentic pixels with prepare_asset or workspace_run and bind them; use generation for suitable original assets when the brief calls for them. Repeated product components must stay faithful across variants: compare navigation glyph silhouettes, fill versus outline, icon size, stroke weight, spacing, label typography and active states against the actual reference pixels. Generic thin icons are not an acceptable substitute for visibly different product icons. Extract authentic navigation assets or reproduce their geometry accurately, while retaining native clickable targets. Review these recurring components at readable scale in every authored variant. Ordinary native text and interface icons do not require raster assets. Retaining a reference ID alone does not mean its assets were used. Use productWork's current screen metadata and latest captures, not obsolete drafts. Preserve original registered simulations and human work; request local repairs to authored screens, never a speculative redesign or mandatory imagery quota. Missing relevant rendered states require inspection, not an invented verdict. Use saved product identity and the user's precise feedback target to assess consistency and scope. An edit should preserve unrelated approved design and behavior. When motion matters, inspect retained beginning/middle/end motion frames and diagnostics; a static capture or zero errors does not prove temporal quality. Timeline samples cover CSS/Web Animations only, not frame rate, JavaScript loops, GIF/video, interrupted interactions or reduced-motion behavior. Ask for concrete missing checks without inventing defects from absent evidence. For completed product edits, argumentChecks may be empty; substantive visual/interaction defects belong in work with concrete resolution signals. Approve only when the requested behavior and material product-quality requirements are addressed, or accurately bound a real unavailable input.
+
+For each authored screen with qualityReviewRequired=true, supply a productChecks entry. Image-directory aliases represent identical pixels shared across variants. Cite the imageDirectory numbers for that screen's current render, useful component-detail crops, and the actual reference pixels you compared. Judge icon silhouettes/weight/fill, authentic marks, meaningful imagery, typography, platform conventions and recurring component consistency together; a functioning screen is not enough. Passing requires actual current render evidence. referenceComparison=not_applicable is reserved for an original direction without a reference-fidelity requirement, with an explanation. Use unverified when pixels cannot establish quality and return concrete work; do not pass from source, retained IDs or the author's claims. productChecks is empty for non-product work. These checks stay internal; the user should see the product and concise outcomes.
 
 Read the actual question and the whole current draft first. Distinguish the author's assertions from quotations, conditional scenarios, questions and acknowledged unknowns. For every criticism, identify a short exact passage and the existing qualification elsewhere in the draft. When an explanation is missing, anchor the gap to the nearest passage that needs developing. If a qualification already resolves your concern, do not repeat that concern. Criticize only what remains after reading that qualification; a hypothetical possibility is not an asserted fact.
 
@@ -169,6 +177,8 @@ export class DiscoveryReviewContext {
     const message = input.filter(p => p.type === 'text').map(p => p.text).join('\n');
     if (!steering) {
       this.nativeSearches.clear(); this.toolResults = {};
+      for (const key of [...this.images.keys()]) if (key.startsWith('screen:') || key.startsWith('asset:')) this.removeImage(key);
+      for (const [id,screen] of this.productScreens) this.productScreens.set(id,{...screen,qualityReviewRequired:false});
       this.handoff = undefined; this.openWork.clear();
       this.question = message;
     } else {
@@ -189,6 +199,7 @@ export class DiscoveryReviewContext {
         let value: JsonObject;
         try { value = object(JSON.parse(string(part.text))); } catch { continue; }
         if (name === 'canvas_read' && Array.isArray(value.screens)) {
+          const feedbackIds=new Set([...(Array.isArray(value.screenFeedbackTargets)?value.screenFeedbackTargets:[]),...(Array.isArray(value.objectFeedbackTargets)?value.objectFeedbackTargets:[])].map(target=>string(object(target).nodeId)));
           const live = new Set(value.screens.map(item => string(object(item).nodeId)));
           for (const id of this.productScreens.keys()) if (!live.has(id)) {
             this.productScreens.delete(id);
@@ -198,10 +209,14 @@ export class DiscoveryReviewContext {
             const screen = object(rawScreen), source = object(screen.source), id = string(screen.nodeId);
             if (!id) continue;
             const previous = this.productScreens.get(id);
+            if (previous?.sourceVersion && screen.sourceVersion && previous.sourceVersion !== screen.sourceVersion) {
+              for (const key of this.images.keys()) if (key.startsWith(`screen:${id}:`)) this.removeImage(key);
+            }
+            const sourceChanged = previous?.sourceVersion && screen.sourceVersion && previous.sourceVersion !== screen.sourceVersion;
             const hasSource = typeof source.html === 'string';
             this.productScreens.set(id, { ...previous, nodeId: id, title: screen.title, width: screen.width, height: screen.height,
-              simulation: screen.simulation, productIdentityId: screen.productIdentityId, referenceAssetIds: screen.referenceAssetIds,
-              ...(hasSource ? { boundAssetIds: canvasV2ScreenBoundAssets(source as unknown as CanvasV2InteractiveScreen) } : {}) });
+              qualityReviewRequired:Boolean(previous?.qualityReviewRequired||feedbackIds.has(id))&&!screen.simulation, sourceVersion:screen.sourceVersion, simulation: screen.simulation, productIdentityId: screen.productIdentityId, referenceAssetIds: screen.referenceAssetIds,
+              ...(sourceChanged ? {reviewed:false,details:[]} : {}), ...(hasSource ? { boundAssetIds: canvasV2ScreenBoundAssets(source as unknown as CanvasV2InteractiveScreen) } : {}) });
           }
         }
         if ((name === 'canvas_screen' || name === 'canvas_screen_element' || name === 'canvas_insert_simulation') && value.committed === true && value.nodeId) {
@@ -209,7 +224,7 @@ export class DiscoveryReviewContext {
           this.productScreens.set(id, { ...previous, nodeId: id, title: input.title ?? previous?.title,
             referenceAssetIds: input.referenceAssetIds ?? previous?.referenceAssetIds ?? [],
             simulation: name === 'canvas_insert_simulation' ? { appName: input.appName } : previous?.simulation,
-            reviewed: false, motionFrames: [], motionSequences: [] });
+            qualityReviewRequired: name !== 'canvas_insert_simulation', reviewed: false, details:[], motionFrames: [], motionSequences: [] });
           // A revised source must not be approved using its previous render.
           for (const key of this.images.keys()) if (key.startsWith(`screen:${id}:`)) this.removeImage(key);
         }
@@ -229,9 +244,10 @@ export class DiscoveryReviewContext {
           captureNode = string(value.nodeId); nextImageKey = `screen:${captureNode}:render`;
           const state = object(value.state);
           this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), nodeId: captureNode,
-            viewport: value.viewport, referenceAssetIds: value.referenceAssetIds, reviewReferenceAssetIds: value.reviewReferenceAssetIds, boundAssetIds: value.boundAssetIds,
+            sourceVersion:value.sourceVersion, qualityReviewRequired:!this.productScreens.get(captureNode)?.simulation, details:[], viewport: value.viewport, referenceAssetIds: value.referenceAssetIds, reviewReferenceAssetIds: value.reviewReferenceAssetIds, boundAssetIds: value.boundAssetIds,
             state: { scroll: state.scroll, overflow: state.overflow, errors: state.errors, motion: state.motion, images: Array.isArray(state.images) ? state.images.slice(0, 60) : undefined }, reviewed: false });
-        } else if (captureNode && value.referenceAssetId) nextImageKey = `screen:${captureNode}:reference:${string(value.referenceAssetId)}`;
+        } else if (captureNode && value.detailName) nextImageKey = `screen:${captureNode}:detail:${string(value.detailName)}`;
+        else if (captureNode && value.referenceAssetId) nextImageKey = `screen:${captureNode}:reference:${string(value.referenceAssetId)}`;
         else if (name === 'inspect_asset' && value.evidenceId) nextImageKey = `asset:${string(value.evidenceId)}`;
       }
       if (part.type === 'inputImage' && url.startsWith('data:image/')) {
@@ -242,6 +258,7 @@ export class DiscoveryReviewContext {
           this.productScreens.set(captureNode, { ...previous, motionFrames: [...new Set([...(Array.isArray(previous?.motionFrames) ? previous.motionFrames : []), progress])],
             motionSequences: (Array.isArray(previous?.motionSequences) ? previous.motionSequences : []).map(raw => { const sequence = object(raw); return sequence.trigger === trigger ? { ...sequence, frames: [...new Set([...(Array.isArray(sequence.frames) ? sequence.frames : []), progress])] } : sequence; }) });
         }
+        if (captureNode && key.includes(':detail:') && retained) { const previous=this.productScreens.get(captureNode); this.productScreens.set(captureNode,{...previous,details:[...(Array.isArray(previous?.details)?previous.details:[]),key]}); }
         if (captureNode && key.endsWith(':render') && retained) this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), reviewed: true });
         nextImageKey = '';
       }
@@ -263,6 +280,21 @@ export class DiscoveryReviewContext {
       // Central work must be addressed or explicitly retired before being replaced by a lesser concern.
       remaining.set(string(item.id), { ...item, priority: previous?.priority === 'central' ? 'central' : item.priority });
     }
+    const directory=JSON.parse(this.packet('').text).imageDirectory as Array<{imageNumber:number;role:string;aliases?:string[]}>;
+    for (const [id,screen] of this.productScreens) {
+      if (screen.simulation || !screen.qualityReviewRequired) continue;
+      const check=(Array.isArray(parsed.productChecks)?parsed.productChecks:[]).map(object).find(check=>check.nodeId===id);
+      const citations=(Array.isArray(check?.evidenceImageNumbers)?check.evidenceImageNumbers:[]).flatMap(number=>directory.filter(entry=>entry.imageNumber===number).flatMap(entry=>entry.aliases??[entry.role]));
+      const references=Array.isArray(screen.reviewReferenceAssetIds)?screen.reviewReferenceAssetIds:screen.referenceAssetIds;
+      const hasReference=citations.some(role=>role.startsWith(`screen:${id}:reference:`));
+      const hasDetails=!Array.isArray(screen.details)||screen.details.every(key=>citations.includes(string(key)));
+      const state=object(screen.state);
+      const runtimeSound=(!Array.isArray(state.errors)||!state.errors.length) && object(state.overflow).horizontal!==true && (!Array.isArray(state.images)||state.images.every(raw=>{const image=object(raw);return image.visible!==true||image.loaded!==false;}));
+      const verified=runtimeSound && screen.reviewed===true && check && citations.includes(`screen:${id}:render`) && hasDetails && check.componentConsistency==='pass' && check.assetQuality==='pass' && ((check.referenceComparison==='not_applicable' && (!Array.isArray(references)||!references.length))||(check.referenceComparison==='pass' && (!Array.isArray(references)||!references.length||hasReference)));
+      const issueId=`product-quality:${id}`;
+      if (!verified) remaining.set(issueId,{id:issueId,priority:'supporting',gap:`Current visual quality is not established for ${string(screen.title)||id}.`,draftBasis:{passage:'Proposed completion of the authored screen',existingQualification:'Functionality, source code and retained asset IDs do not establish reference fidelity.'},whyItMatters:'Product icons, authentic assets and repeated components must meet the brief across every variation.',reasoningToDevelop:'Review the current screen pixels and magnified component details against actual reference pixels; repair concrete inconsistencies locally. Review every changed variant and preserve unrelated work.',investigation:[],resolutionSignal:'An explicit productChecks assessment cites this current render and available component/reference images, with satisfactory component consistency and asset quality.'});
+      else remaining.delete(issueId);
+    }
     const emitted = new Set((parsed.work as JsonObject[]).map(item => string(item.id)));
     const carried = [...remaining.keys()].filter(id => !emitted.has(id));
     const work = [...remaining.values()].sort((a, b) => Number(b.priority === 'central') - Number(a.priority === 'central'));
@@ -278,13 +310,16 @@ export class DiscoveryReviewContext {
     this.handoff = { previousDraft: excerpt(draft), feedback: excerpt(feedback), observationOffset: this.sequence, activity: this.activity() };
   }
   private removeImage(id: string) {
-    this.imageSize -= this.imageSizes.get(id) ?? 0;
     this.imageSizes.delete(id); this.images.delete(id);
+    const identities = new Set<string>(); this.imageSize=0;
+    for (const [key,part] of this.images) { const identity=part.type==='image'?part.url:part.type==='localImage'?part.path:key; if(!identities.has(identity)){identities.add(identity);this.imageSize+=this.imageSizes.get(key)??0;} }
   }
   private image(id: string, part: UserInput, size: number) {
     this.removeImage(id);
-    if (this.imageSize + size > 12_000_000) { this.omitted++; return false; }
-    this.images.set(id, part); this.imageSizes.set(id, size); this.imageSize += size;
+    const identity=part.type==='image'?part.url:part.type==='localImage'?part.path:id;
+    const duplicate=[...this.images.values()].some(image=>(image.type==='image'?image.url:image.type==='localImage'?image.path:'')===identity);
+    if (this.imageSize + (duplicate?0:size) > 12_000_000) { this.omitted++; return false; }
+    this.images.set(id, part); this.imageSizes.set(id, size); this.imageSize += duplicate?0:size;
     return true;
   }
   packet(draft: string): { text: string; images: UserInput[] } {
@@ -294,12 +329,18 @@ export class DiscoveryReviewContext {
     const reviewHandoff = h ? { previousDraft: h.previousDraft, previousFeedback: h.feedback,
       activityAtPreviousReview: h.activity, observationsSincePreviousReview: this.entries.slice(handoffStart),
       omittedObservationsSincePreviousReview: Math.max(0, availableStart - h.observationOffset) } : null;
+    const uniqueImages:UserInput[]=[]; const imageDirectory:Array<{imageNumber:number;role:string;aliases?:string[]}>=[]; const indices=new Map<string,number>();
+    for (const [id,image] of this.images) {
+      const role=id.startsWith('screen:')||id.startsWith('asset:')?id:image.type==='localImage'?'user reference image':'inspected source image';
+      const identity=image.type==='image'?image.url:image.type==='localImage'?image.path:id, existing=indices.get(identity);
+      if(existing !== undefined) { const entry=imageDirectory[existing]; entry.aliases=[...(entry.aliases??[entry.role]),role]; }
+      else {indices.set(identity,uniqueImages.length);uniqueImages.push(image);imageDirectory.push({imageNumber:uniqueImages.length,role});}
+    }
     return { text: JSON.stringify({ reviewDate: new Date().toISOString().slice(0, 10), latestUserRequest: this.question, proposedAnswer: draft, observedActivitySinceLatestUserInput: this.activity(), investigation: this.entries.slice(0, handoffStart),
       productWork: [...this.productScreens.values()],
-      imageDirectory: [...this.images.entries()].map(([id, image], index) => ({ imageNumber: index + 1,
-        role: id.startsWith('screen:') || id.startsWith('asset:') ? id : image.type === 'localImage' ? 'user reference image' : 'inspected source image' })),
+      imageDirectory,
       reviewHandoff, openWork: [...this.openWork.values()],
-      contextLimit: `${this.omitted} earlier entries omitted. Individual entries may be excerpted. Image/tool history may be incomplete; absence is not proof of missing work.` }), images: [...this.images.values()] };
+      contextLimit: `${this.omitted} earlier entries omitted. Individual entries may be excerpted. Image/tool history may be incomplete; absence is not proof of missing work.` }), images: uniqueImages };
   }
 }
 

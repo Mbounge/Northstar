@@ -52,7 +52,7 @@ export async function captureCanvasV2Screen(nodeId: string, encoded: string, sig
   const registered = controllers.get(nodeId);
   if (registered?.encoded === encoded && registered.capture) {
     if (command.action !== 'snapshot') throw new Error('Motion timeline review is available for authored screens. Preserve the registered reference simulation.');
-    return registered.capture(signal);
+    return { ...await registered.capture(signal), details: [] };
   }
   const snapshot = await inspectCanvasV2Screen(nodeId, encoded, command, signal);
   signal.throwIfAborted();
@@ -84,8 +84,24 @@ export async function captureCanvasV2Screen(nodeId: string, encoded: string, sig
     if (!doc) throw new Error('The screen capture could not be read.');
     await Promise.all([...doc.images].map(image => image.decode().catch(() => undefined)));
     await doc.fonts.ready;
-    const image = await toCooperativeJpeg(doc.documentElement, { width, height, pixelRatio: 1, quality: 0.9, skipFonts: true }, () => !signal.aborted && controllers.get(nodeId)?.encoded === encoded);
-    return { image, state: { ...snapshot, html: undefined, css: undefined } };
+    const image = await toCooperativeJpeg(doc.documentElement, { width, height, pixelRatio: command.action === 'snapshot' && width*height <= 1_000_000 ? 2 : 1, quality: 0.95, skipFonts: true }, () => !signal.aborted && controllers.get(nodeId)?.encoded === encoded);
+    const details: Array<{ label:string; selector:string; image:string }> = [];
+    if (command.action === 'snapshot' && Array.isArray(snapshot.reviewRegions) && snapshot.reviewRegions.length) {
+      const raster = new Image(); raster.src = image; await raster.decode();
+      const sx = raster.naturalWidth/width, sy = raster.naturalHeight/height;
+      for (const raw of snapshot.reviewRegions.slice(0,6)) {
+        signal.throwIfAborted();
+        const region = raw as {label?:string;selector?:string;rect?:{x:number;y:number;width:number;height:number}};
+        const rect = region.rect; if (!rect || ![rect.x,rect.y,rect.width,rect.height].every(Number.isFinite)) continue;
+        const x=Math.max(0,rect.x-4), y=Math.max(0,rect.y-4), w=Math.min(width,rect.x+rect.width+4)-x, h=Math.min(height,rect.y+rect.height+4)-y;
+        if (w<=0 || h<=0) continue;
+        const crop = document.createElement('canvas'); crop.width=Math.ceil(w*sx); crop.height=Math.ceil(h*sy);
+        const context = crop.getContext('2d'); if (!context) continue;
+        context.drawImage(raster,x*sx,y*sy,w*sx,h*sy,0,0,crop.width,crop.height);
+        details.push({label:String(region.label||'Component detail').slice(0,180),selector:String(region.selector||'').slice(0,1000),image:crop.toDataURL('image/png')});
+      }
+    }
+    return { image, details, state: { ...snapshot, html: undefined, css: undefined } };
   } finally { frame.remove(); }
 }
 
