@@ -22,12 +22,12 @@ export async function creativeInputContext(
     ? raw.inputAssetIds
     : Array.isArray(raw.inputs)
       ? raw.inputs.map((v) => object(v).assetId)
-      : [];
+      : typeof raw.assetId === 'string' ? [raw.assetId] : [];
   const ids = Array.isArray(decoded.inputAssetIds)
     ? decoded.inputAssetIds
     : Array.isArray(decoded.inputs)
       ? decoded.inputs.map((v) => object(v).assetId)
-      : [];
+      : typeof decoded.assetId === 'string' ? [decoded.assetId] : [];
   if (refs.length > 16)
     throw new Error("Import media in batches of at most 16 files.");
   let total = 0;
@@ -150,7 +150,7 @@ export function creativeResultForModel(result: CreativeResult) {
       url: `northstar-asset:${asset.id}`,
     })),
     next: result.assets.length
-      ? "Inspect the retained image pixels with inspect_asset before using them. Read canvas_read for current media handles; use canvas_edit to place editable structure and these assets."
+      ? "Inspect the retained image pixels with inspect_asset before using them. Reuse these handles in canvas_screen HTML/CSS and its referenceAssetIds for product screens, or canvas_edit for explanatory objects. Keep authentic marks and imagery consistent across variants."
       : "Output files are retained for download and can be re-imported with workspace_run. Use computed values to update native editable canvas objects when requested.",
   };
 }

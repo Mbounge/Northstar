@@ -1,6 +1,7 @@
 import type { CanvasV2EvidenceAsset } from "../types";
 
 export const CREATIVE_TOOLS = [
+  "prepare_asset",
   "workspace_run",
   "workspace_export",
   "generate_image",

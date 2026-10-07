@@ -98,6 +98,8 @@ export function parseDiscoveryFeedback(text: string) {
 
 export const DISCOVERY_REVIEW_INSTRUCTIONS = `You are an independent thinking partner helping the primary model resolve the user's discovery question. You control successful completion: return substantive work when it remains, or an empty work list when the current answer is satisfactory. Help develop the answer, not merely police its wording. Do not write the final answer or request private reasoning.
 
+For product screens, prototypes and simulations, completion includes product quality by default. The user need not explicitly request logos, authentic assets, mobile dimensions, consistent components or visual review. Infer the platform and product identity from the actual reference pixels and brief; preserve them unless the user requested a different direction. Judge requested variations on their own brief, without demanding an exact layout copy when a new design is wanted. Functional controls and zero runtime errors do not establish visual quality. Compare the latest rendered screen pixels with the retained references: meaningful brand marks/photos, typography, spacing, alignment, image crops, navigation and legibility. A letter/emoji/rough mark standing in for a visible authentic logo, or missing meaningful reference imagery, is a material product defect even if the final answer never claims pixel fidelity. Return concrete work to retain/extract those authentic pixels with prepare_asset or workspace_run and bind them; use generation for suitable original assets when the brief calls for them. Ordinary native text and interface icons do not require raster assets. Retaining a reference ID alone does not mean its assets were used. Use productWork's current screen metadata and latest captures, not obsolete drafts. Preserve original registered simulations and human work; request local repairs to authored screens, never a speculative redesign or mandatory imagery quota. Missing relevant rendered states require inspection, not an invented verdict. For completed product edits, argumentChecks may be empty; substantive visual/interaction defects belong in work with concrete resolution signals. Approve only when the requested behavior and material product-quality requirements are addressed, or accurately bound a real unavailable input.
+
 Read the actual question and the whole current draft first. Distinguish the author's assertions from quotations, conditional scenarios, questions and acknowledged unknowns. For every criticism, identify a short exact passage and the existing qualification elsewhere in the draft. When an explanation is missing, anchor the gap to the nearest passage that needs developing. If a qualification already resolves your concern, do not repeat that concern. Criticize only what remains after reading that qualification; a hypothetical possibility is not an asserted fact.
 
 For explanatory questions, contribute an argument when a causal connection is missing. Start from the available facts or explicit assumptions and explain how one thing could lead to another, why an actor would choose that course, and what condition or counterexample would weaken it. Distinguish the ability to produce an outcome from the incentive to choose it. Examine the strongest relevant alternative or interaction: what could it explain independently, and what changes when mechanisms operate together? Do not give a list of factors or tell the author merely to consider incentives or go deeper. Do not force a causal framework onto a direct factual question or completed edit. Useful reasoning may need no additional search.
@@ -146,6 +148,8 @@ export class DiscoveryReviewContext {
   private size = 0;
   private omitted = 0;
   private images = new Map<string, UserInput>();
+  private imageSizes = new Map<string, number>();
+  private productScreens = new Map<string, JsonObject>();
   private imageSize = 0;
   private question = '';
   private nativeSearches = new Set<string>();
@@ -177,9 +181,52 @@ export class DiscoveryReviewContext {
   tool(name: string, args: unknown, content: unknown) {
     this.toolResults[name] = (this.toolResults[name] || 0) + 1;
     this.record(`Tool ${name}`, { arguments: args, result: content });
+    let captureNode = '', nextImageKey = '';
     if (Array.isArray(content)) for (const raw of content) {
       const part = object(raw), url = string(part.imageUrl);
-      if (part.type === 'inputImage' && url.startsWith('data:image/')) this.image(url, { type: 'image', url }, url.length);
+      if (part.type === 'inputText') {
+        let value: JsonObject;
+        try { value = object(JSON.parse(string(part.text))); } catch { continue; }
+        if (name === 'canvas_read' && Array.isArray(value.screens)) {
+          const live = new Set(value.screens.map(item => string(object(item).nodeId)));
+          for (const id of this.productScreens.keys()) if (!live.has(id)) {
+            this.productScreens.delete(id);
+            for (const key of this.images.keys()) if (key.startsWith(`screen:${id}:`)) this.removeImage(key);
+          }
+          for (const rawScreen of value.screens) {
+            const screen = object(rawScreen), source = object(screen.source), id = string(screen.nodeId);
+            if (!id) continue;
+            const previous = this.productScreens.get(id);
+            const hasSource = typeof source.html === 'string';
+            this.productScreens.set(id, { ...previous, nodeId: id, title: screen.title, width: screen.width, height: screen.height,
+              simulation: screen.simulation, referenceAssetIds: screen.referenceAssetIds,
+              ...(hasSource ? { boundAssetIds: [...new Set((string(source.html) + string(source.css) + string(source.javascript)).match(/northstar-asset:[\w:.-]+/g) ?? [])] } : {}) });
+          }
+        }
+        if ((name === 'canvas_screen' || name === 'canvas_insert_simulation') && value.committed === true && value.nodeId) {
+          const id = string(value.nodeId), input = object(args), previous = this.productScreens.get(id);
+          this.productScreens.set(id, { ...previous, nodeId: id, title: input.title ?? previous?.title,
+            referenceAssetIds: input.referenceAssetIds ?? previous?.referenceAssetIds ?? [],
+            simulation: name === 'canvas_insert_simulation' ? { appName: input.appName } : previous?.simulation,
+            reviewed: false });
+          // A revised source must not be approved using its previous render.
+          for (const key of this.images.keys()) if (key.startsWith(`screen:${id}:`)) this.removeImage(key);
+        }
+        if (name === 'canvas_review' && value.nodeId && value.viewport) {
+          captureNode = string(value.nodeId); nextImageKey = `screen:${captureNode}:render`;
+          const state = object(value.state);
+          this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), nodeId: captureNode,
+            viewport: value.viewport, referenceAssetIds: value.referenceAssetIds, reviewReferenceAssetIds: value.reviewReferenceAssetIds, boundAssetIds: value.boundAssetIds,
+            state: { scroll: state.scroll, overflow: state.overflow, errors: state.errors, images: Array.isArray(state.images) ? state.images.slice(0, 60) : undefined }, reviewed: false });
+        } else if (captureNode && value.referenceAssetId) nextImageKey = `screen:${captureNode}:reference:${string(value.referenceAssetId)}`;
+        else if (name === 'inspect_asset' && value.evidenceId) nextImageKey = `asset:${string(value.evidenceId)}`;
+      }
+      if (part.type === 'inputImage' && url.startsWith('data:image/')) {
+        const key = nextImageKey || url;
+        const retained = this.image(key, { type: 'image', url }, url.length);
+        if (captureNode && key.endsWith(':render') && retained) this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), reviewed: true });
+        nextImageKey = '';
+      }
     }
   }
   observation(item: JsonObject) {
@@ -187,6 +234,7 @@ export class DiscoveryReviewContext {
     this.record('Primary observation', item);
   }
   activity() { return { nativeSearches: this.nativeSearches.size, toolResults: { ...this.toolResults } }; }
+  hasProductWork() { return [...this.productScreens.values()].some(screen => !screen.simulation); }
   /** Preserve the reviewer's unfinished work across omissions; this does not grade the answer. */
   reconcileFeedback(feedback: string): string {
     const parsed = parseDiscoveryFeedback(feedback);
@@ -211,10 +259,15 @@ export class DiscoveryReviewContext {
     this.record('Independent review feedback', parsed);
     this.handoff = { previousDraft: excerpt(draft), feedback: excerpt(feedback), observationOffset: this.sequence, activity: this.activity() };
   }
+  private removeImage(id: string) {
+    this.imageSize -= this.imageSizes.get(id) ?? 0;
+    this.imageSizes.delete(id); this.images.delete(id);
+  }
   private image(id: string, part: UserInput, size: number) {
-    if (this.images.has(id)) return;
-    if (this.imageSize + size > 12_000_000) { this.omitted++; return; }
-    this.images.set(id, part); this.imageSize += size;
+    this.removeImage(id);
+    if (this.imageSize + size > 12_000_000) { this.omitted++; return false; }
+    this.images.set(id, part); this.imageSizes.set(id, size); this.imageSize += size;
+    return true;
   }
   packet(draft: string): { text: string; images: UserInput[] } {
     const h = this.handoff;
@@ -224,6 +277,9 @@ export class DiscoveryReviewContext {
       activityAtPreviousReview: h.activity, observationsSincePreviousReview: this.entries.slice(handoffStart),
       omittedObservationsSincePreviousReview: Math.max(0, availableStart - h.observationOffset) } : null;
     return { text: JSON.stringify({ reviewDate: new Date().toISOString().slice(0, 10), latestUserRequest: this.question, proposedAnswer: draft, observedActivitySinceLatestUserInput: this.activity(), investigation: this.entries.slice(0, handoffStart),
+      productWork: [...this.productScreens.values()],
+      imageDirectory: [...this.images.entries()].map(([id, image], index) => ({ imageNumber: index + 1,
+        role: id.startsWith('screen:') || id.startsWith('asset:') ? id : image.type === 'localImage' ? 'user reference image' : 'inspected source image' })),
       reviewHandoff, openWork: [...this.openWork.values()],
       contextLimit: `${this.omitted} earlier entries omitted. Individual entries may be excerpted. Image/tool history may be incomplete; absence is not proof of missing work.` }), images: [...this.images.values()] };
   }

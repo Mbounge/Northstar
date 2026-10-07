@@ -1,4 +1,5 @@
 import test from "node:test";
+import { preparedAssetJob } from "../lib/canvas-v2/creative/asset-preparation";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,18 @@ const png = Buffer.from(
   "base64",
 );
 const empty = { inputs: [] } as CreativeContext;
+test('asset preparation bounds the crop and keeps strings out of executable code', () => {
+  const args = { assetId: 'retained-ref', label: "Logo $(touch x) 'quoted'", crop: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 }, role: 'brand-mark', mask: 'circle' };
+  const job = preparedAssetJob(args, 'safe-id');
+  assert.equal(job.role, 'brand-mark');
+  assert.equal(job.operation.command, "python 'assets/safe-id/prepare.py'");
+  assert.ok(!job.operation.files[1].text.includes('touch x'));
+  assert.deepEqual(JSON.parse(job.operation.files[0].text).crop, args.crop);
+  for (const crop of [{ x: -0.01, y: 0, width: 1, height: 1 }, { x: 0.9, y: 0, width: 0.2, height: 1 }, { x: 0, y: 0, width: 0, height: 1 }, { x: NaN, y: 0, width: 1, height: 1 }, { x: '0', y: 0, width: 1, height: 1 }]) assert.throws(() => preparedAssetJob({ ...args, crop }, 'safe-id'));
+  assert.throws(() => preparedAssetJob(args, '../escape'));
+  assert.throws(() => preparedAssetJob({ ...args, mask: 'arbitrary-command' }, 'safe-id'));
+  assert.throws(() => preparedAssetJob({ ...args, maxEdge: 10000 }, 'safe-id'));
+});
 const tick = () => new Promise((r) => setTimeout(r, 2));
 async function finish(runtime: NorthstarCreativeRuntime, id: string) {
   for (let i = 0; i < 500; i++) {
@@ -52,6 +65,7 @@ function fakeApi(
     uploads = 0,
     expired = options.expired;
   let receiptPath = "";
+  let outputPath = "/mnt/data/northstar/chart.png";
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     const path = url.pathname + url.search;
@@ -81,7 +95,12 @@ function fakeApi(
       const uploaded = await f.text();
       assert.ok(!uploaded.includes("test-key"));
       if (f.name === "run-input.json")
-        receiptPath = JSON.parse(uploaded).receiptPath;
+        {
+        const payload = JSON.parse(uploaded);
+        receiptPath = payload.receiptPath;
+        const config = payload.files.find((file: {path: string}) => file.path.endsWith('/config.json'));
+        if (config) outputPath = '/mnt/data/northstar/' + JSON.parse(Buffer.from(config.data, 'base64').toString()).output;
+      }
       return Response.json({
         id: `cfile_in${++uploads}`,
         path: `/mnt/data/input${uploads}-${f.name}`,
@@ -90,7 +109,7 @@ function fakeApi(
     if (path.includes("/files?"))
       return Response.json({
         data: [
-          { id: "cfile_output", path: "/mnt/data/northstar/chart.png" },
+          { id: "cfile_output", path: outputPath },
           { id: "cfile_receipt", path: `/mnt/data/northstar/${receiptPath}` },
         ],
         has_more: false,
@@ -207,6 +226,27 @@ test("workspace executes once, reuses its isolated container and retains origina
   } finally {
     r.dispose();
   }
+});
+test('prepared assets retain only their source lineage even after unrelated workspace work', async () => {
+  const f = fakeApi();
+  const runtime = new NorthstarCreativeRuntime('test-key', () => 'gpt-5.6-luna', f);
+  const context = (reference: string, id: string): CreativeContext => ({ inputs: [{ reference, id, label: 'Reference', dataUrl: `data:image/png;base64,${png.toString('base64')}` }] });
+  try {
+    runtime.start('earlier', 'workspace_run', { command: 'printf 42', inputs: [{ assetId: 'other-ref', path: 'other.png' }] }, context('other-ref', 'unrelated-source'));
+    assert.equal((await finish(runtime, 'earlier')).status, 'completed');
+    runtime.start('crop', 'prepare_asset', { assetId: 'source-ref', label: 'Product mark', role: 'brand-mark', crop: { x: 0, y: 0, width: 1, height: 1 } }, context('source-ref', 'authentic-source'));
+    const result = await finish(runtime, 'crop');
+    assert.equal(result.status, 'completed');
+    if (result.status !== 'completed') return;
+    assert.deepEqual(result.result.artifacts[0].inputAssetIds, ['authentic-source']);
+    assert.ok(result.result.assets[0].tags?.includes('asset-role:brand-mark'));
+    assert.ok(!result.result.assets[0].tags?.includes('derived-from:unrelated-source'));
+    assert.equal(result.result.artifacts[0].origin, 'computed');
+    const before = f.requests.length;
+    runtime.start('foreign', 'prepare_asset', { assetId: 'unknown', label: 'Mark', crop: { x: 0, y: 0, width: 1, height: 1 } }, context('source-ref', 'authentic-source'));
+    assert.equal((await finish(runtime, 'foreign')).status, 'failed');
+    assert.equal(f.requests.length, before);
+  } finally { runtime.dispose(); }
 });
 test("altered transport commands are not reported as verified execution", async () => {
   const f = fakeApi({ changedCommand: true });

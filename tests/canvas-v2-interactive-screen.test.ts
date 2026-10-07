@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { encodeCanvasV2Screen, parseCanvasV2Screen, readCanvasV2Screens, SCREEN_ATTRIBUTE, validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
+import { encodeCanvasV2Screen, parseCanvasV2Screen, readCanvasV2Screens, SCREEN_ATTRIBUTE, canvasV2ScreenReviewAssets, validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
 import { canvasV2ScreenPatch } from '../lib/canvas-v2/interactive-screen-patch';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
 import { validateCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from '../lib/canvas-v2/artifact-safety';
@@ -9,6 +9,17 @@ import { applyCanvasV2NativeSceneMutation, copyCanvasV2NativeSelection, pasteCan
 
 const screen = { version: 1 as const, title: 'A player’s next team 🏒', width: 390, height: 844, html: '<main><h1>Your next team</h1><button id="save">Save</button></main>', css: 'h1{font-size:28px}', javascript: 'document.querySelector("#save").addEventListener("click",e=>e.target.textContent="Saved")', referenceAssetIds: [] };
 const root = { html: '<main data-canvas-v2-node-id="canvas" data-canvas-v2-workspace-root="true"></main>', css: '' };
+
+test('review follows retained crop lineage back to full references without cycles or unauthorized sources', () => {
+  const original = { id: 'capture', label: 'Original product screen', url: 'data:image/png;base64,source' };
+  const crop = { id: 'mark', label: 'Authentic mark', url: 'data:image/png;base64,crop', tags: ['derived-from:capture'] };
+  const preparedScreen = { ...screen, referenceAssetIds: ['mark'] };
+  assert.deepEqual(canvasV2ScreenReviewAssets(preparedScreen, [original, crop]).map(asset => asset.id), ['capture', 'mark']);
+  assert.deepEqual(canvasV2ScreenReviewAssets({ ...preparedScreen, referenceAssetIds: ['mark', 'capture'] }, [original, crop]).map(asset => asset.id), ['capture', 'mark']);
+  assert.equal(canvasV2ScreenReviewAssets(preparedScreen, [crop, { ...original, tags: ['derived-from:mark'] }]).length, 2);
+  const unavailable = { ...original, source: { providerId: 'test', providerLabel: 'Test', sourceId: 'capture', sourceType: 'other' as const, label: 'Unavailable source', retrievedAt: '', permission: 'unavailable' as const } };
+  assert.deepEqual(canvasV2ScreenReviewAssets(preparedScreen, [crop, unavailable]).map(asset => asset.id), ['mark']);
+});
 
 test('interactive source persists as one safe native object while arbitrary executable board markup stays prohibited', () => {
   assert.deepEqual(parseCanvasV2Screen(encodeCanvasV2Screen(screen)), screen);
@@ -30,7 +41,11 @@ test('targeted source updates retain user geometry, unchanged fields, references
   const updated = readCanvasV2Screens(operation.html)[0].screen;
   assert.equal(updated.javascript, screen.javascript);
   assert.equal(updated.html, screen.html);
-  assert.equal(updated.css, 'h1{font-size:30px}');
+  assert.equal(updated.css, screen.css + '\nh1{font-size:30px}');
+  const replaced = canvasV2ScreenPatch(document, { nodeId: 'existing', css: 'h1{font-size:30px}', cssMode: 'replace' }, [], { x: 0, y: 0 });
+  assert.ok('html' in replaced.operations[0]);
+  assert.equal(readCanvasV2Screens(replaced.operations[0].html)[0].screen.css, 'h1{font-size:30px}');
+  assert.throws(() => canvasV2ScreenPatch(document, { nodeId: 'existing', cssMode: 'guess' }, [], { x: 0, y: 0 }), /cssMode/);
   assert.throws(() => canvasV2ScreenPatch(root, { nodeId: 'deleted', css: '' }, [], { x: 0, y: 0 }), /no longer exists/);
 });
 

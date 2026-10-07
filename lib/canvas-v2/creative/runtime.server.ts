@@ -4,6 +4,7 @@ import { object, string, type JsonObject } from "../managed-agent/protocol";
 import { actualImageType } from "../source-media.server";
 import type { CanvasV2EvidenceAsset } from "../types";
 import { CreativeApiError, CreativeOpenAI, pause } from "./openai.server";
+import { preparedAssetJob } from './asset-preparation';
 import type {
   CreativeContext,
   CreativeJob,
@@ -229,7 +230,9 @@ export class NorthstarCreativeRuntime {
         ]);
         signal.throwIfAborted();
         const result =
-          tool === "generate_image"
+          tool === "prepare_asset"
+            ? await this.prepare(args, context, selected, signal)
+            : tool === "generate_image"
             ? await this.image(args, context, signal)
             : tool === "workspace_export"
               ? await this.export(args, [...this.sourceIds], signal)
@@ -287,6 +290,15 @@ export class NorthstarCreativeRuntime {
         throw new Error("Image edits require PNG, JPEG or WebP inputs.");
       return { ...input, ...data };
     });
+  }
+  private async prepare(args: JsonObject, context: CreativeContext, model: string, signal: AbortSignal): Promise<CreativeResult> {
+    const job = preparedAssetJob(args, randomUUID());
+    const inputs = this.inputs({ inputAssetIds: [args.assetId] }, context, true);
+    const result = await this.run(job.operation, context, model, signal, inputs.map(input => input.id));
+    if (result.execution?.exitCode !== 0 || result.execution.timedOut || result.assets.length !== 1 || result.assets[0].mimeType !== 'image/png') {
+      throw new Error(`Asset preparation failed: ${result.execution?.stderr.slice(-500) || 'No verified PNG was exported.'}`);
+    }
+    return { ...result, assets: result.assets.map(asset => ({ ...asset, tags: [...(asset.tags ?? []), `asset-role:${job.role}`], description: 'Cropped from retained reference pixels. Inspect the crop before binding it to the product screen.' })) };
   }
   private async workspace(signal: AbortSignal) {
     let restarted = false;
@@ -431,6 +443,7 @@ export class NorthstarCreativeRuntime {
     context: CreativeContext,
     model: string,
     signal: AbortSignal,
+    lineage?: string[],
   ): Promise<CreativeResult> {
     const command = string(args.command);
     if (!command.trim() || command.length > 64000)
@@ -528,7 +541,7 @@ export class NorthstarCreativeRuntime {
       .catch(() => undefined);
     const exported = await this.export(
       { ...args, exports },
-      [...this.sourceIds],
+      lineage ?? [...this.sourceIds],
       signal,
     );
     return {

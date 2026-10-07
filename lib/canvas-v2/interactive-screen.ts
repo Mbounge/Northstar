@@ -15,6 +15,22 @@ export interface CanvasV2InteractiveScreen {
   referenceAssetIds: string[];
 }
 
+/** Cropped/generated assets retain their original references for product review. */
+export function canvasV2ScreenReviewAssets(screen: CanvasV2InteractiveScreen, evidence: readonly CanvasV2EvidenceAsset[]): CanvasV2EvidenceAsset[] {
+  const assets = new Map(evidence.map(asset => [asset.id, asset]));
+  const visited = new Set<string>(), result: CanvasV2EvidenceAsset[] = [];
+  const visit = (id: string, depth: number) => {
+    if (visited.has(id) || visited.size >= 128 || depth > 8) return;
+    visited.add(id);
+    const asset = assets.get(id);
+    if (!asset || asset.mediaType === 'video' || asset.source?.permission === 'unavailable') return;
+    for (const tag of asset.tags ?? []) if (tag.startsWith('derived-from:')) visit(tag.slice('derived-from:'.length), depth + 1);
+    result.push(asset);
+  };
+  for (const id of screen.referenceAssetIds) visit(id, 0);
+  return result;
+}
+
 /** Source travels with the native object, not a separate mutable runtime record. */
 export function encodeCanvasV2Screen(screen: CanvasV2InteractiveScreen): string {
   const bytes = new TextEncoder().encode(JSON.stringify(validateCanvasV2Screen(screen)));

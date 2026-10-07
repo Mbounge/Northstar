@@ -8,9 +8,12 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
   const previous = readCanvasV2Screens(document.html).find(item => item.nodeId === nodeId);
   if (input.nodeId && !previous) throw new Error('That interactive screen no longer exists. Read the current canvas before revising it.');
   if (previous?.screen.simulation) throw new Error('This is a registered reference simulation. Create a separate screen variant to iterate on its design.');
+  if (input.cssMode !== undefined && !['merge', 'replace'].includes(String(input.cssMode))) throw new Error('Choose merge or replace for cssMode.');
+  const css = previous && typeof input.css === 'string' && input.cssMode !== 'replace'
+    ? `${previous.screen.css}\n${input.css}` : input.css ?? previous?.screen.css ?? '';
   const screen = validateCanvasV2Screen({ version: 1, simulation: input.simulation, title: input.title ?? previous?.screen.title,
     width: input.width ?? previous?.screen.width ?? 390, height: input.height ?? previous?.screen.height ?? 844,
-    html: input.html ?? previous?.screen.html, css: input.css ?? previous?.screen.css ?? '', javascript: input.javascript ?? previous?.screen.javascript ?? '',
+    html: input.html ?? previous?.screen.html, css, javascript: input.javascript ?? previous?.screen.javascript ?? '',
     referenceAssetIds: input.referenceAssetIds ?? previous?.screen.referenceAssetIds ?? [] });
   validateCanvasV2ScreenAssets(screen, evidence);
   const encoded = encodeCanvasV2Screen(screen);

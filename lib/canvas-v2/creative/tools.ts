@@ -19,6 +19,19 @@ const inputsSchema = {
 };
 export const NORTHSTAR_CREATIVE_TOOLS = [
   {
+    type: 'function', name: 'prepare_asset',
+    description: 'Extract an authentic logo, photo, avatar or illustration from a retained image without redrawing it. Inspect the source first, then choose its visible rectangle with normalized coordinates (0–1 relative to the full image). The exact reference pixels are cropped in the isolated execution workspace, retained with source lineage, and returned as reusable image handles. mask=none preserves a rectangular crop and existing transparency; circle clips the crop to an ellipse with transparent corners. maxEdge only downsizes; it never enlarges low-resolution pixels. Inspect the result, then bind its handle in canvas_screen or canvas_edit. Reuse prepared assets across product variations. For complex processing use workspace_run; for new imagery use generate_image. No public URL, arbitrary filesystem access or generated reconstruction of an existing mark.',
+    parameters: { type: 'object', properties: {
+      assetId: text, label: text,
+      role: { type: 'string', enum: ['brand-mark', 'photo', 'avatar', 'illustration', 'other'] },
+      crop: { type: 'object', properties: {
+        x: { type: 'number', minimum: 0, maximum: 1 }, y: { type: 'number', minimum: 0, maximum: 1 },
+        width: { type: 'number', exclusiveMinimum: 0, maximum: 1 }, height: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
+      }, required: ['x', 'y', 'width', 'height'], additionalProperties: false },
+      mask: { type: 'string', enum: ['none', 'circle'] }, maxEdge: { type: 'integer', minimum: 64, maximum: 2048 },
+    }, required: ['assetId', 'label', 'crop'], additionalProperties: false },
+  },
+  {
     type: "function",
     name: "workspace_run",
     description: `Execute your shell command in this conversation's isolated Linux workspace with Python and Node. Use it for calculations, data analysis, graph/layout geometry, file creation, media processing and checking assumptions. cwd is /mnt/data/northstar. Files and variables in files persist while the workspace is alive. The latest canvas source and all current measured nodes are provided as canvas.json. Check measurementRevisionId matches revisionId before trusting geometry; absent measurements require canvas_review first. inputs copies retained image/artifact bytes to the requested relative paths. files writes text/CSV/scripts at relative paths before execution. exports retains output files for download, follow-up work and native canvas placement (raster images only). No network or server secrets; retrieve public media with research tools first. No interactive terminal. Return actual computed values and repair execution errors. A failed command does not imply rollback of workspace files. A workspace restart is reported; durable exported assets can be re-imported. Do not flatten editable text, cards or connectors into a generated image: calculate geometry then use canvas_edit. Code checks supplement actual canvas_review pixels; they do not establish that the public canvas was changed.`,

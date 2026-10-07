@@ -205,7 +205,9 @@ export class CodexSessionHost {
     run.rounds++;
     s.reviewReport = { ...s.reviewReport, status: 'reviewing', proposedAnswer: s.reviewReport?.proposedAnswer ?? run.draft,
       initialActivity: s.reviewReport?.initialActivity ?? s.reviewContext.activity() };
-    this.progress(s, 'I’m checking whether the explanation misses anything that would change the answer.');
+    this.progress(s, s.reviewContext.hasProductWork()
+      ? 'I’m checking the rendered screens against the references and the requested experience.'
+      : 'I’m checking whether the explanation misses anything that would change the answer.');
     let feedback: string;
     let rawFeedback: string;
     let remainingWork: number;

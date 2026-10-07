@@ -7,6 +7,40 @@ import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
 import { object, string, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 25));
+test('product review keeps current screen/reference pixels instead of exhausting its budget with obsolete drafts', () => {
+  const context = new DiscoveryReviewContext();
+  const result = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });
+  context.tool('canvas_screen', { title: 'Career home', referenceAssetIds: ['ref'] }, [result({ committed: true, nodeId: 'screen-a' })]);
+  assert.equal(context.hasProductWork(), true);
+  assert.equal(JSON.parse(context.packet('Draft').text).productWork[0].reviewed, false);
+  const reference = 'data:image/png;base64,referencepixels';
+  let latest = '';
+  for (let i = 0; i < 80; i++) {
+    latest = 'data:image/png;base64,' + 'a'.repeat(200000) + i;
+    context.tool('canvas_review', {}, [result({ nodeId: 'screen-a', viewport: { width: 390, height: 844 }, referenceAssetIds: ['ref'], boundAssetIds: [], state: { errors: [], scroll: { y: i } } }), { type: 'inputImage', imageUrl: latest }, result({ referenceAssetId: 'ref' }), { type: 'inputImage', imageUrl: reference }]);
+  }
+  const packet = context.packet('Done');
+  assert.equal(packet.images.length, 2);
+  assert.ok(packet.images.some(image => image.type === 'image' && image.url === latest));
+  assert.ok(packet.images.some(image => image.type === 'image' && image.url === reference));
+  const work = JSON.parse(packet.text).productWork[0];
+  assert.equal(work.reviewed, true);
+  assert.deepEqual(work.boundAssetIds, []); // A retained screenshot is not proof of asset use.
+  assert.equal(work.state.scroll.y, 79);
+  assert.deepEqual(JSON.parse(packet.text).imageDirectory, [{ imageNumber: 1, role: 'screen:screen-a:render' }, { imageNumber: 2, role: 'screen:screen-a:reference:ref' }]);
+  context.tool('canvas_screen', { nodeId: 'screen-a' }, [result({ committed: true, nodeId: 'screen-a' })]);
+  assert.equal(context.packet('Revised').images.length, 0);
+  assert.equal(JSON.parse(context.packet('Revised').text).productWork[0].reviewed, false);
+  context.tool('canvas_read', {}, [result({ screens: [] })]);
+  assert.equal(context.hasProductWork(), false);
+  assert.deepEqual(JSON.parse(context.packet('Deleted').text).productWork, []);
+});
+test('registered simulations remain references rather than authored screen repair targets', () => {
+  const context = new DiscoveryReviewContext();
+  context.tool('canvas_insert_simulation', { appName: 'GRAET' }, [{ type: 'inputText', text: JSON.stringify({ committed: true, nodeId: 'original' }) }]);
+  assert.equal(context.hasProductWork(), false);
+  assert.deepEqual(JSON.parse(context.packet('Inserted').text).productWork[0].simulation, { appName: 'GRAET' });
+});
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 
 const feedbackFor = (gap?: string) => JSON.stringify({ question: 'Explain the difference', preserve: ['Established findings'], argumentChecks: [], sourceChecks: [], consistencyChecks: [], resolvedWork: gap ? [] : [{ id: 'gap', disposition: 'resolved', basis: 'The revised answer supplies the previously missing connection.' }], work: gap ? [{ id: 'gap', priority: 'central', gap, draftBasis: { passage: 'The available explanation', existingQualification: 'None in this fixture' }, whyItMatters: 'It changes the explanation.', reasoningToDevelop: 'Work through the missing cause and its consequence.', investigation: [], resolutionSignal: 'Explain the link or show why it does not apply.' }] : [], completionAssessment: gap ? 'Further substantive work remains.' : 'The explanation satisfactorily resolves the question.' });

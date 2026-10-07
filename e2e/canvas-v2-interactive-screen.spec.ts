@@ -35,6 +35,9 @@ test('the agent creates, tests, captures and revises one native screen without s
   await expect(review.getByText('Runtime errors: 0')).toBeVisible();
   await review.getByRole('button', { name: 'Close screen review' }).click();
   await expect(page.getByRole('button', { name: 'Interact with screen' })).toHaveCount(0);
+  await frame.getByRole('textbox', { name: 'Your name', exact: true }).fill('Casey Brooks');
+  await frame.getByRole('textbox', { name: 'Your name', exact: true }).press('Enter');
+  await expect(frame.getByText('Application prepared for Casey Brooks', { exact: true })).toBeVisible();
   await frame.getByRole('button', { name: 'Back to teams' }).click();
   await frame.getByRole('button', { name: 'Save team' }).click();
   await expect(frame.getByRole('button', { name: 'Saved', exact: true }).first()).toBeVisible();

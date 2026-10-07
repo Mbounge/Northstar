@@ -25,7 +25,7 @@ import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
 import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 import { simulatorForApp } from '@/lib/preview/simulator-registry';
 import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
-import { readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
+import { readCanvasV2Screens, canvasV2ScreenReviewAssets } from '@/lib/canvas-v2/interactive-screen';
 import { canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
 import { inspectCanvasV2Screen, captureCanvasV2Screen } from './interactive-screen';
 import type { ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
@@ -176,8 +176,9 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           : selectedScreen ?? (authored.length === 1 ? authored[0] : screens.length === 1 ? screens[0] : undefined);
         if (screen) {
           const capture = await captureCanvasV2Screen(screen.nodeId, screen.encoded, signal);
-          const references = await Promise.all(screen.screen.referenceAssetIds.slice(0, 3).map(async id => {
-            const asset = screenRevision.evidence.find(asset => asset.id === id) ?? assets.current.get(id);
+          const reviewAssets = canvasV2ScreenReviewAssets(screen.screen, [...screenRevision.evidence, ...assets.current.values()]);
+          const references = await Promise.all(reviewAssets.slice(0, 3).map(async asset => {
+            const id = asset.id;
             if (!asset || asset.mediaType === 'video' || asset.source?.permission === 'unavailable') return [];
             try {
               const pixels = inspectedPixels.current.get(id) ?? await readAccountAssetPixels(asset.url, signal);
@@ -188,8 +189,16 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
               return [{ type: 'input_text', text: JSON.stringify({ referenceAssetId: id, unavailable: true, error: error instanceof Error ? error.message : 'Reference pixels unavailable.' }) }];
             }
           }));
+          let imageBytes = capture.image.length;
+          const referenceParts = references.flat().map(part => {
+            if ('image_url' in part && typeof part.image_url === 'string') {
+              if (imageBytes + part.image_url.length > 8_000_000) return { type: 'input_text', text: 'An additional reference image was omitted from this capture to stay within the image transport budget. Use inspect_asset for its retained handle before judging it.' };
+              imageBytes += part.image_url.length;
+            }
+            return part;
+          });
           if (engine.readCommittedRevision().id !== screenRevision.id) throw new Error('The canvas changed during this capture. Read it again.');
-          return [{ type: 'input_text', text: JSON.stringify({ nodeId: screen.nodeId, revisionId: screenRevision.id, viewport: { width: screen.screen.width, height: screen.screen.height }, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, boundAssetIds: [...new Set((screen.screen.html + screen.screen.css + screen.screen.javascript).match(/northstar-asset:[\w:.-]+/g) ?? [])], qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with workspace_run and retain with workspace_export, then bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...references.flat()];
+          return [{ type: 'input_text', text: JSON.stringify({ nodeId: screen.nodeId, revisionId: screenRevision.id, viewport: { width: screen.screen.width, height: screen.screen.height }, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, reviewReferenceAssetIds: reviewAssets.map(asset => asset.id), boundAssetIds: [...new Set((screen.screen.html + screen.screen.css + screen.screen.javascript).match(/northstar-asset:[\w:.-]+/g) ?? [])], qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with prepare_asset (or workspace_run/workspace_export for complex processing), inspect and bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...referenceParts];
         }
         const observation = await engine.ensureObservation(signal);
         const revision = engine.readCommittedRevision();
@@ -280,7 +289,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
               if (plan) compositionHistory.current = [...compositionHistory.current.filter(p => p.execution.target.islandId !== plan.execution.target.islandId), plan];
               readRevision.current = latest.id;
               compositionPlan.current = undefined;
-              return { committed: true, ...(screenPatch ? { nodeId: screenPatch.nodeId } : {}), revisionId: latest.id, summary: string(args.summary), layoutFeedback: current.current.engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, next: screenPatch ? 'Use canvas_review(nodeId) for live screen pixels and canvas_screen_interact to test controls. Revise only actual defects.' : 'Inspect the rendered result with canvas_review. Plan the next island or a repair only if needed.' };
+              return { committed: true, ...(screenPatch ? { nodeId: screenPatch.nodeId } : {}), revisionId: latest.id, summary: string(args.summary), layoutFeedback: current.current.engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, next: screenPatch ? 'First use canvas_review(nodeId) on the initial rendered state and compare its actual brand marks and imagery with the returned reference pixels. Retained IDs alone are not asset use. Repair substitutions with prepare_asset/workspace_run and bind the inspected outputs. Then test controls with canvas_screen_interact and review meaningful changed/scrolled states. Preserve the approved design; revise only actual defects.' : 'Inspect the rendered result with canvas_review. Plan the next island or a repair only if needed.' };
             }
             const failure = current.current.engine.readManualFailure(); if (failure) throw new Error(failure);
             await new Promise(resolve => setTimeout(resolve, 50));
