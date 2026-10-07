@@ -4,6 +4,7 @@ COPY worker/package.json worker/package-lock.json ./
 RUN npm ci
 WORKDIR /app
 COPY lib/canvas-v2 ./lib/canvas-v2
+COPY lib/preview/graet-navigation.ts lib/preview/simulator-registry.ts ./lib/preview/
 COPY worker/main.ts worker/build.mjs ./worker/
 COPY tsconfig.json ./
 RUN npm --prefix worker run build && npm --prefix worker prune --omit=dev
