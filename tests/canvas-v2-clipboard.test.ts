@@ -33,7 +33,9 @@ test("clipboard carries only copied evidence and keeps source metadata immutable
   scene.nodes[0].evidence = { id: asset.id, role: "canonical" };
   const copy = copyCanvasV2NativeSelection(scene, ["source"], [asset, { ...asset, id: "unrelated" }])!;
   asset.label = "Changed later";
-  const decoded = decodeCanvasV2Clipboard(encodeCanvasV2Clipboard(copy).html)!;
+  const encoded = encodeCanvasV2Clipboard(copy);
+  assert.match(encoded.html, /<img src="https:\/\/evidence\.test\/source\.png"/);
+  const decoded = decodeCanvasV2Clipboard(encoded.html)!;
   assert.equal(decoded.evidenceAssets?.length, 1);
   assert.equal(decoded.evidenceAssets?.[0].label, "Source");
   assert.equal(pasteCanvasV2NativeClipboard(empty(), decoded, "cross-board").scene.nodes[0].evidence?.role, "analysis-copy");

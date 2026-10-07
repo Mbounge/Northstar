@@ -139,6 +139,18 @@ test("zooming at a point preserves the world point under the pointer", () => {
   assert.ok(Math.abs(before.y - after.y) < 0.001);
 });
 
+test("close inspection reaches 800% without moving the point under the pointer", () => {
+  const viewport = constrainCanvasV2WorkspaceViewport({ x: -800, y: -500, scale: 0.3 }, camera, insets);
+  const anchor = { x: 980, y: 410 };
+  const before = canvasV2ScreenToWorkspace(anchor, viewport);
+  const zoomed = zoomCanvasV2WorkspaceAtPoint(viewport, 8, anchor, camera, insets);
+  const after = canvasV2ScreenToWorkspace(anchor, zoomed);
+  assert.equal(CANVAS_V2_WORKSPACE.maxScale, 8);
+  assert.equal(zoomed.scale, 8);
+  assert.ok(Math.abs(before.x - after.x) < 0.001);
+  assert.ok(Math.abs(before.y - after.y) < 0.001);
+});
+
 test("wheel input is normalized across trackpads, mice, and page-scrolling devices", () => {
   assert.equal(canvasV2NormalizedWheelDelta(18, 0, 900), 18);
   assert.equal(canvasV2NormalizedWheelDelta(3, 1, 900), 48);

@@ -613,6 +613,52 @@ function scene(): CanvasV2NativeSceneDocument {
   };
 }
 
+test("deleting an island removes detached descendants from paint and selection truth", () => {
+  const source = scene();
+  const island = structuredClone(source.nodes[0]);
+  island.id = "island";
+  island.sourceNodeId = "island";
+  island.kind = "island";
+  island.tagName = "section";
+  island.directText = undefined;
+  island.content = [];
+  island.attributes = { "data-canvas-v2-node-id": "island", "data-canvas-v2-design-region": "" };
+  const detached = structuredClone(source.nodes[0]);
+  detached.id = "detached-card";
+  detached.sourceNodeId = "detached-card";
+  detached.detachedFromParentId = "island";
+  detached.attributes = { "data-canvas-v2-node-id": "detached-card", "data-canvas-v2-detached-from": "island" };
+  source.rootIds = ["island", "detached-card"];
+  source.nodes = [island, detached];
+
+  const deleted = applyCanvasV2NativeSceneMutation(source, { kind: "delete", nodeId: "island" });
+  assert.deepEqual(deleted.rootIds, []);
+  assert.deepEqual(deleted.nodes, []);
+  assert.doesNotMatch(serializeCanvasV2NativeScene(deleted).html, /detached-card/);
+});
+
+test("deleting an attached object also removes its connector and painted parts", () => {
+  let original = applyCanvasV2NativeSceneMutation(scene(), {
+    kind: "create", primitive: "shape", nodeId: "other", x: 1800, y: 1200, width: 220, height: 120,
+  });
+  original = applyCanvasV2NativeSceneMutation(original, {
+    kind: "create", primitive: "connector", nodeId: "attached", x: 1400, y: 1220, endX: 1800, endY: 1260,
+  });
+  original = applyCanvasV2NativeSceneMutation(original, {
+    kind: "connector-endpoint", nodeId: "attached", endpoint: "from", x: 1400, y: 1220, attachNodeId: "note",
+  });
+  const connector = original.nodes.find((node) => node.sourceNodeId === "attached")!;
+  assert.equal(connector.attributes["data-canvas-v2-connector-from"], "note");
+  const paintedParts = [...connector.childIds];
+
+  const deleted = applyCanvasV2NativeSceneMutation(original, { kind: "delete", nodeId: "note" });
+  assert.equal(deleted.nodes.some((node) => node.sourceNodeId === "note"), false);
+  assert.equal(deleted.nodes.some((node) => node.sourceNodeId === "attached" || paintedParts.includes(node.id)), false);
+  assert.equal(deleted.nodes.some((node) => node.sourceNodeId === "other"), true);
+  assert.equal(original.nodes.some((node) => node.sourceNodeId === "attached"), true, "prior revision remains intact");
+  assert.doesNotMatch(serializeCanvasV2NativeScene(deleted).html, /data-canvas-v2-connector-part/);
+});
+
 test("duplicating a flow child preserves siblings and makes an independently positioned copy", () => {
   const source = scene();
   const child = source.nodes[0];

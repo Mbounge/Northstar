@@ -14,6 +14,7 @@ import { canvasV2TextColorSwatch, readCanvasV2RichText, sanitizeCanvasV2RichText
 
 import { canvasV2TidyItems, canvasV2TidyMutation, canvasV2IsSectionHeading } from "@/lib/canvas-v2/tidy-layout";
 import { encodeCanvasV2Clipboard, decodeCanvasV2Clipboard, parseCanvasV2TabularText } from "@/lib/canvas-v2/clipboard";
+import { writeImageToClipboard } from "@/lib/image-clipboard";
 import {
   AlignCenter,
   AlignLeft,
@@ -105,7 +106,6 @@ import {
   copyCanvasV2NativeSelection,
   pasteCanvasV2NativeClipboard,
   canvasV2NativeTableRows,
-  canvasV2NativeSceneAbsoluteBounds,
   type CanvasV2NativeClipboard,
   canvasV2NativeSceneSelectionContainsTarget,
   serializeCanvasV2NativeScene,
@@ -143,7 +143,6 @@ import {
   constrainCanvasV2WorkspaceViewport,
   fitCanvasV2WorkspaceBounds,
   resizeCanvasV2WorkspaceBounds,
-  revealCanvasV2WorkspaceBounds,
   translateCanvasV2WorkspaceBounds,
   type CanvasV2ResizeHandle,
   type CanvasV2WorkspaceInsets,
@@ -432,6 +431,18 @@ function synchronizeSelectionWithNativeScene(
       ...(visualStyle ? { visualStyle } : {}),
     }];
   });
+}
+
+function copiedImageUrl(snapshot: CanvasV2NativeClipboard): string | undefined {
+  if (snapshot.scene.rootIds.length !== 1) return undefined;
+  const node = snapshot.scene.nodes.find((item) => item.id === snapshot.scene.rootIds[0]);
+  if (node?.kind !== "image") return undefined;
+  const source = node.attributes.src;
+  if (!source) return undefined;
+  if (source.startsWith("northstar-asset:")) {
+    return snapshot.evidenceAssets?.find((asset) => asset.id === source.slice("northstar-asset:".length))?.url;
+  }
+  return source;
 }
 
 const RESIZE_HANDLES: ReadonlyArray<{
@@ -1406,7 +1417,6 @@ export function CanvasV2Workspace({
         const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((item) => item.id === packet.id) ? [packet] : [])];
         if (!engine.applyManualDocument(insertion.document, `Placed all ${flow.screens.length} ordered ${app.name} ${flow.name} screens on canvas.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error(engine.readManualFailure() || 'The canvas is still finishing another edit.');
         pendingFlowPlacementRef.current = { id: flow.id, appName: app.name, flowName: flow.name, screenCount: flow.screens.length };
-        revealFlowNode(insertion.laneNodeId);
         setFlowPlacement({ message: `Rendering all ${flow.screens.length} ${app.name} ${flow.name} screens on canvas…` });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'The complete flow could not be placed.';
@@ -1424,31 +1434,6 @@ export function CanvasV2Workspace({
     if (bounds) commitViewport(fitCanvasV2WorkspaceBounds(bounds, cameraSize(), contentInsets(), 48));
     else fitContent();
   };
-
-  const revealedAiRevision = useRef(engine.committed.id);
-  useLayoutEffect(() => {
-    const revision = engine.committed;
-    const scene = engine.nativeScene;
-    if (revealedAiRevision.current === revision.id || scene?.revisionId !== revision.id) return;
-    const transaction = revision.sceneTransaction;
-    if (transaction?.origin !== "northstar") { revealedAiRevision.current = revision.id; return; }
-    const bounds = canvasV2NativeSceneAbsoluteBounds(scene, transaction.targetIslandId)
-      ?? unionCanvasV2ObjectBounds(transaction.mutations.flatMap(mutation => {
-        if (mutation.kind === "preserve" || mutation.kind === "remove") return [];
-        const nodeBounds = canvasV2NativeSceneAbsoluteBounds(scene, mutation.nodeId);
-        return nodeBounds ? [nodeBounds] : [];
-      }));
-    if (!bounds) return;
-    revealedAiRevision.current = revision.id;
-    const insets = contentInsets();
-    const visible = canvasV2VisibleWorkspaceBounds(viewportRef.current, cameraSize(), insets);
-    // Do not disturb a visible composition or change zoom. A restored/native
-    // recompile can put an accepted edit off-screen; reveal that committed work
-    // from its actual native bounds, never from an uncommitted draft.
-    if (!canvasV2BoundsIntersect(bounds, visible)) {
-      commitViewport(revealCanvasV2WorkspaceBounds(bounds, viewportRef.current, cameraSize(), insets, 48));
-    }
-  }, [engine.committed, engine.nativeScene, cameraSize, contentInsets, commitViewport]);
 
   const receiveGeometry = useCallback((geometry: CanvasV2CanvasGeometry) => {
     geometryRef.current = geometry;
@@ -1828,6 +1813,7 @@ export function CanvasV2Workspace({
   const finishDirectGesture = (pointerId: number) => {
     const directGesture = directGestureRef.current;
     if (directGesture?.pointerId !== pointerId) return false;
+    try {
     // Paint the final pointer position before committing. Dropping the last
     // queued frame makes the object trail its handles on a fast release.
     flushDirectGesturePreview(directGesture);
@@ -1909,6 +1895,9 @@ export function CanvasV2Workspace({
       finishDirectGestureChrome();
     }
     return true;
+    } finally {
+      engine.endHumanEdit();
+    }
   };
 
   updateDirectGestureHandlerRef.current = updateDirectGesture;
@@ -2007,6 +1996,7 @@ export function CanvasV2Workspace({
     const mutable = elements.filter((item) => item.nodeId !== "canvas" && !item.locked);
     const selectionBounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
     if (!mutable.length || !selectionBounds || engine.applyingManualEdit) return false;
+    engine.beginHumanEdit();
     const elementBounds = Object.fromEntries(mutable.map((item) => [item.nodeId, item.bounds]));
     const selectedIds = new Set(mutable.map((item) => item.nodeId));
     const snapBounds = kind === "move"
@@ -2092,7 +2082,36 @@ export function CanvasV2Workspace({
 
   const previewDeletion = (nodeIds: readonly string[]) => {
     restoreDeletionPreview();
-    canvasSceneRef.current?.previewNodeRemoval(nodeIds);
+    const scene = engine.readNativeScene();
+    const removedSourceIds = new Set(nodeIds);
+    if (scene) {
+      const byId = new Map(scene.nodes.map((node) => [node.id, node]));
+      const bySourceId = new Map(scene.nodes.flatMap((node) => node.sourceNodeId ? [[node.sourceNodeId, node] as const] : []));
+      const detachedChildren = new Map<string, string[]>();
+      for (const node of scene.nodes) {
+        if (!node.detachedFromParentId) continue;
+        const children = detachedChildren.get(node.detachedFromParentId) ?? [];
+        children.push(node.id);
+        detachedChildren.set(node.detachedFromParentId, children);
+      }
+      const visited = new Set<string>();
+      const visit = (id: string) => {
+        if (visited.has(id)) return;
+        visited.add(id);
+        const node = byId.get(id);
+        if (!node) return;
+        if (node.sourceNodeId) removedSourceIds.add(node.sourceNodeId);
+        node.childIds.forEach(visit);
+        detachedChildren.get(id)?.forEach(visit);
+      };
+      nodeIds.forEach((id) => { const node = bySourceId.get(id); if (node) visit(node.id); });
+      for (const node of scene.nodes) {
+        if (node.kind !== "connector" || !node.sourceNodeId) continue;
+        if (removedSourceIds.has(node.attributes["data-canvas-v2-connector-from"])
+          || removedSourceIds.has(node.attributes["data-canvas-v2-connector-to"])) removedSourceIds.add(node.sourceNodeId);
+      }
+    }
+    canvasSceneRef.current?.previewNodeRemoval([...removedSourceIds]);
     const chrome: Array<HTMLElement | SVGElement | null> = [
       selectionOverlayRef.current,
       hoverOutlineRef.current,
@@ -2181,6 +2200,10 @@ export function CanvasV2Workspace({
       // handles—the resize glitch visible in manual testing.
       if (nextNativeScene) {
         setSelectedElements((current) => synchronizeSelectionWithNativeScene(current, nextNativeScene));
+        if (deletedNodeIds.length) {
+          const survivingIds = new Set(nextNativeScene.nodes.map((node) => node.sourceNodeId));
+          receiveScene(sceneElementsRef.current.filter((item) => survivingIds.has(item.nodeId)));
+        }
       }
       setMutationError(undefined);
       if (mutation.kind === "delete") selectElement(undefined);
@@ -2432,6 +2455,7 @@ export function CanvasV2Workspace({
       directGestureRef.current = undefined;
       cancelDirectGesturePreview();
       restoreDirectGesturePreview(staleDirectGesture);
+      engine.endHumanEdit();
     }
     connectorGestureRef.current = {
       kind,
@@ -2623,10 +2647,21 @@ export function CanvasV2Workspace({
     let copied = false;
     try { copied = document.execCommand("copy"); } catch { /* Fall through to the async API. */ }
     clipboardPublishRef.current = undefined;
+    const imageUrl = copiedImageUrl(snapshot);
+    if (imageUrl) {
+      try {
+        void writeImageToClipboard(imageUrl, payload).then(
+          () => setMutationError(undefined),
+          () => setMutationError("The image could not be copied to the system clipboard. Check this browser's clipboard access and try again."),
+        );
+      } catch {
+        setMutationError("Image clipboard access is unavailable in this browser.");
+      }
+    }
     if (copied) return;
-    if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+    if (!imageUrl && navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
       void navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([payload.html], { type: "text/html" }), "text/plain": new Blob([payload.text], { type: "text/plain" }) })]).catch(() => { /* Internal copy remains available when OS clipboard access is denied. */ });
-    } else if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(payload.text).catch(() => undefined);
+    } else if (!imageUrl && navigator.clipboard?.writeText) void navigator.clipboard.writeText(payload.text).catch(() => undefined);
   };
 
   const copySelection = () => {
@@ -3349,12 +3384,25 @@ export function CanvasV2Workspace({
     event.clipboardData.setData("text/html", payload.html);
     event.clipboardData.setData("text/plain", payload.text);
     internalClipboardRef.current = { snapshot, pasteCount: 0 };
+    const imageUrl = event.type === "copy" ? copiedImageUrl(snapshot) : undefined;
+    if (imageUrl) {
+      try {
+        void writeImageToClipboard(imageUrl, payload).then(
+          () => setMutationError(undefined),
+          () => setMutationError("The image could not be copied to the system clipboard. Check this browser's clipboard access and try again."),
+        );
+      } catch {
+        setMutationError("Image clipboard access is unavailable in this browser.");
+      }
+    }
     if (event.type === "cut") batchForSelection("Cut selected objects.", item => item.locked ? undefined : { kind: "delete", nodeId: item.nodeId });
   };
   workspacePasteHandlerRef.current = (event: ClipboardEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
     if (!engine.interactionReady || engine.applyingManualEdit) return;
+    const snapshot = decodeCanvasV2Clipboard(event.clipboardData?.getData("text/html") ?? "");
+    if (snapshot) { event.preventDefault(); internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); return; }
     const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => (file.type.startsWith("image/") || file.type.startsWith("video/")));
     const itemFiles = directFiles.length ? [] : Array.from(event.clipboardData?.items ?? [])
       .filter((item) => item.kind === "file" && (item.type.startsWith("image/") || item.type.startsWith("video/")))
@@ -3366,10 +3414,8 @@ export function CanvasV2Workspace({
       void addLocalImages(images, lastCanvasPointerRef.current);
       return;
     }
-    const snapshot = decodeCanvasV2Clipboard(event.clipboardData?.getData("text/html") ?? "");
     const text = event.clipboardData?.getData("text/plain") ?? "";
-    if (snapshot) { event.preventDefault(); internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); }
-    else if (text) { event.preventDefault(); pasteExternalText(text, event.clipboardData?.getData("text/html")); }
+    if (text) { event.preventDefault(); pasteExternalText(text, event.clipboardData?.getData("text/html")); }
     else if (internalClipboardRef.current.snapshot && !event.clipboardData?.types.length) { event.preventDefault(); pasteInternalClipboard(); }
   };
 
@@ -4231,7 +4277,7 @@ export function CanvasV2Workspace({
 
       {objectMenu && <div ref={objectMenuRef} role="menu" aria-label="Canvas object menu" data-testid="canvas-v2-object-menu" className="absolute z-[70] w-[230px] rounded-[12px] border border-[#ddddea] bg-white/98 p-2 text-xs font-semibold shadow-[0_22px_70px_rgba(44,39,88,.22)] backdrop-blur-xl dark:border-white/[.11] dark:bg-[#1c1b23]/98 dark:shadow-[0_24px_75px_rgba(0,0,0,.48)]" style={{ left: objectMenu.x, top: objectMenu.y }}>
         {selectedElements.length ? <>
-          <button role="menuitem" onClick={copySelection} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Copy</span><kbd className="text-[10px] text-[#9694a2]">⌘C</kbd></button>
+          <button role="menuitem" onClick={copySelection} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>{selectionIsImage ? "Copy image" : "Copy"}</span><kbd className="text-[10px] text-[#9694a2]">⌘C</kbd></button>
           <button role="menuitem" onClick={cutSelection} disabled={selectedElements.every((item) => item.locked)} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Cut</span><kbd className="text-[10px] text-[#9694a2]">⌘X</kbd></button>
           <button role="menuitem" onClick={() => { duplicateSelection(); setObjectMenu(undefined); }} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Duplicate</span><kbd className="text-[10px] text-[#9694a2]">⌘D</kbd></button>
           {selectedElements.length > 1 ? <button role="menuitem" onClick={() => { groupSelection(); setObjectMenu(undefined); }} disabled={selectedElements.filter((item) => !item.locked).length < 2} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Group</span><kbd className="text-[10px] text-[#9694a2]">⌘G</kbd></button> : selectedElement?.kind === "group" ? <button role="menuitem" onClick={() => { submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId }); setObjectMenu(undefined); }} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Ungroup</span><kbd className="text-[10px] text-[#9694a2]">⇧⌘G</kbd></button> : null}
@@ -4262,7 +4308,7 @@ export function CanvasV2Workspace({
         <button aria-label="Layers" title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>
       </div>
 
-      {zoomMenuOpen && <div role="dialog" aria-label="Zoom options" className="absolute bottom-16 right-5 z-50 grid w-56 gap-1 rounded-2xl bg-[#202024] p-3 text-sm text-white shadow-2xl"><form onSubmit={(event) => { event.preventDefault(); const percent = Number(zoomDraft.replace("%", "")); if (Number.isFinite(percent) && percent > 0) { zoomAtCenter(percent / (viewportRef.current.scale * 100)); setZoomMenuOpen(false); } }}><label className="flex items-center gap-2">Zoom<input autoFocus aria-label="Zoom percentage" value={zoomDraft} onChange={(event) => setZoomDraft(event.target.value)} className="w-24 rounded bg-white/10 px-2 py-1" />%<button type="submit" aria-label="Apply zoom">↵</button></label></form><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { fitContent(); setZoomMenuOpen(false); }}>Fit all <span className="float-right">⇧1</span></button><button className="rounded p-2 text-left hover:bg-white/10" disabled={!selectedElements.length} onClick={() => { focusSelection(); setZoomMenuOpen(false); }}>Zoom to selection <span className="float-right">⇧2</span></button><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { zoomAtCenter(1 / viewportRef.current.scale); setZoomMenuOpen(false); }}>100%</button></div>}
+      {zoomMenuOpen && <div role="dialog" aria-label="Zoom options" className="absolute bottom-16 right-5 z-50 grid w-56 gap-1 rounded-2xl bg-[#202024] p-3 text-sm text-white shadow-2xl"><form onSubmit={(event) => { event.preventDefault(); const percent = Number(zoomDraft.replace("%", "")); if (Number.isFinite(percent) && percent > 0) { zoomAtCenter(percent / (viewportRef.current.scale * 100)); setZoomMenuOpen(false); } }}><label className="flex items-center gap-2">Zoom<input autoFocus aria-label="Zoom percentage" value={zoomDraft} onChange={(event) => setZoomDraft(event.target.value)} className="w-24 rounded bg-white/10 px-2 py-1" />%<button type="submit" aria-label="Apply zoom">↵</button></label><p className="mt-1 text-[11px] text-white/55">4%–800%</p></form><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { fitContent(); setZoomMenuOpen(false); }}>Fit all <span className="float-right">⇧1</span></button><button className="rounded p-2 text-left hover:bg-white/10" disabled={!selectedElements.length} onClick={() => { focusSelection(); setZoomMenuOpen(false); }}>Zoom to selection <span className="float-right">⇧2</span></button><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { zoomAtCenter(1 / viewportRef.current.scale); setZoomMenuOpen(false); }}>100%</button></div>}
       <nav aria-label="Canvas navigation" data-testid="canvas-v2-navigation-controls" className="absolute bottom-[18px] right-[18px] z-40 flex items-center gap-1.5 text-[#4f4f5d] dark:text-[#d7d3df]">
         <div className="flex h-9 items-center overflow-hidden rounded-[12px] border border-[#dedee8]/90 bg-white/92 shadow-[0_8px_24px_rgba(50,45,100,.11)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_10px_28px_rgba(0,0,0,.28)]">
           <button onClick={() => zoomAtCenter(1 / 1.2)} aria-label="Zoom out" title="Zoom out" className="grid h-9 w-9 place-items-center transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:hover:bg-white/[.07]"><Minus className="h-4 w-4" /></button>

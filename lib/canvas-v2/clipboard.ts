@@ -17,7 +17,14 @@ export function encodeCanvasV2Clipboard(clipboard: CanvasV2NativeClipboard): { h
   const text = clipboard.scene.rootIds.map(read).join("\n").trimEnd();
   const escaped = text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   const rich = clipboard.scene.rootIds.map((id) => byId.get(id)).filter((node) => node?.kind === "text").map((node) => `<div>${canvasV2NativeTextMarkup(node!, byId)}</div>`).join("");
-  return { html: `<div ${CANVAS_V2_CLIPBOARD_MARKER}="${payload}">${rich || escaped}</div>`, text };
+  const image = clipboard.scene.rootIds.length === 1 ? byId.get(clipboard.scene.rootIds[0]) : undefined;
+  const source = image?.kind === "image" ? image.attributes.src : undefined;
+  const resolvedSource = source?.startsWith("northstar-asset:")
+    ? clipboard.evidenceAssets?.find((asset) => asset.id === source.slice("northstar-asset:".length))?.url
+    : source;
+  const attribute = (value: string) => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const imageMarkup = resolvedSource ? `<img src="${attribute(resolvedSource)}" alt="${attribute(image?.attributes.alt ?? "Image")}">` : "";
+  return { html: `<div ${CANVAS_V2_CLIPBOARD_MARKER}="${payload}">${rich || imageMarkup || escaped}</div>`, text };
 }
 export function decodeCanvasV2Clipboard(html: string): CanvasV2NativeClipboard | undefined {
   const encoded = html.match(/data-northstar-clipboard="([^"]+)"/)?.[1];

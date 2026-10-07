@@ -64,7 +64,7 @@ export const CANVAS_V2_WORKSPACE = Object.freeze({
   documentMargin: 192,
   grid: 24,
   minScale: 0.04,
-  maxScale: 2.5,
+  maxScale: 8,
   // The distant numeric edge remains honest; ordinary navigation has over a
   // hundred thousand world units in every direction around the opening view.
   cameraOverscroll: 0,

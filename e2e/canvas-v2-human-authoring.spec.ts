@@ -166,6 +166,25 @@ test("notes, lines, drawings and local images are separate selectable objects", 
   await expect(app(page).getByRole("button", { name: "Replace image" })).toBeVisible();
 });
 
+test("a canvas screenshot copies as a PNG that other apps can paste", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openCleanCanvas(page, "/canvas-v2-e2e");
+  await page.getByLabel("Choose images for the canvas").setInputFiles("public/northstar/design-references/evidence-canvas.png");
+  const screenshot = scene(page).locator('img[data-canvas-v2-local-image="true"]');
+  await expect(screenshot).toHaveCount(1);
+  await screenshot.click({ button: "right" });
+  await app(page).getByRole("menuitem", { name: "Copy image" }).click();
+  const copied = await page.evaluate(async () => {
+    const items = await navigator.clipboard.read();
+    const image = items.find((item) => item.types.includes("image/png"));
+    const html = image?.types.includes("text/html") ? await (await image.getType("text/html")).text() : "";
+    return { types: image?.types ?? [], size: image ? (await image.getType("image/png")).size : 0, html };
+  });
+  expect(copied.types).toContain("image/png");
+  expect(copied.size).toBeGreaterThan(0);
+  expect(copied.html).toContain("<img ");
+});
+
 test("connector library exposes straight, arrow and independently adjustable curve variants", async ({ page }) => {
   await openCleanCanvas(page, "/canvas-v2-e2e");
   await app(page).getByRole("button", { name: "shapes" }).click();

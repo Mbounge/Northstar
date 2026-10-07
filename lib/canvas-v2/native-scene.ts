@@ -2153,21 +2153,25 @@ function removeNodeReference(scene: CanvasV2NativeSceneDocument, id: string): vo
 
 function removeNativeSubtree(scene: CanvasV2NativeSceneDocument, id: string): void {
   const byId = canvasV2NativeSceneNodeMap(scene);
+  const detachedChildren = new Map<string, string[]>();
+  for (const node of scene.nodes) {
+    if (!node.detachedFromParentId) continue;
+    const children = detachedChildren.get(node.detachedFromParentId) ?? [];
+    children.push(node.id);
+    detachedChildren.set(node.detachedFromParentId, children);
+  }
   const remove = new Set<string>();
   const visit = (nodeId: string) => {
     if (remove.has(nodeId)) return;
     remove.add(nodeId);
     byId.get(nodeId)?.childIds.forEach(visit);
+    // Detached objects still belong to their original island. Retire them
+    // with it so there are no invisible, selectable remnants after deletion.
+    detachedChildren.get(nodeId)?.forEach(visit);
   };
   visit(id);
-  for (const node of scene.nodes) {
-    if (!node.detachedFromParentId || !remove.has(node.detachedFromParentId)) continue;
-    node.detachedFromParentId = undefined;
-    node.detachedFromParentIndex = undefined;
-    delete node.attributes["data-canvas-v2-detached-from"];
-    delete node.attributes["data-canvas-v2-detached-index"];
-  }
   removeNodeReference(scene, id);
+  scene.rootIds = scene.rootIds.filter((rootId) => !remove.has(rootId));
   scene.nodes = scene.nodes.filter((node) => !remove.has(node.id));
 }
 
@@ -3498,6 +3502,18 @@ export function applyCanvasV2NativeSceneMutation(
     for (const item of mutation.mutations) applyAtomicNativeMutation(scene, item, sourceIndex);
   } else applyAtomicNativeMutation(scene, mutation);
   const atomic = mutation.kind === "batch" ? mutation.mutations : [mutation];
+  if (atomic.some((item) => item.kind === "delete")) {
+    // Connectors are often siblings of the objects they reference, so removing
+    // an object's subtree alone leaves a painted, detached relationship behind.
+    const survivingIds = new Set(scene.nodes.map((node) => node.sourceNodeId).filter(Boolean));
+    const removedIds = new Set(source.nodes.flatMap((node) => node.sourceNodeId && !survivingIds.has(node.sourceNodeId) ? [node.sourceNodeId] : []));
+    for (const connector of [...scene.nodes]) {
+      if (connector.kind !== "connector") continue;
+      const from = connector.attributes["data-canvas-v2-connector-from"];
+      const to = connector.attributes["data-canvas-v2-connector-to"];
+      if ((from && removedIds.has(from)) || (to && removedIds.has(to))) removeNativeSubtree(scene, connector.id);
+    }
+  }
   if (atomic.some(item => ["move", "resize", "transform", "create"].includes(item.kind) || (item.kind === "group" && item.section))) reconcileHumanSectionMembership(scene);
   reconcileCanvasV2NativeConnectors(scene);
   scene.nodes.forEach((node, order) => { node.order = order; });

@@ -218,6 +218,11 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
   const [pendingActionKind, setPendingActionKind] = useState<"research" | "design">("design");
   const [pendingResearch, setPendingResearch] = useState<PendingResearch>();
   const [pendingManualEdit, setPendingManualEdit] = useState<PendingManualEdit>();
+  const pendingManualEditRef = useRef<PendingManualEdit | undefined>(undefined);
+  const updatePendingManualEdit = (next: PendingManualEdit | undefined) => {
+    pendingManualEditRef.current = next;
+    setPendingManualEdit(next);
+  };
   const [manualError, setManualError] = useState<string>();
   const compositionFeedbackRef = useRef<{ revisionId: string; advisory: string[] } | undefined>(undefined);
   const rejectedCompositionRef = useRef<{ observation: CanvasV2RenderObservation; failures: string[] } | undefined>(undefined);
@@ -947,7 +952,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       discardInspectionScene(candidate.id);
       setCandidate(undefined);
       setPendingEdit(undefined);
-      setPendingManualEdit(undefined);
+      updatePendingManualEdit(undefined);
       setPendingActionKind("design");
       setPendingResearch(undefined);
     }
@@ -974,7 +979,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     if (pendingManualEdit && candidate) {
       discardInspectionScene(candidate.id);
       setCandidate(undefined);
-      setPendingManualEdit(undefined);
+      updatePendingManualEdit(undefined);
       setManualError(undefined);
       setManualNotice("Stopped the uncommitted manual revision. The latest committed canvas remains visible.");
       return;
@@ -1012,6 +1017,17 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     return true;
   };
 
+  const interruptNorthstarCandidate = () => {
+    if (pendingManualEditRef.current?.origin !== "northstar") return;
+    if (candidate) {
+      settleCandidateRevision(candidate.id);
+      discardInspectionScene(candidate.id);
+      setCandidate(undefined);
+    }
+    updatePendingManualEdit(undefined);
+    manualFailureRef.current = "The person changed the canvas. Read the latest revision before composing again.";
+  };
+
   const applyManualDocument = (
     document: CanvasV2ArtifactDocument,
     summary: string,
@@ -1027,11 +1043,16 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     // native truth synchronously; the off-screen compiler remains a verifier.
     const currentCommitted = committedRef.current;
     manualFailureRef.current = undefined;
+    if (options.origin === "northstar" && humanEditing.current) {
+      manualFailureRef.current = "The person is editing the canvas. Read the latest revision and try again after the gesture.";
+      return false;
+    }
     // Human edits are immediate. Invalidate stale authoring while preserving the investigation.
     if (options.origin !== "northstar" && loopRef.current && canvasV2LoopIsActive(loopRef.current)) {
       steer({ id: id("human-edit"), message: `The human directly changed the canvas: ${summary}. Inspect the latest object versions, preserve that change, and continue the objective.` });
     }
-    if (pendingManualEdit || (!nativeSceneRevision && !observationsRef.current[currentCommitted.id])) return false;
+    if (options.origin !== "northstar") interruptNorthstarCandidate();
+    if (pendingManualEditRef.current || (!nativeSceneRevision && !observationsRef.current[currentCommitted.id])) return false;
     if (nativeSceneRevision && nativeSceneRevision.revisionId !== currentCommitted.id) return false;
     try {
       const nativeGeometryEdit = Boolean(options.fastNativeTransaction && nativeSceneRevision && !evidence && !options.allowEvidenceRemoval);
@@ -1095,7 +1116,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
         setManualNotice(summary);
         return true;
       }
-      setPendingManualEdit({ summary, origin: options.origin, workingContext: options.workingContext, onPrepared: options.onPrepared, execution: options.execution, selectionNodeIds: [...(options.selectionNodeIds ?? [])] });
+      updatePendingManualEdit({ summary, origin: options.origin, workingContext: options.workingContext, onPrepared: options.onPrepared, execution: options.execution, selectionNodeIds: [...(options.selectionNodeIds ?? [])] });
       setCandidate(nextCandidate);
       return true;
     } catch (error) {
@@ -1194,7 +1215,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
         }
         discardInspectionScene(candidate.id);
         setCandidate(undefined);
-        setPendingManualEdit(undefined);
+        updatePendingManualEdit(undefined);
         return;
       }
       const relationshipFailures = validateCanvasV2RenderedRelationshipGeometry(factualObservation);
@@ -1493,7 +1514,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     if (pendingManualEdit && candidate) {
       discardInspectionScene(candidate.id);
       setCandidate(undefined);
-      setPendingManualEdit(undefined);
+      updatePendingManualEdit(undefined);
       setManualNotice(undefined);
       manualFailureRef.current = message;
       if (pendingManualEdit.origin !== "northstar") setManualError(message);
@@ -1602,6 +1623,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     displayedObservation: observations[displayed.id],
     beginHumanEdit: () => {
       humanEditing.current = true;
+      interruptNorthstarCandidate();
       steer({ id: id("human-edit-start"), message: "The human is directly editing an object. Preserve its final wording and styling when continuing." });
     },
     endHumanEdit: () => {
@@ -1621,7 +1643,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       if (revision.id === committedRef.current.id) return;
       if (revision.state !== 'committed') throw new Error('Only committed canvas updates can be shared.');
       assertCanvasV2ArtifactDocument(revision.document);
-      setCandidate(undefined);setPendingManualEdit(undefined);
+      setCandidate(undefined);updatePendingManualEdit(undefined);
       nativeSceneRef.current=undefined;setNativeScene(undefined);
       acceptCommittedRevision(revision,`shared:${revision.id}`);
       if (!observationsRef.current[revision.id]) setRequestedObservationRevisionId(revision.id);

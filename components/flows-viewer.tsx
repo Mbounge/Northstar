@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reviewScreenshotKey } from "@/lib/app-data/review-media";
+import { writeImageToClipboard } from "@/lib/image-clipboard";
 import { PanoramicMockup } from "./PanoramicMockup";
 import { BrowserMockup } from "./BrowserMockup";
 
@@ -225,45 +226,12 @@ async function copyImageToClipboard(
   onError?: () => void,
 ) {
   try {
-    const res = await fetch(url, { mode: "cors" });
-    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
-
-    const blob = await res.blob();
-    const pngBlob = blob.type === "image/png" ? blob : await convertToPng(blob);
-
-    if (!navigator.clipboard?.write)
-      throw new Error("Clipboard API unavailable");
-
-    await navigator.clipboard.write([
-      new ClipboardItem({ "image/png": pngBlob }),
-    ]);
+    await writeImageToClipboard(url);
     onSuccess?.();
   } catch (err) {
     console.warn("Copy failed:", err instanceof Error ? err.message : err);
     onError?.();
   }
-}
-
-async function convertToPng(blob: Blob): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const img = new window.Image();
-    const url = URL.createObjectURL(blob);
-
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext("2d")!.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
-        "image/png",
-      );
-    };
-
-    img.onerror = reject;
-    img.src = url;
-  });
 }
 
 // ─── DETAIL MODAL ───────────────────────────────────────────────
