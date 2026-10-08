@@ -13,12 +13,27 @@ import type { CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
 import type { CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 import { CANVAS_V2_FEEDBACK_PICKING, setCanvasV2FeedbackPicking, CANVAS_V2_SCREEN_FEEDBACK, parseCanvasV2ScreenFeedbackTarget, canvasV2ScreenLiveEdit, type CanvasV2ScreenLiveEdit } from '@/lib/canvas-v2/screen-feedback';
 import { validateScreenInteractionSequence } from '@/lib/canvas-v2/screen-interaction-sequence';
+import { canvasV2ScreenDevice, canvasV2ScreenDeviceMetrics } from '@/lib/canvas-v2/screen-device';
 
 export const CANVAS_V2_SCREEN_COMMAND = 'northstar-screen-command';
 export const CanvasV2ScreenTheme = createContext<CanvasV2ArtifactTheme>('light');
 export const CanvasV2ScreenIdentities = createContext<readonly CanvasV2ProductIdentity[]>([]);
 export const CanvasV2ScreenAssets = createContext<readonly CanvasV2EvidenceAsset[]>([]);
 type ScreenResult = Record<string, unknown>;
+
+/** Measured pixel appearance helps distinguish product styling from canvas
+ * chrome. It is reference context, never an aesthetic score or a theme command. */
+export async function canvasV2ScreenPixelAppearance(pixels: string) {
+  const image = new Image(); image.src = pixels; await image.decode();
+  const canvas = document.createElement('canvas'); canvas.width = 24; canvas.height = 48;
+  const context = canvas.getContext('2d'); if (!context) return undefined;
+  context.drawImage(image,0,0,24,48);
+  const data = context.getImageData(0,0,24,48).data;
+  let light = 0, dark = 0;
+  for(let i=0;i<data.length;i+=4){const luminance=(.2126*data[i]+.7152*data[i+1]+.0722*data[i+2])/255;if(luminance>.72)light++;if(luminance<.28)dark++;}
+  const count=data.length/4;
+  return {lightAreaFraction:Number((light/count).toFixed(2)),darkAreaFraction:Number((dark/count).toFixed(2)),predominantAppearance:light/count>.6?'light':dark/count>.6?'dark':'mixed',note:'Measured rendered pixels; infer the actual product palette from these pixels and the brief, not from the surrounding canvas theme.'};
+}
 type ScreenController = { encoded: string; revisionReady?: { encoded: string; done: Promise<void> }; capture?: (signal: AbortSignal) => Promise<{ image: string; state: ScreenResult }>; run: (command: ScreenAction, signal: AbortSignal) => Promise<ScreenResult> };
 const controllers = new Map<string, ScreenController>();
 
@@ -97,6 +112,26 @@ export async function captureCanvasV2Screen(nodeId: string, encoded: string, sig
   }
   const snapshot = await inspectCanvasV2Screen(nodeId, encoded, command, signal);
   return rasterizeScreenSnapshot(nodeId,encoded,signal,snapshot,command.action==='snapshot');
+}
+
+/** Native copy/export includes the same phone shell, with transparent corners.
+ * Internal product review continues to inspect the unframed interface pixels. */
+async function captureCanvasV2PresentedScreen(nodeId:string,encoded:string,signal:AbortSignal) {
+  const screen=parseCanvasV2Screen(encoded),device=canvasV2ScreenDevice(screen);
+  const capture=await captureCanvasV2Screen(nodeId,encoded,signal);
+  if(device==='none')return capture.image;
+  const image=new Image();image.src=capture.image;await image.decode();signal.throwIfAborted();
+  const {radius,bezel}=canvasV2ScreenDeviceMetrics(device),pad=8,ratio=image.naturalWidth/screen.width;
+  const canvas=document.createElement('canvas');canvas.width=Math.ceil((screen.width+pad*2)*ratio);canvas.height=Math.ceil((screen.height+pad*2)*ratio);
+  const context=canvas.getContext('2d');if(!context)throw new Error('The phone preview could not be exported.');
+  context.scale(ratio,ratio);
+  if(!screen.simulation){
+    context.beginPath();context.roundRect(pad-bezel/2,pad-bezel/2,screen.width+bezel,screen.height+bezel,radius+bezel/2);context.strokeStyle='#626777';context.lineWidth=bezel+2;context.stroke();
+    context.strokeStyle='#101117';context.lineWidth=bezel;context.stroke();
+  }
+  context.fillStyle='#363a46';context.fillRect(pad-7,pad+92,3,device==='ios'?28:38);context.fillRect(pad-7,pad+135,3,38);context.fillRect(pad+screen.width+4,pad+160,3,62);
+  context.save();context.beginPath();context.roundRect(pad,pad,screen.width,screen.height,radius);context.clip();context.drawImage(image,pad,pad,screen.width,screen.height);context.restore();
+  return canvas.toDataURL('image/png');
 }
 
 async function rasterizeScreenSnapshot(nodeId:string,encoded:string,signal:AbortSignal,snapshot:ScreenResult,detailsEnabled:boolean) {
@@ -179,9 +214,11 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
 
 
   const screen = useMemo(() => parseCanvasV2Screen(encoded), [encoded]);
+  const device = canvasV2ScreenDevice(screen), deviceMetrics = canvasV2ScreenDeviceMetrics(device);
 
   const host = useRef<HTMLDivElement>(null), frame = useRef<HTMLIFrameElement>(null);
   const [runtime, setRuntime] = useState(''), [error, setError] = useState('');
+  const [simulationSource,setSimulationSource]=useState<string>();
   const [reload, setReload] = useState(0), [scale, setScale] = useState(1);
   const previousSource = useRef(encoded), runtimeSource = useRef(encoded);
   const pendingLiveEdit = useRef<{ encoded: string; edit: CanvasV2ScreenLiveEdit } | undefined>(undefined);
@@ -196,13 +233,13 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const pending = pendingLiveEdit.current, controller = controllers.get(nodeId);
     if (!pending || pending.encoded !== encoded || !controller) return;
     const aborter = new AbortController();
-    const done = controller.run({ action: pending.edit.stylesheet === undefined ? 'patch-element' : 'patch-stylesheet', ...pending.edit }, aborter.signal).then(() => {
+    const done = (pending.edit.presentationOnly ? Promise.resolve({}) : controller.run({ action: pending.edit.stylesheet === undefined ? 'patch-element' : 'patch-stylesheet', ...pending.edit }, aborter.signal)).then(() => {
       if (!aborter.signal.aborted && controllers.get(nodeId) === controller) { controller.encoded = encoded; pendingLiveEdit.current = undefined; }
     }).catch(() => { if (!aborter.signal.aborted) setError('This element changed while it was being edited. Choose the current version in History to start fresh.'); });
     controller.revisionReady = { encoded, done };
     return () => aborter.abort();
   }, [nodeId, encoded]);
-  useEffect(() => registerCanvasV2ScreenCapture(nodeId, { encoded, image: async signal => (await captureCanvasV2Screen(nodeId, encoded, signal)).image }), [nodeId, encoded]);
+  useEffect(() => registerCanvasV2ScreenCapture(nodeId, { encoded, image: signal => captureCanvasV2PresentedScreen(nodeId, encoded, signal) }), [nodeId, encoded]);
   const lastHumanInput = useRef(0);
   const feedbackPicking = useRef(false);
   useEffect(() => {
@@ -252,9 +289,12 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow) return;
       if (simulation && event.origin === window.location.origin && event.data?.type === GRAET_PREVIEW_SECTION) {
-        ready = true;
         if (!simulationDocument) { simulationDocument = frame.current?.contentDocument ?? null; simulationDocument?.addEventListener('keydown', simulationEscape); for (const type of ['pointerdown', 'wheel', 'keydown', 'input']) simulationDocument?.addEventListener(type, simulationInput, { capture: true, passive: true }); }
         if (!navigated) { navigated = true; frame.current?.contentWindow?.postMessage({ type: GRAET_PREVIEW_NAVIGATE, section: simulation.section }, window.location.origin); }
+        // Initial onboarding readiness is not readiness for the requested home
+        // section. Otherwise the agent can capture the dark splash while the
+        // visible preview finishes navigating to its light Career home.
+        if(event.data.section===simulation.section)ready=true;
         return;
       }
       if (event.data?.protocol !== SCREEN_PROTOCOL || event.data.token !== token) return;
@@ -311,7 +351,12 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     controllers.set(nodeId, controller);
     void (async () => {
       try {
-        if (simulation) { setRuntime(''); return; }
+        if (simulation) {
+          setRuntime('');
+          const fixture=process.env.NODE_ENV!=='production'&&window.location.pathname.startsWith('/canvas-v2-e2e/');
+          setSimulationSource(fixture?'/canvas-v2-e2e/graet-preview':`${simulatorForApp(simulation.appName)!.embedPath}&canvas=1`);
+          return;
+        }
         const retained = JSON.parse(sources) as Array<{ id: string; url?: string }>;
         const bytes = await Promise.all(retained.map(async asset => {
           if (!asset.url) throw new Error('A referenced image is unavailable.');
@@ -333,10 +378,15 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   }, [nodeId, runtimeEncoded, sources, reload, screen.width, screen.height, screen.simulation]);
   return <div ref={host} data-canvas-v2-interactive-screen={nodeId} tabIndex={-1} className="group relative h-full w-full" style={{ overflow: 'visible' }}>
     {showCaption && <div aria-hidden="true" title="Drag to move this screen" className="absolute -top-9 left-0 w-full cursor-grab truncate text-lg font-medium active:cursor-grabbing" style={{ color: "var(--northstar-ink)", lineHeight: "24px" }}>{screen.title}</div>}
-    <div className="absolute inset-0 overflow-hidden rounded-xl bg-white shadow-sm">
-      {(runtime || screen.simulation) && <iframe key={screen.simulation ? `${encoded}:${reload}` : undefined} ref={frame} title={screen.title} src={screen.simulation ? `${simulatorForApp(screen.simulation.appName)!.embedPath}&canvas=1` : undefined} srcDoc={screen.simulation ? undefined : runtime} sandbox={screen.simulation ? "allow-scripts allow-same-origin" : "allow-scripts allow-forms"} {...(screen.simulation ? {} : { credentialless: "" })} referrerPolicy="no-referrer" style={{ width: screen.width, height: screen.height, border: 0, display: 'block', transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'auto' }} />}
+    <div data-northstar-device-frame={device} className="absolute inset-0 overflow-hidden" style={{borderRadius:deviceMetrics.radius*scale,background:'transparent',boxShadow:device !== 'none' && !screen.simulation ? `0 0 0 ${deviceMetrics.bezel*scale}px #101117,0 0 0 ${(deviceMetrics.bezel+1)*scale}px #626777,0 ${12*scale}px ${32*scale}px #00000038` : undefined}}>
+      {(runtime || screen.simulation) && <iframe key={screen.simulation ? `${encoded}:${reload}` : undefined} ref={frame} title={screen.title} src={screen.simulation ? simulationSource : undefined} srcDoc={screen.simulation ? undefined : runtime} sandbox={screen.simulation ? "allow-scripts allow-same-origin" : "allow-scripts allow-forms"} {...(screen.simulation ? {} : { credentialless: "" })} referrerPolicy="no-referrer" style={{ width: screen.width, height: screen.height, border: 0, display: 'block', transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'auto' }} />}
       {error && <div role="alert" className="absolute inset-0 grid place-content-center bg-white p-6 text-sm text-red-800">{error}</div>}
     </div>
+    {device !== 'none' && <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+      <span style={{position:'absolute',left:-7*scale,top:92*scale,width:3*scale,height:device==='ios'?28*scale:38*scale,borderRadius:2*scale,background:'#363a46'}} />
+      <span style={{position:'absolute',left:-7*scale,top:135*scale,width:3*scale,height:38*scale,borderRadius:2*scale,background:'#363a46'}} />
+      <span style={{position:'absolute',right:-7*scale,top:160*scale,width:3*scale,height:62*scale,borderRadius:2*scale,background:'#363a46'}} />
+    </div>}
     {/* The perimeter selects/moves the canvas object; its interior stays interactive. */}
     <div aria-hidden="true" title="Drag the screen edge to move" className="absolute -left-2 -top-2 h-2 w-[calc(100%+16px)] cursor-move" />
     <div aria-hidden="true" title="Drag the screen edge to move" className="absolute -left-2 -bottom-2 h-2 w-[calc(100%+16px)] cursor-move" />

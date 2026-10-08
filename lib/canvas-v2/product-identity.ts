@@ -6,6 +6,7 @@ export interface CanvasV2ProductIdentity {
   id: string;
   name: string;
   platform: 'mobile' | 'web' | 'responsive';
+  device?: 'ios' | 'android';
   visualLanguage: string;
   typography: string;
   components: string;
@@ -21,6 +22,7 @@ export function validateCanvasV2ProductIdentity(value: unknown, evidence?: reado
   for (const field of ['visualLanguage', 'typography', 'components', 'motion'] as const) {
     if (typeof input[field] !== 'string' || input[field].length > 2400) throw new Error('Keep product design decisions concise.');
   }
+  if(input.device!==undefined&&(!['ios','android'].includes(input.device)||input.platform!=='mobile'))throw new Error('A mobile product identity can specify its iOS or Android presentation.');
   if (!input.tokens || typeof input.tokens !== 'object' || Array.isArray(input.tokens) || Object.keys(input.tokens).length > 60
     || Object.entries(input.tokens).some(([key, value]) => !/^--[a-zA-Z][\w-]{0,60}$/.test(key) || typeof value !== 'string' || !value.trim() || value.length > 240 || /[{};<>]|url\s*\(|@import|expression\s*\(/i.test(value))) throw new Error('Use bounded CSS custom properties for product tokens.');
   if (!Array.isArray(input.referenceAssetIds) || input.referenceAssetIds.length > 100 || input.referenceAssetIds.some(id => !isCanvasV2ScreenAssetId(id)) || input.referenceAssetIds.reduce((size,id) => size + (typeof id === 'string' ? id.length : 0),0) > 24000) throw new Error('Use retained reference asset IDs for the product identity.');
@@ -28,7 +30,7 @@ export function validateCanvasV2ProductIdentity(value: unknown, evidence?: reado
     const asset = evidence.find(asset => asset.id === id);
     if (!asset || asset.source?.permission === 'unavailable' || asset.mediaType === 'video') throw new Error('Inspect and retain product references before saving their design identity.');
   }
-  return { id: input.id, name: input.name.trim(), platform: input.platform, visualLanguage: input.visualLanguage, typography: input.typography, components: input.components, motion: input.motion, tokens: { ...input.tokens }, referenceAssetIds: [...new Set(input.referenceAssetIds)] };
+  return { id: input.id, name: input.name.trim(), platform: input.platform, ...(input.device?{device:input.device}:{}), visualLanguage: input.visualLanguage, typography: input.typography, components: input.components, motion: input.motion, tokens: { ...input.tokens }, referenceAssetIds: [...new Set(input.referenceAssetIds)] };
 }
 
 export function canvasV2ProductTokenCss(identity: CanvasV2ProductIdentity): string {

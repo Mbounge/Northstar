@@ -7,12 +7,13 @@ export class CreativeScreenScenario {
   private nodeId = '';
   private flowId = '';
   private multiTargets: JsonObject[] = [];
-  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false, private multiple = false, private temporal = false, private procedural=false, private interrupt=false, private automatic=false, private journey=false) {}
+  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false, private multiple = false, private temporal = false, private procedural=false, private interrupt=false, private automatic=false, private journey=false, private previewReference=false) {}
   start() { this.peer.tool('canvas_read', {}); }
   reply(result: JsonObject) {
     const parts = Array.isArray(result.contentItems) ? result.contentItems.map(object) : [];
     let value: JsonObject = {};
     try { value = object(JSON.parse(string(parts[0]?.text))); } catch { /* fail below */ }
+    if(this.previewReference){this.checkPreviewReference(result,parts,value);return;}
     if(this.journey){this.checkJourney(result,parts,value);return;}
     if(this.procedural){this.checkProcedural(result,parts,value);return;}
     if (this.temporal) { this.checkTemporal(result, parts, value); return; }
@@ -86,6 +87,21 @@ export class CreativeScreenScenario {
         if(samples.length!==3 || Number(timing.windowDurationMs)<250 || Number(timing.windowDurationMs)>310 || !controls(mid).includes('first') || controls(mid).includes('second') || !controls(end).includes('second') || times.length!==2 || Math.abs(times[0]-times[1])>2) {this.peer.finish('Timeline check failed: staggered reveals lost their shared timing');return;}
         this.peer.finish('Verified the shared timeline: the first reveal finishes before the second starts, and playback is restored.');
       }
+    }
+  }
+  private checkPreviewReference(result:JsonObject,parts:JsonObject[],value:JsonObject){
+    if(!result.success||value.committed===false){this.peer.finish('Preview reference check failed: '+string(parts[0]?.text));return;}
+    switch(this.step++){
+      case 0:this.peer.tool('canvas_insert_simulation',{appName:'GRAET',section:'home',summary:'Inspect the genuine preview appearance'});break;
+      case 1:this.flowId=string(value.nodeId);this.peer.tool('canvas_review',{nodeId:this.flowId});break;
+      case 2:if(object(value.pixelAppearance).predominantAppearance!=='light'||!string(value.captureReferenceAssetId)){this.peer.finish('Preview reference check failed: the actual light pixels were not retained: '+JSON.stringify(value.pixelAppearance));return;}this.peer.tool('inspect_asset',{evidenceId:value.captureReferenceAssetId});break;
+      case 3:if(!parts.some(part=>part.type==='inputImage')){this.peer.finish('Preview reference check failed: retained reference unavailable');return;}this.peer.tool('canvas_screen',{title:'Reference handoff check',html:'<main><h1>Reference handoff</h1><p>Actual preview pixels remain available.</p></main>',css:'body{background:#fff;color:#111}main{padding:32px}',referenceAssetIds:[],summary:'Check automatically retained preview lineage'});break;
+      case 4:this.nodeId=string(value.nodeId);this.peer.tool('canvas_review',{nodeId:this.nodeId});break;
+      case 5:if(value.referenceIntent!=='faithful'||value.referenceAppearance!=='light'||object(value.defaultPixelAppearance).predominantAppearance!=='light'||!(value.referenceAssetIds as string[]??[]).some(id=>id.startsWith('preview:'))){this.peer.finish('Preview reference check failed: default fidelity lineage missing');return;}this.peer.tool('canvas_screen',{nodeId:this.nodeId,css:'body{background:#101018;color:#fff}',summary:'Exercise incorrect default appearance detection'});break;
+      case 6:this.peer.tool('canvas_review',{nodeId:this.nodeId});break;
+      case 7:if(value.referenceAppearance!=='light'||object(value.defaultPixelAppearance).predominantAppearance!=='dark'){this.peer.finish('Preview reference check failed: a mismatched default was not observed');return;}this.peer.tool('canvas_screen',{nodeId:this.nodeId,css:'body{background:#fff;color:#111}',summary:'Restore the fixture appearance'});break;
+      case 8:this.peer.tool('canvas_review',{nodeId:this.nodeId});break;
+      default:this.peer.finish('Verified current light preview pixels, reusable reference assets and automatic faithful lineage. The private default-state check distinguishes a wrong dark appearance.');
     }
   }
   private checkJourney(result: JsonObject, parts: JsonObject[], value: JsonObject) {

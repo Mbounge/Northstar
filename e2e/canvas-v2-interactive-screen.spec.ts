@@ -57,3 +57,16 @@ test('private product journeys exercise rapid actions, saved values and both mot
  await expect(frame.getByText('Twelve goals',{exact:true})).toHaveCount(0);
  await expect(page.locator('iframe[title="Private product journey check"]')).toHaveCount(0);
 });
+
+test('registered preview review waits for Career home and retains actual reference pixels for faithful variants',async({page})=>{
+ await page.goto('/canvas-v2-e2e/codex');
+ await page.getByRole('textbox',{name:'Message North Star'}).fill('screen preview reference');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(page.getByText('Verified current light preview pixels, reusable reference assets and automatic faithful lineage. The private default-state check distinguishes a wrong dark appearance.',{exact:true})).toBeVisible({timeout:30000});
+ const frames=page.locator('[data-northstar-device-frame="ios"]');
+ await expect(frames).toHaveCount(2);
+ for(const frame of await frames.all()) await expect(frame).toHaveCSS('background-color','rgba(0, 0, 0, 0)');
+ const original=page.frameLocator('iframe[title="GRAET · interactive simulation"]');
+ await expect(original.getByRole('button',{name:'Add season goal',exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Interact with screen'})).toHaveCount(0);
+});

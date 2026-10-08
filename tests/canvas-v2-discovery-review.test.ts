@@ -696,3 +696,17 @@ test('a mistaken probe can be retired from observed corrected behavior without r
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
  assert.equal(JSON.parse(context.packet('').text).productWork[0].sourceVersion,'one');
 });
+
+test('a faithful variant cannot pass with an unused matching alternate theme while its default is wrong',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ context.tool('canvas_screen',{referenceIntent:'faithful',referenceAppearance:'light'},[text({nodeId:'variant',committed:true})]);
+ const review=(defaultAppearance:string)=>context.tool('canvas_review',{nodeId:'variant'},[text({nodeId:'variant',viewport:{width:390,height:844},referenceIntent:'faithful',referenceAppearance:'light',pixelAppearance:{predominantAppearance:'light'},defaultPixelAppearance:{predominantAppearance:defaultAppearance},state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,appearance'}]);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'variant',referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:[1],assessment:'An alternate light palette exists.'}];
+ review('dark');
+ const blocked=JSON.parse(context.reconcileFeedback(JSON.stringify(feedback)));
+ assert.equal(blocked.work.length,1);assert.match(blocked.work[0].gap,/default appearance/);
+ review('light');assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ context.tool('canvas_screen',{referenceIntent:'inspired'},[text({nodeId:'variant',committed:true})]);
+ context.tool('canvas_review',{nodeId:'variant'},[text({nodeId:'variant',viewport:{width:390,height:844},referenceIntent:'inspired',referenceAppearance:'light',defaultPixelAppearance:{predominantAppearance:'dark'},state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,new-direction'}]);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0,'a requested original direction is judged on its brief, not a forced theme clone');
+});

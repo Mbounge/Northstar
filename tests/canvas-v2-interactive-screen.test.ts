@@ -191,3 +191,19 @@ test('video reference sampling plans bounded actual timestamps around transition
  for(const duration of [0,-1,Infinity,NaN])assert.throws(()=>canvasV2VideoReferenceTimes(duration));
  for(const times of [[1],[0,10],[2,1],[0,Infinity],[0,0],Array(9).fill(1)])assert.throws(()=>canvasV2VideoReferenceTimes(10,times));
 });
+
+test('mobile phone presentation survives saved source while desktop pages remain unframed',async()=>{
+ const {canvasV2ScreenDevice}=await import('../lib/canvas-v2/screen-device');
+ assert.equal(canvasV2ScreenDevice(screen),'ios');
+ assert.equal(canvasV2ScreenDevice({...screen,width:1440,height:900}),'none');
+ assert.equal(canvasV2ScreenDevice({...screen,device:'android'}),'android');
+ const android=parseCanvasV2Screen(encodeCanvasV2Screen({...screen,device:'android'}));
+ assert.equal(android.device,'android');assert.equal(android.html,screen.html);assert.equal(android.javascript,screen.javascript);
+ assert.throws(()=>validateCanvasV2Screen({...screen,device:'unknown'}),/presentation/);
+ const {canvasV2ScreenPreviewAsset}=await import('../lib/canvas-v2/interactive-screen');
+ const preview={...screen,title:'GRAET',width:383,height:820,html:'<div></div>',css:'',javascript:'',simulation:{appName:'GRAET' as const,section:'home' as const}};
+ const first=canvasV2ScreenPreviewAsset('original',preview,'data:image/jpeg;base64,YQ==');
+ const second=canvasV2ScreenPreviewAsset('original',preview,'data:image/jpeg;base64,Yg==');
+ assert.notEqual(first.id,second.id);assert.equal(first.source?.permission,'authorized');
+ assert.throws(()=>canvasV2ScreenPreviewAsset('screen',screen,'data:image/jpeg;base64,YQ=='),/preview pixels/);
+});

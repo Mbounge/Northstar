@@ -25,7 +25,7 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
   if (identityId && !identity && (!previous || input.productIdentityId !== undefined)) throw new Error('Read or save this product identity before using it.');
   const css = previous && typeof input.css === 'string' && input.cssMode !== 'replace'
     ? `${previous.screen.css}\n${input.css}` : input.css ?? previous?.screen.css ?? '';
-  const screen = validateCanvasV2Screen({ version: 1, productIdentityId: identityId, simulation: input.simulation, title: input.title ?? previous?.screen.title,
+  const screen = validateCanvasV2Screen({ version: 1, device: input.device ?? previous?.screen.device ?? identity?.device, referenceNodeId:input.referenceNodeId??previous?.screen.referenceNodeId,referenceIntent:input.referenceIntent??previous?.screen.referenceIntent,referenceAppearance:input.referenceAppearance??previous?.screen.referenceAppearance, productIdentityId: identityId, simulation: input.simulation, title: input.title ?? previous?.screen.title,
     width: input.width ?? previous?.screen.width ?? 390, height: input.height ?? previous?.screen.height ?? 844,
     html: input.html ?? previous?.screen.html, css: !previous && identity ? canvasV2ProductTokenCss(identity) + '\n' + css : css, javascript: input.javascript ?? previous?.screen.javascript ?? '',
     referenceAssetIds: [...new Set([...(input.referenceAssetIds ?? previous?.screen.referenceAssetIds ?? []) as string[], ...(!previous && identity ? identity.referenceAssetIds : [])])] });

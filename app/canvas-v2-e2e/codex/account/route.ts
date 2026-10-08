@@ -1,5 +1,5 @@
 import { parseAccountQuery, readAccountTools } from '@/lib/canvas-v2/account-tools';
-import { CANVAS_V2_E2E_APPS, CANVAS_V2_E2E_EVIDENCE_PACKETS } from '../../research-fixture';
+import { CANVAS_V2_E2E_APPS, CANVAS_V2_E2E_EVIDENCE_PACKETS, fixtureApp } from '../../research-fixture';
 import type { CanvasV2EvidenceProvider } from '@/lib/canvas-v2/evidence-bridge';
 
 export async function POST(request: Request) {
@@ -11,5 +11,7 @@ export async function POST(request: Request) {
       return { provider: this.descriptor, packets, sources: packets.map(p => p.source), issues: [] };
     },
   };
-  return Response.json({ result: await readAccountTools({ tenantId: 'fixture', apps: CANVAS_V2_E2E_APPS }, parseAccountQuery(await request.json()), provider) });
+  const query=parseAccountQuery(await request.json());
+  const apps=query.operation==='list-apps'&&query.query?.toLowerCase()==='graet'?[fixtureApp('GRAET','#003ce5',['Career home'])]:CANVAS_V2_E2E_APPS;
+  return Response.json({ result: await readAccountTools({ tenantId: 'fixture', apps }, query, provider) });
 }

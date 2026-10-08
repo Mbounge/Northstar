@@ -49,3 +49,11 @@ test("presentation keeps reference links, product names and useful evidence limi
   assert.equal(canvasV2ReadableAgentText('Tokens: blue `#1251dc`, background `#f1f4f8`.'), 'Palette: blue, background.');
   assert.equal(canvasV2ReadableAgentText('The CSS uses SVG icons.', true), 'The CSS uses SVG icons.');
 });
+
+test('journey diagnostics are translated without removing useful recovery reasoning or design timing',()=>{
+ const text='The sheet opens with the intended 300–420ms transition. The private journey runner didn’t accept the textarea step, so I’m validating the same behavior directly and checking the edit-after-save path.';
+ const presented=canvasV2ReadableAgentText(text);
+ assert.match(presented,/300–420ms transition/);assert.match(presented,/I’m validating the same behavior directly/);
+ assert.doesNotMatch(presented,/runner|didn’t accept|textarea/);
+ assert.equal(canvasV2ReadableAgentText('I also caught a theme-rule syntax issue, so I’m checking the light appearance.'),'I’m checking the light appearance.');
+});

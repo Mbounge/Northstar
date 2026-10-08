@@ -1,6 +1,7 @@
 import { isGraetPreviewSection, type GraetPreviewSection } from '../preview/graet-navigation';
 import { simulatorForApp } from '../preview/simulator-registry';
 import type { CanvasV2EvidenceAsset } from './types';
+import { canvasV2FeedbackFingerprint } from './screen-feedback';
 
 export const SCREEN_ATTRIBUTE = 'data-canvas-v2-screen';
 export const SCREEN_ASSET_PATTERN = /northstar-asset:([\w%~.!*:-]+)/g;
@@ -18,8 +19,22 @@ export function canvasV2ScreenBoundAssets(screen: CanvasV2InteractiveScreen) {
   return [...new Set([...(screen.html+'\n'+screen.css+'\n'+screen.javascript).matchAll(SCREEN_ASSET_PATTERN)].flatMap(match => tokens.has(match[1]) ? [tokens.get(match[1])!] : []))];
 }
 
+/** A preview's actual rendered pixels are reusable reference material too.
+ * Immutable pixel identity prevents later navigation changing a retained crop. */
+export function canvasV2ScreenPreviewAsset(nodeId: string, screen: CanvasV2InteractiveScreen, pixels: string): CanvasV2EvidenceAsset {
+  if (!screen.simulation || !/^data:image\/jpeg;base64,/.test(pixels) || pixels.length > 8_000_000) throw new Error('Retain the current registered preview pixels as reference material.');
+  const capturedAt = new Date().toISOString();
+  return { id:`preview:${nodeId}:${canvasV2FeedbackFingerprint(pixels)}`,url:pixels,label:`${screen.simulation.appName} · current preview`,app:screen.simulation.appName,mediaType:'image',mimeType:'image/jpeg',capturedAt,tags:['native-preview-reference',`preview-node:${nodeId}`],
+    description:'Actual rendered pixels from the current registered preview. Use to inspect and extract authentic visible reference details. This snapshot is not an interactive replacement or an original raw app capture.',
+    source:{providerId:'northstar-preview',providerLabel:'Northstar app preview',sourceId:nodeId,sourceType:'capture',label:`${screen.simulation.appName} preview snapshot`,retrievedAt:capturedAt,capturedAt,permission:'authorized',freshness:'current-snapshot'} };
+}
+
 export interface CanvasV2InteractiveScreen {
   version: 1;
+  device?: 'ios' | 'android' | 'none';
+  referenceNodeId?: string;
+  referenceIntent?: 'faithful' | 'inspired' | 'original';
+  referenceAppearance?: 'light' | 'dark' | 'mixed';
   productIdentityId?: string;
   simulation?: { appName: 'GRAET'; section: GraetPreviewSection };
   title: string;
@@ -68,6 +83,10 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
     || screen.referenceAssetIds.some(id => !isCanvasV2ScreenAssetId(id)) || screen.referenceAssetIds.reduce((size,id) => size + (typeof id === 'string' ? id.length : 0), 0) > 24000) throw new Error('Invalid interactive screen. Use finite viewport dimensions and bounded HTML/CSS/JavaScript.');
   if (screen.simulation && (screen.simulation.appName !== 'GRAET' || !simulatorForApp(screen.simulation.appName) || !isGraetPreviewSection(screen.simulation.section) || screen.html !== '<div></div>' || screen.css || screen.javascript || screen.referenceAssetIds.length || screen.width !== 383 || screen.height !== 820)) throw new Error('Registered simulations use their approved runtime and fixed logical viewport; do not supply executable source or URLs.');
   if (screen.productIdentityId !== undefined && (typeof screen.productIdentityId !== 'string' || !/^[\w.-]{1,80}$/.test(screen.productIdentityId) || screen.simulation)) throw new Error('Use an existing product identity for authored screens.');
+  if (screen.device !== undefined && (!['ios','android','none'].includes(screen.device) || screen.simulation && screen.device !== 'ios')) throw new Error('Choose an iOS, Android or unframed web presentation.');
+  if(screen.referenceNodeId!==undefined&&(typeof screen.referenceNodeId!=='string'||!/^[\w.:-]{1,240}$/.test(screen.referenceNodeId)||screen.simulation))throw new Error('Choose a current preview reference for an authored screen.');
+  if(screen.referenceIntent!==undefined&&!['faithful','inspired','original'].includes(screen.referenceIntent))throw new Error('Choose faithful, inspired or original reference intent.');
+  if(screen.referenceAppearance!==undefined&&!['light','dark','mixed'].includes(screen.referenceAppearance))throw new Error('Retain the measured reference appearance.');
   // Only the host constructs the document and its sandbox. Source assets remain
   // opaque handles, so saved objects never hide expiring blob/signed URLs.
   if (/<\s*(?:script|iframe|object|embed|base|link|meta|html|head|body)\b|\son[a-z]+\s*=|javascript\s*:/i.test(screen.html)) throw new Error('Use a body HTML fragment, CSS and event listeners in javascript. Embedded documents, scripts and event attributes are not supported.');
@@ -79,7 +98,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   for (const match of (html + '\n' + css + '\n' + javascript).matchAll(SCREEN_ASSET_PATTERN)) {
     if (!tokens.has(match[1])) throw new Error('Declare and retain the exact asset handle before binding it in a screen.');
   }
-  return { version: 1, ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
+  return { version: 1, ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
 }
 export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
   return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {

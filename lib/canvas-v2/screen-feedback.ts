@@ -65,7 +65,7 @@ export function patchCanvasV2ScreenElement(html: string, selector: string, input
   return document.body.innerHTML;
 }
 
-export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; styles: Record<string, string>; stylesheet?: string }
+export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; styles: Record<string, string>; stylesheet?: string; presentationOnly?: boolean }
 
 /** CSS-only revisions and equivalent DOM trees with one text/style change
  * preserve live mock state. Structural/event changes use the isolated rebuild. */
@@ -75,6 +75,7 @@ export function canvasV2ScreenLiveEdit(before: import('./interactive-screen').Ca
     || before.productIdentityId !== after.productIdentityId) return;
   if (before.html === after.html) {
     if (before.css !== after.css) return { selector: '', styles: {}, stylesheet: after.css };
+    if (before.device !== after.device) return { selector: '', styles: {}, presentationOnly: true };
     return;
   }
   if (before.css !== after.css) return;

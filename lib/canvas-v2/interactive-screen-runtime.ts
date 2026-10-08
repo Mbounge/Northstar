@@ -131,6 +131,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           if(!testMotionPreference)throw Error('Journey checks need a private test copy.');
           const steps=(${validateScreenInteractionSequence.toString()})(command.steps),trace=[],started=performance.now();
           for(const [index,step] of steps.entries()){
+            try {
             const el=step.selector?document.querySelector(step.selector):undefined;
             if(step.selector&&!el)throw Error('Journey target is unavailable at step '+(index+1));
             if(step.action==='click'){if(!el||!visible(el)||el.disabled)throw Error('Journey control is not reachable at step '+(index+1));el.click()}
@@ -142,6 +143,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
             const passed=(step.expectedText===undefined||text.includes(step.expectedText))&&(step.absentText===undefined||!text.includes(step.absentText))&&(step.expectedValue===undefined||(el&&visible(el)&&el.value===step.expectedValue))&&!state.errors.length&&!state.overflow.horizontal;
             trace.push({step:index+1,action:step.action,selector:step.selector,expectedText:step.expectedText,absentText:step.absentText,expectedValue:step.expectedValue,actualValue:el?.value,passed,actualElapsedMs:performance.now()-started,text:text.slice(0,4000),scroll:state.scroll,controls:state.controls.slice(0,30),errors:state.errors});
             if(!passed)break;
+            }catch(error){const state=inspect();trace.push({step:index+1,action:step.action,selector:step.selector,passed:false,failure:String(error),actualElapsedMs:performance.now()-started,text:state.text.slice(0,4000),controls:state.controls.slice(0,30),errors:state.errors,note:'This copy starts from the initial saved screen. Open the relevant view before filling; allow its transition to make fields reachable with delayMs when needed. An unreachable field is not an unsupported field type.'});break;}
           }
           await settle();
           parent.postMessage({protocol,token,requestId,result:{...snapshot(),journey:{mode:'isolated-copy',motionPreference:testMotionPreference,focusSuppressed:true,audioMuted:true,passed:trace.length===steps.length&&trace.every(step=>step.passed)&&!errors.length,steps:trace,requestedStepCount:steps.length}}},'*');return;

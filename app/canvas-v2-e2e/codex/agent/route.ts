@@ -11,9 +11,9 @@ export async function POST(request: Request) {
   if (process.env.NODE_ENV === 'production' || process.env.NORTHSTAR_E2E !== '1') return new Response(null, { status: 404 });
   // Replace the pre-hot-reload factory once; subsequent module reloads update
   // the factory indirection while already-running fixture sessions stay intact.
-  if (fixture.northstarCodexFixtureVersion !== 11) {
+  if (fixture.northstarCodexFixtureVersion !== 12) {
     fixture.northstarCodexFixtureHost?.dispose(); fixture.northstarCodexFixtureHost = undefined;
-    fixture.northstarCodexFixtureVersion = 11;
+    fixture.northstarCodexFixtureVersion = 12;
   }
   fixture.northstarCodexFixtureFactory = fixtureCodex;
   try { return await (fixture.northstarCodexFixtureHost ??= new CodexSessionHost(() => fixture.northstarCodexFixtureFactory!(new URL(request.url).origin), (action, signal) => readNorthstarSource(action, signal, async url => {

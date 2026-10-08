@@ -58,6 +58,11 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
     if (/\b(?:Traceback \(most recent|stack trace|credential secret|ECONNRESET|ECONNREFUSED)\b/i.test(paragraph)) return [];
     const sentences = paragraph.split(/(?<=[.!?])\s+(?=[A-Z“‘])/).flatMap(sentence => {
       if (/\b(?:runtime check|inspection|pixel review|motion sampling|post-edit review|provider|transport|validation|tool|process)\b.{0,120}\b(?:failed|unavailable|timed out|cannot be resolved|rejected|could not|did not respond)\b/i.test(sentence)) return [];
+      if (/\b(?:private journey(?: runner)?|journey runner|theme-rule|syntax|textarea step)\b.{0,100}\b(?:didn[’']t accept|did not accept|issue|error|failed|rejected|could not)\b/i.test(sentence) || /\b(?:syntax|theme-rule) (?:issue|error)\b/i.test(sentence)) {
+        const recovery=sentence.match(/,\s*(?:so\s+)?(I(?:[’']m|[’']ll| will)\s+.+)/i);
+        if(!recovery)return [];
+        sentence=recovery[1]; // Keep useful ongoing reasoning; omit the failed mechanism.
+      }
       if (/\bcommitted["']?\s*:\s*false\b/i.test(sentence)) return [];
       if (/\b(?:not runtime-verified|unavailable check|review is unfinished|review limit|provider credential|invalid session identity)\b/i.test(sentence)) return [];
       let readable = sentence
@@ -79,6 +84,13 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
         .replace(/\bretained ([A-Z][A-Z0-9]*) mark\b/g, '$1 logo')
         .replace(/\bevidence rails?\b/gi, 'reference flows')
         .replace(/\bmodal geometry\b/gi, 'sheet layout')
+        .replace(/\bprivate journey(?: runner)?\b/gi, 'interaction check')
+        .replace(/\btextarea\b/gi, 'text field')
+        .replace(/\b(?:accessibility|ARIA) text\b/gi, 'control labels')
+        .replace(/\b(?:protected interactive reference|authorized app)\b/gi, 'app reference')
+        .replace(/\b(?:forced light palette|light-theme rule)\b/gi, 'light appearance')
+        .replace(/\b(?:render|rendered state)\b/gi, 'screen')
+        .replace(/\b(\d+)px screen\b/gi, 'phone screen')
         .replace(/\bscrollbar chrome\b/gi, 'scrollbars')
         .replace(/\bscroll containers?\b/gi, 'scrolling areas')
         .replace(/\bviewport\b/gi, 'screen')
