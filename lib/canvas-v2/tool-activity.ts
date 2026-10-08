@@ -63,6 +63,14 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
         if(!recovery)return [];
         sentence=recovery[1]; // Keep useful ongoing reasoning; omit the failed mechanism.
       }
+      // A private probe's timing/selector mistake is not a product finding.
+      // Preserve the following design/check intent, without retelling the failure.
+      if (/\b(?:private (?:path|check|journey)|automated (?:journey|check)|test (?:path|journey|probe))\b.{0,250}\b(?:exposed|failed|tried|timing-sensitive|error|unavailable)\b/i.test(sentence)) return [];
+      if (/\b(?:assertion|probe|runner)\b.{0,180}\b(?:evaluated (?:during|before)|failed|timed out|cleanup window|rejected)\b/i.test(sentence)) {
+        const recovery=sentence.match(/,\s*so\s+(I(?:[’']m|[’']ll| will)\s+.+)/i);
+        if(!recovery)return [];
+        sentence=recovery[1];
+      }
       if (/\bcommitted["']?\s*:\s*false\b/i.test(sentence)) return [];
       if (/\b(?:not runtime-verified|unavailable check|review is unfinished|review limit|provider credential|invalid session identity)\b/i.test(sentence)) return [];
       let readable = sentence
@@ -84,7 +92,20 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
         .replace(/\bretained ([A-Z][A-Z0-9]*) mark\b/g, '$1 logo')
         .replace(/\bevidence rails?\b/gi, 'reference flows')
         .replace(/\bmodal geometry\b/gi, 'sheet layout')
-        .replace(/\bprivate journey(?: runner)?\b/gi, 'interaction check')
+        .replace(/\bI([’']m| am) (?:lengthening|adjusting) (?:only )?(?:that|the) (?:opening|test|check) step and (?:rerunning|rechecking) (?:the same|the) (?:journey|check)\b/gi, 'I$1 checking the opening and the same flow again')
+        .replace(/\b(?:rerunning|running) (?:the same|the full) (?:private )?journey\b/gi, 'checking the flow')
+        .replace(/\bprivate (?:journey(?: runner)?|path|check)\b/gi, 'interaction check')
+        .replace(/\bnative bottom sheet\b/gi, 'bottom sheet')
+        .replace(/\blocal product data\b/gi, 'saved details')
+        .replace(/\bfull no-preference path\b/gi, 'full flow with animation')
+        .replace(/\bsynchronously before the reflow-driven transition\b/gi, 'before its entrance animation')
+        .replace(/\bprivate reduced-motion checks?\b/gi, 'reduced-motion checks')
+        .replace(/\brerunning with enough settling time to verify\b/gi, 'checking')
+        .replace(/\bin-flight hidden-state cleanup as a failure\b/gi, 'the moment while closing finishes')
+        .replace(/\bsettled end-state assertion\b/gi, 'check of the final screen')
+        .replace(/\basserts\b/gi, 'checks')
+        .replace(/\brepopulates with\b/gi, 'shows')
+        .replace(/\bfinal cleanup\b/gi, 'finished state')
         .replace(/\btextarea\b/gi, 'text field')
         .replace(/\b(?:accessibility|ARIA) text\b/gi, 'control labels')
         .replace(/\b(?:protected interactive reference|authorized app)\b/gi, 'app reference')

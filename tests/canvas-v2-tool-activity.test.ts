@@ -57,3 +57,23 @@ test('journey diagnostics are translated without removing useful recovery reason
  assert.doesNotMatch(presented,/runner|didn’t accept|textarea/);
  assert.equal(canvasV2ReadableAgentText('I also caught a theme-rule syntax issue, so I’m checking the light appearance.'),'I’m checking the light appearance.');
 });
+
+
+test('private probe timing does not become a public product failure or hide the next useful check',()=>{
+ const original='The first private path exposed a timing-sensitive handoff between the sheet’s entrance motion and the text field; the editor itself opened correctly, but the test tried to fill before the field was reachable. I’m lengthening only that opening step and rerunning the same journey, then I’ll verify the reduced-motion path separately.';
+ const presented=canvasV2ReadableAgentText(original);
+ assert.equal(presented,'I’m checking the opening and the same flow again, then I’ll verify the reduced-motion path separately.');
+ assert.match(original,/private path exposed/,'presentation must not mutate retained reasoning');
+ assert.equal(canvasV2ReadableAgentText('Medito’s onboarding uses one calm decision at a time, while GRAET keeps its blue actions and typography.'),'Medito’s onboarding uses one calm decision at a time, while GRAET keeps its blue actions and typography.');
+ assert.equal(canvasV2ReadableAgentText('The user’s supplied video is missing the final transition.'),'The user’s supplied video is missing the final transition.');
+});
+
+
+test('motion verification keeps the user experience clear without revealing assertion machinery',()=>{
+ const input='The full no-preference path now passes end to end. The reduced-motion check reached the close control too; its assertion was simply evaluated during the fixed cleanup window, so I’m rerunning with enough settling time to verify the unobstructed home rather than treating an in-flight hidden-state cleanup as a failure.';
+ const text=canvasV2ReadableAgentText(input);
+ assert.match(text,/full flow with animation.*passes end to end/);
+ assert.match(text,/I’m checking the unobstructed home/);
+ assert.doesNotMatch(text,/assertion|cleanup|failure|rerunning|no-preference/);
+ assert.equal(canvasV2ReadableAgentText('I’m opening the sheet synchronously before the reflow-driven transition, so private reduced-motion checks can reach the close control.'),'I’m opening the sheet before its entrance animation, so reduced-motion checks can reach the close control.');
+});

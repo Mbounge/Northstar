@@ -33,7 +33,7 @@ import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
 import { readCanvasV2Screens, canvasV2ScreenReviewAssets, canvasV2ScreenBoundAssets, canvasV2ScreenPreviewAsset } from '@/lib/canvas-v2/interactive-screen';
 import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
 import { readCanvasV2SimulationSource, inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion, testCanvasV2ScreenJourney, canvasV2ScreenPixelAppearance } from './interactive-screen';
-import { CANVAS_V2_MAX_FEEDBACK_TARGETS, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking, type CanvasV2ObjectFeedbackTarget, CANVAS_V2_SCREEN_FEEDBACK, canvasV2ScreenFeedbackContext, parseCanvasV2ScreenFeedbackTarget, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
+import { CANVAS_V2_MAX_FEEDBACK_TARGETS, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking, type CanvasV2ObjectFeedbackTarget, CANVAS_V2_SCREEN_FEEDBACK, canvasV2ScreenFeedbackContext, parseCanvasV2ScreenFeedbackTarget, patchCanvasV2ScreenComponent, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
 import { validateCanvasV2ProductIdentity, type CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
 import { canvasV2ScreenMotionReviewMode, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
 import { canvasV2ScreenDevice } from '@/lib/canvas-v2/screen-device';
@@ -279,7 +279,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (args.action === 'journey') {
           const result = await testCanvasV2ScreenJourney(item.nodeId, item.encoded, [...revision.evidence, ...assets.current.values()], args.steps, args.motionPreference === 'reduce' ? 'reduce' : 'no-preference', signal);
           if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this journey check. Read it again.');
-          return [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), state: result.state, note: 'Observed journey in a fresh isolated copy of the current authored source. Motion preference is simulated for CSS media queries and matchMedia. No live user state or canvas geometry was changed. Focus is suppressed and audio is muted in the private copy. Requested step delays can advance CSS/Web Animation timelines to compensate offscreen throttling; JavaScript timers use actual elapsed time. This checks the supplied journey only, not keyboard/focus behavior, every path or frame rate.' }) }, { type: 'input_image', image_url: result.image }];
+          return [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), journeyLabel:string(args.label).slice(0,80),state: result.state, note: 'Observed journey in a fresh isolated copy of the current authored source. Motion preference is simulated for CSS media queries and matchMedia. No live user state or canvas geometry was changed. Focus is suppressed and audio is muted in the private copy. Requested step delays can advance CSS/Web Animation timelines to compensate offscreen throttling; JavaScript timers use actual elapsed time. This checks the supplied journey only, not keyboard/focus behavior, every path or frame rate.' }) }, { type: 'input_image', image_url: result.image }];
         }
         const result = await inspectCanvasV2Screen(item.nodeId, item.encoded, { action: string(args.action) as ScreenAction['action'], selector: typeof args.selector === 'string' ? args.selector : undefined, value: typeof args.value === 'string' ? args.value : undefined, x: typeof args.x === 'number' ? args.x : undefined, y: typeof args.y === 'number' ? args.y : undefined }, signal);
         if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this screen action. Read it again.');
@@ -400,8 +400,11 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           }
           if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed while reading the reference implementation. Read it again.');
         }
+        let componentContext:Record<string,unknown>|undefined;
+        if(requestedScreen&&!requestedScreen.screen.simulation){try{componentContext=await inspectCanvasV2Screen(requestedScreen.nodeId,requestedScreen.encoded,{action:'inspect'},signal);}catch{signal.throwIfAborted();componentContext={note:'Current component layout is unavailable; the saved source remains readable for repair.'};}}
+        if(engine.readCommittedRevision().id!==revision.id)throw new Error('The canvas changed while reading component layout. Read it again.');
         const screens = readCanvasV2Screens(revision.document.html).map(({ nodeId, screen, encoded }) => ({ nodeId, title: screen.title, device:canvasV2ScreenDevice(screen), referenceNodeId:screen.referenceNodeId, referenceIntent:screen.referenceIntent, referenceAppearance:screen.referenceAppearance, width: screen.width, height: screen.height, sourceVersion:canvasV2FeedbackFingerprint(encoded), referenceAssetIds: screen.referenceAssetIds, productIdentityId: screen.productIdentityId, simulation: screen.simulation, ...(requestedNodeId === nodeId ? { source: screen } : {}) }));
-        return { screens, reusableSource, availableFonts:CANVAS_V2_SCREEN_FONTS, screenFeedbackTargets: activeScreenFeedback.current.filter(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded)).map(entry => entry.target), objectFeedbackTargets: activeObjectFeedback.current.filter(objectMatches), productIdentities: productIdentities.current, screenFeedback: activeScreenFeedback.current.find(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded))?.target, theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: observation ? buildCanvasV2IslandRegistry({ observation }) : [], nativeScreenBounds: nativeScreenRead && native ? canvasV2NativeSceneAbsoluteBounds(native, requestedNodeId) : undefined, selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
+        return { screens, reusableSource, componentTargets:componentContext?.componentTargets,scrollRegions:componentContext?.scrollRegions,availableFonts:CANVAS_V2_SCREEN_FONTS, screenFeedbackTargets: activeScreenFeedback.current.filter(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded)).map(entry => entry.target), objectFeedbackTargets: activeObjectFeedback.current.filter(objectMatches), productIdentities: productIdentities.current, screenFeedback: activeScreenFeedback.current.find(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded))?.target, theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: observation ? buildCanvasV2IslandRegistry({ observation }) : [], nativeScreenBounds: nativeScreenRead && native ? canvasV2NativeSceneAbsoluteBounds(native, requestedNodeId) : undefined, selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
           truncated: !range && html.length > 48_000,
           screenPlacements: placement?.context,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),
@@ -423,7 +426,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           return { committed: true, revisionId: readRevision.current, nodeIds: args.nodeIds, next: 'The screen source, sizes, mock state and camera are unchanged. Review the presentation at a useful reading scale.' };
         } catch (error) { return rejectedCodexEdit(engine.readCommittedRevision().id, error); }
       }
-      if (action.name === 'canvas_edit' || action.name === 'canvas_insert_flow' || action.name === 'canvas_screen' || action.name === 'canvas_screen_element' || action.name === 'canvas_insert_simulation') {
+      if (action.name === 'canvas_edit' || action.name === 'canvas_insert_flow' || action.name === 'canvas_screen' || action.name === 'canvas_screen_element' || action.name === 'canvas_screen_component' || action.name === 'canvas_insert_simulation') {
         try {
         if (signal.aborted) throw new Error('This action was stopped.');
         if (editActive.current) throw new Error('Another canvas edit is still committing. Read the canvas after it finishes.');
@@ -473,7 +476,6 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           if(typeof args.referenceNodeId==='string'){
             const original=readCanvasV2Screens(revision.document.html).find(screen=>screen.nodeId===args.referenceNodeId);
             if(!original?.screen.simulation)throw new Error('Choose a current registered app preview as the reference.');
-            if (!previous && (args.referenceIntent ?? 'faithful') === 'faithful' && !args.baseNodeId && !unavailableSimulationSources.current.has(original.nodeId)) throw new Error('Reuse the working reference instead of reconstructing it: canvas_read(referenceNodeId), then canvas_screen with baseNodeId and productIdentityId to create an unchanged baseline. Review that baseline, then add only the requested change to its nodeId.');
             const preview=[...new Map([...evidence,...assets.current.values()].map(asset=>[asset.id,asset])).values()].filter(asset=>asset.tags?.includes(`preview-node:${args.referenceNodeId}`)).sort((a,b)=>(b.capturedAt||'').localeCompare(a.capturedAt||''))[0];
             if(!preview)throw new Error('Review the current app preview before creating its variant. Its visible assets and appearance need to be retained.');
             args.referenceIntent=args.referenceIntent??previous?.screen.referenceIntent??'faithful';
@@ -484,8 +486,15 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           for(const id of ids){const asset=evidence.find(asset=>asset.id===id);if(asset?.mediaType==='video'||asset?.mimeType?.startsWith('video/'))await readCanvasV2ScreenAssetPixels(asset.originalUrl||asset.url,signal);}
           if(engine.readCommittedRevision().id!==revision.id)throw new Error('The canvas changed during asset preparation. Read it again.');
         }
-        const isScreen = action.name === 'canvas_screen' || action.name === 'canvas_screen_element' || isSimulation;
+        const isScreen = action.name === 'canvas_screen' || action.name === 'canvas_screen_element' || action.name === 'canvas_screen_component' || isSimulation;
         let groupedScreenEdits: Array<{nodeId:string;html:string}> | undefined;
+        if(action.name==='canvas_screen_component'){
+          const item=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);
+          if(!item||item.screen.simulation)throw new Error('Read an authored screen before refining its original component.');
+          args.html=patchCanvasV2ScreenComponent(item.screen.html,string(args.selector),{html:args.html,styles:args.styles},new DOMParser());
+          delete args.styles;
+          args.referenceAssetIds=[...new Set([...item.screen.referenceAssetIds,...(Array.isArray(args.referenceAssetIds)?args.referenceAssetIds as string[]:[])])];
+        }
         if (action.name === 'canvas_screen_element') {
           const edits=Array.isArray(args.edits)?args.edits:[args];
           if(!edits.length || edits.length>CANVAS_V2_MAX_FEEDBACK_TARGETS || args.edits && (args.nodeId || args.text!==undefined || args.styles!==undefined))throw new Error('Use one precise edit or a bounded group of submitted feedback targets.');
@@ -546,7 +555,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             if (latest.id !== revision.id) {
               if (latest.id !== expectedRevision) throw new Error(`The canvas changed during this edit. Inspect revision ${latest.id}.`);
               if (plan) compositionHistory.current = [...compositionHistory.current.filter(p => p.execution.target.islandId !== plan.execution.target.islandId), plan];
-              if (action.name === 'canvas_screen_element' && screenPatch) {
+              if (['canvas_screen_element','canvas_screen_component'].includes(action.name) && screenPatch) {
                 const updated=readCanvasV2Screens(latest.document.html);
                 activeScreenFeedback.current=activeScreenFeedback.current.map(entry=>{const item=updated.find(item=>item.nodeId===entry.target.nodeId);return item?{...entry,encoded:item.encoded}:entry;});
               }

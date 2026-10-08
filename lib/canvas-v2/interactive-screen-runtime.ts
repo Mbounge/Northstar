@@ -85,6 +85,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     const releaseMotion = () => {const session=motionSession;motionSession=undefined;if(!session)return;clearTimeout(session.timer);for(const {a,time,state,rate} of session.saved){try{if(a.playState==='idle')continue;a.playbackRate=rate;if(state==='idle')a.cancel();else{a.currentTime=time;if(state==='running')a.play();else if(state==='finished')a.finish();else a.pause()}}catch{a.cancel()}}};
     const selectorFor = el => {
       if(el.id && document.querySelectorAll('#'+CSS.escape(el.id)).length===1)return '#'+CSS.escape(el.id);
+      for(const key of ['data-northstar-control','data-northstar-source-container']){const value=el.getAttribute(key);if(value&&document.querySelectorAll('['+key+'="'+CSS.escape(value)+'"]').length===1)return '['+key+'="'+CSS.escape(value)+'"]'}
       const path=[];let node=el;
       while(node && node!==document.body){const tag=node.tagName.toLowerCase(),peers=[...node.parentElement.children].filter(s=>s.tagName===node.tagName);path.unshift(tag+':nth-of-type('+(peers.indexOf(node)+1)+')');node=node.parentElement}
       return path.length ? 'body > '+path.join(' > ') : 'body';
@@ -95,8 +96,6 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const r=el.getBoundingClientRect();Object.assign(feedbackOutline.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});
     };
     document.addEventListener('pointermove',e=>{if(feedbackMode && e.target instanceof Element && e.target!==feedbackOutline)markFeedback(e.target)},true);
-    // Capture after the complete event dispatch; a capture-listener microtask
-    // runs before the product's later handlers and would retain stale state.
     for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,e=>{
       if(!feedbackMode)return;
       e.preventDefault();e.stopImmediatePropagation();
@@ -111,6 +110,24 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     document.addEventListener('submit', e => e.preventDefault(), true);
     document.addEventListener('keydown', e => {if(e.key==='Escape'){clearFeedback();parent.postMessage({protocol,token,escape:true},'*')}});
     document.addEventListener('click', e => { const a=e.target.closest?.('a'); if(a && !a.getAttribute('href')?.startsWith('#')) e.preventDefault(); }, true);
+    const scrollRegions=()=>{
+      const root=document.scrollingElement;
+      const regions=[...document.querySelectorAll('*')].filter(el=>el!==root&&el.clientHeight>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).opacity!=='0'&&/auto|scroll/.test(getComputedStyle(el).overflowY)&&el.scrollHeight>el.clientHeight+2).slice(0,12).map(el=>({selector:selectorFor(el),x:el.scrollLeft,y:el.scrollTop,width:el.clientWidth,height:el.clientHeight,contentHeight:el.scrollHeight,maxY:el.scrollHeight-el.clientHeight}));
+      if(root&&root.scrollHeight>innerHeight+2&&!/hidden|clip/.test(getComputedStyle(root).overflowY))regions.unshift({selector:'html',x:scrollX,y:scrollY,width:innerWidth,height:innerHeight,contentHeight:root.scrollHeight,maxY:root.scrollHeight-innerHeight});
+      return regions;
+    };
+    const layoutWarnings=()=>{
+      const anchors=[...document.querySelectorAll('[data-northstar-control]')].filter(el=>el.getAttribute('aria-label')).map(el=>({el,label:el.getAttribute('aria-label').replace(/^(?:add|edit|open|view)\\s+/i,'').toLowerCase().trim()})).filter(item=>item.label.length>=5);
+      return [...document.querySelectorAll('body *')].filter(el=>getComputedStyle(el).position==='fixed'&&visible(el)&&!el.closest('nav,header,[role="dialog"],[aria-modal="true"],[role="tooltip"],[role="status"]')&&el.getBoundingClientRect().height<innerHeight*.8).flatMap(el=>{
+        const text=(el.innerText||el.textContent||'').toLowerCase();
+        return anchors.filter(item=>item.el!==el&&!item.el.contains(el)&&text.includes(item.label)).map(item=>({kind:'detached-reference-component',selector:selectorFor(el),referenceSelector:selectorFor(item.el),label:item.label,rect:describe(el).rect,note:'A separate viewport-fixed surface repeats an existing reference component label. Check for a duplicate or detached replacement through scrolling; retain one original component unless the user requested a separate floating surface.'}));
+      }).slice(0,12);
+    };
+    const componentContext=el=>{
+      const r=el.getBoundingClientRect(),p=el.parentElement,pr=p?.getBoundingClientRect();let owner=p;
+      while(owner&&!(/auto|scroll/.test(getComputedStyle(owner).overflowY)&&owner.scrollHeight>owner.clientHeight))owner=owner.parentElement;
+      return {selector:selectorFor(el),parentSelector:p?selectorFor(p):undefined,scrollContainerSelector:owner?selectorFor(owner):undefined,position:getComputedStyle(el).position,localBounds:p&&pr?{x:r.x-pr.x-p.clientLeft+p.scrollLeft,y:r.y-pr.y-p.clientTop+p.scrollTop,width:r.width,height:r.height}:undefined,rasterBacked:!!el.closest('[data-northstar-raster-interface]')};
+    };
     const describe = el => ({tag:el.tagName.toLowerCase(),id:el.id,text:(el.innerText||el.textContent||'').slice(0,250),role:el.getAttribute('role'),label:el.getAttribute('aria-label'),value:el.value,disabled:!!el.disabled,rect:(() => {const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()});
     const visible = el => {
       const r=el.getBoundingClientRect(),s=getComputedStyle(el);
@@ -129,7 +146,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     });
     const sessionData=()=>{try{const json=JSON.stringify(window.northstarProduct.data);return json&&json.length<=16000?JSON.parse(json):undefined}catch{return undefined}};
     const productData=()=>sessionData()??{note:'Product data is not readable within the inspection budget.'};
-    const inspect = () => ({productData:productData(),appearance:{reference:productAppearance,canvasIndependent:true,colorScheme:getComputedStyle(document.documentElement).colorScheme},fonts:[...document.fonts].map(font=>({family:font.family,weight:font.weight,style:font.style,status:font.status})),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
+    const inspect = () => ({layoutWarnings:layoutWarnings(),scrollRegions:scrollRegions(),componentTargets:[...document.querySelectorAll('[data-northstar-control],button,[role="button"],section,article,[data-northstar-component]')].slice(0,100).map(el=>({...describe(el),...componentContext(el)})),productData:productData(),appearance:{reference:productAppearance,canvasIndependent:true,colorScheme:getComputedStyle(document.documentElement).colorScheme},fonts:[...document.fonts].map(font=>({family:font.family,weight:font.weight,style:font.style,status:font.status})),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
     const snapshot = () => {
       let pseudoCss='';
       const clone=document.body.cloneNode(true),live=[document.body,...document.body.querySelectorAll('*')],copies=[clone,...clone.querySelectorAll('*')];
@@ -189,7 +206,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
             void document.body.offsetHeight;
             const state=inspect(),text=state.text;
             const passed=(step.expectedText===undefined||text.includes(step.expectedText))&&(step.absentText===undefined||!text.includes(step.absentText))&&(step.expectedValue===undefined||(el&&visible(el)&&el.value===step.expectedValue))&&!state.errors.length&&!state.overflow.horizontal;
-            trace.push({step:index+1,action:step.action,selector:step.selector,expectedText:step.expectedText,absentText:step.absentText,expectedValue:step.expectedValue,actualValue:el?.value,passed,actualElapsedMs:performance.now()-started,text:text.slice(0,4000),scroll:state.scroll,controls:state.controls.slice(0,30),errors:state.errors});
+            trace.push({step:index+1,action:step.action,selector:step.selector,expectedText:step.expectedText,absentText:step.absentText,expectedValue:step.expectedValue,actualValue:el?.value,passed,actualElapsedMs:performance.now()-started,text:text.slice(0,4000),scroll:state.scroll,scrollRegions:state.scrollRegions,controls:state.controls.slice(0,30),errors:state.errors});
             if(!passed)break;
             }catch(error){const state=inspect();trace.push({step:index+1,action:step.action,selector:step.selector,passed:false,failure:String(error),actualElapsedMs:performance.now()-started,text:state.text.slice(0,4000),controls:state.controls.slice(0,30),errors:state.errors,note:'This copy starts from the initial saved screen. Open the relevant view before filling; allow its transition to make fields reachable with delayMs when needed. An unreachable field is not an unsupported field type.'});break;}
           }

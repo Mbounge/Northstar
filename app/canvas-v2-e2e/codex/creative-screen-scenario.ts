@@ -10,12 +10,13 @@ export class CreativeScreenScenario {
   private multiTargets: JsonObject[] = [];
   private continuitySource:JsonObject={};
   private continuityBaseline:JsonObject={};
-  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false, private multiple = false, private temporal = false, private procedural=false, private interrupt=false, private automatic=false, private journey=false, private previewReference=false, private structural=false) {}
+  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false, private multiple = false, private temporal = false, private procedural=false, private interrupt=false, private automatic=false, private journey=false, private previewReference=false, private structural=false, private component=false) {}
   start() { this.peer.tool('canvas_read', {}); }
   reply(result: JsonObject) {
     const parts = Array.isArray(result.contentItems) ? result.contentItems.map(object) : [];
     let value: JsonObject = {};
     try { value = object(JSON.parse(string(parts[0]?.text))); } catch { /* fail below */ }
+    if(this.component){this.checkComponent(result,parts,value);return;}
     if(this.structural){this.checkStructural(result,parts,value);return;}
     if(this.previewReference){this.checkPreviewReference(result,parts,value);return;}
     if(this.journey){this.checkJourney(result,parts,value);return;}
@@ -92,6 +93,19 @@ export class CreativeScreenScenario {
       }
     }
   }
+  private componentPositions:number[]=[];
+  private checkComponent(result:JsonObject,parts:JsonObject[],value:JsonObject){
+    if(!result.success||value.committed===false){this.peer.finish('Component check failed: '+string(parts[0]?.text));return;}
+    const steps=(y:number)=>[{action:'click',selector:'[aria-label="Add season goal"]',delayMs:300},{action:'fill',selector:'#goal-input',value:'Score 12 goals'},{action:'click',selector:'#goal-save',delayMs:300},{action:'scroll',selector:'[data-graet-scroll]',y,delayMs:80,expectedText:'Score 12 goals'}];
+    switch(this.step++){
+      case 0:this.nodeId=string(object((value.screens as JsonObject[]??[]).find(screen=>!screen.simulation)).nodeId);this.peer.tool('canvas_read',{nodeId:this.nodeId});break;
+      case 1:{const source=object(object((value.screens as JsonObject[]??[]).find(screen=>screen.nodeId===this.nodeId)).source);const target=(value.componentTargets as JsonObject[]??[]).find(item=>item.label==='Add season goal');if(!target?.parentSelector||!target.scrollContainerSelector){this.peer.finish('Component check failed: original layout owner missing');return;}this.peer.tool('canvas_screen_component',{nodeId:this.nodeId,selector:'[aria-label="Add season goal"]',html:'<span class="saved-season" style="top:45px;line-height:22px;font-size:15px" hidden></span>',javascript:string(source.javascript).replace('row.textContent=goal;', 'row.textContent=goal;row.hidden=!goal;'),summary:'Make the original season-goal row natively editable'});break;}
+      case 2:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'journey',label:'Saved goal at scroll 200',steps:steps(200)});break;
+      case 3:{const state=object(value.state),target=(state.componentTargets as JsonObject[]??[]).find(item=>item.label==='Add season goal');if(object(state.journey).passed!==true||!string(target?.text).includes('Score 12 goals')||target?.position==='fixed'){this.peer.finish('Component check failed: saved value is not in the original row');return;}this.componentPositions.push(Number(object(target?.rect).y));this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'journey',label:'Saved goal at scroll 350',steps:steps(350)});break;}
+      default:{const state=object(value.state),target=(state.componentTargets as JsonObject[]??[]).find(item=>item.label==='Add season goal');this.componentPositions.push(Number(object(target?.rect).y));this.peer.finish(object(state.journey).passed===true&&Math.abs(this.componentPositions[0]-this.componentPositions[1]-150)<2&&string(target?.text).includes('Score 12 goals')?'Verified the saved goal updates inside the original component and travels with its scrolling content at both offsets.':'Component check failed: scrolling attachment changed');}
+    }
+  }
+
   private checkStructural(result:JsonObject,parts:JsonObject[],value:JsonObject){
     if(!result.success||value.committed===false){this.peer.finish('Continuity check failed: '+string(parts[0]?.text));return;}
     switch(this.step++){

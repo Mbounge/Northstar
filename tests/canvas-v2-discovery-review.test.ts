@@ -807,3 +807,20 @@ test('a single unavailable independent assessment can recover without another pr
     assert.equal(t.client.view.texts.at(-1)?.text,'Original answer');
   }finally{t.close();}
 });
+
+
+test('faithful edited scrolling screens cannot pass from one static offset; labeled journey pixels retain both states',()=>{
+ const text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)}),context=new DiscoveryReviewContext();
+ context.tool('canvas_screen',{referenceIntent:'faithful',javascript:'native edit handlers'},[text({nodeId:'scrolling-editor',committed:true})]);
+ context.tool('canvas_review',{nodeId:'scrolling-editor'},[text({nodeId:'scrolling-editor',viewport:{width:390,height:844},referenceIntent:'faithful',state:{errors:[],controls:[{id:'edit'}],scrollRegions:[{selector:'#content',maxY:600,y:0}]}}),{type:'inputImage',imageUrl:'data:image/png;base64,current'},text({nodeId:'scrolling-editor',defaultState:true,state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,default'}]);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'scrolling-editor',referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),interactionQuality:'pass',interactionAssessment:'Saved original component retains its scrolling attachment.',evidenceImageNumbers:[1,2],assessment:'Matched reference.'}];
+ assert.match(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work[0].gap,/scroll positions/);
+ for(const [label,y] of [['Saved at 200',200],['Saved at 350',350]] as const)context.tool('canvas_screen_interact',{nodeId:'scrolling-editor',action:'journey',label},[text({nodeId:'scrolling-editor',journeyLabel:label,state:{journey:{passed:true,motionPreference:'no-preference',steps:[{action:'fill'},{action:'click'},{action:'scroll'}]},scrollRegions:[{selector:'#content',maxY:600,y}],errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,scroll'+y}]);
+ const packet=JSON.parse(context.packet('').text);
+ assert.ok(packet.imageDirectory.some((image:{role:string})=>image.role.includes('Saved%20at%20200')));
+ assert.ok(packet.imageDirectory.some((image:{role:string})=>image.role.includes('Saved%20at%20350')));
+ feedback.productChecks[0].evidenceImageNumbers=packet.imageDirectory.map((image:{imageNumber:number})=>image.imageNumber);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ context.tool('canvas_screen_component',{nodeId:'scrolling-editor',selector:'#goal',html:'<span>Updated native goal</span>'},[text({nodeId:'scrolling-editor',committed:true})]);
+ assert.ok(!JSON.parse(context.packet('').text).imageDirectory.some((image:{role:string})=>image.role.includes('Saved%20at%20350')),'source revisions invalidate old scroll proof');
+});

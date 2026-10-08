@@ -65,6 +65,20 @@ export function patchCanvasV2ScreenElement(html: string, selector: string, input
   return document.body.innerHTML;
 }
 
+/** Replace a component's native contents in its existing layout owner. The root
+ * element, selectors, attributes and scroll attachment remain the same. */
+export function patchCanvasV2ScreenComponent(html:string,selector:string,input:{html:unknown;styles?:unknown},parser:DOMParser){
+  if(!selector||selector.length>1600||typeof input.html!=='string'||!input.html.trim()||input.html.length>24000)throw new Error('Choose one existing component and bounded native contents.');
+  const doc=parser.parseFromString(html,'text/html'),targets=doc.body.querySelectorAll(selector),target=targets[0];
+  if(targets.length!==1||!(target instanceof HTMLElement)||target===doc.body||['INPUT','TEXTAREA','SELECT','OPTION','IMG','SCRIPT','STYLE'].includes(target.tagName))throw new Error('Choose an existing HTML component container.');
+  const fragment=parser.parseFromString(input.html,'text/html');
+  if([...fragment.body.querySelectorAll<HTMLElement>('*')].some(el=>['fixed','sticky'].includes(el.style.position)))throw new Error('Component contents belong inside their original layout. Put a requested dialog in a separate screen layer.');
+  if(target.tagName==='BUTTON'&&fragment.body.querySelector('button,input,select,textarea,a,[role="button"]'))throw new Error('Keep one native control; put non-interactive visual contents inside its existing button.');
+  if(input.styles&&Object.keys(input.styles).some(key=>/^(?:position|inset(?:-.+)?|top|right|bottom|left|width|height|margin(?:-.+)?|transform|translate|z-index|display|order|grid-area|grid-row|grid-column)$/.test(key)))throw new Error('Preserve the existing component anchor and layout owner. Use a deliberate screen revision for a requested layout change.');
+  target.innerHTML=fragment.body.innerHTML;
+  return input.styles===undefined?doc.body.innerHTML:patchCanvasV2ScreenElement(doc.body.innerHTML,selector,{styles:input.styles},parser);
+}
+
 export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; styles: Record<string, string>; stylesheet?: string; presentationOnly?: boolean; edits?:Array<{selector:string;text?:string;styles:Record<string,string>}> }
 
 /** CSS-only revisions and equivalent DOM trees with bounded text/style changes
