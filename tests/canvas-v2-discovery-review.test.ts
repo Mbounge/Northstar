@@ -583,3 +583,41 @@ test('motion quality cannot pass from static render or incomplete frame citation
  feedback.productChecks[0].evidenceImageNumbers=[1,2,3,4];
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
 });
+
+
+test('declared RAF rendering can be assessed as static without inventing animation, but active motion needs frames',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ const review=(animations:unknown[])=>context.tool('canvas_review',{},[text({nodeId:'chart',viewport:{width:390,height:844},state:{motion:{authoredRendering:{requestAnimationFrame:true,canvas:true},animations}}}),{type:'inputImage',imageUrl:'data:image/png;base64,chart'}]);
+ review([]);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'chart',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',motionQuality:'not_applicable',motionAssessment:'The requested static chart uses RAF to draw once. No animated behavior is requested or observed.',evidenceImageNumbers:[1],assessment:'The static chart meets the brief.'}];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ review([{mechanism:'css-keyframes'}]);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+});
+
+
+test('four distinct asset-heavy variants retain current evidence and exclude sibling artwork from focused batches',async()=>{
+ const {productReviewBatches}=await import('../lib/canvas-v2/codex-app-server/discovery-review');
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ for(const id of ['a','b','c','d']){
+  const reference='data:image/png;base64,'+id.repeat(3_500_000);
+  context.tool('inspect_asset',{},[text({evidenceId:'ref-'+id}),{type:'inputImage',imageUrl:reference}]);
+  context.tool('canvas_screen',{title:id,referenceAssetIds:['ref-'+id]},[text({nodeId:id,committed:true})]);
+  context.tool('canvas_review',{},[text({nodeId:id,viewport:{width:390,height:844},referenceAssetIds:['ref-'+id],reviewReferenceAssetIds:['ref-'+id],state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,render'+id},text({referenceAssetId:'ref-'+id}),{type:'inputImage',imageUrl:reference}]);
+ }
+ const packet=context.packet('Four directions');assert.equal(packet.images.length,8);
+ assert.equal(JSON.parse(packet.text).productWork.every((screen:{reviewed:boolean})=>screen.reviewed),true);
+ const batches=productReviewBatches(packet);assert.equal(batches.length,2);
+ for(const batch of batches){assert.equal(batch.packet.images.length,4);assert.ok(batch.packet.images.reduce((sum,image)=>sum+(image.type==='image'?image.url.length:0),0)<8_000_000);}
+});
+
+
+test('video reference review retains every timestamped frame and replaces older sampling windows',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ const sample=(revision:number)=>context.tool('inspect_asset',{},[0,1,2,3,4].flatMap(referenceFrame=>[text({evidenceId:'clip',mediaType:'video',referenceFrame,time:referenceFrame*.1+revision}),{type:'inputImage',imageUrl:'data:image/jpeg;base64,frame'+revision+'-'+referenceFrame}]));
+ sample(0);sample(1);
+ const packet=context.packet('Replicate the observed book transition');
+ assert.equal(packet.images.length,5);
+ assert.equal(JSON.parse(packet.text).imageDirectory.length,5);
+ assert.ok(packet.images.every(image=>image.type==='image'&&image.url.includes('frame1-')));
+});

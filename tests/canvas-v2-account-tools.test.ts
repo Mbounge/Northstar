@@ -101,3 +101,16 @@ test('account image inspection sends fetched pixels rather than a remote image U
   assert.equal(pixels, `data:image/png;base64,${bytes.toString('base64')}`);
   await assert.rejects(readAccountAssetPixels('https://account.example/missing.png', new AbortController().signal, async () => new Response('', { status: 404 })), /could not be loaded/);
 });
+
+
+test('source splash and onboarding recordings accompany the original ordered flow without becoming screenshots',async()=>{
+ const {normalizeAppDataRows}=await import('../lib/app-data/canvas-v2-catalog');
+ const apps=normalizeAppDataRows([{app_name:'Recorded app',app_sessions:[{platform:'mobile',session_type:'onboarding',steps_data:[{step:1,image_url:'https://account.example/first.png'},{step:2,image_url:'https://account.example/second.png'}],flows_data:{media:[{role:'app_splash',kind:'video',url:'https://account.example/splash.mp4',duration_seconds:2},{role:'onboarding_journey',kind:'video',url:'https://account.example/journey.mp4'},{role:'unsafe',kind:'video',url:'javascript:alert(1)'}]}}]}],'tenant-a');
+ const app=apps[0],flow=app.flows[0];
+ const result=await readAccountTools({tenantId:'tenant-a',apps},parseAccountQuery({operation:'flow-screens',appId:app.id,flowId:flow.id,offset:1,limit:1}));
+ assert.equal(result.flows[0].screens.length,2);assert.equal(result.evidence.filter(asset=>asset.kind==='screenshot').length,2);
+ const videos=result.evidence.filter(asset=>asset.mediaType==='video');assert.equal(videos.length,2);assert.ok(videos.every(asset=>asset.source?.permission==='authorized'));
+ const model=accountResultForModel(result,1);assert.equal(model.screens.length,1);assert.equal(model.evidence.filter(asset=>asset.mediaType==='video').length,2);
+ assert.ok(model.flows[0].media?.every(clip=>clip.url.startsWith('northstar-asset:')));assert.ok(!JSON.stringify(model.flows).includes('account.example'));
+ assert.equal((await readAccountTools({tenantId:'tenant-a',apps},parseAccountQuery({operation:'flow-screens',appId:'wrong-tenant',flowId:flow.id}))).evidence.length,0);
+});

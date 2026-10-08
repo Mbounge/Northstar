@@ -195,3 +195,15 @@ test('human input interrupts live review without rolling back the new product st
  await expect(page.getByText('The live review yielded to your interaction without changing the screen.',{exact:true})).toBeVisible({timeout:90000});
  await expect(page.frameLocator('iframe[title="Interactive motion study"]').getByText('0% open',{exact:true})).toBeVisible();
 });
+
+
+test('procedural motion chooses live review automatically and leaves the screen usable',async({page})=>{
+ await page.goto('/canvas-v2-e2e/codex');
+ await page.getByLabel('Message North Star').fill('screen procedural auto');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(page.getByText('Verified automatic live review; the animated screen is ready to use.',{exact:true})).toBeVisible({timeout:60000});
+ const screen=page.frameLocator('iframe[title="Interactive motion study"]');
+ await expect(screen.getByText('100% open',{exact:true})).toBeVisible();
+ await screen.getByRole('button',{name:'Close book',exact:true}).click();
+ await expect(screen.getByText('0% open',{exact:true})).toBeVisible();
+});

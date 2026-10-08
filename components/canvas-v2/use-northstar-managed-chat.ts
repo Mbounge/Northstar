@@ -18,7 +18,7 @@ import { parseCodexCanvasPatch, codexCompositionViewport, codexMediaInventory, r
 import { CODEX_NATIVE_CANVAS_GRAMMAR } from '@/lib/canvas-v2/northstar-canvas-grammar';
 import { buildCanvasV2IslandRegistry } from '@/lib/canvas-v2/island-registry';
 import { canvasV2MeasuredConnectorDirectory } from '@/lib/canvas-v2/model-context';
-import { readCanvasV2ScreenAssetPixels, readCanvasV2VideoPoster } from '@/lib/canvas-v2/screen-asset-pixels';
+import { readCanvasV2ScreenAssetPixels, readCanvasV2VideoPoster, readCanvasV2VideoReferenceFrames } from '@/lib/canvas-v2/screen-asset-pixels';
 import { canvasV2ScreenPlacementContext } from '@/lib/canvas-v2/screen-placement-context';
 import { compactCanvasV2WorkingContextForModel, type CanvasV2WorkingContext, type CanvasV2SelectionPolicy } from '@/lib/canvas-v2/working-context';
 import { parseAccountQuery, accountResultForModel, AccountToolHandles, readAccountAssetPixels, type AccountResult } from '@/lib/canvas-v2/account-tools';
@@ -33,7 +33,7 @@ import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, canvasV2ScreenPatch
 import { inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion } from './interactive-screen';
 import { CANVAS_V2_MAX_FEEDBACK_TARGETS, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking, type CanvasV2ObjectFeedbackTarget, CANVAS_V2_SCREEN_FEEDBACK, canvasV2ScreenFeedbackContext, parseCanvasV2ScreenFeedbackTarget, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
 import { validateCanvasV2ProductIdentity, type CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
-import type { ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
+import { canvasV2ScreenMotionReviewMode, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
 import { findCanvasV2OpenPlacement } from '@/lib/canvas-v2/multiplayer-placement';
 import { serializeCanvasV2NativeScene, canvasV2NativeSceneAbsoluteBounds } from '@/lib/canvas-v2/native-scene';
 import { CANVAS_V2_WORKSPACE } from '@/lib/canvas-v2/workspace-coordinate-space';
@@ -179,8 +179,8 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const asset = assets.current.get(string(args.evidenceId)) ?? engine.readCommittedRevision().evidence.find(a => a.id === args.evidenceId);
         if (!asset || asset.source?.permission === 'unavailable') throw new Error('Read that account source or canvas asset before inspecting it.');
         if (asset.mediaType === 'video' || asset.mimeType?.startsWith('video/')) {
-          const frame=await readCanvasV2VideoPoster(asset.originalUrl||asset.url,signal);
-          return [{type:'input_text',text:JSON.stringify({evidenceId:asset.id,label:asset.label,source:asset.source,mediaType:'video',width:frame.width,height:frame.height,duration:frame.duration,time:frame.time,note:'Actual initial frame of retained video. This establishes frame appearance only; it does not establish motion or playback quality.'})},{type:'input_image',image_url:frame.pixels}];
+          const frames=await readCanvasV2VideoReferenceFrames(asset.originalUrl||asset.url,signal,args.sampleTimesSeconds as number[]|undefined);
+          return frames.flatMap((frame,index)=>[{type:'input_text',text:JSON.stringify({evidenceId:asset.id,label:asset.label,source:asset.source,app:asset.app,flow:asset.flow,mediaType:'video',referenceFrame:index,referenceFrameCount:frames.length,width:frame.width,height:frame.height,duration:frame.duration,requestedTime:frame.requestedTime,time:frame.time,note:'Actual timestamped frame of the retained recording. Compare temporal states to infer movement, transitions and sequence; request closer timestamps around an effect. A recording does not identify its original implementation. Recreate requested effects as responsive product behavior, not video playback. The original canvas player is untouched.'})},{type:'input_image',image_url:frame.pixels}]);
         }
         const pixels = inspectedPixels.current.get(asset.id) ?? await readAccountAssetPixels(asset.url, signal);
         inspectedPixels.current.set(asset.id, pixels);
@@ -228,10 +228,11 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         requireCodexCanvasReadRevision(readRevision.current, revision.id);
         const item = readCanvasV2Screens(revision.document.html).find(item => item.nodeId === args.nodeId);
         if (!item || item.screen.simulation) throw new Error('Choose a current authored screen to review its animation timeline.');
-        const frames = await captureCanvasV2ScreenMotion(item.nodeId, item.encoded, signal, typeof args.triggerSelector === 'string' ? args.triggerSelector : undefined, args.mode==='live'?(Array.isArray(args.sampleTimesMs)?args.sampleTimesMs as number[]:[0,160,420]):undefined);
+        const motionMode=canvasV2ScreenMotionReviewMode(item.screen,args.mode);
+        const frames = await captureCanvasV2ScreenMotion(item.nodeId, item.encoded, signal, typeof args.triggerSelector === 'string' ? args.triggerSelector : undefined, motionMode==='live'?(Array.isArray(args.sampleTimesMs)?args.sampleTimesMs as number[]:[]):undefined);
         if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during motion review. Read it again.');
         if (frames.reduce((size, frame) => size + frame.image.length, 0) > 8_000_000) throw new Error('Motion captures exceed the transport budget. Review a smaller viewport.');
-        return frames.flatMap(frame => [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, viewport: { width: item.screen.width, height: item.screen.height }, motionFrame: frame.progress, motionFrameCount:frames.length, state: frame.state, referenceAssetIds: item.screen.referenceAssetIds, note: args.mode==='live'?'Actual elapsed-time rendered samples. Inspect real CSS, Web Animation, SVG and JavaScript/canvas changes and actualElapsedMs. Media elements and authored rendering are reported separately. These samples do not establish frame rate or reduced-motion behavior.':'Actual Web Animations timeline sample. Inspect position, opacity, clipping and continuity across all three frames. Playback restored. JavaScript loops, GIF/video, input interruption, reduced-motion behavior and frame rate are not established by these samples; test these separately when relevant.' }) }, { type: 'input_image', image_url: frame.image }]);
+        return frames.flatMap(frame => [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, viewport: { width: item.screen.width, height: item.screen.height }, motionFrame: frame.progress, motionFrameCount:frames.length, captureMode:motionMode, state: frame.state, referenceAssetIds: item.screen.referenceAssetIds, note: motionMode==='live'?'Actual elapsed-time rendered samples. Inspect real CSS, Web Animation, SVG and JavaScript/canvas changes and actualElapsedMs. Media elements and authored rendering are reported separately. These samples do not establish frame rate or reduced-motion behavior.':'Captured Web Animations timeline sample; paused states belong to the sampled frames, not necessarily current playback. Use inspect for current playback state. Inspect position, opacity, clipping and continuity across all three frames. Playback restored. JavaScript loops, GIF/video, input interruption, reduced-motion behavior and frame rate are not established by these samples; test these separately when relevant.' }) }, { type: 'input_image', image_url: frame.image }]);
       }
       if (action.name === 'canvas_screen_interact') {
         const revision = engine.readCommittedRevision();

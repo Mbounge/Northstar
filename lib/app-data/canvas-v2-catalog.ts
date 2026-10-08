@@ -28,6 +28,8 @@ export interface AppDataJourneySegment {
   screenCount: number;
 }
 
+export interface AppDataFlowMedia { id:string; role:string; url:string; durationSeconds?:number; }
+
 export interface AppDataFlow {
   id: string;
   name: string;
@@ -44,6 +46,8 @@ export interface AppDataFlow {
   /** True when this candidate contains the shared entry and a complete branch. */
   completeJourney?: boolean;
   screens: AppDataScreen[];
+  /** Session recordings accompany the flow; they are not ordered screenshots. */
+  media?: AppDataFlowMedia[];
 }
 
 export interface AppDataApp {
@@ -361,7 +365,14 @@ export function normalizeAppDataRows(rows: UnknownRecord[], tenantId: string): A
       const platform = text(session, ["platform"]);
       const sessionType = text(session, ["session_type", "flow_type", "type"]);
       const storagePrefix = text(session, ["storage_prefix", "storagePrefix"]);
-      const specificFlows = taxonomyFlows(session, tenantId, name, platform, sessionType);
+      const rawMedia=record(session.flows_data)?records(session.flows_data.media):[];
+      const media:AppDataFlowMedia[]=rawMedia.flatMap((asset,index)=>{
+        const url=text(asset,['url']),role=text(asset,['role']);
+        if(asset.kind!=='video'||!url||!role||!imageUrl(url))return [];
+        const duration=Number(asset.duration_seconds);
+        return [{id:id(tenantId,name,platform,sessionType,'video',role,index),role,url,...(Number.isFinite(duration)&&duration>0?{durationSeconds:duration}:{})}];
+      });
+      const specificFlows = taxonomyFlows(session, tenantId, name, platform, sessionType).map(flow=>({...flow,...(media.length?{media}:{})}));
       const rawSessionScreens = sourceScreens(session);
       if (!rawSessionScreens.length) return specificFlows;
       const uniqueSessionScreens = uniqueRawScreens(rawSessionScreens);
@@ -376,6 +387,7 @@ export function normalizeAppDataRows(rows: UnknownRecord[], tenantId: string): A
         platform,
         sessionType,
         scope: "session",
+        ...(media.length?{media}:{}),
         taxonomyPath: [sessionLabel],
         descendantFlowCount: specificFlows.filter((flow) => flow.scope === "flow").length,
         sourceScreenCount: rawSessionScreens.length,

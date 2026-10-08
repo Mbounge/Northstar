@@ -5,6 +5,13 @@ import { isCanvasV2ScreenVideoBytes } from './screen-asset-pixels';
 export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; motionSessionId?: string; sampleTimesMs?: number[] };
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
 
+/** Holding CSS does not hold JavaScript's state/timers. Default those screens
+ * to elapsed capture; pure CSS/Web Animations can still use deterministic seeking. */
+export function canvasV2ScreenMotionReviewMode(screen:Pick<CanvasV2InteractiveScreen,'javascript'>,requested?:unknown):'live'|'timeline' {
+  if(requested==='timeline')return 'timeline';
+  return requested==='live'||/\b(?:requestAnimationFrame|setTimeout|setInterval)\s*\(/.test(screen.javascript)?'live':'timeline';
+}
+
 /** Opaque origin, no host APIs or cookies, no remote dependencies. Only registered
  * image bytes are substituted by the host; model code never receives their URLs. */
 export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string) {
@@ -89,16 +96,20 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const {requestId,command}=e.data;
       try {
         if(command.action==='live-motion'){
-          const times=command.sampleTimesMs||[0,160,420];
-          if(!Array.isArray(times)||times.length<2||times.length>6||times[0]!==0||times.some((time,i)=>!Number.isInteger(time)||time<0||time>2500||(i>0&&time<=times[i-1])))throw Error('Choose 2–6 increasing elapsed samples from 0 to 2500 ms.');
+          let times=command.sampleTimesMs;
+          if(times&&(!Array.isArray(times)||times.length<2||times.length>6||times[0]!==0||times.some((time,i)=>!Number.isInteger(time)||time<0||time>2500||(i>0&&time<=times[i-1]))))throw Error('Choose 2–6 increasing elapsed samples from 0 to 2500 ms.');
           if(motionSession)throw Error('Finish timeline sampling before live motion review.');
           const inputSequence=humanInputSequence,started=performance.now(),samples=[];
           if(command.selector){const trigger=document.querySelector(command.selector);if(!trigger||!visible(trigger)||trigger.disabled)throw Error('Choose a visible motion trigger.');trigger.click()}
+          void document.body.offsetHeight;
+          const active=document.getAnimations(),continuous=active.some(a=>!Number.isFinite(a.effect?.getComputedTiming().iterations));
+          const requestedWindow=Math.max(240,...active.map(a=>{const t=a.effect?.getComputedTiming(),rate=Math.abs(a.playbackRate)||1;return t&&Number.isFinite(t.endTime)?Math.max(0,(t.endTime-Number(a.currentTime||0))/rate):Number(t?.duration||900)/rate;}));
+          if(!times){const end=active.length?Math.min(2500,Math.ceil(requestedWindow)+30):900;times=[0,Math.round(end/2),end];}
           for(const requestedMs of times){
             const remaining=requestedMs-(performance.now()-started);if(remaining>0)await new Promise(resolve=>setTimeout(resolve,remaining));
             if(humanInputSequence!==inputSequence)throw Error('Live motion review was interrupted. Preserve the user interaction.');
             const actualElapsedMs=performance.now()-started,captured=snapshot();
-            samples.push({...captured,motionSample:{method:'Live elapsed-time DOM/canvas samples. No timeline seeking or playback substitution; this is not a frame-rate measurement.',requestedMs,actualElapsedMs,snapshotDurationMs:performance.now()-started-actualElapsedMs,documentHidden:document.hidden}});
+            samples.push({...captured,motionSample:{method:'Live elapsed-time DOM/canvas samples. No timeline seeking or playback substitution; this is not a frame-rate measurement.',requestedMs,actualElapsedMs,snapshotDurationMs:performance.now()-started-actualElapsedMs,documentHidden:document.hidden,windowDurationMs:times.at(-1),continuous,truncated:!command.sampleTimesMs&&requestedWindow>2500}});
             if(samples.reduce((length,sample)=>length+sample.html.length+sample.css.length,0)>12000000)throw Error('Live motion samples exceed the capture budget. Use fewer samples.');
           }
           parent.postMessage({protocol,token,requestId,result:{samples}},'*');return;

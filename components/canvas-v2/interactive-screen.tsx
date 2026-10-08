@@ -29,7 +29,7 @@ export async function inspectCanvasV2Screen(nodeId: string, encoded: string, com
   // Wait only for this mounted object's brief render boundary, never accept a
   // stale source or resurrect a removed object.
   const renderStarted = Date.now();
-  while (controller && controller.encoded !== encoded && controller.revisionReady?.encoded !== encoded && Date.now() - renderStarted < 500) {
+  while ((!controller || (controller.encoded !== encoded && controller.revisionReady?.encoded !== encoded)) && Date.now() - renderStarted < 500) {
     await new Promise(resolve => setTimeout(resolve, 10));
     signal.throwIfAborted(); controller = controllers.get(nodeId);
   }
@@ -111,7 +111,7 @@ async function rasterizeScreenSnapshot(nodeId:string,encoded:string,signal:Abort
 
 export async function captureCanvasV2ScreenMotion(nodeId: string, encoded: string, signal: AbortSignal, triggerSelector?: string, liveTimes?: number[]) {
   if(liveTimes){
-    const result=await inspectCanvasV2Screen(nodeId,encoded,{action:'live-motion',selector:triggerSelector,sampleTimesMs:liveTimes},signal);
+    const result=await inspectCanvasV2Screen(nodeId,encoded,{action:'live-motion',selector:triggerSelector,sampleTimesMs:liveTimes.length?liveTimes:undefined},signal);
     if(!Array.isArray(result.samples))throw new Error('The screen returned no live motion samples.');
     const frames=[];for(let i=0;i<result.samples.length;i++)frames.push({progress:i/(result.samples.length-1),...await rasterizeScreenSnapshot(nodeId,encoded,signal,result.samples[i] as ScreenResult,false)});return frames;
   }

@@ -24,7 +24,7 @@ export class CreativeAssetScenario {
       this.stage = this.gif ? 'create' : 'inspect';
       if (!this.gif) { this.peer.tool('inspect_asset', { evidenceId: this.assetId }); return; }
     }
-    if (this.stage === 'inspect') { this.stage = 'create'; this.peer.tool('canvas_read', {}); return; }
+    if (this.stage === 'inspect') { if(this.video&&(parts.filter(part=>part.type==='inputImage').length!==5||new Set(parts.filter(part=>part.type==='inputImage').map(part=>part.imageUrl)).size<2)){this.peer.finish('Asset check failed: timestamped reference frames missing');return;} this.stage = 'create'; this.peer.tool('canvas_read', {}); return; }
     if (this.stage === 'create') {
       this.stage = 'runtime';
       this.peer.tool('canvas_screen', { title: this.video?'Retained video playback':this.gif ? 'Retained GIF playback' : 'Retained canvas image', width: 390, height: 844, html: `<main><h1>Retained material</h1>${this.video?`<video id="material" src="northstar-asset:${this.assetId}" aria-label="Chosen canvas clip" muted playsinline loop></video><button id="play">Play clip</button>`:`<img id="material" src="northstar-asset:${this.assetId}" alt="Chosen canvas material">`}<button id="save">Save direction</button></main>`, css: 'main{padding:28px}img,video{width:100%;height:220px;object-fit:contain}button{border:0;border-radius:24px;background:#7255e8;color:white;padding:16px;margin-top:28px}', javascript: (this.video?"document.querySelector('#play').addEventListener('click',()=>document.querySelector('video').play()) ;":"")+"document.querySelector('#save').addEventListener('click',e=>e.target.textContent='Direction saved')", referenceAssetIds: [this.assetId], summary: 'Retain and bind the chosen material' }); return;

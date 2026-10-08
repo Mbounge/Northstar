@@ -95,7 +95,13 @@ function packetsForResult(apps: readonly AppDataApp[], flows: readonly AppDataFl
     for (const flow of appFlows) {
       const packetId = `packet:capture:${flow.id}`;
       const source = sourceForApp(app, "capture", flow.id, `${app.name} · ${flow.name}`);
-      const assets = [evidenceForIcon(app, packetId, source), ...flow.screens.map((screen) => evidenceForScreen(screen, packetId, source))]
+      const assets = [evidenceForIcon(app, packetId, source), ...flow.screens.map((screen) => evidenceForScreen(screen, packetId, source)), ...(flow.media??[]).map(clip=>({
+        id:`media:${clip.id}`,url:clip.url,originalUrl:clip.url,label:`${app.name} · ${clip.role.replace(/_/g,' ')}`,app:app.name,
+        description:`${[flow.platform,flow.sessionType].filter(Boolean).join(' ')} session recording. Inspect timestamped frames before describing motion.`,
+        kind:'image' as const,authority:'observed' as const,mediaType:'video' as const,mimeType:new URL(clip.url).pathname.endsWith('.webm')?'video/webm':'video/mp4',packetId,source,
+        limitations:['This is a recording of the source session; its duration and sequence do not identify an exact branch or original animation implementation.'],
+        tags:[flow.platform,flow.sessionType,'session-recording',clip.role].filter((value):value is string=>Boolean(value)),
+      }))]
         .filter((asset): asset is CanvasV2EvidenceAsset => Boolean(asset));
       packets.push({
         schema: CANVAS_V2_EVIDENCE_PACKET_SCHEMA,

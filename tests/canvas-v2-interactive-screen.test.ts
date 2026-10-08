@@ -170,3 +170,24 @@ test('retained video binds inside the isolated screen without allowing network m
   assert.throws(()=>validateCanvasV2Screen({...video,html:'<video src="'+data+'"></video>'}),/handles/);
   await assert.rejects(readCanvasV2ScreenAssetPixels('https://example.com/large.mp4',new AbortController().signal,async()=>new Response(bytes,{headers:{'Content-Type':'video/mp4','Content-Length':'12000001'}})),/12 MB/);
 });
+
+
+test('timed or procedural product states default to live review instead of pausing only their CSS clock',async()=>{
+ const {canvasV2ScreenMotionReviewMode}=await import('../lib/canvas-v2/interactive-screen-runtime');
+ assert.equal(canvasV2ScreenMotionReviewMode({javascript:'button.onclick=()=>el.animate([],{duration:300})'}),'timeline');
+ assert.equal(canvasV2ScreenMotionReviewMode({javascript:'setTimeout(()=>closeReader(),400)'}),'live');
+ assert.equal(canvasV2ScreenMotionReviewMode({javascript:'requestAnimationFrame(draw)'}),'live');
+ assert.equal(canvasV2ScreenMotionReviewMode({javascript:'setInterval(update,20)'}),'live');
+ assert.equal(canvasV2ScreenMotionReviewMode({javascript:''},'live'),'live');
+ assert.equal(canvasV2ScreenMotionReviewMode({javascript:'setTimeout(close,400)'},'timeline'),'timeline');
+});
+
+
+test('video reference sampling plans bounded actual timestamps around transitions',async()=>{
+ const {canvasV2VideoReferenceTimes}=await import('../lib/canvas-v2/screen-asset-pixels');
+ assert.deepEqual(canvasV2VideoReferenceTimes(10),[0,2.45,4.9,7.3500000000000005,9.8]);
+ assert.deepEqual(canvasV2VideoReferenceTimes(10,[1,1.1,1.3]),[1,1.1,1.3]);
+ assert.equal(canvasV2VideoReferenceTimes(7200).at(-1),3600);
+ for(const duration of [0,-1,Infinity,NaN])assert.throws(()=>canvasV2VideoReferenceTimes(duration));
+ for(const times of [[1],[0,10],[2,1],[0,Infinity],[0,0],Array(9).fill(1)])assert.throws(()=>canvasV2VideoReferenceTimes(10,times));
+});
