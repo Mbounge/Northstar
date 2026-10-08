@@ -72,7 +72,7 @@ export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; style
 export function canvasV2ScreenLiveEdit(before: import('./interactive-screen').CanvasV2InteractiveScreen, after: import('./interactive-screen').CanvasV2InteractiveScreen, parser: DOMParser): CanvasV2ScreenLiveEdit | undefined {
   if (before.simulation || after.simulation || before.title !== after.title || before.width !== after.width || before.height !== after.height
     || before.javascript !== after.javascript || JSON.stringify(before.referenceAssetIds) !== JSON.stringify(after.referenceAssetIds)
-    || before.productIdentityId !== after.productIdentityId) return;
+    || before.productIdentityId !== after.productIdentityId || before.referenceIntent !== after.referenceIntent || before.referenceAppearance !== after.referenceAppearance) return;
   if (before.html === after.html) {
     if (before.css !== after.css) return { selector: '', styles: {}, stylesheet: after.css };
     if (before.device !== after.device) return { selector: '', styles: {}, presentationOnly: true };

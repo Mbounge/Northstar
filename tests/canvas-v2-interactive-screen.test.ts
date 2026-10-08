@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { encodeCanvasV2Screen, parseCanvasV2Screen, readCanvasV2Screens, SCREEN_ATTRIBUTE, canvasV2ScreenReviewAssets, canvasV2ScreenAssetToken, canvasV2ScreenBoundAssets, validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
 import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, canvasV2ScreenPatch, validateCanvasV2ScreenJavaScript } from '../lib/canvas-v2/interactive-screen-patch';
-import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
+import { buildCanvasV2ScreenRuntime, fixedScreenMediaQuery } from '../lib/canvas-v2/interactive-screen-runtime';
 import { validateCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from '../lib/canvas-v2/artifact-safety';
 import { applyCanvasV2SourcePatch } from '../lib/canvas-v2/source-patch';
 import { applyCanvasV2NativeSceneMutation, copyCanvasV2NativeSelection, pasteCanvasV2NativeClipboard, serializeCanvasV2NativeScene, type CanvasV2NativeSceneDocument } from '../lib/canvas-v2/native-scene';
@@ -215,4 +215,20 @@ test('a new faithful copy requires observed identity lineage before authoring, w
  const identity={id:'observed',name:'Referenced product',platform:'mobile' as const,typography:'Observed font and weights',visualLanguage:'Observed palette',components:'Original visible content and icon conventions',motion:'Requested sheet transition',tokens:{},referenceAssetIds:['reference']};
  assert.doesNotThrow(()=>canvasV2ScreenPatch(root,{...faithful,productIdentityId:'observed'},[reference],{x:0,y:0},[identity]));
  assert.doesNotThrow(()=>canvasV2ScreenPatch(root,{...screen,referenceIntent:'original'},[],{x:0,y:0}));
+});
+
+
+test('faithful product appearance pins scheme queries independently of workspace or system preferences', () => {
+  assert.equal(fixedScreenMediaQuery('screen and (prefers-color-scheme: dark) and (min-width: 300px)', 'light', null), 'screen and (max-width: 0px) and (min-width: 300px)');
+  assert.equal(fixedScreenMediaQuery('not (prefers-color-scheme: light), (prefers-color-scheme: dark)', 'dark', null), 'not (max-width: 0px), (min-width: 0px)');
+  assert.equal(fixedScreenMediaQuery('(PREFERS-COLOR-SCHEME: LIGHT) and (prefers-reduced-motion: reduce)', 'light', 'reduce'), '(min-width: 0px) and (min-width: 0px)');
+  assert.equal(fixedScreenMediaQuery('(prefers-reduced-motion: no-preference)', 'dark', 'reduce'), '(max-width: 0px)');
+  assert.equal(fixedScreenMediaQuery('(prefers-color-scheme: dark) and (prefers-reduced-motion: reduce)', null, null), '(prefers-color-scheme: dark) and (prefers-reduced-motion: reduce)');
+  assert.equal(fixedScreenMediaQuery('(prefers-color-scheme: reduce)', 'light', null), '(prefers-color-scheme: reduce)', 'invalid feature values remain invalid');
+  for (const appearance of ['light', 'dark'] as const) {
+    const runtime = buildCanvasV2ScreenRuntime({...screen,referenceIntent:'faithful',referenceAppearance:appearance}, new Map(), 'theme-test');
+    assert.ok(runtime.includes('const productAppearance='+JSON.stringify(appearance)));
+  }
+  const original = buildCanvasV2ScreenRuntime({...screen,referenceIntent:'original',referenceAppearance:'light'}, new Map(), 'theme-test');
+  assert.ok(original.includes('const productAppearance=null'), 'an original or inspired product can deliberately own its theme behavior');
 });

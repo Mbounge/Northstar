@@ -23,6 +23,16 @@ export function canvasV2ScreenMotionReviewMode(screen:Pick<CanvasV2InteractiveSc
   return requested==='live'||/\b(?:requestAnimationFrame|setTimeout|setInterval)\s*\(/.test(screen.javascript)?'live':'timeline';
 }
 
+/** A faithful product owns its appearance. Neither workspace chrome nor the
+ * browser's system theme may select an unrequested alternate product palette.
+ * Width substitutions preserve compound/not queries in the bounded viewport. */
+export function fixedScreenMediaQuery(query: string, appearance: 'light' | 'dark' | null, motion: 'reduce' | 'no-preference' | null): string {
+  return query.replace(/\(\s*prefers-(color-scheme|reduced-motion)\s*:\s*(light|dark|reduce|no-preference)\s*\)/gi, (feature, kind: string, value: string) => {
+    const selected = kind.toLowerCase() === 'color-scheme' ? appearance : motion;
+    return selected && (kind.toLowerCase() === 'color-scheme' ? ['light','dark'] : ['reduce','no-preference']).includes(value.toLowerCase()) ? value.toLowerCase() === selected ? '(min-width: 0px)' : '(max-width: 0px)' : feature;
+  });
+}
+
 /** Opaque origin, no host APIs or cookies, no remote dependencies. Only registered
  * image bytes are substituted by the host; model code never receives their URLs. */
 export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '') {
@@ -35,6 +45,21 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     // Private journey checks can exercise both motion preferences without
     // changing the user's OS settings or their live canvas runtime.
     const testMotionPreference=${JSON.stringify(motionPreference ?? null)};
+    const productAppearance=${JSON.stringify(screen.referenceIntent === 'faithful' && screen.referenceAppearance !== 'mixed' ? screen.referenceAppearance ?? null : null)};
+    const fixedMediaQuery=${fixedScreenMediaQuery.toString()};
+    if(productAppearance)document.documentElement.style.colorScheme=productAppearance;
+    const rewriteMedia=query=>fixedMediaQuery(query,productAppearance,testMotionPreference);
+    const nativeMatchMedia=window.matchMedia.bind(window);
+    if(productAppearance||testMotionPreference)window.matchMedia=query=>nativeMatchMedia(rewriteMedia(query));
+    const rewriteRules=rules=>{for(const rule of rules){if(rule instanceof CSSMediaRule){const next=rewriteMedia(rule.media.mediaText);if(next!==rule.media.mediaText)rule.media.mediaText=next}if(rule.cssRules)rewriteRules(rule.cssRules)}};
+    const keepProductMedia=()=>{if(productAppearance||testMotionPreference)for(const sheet of document.styleSheets)rewriteRules(sheet.cssRules)};
+    keepProductMedia();
+    // Newly authored styles and local stylesheet patches obey the same product
+    // appearance, without remounting or resetting inputs, scroll or mock state.
+    if(productAppearance||testMotionPreference)new MutationObserver(records=>{
+      const changed=records.some(record=>record.target instanceof HTMLStyleElement||record.target.parentElement?.closest('style')||[...record.addedNodes].some(node=>node instanceof Element&&(node.tagName==='STYLE'||node.querySelector('style'))));
+      if(changed)keepProductMedia();
+    }).observe(document.documentElement,{subtree:true,childList:true,characterData:true});
     if(testMotionPreference){
       // Private checks must not steal typing focus or play sound. They are not
       // evidence for keyboard/focus behavior, which needs a separate check.
@@ -44,10 +69,6 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       document.querySelectorAll('video,audio').forEach(el=>el.muted=true);
       const nativePlay=HTMLMediaElement.prototype.play;
       HTMLMediaElement.prototype.play=function(){this.muted=true;return nativePlay.call(this)};
-      const nativeMatchMedia=window.matchMedia.bind(window);
-      window.matchMedia=query=>nativeMatchMedia(query.replace(/\\(\\s*prefers-reduced-motion\\s*:\\s*(reduce|no-preference)\\s*\\)/gi,(_,value)=>value.toLowerCase()===testMotionPreference?'(min-width: 0px)':'(max-width: -1px)'));
-      const rewriteRules=rules=>{for(const rule of rules){if(rule instanceof CSSMediaRule)rule.media.mediaText=rule.media.mediaText.replace(/\\(\\s*prefers-reduced-motion\\s*:\\s*(reduce|no-preference)\\s*\\)/gi,(_,value)=>value.toLowerCase()===testMotionPreference?'(min-width: 0px)':'(max-width: -1px)');if(rule.cssRules)rewriteRules(rule.cssRules)}};
-      for(const sheet of document.styleSheets)rewriteRules(sheet.cssRules);
     }
     // Offscreen/background frames can suspend RAF. Review must still respond
     // without moving the user's camera or tab. Force layout and bound settling.
@@ -92,12 +113,12 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       return [[(l+rr)/2,(t+b)/2],[l+Math.min(3,(rr-l)/2),t+Math.min(3,(b-t)/2)],[rr-Math.min(3,(rr-l)/2),b-Math.min(3,(b-t)/2)]].some(([x,y])=>{const hit=document.elementFromPoint(x,y);return hit===el||Boolean(hit&&el.contains(hit))});
     };
     const motionInfo = () => ({reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,hasReducedMotionStyles:[...document.querySelectorAll('style')].some(el=>el.textContent.includes('prefers-reduced-motion')),authoredRendering:${JSON.stringify({requestAnimationFrame:/\brequestAnimationFrame\s*\(/.test(screen.javascript),canvas:/<canvas\b/i.test(screen.html),svg:/<svg\b/i.test(screen.html)})},media:{videos:document.querySelectorAll('video').length,gifs:[...document.images].filter(el=>el.src.startsWith('data:image/gif;')).length},animations:document.getAnimations().slice(0,40).map(a=>{const t=a.effect?.getComputedTiming(),el=a.effect?.target;return {mechanism:typeof CSSAnimation!=='undefined'&&a instanceof CSSAnimation?'css-keyframes':typeof CSSTransition!=='undefined'&&a instanceof CSSTransition?'css-transition':'web-animation',selector:el instanceof Element?selectorFor(el):undefined,playState:a.playState,currentTime:typeof a.currentTime==='number'?a.currentTime:null,duration:t?.duration,iterations:Number.isFinite(t?.iterations)?t.iterations:'infinite',easing:t?.easing}})});
-    const reviewRegions = () => [...document.querySelectorAll('nav,[role="navigation"],header,[role="banner"],img')].filter(el=>visible(el)&&(el.tagName!=='IMG'||/logo|mark|brand/i.test(el.alt||''))).slice(0,6).map(el=>({selector:selectorFor(el),label:el.tagName==='IMG' ? el.alt : el.getAttribute('aria-label')||el.tagName.toLowerCase(),rect:describe(el).rect}));
-    const componentReadings = () => [...document.querySelectorAll('nav,[role="navigation"],header,[role="banner"],h1,h2')].filter(visible).slice(0,12).map(el=>{
+    const reviewRegions = () => [...new Set([...document.querySelectorAll('[role="dialog"],[aria-modal="true"]'),...document.querySelectorAll('nav,[role="navigation"],header,[role="banner"],img')])].filter(el=>visible(el)&&(el.tagName!=='IMG'||/logo|mark|brand/i.test(el.alt||''))).slice(0,6).map(el=>({selector:selectorFor(el),label:el.tagName==='IMG' ? el.alt : el.getAttribute('aria-label')||el.tagName.toLowerCase(),rect:describe(el).rect}));
+    const componentReadings = () => [...new Set([...document.querySelectorAll('[role="dialog"],[aria-modal="true"]'),...document.querySelectorAll('nav,[role="navigation"],header,[role="banner"],h1,h2')])].filter(visible).slice(0,12).map(el=>{
       const style=getComputedStyle(el),typography=node=>{const s=getComputedStyle(node);return {fontFamily:s.fontFamily,fontSize:s.fontSize,fontWeight:s.fontWeight,lineHeight:s.lineHeight,letterSpacing:s.letterSpacing,color:s.color}};
-      return {selector:selectorFor(el),rect:describe(el).rect,typography:typography(el),gap:style.gap,padding:style.padding,controls:[...el.querySelectorAll('button,a,[role="button"]')].filter(visible).slice(0,8).map(control=>({selector:selectorFor(control),label:control.getAttribute('aria-label')||control.innerText,rect:describe(control).rect,typography:typography(control),icons:[...control.querySelectorAll('svg,img')].slice(0,2).map(icon=>{const s=getComputedStyle(icon);return {kind:icon.tagName.toLowerCase(),rect:describe(icon).rect,fill:s.fill,stroke:s.stroke,strokeWidth:s.strokeWidth,viewBox:icon.getAttribute('viewBox'),label:icon.getAttribute('aria-label')||icon.getAttribute('alt')}})}))};
+      return {selector:selectorFor(el),role:el.getAttribute('role'),label:el.getAttribute('aria-label'),rect:describe(el).rect,backgroundColor:style.backgroundColor,colorScheme:style.colorScheme,borderRadius:style.borderRadius,typography:typography(el),gap:style.gap,padding:style.padding,controls:[...el.querySelectorAll('button,a,input,textarea,select,[role="button"]')].filter(visible).slice(0,8).map(control=>({selector:selectorFor(control),label:control.getAttribute('aria-label')||control.innerText,rect:describe(control).rect,typography:typography(control),icons:[...control.querySelectorAll('svg,img')].slice(0,2).map(icon=>{const s=getComputedStyle(icon);return {kind:icon.tagName.toLowerCase(),rect:describe(icon).rect,fill:s.fill,stroke:s.stroke,strokeWidth:s.strokeWidth,viewBox:icon.getAttribute('viewBox'),label:icon.getAttribute('aria-label')||icon.getAttribute('alt')}})}))};
     });
-    const inspect = () => ({fonts:[...document.fonts].map(font=>({family:font.family,weight:font.weight,style:font.style,status:font.status})),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
+    const inspect = () => ({appearance:{reference:productAppearance,canvasIndependent:true,colorScheme:getComputedStyle(document.documentElement).colorScheme},fonts:[...document.fonts].map(font=>({family:font.family,weight:font.weight,style:font.style,status:font.status})),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
     const snapshot = () => {
       let pseudoCss='';
       const clone=document.body.cloneNode(true),live=[document.body,...document.body.querySelectorAll('*')],copies=[clone,...clone.querySelectorAll('*')];
@@ -128,7 +149,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           if(typeof command.stylesheet!=='string'||command.stylesheet.length>8000000||command.stylesheet.toLowerCase().includes('</style')||/@import/i.test(command.stylesheet))throw Error('Use a retained product stylesheet.');
           const style=document.querySelector('style[data-northstar-screen-style]');
           if(!style)throw Error('The product stylesheet is unavailable.');
-          releaseMotion();style.textContent=command.stylesheet;await settle();void document.body.offsetHeight;await document.fonts.ready;
+          releaseMotion();style.textContent=command.stylesheet;keepProductMedia();await settle();void document.body.offsetHeight;await document.fonts.ready;
           parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
         }
         if(command.action==='test-sequence'){

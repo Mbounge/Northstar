@@ -766,3 +766,18 @@ test('the real single-screen review delegate receives the focused packet and rem
  },packet,{key:'fixture',model:'fixture',signal:new AbortController().signal});
  assert.deepEqual(JSON.parse(result).productChecks[0].evidenceImageNumbers,[2,3]);
 });
+
+
+test('a matching default appearance does not clear a mismatched added dialog palette', () => {
+  const context = new DiscoveryReviewContext(), text = (value: unknown) => ({type:'inputText',text:JSON.stringify(value)});
+  context.tool('canvas_screen',{referenceIntent:'faithful',referenceAppearance:'light'},[text({nodeId:'editor-theme',committed:true})]);
+  const components = [{role:'dialog',label:'Edit season goal',backgroundColor:'rgb(17, 24, 39)',colorScheme:'light'}];
+  context.tool('canvas_review',{nodeId:'editor-theme'},[text({nodeId:'editor-theme',viewport:{width:390,height:844},referenceIntent:'faithful',referenceAppearance:'light',defaultPixelAppearance:{predominantAppearance:'light'},state:{components,errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,editor'},text({nodeId:'editor-theme',defaultState:true,state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,home'}]);
+  assert.deepEqual(JSON.parse(context.packet('').text).productWork[0].state.components, components, 'the independent reviewer retains dialog surface diagnostics alongside the pixels');
+  const feedback = JSON.parse(feedbackFor()); feedback.resolvedWork=[];
+  const checks=goodVisualChecks();checks.visualChecks.palette={status:'unverified',assessment:'The editor uses dark surfaces absent from the light app reference.'};
+  feedback.productChecks=[{nodeId:'editor-theme',referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...checks,evidenceImageNumbers:[1,2],assessment:'The home is faithful but its added editor is not.'}];
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+  checks.visualChecks.palette={status:'pass',assessment:'The locally repaired editor now uses the reference light surfaces and blue actions.'};
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+});
