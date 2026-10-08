@@ -30,6 +30,6 @@ test('both private motion preferences produce syntactically valid isolated runti
  for(const preference of ['reduce','no-preference'] as const){
   const runtime=buildCanvasV2ScreenRuntime(screen,new Map(),'journey',preference);
   const scripts=[...runtime.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
-  assert.equal(scripts.length,2);for(const script of scripts)assert.doesNotThrow(()=>new Function(script[1]));
+  assert.equal(scripts.length,3);for(const script of scripts)assert.doesNotThrow(()=>new Function(script[1]));
  }
 });

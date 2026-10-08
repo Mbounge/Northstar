@@ -44,3 +44,28 @@ export async function readCanvasV2ScreenFontCss(screen: Pick<CanvasV2Interactive
   signal.throwIfAborted();
   return canvasV2ScreenFontCss(families, bytes);
 }
+
+
+/** The unique temporary family is used only by this specimen canvas, removed
+ * afterwards, and never changes Northstar's own interface typography. */
+export async function inspectCanvasV2FontPixels(pixels:string,signal:AbortSignal){
+  const {isCanvasV2FontBytes}=await import('./screen-asset-pixels');
+  if(!isCanvasV2FontBytes(pixels))throw new Error('Inspect retained valid font bytes.');
+  const family='NorthstarSpecimen'+crypto.randomUUID().replaceAll('-','');
+  const face=new FontFace(family,`url("${pixels}")`);
+  try{
+    const bounded=AbortSignal.any([signal,AbortSignal.timeout(10000)]);
+    bounded.throwIfAborted();
+    await new Promise<void>((resolve,reject)=>{
+      const aborted=()=>reject(bounded.reason);
+      bounded.addEventListener('abort',aborted,{once:true});
+      face.load().then(()=>resolve(),reject).finally(()=>bounded.removeEventListener('abort',aborted));
+    });
+    signal.throwIfAborted();document.fonts.add(face);
+    const canvas=document.createElement('canvas');canvas.width=1000;canvas.height=440;
+    const context=canvas.getContext('2d');if(!context)throw new Error('The font specimen is unavailable.');
+    context.fillStyle='#fff';context.fillRect(0,0,1000,440);context.fillStyle='#111';
+    for(const [size,text,y] of [[42,'Career · Your next season',78],[28,'Home  Explore  Goals  Profile',150],[18,'Your last 5 games · Score 12 goals',215],[36,'Aa Bb Cc Gg Mm 0123456789',300],[24,'Hamburgefontsiv · Regular glyphs',375]] as const){context.font=`${size}px "${family}"`;context.fillText(text,28,y);}
+    signal.throwIfAborted();return {pixels:canvas.toDataURL('image/png'),loaded:face.status==='loaded',note:'Actual glyph specimen from the retained font bytes. This is typeface inspection, not proof of a matching reference, source font weight, or app layout.'};
+  }finally{document.fonts.delete(face);}
+}

@@ -1,5 +1,11 @@
 import { readAccountAssetPixels } from './account-tools';
 
+export function isCanvasV2FontBytes(value:string){
+  const match=/^data:font\/(ttf|otf|woff|woff2);base64,([A-Za-z0-9+/=]+)$/.exec(value);
+  if(!match||value.length>2_800_000)return false;
+  try{const header=atob(match[2].slice(0,48));if(header.length<12)return false;return match[1]==='ttf'?header.startsWith('\0\x01\0\0'):header.startsWith({otf:'OTTO',woff:'wOFF',woff2:'wOF2'}[match[1] as 'otf'|'woff'|'woff2']);}catch{return false;}
+}
+
 const VIDEO_DATA = /^data:video\/(?:mp4|webm);base64,[A-Za-z0-9+/=]+$/;
 export function isCanvasV2ScreenVideoBytes(value: string) {
   if (!VIDEO_DATA.test(value) || value.length > 16_000_000) return false;
@@ -13,25 +19,27 @@ export function isCanvasV2ScreenVideoBytes(value: string) {
  * replace the product media. Only declared, bounded assets reach the sandbox. */
 export async function readCanvasV2ScreenAssetPixels(url: string, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<string> {
   if (/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(url) && url.length<=6_000_000) return url;
+  if(url.startsWith('data:font/')){if(!isCanvasV2FontBytes(url))throw new Error('Use a retained bounded TTF, OTF, WOFF or WOFF2 font.');return url;}
   if(VIDEO_DATA.test(url)){if(!isCanvasV2ScreenVideoBytes(url))throw new Error('Use a readable MP4 or WebM up to 12 MB inside a screen.');return url;}
   const response=await fetcher(url,{signal:AbortSignal.any([signal,AbortSignal.timeout(20_000)]),credentials:'omit'});
   if(!response.ok)throw new Error('The retained screen asset could not be loaded.');
   const mime=response.headers.get('content-type')?.split(';')[0].trim();
-  const video=mime==='video/mp4'||mime==='video/webm',limit=video?12_000_000:4_500_000;
-  const tooLarge=()=>new Error(video?'Use a video up to 12 MB inside a screen.':'Use a GIF up to 4.5 MB inside a screen.');
-  if(mime!=='image/gif' && !video) {
+  const video=mime==='video/mp4'||mime==='video/webm',font=Boolean(mime&&/^font\/(ttf|otf|woff|woff2)$/.test(mime)),limit=video?12_000_000:font?2_000_000:4_500_000;
+  const tooLarge=()=>new Error(video?'Use a video up to 12 MB inside a screen.':font?'Use a font up to 2 MB inside a screen.':'Use a GIF up to 4.5 MB inside a screen.');
+  if(mime!=='image/gif' && !video && !font) {
     // Keep normal image decoding/resizing on the existing path; use this
     // response once rather than downloading the same account image twice.
     return readAccountAssetPixels(url,signal,async()=>response);
   }
   if(Number(response.headers.get('content-length'))>limit){await response.body?.cancel();throw tooLarge();}
-  if(!response.body)throw new Error('The retained GIF has no content.');
+  if(!response.body)throw new Error('The retained asset has no content.');
   const reader=response.body.getReader(),parts:Uint8Array[]=[];let length=0;
   try{while(true){signal.throwIfAborted();const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>limit)throw tooLarge();parts.push(value);}}catch(error){await reader.cancel();throw error;}finally{reader.releaseLock();}
   const bytes=new Uint8Array(length);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.length;}
-  if(!video && !/^GIF8[79]a$/.test(String.fromCharCode(...bytes.slice(0,6))))throw new Error('The retained asset is not a readable GIF.');
+  if(!video && !font && !/^GIF8[79]a$/.test(String.fromCharCode(...bytes.slice(0,6))))throw new Error('The retained asset is not a readable GIF.');
   const chunks:string[]=[];for(let i=0;i<bytes.length;i+=32768)chunks.push(String.fromCharCode(...bytes.subarray(i,i+32768)));
   signal.throwIfAborted();const data=`data:${mime};base64,${btoa(chunks.join(''))}`;
+  if(font && !isCanvasV2FontBytes(data))throw new Error('The retained font has unsupported bytes.');
   if(video && !isCanvasV2ScreenVideoBytes(data))throw new Error('The retained asset is not a readable MP4 or WebM.');return data;
 }
 
@@ -65,7 +73,7 @@ export async function readCanvasV2VideoPoster(url: string, signal: AbortSignal) 
 export function canvasV2VideoReferenceTimes(duration:number,requested?:number[]) {
   if(!Number.isFinite(duration)||duration<=0)throw new Error('Choose a finite, readable video recording.');
   if(requested){
-    if(!Array.isArray(requested)||requested.length<2||requested.length>8||requested.some((time,i)=>!Number.isFinite(time)||time<0||time>=duration||time>3600||(i>0&&time<=requested[i-1])))throw new Error('Choose 2–8 increasing timestamps within the recording, up to one hour.');
+    if(!Array.isArray(requested)||requested.length<1||requested.length>8||requested.some((time,i)=>!Number.isFinite(time)||time<0||time>=duration||time>3600||(i>0&&time<=requested[i-1])))throw new Error('Choose 1–8 increasing timestamps within the recording, up to one hour.');
     return requested;
   }
   const end=Math.min(duration*.98,3600);
@@ -99,4 +107,36 @@ export async function readCanvasV2VideoReferenceFrames(url:string,signal:AbortSi
     }
     return frames;
   }finally{video.pause();video.removeAttribute('src');video.load();}
+}
+
+
+export function screenComparisonRect(value: unknown) {
+  const rect = value as {x:number;y:number;width:number;height:number};
+  if (!rect || ![rect.x,rect.y,rect.width,rect.height].every(v => typeof v === 'number' && Number.isFinite(v)) || rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 || rect.x + rect.width > 1 || rect.y + rect.height > 1) throw new Error('Choose a normalized crop inside each image.');
+  return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};
+}
+
+/** Matching crops make small glyphs/surfaces legible. This returns observed
+ * pixels and dimensions, never a heuristic approval or a modified reference. */
+export async function compareScreenReferencePixels(referencePixels: string, screenPixels: string, referenceRect: unknown, screenRect: unknown, signal: AbortSignal) {
+  const a = screenComparisonRect(referenceRect), b = screenComparisonRect(screenRect);
+  const load = async (pixels:string) => {
+    if (!/^data:image\/(png|jpeg|webp);base64,/.test(pixels) || pixels.length > 8_000_000) throw new Error('Compare retained still-image pixels.');
+    const image = new Image(); image.src = pixels; await image.decode(); signal.throwIfAborted();
+    if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth * image.naturalHeight > 32_000_000) throw new Error('The comparison image exceeds its pixel budget.');
+    return image;
+  };
+  const [reference,current] = await Promise.all([load(referencePixels),load(screenPixels)]);
+  const source = {x:a.x*reference.naturalWidth,y:a.y*reference.naturalHeight,width:a.width*reference.naturalWidth,height:a.height*reference.naturalHeight};
+  const target = {x:b.x*current.naturalWidth,y:b.y*current.naturalHeight,width:b.width*current.naturalWidth,height:b.height*current.naturalHeight};
+  const panelWidth=480,panelHeight=480;
+  const canvas=document.createElement('canvas');canvas.width=panelWidth*2+24;canvas.height=panelHeight+44;
+  const context=canvas.getContext('2d');if(!context)throw new Error('The pixel comparison is unavailable.');
+  context.fillStyle='#f0f0f4';context.fillRect(0,0,canvas.width,canvas.height);context.fillStyle='#191923';context.font='16px system-ui';context.fillText('Reference',12,26);context.fillText('Current screen',panelWidth+36,26);
+  for(const [index,image,rect] of [[0,reference,source],[1,current,target]] as const){
+    const scale=Math.min(panelWidth/rect.width,panelHeight/rect.height),width=rect.width*scale,height=rect.height*scale;
+    context.drawImage(image,rect.x,rect.y,rect.width,rect.height,index*(panelWidth+24)+(panelWidth-width)/2,44+(panelHeight-height)/2,width,height);
+  }
+  signal.throwIfAborted();
+  return {image:canvas.toDataURL('image/png'),referenceCropPixels:source,screenCropPixels:target,referenceAspectRatio:source.width/source.height,screenAspectRatio:target.width/target.height,note:'Actual paired crops, shown at the same maximum panel size without stretching their aspect ratios. Compare typography, icon geometry, spacing, palette and effects under the user brief. Different capture scale, antialiasing or intended changes need interpretation. These pixels do not establish animation timing, interaction quality or approval.'};
 }

@@ -212,7 +212,13 @@ export class CodexSessionHost {
     let rawFeedback: string;
     let remainingWork: number;
     try {
-      rawFeedback = await this.reviewer!(s.reviewContext.packet(run.draft), { key, model: s.model, effort: s.effort, signal: run.controller.signal });
+      // One unavailable/invalid independent assessment may recover in a fresh
+      // ephemeral reviewer. No primary mutation, claimed approval or public
+      // failure trace is introduced; cancellation always stops immediately.
+      for(let attempt=0;;attempt++){
+        try{rawFeedback=await this.reviewer!(s.reviewContext.packet(run.draft),{key,model:s.model,effort:s.effort,signal:run.controller.signal});parseDiscoveryFeedback(rawFeedback);break;}
+        catch(error){if(attempt || run.controller.signal.aborted || s.closed || s.reviewRun!==run || run.phase!=='reviewing')throw error;}
+      }
       feedback = s.reviewContext.reconcileFeedback(rawFeedback);
       remainingWork = (parseDiscoveryFeedback(feedback).work as unknown[]).length;
     }

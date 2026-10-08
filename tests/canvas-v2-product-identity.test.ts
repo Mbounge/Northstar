@@ -40,3 +40,17 @@ test('precise feedback bounds untrusted frame data and uses the host object iden
   assert.throws(() => parseCanvasV2ScreenFeedbackTarget({ ...target, rect: { ...target.rect, x: NaN } }, 'real', 'A'), /visible/);
   assert.throws(() => parseCanvasV2ScreenFeedbackTarget({ ...target, selector: 'x'.repeat(2000) }, 'real', 'A'), /visible/);
 });
+
+
+test('derivatives retain distinct reference purposes, reusable native components and coherent initial data', () => {
+  const profile=validateCanvasV2ProductIdentity({...identity,referenceRoles:[{assetId:'mark',role:'identity',intent:'GRAET owns the blue palette and typography.'}],reusableComponents:[{id:'navigation',name:'Product navigation',html:'<nav><button>Home</button></nav>',css:'nav{color:var(--brand-accent)}',referenceAssetIds:['mark']}],mockData:{player:{name:'Bond',birthYear:1995},seasonGoal:'Score 12 goals'}},evidence);
+  const patch=canvasV2ScreenPatch(root,{productIdentityId:profile.id,title:'Career',html:'<h1>Career</h1>'},evidence,{x:0,y:0},[profile]);
+  const doc=applyCanvasV2SourcePatch({previous:root,operations:patch.operations,evidence});
+  const saved=readCanvasV2Screens(doc.html)[0];
+  assert.deepEqual(saved.screen.mockData,profile.mockData);
+  const updated=canvasV2ScreenPatch(doc,{nodeId:saved.nodeId,css:'h1{font-size:28px}'},evidence,{x:0,y:0},[{...profile,mockData:{seasonGoal:'Changed default'}}]);
+  assert.deepEqual(readCanvasV2Screens(applyCanvasV2SourcePatch({previous:doc,operations:updated.operations,evidence}).html)[0].screen.mockData,profile.mockData,'a design-context update must not silently overwrite a running preview seed');
+  assert.throws(()=>validateCanvasV2ProductIdentity({...profile,reusableComponents:[{...profile.reusableComponents![0],html:'<script>bad()</script>'}]},evidence),/HTML fragment/);
+  assert.throws(()=>validateCanvasV2ProductIdentity({...profile,referenceRoles:[{assetId:'missing',role:'identity',intent:'Unretained'}]},evidence),/reference/);
+  assert.throws(()=>validateCanvasV2ProductIdentity({...profile,mockData:{value:NaN}},evidence),/JSON/);
+});

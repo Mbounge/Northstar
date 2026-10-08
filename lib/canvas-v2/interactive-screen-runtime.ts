@@ -1,17 +1,17 @@
 import { packScreenCaptureImages } from './screen-capture-resources';
 import { validateCanvasV2Screen, canvasV2ScreenAssetToken, SCREEN_ASSET_PATTERN, type CanvasV2InteractiveScreen } from './interactive-screen';
 import { advanceScreenJourneyMotion, screenMotionTimeline } from './screen-motion-timeline';
-import { isCanvasV2ScreenVideoBytes } from './screen-asset-pixels';
+import { isCanvasV2ScreenVideoBytes, isCanvasV2FontBytes } from './screen-asset-pixels';
 import { validateScreenInteractionSequence, type ScreenInteractionStep } from './screen-interaction-sequence';
 
-export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-stylesheet' | 'test-sequence'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[] };
+export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence'; selector?: string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; edits?:Array<{selector:string;text?:string;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[] };
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
 
 export function bindCanvasV2ScreenAssetSource(source: string, referenceAssetIds: readonly string[], imageBytes: ReadonlyMap<string, string>) {
   const tokens = new Map(referenceAssetIds.map(id => [canvasV2ScreenAssetToken(id), id]));
   return source.replace(SCREEN_ASSET_PATTERN, (_, token: string) => {
     const id = tokens.get(token), bytes = id ? imageBytes.get(id) : undefined;
-    if (!bytes || (!/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(bytes) && !isCanvasV2ScreenVideoBytes(bytes))) throw new Error('A bound asset has no retained pixels or playable media.');
+    if (!bytes || (!/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(bytes) && !isCanvasV2ScreenVideoBytes(bytes) && !isCanvasV2FontBytes(bytes))) throw new Error('A bound asset has no retained pixels or playable media.');
     return bytes;
   });
 }
@@ -35,13 +35,18 @@ export function fixedScreenMediaQuery(query: string, appearance: 'light' | 'dark
 
 /** Opaque origin, no host APIs or cookies, no remote dependencies. Only registered
  * image bytes are substituted by the host; model code never receives their URLs. */
-export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '') {
+export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '', retainedState?: {data?:Record<string,unknown>;fields?:Array<{id:string;name:string;type:string;value:string;checked:boolean}>;scroll?:{x:number;y:number};scrollers?:Array<{selector:string;x:number;y:number}>;focused?:{id:string;type:string;start?:number;end?:number}}) {
   const screen = validateCanvasV2Screen(input);
   const bind = (source: string) => bindCanvasV2ScreenAssetSource(source, screen.referenceAssetIds, imageBytes);
   const nonce = token.replace(/[^a-zA-Z0-9-]/g, '');
   const boot = `(() => {
     const token=${JSON.stringify(token)}, protocol=${JSON.stringify(SCREEN_PROTOCOL)};
     const errors=[];
+    // Each native product runtime starts from its retained family dataset.
+    // Connected views inside this runtime share this actual local state; private
+    // journey copies get their own seed and never mutate the user's preview.
+    window.northstarProduct={data:${JSON.stringify(retainedState?.data ?? screen.mockData ?? {})}};
+
     // Private journey checks can exercise both motion preferences without
     // changing the user's OS settings or their live canvas runtime.
     const testMotionPreference=${JSON.stringify(motionPreference ?? null)};
@@ -90,6 +95,8 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const r=el.getBoundingClientRect();Object.assign(feedbackOutline.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});
     };
     document.addEventListener('pointermove',e=>{if(feedbackMode && e.target instanceof Element && e.target!==feedbackOutline)markFeedback(e.target)},true);
+    // Capture after the complete event dispatch; a capture-listener microtask
+    // runs before the product's later handlers and would retain stale state.
     for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,e=>{
       if(!feedbackMode)return;
       e.preventDefault();e.stopImmediatePropagation();
@@ -98,7 +105,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     },true);
     addEventListener('error', e => errors.push(String(e.message).slice(0,1000)));
     addEventListener('unhandledrejection', e => errors.push(String(e.reason).slice(0,1000)));
-    for(const type of ['pointerdown','wheel','keydown','input'])document.addEventListener(type,e=>{if(e.isTrusted){humanInputSequence++;releaseMotion();parent.postMessage({protocol,token,userInput:true},'*')}},{capture:true,passive:true});
+    // Capture after the complete event dispatch; a capture-listener microtask
+    // runs before the product's later handlers and would retain stale state.
+    for(const type of ['pointerdown','wheel','keydown','input','click','change'])document.addEventListener(type,e=>{if(e.isTrusted){humanInputSequence++;releaseMotion();setTimeout(()=>parent.postMessage({protocol,token,userInput:true,retainedState:{data:sessionData(),focused:document.activeElement?.id?{id:document.activeElement.id,type:document.activeElement.type,start:document.activeElement.selectionStart,end:document.activeElement.selectionEnd}:undefined,scroll:{x:scrollX,y:scrollY},scrollers:[...document.querySelectorAll('[id],[data-graet-scroll],[data-northstar-scroll]')].filter(el=>el.scrollTop||el.scrollLeft).slice(0,20).map(el=>({selector:el.id?'#'+CSS.escape(el.id):el.hasAttribute('data-graet-scroll')?'[data-graet-scroll]':'[data-northstar-scroll]',x:el.scrollLeft,y:el.scrollTop})),fields:[...document.querySelectorAll('input,textarea,select')].filter(el=>(el.id||el.name)&&String(el.value).length<=16000).slice(0,40).map(el=>({id:el.id,name:el.name||'',type:el.type||el.tagName.toLowerCase(),value:String(el.value),checked:!!el.checked}))}},'*'))}},{capture:true,passive:true});
     document.addEventListener('submit', e => e.preventDefault(), true);
     document.addEventListener('keydown', e => {if(e.key==='Escape'){clearFeedback();parent.postMessage({protocol,token,escape:true},'*')}});
     document.addEventListener('click', e => { const a=e.target.closest?.('a'); if(a && !a.getAttribute('href')?.startsWith('#')) e.preventDefault(); }, true);
@@ -118,7 +127,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const style=getComputedStyle(el),typography=node=>{const s=getComputedStyle(node);return {fontFamily:s.fontFamily,fontSize:s.fontSize,fontWeight:s.fontWeight,lineHeight:s.lineHeight,letterSpacing:s.letterSpacing,color:s.color}};
       return {selector:selectorFor(el),role:el.getAttribute('role'),label:el.getAttribute('aria-label'),rect:describe(el).rect,backgroundColor:style.backgroundColor,colorScheme:style.colorScheme,borderRadius:style.borderRadius,typography:typography(el),gap:style.gap,padding:style.padding,controls:[...el.querySelectorAll('button,a,input,textarea,select,[role="button"]')].filter(visible).slice(0,8).map(control=>({selector:selectorFor(control),label:control.getAttribute('aria-label')||control.innerText,rect:describe(control).rect,typography:typography(control),icons:[...control.querySelectorAll('svg,img')].slice(0,2).map(icon=>{const s=getComputedStyle(icon);return {kind:icon.tagName.toLowerCase(),rect:describe(icon).rect,fill:s.fill,stroke:s.stroke,strokeWidth:s.strokeWidth,viewBox:icon.getAttribute('viewBox'),label:icon.getAttribute('aria-label')||icon.getAttribute('alt')}})}))};
     });
-    const inspect = () => ({appearance:{reference:productAppearance,canvasIndependent:true,colorScheme:getComputedStyle(document.documentElement).colorScheme},fonts:[...document.fonts].map(font=>({family:font.family,weight:font.weight,style:font.style,status:font.status})),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
+    const sessionData=()=>{try{const json=JSON.stringify(window.northstarProduct.data);return json&&json.length<=16000?JSON.parse(json):undefined}catch{return undefined}};
+    const productData=()=>sessionData()??{note:'Product data is not readable within the inspection budget.'};
+    const inspect = () => ({productData:productData(),appearance:{reference:productAppearance,canvasIndependent:true,colorScheme:getComputedStyle(document.documentElement).colorScheme},fonts:[...document.fonts].map(font=>({family:font.family,weight:font.weight,style:font.style,status:font.status})),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
     const snapshot = () => {
       let pseudoCss='';
       const clone=document.body.cloneNode(true),live=[document.body,...document.body.querySelectorAll('*')],copies=[clone,...clone.querySelectorAll('*')];
@@ -151,6 +162,16 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           if(!style)throw Error('The product stylesheet is unavailable.');
           releaseMotion();style.textContent=command.stylesheet;keepProductMedia();await settle();void document.body.offsetHeight;await document.fonts.ready;
           parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
+        }
+        if(command.action==='restore-focus'){
+          const el=document.getElementById(command.selector);if((el instanceof HTMLInputElement||el instanceof HTMLTextAreaElement)&&el.type===command.value&&visible(el)&&!el.disabled){el.focus({preventScroll:true});if(typeof command.selectionStart==='number'&&typeof command.selectionEnd==='number'&&typeof el.selectionStart==='number')el.setSelectionRange(command.selectionStart,command.selectionEnd)}
+          parent.postMessage({protocol,token,requestId,result:{}},'*');return;
+        }
+        if(command.action==='patch-elements'){
+          if(!Array.isArray(command.edits)||!command.edits.length||command.edits.length>24)throw Error('Use bounded precise feedback edits.');
+          const prepared=command.edits.map(edit=>{const el=document.querySelector(edit.selector);if(!(el instanceof HTMLElement)||edit.text!==undefined&&el.children.length)throw Error('A feedback element changed in the live product state.');return {el,edit}});
+          for(const {el,edit} of prepared){if(edit.text!==undefined)el.textContent=edit.text;for(const [property,value] of Object.entries(edit.styles||{}))el.style.setProperty(property,value)}
+          await settle();parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
         }
         if(command.action==='test-sequence'){
           if(!testMotionPreference)throw Error('Journey checks need a private test copy.');
@@ -231,5 +252,5 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     parent.postMessage({protocol,token,ready:true},'*');
   })();`;
   const safeScript = (code: string) => code.replace(/<\/script/gi, '<\\/script');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'nonce-${nonce}'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style data-northstar-screen-fonts>${fontCss}</style><style data-northstar-screen-style>${bind(screen.css)}</style></head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script><script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'nonce-${nonce}'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style data-northstar-screen-fonts>${fontCss}</style><style data-northstar-screen-style>${bind(screen.css)}</style></head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script><script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script><script nonce="${nonce}">${safeScript(`(() => {const fields=${JSON.stringify(retainedState?.fields ?? [])},scrollers=${JSON.stringify(retainedState?.scrollers??[])},scroll=${JSON.stringify(retainedState?.scroll??null)};for(const field of fields){const matches=[...document.querySelectorAll('input,textarea,select')].filter(el=>(field.id?el.id===field.id:el.name===field.name)&&(el.type||el.tagName.toLowerCase())===field.type);if(matches.length===1){matches[0].value=field.value;if('checked' in matches[0])matches[0].checked=field.checked}}for(const saved of scrollers){try{const elements=document.querySelectorAll(saved.selector);if(elements.length===1&&Number.isFinite(saved.x)&&Number.isFinite(saved.y))elements[0].scrollTo(saved.x,saved.y)}catch{/* A changed scroller is not restored. */}}if(scroll&&Number.isFinite(scroll.x)&&Number.isFinite(scroll.y))scrollTo(scroll.x,scroll.y)})();`)}</script></body></html>`;
 }

@@ -28,3 +28,22 @@ test('font loading uses fixed public resources with validated bytes and cached r
     await assert.rejects(readCanvasV2ScreenFontCss(screen,aborter.signal));
   }finally{globalThis.fetch=original;}
 });
+
+
+test('retained authentic font files export as font assets and bind into isolated native typography', async () => {
+  const {readFile}=await import('node:fs/promises');
+  const {creativeArtifact}=await import('../lib/canvas-v2/creative/runtime.server');
+  const {isCanvasV2FontBytes,readCanvasV2ScreenAssetPixels}=await import('../lib/canvas-v2/screen-asset-pixels');
+  const {buildCanvasV2ScreenRuntime}=await import('../lib/canvas-v2/interactive-screen-runtime');
+  const {validateCanvasV2Screen}=await import('../lib/canvas-v2/interactive-screen');
+  const original=await readFile('public/graet-replica/fonts/MonaSans-Regular.ttf');
+  const retained=creativeArtifact(original,'reference.ttf','Reference typography','computed',['source-font']);
+  assert.equal(retained.artifact.mimeType,'font/ttf');assert.equal(retained.asset?.kind,'document');
+  assert.ok(isCanvasV2FontBytes(retained.artifact.dataUrl));
+  const pixels=await readCanvasV2ScreenAssetPixels(retained.artifact.dataUrl,new AbortController().signal);
+  const screen={version:1 as const,title:'Native reference typography',width:390,height:844,html:'<h1>Career</h1>',css:`@font-face{font-family:ReferenceFace;src:url(northstar-asset:${retained.artifact.id})}h1{font-family:ReferenceFace}`,javascript:'',referenceAssetIds:[retained.artifact.id]};
+  const runtime=buildCanvasV2ScreenRuntime(screen,new Map([[retained.artifact.id,pixels]]),'font-proof');
+  assert.ok(runtime.includes(pixels));assert.ok(runtime.includes("font-src data:"));
+  assert.throws(()=>validateCanvasV2Screen({...screen,css:`@font-face{font-family:ReferenceFace;src:url(data:font/ttf;base64,AAEAAAAAAAAAAAAA)}`}),/registered northstar-asset/);
+  assert.equal(isCanvasV2FontBytes('data:font/woff2;base64,'+Buffer.from('not a font').toString('base64')),false);
+});

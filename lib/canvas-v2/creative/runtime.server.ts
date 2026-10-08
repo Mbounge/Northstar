@@ -49,7 +49,7 @@ function decodeData(url: string) {
 }
 function mimeFor(path: string, bytes: Buffer) {
   return (
-    actualImageType(bytes) ??
+    actualImageType(bytes) ?? (bytes.length>=12&&bytes.length<=2_000_000?(bytes.subarray(0,4).equals(Buffer.from([0,1,0,0]))?'font/ttf':({'OTTO':'font/otf','wOFF':'font/woff','wOF2':'font/woff2'}[bytes.subarray(0,4).toString('latin1')])):undefined) ??
     ({
       ".json": "application/json",
       ".csv": "text/csv",
@@ -90,18 +90,19 @@ export function creativeArtifact(
     ...(name.startsWith(`${WORKSPACE}/`) ? { workspacePath: name } : {}),
   };
   const image = actualImageType(bytes);
-  const asset: CanvasV2EvidenceAsset | undefined = image
+  const font=mimeType.startsWith("font/");
+  const asset: CanvasV2EvidenceAsset | undefined = image || font
     ? {
         id,
         url: dataUrl,
         label,
-        kind: "image",
+        kind: font ? "document" : "image",
         mimeType,
-        mediaType: image === "image/gif" ? "gif" : "image",
+        ...(font?{}:{mediaType: image === "image/gif" ? "gif" as const : "image" as const}),
         authority: origin === "generated" ? "inferred" : "calculated",
         tags: [origin, ...inputAssetIds.map((id) => `derived-from:${id}`)],
         description:
-          origin === "generated"
+          font ? "Retained font bytes for native product typography. Compare loaded glyphs with the reference; a filename alone does not establish a matching typeface." : origin === "generated"
             ? `AI-generated illustration${model ? ` (${model})` : ""}. Not documentary evidence.`
             : "Created by code from the supplied inputs; inspect before using.",
         limitations:

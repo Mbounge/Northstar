@@ -65,14 +65,14 @@ export function patchCanvasV2ScreenElement(html: string, selector: string, input
   return document.body.innerHTML;
 }
 
-export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; styles: Record<string, string>; stylesheet?: string; presentationOnly?: boolean }
+export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; styles: Record<string, string>; stylesheet?: string; presentationOnly?: boolean; edits?:Array<{selector:string;text?:string;styles:Record<string,string>}> }
 
-/** CSS-only revisions and equivalent DOM trees with one text/style change
+/** CSS-only revisions and equivalent DOM trees with bounded text/style changes
  * preserve live mock state. Structural/event changes use the isolated rebuild. */
 export function canvasV2ScreenLiveEdit(before: import('./interactive-screen').CanvasV2InteractiveScreen, after: import('./interactive-screen').CanvasV2InteractiveScreen, parser: DOMParser): CanvasV2ScreenLiveEdit | undefined {
   if (before.simulation || after.simulation || before.title !== after.title || before.width !== after.width || before.height !== after.height
     || before.javascript !== after.javascript || JSON.stringify(before.referenceAssetIds) !== JSON.stringify(after.referenceAssetIds)
-    || before.productIdentityId !== after.productIdentityId || before.referenceIntent !== after.referenceIntent || before.referenceAppearance !== after.referenceAppearance) return;
+    || before.productIdentityId !== after.productIdentityId || before.referenceIntent !== after.referenceIntent || before.referenceAppearance !== after.referenceAppearance || JSON.stringify(before.mockData)!==JSON.stringify(after.mockData)) return;
   if (before.html === after.html) {
     if (before.css !== after.css) return { selector: '', styles: {}, stylesheet: after.css };
     if (before.device !== after.device) return { selector: '', styles: {}, presentationOnly: true };
@@ -82,7 +82,7 @@ export function canvasV2ScreenLiveEdit(before: import('./interactive-screen').Ca
   const oldBody = parser.parseFromString(before.html, 'text/html').body, newBody = parser.parseFromString(after.html, 'text/html').body;
   const oldNodes = [...oldBody.querySelectorAll('*')], newNodes = [...newBody.querySelectorAll('*')];
   if (oldNodes.length !== newNodes.length || oldNodes.length > 5000) return;
-  let edit: CanvasV2ScreenLiveEdit | undefined;
+  const edits: Array<{selector:string;text?:string;styles:Record<string,string>}> = [];
   for (let i = 0; i < oldNodes.length; i++) {
     const a = oldNodes[i] as HTMLElement, b = newNodes[i] as HTMLElement;
     if (a.tagName !== b.tagName || a.namespaceURI !== b.namespaceURI || a.childNodes.length !== b.childNodes.length) return;
@@ -103,12 +103,13 @@ export function canvasV2ScreenLiveEdit(before: import('./interactive-screen').Ca
       if (a.style.getPropertyValue(property) !== b.style.getPropertyValue(property)) styles[property] = b.style.getPropertyValue(property);
     }
     if (!textChanged && !Object.keys(styles).length) continue;
-    if (edit || ['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'SCRIPT', 'STYLE'].includes(a.tagName)) return;
+    if (edits.length >= 24 || ['SCRIPT','STYLE'].includes(a.tagName) || textChanged && ['INPUT','TEXTAREA','SELECT','OPTION'].includes(a.tagName)) return;
     const path: string[] = []; let el: Element | null = a;
     while (el && el !== oldBody) { const tag = el.tagName.toLowerCase(), peers = [...el.parentElement!.children].filter(peer => peer.tagName === el!.tagName); path.unshift(`${tag}:nth-of-type(${peers.indexOf(el) + 1})`); el = el.parentElement; }
-    edit = { selector: 'body > ' + path.join(' > '), ...(textChanged ? { text: b.textContent ?? '' } : {}), styles };
+    const selector=a.id&&/^[A-Za-z_][\w-]*$/.test(a.id)&&oldBody.querySelectorAll('#'+a.id).length===1?'#'+a.id:'body > '+path.join(' > ');
+    edits.push({selector,...(textChanged?{text:b.textContent??''}:{}),styles});
   }
   // Parent structure and top-level text must be unchanged too.
   if (oldBody.childNodes.length !== newBody.childNodes.length || [...oldBody.childNodes].some((node, i) => node.nodeType !== newBody.childNodes[i].nodeType || (node.nodeType !== 1 && node.textContent !== newBody.childNodes[i].textContent))) return;
-  return edit;
+  return edits.length>1?{selector:'',styles:{},edits}:edits[0];
 }

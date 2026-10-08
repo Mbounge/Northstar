@@ -550,11 +550,11 @@ test('four-screen review batches keep sibling component evidence and reconcile l
   }
   context.tool('canvas_read',{},[text({document:{html:'obsolete board source',css:'css'},screens:['one','two','three','four'].map(nodeId=>({nodeId}))})]);
   const packet=context.packet('All requested variants are ready.'),batches=productReviewBatches(packet);
-  assert.equal(batches.length,2);
-  assert.deepEqual(batches.map(batch=>JSON.parse(batch.packet.text).reviewFocus.screenNodeIds),[['one','two'],['three','four']]);
+  assert.equal(batches.length,4);
+  assert.deepEqual(batches.map(batch=>JSON.parse(batch.packet.text).reviewFocus.screenNodeIds),[['one'],['two'],['three'],['four']]);
   for(const batch of batches){
     const value=JSON.parse(batch.packet.text);
-    assert.equal(value.imageDirectory.filter((entry:{role:string})=>entry.role.includes(':render')).length,2);
+    assert.equal(value.imageDirectory.filter((entry:{role:string})=>entry.role.includes(':render')).length,1);
     assert.equal(value.imageDirectory.filter((entry:{role:string})=>entry.role.includes(':detail:')).length,4);
     assert.ok(!batch.packet.text.includes('obsolete board source'));
   }
@@ -563,7 +563,7 @@ test('four-screen review batches keep sibling component evidence and reconcile l
     calls++;const value=JSON.parse(batch.text),result=JSON.parse(feedbackFor());result.resolvedWork=[];
     result.productChecks=value.reviewFocus.screenNodeIds.map((nodeId:string)=>({nodeId,referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),assessment:'Current navigation matches the reference and sibling variants.',evidenceImageNumbers:value.imageDirectory.filter((entry:{role:string;aliases?:string[]})=>(entry.aliases??[entry.role]).some(role=>role.startsWith(`screen:${nodeId}:`))).map((entry:{imageNumber:number})=>entry.imageNumber)}));return JSON.stringify(result);
   },packet,{key:'fake',model:'gpt-5.6-luna',signal:new AbortController().signal});
-  assert.equal(calls,2);
+  assert.equal(calls,4);
   assert.equal(JSON.parse(feedback).productChecks.length,4);
   assert.equal(JSON.parse(context.reconcileFeedback(feedback)).work.length,0);
   await assert.rejects(reviewProductBatches(async()=>{throw new Error('Review failed');},packet,{key:'fake',model:'gpt-5.6-luna',signal:new AbortController().signal}),/Review failed/);
@@ -629,8 +629,8 @@ test('four distinct asset-heavy variants retain current evidence and exclude sib
  }
  const packet=context.packet('Four directions');assert.equal(packet.images.length,8);
  assert.equal(JSON.parse(packet.text).productWork.every((screen:{reviewed:boolean})=>screen.reviewed),true);
- const batches=productReviewBatches(packet);assert.equal(batches.length,2);
- for(const batch of batches){assert.equal(batch.packet.images.length,4);assert.ok(batch.packet.images.reduce((sum,image)=>sum+(image.type==='image'?image.url.length:0),0)<8_000_000);}
+ const batches=productReviewBatches(packet);assert.equal(batches.length,4);
+ for(const batch of batches){assert.equal(batch.packet.images.length,2);assert.ok(batch.packet.images.reduce((sum,image)=>sum+(image.type==='image'?image.url.length:0),0)<8_000_000);}
 });
 
 
@@ -780,4 +780,30 @@ test('a matching default appearance does not clear a mismatched added dialog pal
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
   checks.visualChecks.palette={status:'pass',assessment:'The locally repaired editor now uses the reference light surfaces and blue actions.'};
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+});
+
+
+test('grouped feedback invalidates every changed screen and paired reference crops remain current evidence', () => {
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  context.tool('canvas_screen_element',{edits:[{nodeId:'one'},{nodeId:'two'}]},[text({committed:true,nodeId:'one',nodeIds:['one','two']})]);
+  assert.equal(JSON.parse(context.packet('').text).productWork.filter((screen:{qualityReviewRequired:boolean})=>screen.qualityReviewRequired).length,2);
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'one',sourceVersion:'v1'},{nodeId:'two',sourceVersion:'v1'}]})]);
+  context.tool('canvas_compare_reference',{nodeId:'one'},[text({nodeId:'one',sourceVersion:'v1',referenceAssetId:'ref',comparisonLabel:'Navigation',referenceCropPixels:{x:0,y:0,width:100,height:30},screenCropPixels:{x:0,y:0,width:100,height:30}}),{type:'inputImage',imageUrl:'data:image/png;base64,paired'}]);
+  const packet=JSON.parse(context.packet('').text);
+  assert.equal(packet.productWork.find((screen:{nodeId:string})=>screen.nodeId==='one').comparisons[0].referenceAssetId,'ref');
+  assert.ok(packet.imageDirectory.some((image:{role:string})=>image.role==='screen:one:comparison:Navigation'));
+  context.tool('canvas_screen_element',{},[text({committed:true,nodeId:'one'})]);
+  assert.ok(!JSON.parse(context.packet('').text).imageDirectory.some((image:{role:string})=>image.role==='screen:one:comparison:Navigation'),'old comparison pixels cannot approve a new source');
+});
+
+
+test('a single unavailable independent assessment can recover without another primary draft or false approval', async () => {
+  let attempts=0;
+  const t=await setup(async()=>{if(++attempts===1)throw new Error('Discovery review cancelled or timed out.');return feedbackFor();});
+  try{
+    await t.client.send('Explain',[],'gpt-5.6-luna','r1');t.peer.finish('Original answer');await tick();
+    assert.equal(attempts,2);assert.equal((await t.snapshot()).review.status,'completed');
+    assert.equal(t.peer.calls.filter(call=>call.method==='turn/start').length,1);
+    assert.equal(t.client.view.texts.at(-1)?.text,'Original answer');
+  }finally{t.close();}
 });

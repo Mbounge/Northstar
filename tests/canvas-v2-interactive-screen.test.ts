@@ -189,7 +189,8 @@ test('video reference sampling plans bounded actual timestamps around transition
  assert.deepEqual(canvasV2VideoReferenceTimes(10,[1,1.1,1.3]),[1,1.1,1.3]);
  assert.equal(canvasV2VideoReferenceTimes(7200).at(-1),3600);
  for(const duration of [0,-1,Infinity,NaN])assert.throws(()=>canvasV2VideoReferenceTimes(duration));
- for(const times of [[1],[0,10],[2,1],[0,Infinity],[0,0],Array(9).fill(1)])assert.throws(()=>canvasV2VideoReferenceTimes(10,times));
+ assert.deepEqual(canvasV2VideoReferenceTimes(10,[1]),[1]);
+ for(const times of [[],[0,10],[2,1],[0,Infinity],[0,0],Array(9).fill(1)])assert.throws(()=>canvasV2VideoReferenceTimes(10,times));
 });
 
 test('mobile phone presentation survives saved source while desktop pages remain unframed',async()=>{
@@ -231,4 +232,29 @@ test('faithful product appearance pins scheme queries independently of workspace
   }
   const original = buildCanvasV2ScreenRuntime({...screen,referenceIntent:'original',referenceAppearance:'light'}, new Map(), 'theme-test');
   assert.ok(original.includes('const productAppearance=null'), 'an original or inspired product can deliberately own its theme behavior');
+});
+
+
+test('component comparisons reject misleading out-of-image crops and mock data stays isolated in the saved runtime', async () => {
+  const {screenComparisonRect}=await import('../lib/canvas-v2/screen-asset-pixels');
+  assert.deepEqual(screenComparisonRect({x:.1,y:.2,width:.4,height:.5}),{x:.1,y:.2,width:.4,height:.5});
+  for(const rect of [{x:-1,y:0,width:1,height:1},{x:.9,y:0,width:.2,height:1},{x:0,y:0,width:NaN,height:1}])assert.throws(()=>screenComparisonRect(rect),/normalized crop/);
+  const source={...screen,mockData:{player:'Bond',goal:'Score 12 goals'}};
+  const runtime=buildCanvasV2ScreenRuntime(source,new Map(),'data-test');
+  assert.ok(runtime.includes('window.northstarProduct={data:{"player":"Bond","goal":"Score 12 goals"}}'));
+  assert.deepEqual(parseCanvasV2Screen(encodeCanvasV2Screen(source)).mockData,source.mockData);
+  assert.throws(()=>validateCanvasV2Screen({...source,mockData:{goal:()=>1}}),/JSON/);
+});
+
+
+test('structural runtime continuity restores user data and matching fields without changing the saved initial dataset', () => {
+  const source={...screen,mockData:{goal:'Starting goal'}};
+  const state={data:{goal:'User goal',view:'editor'},fields:[{id:'goal',name:'',type:'text',value:'User draft',checked:false}],scroll:{x:0,y:120}};
+  const runtime=buildCanvasV2ScreenRuntime(source,new Map(),'continuity',undefined,'',state);
+  assert.ok(runtime.includes('window.northstarProduct={data:{"goal":"User goal","view":"editor"}}'));
+  assert.ok(runtime.includes('"value":"User draft"'));
+  assert.deepEqual(source.mockData,{goal:'Starting goal'});
+  const fresh=buildCanvasV2ScreenRuntime(source,new Map(),'fresh','reduce');
+  assert.ok(fresh.includes('window.northstarProduct={data:{"goal":"Starting goal"}}'));
+  assert.ok(!fresh.includes('User draft'));
 });

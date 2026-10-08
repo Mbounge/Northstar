@@ -36,6 +36,7 @@ export interface CanvasV2InteractiveScreen {
   referenceIntent?: 'faithful' | 'inspired' | 'original';
   referenceAppearance?: 'light' | 'dark' | 'mixed';
   productIdentityId?: string;
+  mockData?: Record<string, unknown>;
   simulation?: { appName: 'GRAET'; section: GraetPreviewSection };
   title: string;
   width: number;
@@ -87,10 +88,16 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   if(screen.referenceNodeId!==undefined&&(typeof screen.referenceNodeId!=='string'||!/^[\w.:-]{1,240}$/.test(screen.referenceNodeId)||screen.simulation))throw new Error('Choose a current preview reference for an authored screen.');
   if(screen.referenceIntent!==undefined&&!['faithful','inspired','original'].includes(screen.referenceIntent))throw new Error('Choose faithful, inspired or original reference intent.');
   if(screen.referenceAppearance!==undefined&&!['light','dark','mixed'].includes(screen.referenceAppearance))throw new Error('Retain the measured reference appearance.');
+  if(screen.mockData!==undefined){
+    const encoded=JSON.stringify(screen.mockData);
+    if(!screen.mockData||typeof screen.mockData!=='object'||Array.isArray(screen.mockData)||!encoded||encoded.length>16000)throw new Error('Use a bounded product mock-data object.');
+    const visit=(value:unknown,depth:number):void=>{if(depth>12)throw new Error('Keep mock data within the product depth budget.');if(value===null||typeof value==='string'||typeof value==='boolean'||typeof value==='number'&&Number.isFinite(value))return;if(!value||typeof value!=='object'||![Object.prototype,Array.prototype,null].includes(Object.getPrototypeOf(value)))throw new Error('Use plain JSON mock data.');for(const [key,child] of Object.entries(value)){if(['__proto__','constructor','prototype'].includes(key))throw new Error('Use ordinary mock-data keys.');visit(child,depth+1)}};
+    visit(screen.mockData,0);
+  }
   // Only the host constructs the document and its sandbox. Source assets remain
   // opaque handles, so saved objects never hide expiring blob/signed URLs.
   if (/<\s*(?:script|iframe|object|embed|base|link|meta|html|head|body)\b|\son[a-z]+\s*=|javascript\s*:/i.test(screen.html)) throw new Error('Use a body HTML fragment, CSS and event listeners in javascript. Embedded documents, scripts and event attributes are not supported.');
-  if (/@import|<\/style/i.test(screen.css) || /blob:|data:(?:image\/(?:png|jpe?g|webp|gif)|video\/(?:mp4|webm));base64/i.test(screen.html + screen.css + screen.javascript)) throw new Error('Use registered northstar-asset handles for images; external stylesheets and temporary image URLs cannot be retained.');
+  if (/@import|<\/style/i.test(screen.css) || /blob:|data:(?:image\/(?:png|jpe?g|webp|gif)|video\/(?:mp4|webm)|font\/(?:ttf|otf|woff|woff2));base64/i.test(screen.html + screen.css + screen.javascript)) throw new Error('Use registered northstar-asset handles for images; external stylesheets and temporary image URLs cannot be retained.');
   const refs = new Set(screen.referenceAssetIds);
   const html = normalizeScreenAssetTokens(screen.html, [...refs]), css = normalizeScreenAssetTokens(screen.css, [...refs]), javascript = normalizeScreenAssetTokens(screen.javascript, [...refs]);
   if (html.length > 64000 || css.length > 40000 || javascript.length > 40000) throw new Error('The normalized screen source exceeds its HTML/CSS/JavaScript size budget.');
@@ -98,7 +105,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   for (const match of (html + '\n' + css + '\n' + javascript).matchAll(SCREEN_ASSET_PATTERN)) {
     if (!tokens.has(match[1])) throw new Error('Declare and retain the exact asset handle before binding it in a screen.');
   }
-  return { version: 1, ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
+  return { version: 1, ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), ...(screen.mockData ? {mockData:structuredClone(screen.mockData)} : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
 }
 export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
   return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {

@@ -1,7 +1,7 @@
 'use client';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasV2ArtifactTheme } from '@/lib/canvas-v2/artifact-theme';
-import { parseCanvasV2Screen, canvasV2ScreenBoundAssets } from '@/lib/canvas-v2/interactive-screen';
+import { parseCanvasV2Screen, validateCanvasV2Screen, canvasV2ScreenBoundAssets } from '@/lib/canvas-v2/interactive-screen';
 import { buildCanvasV2ScreenRuntime, bindCanvasV2ScreenAssetSource, SCREEN_PROTOCOL, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
 import { readCanvasV2ScreenAssetPixels } from '@/lib/canvas-v2/screen-asset-pixels';
 import { toCooperativeJpeg } from '@/lib/canvas-v2/cooperative-capture';
@@ -239,9 +239,12 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const [runtime, setRuntime] = useState(''), [error, setError] = useState('');
   const [simulationSource,setSimulationSource]=useState<string>();
   const [reload, setReload] = useState(0), [scale, setScale] = useState(1);
+  const retainedState=useRef<{data?:Record<string,unknown>;fields?:Array<{id:string;name:string;type:string;value:string;checked:boolean}>;scroll?:{x:number;y:number};scrollers?:Array<{selector:string;x:number;y:number}>;focused?:{id:string;type:string;start?:number;end?:number}}>(undefined);
   const previousSource = useRef(encoded), runtimeSource = useRef(encoded);
   const pendingLiveEdit = useRef<{ encoded: string; edit: CanvasV2ScreenLiveEdit } | undefined>(undefined);
   if (previousSource.current !== encoded) {
+    const before=parseCanvasV2Screen(previousSource.current);
+    if(before.productIdentityId!==screen.productIdentityId || JSON.stringify(before.mockData)!==JSON.stringify(screen.mockData) || before.referenceNodeId!==screen.referenceNodeId)retainedState.current=undefined;
     const edit = typeof DOMParser !== 'undefined' && controllers.has(nodeId) ? canvasV2ScreenLiveEdit(parseCanvasV2Screen(previousSource.current), screen, new DOMParser()) : undefined;
     if (edit && JSON.stringify(canvasV2ScreenBoundAssets(parseCanvasV2Screen(previousSource.current)).sort()) === JSON.stringify(canvasV2ScreenBoundAssets(screen).sort())) pendingLiveEdit.current = { encoded, edit };
     else { runtimeSource.current = encoded; pendingLiveEdit.current = undefined; }
@@ -252,7 +255,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const pending = pendingLiveEdit.current, controller = controllers.get(nodeId);
     if (!pending || pending.encoded !== encoded || !controller) return;
     const aborter = new AbortController();
-    const done = (pending.edit.presentationOnly ? Promise.resolve({}) : controller.run({ action: pending.edit.stylesheet === undefined ? 'patch-element' : 'patch-stylesheet', ...pending.edit }, aborter.signal)).then(() => {
+    const done = (pending.edit.presentationOnly ? Promise.resolve({}) : controller.run({ action: pending.edit.edits ? 'patch-elements' : pending.edit.stylesheet === undefined ? 'patch-element' : 'patch-stylesheet', ...pending.edit }, aborter.signal)).then(() => {
       if (!aborter.signal.aborted && controllers.get(nodeId) === controller) { controller.encoded = encoded; pendingLiveEdit.current = undefined; }
     }).catch(() => { if (!aborter.signal.aborted) setError('This element changed while it was being edited. Choose the current version in History to start fresh.'); });
     controller.revisionReady = { encoded, done };
@@ -271,7 +274,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const command = (event: Event) => {
       const action = (event as CustomEvent).detail;
       if (action === 'feedback') setCanvasV2FeedbackPicking(true);
-      if (action === 'restart') { runtimeSource.current = encoded; setReload(value => value + 1); }
+      if (action === 'restart') { retainedState.current=undefined; runtimeSource.current = encoded; setReload(value => value + 1); }
     };
     window.addEventListener(CANVAS_V2_FEEDBACK_PICKING, receive);
     host.current?.addEventListener(CANVAS_V2_SCREEN_COMMAND, command);
@@ -326,9 +329,18 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
         } catch { feedbackPicking.current = false; }
         return;
       }
-      if (event.data.userInput) { lastHumanInput.current = Date.now(); return; }
+      if (event.data.userInput) {
+        lastHumanInput.current=Date.now();
+        try{const state=event.data.retainedState;if(state && JSON.stringify(state).length<=64000 && (!state.data || typeof state.data==='object'&&!Array.isArray(state.data)) && Array.isArray(state.fields) && state.fields.length<=40 && state.fields.every((field:Record<string,unknown>)=>typeof field.id==='string'&&typeof field.name==='string'&&typeof field.type==='string'&&typeof field.value==='string'&&field.value.length<=16000&&typeof field.checked==='boolean')){validateCanvasV2Screen({...runtimeScreen,mockData:state.data});retainedState.current={data:structuredClone(state.data),fields:structuredClone(state.fields),scroll:state.scroll&&Number.isFinite(state.scroll.x)&&Number.isFinite(state.scroll.y)?state.scroll:undefined,scrollers:Array.isArray(state.scrollers)?state.scrollers.filter((item:Record<string,unknown>)=>typeof item.selector==='string'&&item.selector.length<1000&&Number.isFinite(item.x)&&Number.isFinite(item.y)).slice(0,20):undefined,focused:state.focused&&typeof state.focused.id==='string'&&state.focused.id.length<1000?state.focused:undefined};}}catch{/* Malformed product state cannot alter host source. */}
+        return;
+      }
       if (event.data.escape) { setCanvasV2FeedbackPicking(false); frame.current?.blur(); host.current?.focus({ preventScroll: true }); return; }
-      if (event.data.ready) { ready = true; return; }
+      if (event.data.ready) {
+        ready=true;
+        const focused=retainedState.current?.focused;
+        if(focused&&document.activeElement===frame.current)frame.current?.contentWindow?.postMessage({protocol:SCREEN_PROTOCOL,token,requestId:crypto.randomUUID(),command:{action:'restore-focus',selector:focused.id,value:focused.type,selectionStart:focused.start,selectionEnd:focused.end}},'*');
+        return;
+      }
       const request = pending.get(event.data.requestId);
       if (!request) return;
       pending.delete(event.data.requestId);
@@ -344,10 +356,10 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       }
       if (!ready || !frame.current?.contentWindow) throw new Error('The interactive screen is still loading.');
       signal.throwIfAborted(); aborter.signal.throwIfAborted();
-      if (Date.now() - lastHumanInput.current < 2500 && !['inspect', 'snapshot', 'feedback-mode', 'patch-element', 'patch-stylesheet', 'motion-end'].includes(command.action)) throw new Error('The user is interacting with this screen. Inspect or review it without changing their current mock state.');
+      if (Date.now() - lastHumanInput.current < 2500 && !['inspect', 'snapshot', 'feedback-mode', 'patch-element', 'patch-elements', 'patch-stylesheet', 'motion-end'].includes(command.action)) throw new Error('The user is interacting with this screen. Inspect or review it without changing their current mock state.');
       if (simulation) return inspectRegisteredSimulation(frame.current, command, signal);
-      if (['patch-element','patch-stylesheet'].includes(command.action)) {
-        for(const family of canvasV2ScreenFontFamilies({html:'',css:command.stylesheet??JSON.stringify(command.styles??{}),javascript:''}))loadedFontFamilies.add(family);
+      if (['patch-element','patch-elements','patch-stylesheet'].includes(command.action)) {
+        for(const family of canvasV2ScreenFontFamilies({html:'',css:command.stylesheet??JSON.stringify(command.edits?.map(edit=>edit.styles)??command.styles??{}),javascript:''}))loadedFontFamilies.add(family);
         command={...command,fontCss:await readCanvasV2ScreenFontCss({html:'',css:[...loadedFontFamilies].join(','),javascript:''},signal)};
       }
       if (command.action === 'patch-stylesheet') command = { ...command, stylesheet: bindCanvasV2ScreenAssetSource(command.stylesheet ?? '', runtimeScreen.referenceAssetIds, retainedBytes) };
@@ -396,7 +408,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
         }));
         aborter.signal.throwIfAborted();
         retainedBytes = new Map(bytes);
-        setRuntime(buildCanvasV2ScreenRuntime(runtimeScreen, retainedBytes, token, undefined, await readCanvasV2ScreenFontCss(runtimeScreen, aborter.signal)));
+        setRuntime(buildCanvasV2ScreenRuntime(runtimeScreen, retainedBytes, token, undefined, await readCanvasV2ScreenFontCss(runtimeScreen, aborter.signal),retainedState.current));
       } catch (error) { if (!aborter.signal.aborted) setError(error instanceof Error ? error.message : 'The screen could not be loaded.'); }
     })();
     return () => {
