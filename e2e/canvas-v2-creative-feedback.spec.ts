@@ -160,3 +160,38 @@ test('GIF references keep their original animated bytes inside an authored scree
   await expect(page.getByText('The retained GIF is loaded inside the interactive screen.', { exact: true })).toBeVisible({ timeout: 90000 });
   await expect(page.frameLocator('iframe[title="Retained GIF playback"]').getByRole('img', { name: 'Chosen canvas material' })).toHaveAttribute('src', /^data:image\/gif;base64,/);
 });
+
+
+test('live motion review captures genuine procedural canvas/3D states without a media surrogate',async({page})=>{
+ await page.goto('/canvas-v2-e2e/codex');
+ await page.getByLabel('Message North Star').fill('screen procedural');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(page.getByText('Verified a genuine animated book and responsive light in four live frames, with no video or GIF.',{exact:true})).toBeVisible({timeout:90000});
+ const frame=page.frameLocator('iframe[title="Interactive motion study"]');
+ await expect(frame.getByText('100% open',{exact:true})).toBeVisible();
+ await frame.getByRole('button',{name:'Close book',exact:true}).click();
+ await frame.getByRole('button',{name:'Open book',exact:true}).click();
+ await expect(frame.getByText('100% open',{exact:true})).toBeVisible();
+ expect(await frame.locator('video,img').count()).toBe(0);
+});
+
+test('native uploaded video is inspectable and playable inside an authored screen',async({page})=>{
+ await page.goto('/canvas-v2-e2e/codex');
+ await expect(page.getByRole('button',{name:'Upload image, GIF, or video',exact:true})).toBeEnabled();
+ const chooser=page.waitForEvent('filechooser');await page.getByRole('button',{name:'Upload image, GIF, or video',exact:true}).click();
+ await(await chooser).setFiles('app/canvas-v2-e2e/codex/media-assets/demo.mp4');
+ await expect(page.getByRole('button',{name:'Play video',exact:true})).toBeVisible();
+ await page.getByLabel('Message North Star').fill('screen video asset');await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(page.getByText('The uploaded video is retained, inspected, rendered and playing inside the interactive screen.',{exact:true})).toBeVisible({timeout:90000});
+ await expect(page.frameLocator('iframe[title="Retained video playback"]').locator('video')).toHaveAttribute('src',/^data:video\/mp4;base64,/);
+});
+
+
+test('human input interrupts live review without rolling back the new product state',async({page})=>{
+ await page.goto('/canvas-v2-e2e/codex');
+ await page.getByLabel('Message North Star').fill('screen procedural interrupt');await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(page.getByText('Review screen motion…',{exact:true})).toBeVisible({timeout:90000});
+ await page.frameLocator('iframe[title="Interactive motion study"]').getByRole('button',{name:'Close book',exact:true}).click();
+ await expect(page.getByText('The live review yielded to your interaction without changing the screen.',{exact:true})).toBeVisible({timeout:90000});
+ await expect(page.frameLocator('iframe[title="Interactive motion study"]').getByText('0% open',{exact:true})).toBeVisible();
+});

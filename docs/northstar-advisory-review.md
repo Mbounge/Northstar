@@ -1,6 +1,6 @@
 # Iterative discovery review (experimental)
 
-Enable with `NORTHSTAR_DISCOVERY_REVIEW=advisory` on the process hosting Codex. Restart after changing the setting. Unset it to retain the production native-loop baseline. This experiment is opt-in and has not been deployed.
+Enable with `NORTHSTAR_DISCOVERY_REVIEW=advisory` on the process hosting Codex. Restart after changing the setting. Unset it to retain the production native-loop baseline. The review loop is enabled only where `NORTHSTAR_DISCOVERY_REVIEW=advisory` is configured; deployment alone does not enable it.
 
 ## Review loop
 
@@ -59,3 +59,12 @@ Protocol tests cover repeated reviews, multiple native turns within one public t
 Chat rendering accepts explicit HTTP(S) URLs inside native citation tokens, including multi-source citations. Unknown native reference IDs render as “Source unavailable”; URLs are never guessed. Partial URL-citation tokens are held while streaming and literal code remains unchanged. This is presentation support, not a source-verification mechanism.
 
 Runtime reference: https://learn.chatgpt.com/docs/app-server
+
+
+## Product review across variations
+
+For more than two changed authored screens, independent review partitions the current evidence into groups of two. Each group keeps sibling component crops for cross-variant comparison and deduplicated reference pixels; it does not require missing sibling full renders that another group reviews. Local image citations are mapped back to the full evidence directory before completion checks. All changed screens still require satisfactory current-render/component/reference assessments. A failed group cannot approve the remaining work, and contradictory unresolved work takes precedence over a resolution from another group.
+
+Visual packets omit repeated canvas reads and raw board source while retaining the latest product identities, feedback context, actual interaction observations, research results, reviewer handoff and current images. Capturing a new state removes stale component/reference crops. Inspecting an untouched saved screen for a read-only audit does not turn it into a mandatory redesign. These are transport/reliability improvements; visual judgment remains an LLM assessment that requires live calibration.
+
+Motion completion also requires an explicit motion-quality assessment and citations for every retained frame in each supplied sequence. Active CSS/Web Animation evidence or declared procedural RAF rendering cannot pass from a still alone. Missing sequence frames or motion citations remain unfinished work. This is evidence coverage, not a deterministic judgment of taste, timing quality or smoothness.

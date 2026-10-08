@@ -1,7 +1,8 @@
 import { validateCanvasV2Screen, canvasV2ScreenAssetToken, SCREEN_ASSET_PATTERN, type CanvasV2InteractiveScreen } from './interactive-screen';
 import { screenMotionTimeline } from './screen-motion-timeline';
+import { isCanvasV2ScreenVideoBytes } from './screen-asset-pixels';
 
-export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'patch-element'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; motionSessionId?: string };
+export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; motionSessionId?: string; sampleTimesMs?: number[] };
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
 
 /** Opaque origin, no host APIs or cookies, no remote dependencies. Only registered
@@ -12,7 +13,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
   const bind = (source: string) => source.replace(SCREEN_ASSET_PATTERN, (_, token: string) => {
     const id = tokens.get(token);
     const bytes = id ? imageBytes.get(id) : undefined;
-    if (!bytes || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(bytes)) throw new Error(`Image ${id} has no retained pixels.`);
+    if (!bytes || (!/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(bytes) && !isCanvasV2ScreenVideoBytes(bytes))) throw new Error(`Asset ${id} has no retained pixels or playable media.`);
     return bytes;
   });
   const nonce = token.replace(/[^a-zA-Z0-9-]/g, '');
@@ -22,7 +23,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     // Offscreen/background frames can suspend RAF. Review must still respond
     // without moving the user's camera or tab. Force layout and bound settling.
     const settle = () => new Promise(resolve => {const timer=setTimeout(resolve,120);requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve()}))});
-    let feedbackMode=false, feedbackOutline, motionSession;
+    let feedbackMode=false, feedbackOutline, motionSession, humanInputSequence=0;
     const motionTimeline=${screenMotionTimeline.toString()};
     const releaseMotion = () => {const session=motionSession;motionSession=undefined;if(!session)return;clearTimeout(session.timer);for(const {a,time,state,rate} of session.saved){try{if(a.playState==='idle')continue;a.playbackRate=rate;if(state==='idle')a.cancel();else{a.currentTime=time;if(state==='running')a.play();else if(state==='finished')a.finish();else a.pause()}}catch{a.cancel()}}};
     const selectorFor = el => {
@@ -45,7 +46,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     },true);
     addEventListener('error', e => errors.push(String(e.message).slice(0,1000)));
     addEventListener('unhandledrejection', e => errors.push(String(e.reason).slice(0,1000)));
-    for(const type of ['pointerdown','wheel','keydown','input'])document.addEventListener(type,e=>{if(e.isTrusted){releaseMotion();parent.postMessage({protocol,token,userInput:true},'*')}},{capture:true,passive:true});
+    for(const type of ['pointerdown','wheel','keydown','input'])document.addEventListener(type,e=>{if(e.isTrusted){humanInputSequence++;releaseMotion();parent.postMessage({protocol,token,userInput:true},'*')}},{capture:true,passive:true});
     document.addEventListener('submit', e => e.preventDefault(), true);
     document.addEventListener('keydown', e => {if(e.key==='Escape'){clearFeedback();parent.postMessage({protocol,token,escape:true},'*')}});
     document.addEventListener('click', e => { const a=e.target.closest?.('a'); if(a && !a.getAttribute('href')?.startsWith('#')) e.preventDefault(); }, true);
@@ -59,9 +60,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const l=Math.max(0,r.left),t=Math.max(0,r.top),rr=Math.min(innerWidth,r.right),b=Math.min(innerHeight,r.bottom);
       return [[(l+rr)/2,(t+b)/2],[l+Math.min(3,(rr-l)/2),t+Math.min(3,(b-t)/2)],[rr-Math.min(3,(rr-l)/2),b-Math.min(3,(b-t)/2)]].some(([x,y])=>{const hit=document.elementFromPoint(x,y);return hit===el||Boolean(hit&&el.contains(hit))});
     };
-    const motionInfo = () => ({reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,hasReducedMotionStyles:[...document.querySelectorAll('style')].some(el=>el.textContent.includes('prefers-reduced-motion')),animations:document.getAnimations().slice(0,40).map(a=>{const t=a.effect?.getComputedTiming(),el=a.effect?.target;return {selector:el instanceof Element?selectorFor(el):undefined,playState:a.playState,currentTime:typeof a.currentTime==='number'?a.currentTime:null,duration:t?.duration,iterations:Number.isFinite(t?.iterations)?t.iterations:'infinite',easing:t?.easing}})});
+    const motionInfo = () => ({reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,hasReducedMotionStyles:[...document.querySelectorAll('style')].some(el=>el.textContent.includes('prefers-reduced-motion')),authoredRendering:${JSON.stringify({requestAnimationFrame:/\brequestAnimationFrame\s*\(/.test(screen.javascript),canvas:/<canvas\b/i.test(screen.html),svg:/<svg\b/i.test(screen.html)})},media:{videos:document.querySelectorAll('video').length,gifs:[...document.images].filter(el=>el.src.startsWith('data:image/gif;')).length},animations:document.getAnimations().slice(0,40).map(a=>{const t=a.effect?.getComputedTiming(),el=a.effect?.target;return {mechanism:typeof CSSAnimation!=='undefined'&&a instanceof CSSAnimation?'css-keyframes':typeof CSSTransition!=='undefined'&&a instanceof CSSTransition?'css-transition':'web-animation',selector:el instanceof Element?selectorFor(el):undefined,playState:a.playState,currentTime:typeof a.currentTime==='number'?a.currentTime:null,duration:t?.duration,iterations:Number.isFinite(t?.iterations)?t.iterations:'infinite',easing:t?.easing}})});
     const reviewRegions = () => [...document.querySelectorAll('nav,[role="navigation"],header,[role="banner"],img')].filter(el=>visible(el)&&(el.tagName!=='IMG'||/logo|mark|brand/i.test(el.alt||''))).slice(0,6).map(el=>({selector:selectorFor(el),label:el.tagName==='IMG' ? el.alt : el.getAttribute('aria-label')||el.tagName.toLowerCase(),rect:describe(el).rect}));
-    const inspect = () => ({reviewRegions:reviewRegions(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
+    const inspect = () => ({reviewRegions:reviewRegions(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
     const snapshot = () => {
       let pseudoCss='';
       const clone=document.body.cloneNode(true),live=[document.body,...document.body.querySelectorAll('*')],copies=[clone,...clone.querySelectorAll('*')];
@@ -72,6 +73,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         if(el instanceof HTMLTextAreaElement)copy.textContent=el.value;
         if(el instanceof HTMLSelectElement) [...copy.options].forEach((o,j)=>o.selected=el.options[j].selected);
         if(el instanceof HTMLCanvasElement){const image=document.createElement('img');image.src=el.toDataURL();image.setAttribute('style',copy.getAttribute('style')||'');copy.replaceWith(image)}
+        if(el instanceof HTMLVideoElement){const image=document.createElement('img');image.setAttribute('style',copy.getAttribute('style')||'');image.alt=el.getAttribute('aria-label')||'Video frame';if(el.readyState>=2&&el.videoWidth){const still=document.createElement('canvas');still.width=el.videoWidth;still.height=el.videoHeight;still.getContext('2d').drawImage(el,0,0);image.src=still.toDataURL('image/jpeg',0.95)}copy.replaceWith(image)}
         // A review must capture the GIF's currently displayed frame, rather
         // than restarting its animation in the private raster surface.
         if(el instanceof HTMLImageElement && el.src.startsWith('data:image/gif;') && el.complete && el.naturalWidth){const still=document.createElement('canvas');still.width=el.naturalWidth;still.height=el.naturalHeight;still.getContext('2d').drawImage(el,0,0);copy.src=still.toDataURL('image/png')}
@@ -86,6 +88,21 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       if(e.source!==parent || e.data?.protocol!==protocol || e.data.token!==token) return;
       const {requestId,command}=e.data;
       try {
+        if(command.action==='live-motion'){
+          const times=command.sampleTimesMs||[0,160,420];
+          if(!Array.isArray(times)||times.length<2||times.length>6||times[0]!==0||times.some((time,i)=>!Number.isInteger(time)||time<0||time>2500||(i>0&&time<=times[i-1])))throw Error('Choose 2–6 increasing elapsed samples from 0 to 2500 ms.');
+          if(motionSession)throw Error('Finish timeline sampling before live motion review.');
+          const inputSequence=humanInputSequence,started=performance.now(),samples=[];
+          if(command.selector){const trigger=document.querySelector(command.selector);if(!trigger||!visible(trigger)||trigger.disabled)throw Error('Choose a visible motion trigger.');trigger.click()}
+          for(const requestedMs of times){
+            const remaining=requestedMs-(performance.now()-started);if(remaining>0)await new Promise(resolve=>setTimeout(resolve,remaining));
+            if(humanInputSequence!==inputSequence)throw Error('Live motion review was interrupted. Preserve the user interaction.');
+            const actualElapsedMs=performance.now()-started,captured=snapshot();
+            samples.push({...captured,motionSample:{method:'Live elapsed-time DOM/canvas samples. No timeline seeking or playback substitution; this is not a frame-rate measurement.',requestedMs,actualElapsedMs,snapshotDurationMs:performance.now()-started-actualElapsedMs,documentHidden:document.hidden}});
+            if(samples.reduce((length,sample)=>length+sample.html.length+sample.css.length,0)>12000000)throw Error('Live motion samples exceed the capture budget. Use fewer samples.');
+          }
+          parent.postMessage({protocol,token,requestId,result:{samples}},'*');return;
+        }
         if(command.action==='feedback-mode'){feedbackMode=command.value==='on';if(!feedbackMode)clearFeedback();parent.postMessage({protocol,token,requestId,result:{feedbackMode}},'*');return}
         if(command.action==='motion-end'){if(motionSession?.id===command.motionSessionId)releaseMotion();parent.postMessage({protocol,token,requestId,result:{restored:true}},'*');return}
         if(command.action==='motion-begin'){
@@ -116,11 +133,12 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         else if(command.action==='scroll'){(el||window).scrollTo(Number(command.x)||0,Number(command.y)||0)}
         else if(!['inspect','snapshot'].includes(command.action))throw Error('Unknown screen action.');
         await settle();void document.body.offsetHeight;
+        if(command.action==='snapshot')await Promise.all([...document.querySelectorAll('video')].filter(el=>visible(el)&&el.readyState<2).map(el=>new Promise(resolve=>{const done=()=>{clearTimeout(timer);el.removeEventListener('loadeddata',done);el.removeEventListener('error',done);resolve()};const timer=setTimeout(done,5000);el.addEventListener('loadeddata',done,{once:true});el.addEventListener('error',done,{once:true})})));
         parent.postMessage({protocol,token,requestId,result:command.action==='snapshot'?snapshot():{...inspect(),element:el?describe(el):undefined}},'*');
       } catch(error){parent.postMessage({protocol,token,requestId,error:String(error)},'*')}
     });
     parent.postMessage({protocol,token,ready:true},'*');
   })();`;
   const safeScript = (code: string) => code.replace(/<\/script/gi, '<\\/script');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style>${bind(screen.css)}</style></head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script><script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style>${bind(screen.css)}</style></head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script><script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script></body></html>`;
 }

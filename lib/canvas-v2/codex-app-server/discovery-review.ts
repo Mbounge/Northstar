@@ -53,8 +53,8 @@ export const DISCOVERY_REVIEW_SCHEMA = {
       required: ['id', 'disposition', 'basis'],
     } },
     productChecks: { type:'array', items:{type:'object',additionalProperties:false,properties:{
-      nodeId:textField, referenceComparison:{type:'string',enum:['pass','revise','unverified','not_applicable']}, componentConsistency:{type:'string',enum:['pass','revise','unverified']}, assetQuality:{type:'string',enum:['pass','revise','unverified']}, evidenceImageNumbers:{type:'array',items:{type:'integer',minimum:1}}, assessment:textField,
-    },required:['nodeId','referenceComparison','componentConsistency','assetQuality','evidenceImageNumbers','assessment']} },
+      nodeId:textField, referenceComparison:{type:'string',enum:['pass','revise','unverified','not_applicable']}, componentConsistency:{type:'string',enum:['pass','revise','unverified']}, assetQuality:{type:'string',enum:['pass','revise','unverified']}, motionQuality:{type:'string',enum:['pass','revise','unverified','not_applicable']}, motionAssessment:textField, evidenceImageNumbers:{type:'array',items:{type:'integer',minimum:1}}, assessment:textField,
+    },required:['nodeId','referenceComparison','componentConsistency','assetQuality','motionQuality','motionAssessment','evidenceImageNumbers','assessment']} },
     completionAssessment: textField,
   },
   required: ['question', 'preserve', 'argumentChecks', 'sourceChecks', 'consistencyChecks', 'work', 'resolvedWork', 'productChecks', 'completionAssessment'],
@@ -96,7 +96,7 @@ export function parseDiscoveryFeedback(text: string) {
     return filled(resolution.id) && filled(resolution.basis) && ['resolved', 'no_longer_needed'].includes(string(resolution.disposition));
   })) return invalid();
   if (feedback.productChecks !== undefined && (!Array.isArray(feedback.productChecks) || !feedback.productChecks.every(raw => {
-    const check=object(raw); return filled(check.nodeId) && filled(check.assessment) && ['pass','revise','unverified','not_applicable'].includes(string(check.referenceComparison)) && ['pass','revise','unverified'].includes(string(check.componentConsistency)) && ['pass','revise','unverified'].includes(string(check.assetQuality)) && Array.isArray(check.evidenceImageNumbers) && check.evidenceImageNumbers.every(number=>Number.isInteger(number) && Number(number)>0);
+    const check=object(raw); if(check.motionQuality!==undefined&&(!['pass','revise','unverified','not_applicable'].includes(string(check.motionQuality))||!filled(check.motionAssessment)))return false; return filled(check.nodeId) && filled(check.assessment) && ['pass','revise','unverified','not_applicable'].includes(string(check.referenceComparison)) && ['pass','revise','unverified'].includes(string(check.componentConsistency)) && ['pass','revise','unverified'].includes(string(check.assetQuality)) && Array.isArray(check.evidenceImageNumbers) && check.evidenceImageNumbers.every(number=>Number.isInteger(number) && Number(number)>0);
   }))) return invalid();
   const ids = [...feedback.work, ...feedback.resolvedWork].map(item => string(object(item).id));
   if (new Set(ids).size !== ids.length) return invalid();
@@ -105,9 +105,9 @@ export function parseDiscoveryFeedback(text: string) {
 
 export const DISCOVERY_REVIEW_INSTRUCTIONS = `You are an independent thinking partner helping the primary model resolve the user's discovery question. You control successful completion: return substantive work when it remains, or an empty work list when the current answer is satisfactory. Help develop the answer, not merely police its wording. Do not write the final answer or request private reasoning.
 
-For product screens, prototypes and simulations, completion includes product quality by default. The user need not explicitly request logos, authentic assets, mobile dimensions, consistent components or visual review. Infer the platform and product identity from the actual reference pixels and brief; preserve them unless the user requested a different direction. Judge requested variations on their own brief, without demanding an exact layout copy when a new design is wanted. Functional controls and zero runtime errors do not establish visual quality. Compare the latest rendered screen pixels with the retained references: meaningful brand marks/photos, typography, spacing, alignment, image crops, navigation and legibility. A letter/emoji/rough mark standing in for a visible authentic logo, or missing meaningful reference imagery, is a material product defect even if the final answer never claims pixel fidelity. Return concrete work to retain/extract those authentic pixels with prepare_asset or workspace_run and bind them; use generation for suitable original assets when the brief calls for them. Repeated product components must stay faithful across variants: compare navigation glyph silhouettes, fill versus outline, icon size, stroke weight, spacing, label typography and active states against the actual reference pixels. Generic thin icons are not an acceptable substitute for visibly different product icons. Extract authentic navigation assets or reproduce their geometry accurately, while retaining native clickable targets. Review these recurring components at readable scale in every authored variant. Ordinary native text and interface icons do not require raster assets. Retaining a reference ID alone does not mean its assets were used. Use productWork's current screen metadata and latest captures, not obsolete drafts. Mobile dialogs and bottom sheets may intentionally cover or dim fixed navigation. Judge actual clipping, obstruction, safe-area clearance and reachable controls, rather than treating overlap with background content as a defect or moving a sheet above the tab bar merely to avoid it. Preserve original registered simulations and human work; request local repairs to authored screens, never a speculative redesign or mandatory imagery quota. Missing relevant rendered states require inspection, not an invented verdict. Use saved product identity and the user's precise feedback target to assess consistency and scope. An edit should preserve unrelated approved design and behavior. When motion matters, inspect retained elapsed-time motion frames and diagnostics, including stagger, shared timing, continuous effects and truncated windows; a static capture or zero errors does not prove temporal quality. Timeline samples cover CSS/Web Animations only, not frame rate, JavaScript loops, GIF/video, interrupted interactions or reduced-motion behavior. Ask for concrete missing checks without inventing defects from absent evidence. For completed product edits, argumentChecks may be empty; substantive visual/interaction defects belong in work with concrete resolution signals. Approve only when the requested behavior and material product-quality requirements are addressed, or accurately bound a real unavailable input.
+For product screens, prototypes and simulations, completion includes product quality by default. The user need not explicitly request logos, authentic assets, mobile dimensions, consistent components or visual review. Infer the platform and product identity from the actual reference pixels and brief; preserve them unless the user requested a different direction. Judge requested variations on their own brief, without demanding an exact layout copy when a new design is wanted. Functional controls and zero runtime errors do not establish visual quality. Compare the latest rendered screen pixels with the retained references: meaningful brand marks/photos, typography, spacing, alignment, image crops, navigation and legibility. A letter/emoji/rough mark standing in for a visible authentic logo, or missing meaningful reference imagery, is a material product defect even if the final answer never claims pixel fidelity. Return concrete work to retain/extract those authentic pixels with prepare_asset or workspace_run and bind them; use generation for suitable original assets when the brief calls for them. Repeated product components must stay faithful across variants: compare navigation glyph silhouettes, fill versus outline, icon size, stroke weight, spacing, label typography and active states against the actual reference pixels. Generic thin icons are not an acceptable substitute for visibly different product icons. Extract authentic navigation assets or reproduce their geometry accurately, while retaining native clickable targets. Review these recurring components at readable scale in every authored variant. Ordinary native text and interface icons do not require raster assets. Retaining a reference ID alone does not mean its assets were used. Use productWork's current screen metadata and latest captures, not obsolete drafts. Mobile dialogs and bottom sheets may intentionally cover or dim fixed navigation. Judge actual clipping, obstruction, safe-area clearance and reachable controls, rather than treating overlap with background content as a defect or moving a sheet above the tab bar merely to avoid it. Preserve original registered simulations and human work; request local repairs to authored screens, never a speculative redesign or mandatory imagery quota. Missing relevant rendered states require inspection, not an invented verdict. Use saved product identity and the user's precise feedback target to assess consistency and scope. An edit should preserve unrelated approved design and behavior. When motion matters, inspect retained elapsed-time motion frames and diagnostics, including stagger, shared timing, continuous effects and truncated windows; a static capture or zero errors does not prove temporal quality. Timeline seeking covers CSS/Web Animations. Live elapsed samples can establish changed procedural JavaScript/canvas/SVG states; inspect actual timestamps and hidden-page diagnostics. Runtime authored mechanisms and media elements are separate: a showcase recording may depict genuine product motion, but a retained clip cannot substitute for an interactive effect. Neither method proves frame rate, interrupted interactions or reduced-motion behavior. Ask for concrete missing checks without inventing defects from absent evidence. For completed product edits, argumentChecks may be empty; substantive visual/interaction defects belong in work with concrete resolution signals. Approve only when the requested behavior and material product-quality requirements are addressed, or accurately bound a real unavailable input.
 
-For each authored screen with qualityReviewRequired=true, supply a productChecks entry. Image-directory aliases represent identical pixels shared across variants. Cite the imageDirectory numbers for that screen's current render, useful component-detail crops, and the actual reference pixels you compared. Judge icon silhouettes/weight/fill, authentic marks, meaningful imagery, typography, platform conventions and recurring component consistency together; a functioning screen is not enough. Passing requires actual current render evidence. referenceComparison=not_applicable is reserved for an original direction without a reference-fidelity requirement, with an explanation. Use unverified when pixels cannot establish quality and return concrete work; do not pass from source, retained IDs or the author's claims. productChecks is empty for non-product work. These checks stay internal; the user should see the product and concise outcomes.
+For each authored screen with qualityReviewRequired=true, supply a productChecks entry. Image-directory aliases represent identical pixels shared across variants. Cite the imageDirectory numbers for that screen's current render, useful component-detail crops, and the actual reference pixels you compared. Judge icon silhouettes/weight/fill, authentic marks, meaningful imagery, typography, platform conventions and recurring component consistency together; a functioning screen is not enough. Passing requires actual current render evidence. referenceComparison=not_applicable is reserved for an original direction without a reference-fidelity requirement, with an explanation. Use unverified when pixels cannot establish quality and return concrete work; do not pass from source, retained IDs or the author's claims. productChecks is empty for non-product work. For supplied motion sequences, cite every retained elapsed/timeline frame and set motionQuality with a concrete motionAssessment. Static screenshots cannot establish motionQuality=pass; incomplete sequences remain unverified. Use not_applicable only when no motion check applies. Keep videos/GIFs distinct from authored animation. These checks stay internal; the user should see the product and concise outcomes.
 
 Read the actual question and the whole current draft first. Distinguish the author's assertions from quotations, conditional scenarios, questions and acknowledged unknowns. For every criticism, identify a short exact passage and the existing qualification elsewhere in the draft. When an explanation is missing, anchor the gap to the nearest passage that needs developing. If a qualification already resolves your concern, do not repeat that concern. Criticize only what remains after reading that qualification; a hypothetical possibility is not an asserted fact.
 
@@ -167,7 +167,7 @@ export class DiscoveryReviewContext {
   private openWork = new Map<string, JsonObject>();
   private handoff?: { previousDraft: string; feedback: string; observationOffset: number; activity: ReturnType<DiscoveryReviewContext['activity']> };
   record(label: string, value: unknown) {
-    const serialized = JSON.stringify(value, (_key, v) => typeof v === 'string' && v.startsWith('data:image/') ? '[image supplied separately when within packet budget]' : v) ?? '';
+    const serialized = JSON.stringify(value, (_key, v) => typeof v === 'string' && /^data:(?:image|video)\//.test(v) ? '[image supplied separately when within packet budget]' : v) ?? '';
     const entry = `${label}: ${serialized.slice(0, 24_000)}${serialized.length > 24_000 ? ' [excerpt truncated]' : ''}`;
     this.entries.push(entry); this.size += entry.length;
     this.sequence++;
@@ -227,7 +227,7 @@ export class DiscoveryReviewContext {
             const hasSource = typeof source.html === 'string';
             this.productScreens.set(id, { ...previous, nodeId: id, title: screen.title, width: screen.width, height: screen.height,
               qualityReviewRequired:Boolean(previous?.qualityReviewRequired||feedbackIds.has(id))&&!screen.simulation, sourceVersion:screen.sourceVersion, simulation: screen.simulation, productIdentityId: screen.productIdentityId, referenceAssetIds: screen.referenceAssetIds,
-              ...(sourceChanged ? {reviewed:false,details:[]} : {}), ...(hasSource ? { boundAssetIds: canvasV2ScreenBoundAssets(source as unknown as CanvasV2InteractiveScreen) } : {}) });
+              ...(sourceChanged ? {reviewed:false,details:[],motionFrames:[],motionSequences:[]} : {}), ...(hasSource ? { boundAssetIds: canvasV2ScreenBoundAssets(source as unknown as CanvasV2InteractiveScreen) } : {}) });
           }
         }
         if ((name === 'canvas_screen' || name === 'canvas_screen_element' || name === 'canvas_insert_simulation') && value.committed === true && value.nodeId) {
@@ -241,22 +241,25 @@ export class DiscoveryReviewContext {
         }
         if (name === 'canvas_screen_motion_review' && value.nodeId && typeof value.motionFrame === 'number') {
           captureNode = string(value.nodeId);
-          const trigger = string(object(args).triggerSelector).slice(0, 1000) || 'ongoing';
+          const trigger = (object(args).mode==='live'?'live:':'')+(string(object(args).triggerSelector).slice(0,1000)||'ongoing');
           nextImageKey = `screen:${captureNode}:motion:${encodeURIComponent(trigger)}:${value.motionFrame}`;
           const previous = this.productScreens.get(captureNode);
           const sequences = (Array.isArray(previous?.motionSequences) ? previous.motionSequences : []).map(object);
           const current = sequences.find(sequence => sequence.trigger === trigger);
-          const retained = [...sequences.filter(sequence => sequence.trigger !== trigger), { trigger, frames: Array.isArray(current?.frames) ? current.frames : [] }].slice(-3);
+          const retained = [...sequences.filter(sequence => sequence.trigger !== trigger), { trigger, expectedFrameCount: Number(value.motionFrameCount)||3, frames: Array.isArray(current?.frames) ? current.frames : [] }].slice(-3);
           const triggers = new Set(retained.map(sequence => encodeURIComponent(string(sequence.trigger))));
           for (const key of this.images.keys()) if (key.startsWith(`screen:${captureNode}:motion:`) && !triggers.has(key.split(':').at(-2)!)) this.removeImage(key);
           this.productScreens.set(captureNode, { ...previous, motionSequences: retained, motion: object(value.state).motion, motionMethod: object(object(value.state).motionSample).method });
         }
         else if (name === 'canvas_review' && value.nodeId && value.viewport) {
           captureNode = string(value.nodeId); nextImageKey = `screen:${captureNode}:render`;
+          // A new capture replaces its component/reference set too. Old crops
+          // otherwise remain in the packet after their metadata was reset.
+          for (const key of [...this.images.keys()]) if (key.startsWith(`screen:${captureNode}:detail:`) || key.startsWith(`screen:${captureNode}:reference:`)) this.removeImage(key);
           const state = object(value.state);
           this.productScreens.set(captureNode, { ...this.productScreens.get(captureNode), nodeId: captureNode,
-            sourceVersion:value.sourceVersion, qualityReviewRequired:!this.productScreens.get(captureNode)?.simulation, details:[], viewport: value.viewport, referenceAssetIds: value.referenceAssetIds, reviewReferenceAssetIds: value.reviewReferenceAssetIds, boundAssetIds: value.boundAssetIds,
-            state: { scroll: state.scroll, overflow: state.overflow, errors: state.errors, motion: state.motion, images: Array.isArray(state.images) ? state.images.slice(0, 60) : undefined }, reviewed: false });
+            sourceVersion:value.sourceVersion, qualityReviewRequired:this.productScreens.get(captureNode)?.qualityReviewRequired??!this.productScreens.get(captureNode)?.simulation, details:[], viewport: value.viewport, referenceAssetIds: value.referenceAssetIds, reviewReferenceAssetIds: value.reviewReferenceAssetIds, boundAssetIds: value.boundAssetIds,
+            state: { scroll: state.scroll, overflow: state.overflow, errors: state.errors, motion: state.motion, videos:state.videos, images: Array.isArray(state.images) ? state.images.slice(0, 60) : undefined }, reviewed: false });
         } else if (captureNode && value.detailName) nextImageKey = `screen:${captureNode}:detail:${string(value.detailName)}`;
         else if (captureNode && value.referenceAssetId) nextImageKey = `screen:${captureNode}:reference:${string(value.referenceAssetId)}`;
         else if (name === 'inspect_asset' && value.evidenceId) nextImageKey = `asset:${string(value.evidenceId)}`;
@@ -301,9 +304,14 @@ export class DiscoveryReviewContext {
       const hasDetails=!Array.isArray(screen.details)||screen.details.every(key=>citations.includes(string(key)));
       const state=object(screen.state);
       const runtimeSound=(!Array.isArray(state.errors)||!state.errors.length) && object(state.overflow).horizontal!==true && (!Array.isArray(state.images)||state.images.every(raw=>{const image=object(raw);return image.visible!==true||image.loaded!==false;}));
-      const verified=runtimeSound && screen.reviewed===true && check && citations.includes(`screen:${id}:render`) && hasDetails && check.componentConsistency==='pass' && check.assetQuality==='pass' && ((check.referenceComparison==='not_applicable' && (!Array.isArray(references)||!references.length))||(check.referenceComparison==='pass' && (!Array.isArray(references)||!references.length||hasReference)));
+      const videoSound=!Array.isArray(state.videos)||state.videos.every(raw=>{const video=object(raw);return video.visible!==true||(video.loaded===true&&!video.error);});
+      const filledMotionAssessment=(check:JsonObject)=>typeof check.motionAssessment==='string'&&check.motionAssessment.trim().length>0;
+      const sequences=(Array.isArray(screen.motionSequences)?screen.motionSequences:[]).map(object);
+      const observedMotion=object(state.motion),needsMotion=sequences.length>0||(Array.isArray(observedMotion.animations)&&observedMotion.animations.length>0)||object(observedMotion.authoredRendering).requestAnimationFrame===true;
+      const motionSound=!needsMotion||sequences.length>0&&(check?.motionQuality==='pass'&&filledMotionAssessment(check)&&sequences.every(sequence=>Array.isArray(sequence.frames)&&sequence.frames.length===sequence.expectedFrameCount)&&directory.filter(entry=>(entry.aliases??[entry.role]).some(role=>role.startsWith(`screen:${id}:motion:`))).every(entry=>citations.some(role=>(entry.aliases??[entry.role]).includes(role))));
+      const verified=motionSound && videoSound && runtimeSound && screen.reviewed===true && check && citations.includes(`screen:${id}:render`) && hasDetails && check.componentConsistency==='pass' && check.assetQuality==='pass' && ((check.referenceComparison==='not_applicable' && (!Array.isArray(references)||!references.length))||(check.referenceComparison==='pass' && (!Array.isArray(references)||!references.length||hasReference)));
       const issueId=`product-quality:${id}`;
-      if (!verified) remaining.set(issueId,{id:issueId,priority:'supporting',gap:`Current visual quality is not established for ${string(screen.title)||id}.`,draftBasis:{passage:'Proposed completion of the authored screen',existingQualification:'Functionality, source code and retained asset IDs do not establish reference fidelity.'},whyItMatters:'Product icons, authentic assets and repeated components must meet the brief across every variation.',reasoningToDevelop:'Review the current screen pixels and magnified component details against actual reference pixels; repair concrete inconsistencies locally. Review every changed variant and preserve unrelated work.',investigation:[],resolutionSignal:'An explicit productChecks assessment cites this current render and available component/reference images, with satisfactory component consistency and asset quality.'});
+      if (!verified) remaining.set(issueId,{id:issueId,priority:'supporting',gap:!motionSound?`Current animation quality is not established for ${string(screen.title)||id}.`:!videoSound?`A visible video is not ready in ${string(screen.title)||id}.`:`Current visual quality is not established for ${string(screen.title)||id}.`,draftBasis:{passage:'Proposed completion of the authored screen',existingQualification:'Functionality, source code and retained asset IDs do not establish reference fidelity.'},whyItMatters:'Product icons, authentic assets and repeated components must meet the brief across every variation.',reasoningToDevelop:!motionSound?'Capture every relevant authored animation sequence with timeline or live elapsed sampling as appropriate. Inspect and cite all its current frames, real timing and usable end state; supply an explicit motionQuality and motionAssessment. Static screenshots cannot approve genuine animation. Preserve user interaction and unrelated work.':!videoSound?'Prepare the retained clip and verify loaded visible frames and intended playback without replacing the requested authored animation with media. Preserve the original asset.':'Review the current screen pixels and magnified component details against actual reference pixels; repair concrete inconsistencies locally. Review every changed variant and preserve unrelated work.',investigation:[],resolutionSignal:'An explicit productChecks assessment cites this current render and available component/reference images, with satisfactory component consistency and asset quality.'});
       else remaining.delete(issueId);
     }
     const emitted = new Set((parsed.work as JsonObject[]).map(item => string(item.id)));
@@ -357,9 +365,76 @@ export class DiscoveryReviewContext {
 
 export type DiscoveryReviewer = (packet: ReturnType<DiscoveryReviewContext['packet']>, options: { key: string; model: string; effort?: import('../model-catalog').NorthstarEffort; signal: AbortSignal }) => Promise<string>;
 
+/** Keep each visual assessment readable while retaining sibling component
+ * pixels for consistency. Citation numbers are mapped back to the full packet. */
+export function productReviewBatches(packet: ReturnType<DiscoveryReviewContext['packet']>) {
+  let value: JsonObject;
+  try { value=object(JSON.parse(packet.text)); } catch { return [{packet,imageNumbers:packet.images.map((_,i)=>i+1)}]; }
+  const screens=(Array.isArray(value.productWork)?value.productWork:[]).map(object);
+  const required=screens.filter(screen=>screen.qualityReviewRequired && !screen.simulation);
+  if(required.length<=2)return [{packet,imageNumbers:packet.images.map((_,i)=>i+1)}];
+  const directory=(Array.isArray(value.imageDirectory)?value.imageDirectory:[]).map(object);
+  const compactHistory=(raw:unknown)=>{
+    if(!Array.isArray(raw))return raw;
+    const lastRead=raw.findLastIndex(entry=>typeof entry==='string' && entry.startsWith('Tool canvas_read:'));
+    return raw.flatMap((entry,i)=>{
+      if(typeof entry!=='string')return [entry];
+      if(entry.startsWith('Primary observation:')){try{const observation=object(JSON.parse(entry.slice('Primary observation: '.length)));if(['dynamicToolCall','mcpToolCall','functionCall'].includes(string(observation.type)))return [];}catch{/* Preserve unfamiliar observations. */}} // Only duplicate tool-call source is omitted; native research and useful reasoning stay available.
+      if(!entry.startsWith('Tool canvas_read:'))return [entry];
+      if(i!==lastRead)return [];
+      try{
+        const payload=object(JSON.parse(entry.slice('Tool canvas_read: '.length)));
+        if(Array.isArray(payload.result))payload.result=payload.result.map(rawPart=>{
+          const part=object(rawPart);if(part.type!=='inputText')return rawPart;
+          const current=object(JSON.parse(string(part.text)));
+          const context={...current};delete context.document;delete context.observation;
+          return {...part,text:JSON.stringify({...context,sourceOmitted:'Assess current rendered pixels; interface source and board geometry omitted from visual review.'})};
+        });
+        return ['Tool canvas_read: '+JSON.stringify(payload)];
+      }catch{return [entry];}
+    });
+  };
+  const batches=[];
+  for(let start=0;start<required.length;start+=2){
+    const ids=new Set(required.slice(start,start+2).map(screen=>string(screen.nodeId)));
+    const selected=directory.filter(entry=>(Array.isArray(entry.aliases)?entry.aliases:[entry.role]).some(raw=>{
+      const role=string(raw);
+      return !role.startsWith('screen:') || [...ids].some(id=>role.startsWith(`screen:${id}:`)) || role.includes(':detail:');
+    }));
+    const imageNumbers=selected.map(entry=>Number(entry.imageNumber));
+    const focus={...value,investigation:compactHistory(value.investigation),reviewHandoff:value.reviewHandoff?{...object(value.reviewHandoff),observationsSincePreviousReview:compactHistory(object(value.reviewHandoff).observationsSincePreviousReview)}:null,productWork:screens.map(screen=>({...screen,qualityReviewRequired:ids.has(string(screen.nodeId))})),
+      reviewFocus:{screenNodeIds:[...ids],assessAnswer:start===0,rule:'Assess product quality only for these screenNodeIds. Sibling component crops are comparison evidence. Do not ask to recapture omitted sibling full renders; their own batch reviews them. Assess non-product explanation/source claims only when assessAnswer is true. Keep all material visual defects for the focused screens.'},
+      imageDirectory:selected.map((entry,i)=>({...entry,imageNumber:i+1}))};
+    batches.push({packet:{text:JSON.stringify(focus),images:imageNumbers.map(number=>packet.images[number-1])},imageNumbers});
+  }
+  return batches;
+}
+
+/** A failed batch never becomes an approval of the remaining screens. */
+export async function reviewProductBatches(review: DiscoveryReviewer, packet: ReturnType<DiscoveryReviewContext['packet']>, options: Parameters<DiscoveryReviewer>[1]): Promise<string> {
+  const batches=productReviewBatches(packet);
+  if(batches.length===1)return review(packet,options);
+  const feedback:JsonObject[]=[];
+  for(const batch of batches){
+    options.signal.throwIfAborted();
+    const result=parseDiscoveryFeedback(await review(batch.packet,options));
+    const ids=object(JSON.parse(batch.packet.text)).reviewFocus as {screenNodeIds:string[]};
+    result.productChecks=(Array.isArray(result.productChecks)?result.productChecks:[]).map(object).filter(check=>ids.screenNodeIds.includes(string(check.nodeId))).map(check=>({...check,evidenceImageNumbers:(check.evidenceImageNumbers as number[]).map(number=>batch.imageNumbers[number-1]).filter(Boolean)}));
+    feedback.push(result);
+  }
+  const work=new Map<string,JsonObject>(),resolved=new Map<string,JsonObject>(),checks=new Map<string,JsonObject>();
+  for(const result of feedback){
+    for(const raw of result.work as JsonObject[]){const prior=work.get(string(raw.id));work.set(string(raw.id),{...raw,priority:prior?.priority==='central'?'central':raw.priority});}
+    for(const raw of result.resolvedWork as JsonObject[])resolved.set(string(raw.id),raw);
+    for(const raw of result.productChecks as JsonObject[])checks.set(string(raw.nodeId),raw);
+  }
+  for(const id of work.keys())resolved.delete(id);
+  return JSON.stringify({...feedback[0],work:[...work.values()],resolvedWork:[...resolved.values()],productChecks:[...checks.values()],completionAssessment:feedback.map(result=>string(result.completionAssessment)).join(' ')});
+}
+
 /** A separate ephemeral Codex process, same model/effort, no discovery tools or side effects. */
 export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, timeoutMs = 120_000): DiscoveryReviewer {
-  return async (packet, options) => {
+  const review: DiscoveryReviewer = async (packet, options) => {
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), timeoutMs);
     const signal = AbortSignal.any([options.signal, deadline.signal]);
@@ -414,6 +489,7 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
       return await completed;
     } finally { clearTimeout(timer); signal.removeEventListener('abort', stop); rpc?.close(); }
   };
+  return (packet,options)=>reviewProductBatches(review,packet,options);
 }
 
 /** One public turn spans successive primary drafts and their independent reviews. */

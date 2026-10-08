@@ -39,7 +39,7 @@ export function canvasV2ScreenReviewAssets(screen: CanvasV2InteractiveScreen, ev
     if (visited.has(id) || visited.size >= 128 || depth > 8) return;
     visited.add(id);
     const asset = assets.get(id);
-    if (!asset || asset.mediaType === 'video' || asset.source?.permission === 'unavailable') return;
+    if (!asset || asset.source?.permission === 'unavailable') return;
     for (const tag of asset.tags ?? []) if (tag.startsWith('derived-from:')) visit(tag.slice('derived-from:'.length), depth + 1);
     result.push(asset);
   };
@@ -71,7 +71,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   // Only the host constructs the document and its sandbox. Source assets remain
   // opaque handles, so saved objects never hide expiring blob/signed URLs.
   if (/<\s*(?:script|iframe|object|embed|base|link|meta|html|head|body)\b|\son[a-z]+\s*=|javascript\s*:/i.test(screen.html)) throw new Error('Use a body HTML fragment, CSS and event listeners in javascript. Embedded documents, scripts and event attributes are not supported.');
-  if (/@import|<\/style/i.test(screen.css) || /blob:|data:image\/(?:png|jpe?g|webp|gif);base64/i.test(screen.html + screen.css + screen.javascript)) throw new Error('Use registered northstar-asset handles for images; external stylesheets and temporary image URLs cannot be retained.');
+  if (/@import|<\/style/i.test(screen.css) || /blob:|data:(?:image\/(?:png|jpe?g|webp|gif)|video\/(?:mp4|webm));base64/i.test(screen.html + screen.css + screen.javascript)) throw new Error('Use registered northstar-asset handles for images; external stylesheets and temporary image URLs cannot be retained.');
   const refs = new Set(screen.referenceAssetIds);
   const html = normalizeScreenAssetTokens(screen.html, [...refs]), css = normalizeScreenAssetTokens(screen.css, [...refs]), javascript = normalizeScreenAssetTokens(screen.javascript, [...refs]);
   if (html.length > 64000 || css.length > 40000 || javascript.length > 40000) throw new Error('The normalized screen source exceeds its HTML/CSS/JavaScript size budget.');
@@ -92,6 +92,6 @@ export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encod
 export function validateCanvasV2ScreenAssets(screen: CanvasV2InteractiveScreen, evidence: readonly CanvasV2EvidenceAsset[]) {
   for (const id of screen.referenceAssetIds) {
     const asset = evidence.find(asset => asset.id === id);
-    if (!asset || asset.source?.permission === 'unavailable' || asset.mediaType === 'video') throw new Error(`Read and retain image ${id} before using it in a screen.`);
+    if (!asset || asset.source?.permission === 'unavailable') throw new Error(`Read and retain asset ${id} before using it in a screen.`);
   }
 }

@@ -41,3 +41,16 @@ test("executable media URLs and model-authored players remain rejected", () => {
   assert.throws(() => parseCanvasV2PlayableMedia(JSON.stringify({ version:1,type:"video",src:"javascript:alert(1)",evidenceId:"x",description:"Video" })), /direct hosted/);
   assert.ok(validateCanvasV2ArtifactDocument({ html: '<video src="https://example.com/movie.mp4"></video>', css: "", javascript: "" }).length);
 });
+
+test('uploaded video and GIF metadata retain playback identity across saved data URLs',async()=>{
+  const {canvasV2SuppliedMediaAsset}=await import('../lib/canvas-v2/canvas-media');
+  for(const [type,mime] of [['video','video/mp4'],['gif','image/gif']] as const){
+    const raw={version:1,type,src:`data:${mime};base64,ZmFrZQ==`,evidenceId:'upload',description:'Chosen clip'};
+    const media=parseCanvasV2PlayableMedia(JSON.stringify(raw)),asset=canvasV2SuppliedMediaAsset(media,mime);
+    assert.equal(asset.mediaType,type);assert.equal(asset.originalUrl,raw.src);assert.equal(asset.source?.permission,'authorized');
+    const document={html:`<div data-canvas-v2-node-id="clip" data-canvas-v2-media='${JSON.stringify(media)}'></div>`,css:''};
+    assert.deepEqual(validateCanvasV2ArtifactDocument(document),[]);
+    assert.deepEqual(validateCanvasV2EvidenceBindings(document,[asset]),[]);
+  }
+  assert.throws(()=>parseCanvasV2PlayableMedia(JSON.stringify({version:1,type:'video',src:'data:text/html;base64,ZmFrZQ==',evidenceId:'unsafe',description:'Unsafe'})),/retained/);
+});

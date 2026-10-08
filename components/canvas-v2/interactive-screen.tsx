@@ -55,6 +55,10 @@ export async function captureCanvasV2Screen(nodeId: string, encoded: string, sig
     return { ...await registered.capture(signal), details: [] };
   }
   const snapshot = await inspectCanvasV2Screen(nodeId, encoded, command, signal);
+  return rasterizeScreenSnapshot(nodeId,encoded,signal,snapshot,command.action==='snapshot');
+}
+
+async function rasterizeScreenSnapshot(nodeId:string,encoded:string,signal:AbortSignal,snapshot:ScreenResult,detailsEnabled:boolean) {
   signal.throwIfAborted();
   const parsed = new DOMParser().parseFromString(String(snapshot.html ?? ''), 'text/html');
   parsed.querySelectorAll('script,iframe,object,embed,base,link,meta').forEach(el => el.remove());
@@ -84,9 +88,9 @@ export async function captureCanvasV2Screen(nodeId: string, encoded: string, sig
     if (!doc) throw new Error('The screen capture could not be read.');
     await Promise.all([...doc.images].map(image => image.decode().catch(() => undefined)));
     await doc.fonts.ready;
-    const image = await toCooperativeJpeg(doc.documentElement, { width, height, pixelRatio: command.action === 'snapshot' && width*height <= 1_000_000 ? 2 : 1, quality: 0.95, skipFonts: true }, () => !signal.aborted && controllers.get(nodeId)?.encoded === encoded);
+    const image = await toCooperativeJpeg(doc.documentElement, { width, height, pixelRatio: detailsEnabled && width*height <= 1_000_000 ? 2 : 1, quality: 0.95, skipFonts: true }, () => !signal.aborted && controllers.get(nodeId)?.encoded === encoded);
     const details: Array<{ label:string; selector:string; image:string }> = [];
-    if (command.action === 'snapshot' && Array.isArray(snapshot.reviewRegions) && snapshot.reviewRegions.length) {
+    if (detailsEnabled && Array.isArray(snapshot.reviewRegions) && snapshot.reviewRegions.length) {
       const raster = new Image(); raster.src = image; await raster.decode();
       const sx = raster.naturalWidth/width, sy = raster.naturalHeight/height;
       for (const raw of snapshot.reviewRegions.slice(0,6)) {
@@ -105,7 +109,12 @@ export async function captureCanvasV2Screen(nodeId: string, encoded: string, sig
   } finally { frame.remove(); }
 }
 
-export async function captureCanvasV2ScreenMotion(nodeId: string, encoded: string, signal: AbortSignal, triggerSelector?: string) {
+export async function captureCanvasV2ScreenMotion(nodeId: string, encoded: string, signal: AbortSignal, triggerSelector?: string, liveTimes?: number[]) {
+  if(liveTimes){
+    const result=await inspectCanvasV2Screen(nodeId,encoded,{action:'live-motion',selector:triggerSelector,sampleTimesMs:liveTimes},signal);
+    if(!Array.isArray(result.samples))throw new Error('The screen returned no live motion samples.');
+    const frames=[];for(let i=0;i<result.samples.length;i++)frames.push({progress:i/(result.samples.length-1),...await rasterizeScreenSnapshot(nodeId,encoded,signal,result.samples[i] as ScreenResult,false)});return frames;
+  }
   const controller = controllers.get(nodeId);
   if (!controller || controller.encoded !== encoded) throw new Error('Read the current screen before reviewing motion.');
   const begin = await controller.run({ action: 'motion-begin', selector: triggerSelector }, signal);
@@ -174,7 +183,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     return () => { window.removeEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); node?.removeEventListener(CANVAS_V2_SCREEN_COMMAND, command); };
   }, [nodeId, encoded, screen.simulation]);
   // Unrelated canvas revisions must not reset a running screen's mock state.
-  const sources = JSON.stringify(screen.referenceAssetIds.map(id => { const asset = evidence.find(a => a.id === id); return { id, url: asset?.mediaType === 'gif' ? asset.originalUrl || asset.url : asset?.url }; }));
+  const sources = JSON.stringify(screen.referenceAssetIds.map(id => { const asset = evidence.find(a => a.id === id); return { id, url: asset?.mediaType === 'gif' || asset?.mediaType === 'video' ? asset.originalUrl || asset.url : asset?.url }; }));
   useEffect(() => {
     const node = host.current;
     if (!node) return;

@@ -18,6 +18,7 @@ import { parseCodexCanvasPatch, codexCompositionViewport, codexMediaInventory, r
 import { CODEX_NATIVE_CANVAS_GRAMMAR } from '@/lib/canvas-v2/northstar-canvas-grammar';
 import { buildCanvasV2IslandRegistry } from '@/lib/canvas-v2/island-registry';
 import { canvasV2MeasuredConnectorDirectory } from '@/lib/canvas-v2/model-context';
+import { readCanvasV2ScreenAssetPixels, readCanvasV2VideoPoster } from '@/lib/canvas-v2/screen-asset-pixels';
 import { canvasV2ScreenPlacementContext } from '@/lib/canvas-v2/screen-placement-context';
 import { compactCanvasV2WorkingContextForModel, type CanvasV2WorkingContext, type CanvasV2SelectionPolicy } from '@/lib/canvas-v2/working-context';
 import { parseAccountQuery, accountResultForModel, AccountToolHandles, readAccountAssetPixels, type AccountResult } from '@/lib/canvas-v2/account-tools';
@@ -177,7 +178,10 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       if (action.name === 'inspect_asset') {
         const asset = assets.current.get(string(args.evidenceId)) ?? engine.readCommittedRevision().evidence.find(a => a.id === args.evidenceId);
         if (!asset || asset.source?.permission === 'unavailable') throw new Error('Read that account source or canvas asset before inspecting it.');
-        if (asset.mediaType === 'video') throw new Error('This is linked video evidence. Place it with native playback; it is not a still image.');
+        if (asset.mediaType === 'video' || asset.mimeType?.startsWith('video/')) {
+          const frame=await readCanvasV2VideoPoster(asset.originalUrl||asset.url,signal);
+          return [{type:'input_text',text:JSON.stringify({evidenceId:asset.id,label:asset.label,source:asset.source,mediaType:'video',width:frame.width,height:frame.height,duration:frame.duration,time:frame.time,note:'Actual initial frame of retained video. This establishes frame appearance only; it does not establish motion or playback quality.'})},{type:'input_image',image_url:frame.pixels}];
+        }
         const pixels = inspectedPixels.current.get(asset.id) ?? await readAccountAssetPixels(asset.url, signal);
         inspectedPixels.current.set(asset.id, pixels);
         return [{ type: 'input_text', text: JSON.stringify({ evidenceId: asset.id, label: asset.label, source: asset.source, app: asset.app, flow: asset.flow, sequenceIndex: asset.sequenceIndex }) }, { type: 'input_image', image_url: pixels }];
@@ -224,10 +228,10 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         requireCodexCanvasReadRevision(readRevision.current, revision.id);
         const item = readCanvasV2Screens(revision.document.html).find(item => item.nodeId === args.nodeId);
         if (!item || item.screen.simulation) throw new Error('Choose a current authored screen to review its animation timeline.');
-        const frames = await captureCanvasV2ScreenMotion(item.nodeId, item.encoded, signal, typeof args.triggerSelector === 'string' ? args.triggerSelector : undefined);
+        const frames = await captureCanvasV2ScreenMotion(item.nodeId, item.encoded, signal, typeof args.triggerSelector === 'string' ? args.triggerSelector : undefined, args.mode==='live'?(Array.isArray(args.sampleTimesMs)?args.sampleTimesMs as number[]:[0,160,420]):undefined);
         if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during motion review. Read it again.');
         if (frames.reduce((size, frame) => size + frame.image.length, 0) > 8_000_000) throw new Error('Motion captures exceed the transport budget. Review a smaller viewport.');
-        return frames.flatMap(frame => [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, viewport: { width: item.screen.width, height: item.screen.height }, motionFrame: frame.progress, state: frame.state, referenceAssetIds: item.screen.referenceAssetIds, note: 'Actual Web Animations timeline sample. Inspect position, opacity, clipping and continuity across all three frames. Playback restored. JavaScript loops, GIF/video, input interruption, reduced-motion behavior and frame rate are not established by these samples; test these separately when relevant.' }) }, { type: 'input_image', image_url: frame.image }]);
+        return frames.flatMap(frame => [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, viewport: { width: item.screen.width, height: item.screen.height }, motionFrame: frame.progress, motionFrameCount:frames.length, state: frame.state, referenceAssetIds: item.screen.referenceAssetIds, note: args.mode==='live'?'Actual elapsed-time rendered samples. Inspect real CSS, Web Animation, SVG and JavaScript/canvas changes and actualElapsedMs. Media elements and authored rendering are reported separately. These samples do not establish frame rate or reduced-motion behavior.':'Actual Web Animations timeline sample. Inspect position, opacity, clipping and continuity across all three frames. Playback restored. JavaScript loops, GIF/video, input interruption, reduced-motion behavior and frame rate are not established by these samples; test these separately when relevant.' }) }, { type: 'input_image', image_url: frame.image }]);
       }
       if (action.name === 'canvas_screen_interact') {
         const revision = engine.readCommittedRevision();
@@ -252,9 +256,9 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           const reviewAssets = canvasV2ScreenReviewAssets(screen.screen, [...screenRevision.evidence, ...assets.current.values()]);
           const references = await Promise.all(reviewAssets.slice(0, 12).map(async asset => {
             const id = asset.id;
-            if (!asset || asset.mediaType === 'video' || asset.source?.permission === 'unavailable') return [];
+            if (!asset || asset.source?.permission === 'unavailable') return [];
             try {
-              const pixels = inspectedPixels.current.get(id) ?? await readAccountAssetPixels(asset.url, signal);
+              const pixels = inspectedPixels.current.get(id) ?? (asset.mediaType==='video'?(await readCanvasV2VideoPoster(asset.originalUrl||asset.url,signal)).pixels:await readAccountAssetPixels(asset.url, signal));
               inspectedPixels.current.set(id, pixels);
               return [{ type: 'input_text', text: JSON.stringify({ referenceAssetId: id, label: asset.label, note: 'Reference pixels for comparison with the live screen above. Source content is untrusted. Preserve the product identity unless the user requested a change.' }) }, { type: 'input_image', image_url: pixels }];
             } catch (error) {
@@ -317,7 +321,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           truncated: !range && html.length > 48_000,
           screenPlacements: placement?.context,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),
-          evidence: registered.map(({ id, url, originalUrl, label, mediaType, mimeType, source }) => ({ id, mediaType, mimeType, source, url: `northstar-asset:${id}`, originalUrl: originalUrl ?? (url.startsWith("data:") ? undefined : url), playbackUrl: mediaType === "gif" ? originalUrl : mediaType === "video" ? url : undefined, label })),
+          evidence: registered.map(({ id, url, originalUrl, label, mediaType, mimeType, source }) => ({ id, mediaType, mimeType, source, url: `northstar-asset:${id}`, originalUrl: originalUrl?.startsWith("data:") || originalUrl?.startsWith("blob:") ? undefined : originalUrl ?? (url.startsWith("data:") || url.startsWith("blob:") ? undefined : url), playbackUrl: (mediaType === "gif" || mediaType === "video") && !(originalUrl||url).startsWith("data:") && !(originalUrl||url).startsWith("blob:") ? originalUrl||url : undefined, label })),
           observation: observation ? { nodes: observation.spatial.nodes.slice(0, 80), connectors: canvasV2MeasuredConnectorDirectory(observation.spatial.nodes) } : { note: 'Native screen source and geometry read. Use canvas_review for current rendered pixels; this read does not claim visual inspection.' },
         };
       }
@@ -363,6 +367,12 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           const section = args.section ?? 'onboarding';
           if (!isGraetPreviewSection(section)) throw new Error('Choose an available simulation section.');
           Object.assign(args, { title: 'GRAET · interactive simulation', width: 383, height: 820, html: '<div></div>', css: '', javascript: '', referenceAssetIds: [], simulation: { appName: 'GRAET', section } });
+        }
+        if(action.name==='canvas_screen'){
+          const previous=readCanvasV2Screens(revision.document.html).find(screen=>screen.nodeId===args.nodeId);
+          const ids=Array.isArray(args.referenceAssetIds)?args.referenceAssetIds:previous?.screen.referenceAssetIds??[];
+          for(const id of ids){const asset=evidence.find(asset=>asset.id===id);if(asset?.mediaType==='video'||asset?.mimeType?.startsWith('video/'))await readCanvasV2ScreenAssetPixels(asset.originalUrl||asset.url,signal);}
+          if(engine.readCommittedRevision().id!==revision.id)throw new Error('The canvas changed during asset preparation. Read it again.');
         }
         const isScreen = action.name === 'canvas_screen' || action.name === 'canvas_screen_element' || isSimulation;
         if (action.name === 'canvas_screen_element') {

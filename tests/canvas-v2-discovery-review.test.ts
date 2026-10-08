@@ -522,3 +522,64 @@ test('unfinished product review keeps failure diagnostics and unverified approva
     assert.equal(t.client.view.status, 'completed');
   } finally { t.close(); }
 });
+
+test('four-screen review batches keep sibling component evidence and reconcile local citations for every variant',async()=>{
+  const {productReviewBatches,reviewProductBatches}=await import('../lib/canvas-v2/codex-app-server/discovery-review');
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  for(const id of ['one','two','three','four']){
+    context.tool('canvas_screen',{title:id},[text({nodeId:id,committed:true})]);
+    context.tool('canvas_review',{},[text({nodeId:id,viewport:{width:390,height:844},reviewReferenceAssetIds:['ref'],state:{errors:[],overflow:{horizontal:false}}}),{type:'inputImage',imageUrl:'data:image/png;base64,render-'+id},text({detailName:'Navigation'}),{type:'inputImage',imageUrl:'data:image/png;base64,nav-'+id},text({referenceAssetId:'ref'}),{type:'inputImage',imageUrl:'data:image/png;base64,shared-reference'}]);
+  }
+  context.tool('canvas_read',{},[text({document:{html:'obsolete board source',css:'css'},screens:['one','two','three','four'].map(nodeId=>({nodeId}))})]);
+  const packet=context.packet('All requested variants are ready.'),batches=productReviewBatches(packet);
+  assert.equal(batches.length,2);
+  assert.deepEqual(batches.map(batch=>JSON.parse(batch.packet.text).reviewFocus.screenNodeIds),[['one','two'],['three','four']]);
+  for(const batch of batches){
+    const value=JSON.parse(batch.packet.text);
+    assert.equal(value.imageDirectory.filter((entry:{role:string})=>entry.role.includes(':render')).length,2);
+    assert.equal(value.imageDirectory.filter((entry:{role:string})=>entry.role.includes(':detail:')).length,4);
+    assert.ok(!batch.packet.text.includes('obsolete board source'));
+  }
+  let calls=0;
+  const feedback=await reviewProductBatches(async batch=>{
+    calls++;const value=JSON.parse(batch.text),result=JSON.parse(feedbackFor());result.resolvedWork=[];
+    result.productChecks=value.reviewFocus.screenNodeIds.map((nodeId:string)=>({nodeId,referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',assessment:'Current navigation matches the reference and sibling variants.',evidenceImageNumbers:value.imageDirectory.filter((entry:{role:string;aliases?:string[]})=>(entry.aliases??[entry.role]).some(role=>role.startsWith(`screen:${nodeId}:`))).map((entry:{imageNumber:number})=>entry.imageNumber)}));return JSON.stringify(result);
+  },packet,{key:'fake',model:'gpt-5.6-luna',signal:new AbortController().signal});
+  assert.equal(calls,2);
+  assert.equal(JSON.parse(feedback).productChecks.length,4);
+  assert.equal(JSON.parse(context.reconcileFeedback(feedback)).work.length,0);
+  await assert.rejects(reviewProductBatches(async()=>{throw new Error('Review failed');},packet,{key:'fake',model:'gpt-5.6-luna',signal:new AbortController().signal}),/Review failed/);
+});
+
+test('new rendered state discards stale component and reference crops; unready visible video cannot pass',()=>{
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  context.tool('canvas_review',{},[text({nodeId:'video',viewport:{width:390,height:844},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,old'},text({detailName:'Old navigation'}),{type:'inputImage',imageUrl:'data:image/png;base64,old-detail'},text({referenceAssetId:'old-ref'}),{type:'inputImage',imageUrl:'data:image/png;base64,old-ref'}]);
+  context.tool('canvas_review',{},[text({nodeId:'video',viewport:{width:390,height:844},state:{videos:[{visible:true,loaded:false}]}}),{type:'inputImage',imageUrl:'data:image/png;base64,current'}]);
+  const packet=context.packet('Video ready');assert.equal(packet.images.length,1);
+  const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'video',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',assessment:'Original direction.',evidenceImageNumbers:[1]}];
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+});
+
+
+test('read-only review of saved screens does not turn an audit into a mandatory redesign',()=>{
+ const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+ context.user([{type:'text',text:'Assess the existing screens and leave them unchanged.',text_elements:[]}]);
+ context.tool('canvas_read',{},[text({screens:[{nodeId:'saved',sourceVersion:'same'}]})]);
+ context.tool('canvas_review',{},[text({nodeId:'saved',viewport:{width:390,height:844},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,seen'}]);
+ assert.equal(JSON.parse(context.packet('Assessment').text).productWork[0].qualityReviewRequired,false);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+});
+
+
+test('motion quality cannot pass from static render or incomplete frame citations',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ context.tool('canvas_review',{},[text({nodeId:'motion',viewport:{width:390,height:844},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,render'}]);
+ for(const motionFrame of [0,.5,1])context.tool('canvas_screen_motion_review',{mode:'live',triggerSelector:'#open'},[text({nodeId:'motion',motionFrame,motionFrameCount:3,state:{motionSample:{actualElapsedMs:motionFrame*800}}}),{type:'inputImage',imageUrl:'data:image/png;base64,frame'+motionFrame}]);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'motion',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',evidenceImageNumbers:[1],assessment:'Current screen is sound.'}];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+ feedback.productChecks[0].motionQuality='pass';feedback.productChecks[0].motionAssessment='Actual live frames establish the intended transition, with bounded timing.';
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+ feedback.productChecks[0].evidenceImageNumbers=[1,2,3,4];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+});

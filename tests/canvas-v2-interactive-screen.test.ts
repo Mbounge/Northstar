@@ -154,3 +154,19 @@ test('screen commits reject JavaScript syntax faults without evaluating the scri
   assert.doesNotThrow(() => validateCanvasV2ScreenJavaScript('globalThis.northstarSyntaxSideEffect=true;'));
   assert.equal((globalThis as Record<string, unknown>).northstarSyntaxSideEffect, undefined);
 });
+
+test('retained video binds inside the isolated screen without allowing network media or direct encoded payloads',async()=>{
+  const {readFileSync}=await import('node:fs');
+  const {readCanvasV2ScreenAssetPixels,isCanvasV2ScreenVideoBytes}=await import('../lib/canvas-v2/screen-asset-pixels');
+  const bytes=readFileSync('app/canvas-v2-e2e/codex/media-assets/demo.mp4'),data='data:video/mp4;base64,'+bytes.toString('base64');
+  assert.ok(isCanvasV2ScreenVideoBytes(data));
+  assert.equal(await readCanvasV2ScreenAssetPixels('https://example.com/clip.mp4',new AbortController().signal,async()=>new Response(bytes,{headers:{'Content-Type':'video/mp4'}})),data);
+  const video={...screen,html:'<video controls playsinline src="northstar-asset:clip"></video>',referenceAssetIds:['clip']};
+  const asset={id:'clip',url:data,label:'Clip',mediaType:'video' as const,mimeType:'video/mp4'};
+  const {validateCanvasV2ScreenAssets}=await import('../lib/canvas-v2/interactive-screen');validateCanvasV2ScreenAssets(video,[asset]);
+  const runtime=buildCanvasV2ScreenRuntime(video,new Map([['clip',data]]),'video-token');
+  assert.ok(runtime.includes('src="'+data+'"'));assert.ok(runtime.includes('media-src data:'));assert.ok(runtime.includes("connect-src 'none'"));
+  assert.throws(()=>buildCanvasV2ScreenRuntime(video,new Map([['clip','data:video/mp4;base64,ZmFrZQ==']]),'bad'),/retained pixels/);
+  assert.throws(()=>validateCanvasV2Screen({...video,html:'<video src="'+data+'"></video>'}),/handles/);
+  await assert.rejects(readCanvasV2ScreenAssetPixels('https://example.com/large.mp4',new AbortController().signal,async()=>new Response(bytes,{headers:{'Content-Type':'video/mp4','Content-Length':'12000001'}})),/12 MB/);
+});

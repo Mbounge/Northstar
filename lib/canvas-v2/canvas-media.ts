@@ -1,3 +1,4 @@
+import type { CanvasV2EvidenceAsset } from './types';
 export const CANVAS_V2_MEDIA_TOGGLE_EVENT = "canvas-v2:toggle-media";
 export const CANVAS_V2_MEDIA_STATE_EVENT = "canvas-v2:media-state";
 export const MEDIA_ATTRIBUTE = "data-canvas-v2-media";
@@ -16,9 +17,15 @@ export function canvasV2VideoEmbedUrl(src: string): string | undefined {
   return vimeo ? `https://player.vimeo.com/video/${vimeo}` : undefined;
 }
 export function parseCanvasV2PlayableMedia(raw: string): CanvasV2PlayableMedia {
-  if (raw.length > 12000) throw new Error("The media reference is too large.");
+  if (raw.length > 140_000_000) throw new Error("The media reference is too large.");
   const value = JSON.parse(raw) as CanvasV2PlayableMedia;
-  if (!value || value.version !== 1 || !["video", "gif"].includes(value.type) || typeof value.src !== "string" || value.src.length > 8000 || typeof value.evidenceId !== "string" || !value.evidenceId || typeof value.description !== "string" || value.description.length > 1800) throw new Error("Invalid playable media reference.");
+  if (!value || value.version !== 1 || !["video", "gif"].includes(value.type) || typeof value.src !== "string" || value.src.length > 140_000_000 || typeof value.evidenceId !== "string" || !value.evidenceId || typeof value.description !== "string" || value.description.length > 1800) throw new Error("Invalid playable media reference.");
+  if(value.src.startsWith('data:')){
+    const allowed=value.type==='gif'?/^data:image\/gif;base64,[A-Za-z0-9+/=]+$/:/^data:video\/(?:mp4|webm);base64,[A-Za-z0-9+/=]+$/;
+    if(!allowed.test(value.src))throw new Error('Use retained GIF, MP4 or WebM bytes for uploaded media.');
+    return {version:1,type:value.type,src:value.src,evidenceId:value.evidenceId,description:value.description};
+  }
+  if(value.src.length>8000)throw new Error('The hosted media reference is too large.');
   const url = new URL(value.src);
   if (!["https:", "http:", "blob:"].includes(url.protocol) || url.username || url.password || (url.protocol === "blob:" && !/^blob:https?:\/\//.test(value.src))) throw new Error("Use a direct hosted video/GIF URL or a local media upload.");
   return { version: 1, type: value.type, src: value.src, evidenceId: value.evidenceId, description: value.description };
@@ -58,4 +65,11 @@ export function measureCanvasV2PlayableMedia(src: string, type: "video" | "gif")
     if (element instanceof HTMLVideoElement) element.preload = "metadata";
     element.src = src;
   });
+}
+
+
+export function canvasV2SuppliedMediaAsset(media: CanvasV2PlayableMedia, mimeType?: string): CanvasV2EvidenceAsset {
+  return {id:media.evidenceId,url:media.src,originalUrl:media.src,label:media.description,authority:'supplied',mediaType:media.type,
+    mimeType:mimeType??(media.type==='gif'?'image/gif':'video/mp4'),description:'Human-supplied media. Playback is not model observation.',
+    source:{providerId:'user-canvas',providerLabel:'Canvas material',sourceId:media.evidenceId,sourceType:'uploaded',label:media.description,retrievedAt:'',permission:'authorized'}};
 }

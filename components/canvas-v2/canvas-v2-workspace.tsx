@@ -5,7 +5,7 @@ import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 import { useFloatingPanel } from "./use-floating-panel";
 import { canvasV2PanelAwareInsets } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { CanvasV2MediaInsert } from "./media-insert";
-import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia, measureCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
+import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, MEDIA_ATTRIBUTE, canvasV2SuppliedMediaAsset, parseCanvasV2PlayableMedia, measureCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { ScreenVersionHistory } from './screen-version-history';
 import { reviseCanvasV2NativeScreen, validateCanvasV2ScreenJavaScript } from '@/lib/canvas-v2/interactive-screen-patch';
 import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
@@ -3213,7 +3213,7 @@ export function CanvasV2Workspace({
         { kind: "attribute" as const, nodeId: item.nodeId, name: MEDIA_ATTRIBUTE, value: JSON.stringify(item.media) },
       ]);
       const native = applyCanvasV2NativeSceneMutation(scene, { kind: "batch", label: "Added playable media.", mutations });
-      const evidence = entries.map(item => ({ id: item.evidenceId, url: item.src, label: item.description, authority: "supplied" as const, mimeType: item.mimeType ?? (item.type === "gif" ? "image/gif" : "video/mp4"), description: "Human-supplied media. Playback is not model observation." }));
+      const evidence = entries.map(item => canvasV2SuppliedMediaAsset(item.media, item.mimeType));
       if (!engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Added playable media.", [...engine.readCommittedRevision().evidence, ...evidence], native, { selectionNodeIds: entries.map(item => item.nodeId) })) throw new Error(engine.readManualFailure() || "The media could not be added.");
       mediaUrls.current.push(...items.filter(item => item.src.startsWith("blob:")).map(item => item.src));
       cancelDrawingGesture(); setTool("select"); setSelectedElements([]); setSelectionTarget(entries.at(-1)?.nodeId); setMutationError(undefined); return true;
