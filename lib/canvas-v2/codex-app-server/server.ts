@@ -11,7 +11,7 @@ import { codexDisplayEvents } from './events';
 import { spawnCodex, type CodexTransport } from './rpc.server';
 import type { DynamicToolSpec } from './generated/v2/DynamicToolSpec';
 import type { DynamicToolCallResponse } from './generated/v2/DynamicToolCallResponse';
-import { codexDiscoveryReviewer, DiscoveryReviewContext, DiscoveryReviewRun, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from './discovery-review';
+import { codexDiscoveryReviewer, DiscoveryReviewContext, DiscoveryReviewRun, parseDiscoveryFeedback, initialAppearanceReviewPacket, reviewContinuation, type DiscoveryReviewer } from './discovery-review';
 import type { TurnSteerParams } from './generated/v2/TurnSteerParams';
 
 type PendingTool = { rpcId: string | number; action: JsonObject };
@@ -20,7 +20,7 @@ type Session = {
   turn: JsonObject; events: JsonObject[]; items: Map<string, JsonObject>; pending: Map<string, PendingTool>;
   listeners: Set<(e: JsonObject) => void>; receipts: Map<string, { fingerprint: string; work: Promise<unknown> }>;
   model: string; effort: NorthstarEffort; capabilities: NorthstarModelCapability[];
-  nativeTurnId: string; nativeActive: boolean; reviewRun?: DiscoveryReviewRun; reviewContext: DiscoveryReviewContext;
+  nativeTurnId: string; nativeActive: boolean; reviewRun?: DiscoveryReviewRun; reviewContext: DiscoveryReviewContext; appearanceReviews:Set<AbortController>;
   reviewReport?: { failureKind?: 'timeout'|'invalid_feedback'|'process_stopped'|'provider_or_transport'; status: string; durationMs?: number; proposedAnswer?: string; feedback?: string; continuedAnswer?: string;
     rounds?: Array<{ draft: string; feedback: string; rawFeedback?: string; durationMs: number; activity: ReturnType<DiscoveryReviewContext['activity']> }>;
     initialActivity?: ReturnType<DiscoveryReviewContext['activity']>; completedActivity?: ReturnType<DiscoveryReviewContext['activity']> };
@@ -50,7 +50,7 @@ export class CodexSessionHost {
   }
   dispose() { clearInterval(this.reaper); for (const s of this.sessions.values()) this.close(s); }
   private close(s: Session, message = 'The Codex connection expired. Start a new conversation.') {
-    if (s.closed) return; s.closed = true; s.reviewRun?.stop(); s.creative.dispose();
+    if (s.closed) return; s.closed = true; s.reviewRun?.stop(); for(const review of s.appearanceReviews)review.abort(); s.creative.dispose();
     this.emit(s, { type: 'agent.session.turn.failed', error: { message } });
     s.rpc.close(); this.sessions.delete(s.token);
     for (const [key, value] of this.creations) void value.work.then(v => { if (v === s) this.creations.delete(key); }).catch(() => undefined);
@@ -79,7 +79,7 @@ export class CodexSessionHost {
     let rpc: CodexTransport;
     try { rpc = await this.factory(); } finally { const left = (this.starting.get(owner) || 1) - 1; if (left) this.starting.set(owner, left); else this.starting.delete(owner); }
     const creative = this.creativeFactory(key, () => s.model);
-    const s: Session = { ...selected, creative, capabilities: [], id: randomUUID(), owner, token: randomUUID(), rpc, threadId: '', nativeTurnId: '', nativeActive: false, reviewContext: new DiscoveryReviewContext(), turn: {}, events: [], items: new Map(), pending: new Map(), listeners: new Set(), receipts: new Map(), commands: Promise.resolve(), lastUse: Date.now(), disconnectedAt: Date.now(), closed: false };
+    const s: Session = { ...selected, creative, capabilities: [], id: randomUUID(), owner, token: randomUUID(), rpc, threadId: '', nativeTurnId: '', nativeActive: false, reviewContext: new DiscoveryReviewContext(), appearanceReviews:new Set(), turn: {}, events: [], items: new Map(), pending: new Map(), listeners: new Set(), receipts: new Map(), commands: Promise.resolve(), lastUse: Date.now(), disconnectedAt: Date.now(), closed: false };
     this.sessions.set(s.token, s);
     rpc.onClose(() => { if (!s.closed) { this.emit(s, { type: 'agent.session.turn.failed', error: { message: 'The Codex process stopped. Start a new conversation.' } }); this.close(s); } });
     rpc.onMessage(message => {
@@ -327,6 +327,7 @@ export class CodexSessionHost {
     }
     if (body.op === 'send') return Response.json(await this.once(s, body, () => this.input(s, body)));
     if (body.op === 'cancel') return Response.json(await this.once(s, body, async () => {
+      for(const review of s.appearanceReviews)review.abort();
       await s.commands;
       const wasRunning = s.turn.status === 'in_progress';
       s.creative.cancel();
@@ -343,6 +344,25 @@ export class CodexSessionHost {
       if (JSON.stringify(raw).length > 10_000_000) throw new Error('Tool output exceeds the transport limit.');
       const contentItems: DynamicToolCallResponse['contentItems'] = raw.map(v => { const part = object(v); return part.type === 'input_image' ? { type: 'inputImage', imageUrl: string(part.image_url) } : { type: 'inputText', text: string(part.text) }; });
       if (this.reviewer) s.reviewContext.tool(string(pending.action.name), pending.action.arguments, contentItems, body.success !== false);
+      const changed=contentItems.flatMap(part=>{if(part.type!=='inputText')return [];try{const value=object(JSON.parse(part.text));return value.postCommitReview===true?[string(value.nodeId)]:[];}catch{return [];}});
+      if(this.reviewer&&body.success!==false&&changed.length){
+        const controller=new AbortController();s.appearanceReviews.add(controller);
+        const appearanceSignal=AbortSignal.any([controller.signal,options.signal,AbortSignal.timeout(45_000)]);
+        const packet=initialAppearanceReviewPacket(s.reviewContext.packet(''),changed);
+        const question=string(object(JSON.parse(packet.text)).latestUserRequest);
+        this.progress(s,'I’m checking the edited screen’s visual details before continuing.');
+        try{
+          const feedback=await this.reviewer(packet,{key,model:s.model,effort:s.effort,signal:appearanceSignal});
+          if(!s.closed&&s.pending.get(string(body.callId))===pending&&s.turn.status==='in_progress'&&question===string(object(JSON.parse(s.reviewContext.packet('').text)).latestUserRequest)){
+            const parsed=parseDiscoveryFeedback(feedback);s.reviewContext.appearanceFeedback(feedback);
+            contentItems.push({type:'inputText',text:JSON.stringify({initialAppearanceReview:parsed,note:'Address these concrete appearance corrections before unrelated authoring or behavior testing. This initial styling assessment does not approve interactions, motion quality or completion.'})});
+          }
+        }catch{
+          if(!s.closed&&s.turn.status==='in_progress')contentItems.push({type:'inputText',text:JSON.stringify({initialAppearanceReview:{status:'unverified'},note:'The component is committed but visual approval is not established. Compare the attached paired crops and correct styling before continuing; final review remains required.'})});
+        }finally{s.appearanceReviews.delete(controller);}
+        if(controller.signal.aborted||s.closed||s.pending.get(string(body.callId))!==pending||s.turn.status!=='in_progress')return {accepted:false};
+      }
+
       s.rpc.reply(pending.rpcId, { success: body.success !== false, contentItems } satisfies DynamicToolCallResponse); s.pending.delete(string(body.callId)); s.creative.release(string(body.callId));
       return { accepted: true };
     }));

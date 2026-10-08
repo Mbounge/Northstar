@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexSessionHost } from '../lib/canvas-v2/codex-app-server/server';
-import { codexDiscoveryReviewer, DiscoveryReviewContext, DISCOVERY_REVIEW_SCHEMA, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from '../lib/canvas-v2/codex-app-server/discovery-review';
+import { codexDiscoveryReviewer, initialAppearanceReviewPacket, DiscoveryReviewContext, DISCOVERY_REVIEW_SCHEMA, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from '../lib/canvas-v2/codex-app-server/discovery-review';
 import { fixtureCodex } from '../app/canvas-v2-e2e/codex/fixture';
 import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
 import { object, string, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
@@ -823,4 +823,36 @@ test('faithful edited scrolling screens cannot pass from one static offset; labe
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
  context.tool('canvas_screen_component',{nodeId:'scrolling-editor',selector:'#goal',html:'<span>Updated native goal</span>'},[text({nodeId:'scrolling-editor',committed:true})]);
  assert.ok(!JSON.parse(context.packet('').text).imageDirectory.some((image:{role:string})=>image.role.includes('Saved%20at%20350')),'source revisions invalidate old scroll proof');
+});
+
+
+test('a committed edit carries its immediate component pixels before the primary model resumes',async()=>{
+ const text=(value:unknown)=>({type:'input_text',text:JSON.stringify(value)}),output=[text({committed:true,nodeId:'edited'}),text({nodeId:'edited',postCommitReview:true,sourceVersion:'current',viewport:{width:375,height:812},componentComparisonLabels:['Reference component · Goal'],state:{controls:[{id:'goal'}],errors:[]}}),{type:'input_image',image_url:'data:image/png;base64,render'},text({nodeId:'edited',detailName:'Reference component · Goal'}),{type:'input_image',image_url:'data:image/png;base64,paired'}];
+ const review=deferred<string>();let early=0;const t=await setup(async packet=>{const value=JSON.parse(packet.text);assert.equal(value.reviewStage,'initial_appearance');assert.equal(value.productWork[0].nodeId,'edited');assert.ok(value.imageDirectory.some((image:{role:string})=>image.role.includes('Reference component')));early++;return review.promise;},6,output);
+ try{
+  await t.client.send('Make this component editable without redesigning it',[],'gpt-5.6-luna','r1');
+  t.peer.tool('canvas_screen_component',{nodeId:'edited',selector:'#goal',html:'<span>Saved</span>'});await tick();
+  assert.equal(early,1);assert.equal(t.peer.calls.filter(call=>call.method==='turn/start').length,1);
+  review.resolve(feedbackFor('Restore the original grey fill and blue value hierarchy.'));await tick();
+  const packet=JSON.parse(initialAppearanceReviewPacket(new DiscoveryReviewContext().packet(''),[]).text);assert.equal(packet.reviewStage,'initial_appearance');
+  assert.equal(t.client.view.status,'running','an initial appearance decision cannot finish the task');
+ }finally{t.close();}
+});
+
+test('automatic paired component crops cannot be ignored in a successful visual assessment',()=>{
+ const text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)}),context=new DiscoveryReviewContext();
+ context.tool('canvas_screen',{},[text({committed:true,nodeId:'card'})]);
+ context.tool('canvas_review',{},[text({nodeId:'card',viewport:{width:375,height:812},componentComparisonLabels:['Reference component · Goal'],state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,render'},text({nodeId:'card',detailName:'Reference component · Goal'}),{type:'inputImage',imageUrl:'data:image/png;base64,paired'}]);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'card',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:[1],assessment:'Matched the overall phone.'}];
+ assert.match(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work[0].gap,/component details/);
+ feedback.productChecks[0].evidenceImageNumbers=[1,2];assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ context.tool('canvas_screen_component',{nodeId:'card'},[text({committed:true,nodeId:'card'})]);assert.equal(context.packet('').images.length,0,'old component comparisons cannot approve a new revision');
+});
+
+
+test('stop cancels the immediate styling assessment without approving or resuming the edit',async()=>{
+ let began=false,aborted=false;
+ const output=[{type:'input_text',text:JSON.stringify({committed:true,nodeId:'edited'})},{type:'input_text',text:JSON.stringify({nodeId:'edited',postCommitReview:true,viewport:{width:375,height:812},state:{}})},{type:'input_image',image_url:'data:image/png;base64,current'}];
+ const t=await setup(async(_packet,options)=>{began=true;return new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('Cancelled'));},{once:true}));},6,output);
+ try{await t.client.send('Keep this reference faithful',[],'gpt-5.6-luna','r1');t.peer.tool('canvas_screen',{title:'Editable reference'});await tick();assert.equal(began,true);await t.client.cancel();await tick();assert.equal(aborted,true);assert.equal(t.client.view.status,'stopped');assert.equal(t.peer.calls.filter(call=>call.method==='turn/start').length,1);}finally{t.close();}
 });
