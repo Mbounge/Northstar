@@ -40,6 +40,7 @@ export interface CreativeContext {
     theme?: ReturnType<typeof import('../theme-context').canvasV2ModelThemeContext>;
     connectors?: unknown;
     viewport?: unknown;
+    screenPlacements?: unknown;
   };
 }
 export interface CreativeResult {

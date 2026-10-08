@@ -1,4 +1,5 @@
 import { validateCanvasV2Screen, canvasV2ScreenAssetToken, SCREEN_ASSET_PATTERN, type CanvasV2InteractiveScreen } from './interactive-screen';
+import { screenMotionTimeline } from './screen-motion-timeline';
 
 export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'patch-element'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; motionSessionId?: string };
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
@@ -22,6 +23,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     // without moving the user's camera or tab. Force layout and bound settling.
     const settle = () => new Promise(resolve => {const timer=setTimeout(resolve,120);requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve()}))});
     let feedbackMode=false, feedbackOutline, motionSession;
+    const motionTimeline=${screenMotionTimeline.toString()};
     const releaseMotion = () => {const session=motionSession;motionSession=undefined;if(!session)return;clearTimeout(session.timer);for(const {a,time,state,rate} of session.saved){try{if(a.playState==='idle')continue;a.playbackRate=rate;if(state==='idle')a.cancel();else{a.currentTime=time;if(state==='running')a.play();else if(state==='finished')a.finish();else a.pause()}}catch{a.cancel()}}};
     const selectorFor = el => {
       if(el.id && document.querySelectorAll('#'+CSS.escape(el.id)).length===1)return '#'+CSS.escape(el.id);
@@ -70,6 +72,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         if(el instanceof HTMLTextAreaElement)copy.textContent=el.value;
         if(el instanceof HTMLSelectElement) [...copy.options].forEach((o,j)=>o.selected=el.options[j].selected);
         if(el instanceof HTMLCanvasElement){const image=document.createElement('img');image.src=el.toDataURL();image.setAttribute('style',copy.getAttribute('style')||'');copy.replaceWith(image)}
+        // A review must capture the GIF's currently displayed frame, rather
+        // than restarting its animation in the private raster surface.
+        if(el instanceof HTMLImageElement && el.src.startsWith('data:image/gif;') && el.complete && el.naturalWidth){const still=document.createElement('canvas');still.width=el.naturalWidth;still.height=el.naturalHeight;still.getContext('2d').drawImage(el,0,0);copy.src=still.toDataURL('image/png')}
         // Translate scrolled contents inside their clipping box for raster capture.
         if(el.scrollTop||el.scrollLeft){for(const child of [...copy.children]) if(child.style && getComputedStyle(el.children[[...copy.children].indexOf(child)]).position!=='fixed'){child.style.position='relative';child.style.top=-el.scrollTop+'px';child.style.left=-el.scrollLeft+'px'}}
       });
@@ -88,8 +93,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           if(command.selector){const trigger=document.querySelector(command.selector);if(!trigger||!visible(trigger)||trigger.disabled)throw Error('Choose a visible motion trigger.');trigger.click()}
           void document.body.offsetHeight;
           const saved=document.getAnimations().filter(a=>a.effect instanceof KeyframeEffect && ['running','paused'].includes(a.playState)).slice(0,80).map(a=>({a,time:a.currentTime,state:a.playState,rate:a.playbackRate}));
+          const timeline=motionTimeline(saved.map(({a,time,rate})=>{const t=a.effect.getComputedTiming();return {time:typeof time==='number'?time:0,rate,duration:Number(t.duration),delay:Number(t.delay||0),endTime:Number(t.endTime),iterations:Number(t.iterations)}}));
           for(const {a} of saved)a.pause();
-          const id=String(requestId);motionSession={id,saved,timer:setTimeout(releaseMotion,30000)};
+          const id=String(requestId);motionSession={id,saved,timeline,timer:setTimeout(releaseMotion,30000)};
           await settle();
           if(motionSession?.id!==id)throw Error('Motion review was interrupted. Preserve user input and review again.');
           parent.postMessage({protocol,token,requestId,result:{motionSessionId:id,animationCount:saved.length}},'*');return;
@@ -98,8 +104,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           if(typeof command.progress!=='number'||command.progress<0||command.progress>1)throw Error('Motion progress must be between 0 and 1.');
           if(!motionSession || motionSession.id!==command.motionSessionId)throw Error('Motion review was interrupted or expired. Preserve user input and review again.');
           const animations=motionSession.saved.map(s=>s.a);
-          for(const a of animations){const t=a.effect.getComputedTiming(),duration=Number(t.duration);if(!Number.isFinite(duration)||duration<=0)continue;a.currentTime=Number(t.delay||0)+duration*command.progress}
-          const result={...snapshot(),motionSample:{progress:command.progress,animationCount:animations.length,method:'Web Animations timeline sample; JavaScript loops, GIF/video and performance are not verified by seeking.'}};parent.postMessage({protocol,token,requestId,result},'*');return;
+          const timeline=motionSession.timeline,elapsed=timeline.start+timeline.duration*command.progress;
+          animations.forEach((a,i)=>{const entry=timeline.entries[i];a.currentTime=entry.rate?(elapsed-entry.origin)*entry.rate:entry.heldTime});
+          const result={...snapshot(),motionSample:{progress:command.progress,elapsedMs:elapsed,windowDurationMs:timeline.duration,truncated:timeline.truncated,continuous:timeline.continuous,animationCount:animations.length,method:'Shared elapsed-time Web Animations sample preserving delay, stagger and duration. Continuous effects cover a cycle; sequences over 10 seconds are bounded. JavaScript loops, GIF/video and performance are not verified by seeking.'}};parent.postMessage({protocol,token,requestId,result},'*');return;
         }
         const el=command.selector?document.querySelector(command.selector):undefined;
         if(command.selector&&!el)throw Error('No element matches '+command.selector);

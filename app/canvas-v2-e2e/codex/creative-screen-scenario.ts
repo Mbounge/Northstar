@@ -7,12 +7,13 @@ export class CreativeScreenScenario {
   private nodeId = '';
   private flowId = '';
   private multiTargets: JsonObject[] = [];
-  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false, private multiple = false) {}
+  constructor(private peer: FixtureCodex, private feedback: boolean, private flow = false, private reachability = false, private multiple = false, private temporal = false) {}
   start() { this.peer.tool('canvas_read', {}); }
   reply(result: JsonObject) {
     const parts = Array.isArray(result.contentItems) ? result.contentItems.map(object) : [];
     let value: JsonObject = {};
     try { value = object(JSON.parse(string(parts[0]?.text))); } catch { /* fail below */ }
+    if (this.temporal) { this.checkTemporal(result, parts, value); return; }
     if (this.reachability) { this.checkReachability(result, parts, value); return; }
     if (this.multiple) {
       if (!result.success || value.committed === false) { this.peer.finish('Multiple feedback failed: '+string(parts[0]?.text)); return; }
@@ -56,6 +57,21 @@ export class CreativeScreenScenario {
       case 4:
         if (!parts.some(part=>part.type==='inputText' && string(part.text).includes('detailName')) || parts.filter(part=>part.type==='inputImage').length<2) { this.peer.finish('Creative screen failed: magnified component pixels missing'); return; }
         this.peer.finish('Created the screen with a saved product identity and reviewed three distinct motion frames.'); break;
+    }
+  }
+  private checkTemporal(result: JsonObject, parts: JsonObject[], value: JsonObject) {
+    if (!result.success || value.committed === false) { this.peer.finish('Timeline check failed: '+string(parts[0]?.text)); return; }
+    switch(this.step++) {
+      case 0: this.peer.tool('canvas_screen', {title:'Shared motion timeline',width:390,height:844,html:'<main><h1>A shared rhythm</h1><button id="start">Start sequence</button><section><button id="first">First reveal</button><button id="second">Second reveal</button></section></main>',css:'main{padding:32px}section{display:grid;gap:24px;margin-top:32px}button{padding:20px;border:0;border-radius:16px;background:#7255e8;color:white}section button{opacity:0}.active #first{animation:reveal 100ms linear forwards}.active #second{animation:reveal 100ms 200ms linear forwards}@keyframes reveal{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){.active #first,.active #second{animation:none;opacity:1}}',javascript:"document.querySelector('#start').addEventListener('click',()=>document.body.classList.add('active'))",referenceAssetIds:[],summary:'Check staggered reveal timing'});break;
+      case 1: this.nodeId=string(value.nodeId);this.peer.tool('canvas_screen_motion_review',{nodeId:this.nodeId,triggerSelector:'#start'});break;
+      default: {
+        const samples=parts.filter(part=>part.type==='inputText').map(part=>{try{return object(JSON.parse(string(part.text)));}catch{return {};}});
+        const mid=object(samples[1]?.state),end=object(samples[2]?.state),timing=object(mid.motionSample);
+        const controls=(state:JsonObject)=>(state.controls as JsonObject[]??[]).map(control=>string(control.id));
+        const times=(object(mid.motion).animations as JsonObject[]??[]).map(animation=>Number(animation.currentTime));
+        if(samples.length!==3 || Number(timing.windowDurationMs)<250 || Number(timing.windowDurationMs)>310 || !controls(mid).includes('first') || controls(mid).includes('second') || !controls(end).includes('second') || times.length!==2 || Math.abs(times[0]-times[1])>2) {this.peer.finish('Timeline check failed: staggered reveals lost their shared timing');return;}
+        this.peer.finish('Verified the shared timeline: the first reveal finishes before the second starts, and playback is restored.');
+      }
     }
   }
   private checkReachability(result: JsonObject, parts: JsonObject[], value: JsonObject) {

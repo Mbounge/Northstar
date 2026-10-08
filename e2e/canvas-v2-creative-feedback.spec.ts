@@ -129,3 +129,34 @@ test('feedback spans screens and canvas references; restoring a version preserve
   await expect(history.getByText('On canvas',{exact:true})).toHaveCount(1);
   await expect(history.getByRole('button',{name:'Applied on canvas',exact:true})).toBeDisabled();
 });
+
+
+test('motion review samples staggered reveals on one shared timeline', async ({ page }) => {
+  await page.goto('/canvas-v2-e2e/codex');
+  await page.getByLabel('Message North Star').fill('screen temporal');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('Verified the shared timeline: the first reveal finishes before the second starts, and playback is restored.', { exact: true })).toBeVisible({ timeout: 90000 });
+});
+
+
+test('native image uploads become inspected retained material inside an authored screen', async ({ page }) => {
+  await page.goto('/canvas-v2-e2e/codex');
+  await page.getByLabel('Choose images for the canvas', { exact: true }).setInputFiles('app/canvas-v2-e2e/codex/media-assets/reference.png');
+  await expect(page.locator('[data-canvas-v2-native-scene] img')).toHaveCount(1);
+  await page.getByLabel('Message North Star').fill('screen canvas asset');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('The native canvas image is retained, inspected and loaded inside the interactive screen.', { exact: true })).toBeVisible({ timeout: 90000 });
+  const frame = page.frameLocator('iframe[title="Retained canvas image"]');
+  await expect(frame.getByRole('img', { name: 'Chosen canvas material' })).toHaveAttribute('src', /^data:image\/png;base64,/);
+  await frame.getByRole('button', { name: 'Save direction', exact: true }).click();
+  await expect(frame.getByRole('button', { name: 'Direction saved', exact: true })).toBeVisible();
+  await expect(page.locator('[data-canvas-v2-native-scene] img')).toHaveCount(1);
+});
+
+test('GIF references keep their original animated bytes inside an authored screen', async ({ page }) => {
+  await page.goto('/canvas-v2-e2e/codex');
+  await page.getByLabel('Message North Star').fill('screen gif asset');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByText('The retained GIF is loaded inside the interactive screen.', { exact: true })).toBeVisible({ timeout: 90000 });
+  await expect(page.frameLocator('iframe[title="Retained GIF playback"]').getByRole('img', { name: 'Chosen canvas material' })).toHaveAttribute('src', /^data:image\/gif;base64,/);
+});

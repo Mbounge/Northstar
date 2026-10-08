@@ -18,6 +18,7 @@ import { parseCodexCanvasPatch, codexCompositionViewport, codexMediaInventory, r
 import { CODEX_NATIVE_CANVAS_GRAMMAR } from '@/lib/canvas-v2/northstar-canvas-grammar';
 import { buildCanvasV2IslandRegistry } from '@/lib/canvas-v2/island-registry';
 import { canvasV2MeasuredConnectorDirectory } from '@/lib/canvas-v2/model-context';
+import { canvasV2ScreenPlacementContext } from '@/lib/canvas-v2/screen-placement-context';
 import { compactCanvasV2WorkingContextForModel, type CanvasV2WorkingContext, type CanvasV2SelectionPolicy } from '@/lib/canvas-v2/working-context';
 import { parseAccountQuery, accountResultForModel, AccountToolHandles, readAccountAssetPixels, type AccountResult } from '@/lib/canvas-v2/account-tools';
 import { mergeCanvasV2EvidencePackets } from '@/lib/canvas-v2/evidence-packets';
@@ -136,6 +137,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const context = await creativeInputContext(object(action.arguments), args, registered, [...artifacts.current.values()], action.name === 'workspace_run' ? {
           theme: themeContext, revisionId: revision.id, document: {html, css: revision.document.css}, nodes: measurement?.spatial.nodes ?? [], measurementRevisionId: measurement?.revisionId,
           connectors: measurement ? canvasV2MeasuredConnectorDirectory(measurement.spatial.nodes) : undefined,
+          screenPlacements: engine.readNativeScene()?.revisionId === revision.id ? canvasV2ScreenPlacementContext(engine.readNativeScene()!, registered, current.current.selectedNodeIds).context : undefined,
           viewport: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.('reference')),
         } : undefined, signal);
         const result = await runCreativeJob((body, s)=>runtime.request(body, s), action, context, signal);
@@ -299,6 +301,9 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const observation = nativeScreenRead ? undefined : await engine.ensureObservation(signal);
         const revision = engine.readCommittedRevision();
         if (revision.id !== before.id || (observation && observation.revisionId !== revision.id)) throw new Error('The canvas changed during this read. Read it again.');
+        const currentScene = engine.readNativeScene();
+        const placement = currentScene?.revisionId === revision.id ? canvasV2ScreenPlacementContext(currentScene, [...revision.evidence, ...assets.current.values()], current.current.selectedNodeIds, requestedNodeId || undefined) : undefined;
+        for (const asset of placement?.retainedAssets ?? []) assets.current.set(asset.id, asset);
         let html = revision.document.html;
         const registered = [...new Map([...revision.evidence, ...assets.current.values()].map(a => [a.id, a])).values()];
         accountHandles.current.remember({ apps: [], flows: [], evidence: registered });
@@ -310,6 +315,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const screens = readCanvasV2Screens(revision.document.html).map(({ nodeId, screen, encoded }) => ({ nodeId, title: screen.title, width: screen.width, height: screen.height, sourceVersion:canvasV2FeedbackFingerprint(encoded), referenceAssetIds: screen.referenceAssetIds, productIdentityId: screen.productIdentityId, simulation: screen.simulation, ...(requestedNodeId === nodeId ? { source: screen } : {}) }));
         return { screens, screenFeedbackTargets: activeScreenFeedback.current.filter(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded)).map(entry => entry.target), objectFeedbackTargets: activeObjectFeedback.current.filter(objectMatches), productIdentities: productIdentities.current, screenFeedback: activeScreenFeedback.current.find(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded))?.target, theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: observation ? buildCanvasV2IslandRegistry({ observation }) : [], nativeScreenBounds: nativeScreenRead && native ? canvasV2NativeSceneAbsoluteBounds(native, requestedNodeId) : undefined, selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
           truncated: !range && html.length > 48_000,
+          screenPlacements: placement?.context,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),
           evidence: registered.map(({ id, url, originalUrl, label, mediaType, mimeType, source }) => ({ id, mediaType, mimeType, source, url: `northstar-asset:${id}`, originalUrl: originalUrl ?? (url.startsWith("data:") ? undefined : url), playbackUrl: mediaType === "gif" ? originalUrl : mediaType === "video" ? url : undefined, label })),
           observation: observation ? { nodes: observation.spatial.nodes.slice(0, 80), connectors: canvasV2MeasuredConnectorDirectory(observation.spatial.nodes) } : { note: 'Native screen source and geometry read. Use canvas_review for current rendered pixels; this read does not claim visual inspection.' },

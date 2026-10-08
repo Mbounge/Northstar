@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import type { CanvasV2ArtifactTheme } from '@/lib/canvas-v2/artifact-theme';
 import { parseCanvasV2Screen } from '@/lib/canvas-v2/interactive-screen';
 import { buildCanvasV2ScreenRuntime, SCREEN_PROTOCOL, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
-import { readAccountAssetPixels } from '@/lib/canvas-v2/account-tools';
+import { readCanvasV2ScreenAssetPixels } from '@/lib/canvas-v2/screen-asset-pixels';
 import { toCooperativeJpeg } from '@/lib/canvas-v2/cooperative-capture';
 import { simulatorForApp } from '@/lib/preview/simulator-registry';
 import { GRAET_PREVIEW_NAVIGATE, GRAET_PREVIEW_SECTION } from '@/lib/preview/graet-navigation';
@@ -174,7 +174,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     return () => { window.removeEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); node?.removeEventListener(CANVAS_V2_SCREEN_COMMAND, command); };
   }, [nodeId, encoded, screen.simulation]);
   // Unrelated canvas revisions must not reset a running screen's mock state.
-  const sources = JSON.stringify(screen.referenceAssetIds.map(id => { const asset = evidence.find(a => a.id === id); return { id, url: asset?.url }; }));
+  const sources = JSON.stringify(screen.referenceAssetIds.map(id => { const asset = evidence.find(a => a.id === id); return { id, url: asset?.mediaType === 'gif' ? asset.originalUrl || asset.url : asset?.url }; }));
   useEffect(() => {
     const node = host.current;
     if (!node) return;
@@ -263,7 +263,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
         const retained = JSON.parse(sources) as Array<{ id: string; url?: string }>;
         const bytes = await Promise.all(retained.map(async asset => {
           if (!asset.url) throw new Error('A referenced image is unavailable.');
-          return [asset.id, await readAccountAssetPixels(asset.url, aborter.signal)] as const;
+          return [asset.id, await readCanvasV2ScreenAssetPixels(asset.url, aborter.signal)] as const;
         }));
         aborter.signal.throwIfAborted();
         setRuntime(buildCanvasV2ScreenRuntime(parseCanvasV2Screen(runtimeEncoded), new Map(bytes), token));

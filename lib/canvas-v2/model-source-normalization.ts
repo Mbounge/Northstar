@@ -26,6 +26,11 @@ export function normalizeCanvasV2ModelSource(input: {
   evidence: readonly CanvasV2EvidenceAsset[];
 }): CanvasV2ArtifactDocument {
   const approvedByUrl = new Map(input.evidence.map((asset) => [asset.url, asset.id]));
+  const unchangedHumanImages = new Map<string, string>();
+  for (const [tag, attributes] of input.previous?.html.matchAll(/<img\b([^>]*)>/gi) ?? []) {
+    const id = attribute(attributes, 'data-canvas-v2-node-id');
+    if (id && (/\bdata-canvas-v2-user-edited\s*=/i.test(attributes) || attribute(attributes, 'data-canvas-v2-origin') === 'user')) unchangedHumanImages.set(id, tag);
+  }
   const canonicalSourceByEvidence = new Map<string, string>();
   for (const flow of input.previous ? readCanvasV2CanonicalFlowManifests(input.previous) : []) {
     for (const item of flow.items) if (!canonicalSourceByEvidence.has(item.evidenceId)) canonicalSourceByEvidence.set(item.evidenceId, item.nodeId);
@@ -46,6 +51,10 @@ export function normalizeCanvasV2ModelSource(input: {
   };
 
   const html = input.document.html.replace(/<img\b([^>]*)>/gi, (_tag, rawAttributes: string) => {
+    // Retaining a canvas upload for reuse must not annotate or take ownership
+    // of the original human object during an unrelated screen insertion.
+    const existingId = attribute(rawAttributes, 'data-canvas-v2-node-id');
+    if (existingId && unchangedHumanImages.get(existingId) === _tag) return _tag;
     let attributes = rawAttributes;
     const additions: string[] = [];
     const source = attribute(attributes, "src");
