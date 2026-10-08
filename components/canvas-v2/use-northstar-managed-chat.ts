@@ -30,7 +30,7 @@ import { simulatorForApp } from '@/lib/preview/simulator-registry';
 import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
 import { readCanvasV2Screens, canvasV2ScreenReviewAssets, canvasV2ScreenBoundAssets } from '@/lib/canvas-v2/interactive-screen';
 import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
-import { inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion } from './interactive-screen';
+import { inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion, testCanvasV2ScreenJourney } from './interactive-screen';
 import { CANVAS_V2_MAX_FEEDBACK_TARGETS, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking, type CanvasV2ObjectFeedbackTarget, CANVAS_V2_SCREEN_FEEDBACK, canvasV2ScreenFeedbackContext, parseCanvasV2ScreenFeedbackTarget, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
 import { validateCanvasV2ProductIdentity, type CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
 import { canvasV2ScreenMotionReviewMode, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
@@ -232,16 +232,21 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const frames = await captureCanvasV2ScreenMotion(item.nodeId, item.encoded, signal, typeof args.triggerSelector === 'string' ? args.triggerSelector : undefined, motionMode==='live'?(Array.isArray(args.sampleTimesMs)?args.sampleTimesMs as number[]:[]):undefined);
         if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during motion review. Read it again.');
         if (frames.reduce((size, frame) => size + frame.image.length, 0) > 8_000_000) throw new Error('Motion captures exceed the transport budget. Review a smaller viewport.');
-        return frames.flatMap(frame => [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, viewport: { width: item.screen.width, height: item.screen.height }, motionFrame: frame.progress, motionFrameCount:frames.length, captureMode:motionMode, state: frame.state, referenceAssetIds: item.screen.referenceAssetIds, note: motionMode==='live'?'Actual elapsed-time rendered samples. Inspect real CSS, Web Animation, SVG and JavaScript/canvas changes and actualElapsedMs. Media elements and authored rendering are reported separately. These samples do not establish frame rate or reduced-motion behavior.':'Captured Web Animations timeline sample; paused states belong to the sampled frames, not necessarily current playback. Use inspect for current playback state. Inspect position, opacity, clipping and continuity across all three frames. Playback restored. JavaScript loops, GIF/video, input interruption, reduced-motion behavior and frame rate are not established by these samples; test these separately when relevant.' }) }, { type: 'input_image', image_url: frame.image }]);
+        return frames.flatMap(frame => [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, viewport: { width: item.screen.width, height: item.screen.height }, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), motionFrame: frame.progress, motionFrameCount:frames.length, captureMode:motionMode, state: frame.state, referenceAssetIds: item.screen.referenceAssetIds, note: motionMode==='live'?'Actual elapsed-time rendered samples. Inspect real CSS, Web Animation, SVG and JavaScript/canvas changes and actualElapsedMs. Media elements and authored rendering are reported separately. These samples do not establish frame rate or reduced-motion behavior.':'Captured Web Animations timeline sample; paused states belong to the sampled frames, not necessarily current playback. Use inspect for current playback state. Inspect position, opacity, clipping and continuity across all three frames. Playback restored. JavaScript loops, GIF/video, input interruption, reduced-motion behavior and frame rate are not established by these samples; test these separately when relevant.' }) }, { type: 'input_image', image_url: frame.image }]);
       }
       if (action.name === 'canvas_screen_interact') {
         const revision = engine.readCommittedRevision();
         requireCodexCanvasReadRevision(readRevision.current, revision.id);
         const item = readCanvasV2Screens(revision.document.html).find(item => item.nodeId === args.nodeId);
         if (!item) throw new Error('That screen no longer exists. Read the current canvas.');
+        if (args.action === 'journey') {
+          const result = await testCanvasV2ScreenJourney(item.nodeId, item.encoded, [...revision.evidence, ...assets.current.values()], args.steps, args.motionPreference === 'reduce' ? 'reduce' : 'no-preference', signal);
+          if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this journey check. Read it again.');
+          return [{ type: 'input_text', text: JSON.stringify({ nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), state: result.state, note: 'Observed journey in a fresh isolated copy of the current authored source. Motion preference is simulated for CSS media queries and matchMedia. No live user state or canvas geometry was changed. Focus is suppressed and audio is muted in the private copy. This checks the supplied journey only, not keyboard/focus behavior, every path or frame rate.' }) }, { type: 'input_image', image_url: result.image }];
+        }
         const result = await inspectCanvasV2Screen(item.nodeId, item.encoded, { action: string(args.action) as ScreenAction['action'], selector: typeof args.selector === 'string' ? args.selector : undefined, value: typeof args.value === 'string' ? args.value : undefined, x: typeof args.x === 'number' ? args.x : undefined, y: typeof args.y === 'number' ? args.y : undefined }, signal);
         if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this screen action. Read it again.');
-        return { nodeId: item.nodeId, revisionId: revision.id, ...result };
+        return { nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), ...result };
       }
       if (action.name === 'canvas_review') {
         const screenRevision = engine.readCommittedRevision();

@@ -65,14 +65,19 @@ export function patchCanvasV2ScreenElement(html: string, selector: string, input
   return document.body.innerHTML;
 }
 
-export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; styles: Record<string, string> }
+export interface CanvasV2ScreenLiveEdit { selector: string; text?: string; styles: Record<string, string>; stylesheet?: string }
 
-/** Only equivalent DOM trees with one text/style change qualify for a live edit.
- * Structural/event-code changes require the normal isolated runtime rebuild. */
+/** CSS-only revisions and equivalent DOM trees with one text/style change
+ * preserve live mock state. Structural/event changes use the isolated rebuild. */
 export function canvasV2ScreenLiveEdit(before: import('./interactive-screen').CanvasV2InteractiveScreen, after: import('./interactive-screen').CanvasV2InteractiveScreen, parser: DOMParser): CanvasV2ScreenLiveEdit | undefined {
   if (before.simulation || after.simulation || before.title !== after.title || before.width !== after.width || before.height !== after.height
-    || before.css !== after.css || before.javascript !== after.javascript || JSON.stringify(before.referenceAssetIds) !== JSON.stringify(after.referenceAssetIds)
-    || before.productIdentityId !== after.productIdentityId || before.html === after.html) return;
+    || before.javascript !== after.javascript || JSON.stringify(before.referenceAssetIds) !== JSON.stringify(after.referenceAssetIds)
+    || before.productIdentityId !== after.productIdentityId) return;
+  if (before.html === after.html) {
+    if (before.css !== after.css) return { selector: '', styles: {}, stylesheet: after.css };
+    return;
+  }
+  if (before.css !== after.css) return;
   const oldBody = parser.parseFromString(before.html, 'text/html').body, newBody = parser.parseFromString(after.html, 'text/html').body;
   const oldNodes = [...oldBody.querySelectorAll('*')], newNodes = [...newBody.querySelectorAll('*')];
   if (oldNodes.length !== newNodes.length || oldNodes.length > 5000) return;

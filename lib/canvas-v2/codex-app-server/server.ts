@@ -336,7 +336,7 @@ export class CodexSessionHost {
       const raw = body.success === false ? [{ type: 'input_text', text: string(body.error).slice(0, 2000) }] : Array.isArray(body.output) ? body.output : [{ type: 'input_text', text: typeof body.output === 'string' ? body.output : JSON.stringify(body.output) }];
       if (JSON.stringify(raw).length > 10_000_000) throw new Error('Tool output exceeds the transport limit.');
       const contentItems: DynamicToolCallResponse['contentItems'] = raw.map(v => { const part = object(v); return part.type === 'input_image' ? { type: 'inputImage', imageUrl: string(part.image_url) } : { type: 'inputText', text: string(part.text) }; });
-      if (this.reviewer) s.reviewContext.tool(string(pending.action.name), pending.action.arguments, contentItems);
+      if (this.reviewer) s.reviewContext.tool(string(pending.action.name), pending.action.arguments, contentItems, body.success !== false);
       s.rpc.reply(pending.rpcId, { success: body.success !== false, contentItems } satisfies DynamicToolCallResponse); s.pending.delete(string(body.callId)); s.creative.release(string(body.callId));
       return { accepted: true };
     }));

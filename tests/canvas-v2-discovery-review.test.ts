@@ -6,6 +6,10 @@ import { fixtureCodex } from '../app/canvas-v2-e2e/codex/fixture';
 import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
 import { object, string, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
 
+const goodVisualChecks = () => ({
+  visualChecks: Object.fromEntries(['icons','typography','imagery','layout'].map(key=>[key,{status:'pass',assessment:`Current ${key} meets the fixture brief from supplied pixels.`}])),
+  probeResolutions: [], interactionQuality: 'not_applicable', interactionAssessment: 'This fixture is a static screen without an authored interaction requirement.',
+});
 const tick = () => new Promise(resolve => setTimeout(resolve, 25));
 test('motion review retains three latest timeline frames and invalidates them after a precise edit', () => {
   const context = new DiscoveryReviewContext();
@@ -458,7 +462,7 @@ test('product completion requires actual current component/reference pixels and 
   context.tool('canvas_screen',{title:'First',referenceAssetIds:['ref']},[text({nodeId:'first',committed:true})]);
   context.tool('canvas_screen',{title:'Second',referenceAssetIds:['ref']},[text({nodeId:'second',committed:true})]);
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,2);
-  const check=(id:string,numbers:number[])=>({nodeId:id,referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',evidenceImageNumbers:numbers,assessment:'Current navigation shapes, marks and spacing match the source.'});
+  const check=(id:string,numbers:number[])=>({nodeId:id,referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:numbers,assessment:'Current navigation shapes, marks and spacing match the source.'});
   baseline.productChecks=[check('first',[1]),check('second',[1])];
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(baseline))).work.length,2); // Invented citations cannot pass.
   for(const id of ['first','second'])context.tool('canvas_review',{},[text({nodeId:id,viewport:{width:390,height:844},sourceVersion:'one',reviewReferenceAssetIds:['ref'],state:{errors:[],images:[],overflow:{horizontal:false}}}),{type:'inputImage',imageUrl:'data:image/png;base64,render-'+id},text({detailName:'Navigation'}),{type:'inputImage',imageUrl:'data:image/png;base64,nav-'+id},text({referenceAssetId:'ref'}),{type:'inputImage',imageUrl:'data:image/png;base64,shared-ref'}]);
@@ -543,7 +547,7 @@ test('four-screen review batches keep sibling component evidence and reconcile l
   let calls=0;
   const feedback=await reviewProductBatches(async batch=>{
     calls++;const value=JSON.parse(batch.text),result=JSON.parse(feedbackFor());result.resolvedWork=[];
-    result.productChecks=value.reviewFocus.screenNodeIds.map((nodeId:string)=>({nodeId,referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',assessment:'Current navigation matches the reference and sibling variants.',evidenceImageNumbers:value.imageDirectory.filter((entry:{role:string;aliases?:string[]})=>(entry.aliases??[entry.role]).some(role=>role.startsWith(`screen:${nodeId}:`))).map((entry:{imageNumber:number})=>entry.imageNumber)}));return JSON.stringify(result);
+    result.productChecks=value.reviewFocus.screenNodeIds.map((nodeId:string)=>({nodeId,referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),assessment:'Current navigation matches the reference and sibling variants.',evidenceImageNumbers:value.imageDirectory.filter((entry:{role:string;aliases?:string[]})=>(entry.aliases??[entry.role]).some(role=>role.startsWith(`screen:${nodeId}:`))).map((entry:{imageNumber:number})=>entry.imageNumber)}));return JSON.stringify(result);
   },packet,{key:'fake',model:'gpt-5.6-luna',signal:new AbortController().signal});
   assert.equal(calls,2);
   assert.equal(JSON.parse(feedback).productChecks.length,4);
@@ -556,7 +560,7 @@ test('new rendered state discards stale component and reference crops; unready v
   context.tool('canvas_review',{},[text({nodeId:'video',viewport:{width:390,height:844},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,old'},text({detailName:'Old navigation'}),{type:'inputImage',imageUrl:'data:image/png;base64,old-detail'},text({referenceAssetId:'old-ref'}),{type:'inputImage',imageUrl:'data:image/png;base64,old-ref'}]);
   context.tool('canvas_review',{},[text({nodeId:'video',viewport:{width:390,height:844},state:{videos:[{visible:true,loaded:false}]}}),{type:'inputImage',imageUrl:'data:image/png;base64,current'}]);
   const packet=context.packet('Video ready');assert.equal(packet.images.length,1);
-  const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'video',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',assessment:'Original direction.',evidenceImageNumbers:[1]}];
+  const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'video',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),assessment:'Original direction.',evidenceImageNumbers:[1]}];
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
 });
 
@@ -576,11 +580,15 @@ test('motion quality cannot pass from static render or incomplete frame citation
  const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
  context.tool('canvas_review',{},[text({nodeId:'motion',viewport:{width:390,height:844},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,render'}]);
  for(const motionFrame of [0,.5,1])context.tool('canvas_screen_motion_review',{mode:'live',triggerSelector:'#open'},[text({nodeId:'motion',motionFrame,motionFrameCount:3,state:{motionSample:{actualElapsedMs:motionFrame*800}}}),{type:'inputImage',imageUrl:'data:image/png;base64,frame'+motionFrame}]);
- const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'motion',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',evidenceImageNumbers:[1],assessment:'Current screen is sound.'}];
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'motion',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:[1],assessment:'Current screen is sound.'}];
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
  feedback.productChecks[0].motionQuality='pass';feedback.productChecks[0].motionAssessment='Actual live frames establish the intended transition, with bounded timing.';
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
  feedback.productChecks[0].evidenceImageNumbers=[1,2,3,4];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+ context.tool('canvas_screen_interact',{nodeId:'motion',action:'journey',motionPreference:'reduce'},[text({nodeId:'motion',state:{journey:{motionPreference:'reduce',passed:true},errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,reduced'}]);
+ feedback.productChecks[0].interactionQuality='pass';feedback.productChecks[0].interactionAssessment='The private reduced-motion journey reaches the intended state.';
+ feedback.productChecks[0].evidenceImageNumbers.push(5);
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
 });
 
@@ -589,7 +597,7 @@ test('declared RAF rendering can be assessed as static without inventing animati
  const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
  const review=(animations:unknown[])=>context.tool('canvas_review',{},[text({nodeId:'chart',viewport:{width:390,height:844},state:{motion:{authoredRendering:{requestAnimationFrame:true,canvas:true},animations}}}),{type:'inputImage',imageUrl:'data:image/png;base64,chart'}]);
  review([]);
- const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'chart',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',motionQuality:'not_applicable',motionAssessment:'The requested static chart uses RAF to draw once. No animated behavior is requested or observed.',evidenceImageNumbers:[1],assessment:'The static chart meets the brief.'}];
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'chart',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),motionQuality:'not_applicable',motionAssessment:'The requested static chart uses RAF to draw once. No animated behavior is requested or observed.',evidenceImageNumbers:[1],assessment:'The static chart meets the brief.'}];
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
  review([{mechanism:'css-keyframes'}]);
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
@@ -620,4 +628,71 @@ test('video reference review retains every timestamped frame and replaces older 
  assert.equal(packet.images.length,5);
  assert.equal(JSON.parse(packet.text).imageDirectory.length,5);
  assert.ok(packet.images.every(image=>image.type==='image'&&image.url.includes('frame1-')));
+});
+
+test('a faithful screen needs every retained comparison, separate visual judgments, and no duplicate verdicts',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ context.tool('canvas_screen',{title:'Product',referenceAssetIds:['brand','tabs']},[text({nodeId:'product',committed:true})]);
+ context.tool('canvas_review',{nodeId:'product'},[text({nodeId:'product',sourceVersion:'current',viewport:{width:390,height:844},reviewReferenceAssetIds:['brand','tabs'],state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,product'},text({referenceAssetId:'brand'}),{type:'inputImage',imageUrl:'data:image/png;base64,brand'}]);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];
+ feedback.productChecks=[{nodeId:'product',referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:[1,2],assessment:'The brief is addressed.'}];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1,'one reference cannot approve both brand and tabs');
+ context.tool('inspect_asset',{evidenceId:'tabs'},[text({evidenceId:'tabs'}),{type:'inputImage',imageUrl:'data:image/png;base64,tabs'}]);
+ feedback.productChecks[0].evidenceImageNumbers.push(3);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0,'independently inspected pixels can supply an omitted comparison');
+ for(const key of ['icons','typography','imagery','layout']){
+  feedback.productChecks[0].visualChecks[key].status='revise';
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1,`${key} is material even when the overall verdict says pass`);
+  feedback.productChecks[0].visualChecks[key].status='pass';
+ }
+ assert.throws(()=>parseDiscoveryFeedback(JSON.stringify({...feedback,productChecks:[...feedback.productChecks,...feedback.productChecks]})),/supported format/);
+});
+
+test('failed product probes remain unverified after a clean render, then clear on a successful retry; new source invalidates all behavior evidence',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ context.tool('canvas_screen',{title:'Goal',javascript:'saveGoal()'},[text({nodeId:'goal',committed:true})]);
+ const review=()=>context.tool('canvas_review',{nodeId:'goal'},[text({nodeId:'goal',sourceVersion:'one',viewport:{width:390,height:844},state:{errors:[],controls:[{id:'save'}]}}),{type:'inputImage',imageUrl:'data:image/png;base64,goal'}]);
+ review();
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'goal',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),interactionQuality:'pass',interactionAssessment:'Save and reopen retains the new goal.',evidenceImageNumbers:[1],assessment:'Original product direction.'}];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1,'an author claim cannot substitute for executing an interaction');
+ const args={nodeId:'goal',action:'click',selector:'#save'};
+ context.tool('canvas_screen_interact',args,[text({nodeId:'goal',sourceVersion:'one',errors:[]})]);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ context.tool('canvas_screen_interact',args,[{type:'inputText',text:'Control is unavailable'}],false);
+ review();
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1,'a clean static render does not erase a failed requested action');
+ context.tool('canvas_screen_interact',args,[text({nodeId:'goal',sourceVersion:'one',errors:[]})]);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ context.tool('canvas_read',{},[text({screens:[{nodeId:'goal',sourceVersion:'two',source:{html:'<button>Save</button>',javascript:'newGoal()',referenceAssetIds:[]}}]})]);
+ const work=JSON.parse(context.packet('').text).productWork[0];
+ assert.deepEqual(work.interactions,[]);assert.deepEqual(work.failedChecks,[]);assert.equal(work.reviewed,false);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+ context.tool('canvas_read',{},[text({screens:[]})]);
+ assert.equal(JSON.parse(context.packet('').text).productWork.length,0,'deleted work leaves no residual review targets');
+});
+
+test('a partial repeated animation capture cannot borrow missing frames from an earlier sequence',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ const frame=(progress:number,round:string)=>context.tool('canvas_screen_motion_review',{nodeId:'motion',triggerSelector:'#open'},[text({nodeId:'motion',sourceVersion:'one',motionFrame:progress,motionFrameCount:3,state:{}}),{type:'inputImage',imageUrl:`data:image/png;base64,${round}-${progress}`}]);
+ for(const progress of [0,.5,1])frame(progress,'old');
+ frame(0,'new');
+ const packet=context.packet('Ready'),work=JSON.parse(packet.text).productWork[0];
+ assert.equal(packet.images.length,1);assert.deepEqual(work.motionSequences[0].frames,[0]);
+ assert.ok(packet.images.every(image=>image.type==='image'&&!image.url.includes('old')));
+});
+
+test('a mistaken probe can be retired from observed corrected behavior without rewriting the product; an explanation alone is insufficient',()=>{
+ const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
+ context.tool('canvas_screen',{javascript:'openEditor()'},[text({nodeId:'editor',committed:true})]);
+ context.tool('canvas_review',{nodeId:'editor'},[text({nodeId:'editor',sourceVersion:'one',viewport:{width:390,height:844},state:{errors:[],controls:[{id:'edit'}]}}),{type:'inputImage',imageUrl:'data:image/png;base64,editor'}]);
+ context.tool('canvas_screen_interact',{nodeId:'editor',action:'click',selector:'#wrong'},[{type:'inputText',text:'No matching control'}],false);
+ const screen=JSON.parse(context.packet('').text).productWork[0];
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'editor',referenceComparison:'not_applicable',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),interactionQuality:'pass',interactionAssessment:'Corrected editor journey retains the saved goal.',probeResolutions:[{checkNumber:screen.failedChecks[0].checkNumber,basis:'The earlier selector was wrong. A corrected private journey now executes the real editor.'}],evidenceImageNumbers:[1],assessment:'The original design is retained.'}];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1,'retirement needs later actual behavior');
+ context.tool('canvas_screen_interact',{nodeId:'editor',action:'inspect'},[text({nodeId:'editor',sourceVersion:'one',errors:[]})]);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1,'a static inspect is insufficient');
+ context.tool('canvas_screen_interact',{nodeId:'editor',action:'journey',motionPreference:'no-preference',steps:[{action:'click',selector:'#edit',expectedText:'Goal'}]},[text({nodeId:'editor',sourceVersion:'one',state:{errors:[],journey:{passed:true}}}),{type:'inputImage',imageUrl:'data:image/png;base64,corrected'}]);
+ feedback.productChecks[0].evidenceImageNumbers.push(2);
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ assert.equal(JSON.parse(context.packet('').text).productWork[0].sourceVersion,'one');
 });

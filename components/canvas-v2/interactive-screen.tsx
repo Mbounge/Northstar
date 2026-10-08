@@ -1,8 +1,8 @@
 'use client';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasV2ArtifactTheme } from '@/lib/canvas-v2/artifact-theme';
-import { parseCanvasV2Screen } from '@/lib/canvas-v2/interactive-screen';
-import { buildCanvasV2ScreenRuntime, SCREEN_PROTOCOL, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
+import { parseCanvasV2Screen, canvasV2ScreenBoundAssets } from '@/lib/canvas-v2/interactive-screen';
+import { buildCanvasV2ScreenRuntime, bindCanvasV2ScreenAssetSource, SCREEN_PROTOCOL, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
 import { readCanvasV2ScreenAssetPixels } from '@/lib/canvas-v2/screen-asset-pixels';
 import { toCooperativeJpeg } from '@/lib/canvas-v2/cooperative-capture';
 import { simulatorForApp } from '@/lib/preview/simulator-registry';
@@ -12,6 +12,7 @@ import { registerCanvasV2ScreenCapture } from '@/lib/canvas-v2/interactive-scree
 import type { CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
 import type { CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 import { CANVAS_V2_FEEDBACK_PICKING, setCanvasV2FeedbackPicking, CANVAS_V2_SCREEN_FEEDBACK, parseCanvasV2ScreenFeedbackTarget, canvasV2ScreenLiveEdit, type CanvasV2ScreenLiveEdit } from '@/lib/canvas-v2/screen-feedback';
+import { validateScreenInteractionSequence } from '@/lib/canvas-v2/screen-interaction-sequence';
 
 export const CANVAS_V2_SCREEN_COMMAND = 'northstar-screen-command';
 export const CanvasV2ScreenTheme = createContext<CanvasV2ArtifactTheme>('light');
@@ -20,6 +21,46 @@ export const CanvasV2ScreenAssets = createContext<readonly CanvasV2EvidenceAsset
 type ScreenResult = Record<string, unknown>;
 type ScreenController = { encoded: string; revisionReady?: { encoded: string; done: Promise<void> }; capture?: (signal: AbortSignal) => Promise<{ image: string; state: ScreenResult }>; run: (command: ScreenAction, signal: AbortSignal) => Promise<ScreenResult> };
 const controllers = new Map<string, ScreenController>();
+
+/** Test the actual saved source in a disposable opaque-origin runtime. User
+ * interaction, selection, camera and current mock data are never changed. */
+export async function testCanvasV2ScreenJourney(nodeId: string, encoded: string, evidence: readonly CanvasV2EvidenceAsset[], steps: unknown, motionPreference: 'reduce' | 'no-preference', signal: AbortSignal) {
+  const screen = parseCanvasV2Screen(encoded);
+  if (screen.simulation) throw new Error('Preserve the original app simulation. Test an authored screen instead.');
+  const sequence = validateScreenInteractionSequence(steps);
+  const bytes = await Promise.all(canvasV2ScreenBoundAssets(screen).map(async id => {
+    const asset = evidence.find(asset => asset.id === id);
+    if (!asset || asset.source?.permission === 'unavailable') throw new Error('A retained product asset is unavailable.');
+    return [id, await readCanvasV2ScreenAssetPixels(asset.mediaType === 'gif' || asset.mediaType === 'video' ? asset.originalUrl || asset.url : asset.url, signal)] as const;
+  }));
+  signal.throwIfAborted();
+  const frame = document.createElement('iframe'), token = crypto.randomUUID(), requestId = crypto.randomUUID();
+  frame.title = 'Private product journey check';
+  frame.tabIndex = -1;
+  frame.setAttribute('sandbox', 'allow-scripts allow-forms');
+  frame.setAttribute('credentialless', '');
+  frame.referrerPolicy = 'no-referrer';
+  frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${screen.width}px;height:${screen.height}px;border:0;pointer-events:none`;
+  // Identity tokens are already retained in this exact saved screen source.
+  frame.srcdoc = buildCanvasV2ScreenRuntime(screen, new Map(bytes), token, motionPreference);
+  try {
+    const result = await new Promise<ScreenResult>((resolve, reject) => {
+      const cleanup = () => { clearTimeout(timer); window.removeEventListener('message', receive); signal.removeEventListener('abort', abort); };
+      const abort = () => { cleanup(); reject(signal.reason); };
+      const receive = (event: MessageEvent) => {
+        if (event.source !== frame.contentWindow || event.data?.protocol !== SCREEN_PROTOCOL || event.data.token !== token) return;
+        if (event.data.ready) { frame.contentWindow?.postMessage({ protocol: SCREEN_PROTOCOL, token, requestId, command: { action: 'test-sequence', steps: sequence } }, '*'); return; }
+        if (event.data.requestId !== requestId) return;
+        cleanup();
+        if (event.data.error) reject(new Error(String(event.data.error))); else resolve(event.data.result);
+      };
+      const timer = setTimeout(() => { cleanup(); reject(new Error('The product journey check timed out.')); }, 12000);
+      window.addEventListener('message', receive); signal.addEventListener('abort', abort, { once: true });
+      document.body.appendChild(frame);
+    });
+    return await rasterizeScreenSnapshot(nodeId, encoded, signal, result, true);
+  } finally { frame.remove(); }
+}
 
 /** The bridge accepts only the frame belonging to this exact saved object. */
 export async function inspectCanvasV2Screen(nodeId: string, encoded: string, command: ScreenAction, signal: AbortSignal) {
@@ -146,7 +187,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const pendingLiveEdit = useRef<{ encoded: string; edit: CanvasV2ScreenLiveEdit } | undefined>(undefined);
   if (previousSource.current !== encoded) {
     const edit = typeof DOMParser !== 'undefined' && controllers.has(nodeId) ? canvasV2ScreenLiveEdit(parseCanvasV2Screen(previousSource.current), screen, new DOMParser()) : undefined;
-    if (edit) pendingLiveEdit.current = { encoded, edit };
+    if (edit && JSON.stringify(canvasV2ScreenBoundAssets(parseCanvasV2Screen(previousSource.current)).sort()) === JSON.stringify(canvasV2ScreenBoundAssets(screen).sort())) pendingLiveEdit.current = { encoded, edit };
     else { runtimeSource.current = encoded; pendingLiveEdit.current = undefined; }
     previousSource.current = encoded;
   }
@@ -155,7 +196,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const pending = pendingLiveEdit.current, controller = controllers.get(nodeId);
     if (!pending || pending.encoded !== encoded || !controller) return;
     const aborter = new AbortController();
-    const done = controller.run({ action: 'patch-element', ...pending.edit }, aborter.signal).then(() => {
+    const done = controller.run({ action: pending.edit.stylesheet === undefined ? 'patch-element' : 'patch-stylesheet', ...pending.edit }, aborter.signal).then(() => {
       if (!aborter.signal.aborted && controllers.get(nodeId) === controller) { controller.encoded = encoded; pendingLiveEdit.current = undefined; }
     }).catch(() => { if (!aborter.signal.aborted) setError('This element changed while it was being edited. Choose the current version in History to start fresh.'); });
     controller.revisionReady = { encoded, done };
@@ -183,7 +224,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     return () => { window.removeEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); node?.removeEventListener(CANVAS_V2_SCREEN_COMMAND, command); };
   }, [nodeId, encoded, screen.simulation]);
   // Unrelated canvas revisions must not reset a running screen's mock state.
-  const sources = JSON.stringify(screen.referenceAssetIds.map(id => { const asset = evidence.find(a => a.id === id); return { id, url: asset?.mediaType === 'gif' || asset?.mediaType === 'video' ? asset.originalUrl || asset.url : asset?.url }; }));
+  const sources = JSON.stringify(canvasV2ScreenBoundAssets(screen).map(id => { const asset = evidence.find(a => a.id === id); return { id, url: asset?.mediaType === 'gif' || asset?.mediaType === 'video' ? asset.originalUrl || asset.url : asset?.url }; }));
   useEffect(() => {
     const node = host.current;
     if (!node) return;
@@ -201,6 +242,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const runtimeScreen = parseCanvasV2Screen(runtimeEncoded);
     const token = crypto.randomUUID();
     let ready = false, navigated = false;
+    let retainedBytes = new Map<string,string>();
     let simulationDocument: Document | null = null;
     const simulationInput = (event: Event) => { if (event.isTrusted) lastHumanInput.current = Date.now(); };
     const simulationEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { frame.current?.blur(); host.current?.focus({ preventScroll: true }); } };
@@ -242,8 +284,9 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       }
       if (!ready || !frame.current?.contentWindow) throw new Error('The interactive screen is still loading.');
       signal.throwIfAborted(); aborter.signal.throwIfAborted();
-      if (Date.now() - lastHumanInput.current < 2500 && !['inspect', 'snapshot', 'feedback-mode', 'patch-element', 'motion-end'].includes(command.action)) throw new Error('The user is interacting with this screen. Inspect or review it without changing their current mock state.');
+      if (Date.now() - lastHumanInput.current < 2500 && !['inspect', 'snapshot', 'feedback-mode', 'patch-element', 'patch-stylesheet', 'motion-end'].includes(command.action)) throw new Error('The user is interacting with this screen. Inspect or review it without changing their current mock state.');
       if (simulation) return inspectRegisteredSimulation(frame.current, command, signal);
+      if (command.action === 'patch-stylesheet') command = { ...command, stylesheet: bindCanvasV2ScreenAssetSource(command.stylesheet ?? '', runtimeScreen.referenceAssetIds, retainedBytes) };
       return new Promise<ScreenResult>((resolve, reject) => {
         const id = crypto.randomUUID();
         const finish = (error?: Error, value?: ScreenResult) => {
@@ -275,7 +318,8 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
           return [asset.id, await readCanvasV2ScreenAssetPixels(asset.url, aborter.signal)] as const;
         }));
         aborter.signal.throwIfAborted();
-        setRuntime(buildCanvasV2ScreenRuntime(parseCanvasV2Screen(runtimeEncoded), new Map(bytes), token));
+        retainedBytes = new Map(bytes);
+        setRuntime(buildCanvasV2ScreenRuntime(parseCanvasV2Screen(runtimeEncoded), retainedBytes, token));
       } catch (error) { if (!aborter.signal.aborted) setError(error instanceof Error ? error.message : 'The screen could not be loaded.'); }
     })();
     return () => {

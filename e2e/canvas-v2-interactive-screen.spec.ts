@@ -46,3 +46,14 @@ test('the agent creates, tests, captures and revises one native screen without s
   await page.getByRole('button', { name: 'Reset screen' }).click();
   await expect(frame.getByRole('button', { name: 'Save team' })).toBeVisible();
 });
+
+test('private product journeys exercise rapid actions, saved values and both motion preferences without resetting live user state',async({page})=>{
+ await page.goto('/canvas-v2-e2e/codex');
+ await page.getByRole('textbox',{name:'Message North Star'}).fill('screen journey');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(page.getByText('Verified rapid reversals, save/reopen continuity and both motion preferences in private copies. The live user goal is unchanged.',{exact:true})).toBeVisible({timeout:30000});
+ const frame=page.frameLocator('iframe[title="Product journey checks"]');
+ await expect(frame.getByText('User live goal',{exact:true})).toBeVisible();
+ await expect(frame.getByText('Twelve goals',{exact:true})).toHaveCount(0);
+ await expect(page.locator('iframe[title="Private product journey check"]')).toHaveCount(0);
+});
