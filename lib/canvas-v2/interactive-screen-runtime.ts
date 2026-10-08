@@ -1,5 +1,6 @@
+import { packScreenCaptureImages } from './screen-capture-resources';
 import { validateCanvasV2Screen, canvasV2ScreenAssetToken, SCREEN_ASSET_PATTERN, type CanvasV2InteractiveScreen } from './interactive-screen';
-import { screenMotionTimeline } from './screen-motion-timeline';
+import { advanceScreenJourneyMotion, screenMotionTimeline } from './screen-motion-timeline';
 import { isCanvasV2ScreenVideoBytes } from './screen-asset-pixels';
 import { validateScreenInteractionSequence, type ScreenInteractionStep } from './screen-interaction-sequence';
 
@@ -53,6 +54,8 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     const settle = () => new Promise(resolve => {const timer=setTimeout(resolve,120);requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve()}))});
     let feedbackMode=false, feedbackOutline, motionSession, humanInputSequence=0;
     const motionTimeline=${screenMotionTimeline.toString()};
+    const packCapture=${packScreenCaptureImages.toString()};
+    const advanceJourneyMotion=${advanceScreenJourneyMotion.toString()};
     const releaseMotion = () => {const session=motionSession;motionSession=undefined;if(!session)return;clearTimeout(session.timer);for(const {a,time,state,rate} of session.saved){try{if(a.playState==='idle')continue;a.playbackRate=rate;if(state==='idle')a.cancel();else{a.currentTime=time;if(state==='running')a.play();else if(state==='finished')a.finish();else a.pause()}}catch{a.cancel()}}};
     const selectorFor = el => {
       if(el.id && document.querySelectorAll('#'+CSS.escape(el.id)).length===1)return '#'+CSS.escape(el.id);
@@ -114,7 +117,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       });
       clone.style.margin='0';clone.style.setProperty('position','relative','important');clone.style.setProperty('left',-scrollX+'px','important');clone.style.setProperty('top',-scrollY+'px','important');
       clone.querySelectorAll('script,iframe,object,embed,link,meta,base,[data-northstar-feedback-overlay]').forEach(el=>el.remove());
-      return {html:clone.outerHTML,css:[...document.querySelectorAll('style')].map(el=>el.textContent).join('\\n')+pseudoCss,width:innerWidth,height:innerHeight,...inspect()};
+      return {...packCapture(clone.outerHTML,[...document.querySelectorAll('style')].map(el=>el.textContent).join('\\n')+pseudoCss),width:innerWidth,height:innerHeight,...inspect()};
     };
     addEventListener('message', async e => {
       if(e.source!==parent || e.data?.protocol!==protocol || e.data.token!==token) return;
@@ -130,7 +133,8 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         }
         if(command.action==='test-sequence'){
           if(!testMotionPreference)throw Error('Journey checks need a private test copy.');
-          const steps=(${validateScreenInteractionSequence.toString()})(command.steps),trace=[],started=performance.now();
+          const steps=(${validateScreenInteractionSequence.toString()})(command.steps),trace=[],started=performance.now(),journeyAnimations=new Map();let journeyTime=0;
+          const tickJourney=()=>{void document.body.offsetHeight;advanceJourneyMotion(document.getAnimations().filter(a=>a.effect instanceof KeyframeEffect&&(a.currentTime===null||typeof a.currentTime==='number')),journeyTime,journeyAnimations)};
           for(const [index,step] of steps.entries()){
             try {
             const el=step.selector?document.querySelector(step.selector):undefined;
@@ -138,7 +142,8 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
             if(step.action==='click'){if(!el||!visible(el)||el.disabled)throw Error('Journey control is not reachable at step '+(index+1));el.click()}
             if(step.action==='fill'){if(!el||!visible(el)||el.disabled||el.readOnly||!(el instanceof HTMLInputElement||el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement))throw Error('Journey field is not editable at step '+(index+1));el.value=step.value??'';el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}
             if(step.action==='scroll')(el||window).scrollTo(step.x||0,step.y||0);
-            if(step.delayMs)await new Promise(resolve=>setTimeout(resolve,step.delayMs));
+            tickJourney();
+            if(step.delayMs){await new Promise(resolve=>setTimeout(resolve,step.delayMs));journeyTime+=step.delayMs;tickJourney();}
             void document.body.offsetHeight;
             const state=inspect(),text=state.text;
             const passed=(step.expectedText===undefined||text.includes(step.expectedText))&&(step.absentText===undefined||!text.includes(step.absentText))&&(step.expectedValue===undefined||(el&&visible(el)&&el.value===step.expectedValue))&&!state.errors.length&&!state.overflow.horizontal;
@@ -147,7 +152,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
             }catch(error){const state=inspect();trace.push({step:index+1,action:step.action,selector:step.selector,passed:false,failure:String(error),actualElapsedMs:performance.now()-started,text:state.text.slice(0,4000),controls:state.controls.slice(0,30),errors:state.errors,note:'This copy starts from the initial saved screen. Open the relevant view before filling; allow its transition to make fields reachable with delayMs when needed. An unreachable field is not an unsupported field type.'});break;}
           }
           await settle();
-          parent.postMessage({protocol,token,requestId,result:{...snapshot(),journey:{mode:'isolated-copy',motionPreference:testMotionPreference,focusSuppressed:true,audioMuted:true,passed:trace.length===steps.length&&trace.every(step=>step.passed)&&!errors.length,steps:trace,requestedStepCount:steps.length}}},'*');return;
+          parent.postMessage({protocol,token,requestId,result:{...snapshot(),journey:{mode:'isolated-copy',motionClock:'CSS/Web Animation timelines advance by requested step delays when offscreen playback is throttled. JavaScript timers use actual elapsed time; this is not live playback or frame-rate evidence.',motionPreference:testMotionPreference,focusSuppressed:true,audioMuted:true,passed:trace.length===steps.length&&trace.every(step=>step.passed)&&!errors.length,steps:trace,requestedStepCount:steps.length}}},'*');return;
         }
         if(command.action==='live-motion'){
           let times=command.sampleTimesMs;

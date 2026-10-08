@@ -5,6 +5,7 @@ import { simulatorForApp } from "../lib/preview/simulator-registry";
 test("GRAET resolves to its simulator regardless of assignment casing", () => {
   assert.deepEqual(simulatorForApp(" graet "), {
     slug: "graet",
+    assetRoot: "/graet-replica/",
     path: "/preview-lab/replica/graet",
     embedPath: "/preview-lab/replica/graet?embedded=1",
   });

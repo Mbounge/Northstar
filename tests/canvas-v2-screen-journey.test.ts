@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateScreenInteractionSequence } from '../lib/canvas-v2/screen-interaction-sequence';
+import { advanceScreenJourneyMotion } from '../lib/canvas-v2/screen-motion-timeline';
+
+test('private journey waits compensate a stalled transition while preserving rapid reversals and authored pauses',()=>{
+ const opening={currentTime:0,playbackRate:1,playState:'running'},paused={currentTime:20,playbackRate:1,playState:'paused'};
+ const ledger=new Map<typeof opening,{elapsed:number;time:number;rate:number}>();
+ advanceScreenJourneyMotion([opening,paused],0,ledger);
+ advanceScreenJourneyMotion([opening,paused],280,ledger);
+ assert.equal(opening.currentTime,280);assert.equal(paused.currentTime,20);
+ const reversed={currentTime:180,playbackRate:-1,playState:'running'};
+ advanceScreenJourneyMotion([reversed],280,ledger);
+ advanceScreenJourneyMotion([reversed],300,ledger);
+ assert.equal(reversed.currentTime,160);
+ advanceScreenJourneyMotion([reversed],300,ledger);assert.equal(reversed.currentTime,160);
+ opening.currentTime=400;advanceScreenJourneyMotion([opening],300,ledger);assert.equal(opening.currentTime,400);
+});
 
 test('journeys retain deliberate rapid actions and saved-value assertions within a finite execution budget',()=>{
  const steps=validateScreenInteractionSequence([{action:'click',selector:'#open'},{action:'click',selector:'#close',delayMs:20},{action:'fill',selector:'#goal',value:'Twelve goals'},{action:'wait',selector:'#goal',expectedValue:'Twelve goals',expectedText:'Your season',absentText:'Failed',delayMs:400}]);

@@ -243,7 +243,7 @@ export class CodexSessionHost {
   }
   private finishReviewedDraft(s: Session, run: DiscoveryReviewRun, unfinished = false) {
     run.stop();
-    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: unfinished ? (s.reviewContext.hasProductWork() ? 'The latest version is on your canvas. You can explore it and keep refining it.' : `Here’s what I found so far.\n\n${item.text}`) : item.text }] } });
+    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: unfinished ? (s.reviewContext.hasProductWork() ? (s.reviewContext.hasProductEdits() ? 'This screen is still a draft. I haven’t completed its reference and interaction checks.' : `Here’s my assessment so far:\n\n${item.text}\n\nI haven’t completed this review.`) : `Here’s what I found so far.\n\n${item.text}`) : item.text }] } });
     this.emit(s, { type: 'agent.session.turn.completed', turn_id: run.publicTurnId });
   }
   private stream(s: Session, identity: boolean, signal: AbortSignal) {

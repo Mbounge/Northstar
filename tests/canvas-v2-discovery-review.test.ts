@@ -7,7 +7,7 @@ import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
 import { object, string, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
 
 const goodVisualChecks = () => ({
-  visualChecks: Object.fromEntries(['icons','typography','imagery','layout'].map(key=>[key,{status:'pass',assessment:`Current ${key} meets the fixture brief from supplied pixels.`}])),
+  visualChecks: Object.fromEntries(['icons','typography','imagery','layout','content','palette','shapes','surfaceEffects'].map(key=>[key,{status:'pass',assessment:`Current ${key} meets the fixture brief from supplied pixels.`}])),
   probeResolutions: [], interactionQuality: 'not_applicable', interactionAssessment: 'This fixture is a static screen without an authored interaction requirement.',
 });
 const tick = () => new Promise(resolve => setTimeout(resolve, 25));
@@ -521,10 +521,24 @@ test('unfinished product review keeps failure diagnostics and unverified approva
     t.peer.finish('All visual checks passed.'); await tick();
     assert.equal((await t.snapshot()).review.status, 'unavailable');
     assert.equal((await t.snapshot()).review.failureKind, 'timeout');
-    assert.equal(t.client.view.texts.at(-1)?.text, 'The latest version is on your canvas. You can explore it and keep refining it.');
+    assert.equal(t.client.view.texts.at(-1)?.text, 'This screen is still a draft. I haven’t completed its reference and interaction checks.');
     assert.ok(!t.client.view.texts.some(item => /timed out|all visual checks passed|review.*unfinished/i.test(item.text)));
     assert.equal(t.client.view.status, 'completed');
   } finally { t.close(); }
+});
+
+test('a read-only product assessment survives incomplete review instead of becoming a false canvas delivery', async () => {
+  const t = await setup(async () => { throw new Error('Review timed out'); }, 6, [{ type:'inputText',text:JSON.stringify({screens:[{nodeId:'existing',title:'Career',sourceVersion:'one'}]}) }]);
+  try {
+    t.peer.reply=(id,result)=>{t.peer.replies.push({id,result:object(result)});};
+    await t.client.send('Compare only. Do not edit.', [], 'gpt-5.6-luna', 'r1');
+    t.peer.tool('canvas_read',{}); await tick();
+    t.peer.finish('The header, icons and section order differ from the reference.'); await tick();
+    const answer=t.client.view.texts.at(-1)?.text||'';
+    assert.match(answer,/header, icons and section order differ/);
+    assert.match(answer,/haven’t completed this review/);
+    assert.doesNotMatch(answer,/latest version is on your canvas|screen is still a draft|timed out/);
+  } finally {t.close();}
 });
 
 test('four-screen review batches keep sibling component evidence and reconcile local citations for every variant',async()=>{
@@ -640,7 +654,7 @@ test('a faithful screen needs every retained comparison, separate visual judgmen
  context.tool('inspect_asset',{evidenceId:'tabs'},[text({evidenceId:'tabs'}),{type:'inputImage',imageUrl:'data:image/png;base64,tabs'}]);
  feedback.productChecks[0].evidenceImageNumbers.push(3);
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0,'independently inspected pixels can supply an omitted comparison');
- for(const key of ['icons','typography','imagery','layout']){
+ for(const key of ['icons','typography','imagery','layout','content','palette','shapes','surfaceEffects']){
   feedback.productChecks[0].visualChecks[key].status='revise';
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1,`${key} is material even when the overall verdict says pass`);
   feedback.productChecks[0].visualChecks[key].status='pass';

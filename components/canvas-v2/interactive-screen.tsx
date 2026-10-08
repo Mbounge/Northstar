@@ -7,6 +7,8 @@ import { readCanvasV2ScreenAssetPixels } from '@/lib/canvas-v2/screen-asset-pixe
 import { toCooperativeJpeg } from '@/lib/canvas-v2/cooperative-capture';
 import { simulatorForApp } from '@/lib/preview/simulator-registry';
 import { GRAET_PREVIEW_NAVIGATE, GRAET_PREVIEW_SECTION } from '@/lib/preview/graet-navigation';
+import { unpackScreenCaptureImages, bindScreenCaptureImages } from '@/lib/canvas-v2/screen-capture-resources';
+import { readSimulationSource, type SimulationSource } from '@/lib/canvas-v2/simulation-source';
 import { inspectRegisteredSimulation } from '@/lib/canvas-v2/registered-simulation-runtime';
 import { registerCanvasV2ScreenCapture } from '@/lib/canvas-v2/interactive-screen-capture';
 import type { CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
@@ -35,7 +37,7 @@ export async function canvasV2ScreenPixelAppearance(pixels: string) {
   const count=data.length/4;
   return {lightAreaFraction:Number((light/count).toFixed(2)),darkAreaFraction:Number((dark/count).toFixed(2)),predominantAppearance:light/count>.6?'light':dark/count>.6?'dark':'mixed',note:'Measured rendered pixels; infer the actual product palette from these pixels and the brief, not from the surrounding canvas theme.'};
 }
-type ScreenController = { encoded: string; revisionReady?: { encoded: string; done: Promise<void> }; capture?: (signal: AbortSignal) => Promise<{ image: string; state: ScreenResult }>; run: (command: ScreenAction, signal: AbortSignal) => Promise<ScreenResult> };
+type ScreenController = { encoded: string; readSource?: (signal: AbortSignal) => Promise<SimulationSource>; revisionReady?: { encoded: string; done: Promise<void> }; capture?: (signal: AbortSignal) => Promise<{ image: string; state: ScreenResult }>; run: (command: ScreenAction, signal: AbortSignal) => Promise<ScreenResult> };
 const controllers = new Map<string, ScreenController>();
 
 /** Test the actual saved source in a disposable opaque-origin runtime. User
@@ -78,6 +80,7 @@ export async function testCanvasV2ScreenJourney(nodeId: string, encoded: string,
   } finally { frame.remove(); }
 }
 
+
 /** The bridge accepts only the frame belonging to this exact saved object. */
 export async function inspectCanvasV2Screen(nodeId: string, encoded: string, command: ScreenAction, signal: AbortSignal) {
   signal.throwIfAborted();
@@ -101,6 +104,16 @@ export async function inspectCanvasV2Screen(nodeId: string, encoded: string, com
   }
   if (!controller || controllers.get(nodeId) !== controller || controller.encoded !== encoded) throw new Error('This screen is not ready or was revised/deleted. Read the canvas again.');
   return controller.run(command, signal);
+}
+
+/** Only registered, tenant-protected first-party frames expose their implementation.
+ * Generated screens never gain same-origin access through this adapter. */
+export async function readCanvasV2SimulationSource(nodeId: string, encoded: string, signal: AbortSignal) {
+  const controller = controllers.get(nodeId);
+  if (!parseCanvasV2Screen(encoded).simulation || controller?.encoded !== encoded || !controller.readSource) throw new Error('Read a current registered simulation to reuse its implementation.');
+  const source = await controller.readSource(signal);
+  if (controllers.get(nodeId) !== controller || controller.encoded !== encoded) throw new Error('The reference changed while its source was being read.');
+  return source;
 }
 
 /** Rasterize live DOM/state returned by the opaque frame in a script-disabled
@@ -137,21 +150,24 @@ async function captureCanvasV2PresentedScreen(nodeId:string,encoded:string,signa
 
 async function rasterizeScreenSnapshot(nodeId:string,encoded:string,signal:AbortSignal,snapshot:ScreenResult,detailsEnabled:boolean) {
   signal.throwIfAborted();
-  const parsed = new DOMParser().parseFromString(String(snapshot.html ?? ''), 'text/html');
+  const resources = unpackScreenCaptureImages(snapshot.captureImages, blob => URL.createObjectURL(blob));
+  const bind = (value: string) => bindScreenCaptureImages(value, resources.replacements);
+  try {
+  const parsed = new DOMParser().parseFromString(bind(String(snapshot.html ?? '')), 'text/html');
   parsed.querySelectorAll('script,iframe,object,embed,base,link,meta').forEach(el => el.remove());
   for (const el of parsed.querySelectorAll('*')) for (const attribute of [...el.attributes]) {
     if (/^on/i.test(attribute.name) || ['srcdoc', 'href', 'action', 'formaction'].includes(attribute.name)
-      || (attribute.name === 'src' && !/^data:image\/(?:png|jpeg|webp|gif);base64,/.test(attribute.value))) el.removeAttribute(attribute.name);
+      || (attribute.name === 'src' && !/^data:image\/(?:png|jpeg|webp|gif);base64,/.test(attribute.value) && !resources.urls.includes(attribute.value))) el.removeAttribute(attribute.name);
   }
   const frame = document.createElement('iframe');
   frame.setAttribute('sandbox', 'allow-same-origin');
   const width = Number(snapshot.width), height = Number(snapshot.height);
   if (!Number.isFinite(width) || width < 240 || width > 1920 || !Number.isFinite(height) || height < 240 || height > 1600) throw new Error('Invalid screen capture viewport.');
-  const css = String(snapshot.css ?? '').replace(/<\/style/gi, '');
+  const css = bind(String(snapshot.css ?? '')).replace(/<\/style/gi, '');
   if (parsed.body.outerHTML.length + css.length > 8_000_000) throw new Error('The screen capture exceeds its size budget.');
   frame.title = 'Private interactive screen capture';
   frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${width}px;height:${height}px;border:0;pointer-events:none`;
-  frame.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'none'; base-uri 'none'; form-action 'none'"><style>${css}</style><style>html{margin:0;width:${width}px;height:${height}px;overflow:hidden}</style></head>${parsed.body.outerHTML}</html>`;
+  frame.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:; script-src 'none'; base-uri 'none'; form-action 'none'"><style>${css}</style><style>html{margin:0;width:${width}px;height:${height}px;overflow:hidden}</style></head>${parsed.body.outerHTML}</html>`;
   try {
     await new Promise<void>((resolve, reject) => {
       const timeout = window.setTimeout(() => { cleanup(); reject(new Error('Screen capture timed out.')); }, 10000);
@@ -183,8 +199,9 @@ async function rasterizeScreenSnapshot(nodeId:string,encoded:string,signal:Abort
         details.push({label:String(region.label||'Component detail').slice(0,180),selector:String(region.selector||'').slice(0,1000),image:crop.toDataURL('image/png')});
       }
     }
-    return { image, details, state: { ...snapshot, html: undefined, css: undefined } };
+    return { image, details, state: { ...snapshot, html: undefined, css: undefined, captureImages: undefined } };
   } finally { frame.remove(); }
+  } finally { for (const url of resources.urls) URL.revokeObjectURL(url); }
 }
 
 export async function captureCanvasV2ScreenMotion(nodeId: string, encoded: string, signal: AbortSignal, triggerSelector?: string, liveTimes?: number[]) {
@@ -347,6 +364,14 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
         frame.current!.contentWindow!.postMessage({ protocol: SCREEN_PROTOCOL, token, requestId: id, command }, '*');
       });
     } };
+    if (simulation) controller.readSource = async signal => {
+      await controller.run({ action: 'inspect' }, signal);
+      const doc = frame.current?.contentDocument;
+      if (!doc) throw new Error('The simulation is unavailable.');
+      await doc.fonts.ready;
+      signal.throwIfAborted(); aborter.signal.throwIfAborted();
+      return readSimulationSource(doc, simulatorForApp(simulation.appName)!);
+    };
     if (simulation) controller.capture = async signal => {
       const state = await controller.run({ action: 'inspect' }, signal);
       const doc = frame.current?.contentDocument;

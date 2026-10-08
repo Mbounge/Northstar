@@ -1,8 +1,9 @@
-export type Simulator = { slug: string; path: string; embedPath: string };
+export type Simulator = { slug: string; path: string; embedPath: string; assetRoot?: string };
 
 const simulators: Record<string, Simulator> = {
   graet: {
     slug: "graet",
+    assetRoot: "/graet-replica/",
     path: "/preview-lab/replica/graet",
     embedPath: "/preview-lab/replica/graet?embedded=1",
   },

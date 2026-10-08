@@ -19,3 +19,18 @@ export function screenMotionTimeline(items: readonly ScreenMotionTiming[]) {
   const duration=Math.min(10_000,Math.max(0,requestedEnd-start));
   return {start,duration,truncated:requestedEnd-start>10_000,continuous:entries.some(item=>item.continuous),entries};
 }
+
+/** Offscreen browsers may throttle CSS transitions. Private journey waits can
+ * advance those timelines by their requested delay without changing live work,
+ * authored pauses, reversed playback or JavaScript's clock. Not a frame-rate test. */
+export function advanceScreenJourneyMotion<T extends { currentTime: unknown; playbackRate: number; playState: string }>(animations: T[], elapsed: number, ledger: Map<T, { elapsed: number; time: number; rate: number }>) {
+  for (const animation of animations) {
+    if (animation.playState === 'paused' || animation.playState === 'idle' || !Number.isFinite(animation.playbackRate) || !animation.playbackRate) continue;
+    const actual = typeof animation.currentTime === 'number' ? animation.currentTime : 0;
+    let origin = ledger.get(animation);
+    if (!origin || origin.rate !== animation.playbackRate) { origin = { elapsed, time: actual, rate: animation.playbackRate }; ledger.set(animation, origin); }
+    const expected = Math.max(0, origin.time + (elapsed - origin.elapsed) * origin.rate);
+    const target = origin.rate > 0 ? Math.max(actual, expected) : Math.min(actual, expected);
+    if (target !== actual || animation.currentTime === null) animation.currentTime = target;
+  }
+}
