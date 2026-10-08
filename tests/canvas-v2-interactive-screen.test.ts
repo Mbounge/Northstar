@@ -207,3 +207,12 @@ test('mobile phone presentation survives saved source while desktop pages remain
  assert.notEqual(first.id,second.id);assert.equal(first.source?.permission,'authorized');
  assert.throws(()=>canvasV2ScreenPreviewAsset('screen',screen,'data:image/jpeg;base64,YQ=='),/preview pixels/);
 });
+
+test('a new faithful copy requires observed identity lineage before authoring, while original creation stays available',()=>{
+ const reference={id:'reference',url:'data:image/png;base64,a',label:'Product reference'};
+ const faithful={...screen,referenceIntent:'faithful',referenceAssetIds:['reference']};
+ assert.throws(()=>canvasV2ScreenPatch(root,faithful,[reference],{x:0,y:0}),/observed typography/);
+ const identity={id:'observed',name:'Referenced product',platform:'mobile' as const,typography:'Observed font and weights',visualLanguage:'Observed palette',components:'Original visible content and icon conventions',motion:'Requested sheet transition',tokens:{},referenceAssetIds:['reference']};
+ assert.doesNotThrow(()=>canvasV2ScreenPatch(root,{...faithful,productIdentityId:'observed'},[reference],{x:0,y:0},[identity]));
+ assert.doesNotThrow(()=>canvasV2ScreenPatch(root,{...screen,referenceIntent:'original'},[],{x:0,y:0}));
+});

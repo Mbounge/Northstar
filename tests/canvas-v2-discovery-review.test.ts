@@ -700,7 +700,7 @@ test('a mistaken probe can be retired from observed corrected behavior without r
 test('a faithful variant cannot pass with an unused matching alternate theme while its default is wrong',()=>{
  const context=new DiscoveryReviewContext(),text=(v:unknown)=>({type:'inputText',text:JSON.stringify(v)});
  context.tool('canvas_screen',{referenceIntent:'faithful',referenceAppearance:'light'},[text({nodeId:'variant',committed:true})]);
- const review=(defaultAppearance:string)=>context.tool('canvas_review',{nodeId:'variant'},[text({nodeId:'variant',viewport:{width:390,height:844},referenceIntent:'faithful',referenceAppearance:'light',pixelAppearance:{predominantAppearance:'light'},defaultPixelAppearance:{predominantAppearance:defaultAppearance},state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,appearance'}]);
+ const review=(defaultAppearance:string)=>context.tool('canvas_review',{nodeId:'variant'},[text({nodeId:'variant',viewport:{width:390,height:844},referenceIntent:'faithful',referenceAppearance:'light',pixelAppearance:{predominantAppearance:'light'},defaultPixelAppearance:{predominantAppearance:defaultAppearance},state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,appearance'},text({nodeId:'variant',defaultState:true,state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,appearance'}]);
  const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'variant',referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:[1],assessment:'An alternate light palette exists.'}];
  review('dark');
  const blocked=JSON.parse(context.reconcileFeedback(JSON.stringify(feedback)));
@@ -709,4 +709,46 @@ test('a faithful variant cannot pass with an unused matching alternate theme whi
  context.tool('canvas_screen',{referenceIntent:'inspired'},[text({nodeId:'variant',committed:true})]);
  context.tool('canvas_review',{nodeId:'variant'},[text({nodeId:'variant',viewport:{width:390,height:844},referenceIntent:'inspired',referenceAppearance:'light',defaultPixelAppearance:{predominantAppearance:'dark'},state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,new-direction'}]);
  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0,'a requested original direction is judged on its brief, not a forced theme clone');
+});
+
+test('faithful visual approval cites the clear default view and cannot skip typography or layout',()=>{
+ const text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+ const context=new DiscoveryReviewContext();context.user([{type:'text',text:'Copy the referenced screen and add an editor.',text_elements:[]}]);
+ context.tool('canvas_screen',{referenceIntent:'faithful'},[text({nodeId:'faithful',committed:true})]);
+ context.tool('canvas_review',{nodeId:'faithful'},[text({nodeId:'faithful',viewport:{width:390,height:844},referenceIntent:'faithful',state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,dialog'},text({nodeId:'faithful',defaultState:true,state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,home'}]);
+ const feedback=JSON.parse(feedbackFor());feedback.resolvedWork=[];feedback.productChecks=[{nodeId:'faithful',referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:[1],assessment:'The sheet works.'}];
+ assert.match(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work[0].gap,/default screen/);
+ feedback.productChecks[0].evidenceImageNumbers=[1,2];
+ assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,0);
+ for(const key of ['typography','layout']){
+  feedback.productChecks[0].visualChecks[key].status='not_applicable';
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length,1);
+  feedback.productChecks[0].visualChecks[key].status='pass';
+ }
+});
+
+test('even one screen receives a focused pixel review without authored source or success claims',async()=>{
+ const {productReviewBatches}=await import('../lib/canvas-v2/codex-app-server/discovery-review');
+ const text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+ const context=new DiscoveryReviewContext();context.user([{type:'text',text:'Copy the original screen.',text_elements:[]}]);
+ context.tool('canvas_screen',{html:'obsolete author implementation'},[text({nodeId:'one',committed:true})]);
+ context.record('Primary observation',{type:'agentMessage',phase:'commentary',text:'Everything matches perfectly.'});
+ context.tool('canvas_review',{nodeId:'one'},[text({nodeId:'one',viewport:{width:390,height:844},state:{errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,one'}]);
+ const [batch]=productReviewBatches(context.packet('Ready to try.'));
+ assert.deepEqual(JSON.parse(batch.packet.text).reviewFocus.screenNodeIds,['one']);
+ assert.ok(!batch.packet.text.includes('obsolete author implementation'));
+ assert.ok(!batch.packet.text.includes('Everything matches perfectly.'));
+ assert.match(batch.packet.text,/Copy the original screen/);
+});
+
+test('the real single-screen review delegate receives the focused packet and remaps reference citations',async()=>{
+ const {reviewProductBatches}=await import('../lib/canvas-v2/codex-app-server/discovery-review');
+ const packet={text:JSON.stringify({latestUserRequest:'Copy the reference.',investigation:['Tool canvas_screen: '+JSON.stringify({html:'unreviewable author source'})],productWork:[{nodeId:'one',qualityReviewRequired:true,referenceAssetIds:['ref']}],imageDirectory:[{imageNumber:1,role:'screen:other:render'},{imageNumber:2,role:'screen:one:render'},{imageNumber:3,role:'screen:one:reference:ref'}]}),images:[{type:'image' as const,url:'data:image/png;base64,other'},{type:'image' as const,url:'data:image/png;base64,one'},{type:'image' as const,url:'data:image/png;base64,ref'}]};
+ const result=await reviewProductBatches(async focused=>{
+  assert.ok(!focused.text.includes('unreviewable author source'));
+  assert.equal(focused.images.length,2);
+  const feedback=JSON.parse(feedbackFor());feedback.productChecks=[{nodeId:'one',referenceComparison:'pass',componentConsistency:'pass',assetQuality:'pass',...goodVisualChecks(),evidenceImageNumbers:[1,2],assessment:'Compared actual reference pixels.'}];
+  return JSON.stringify(feedback);
+ },packet,{key:'fixture',model:'fixture',signal:new AbortController().signal});
+ assert.deepEqual(JSON.parse(result).productChecks[0].evidenceImageNumbers,[2,3]);
 });

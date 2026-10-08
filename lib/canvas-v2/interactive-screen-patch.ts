@@ -23,6 +23,7 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
   const identityId = input.productIdentityId ?? previous?.screen.productIdentityId;
   const identity = identityId ? identities.find(item => item.id === identityId) : undefined;
   if (identityId && !identity && (!previous || input.productIdentityId !== undefined)) throw new Error('Read or save this product identity before using it.');
+  if(!previous && input.referenceIntent==='faithful' && (!identity || !identity.referenceAssetIds.some(id=>(input.referenceAssetIds as string[]??[]).includes(id)))) throw new Error('Inspect the reference and save its observed typography, palette, original section order, content and icon conventions with canvas_product_identity before creating a faithful copy. Retain that reference in the identity and use its productIdentityId.');
   const css = previous && typeof input.css === 'string' && input.cssMode !== 'replace'
     ? `${previous.screen.css}\n${input.css}` : input.css ?? previous?.screen.css ?? '';
   const screen = validateCanvasV2Screen({ version: 1, device: input.device ?? previous?.screen.device ?? identity?.device, referenceNodeId:input.referenceNodeId??previous?.screen.referenceNodeId,referenceIntent:input.referenceIntent??previous?.screen.referenceIntent,referenceAppearance:input.referenceAppearance??previous?.screen.referenceAppearance, productIdentityId: identityId, simulation: input.simulation, title: input.title ?? previous?.screen.title,

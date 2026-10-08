@@ -13,6 +13,7 @@ import type { CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
 import type { CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 import { CANVAS_V2_FEEDBACK_PICKING, setCanvasV2FeedbackPicking, CANVAS_V2_SCREEN_FEEDBACK, parseCanvasV2ScreenFeedbackTarget, canvasV2ScreenLiveEdit, type CanvasV2ScreenLiveEdit } from '@/lib/canvas-v2/screen-feedback';
 import { validateScreenInteractionSequence } from '@/lib/canvas-v2/screen-interaction-sequence';
+import { canvasV2ScreenFontFamilies, readCanvasV2ScreenFontCss } from '@/lib/canvas-v2/screen-fonts';
 import { canvasV2ScreenDevice, canvasV2ScreenDeviceMetrics } from '@/lib/canvas-v2/screen-device';
 
 export const CANVAS_V2_SCREEN_COMMAND = 'northstar-screen-command';
@@ -57,7 +58,7 @@ export async function testCanvasV2ScreenJourney(nodeId: string, encoded: string,
   frame.referrerPolicy = 'no-referrer';
   frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${screen.width}px;height:${screen.height}px;border:0;pointer-events:none`;
   // Identity tokens are already retained in this exact saved screen source.
-  frame.srcdoc = buildCanvasV2ScreenRuntime(screen, new Map(bytes), token, motionPreference);
+  frame.srcdoc = buildCanvasV2ScreenRuntime(screen, new Map(bytes), token, motionPreference, await readCanvasV2ScreenFontCss(screen, signal));
   try {
     const result = await new Promise<ScreenResult>((resolve, reject) => {
       const cleanup = () => { clearTimeout(timer); window.removeEventListener('message', receive); signal.removeEventListener('abort', abort); };
@@ -150,7 +151,7 @@ async function rasterizeScreenSnapshot(nodeId:string,encoded:string,signal:Abort
   if (parsed.body.outerHTML.length + css.length > 8_000_000) throw new Error('The screen capture exceeds its size budget.');
   frame.title = 'Private interactive screen capture';
   frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${width}px;height:${height}px;border:0;pointer-events:none`;
-  frame.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'"><style>${css}</style><style>html{margin:0;width:${width}px;height:${height}px;overflow:hidden}</style></head>${parsed.body.outerHTML}</html>`;
+  frame.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'none'; base-uri 'none'; form-action 'none'"><style>${css}</style><style>html{margin:0;width:${width}px;height:${height}px;overflow:hidden}</style></head>${parsed.body.outerHTML}</html>`;
   try {
     await new Promise<void>((resolve, reject) => {
       const timeout = window.setTimeout(() => { cleanup(); reject(new Error('Screen capture timed out.')); }, 10000);
@@ -164,7 +165,8 @@ async function rasterizeScreenSnapshot(nodeId:string,encoded:string,signal:Abort
     if (!doc) throw new Error('The screen capture could not be read.');
     await Promise.all([...doc.images].map(image => image.decode().catch(() => undefined)));
     await doc.fonts.ready;
-    const image = await toCooperativeJpeg(doc.documentElement, { width, height, pixelRatio: detailsEnabled && width*height <= 1_000_000 ? 2 : 1, quality: 0.95, skipFonts: true }, () => !signal.aborted && controllers.get(nodeId)?.encoded === encoded);
+    const fontEmbedCSS=[...doc.styleSheets].flatMap(sheet=>[...sheet.cssRules].filter(rule=>rule.type===CSSRule.FONT_FACE_RULE).map(rule=>rule.cssText)).join('\n');
+    const image = await toCooperativeJpeg(doc.documentElement, { width, height, fontEmbedCSS, pixelRatio: detailsEnabled && width*height <= 1_000_000 ? 2 : 1, quality: 0.95 }, () => !signal.aborted && controllers.get(nodeId)?.encoded === encoded);
     const details: Array<{ label:string; selector:string; image:string }> = [];
     if (detailsEnabled && Array.isArray(snapshot.reviewRegions) && snapshot.reviewRegions.length) {
       const raster = new Image(); raster.src = image; await raster.decode();
@@ -277,6 +279,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   useEffect(() => {
     const aborter = new AbortController();
     const runtimeScreen = parseCanvasV2Screen(runtimeEncoded);
+    const loadedFontFamilies = new Set(canvasV2ScreenFontFamilies(runtimeScreen));
     const token = crypto.randomUUID();
     let ready = false, navigated = false;
     let retainedBytes = new Map<string,string>();
@@ -326,6 +329,10 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       signal.throwIfAborted(); aborter.signal.throwIfAborted();
       if (Date.now() - lastHumanInput.current < 2500 && !['inspect', 'snapshot', 'feedback-mode', 'patch-element', 'patch-stylesheet', 'motion-end'].includes(command.action)) throw new Error('The user is interacting with this screen. Inspect or review it without changing their current mock state.');
       if (simulation) return inspectRegisteredSimulation(frame.current, command, signal);
+      if (['patch-element','patch-stylesheet'].includes(command.action)) {
+        for(const family of canvasV2ScreenFontFamilies({html:'',css:command.stylesheet??JSON.stringify(command.styles??{}),javascript:''}))loadedFontFamilies.add(family);
+        command={...command,fontCss:await readCanvasV2ScreenFontCss({html:'',css:[...loadedFontFamilies].join(','),javascript:''},signal)};
+      }
       if (command.action === 'patch-stylesheet') command = { ...command, stylesheet: bindCanvasV2ScreenAssetSource(command.stylesheet ?? '', runtimeScreen.referenceAssetIds, retainedBytes) };
       return new Promise<ScreenResult>((resolve, reject) => {
         const id = crypto.randomUUID();
@@ -345,7 +352,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       const doc = frame.current?.contentDocument;
       if (!doc) throw new Error('The simulation is unavailable.');
       await doc.fonts.ready;
-      const image = await toCooperativeJpeg(doc.documentElement, { width: screen.width, height: screen.height, pixelRatio: 1, quality: 0.9 }, () => !signal.aborted && controllers.get(nodeId) === controller);
+      const image = await toCooperativeJpeg(doc.documentElement, { width: screen.width, height: screen.height, pixelRatio: 2, quality: 0.95 }, () => !signal.aborted && controllers.get(nodeId) === controller);
       return { image, state };
     };
     controllers.set(nodeId, controller);
@@ -364,7 +371,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
         }));
         aborter.signal.throwIfAborted();
         retainedBytes = new Map(bytes);
-        setRuntime(buildCanvasV2ScreenRuntime(parseCanvasV2Screen(runtimeEncoded), retainedBytes, token));
+        setRuntime(buildCanvasV2ScreenRuntime(runtimeScreen, retainedBytes, token, undefined, await readCanvasV2ScreenFontCss(runtimeScreen, aborter.signal)));
       } catch (error) { if (!aborter.signal.aborted) setError(error instanceof Error ? error.message : 'The screen could not be loaded.'); }
     })();
     return () => {

@@ -1,4 +1,5 @@
 'use client';
+import { CANVAS_V2_SCREEN_FONTS } from '@/lib/canvas-v2/screen-fonts';
 import { recordCanvasV2ScreenVersions, type CanvasV2ScreenVersion } from '@/lib/canvas-v2/screen-versions';
 import { artifactMetadata, isCreativeTool, type NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { creativeInputContext, runCreativeJob, creativeResultForModel } from '@/lib/canvas-v2/creative/bridge';
@@ -50,7 +51,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const artifacts = useRef(new Map<string, NorthstarArtifact>((input.initial?.memory?.artifacts ?? []).map(a => [a.id, a])));
   const accountHandles = useRef(new AccountToolHandles(input.initial?.memory?.accountHandles));
   const inspectedPixels = useRef(new Map<string, string>());
-  const defaultAppearances = useRef(new Map<string, Awaited<ReturnType<typeof canvasV2ScreenPixelAppearance>>>());
+  const defaultCaptures = useRef(new Map<string, {appearance:Awaited<ReturnType<typeof canvasV2ScreenPixelAppearance>>;capture:Awaited<ReturnType<typeof testCanvasV2ScreenJourney>>}>());
   const reviewedPreviews = useRef<{turnId:string;nodeIds:Set<string>}>({turnId:'',nodeIds:new Set()});
   const accountPackets = useRef<CanvasV2EvidencePacket[]>(input.initial?.memory?.accountPackets ?? []);
   const accountFlows = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlows ?? []));
@@ -264,16 +265,17 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (screen) {
           const capture = await captureCanvasV2Screen(screen.nodeId, screen.encoded, signal);
           const pixelAppearance = await canvasV2ScreenPixelAppearance(capture.image);
-          let defaultPixelAppearance;
-          if(!screen.screen.simulation && screen.screen.referenceIntent==='faithful' && screen.screen.referenceAppearance && screen.screen.referenceAppearance!=='mixed'){
+          let defaultPixelAppearance, defaultCapture;
+          if(!screen.screen.simulation && screen.screen.referenceIntent==='faithful'){
             const key=`${screen.nodeId}:${canvasV2FeedbackFingerprint(screen.encoded)}`;
-            defaultPixelAppearance=defaultAppearances.current.get(key);
-            if(!defaultPixelAppearance){
+            let cached=defaultCaptures.current.get(key);
+            if(!cached){
               const initial=await testCanvasV2ScreenJourney(screen.nodeId,screen.encoded,[...screenRevision.evidence,...assets.current.values()],[{action:'wait',delayMs:100}], 'no-preference',signal);
-              defaultPixelAppearance=await canvasV2ScreenPixelAppearance(initial.image);
-              defaultAppearances.current.set(key,defaultPixelAppearance);
-              if(defaultAppearances.current.size>24)defaultAppearances.current.delete(defaultAppearances.current.keys().next().value!);
+              cached={appearance:await canvasV2ScreenPixelAppearance(initial.image),capture:initial};
+              defaultCaptures.current.set(key,cached);
+              if(defaultCaptures.current.size>6)defaultCaptures.current.delete(defaultCaptures.current.keys().next().value!);
             }
+            defaultPixelAppearance=cached.appearance;defaultCapture=cached.capture;
           }
           const previewAsset = screen.screen.simulation ? canvasV2ScreenPreviewAsset(screen.nodeId,screen.screen,capture.image) : undefined;
           if(previewAsset){previewAsset.tags?.push(`pixel-appearance:${pixelAppearance?.predominantAppearance||'mixed'}`);assets.current.set(previewAsset.id,previewAsset);inspectedPixels.current.set(previewAsset.id,capture.image);reviewedPreviews.current.nodeIds.add(screen.nodeId);}
@@ -290,7 +292,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
               return [{ type: 'input_text', text: JSON.stringify({ referenceAssetId: id, unavailable: true, error: error instanceof Error ? error.message : 'Reference pixels unavailable.' }) }];
             }
           }));
-          let imageBytes = capture.image.length;
+          let imageBytes = capture.image.length+(defaultCapture?.image.length??0);
           const detailParts = capture.details.flatMap((detail,index) => {
             if (imageBytes + detail.image.length > 8_000_000) return [];
             imageBytes += detail.image.length;
@@ -304,7 +306,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             return part;
           });
           if (engine.readCommittedRevision().id !== screenRevision.id) throw new Error('The canvas changed during this capture. Read it again.');
-          return [{ type: 'input_text', text: JSON.stringify({ nodeId: screen.nodeId, revisionId: screenRevision.id, sourceVersion:canvasV2FeedbackFingerprint(screen.encoded), viewport: { width: screen.screen.width, height: screen.screen.height }, pixelAppearance, defaultPixelAppearance, referenceIntent:screen.screen.referenceIntent, referenceAppearance:screen.screen.referenceAppearance, captureReferenceAssetId: previewAsset?.id, referenceUse: previewAsset ? 'These current preview pixels are retained. Use captureReferenceAssetId with inspect_asset, prepare_asset or workspace_run to extract visible logos, icons and images. Use referenceNodeId equal to this preview nodeId on canvas_screen to retain this comparison automatically; faithful is the default intent. Match this product appearance unless the user requested a different direction. Keep the original preview intact.' : undefined, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, reviewReferenceAssetIds: reviewAssets.map(asset => asset.id), boundAssetIds: canvasV2ScreenBoundAssets(screen.screen), qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with prepare_asset (or workspace_run/workspace_export for complex processing), inspect and bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...detailParts, ...referenceParts];
+          return [{ type: 'input_text', text: JSON.stringify({ nodeId: screen.nodeId, revisionId: screenRevision.id, sourceVersion:canvasV2FeedbackFingerprint(screen.encoded), viewport: { width: screen.screen.width, height: screen.screen.height }, pixelAppearance, defaultPixelAppearance, referenceIntent:screen.screen.referenceIntent, referenceAppearance:screen.screen.referenceAppearance, captureReferenceAssetId: previewAsset?.id, referenceUse: previewAsset ? 'These current preview pixels are retained. Use captureReferenceAssetId with inspect_asset, prepare_asset or workspace_run to extract visible logos, icons and images. Use referenceNodeId equal to this preview nodeId on canvas_screen to retain this comparison automatically; faithful is the default intent. Match this product appearance unless the user requested a different direction. Keep the original preview intact.' : undefined, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, reviewReferenceAssetIds: reviewAssets.map(asset => asset.id), boundAssetIds: canvasV2ScreenBoundAssets(screen.screen), qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with prepare_asset (or workspace_run/workspace_export for complex processing), inspect and bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...(defaultCapture?[{type:'input_text',text:JSON.stringify({nodeId:screen.nodeId,defaultState:true,sourceVersion:canvasV2FeedbackFingerprint(screen.encoded),note:'Fresh default state of the current saved source, retained for direct reference comparison even when the live screen is scrolled or showing a dialog.',state:defaultCapture.state})},{type:'input_image',image_url:defaultCapture.image}]:[]), ...detailParts, ...referenceParts];
         }
         const observation = await engine.ensureObservation(signal);
         const revision = engine.readCommittedRevision();
@@ -341,7 +343,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (requestedNodeId && !range) throw new Error('This canvas object no longer exists. Read the current canvas.');
         readRevision.current = revision.id;
         const screens = readCanvasV2Screens(revision.document.html).map(({ nodeId, screen, encoded }) => ({ nodeId, title: screen.title, device:canvasV2ScreenDevice(screen), referenceNodeId:screen.referenceNodeId, referenceIntent:screen.referenceIntent, referenceAppearance:screen.referenceAppearance, width: screen.width, height: screen.height, sourceVersion:canvasV2FeedbackFingerprint(encoded), referenceAssetIds: screen.referenceAssetIds, productIdentityId: screen.productIdentityId, simulation: screen.simulation, ...(requestedNodeId === nodeId ? { source: screen } : {}) }));
-        return { screens, screenFeedbackTargets: activeScreenFeedback.current.filter(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded)).map(entry => entry.target), objectFeedbackTargets: activeObjectFeedback.current.filter(objectMatches), productIdentities: productIdentities.current, screenFeedback: activeScreenFeedback.current.find(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded))?.target, theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: observation ? buildCanvasV2IslandRegistry({ observation }) : [], nativeScreenBounds: nativeScreenRead && native ? canvasV2NativeSceneAbsoluteBounds(native, requestedNodeId) : undefined, selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
+        return { screens, availableFonts:CANVAS_V2_SCREEN_FONTS, screenFeedbackTargets: activeScreenFeedback.current.filter(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded)).map(entry => entry.target), objectFeedbackTargets: activeObjectFeedback.current.filter(objectMatches), productIdentities: productIdentities.current, screenFeedback: activeScreenFeedback.current.find(entry => readCanvasV2Screens(revision.document.html).some(item => item.nodeId === entry.target.nodeId && item.encoded === entry.encoded))?.target, theme: themeContext, baseRevisionId: revision.id, artifacts: [...artifacts.current.values()].map(artifactMetadata), media: codexMediaInventory(registered, sourceMedia.current, sourcePages.current), sourceMedia: sourceMedia.current, compositionPlan: compositionPlan.current, compositionHistory: compositionHistory.current, workingContext: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.("reference")), islands: observation ? buildCanvasV2IslandRegistry({ observation }) : [], nativeScreenBounds: nativeScreenRead && native ? canvasV2NativeSceneAbsoluteBounds(native, requestedNodeId) : undefined, selectedNodeIds: current.current.selectedNodeIds ?? [], document: { html: (range ? html.slice(range.start, range.end) : html).slice(0, 48_000), css: revision.document.css.slice(0, 24_000) },
           truncated: !range && html.length > 48_000,
           screenPlacements: placement?.context,
           accountEvidence: mergeCanvasV2EvidencePackets(revision.evidencePackets, accountPackets.current).map(({ assets: media, ...packet }) => ({ ...packet, assetIds: media.map(a => a.id) })),

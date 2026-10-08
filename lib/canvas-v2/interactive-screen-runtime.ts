@@ -3,7 +3,7 @@ import { screenMotionTimeline } from './screen-motion-timeline';
 import { isCanvasV2ScreenVideoBytes } from './screen-asset-pixels';
 import { validateScreenInteractionSequence, type ScreenInteractionStep } from './screen-interaction-sequence';
 
-export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-stylesheet' | 'test-sequence'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; stylesheet?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[] };
+export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-stylesheet' | 'test-sequence'; selector?: string; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[] };
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
 
 export function bindCanvasV2ScreenAssetSource(source: string, referenceAssetIds: readonly string[], imageBytes: ReadonlyMap<string, string>) {
@@ -24,7 +24,7 @@ export function canvasV2ScreenMotionReviewMode(screen:Pick<CanvasV2InteractiveSc
 
 /** Opaque origin, no host APIs or cookies, no remote dependencies. Only registered
  * image bytes are substituted by the host; model code never receives their URLs. */
-export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference') {
+export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '') {
   const screen = validateCanvasV2Screen(input);
   const bind = (source: string) => bindCanvasV2ScreenAssetSource(source, screen.referenceAssetIds, imageBytes);
   const nonce = token.replace(/[^a-zA-Z0-9-]/g, '');
@@ -94,7 +94,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const style=getComputedStyle(el),typography=node=>{const s=getComputedStyle(node);return {fontFamily:s.fontFamily,fontSize:s.fontSize,fontWeight:s.fontWeight,lineHeight:s.lineHeight,letterSpacing:s.letterSpacing,color:s.color}};
       return {selector:selectorFor(el),rect:describe(el).rect,typography:typography(el),gap:style.gap,padding:style.padding,controls:[...el.querySelectorAll('button,a,[role="button"]')].filter(visible).slice(0,8).map(control=>({selector:selectorFor(control),label:control.getAttribute('aria-label')||control.innerText,rect:describe(control).rect,typography:typography(control),icons:[...control.querySelectorAll('svg,img')].slice(0,2).map(icon=>{const s=getComputedStyle(icon);return {kind:icon.tagName.toLowerCase(),rect:describe(icon).rect,fill:s.fill,stroke:s.stroke,strokeWidth:s.strokeWidth,viewBox:icon.getAttribute('viewBox'),label:icon.getAttribute('aria-label')||icon.getAttribute('alt')}})}))};
     });
-    const inspect = () => ({reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
+    const inspect = () => ({fonts:[...document.fonts].map(font=>({family:font.family,weight:font.weight,style:font.style,status:font.status})),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:{horizontal:document.documentElement.scrollWidth>innerWidth},errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
     const snapshot = () => {
       let pseudoCss='';
       const clone=document.body.cloneNode(true),live=[document.body,...document.body.querySelectorAll('*')],copies=[clone,...clone.querySelectorAll('*')];
@@ -120,11 +120,12 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       if(e.source!==parent || e.data?.protocol!==protocol || e.data.token!==token) return;
       const {requestId,command}=e.data;
       try {
+        if(command.fontCss){document.querySelector('style[data-northstar-screen-fonts]').textContent=command.fontCss;}
         if(command.action==='patch-stylesheet'){
           if(typeof command.stylesheet!=='string'||command.stylesheet.length>8000000||command.stylesheet.toLowerCase().includes('</style')||/@import/i.test(command.stylesheet))throw Error('Use a retained product stylesheet.');
           const style=document.querySelector('style[data-northstar-screen-style]');
           if(!style)throw Error('The product stylesheet is unavailable.');
-          releaseMotion();style.textContent=command.stylesheet;await settle();
+          releaseMotion();style.textContent=command.stylesheet;await settle();void document.body.offsetHeight;await document.fonts.ready;
           parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
         }
         if(command.action==='test-sequence'){
@@ -196,7 +197,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         else if(command.action==='fill'){if(!el||!visible(el)||el.disabled||el.readOnly)throw Error('Choose a visible, editable field.');if(!(el instanceof HTMLInputElement||el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement))throw Error('Choose a form field.');el.value=String(command.value??'');el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}
         else if(command.action==='scroll'){(el||window).scrollTo(Number(command.x)||0,Number(command.y)||0)}
         else if(!['inspect','snapshot'].includes(command.action))throw Error('Unknown screen action.');
-        await settle();void document.body.offsetHeight;
+        await settle();void document.body.offsetHeight;await document.fonts.ready;
         if(command.action==='snapshot')await Promise.all([...document.querySelectorAll('video')].filter(el=>visible(el)&&el.readyState<2).map(el=>new Promise(resolve=>{const done=()=>{clearTimeout(timer);el.removeEventListener('loadeddata',done);el.removeEventListener('error',done);resolve()};const timer=setTimeout(done,5000);el.addEventListener('loadeddata',done,{once:true});el.addEventListener('error',done,{once:true})})));
         parent.postMessage({protocol,token,requestId,result:command.action==='snapshot'?snapshot():{...inspect(),element:el?describe(el):undefined}},'*');
       } catch(error){parent.postMessage({protocol,token,requestId,error:String(error)},'*')}
@@ -204,5 +205,5 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     parent.postMessage({protocol,token,ready:true},'*');
   })();`;
   const safeScript = (code: string) => code.replace(/<\/script/gi, '<\\/script');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style data-northstar-screen-style>${bind(screen.css)}</style></head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script><script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'nonce-${nonce}'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style data-northstar-screen-fonts>${fontCss}</style><style data-northstar-screen-style>${bind(screen.css)}</style></head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script><script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script></body></html>`;
 }
