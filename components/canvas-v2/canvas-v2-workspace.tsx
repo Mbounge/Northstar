@@ -1359,6 +1359,8 @@ export function CanvasV2Workspace({
     ));
   }, [cameraSize, commitViewport, contentInsets]);
 
+  const { referenceRailFlowIds, rememberReferenceRail } = managedChat;
+
   const revealFlowIfReady = useCallback(() => {
     const laneId = pendingFlowRevealRef.current;
     if (!laneId) return;
@@ -1389,10 +1391,10 @@ export function CanvasV2Workspace({
     }
     pendingFlowPlacementRef.current = undefined;
     attemptedChatFlowsRef.current.add(pending.key);
-    managedChat.rememberReferenceRail(pending.id);
+    rememberReferenceRail(pending.id);
     setFlowPlacement({ message: `Added all ${pending.screenCount} ${pending.appName} ${pending.flowName} screens to canvas.` });
     setFlowQueueTick((tick) => tick + 1);
-  }, [engine.committed, engine.manualError]);
+  }, [engine.committed, engine.manualError, rememberReferenceRail]);
 
   useEffect(() => {
     if (!restoredFlowViewRef.current) return;
@@ -1473,8 +1475,8 @@ export function CanvasV2Workspace({
     const next = flows.find(({ turnId, reference }) => {
       const key = turnId + ':' + reference.id;
       if (attemptedChatFlowsRef.current.has(key) || (flowPlacementAttemptsRef.current.get(key) ?? 0) >= 3) return false;
-      if (!accountReferenceFlowNeedsPlacement(reference.id,presentFlowIds,managedChat.referenceRailFlowIds)) {
-        if(presentFlowIds.has(reference.id))managedChat.rememberReferenceRail(reference.id);
+      if (!accountReferenceFlowNeedsPlacement(reference.id,presentFlowIds,referenceRailFlowIds)) {
+        if(presentFlowIds.has(reference.id))rememberReferenceRail(reference.id);
         attemptedChatFlowsRef.current.add(key);
         return false;
       }
@@ -1502,7 +1504,7 @@ export function CanvasV2Workspace({
         const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: result.evidence, packet });
         const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((item) => item.id === packet.id) ? [packet] : [])];
         if (insertion.alreadyInserted) {
-          managedChat.rememberReferenceRail(reference.id);
+          rememberReferenceRail(reference.id);
           attemptedChatFlowsRef.current.add(key);
           setFlowPlacement({ message: `${app.name} ${flow.name} is already represented by its complete source rail.` });
           return;
@@ -1519,7 +1521,7 @@ export function CanvasV2Workspace({
         window.setTimeout(() => setFlowQueueTick((tick) => tick + 1), 400);
       }
     })();
-  }, [accountEndpoint, chat.busy, chat.turns, engine.applyingManualEdit, engine.committed.id, engine.interactionReady, engine.running, flowQueueTick, liveReplica, managedChat.steeredFlowReads, steeredFlowRequests]);
+  }, [accountEndpoint, chat.busy, chat.turns, engine.applyingManualEdit, engine.committed.id, engine.interactionReady, engine.running, flowQueueTick, liveReplica, managedChat.steeredFlowReads, steeredFlowRequests, referenceRailFlowIds, rememberReferenceRail]);
 
   const showLatestComposition = () => {
     const transaction = engine.committed.sceneTransaction;

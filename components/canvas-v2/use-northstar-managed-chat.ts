@@ -5,7 +5,7 @@ import { recordCanvasV2ScreenVersions, type CanvasV2ScreenVersion } from '@/lib/
 import { artifactMetadata, isCreativeTool, type NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { creativeInputContext, runCreativeJob, creativeResultForModel } from '@/lib/canvas-v2/creative/bridge';
 import { useTimedChatTurns } from "./use-timed-chat-turns";
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { useCanvasV2Chat } from './use-canvas-v2-chat';
 import type { useCanvasV2DesignLoop } from './use-canvas-v2-design-loop';
 import { codexWorkerFetch } from '@/lib/canvas-v2/worker/transport';
@@ -61,6 +61,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const accountFlows = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlows ?? []));
   const steerFlowBaseline = useRef<Set<string> | undefined>(undefined);
   const referenceRailFlowIds = useRef(new Set(input.initial?.memory?.referenceRailFlowIds ?? []));
+  const rememberReferenceRail=useCallback((flowId:string)=>{referenceRailFlowIds.current.add(flowId);},[]);
   const [steeredFlowReads, setSteeredFlowReads] = useState<Array<{ app: AppDataApp; flow: AppDataFlow }>>([]);
   const accountFlowSummaries = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlowSummaries ?? input.initial?.memory?.accountFlows ?? []));
   const productIdentities = useRef<CanvasV2ProductIdentity[]>(input.initial?.memory?.productIdentities ?? []);
@@ -747,5 +748,5 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
   return { ...input.base, productIdentities: productIdentities.current, screenVersions, screenFeedback: screenFeedbacks[0]?.target, screenFeedbackTargets: screenFeedbacks.map(entry => entry.target), objectFeedbackTargets: objectFeedbacks,
     removeFeedbackTarget: (nodeId: string, selector?: string) => { if (selector) setScreenFeedbacks(current => current.filter(entry => entry.target.nodeId !== nodeId || entry.target.selector !== selector)); else setObjectFeedbacks(current => current.filter(entry => entry.nodeId !== nodeId)); },
-    clearScreenFeedback: () => { setScreenFeedbacks([]); setObjectFeedbacks([]); }, memory, referenceRailFlowIds:referenceRailFlowIds.current, rememberReferenceRail:(flowId:string)=>referenceRailFlowIds.current.add(flowId), steeredFlowReads, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
+    clearScreenFeedback: () => { setScreenFeedbacks([]); setObjectFeedbacks([]); }, memory, referenceRailFlowIds:referenceRailFlowIds.current, rememberReferenceRail, steeredFlowReads, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
 }
