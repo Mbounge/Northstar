@@ -415,8 +415,9 @@ export function CanvasV2ChatPanel({
       className="h-full overflow-y-auto px-4 pb-3 pt-4 text-[#292834] [scrollbar-width:thin] [scrollbar-color:#d8d4ec_transparent] dark:text-[#f2f1f7] dark:[scrollbar-color:#4b485a_transparent]"
       aria-live="polite"
       onClickCapture={event => {
-        // Opening history is a reading action, not a request to follow new output.
-        if (event.target instanceof Element && event.target.closest("summary")) followingLatestRef.current = false;
+        // Opening history or assets is a reading action. Keep the header in
+        // place when its content grows instead of following the new bottom.
+        if (event.target instanceof Element && event.target.closest("summary,button[aria-controls][aria-expanded]")) followingLatestRef.current = false;
       }}
       onScroll={updateFollowing}
     >
