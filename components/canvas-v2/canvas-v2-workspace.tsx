@@ -88,7 +88,7 @@ import { insertCanvasV2EvidenceAsset } from "@/lib/canvas-v2/evidence-insertion"
 import { insertCanvasV2CanonicalFlow } from "@/lib/canvas-v2/flow-insertion";
 import { appsNamedInSteer, flowLanesForSteer } from "@/lib/canvas-v2/steered-app-flows";
 import type { CanvasV2ChatEvidenceReference } from "@/lib/canvas-v2/chat-evidence";
-import type { AccountResult } from "@/lib/canvas-v2/account-tools";
+import { accountReferenceFlowNeedsPlacement, type AccountResult } from "@/lib/canvas-v2/account-tools";
 import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
 import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachments";
@@ -1389,6 +1389,7 @@ export function CanvasV2Workspace({
     }
     pendingFlowPlacementRef.current = undefined;
     attemptedChatFlowsRef.current.add(pending.key);
+    managedChat.rememberReferenceRail(pending.id);
     setFlowPlacement({ message: `Added all ${pending.screenCount} ${pending.appName} ${pending.flowName} screens to canvas.` });
     setFlowQueueTick((tick) => tick + 1);
   }, [engine.committed, engine.manualError]);
@@ -1468,10 +1469,12 @@ export function CanvasV2Workspace({
         appId: app.id, appName: app.name, screenCount: flow.screens.length || flow.sourceScreenCount || 0,
       } }))];
     const existing = new DOMParser().parseFromString(currentEngine.readCommittedRevision().document.html, 'text/html');
+    const presentFlowIds=new Set(Array.from(existing.querySelectorAll('[data-canvas-v2-canonical-flow]')).map(node=>node.getAttribute('data-canvas-v2-canonical-flow')!).filter(Boolean));
     const next = flows.find(({ turnId, reference }) => {
       const key = turnId + ':' + reference.id;
       if (attemptedChatFlowsRef.current.has(key) || (flowPlacementAttemptsRef.current.get(key) ?? 0) >= 3) return false;
-      if (Array.from(existing.querySelectorAll('[data-canvas-v2-canonical-flow]')).some((node) => node.getAttribute('data-canvas-v2-canonical-flow') === reference.id)) {
+      if (!accountReferenceFlowNeedsPlacement(reference.id,presentFlowIds,managedChat.referenceRailFlowIds)) {
+        if(presentFlowIds.has(reference.id))managedChat.rememberReferenceRail(reference.id);
         attemptedChatFlowsRef.current.add(key);
         return false;
       }
@@ -1499,6 +1502,7 @@ export function CanvasV2Workspace({
         const insertion = insertCanvasV2CanonicalFlow({ document: revision.document, currentEvidence: revision.evidence, app, flow, evidence: result.evidence, packet });
         const evidencePackets = [...(revision.evidencePackets ?? []), ...(packet && !revision.evidencePackets?.some((item) => item.id === packet.id) ? [packet] : [])];
         if (insertion.alreadyInserted) {
+          managedChat.rememberReferenceRail(reference.id);
           attemptedChatFlowsRef.current.add(key);
           setFlowPlacement({ message: `${app.name} ${flow.name} is already represented by its complete source rail.` });
           return;

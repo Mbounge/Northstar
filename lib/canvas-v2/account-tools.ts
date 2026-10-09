@@ -21,6 +21,11 @@ export function accountReferenceFlows(assets: readonly CanvasV2EvidenceAsset[], 
   const used = new Set(assets.filter(asset => (asset.kind === 'screenshot' || asset.mediaType === 'video') && asset.source?.providerId === 'northstar-account-apps' && asset.source.sourceType === 'capture' && asset.source.permission === 'authorized').map(asset => asset.source!.sourceId));
   return [...used].flatMap(id => { const reference = flows.get(id); return reference ? [reference] : []; });
 }
+
+/** Automatic discovery must not resurrect reference work a person removed. Explicit insertion remains available. */
+export function accountReferenceFlowNeedsPlacement(flowId: string, presentIds: ReadonlySet<string>, placedIds: ReadonlySet<string>) {
+  return !presentIds.has(flowId) && !placedIds.has(flowId);
+}
 export function parseAccountQuery(raw: unknown): AccountQuery {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Provide an account research request.');
   const value = raw as Record<string, unknown>;

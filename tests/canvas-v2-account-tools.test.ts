@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { readAccountTools, parseAccountQuery, accountResultForModel, accountReferenceFlows, AccountToolHandles, readAccountAssetPixels } from '../lib/canvas-v2/account-tools';
+import { readAccountTools, parseAccountQuery, accountResultForModel, accountReferenceFlows, accountReferenceFlowNeedsPlacement, AccountToolHandles, readAccountAssetPixels } from '../lib/canvas-v2/account-tools';
 import { CANVAS_V2_E2E_APPS } from '../app/canvas-v2-e2e/research-fixture';
 import { createCanvasV2AccountEvidenceProvider } from '../lib/canvas-v2/account-evidence-provider';
 import { mergeCanvasV2EvidencePackets } from '../lib/canvas-v2/evidence-packets';
@@ -127,4 +127,17 @@ test('inspected account capture lineage selects its real complete flow, not name
   assert.deepEqual(accountReferenceFlows([{...screenshot,source:{...screenshot.source!,sourceType:'marketing-feed'}}],flows),[]);
   assert.deepEqual(accountReferenceFlows([{...screenshot,source:{...screenshot.source!,permission:'unavailable'}}],flows),[]);
   assert.equal(summary.flow.screens.length,0,'a selected subset is a request for a fresh full flow read, never the canonical lane itself');
+});
+
+
+test('new citations and steers do not automatically resurrect a deleted reference rail',()=>{
+  const placed=new Set<string>(),present=new Set<string>();
+  assert.equal(accountReferenceFlowNeedsPlacement('flow:first',present,placed),true);
+  placed.add('flow:first');present.add('flow:first');
+  assert.equal(accountReferenceFlowNeedsPlacement('flow:first',present,placed),false);
+  present.delete('flow:first');
+  assert.equal(accountReferenceFlowNeedsPlacement('flow:first',present,placed),false,'a fresh turn/citation cannot override the person’s deletion');
+  assert.equal(accountReferenceFlowNeedsPlacement('flow:second',present,placed),true,'another used reference can still enter');
+  const restoredPlaced=new Set(JSON.parse(JSON.stringify([...placed])) as string[]);
+  assert.equal(accountReferenceFlowNeedsPlacement('flow:first',present,restoredPlaced),false,'saved ownership survives reload');
 });
