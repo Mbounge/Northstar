@@ -57,6 +57,11 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
     if (/^(?:The (?:additional check|final visual review) (?:was unavailable|could not finish)|I reached the review limit)/i.test(paragraph.trim())) return [];
     if (/\b(?:Traceback \(most recent|stack trace|credential secret|ECONNRESET|ECONNREFUSED)\b/i.test(paragraph)) return [];
     const sentences = paragraph.split(/(?<=[.!?])\s+(?=[A-Z“‘])/).flatMap(sentence => {
+      if (/\b(?:local draft|screen validator)\b.{0,180}\b(?:rejected|won[’']t accept|not registered)\b/i.test(sentence)) {
+        const recovery = sentence.match(/;\s*(I(?:[’']m|[’']ll| will)\s+.+)/i);
+        if (!recovery) return [];
+        sentence = recovery[1];
+      }
       if (/\b(?:runtime check|inspection|pixel review|motion sampling|post-edit review|provider|transport|validation|tool|process)\b.{0,120}\b(?:failed|unavailable|timed out|cannot be resolved|rejected|could not|did not respond)\b/i.test(sentence)) return [];
       if (/\b(?:private journey(?: runner)?|journey runner|theme-rule|syntax|textarea step)\b.{0,100}\b(?:didn[’']t accept|did not accept|issue|error|failed|rejected|could not)\b/i.test(sentence) || /\b(?:syntax|theme-rule) (?:issue|error)\b/i.test(sentence)) {
         const recovery=sentence.match(/,\s*(?:so\s+)?(I(?:[’']m|[’']ll| will)\s+.+)/i);
@@ -80,6 +85,12 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
         .replace(/`?[a-z][a-z0-9]*(?:-[a-z0-9]+){2,}`? (?=identity\b)/g, 'product ')
         .replace(/\b(?:canvas_(?:read|edit|review|plan|screen(?:_\w+)?|insert_\w+|arrange_screens|product_identity)|workspace_(?:run|export)|prepare_asset|inspect_asset|generate_image|account_read)\b/g, 'the canvas');
       if (!technicalRequested) readable = readable
+        .replace(/\brefreshing the canvas context\b/gi, 'checking the reference assets')
+        .replace(/\bre-submit the same visual\/interaction correction with that reference assets explicitly recognized\b/gi, 'apply the same design correction with the reference icon')
+        .replace(/\bmoving the same retained tile into the screen[’']s declared styling\b/gi, 'applying the original icon')
+        .replace(/\bextracted tile did not render in the live screen\b/gi, 'reference icon is missing from the screen')
+        .replace(/\bfailed image binding\b/gi, 'missing icon')
+        .replace(/\bnative target glyph\b/gi, 'target icon')
         .replace(/\b(?:code-native reference-like|inline SVG|code-native|SVG) icons\b/gi, 'icons')
         .replace(/\b(?:inline SVG|SVG) controls\b/gi, 'controls')
         .replace(/\b(?:DOM|HTML)\b/g, 'screen structure')

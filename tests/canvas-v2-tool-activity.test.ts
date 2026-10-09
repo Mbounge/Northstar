@@ -77,3 +77,13 @@ test('motion verification keeps the user experience clear without revealing asse
  assert.doesNotMatch(text,/assertion|cleanup|failure|rerunning|no-preference/);
  assert.equal(canvasV2ReadableAgentText('I’m opening the sheet synchronously before the reflow-driven transition, so private reduced-motion checks can reach the close control.'),'I’m opening the sheet before its entrance animation, so reduced-motion checks can reach the close control.');
 });
+
+test('asset preparation keeps design reasoning and visible defects without private rejection mechanisms',()=>{
+  const rejection='The public screen is unchanged; the local draft was rejected because the newly prepared icon wasn’t yet registered in the current canvas read. I’m refreshing the canvas context and will re-submit the same visual/interaction correction with that reference assets explicitly recognized.';
+  assert.equal(canvasV2ReadableAgentText(rejection),'I’m checking the reference assets and will apply the same design correction with the reference icon.');
+  const binding='The asset is registered, but the screen validator won’t accept a dynamically assigned image handle; I’m moving the same retained tile into the screen’s declared styling while keeping the markup and interaction behavior otherwise identical.';
+  assert.equal(canvasV2ReadableAgentText(binding),'I’m applying the original icon while keeping the markup and interaction behavior otherwise identical.');
+  const finding='The review caught one concrete issue: the extracted tile did not render in the live screen, leaving the left icon blank. I’m replacing that failed image binding with a native target glyph that matches the inspected original silhouette.';
+  assert.equal(canvasV2ReadableAgentText(finding),'The review caught one concrete issue: the reference icon is missing from the screen, leaving the left icon blank. I’m replacing that missing icon with a target icon that matches the inspected original silhouette.');
+  assert.match(rejection,/local draft was rejected/,'original diagnostics remain intact');
+});
