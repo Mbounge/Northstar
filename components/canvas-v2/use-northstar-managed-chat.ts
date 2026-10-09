@@ -364,6 +364,16 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         requireCodexCanvasReadRevision(readRevision.current, revision.id);
         const registered = [...new Map([...revision.evidence, ...assets.current.values()].map(a => [a.id, a])).values()];
         const identity = validateCanvasV2ProductIdentity(args.identity, registered);
+        if (!identity.appearance) {
+          // Legacy profiles gain appearance only from inspected full app UI,
+          // never from a generated photo, extracted logo or canvas backdrop.
+          for (const id of canvasV2ProductDesignContext(identity).primaryReferenceAssetIds) {
+            const asset = registered.find(item => item.id === id), pixels = inspectedPixels.current.get(id);
+            if (asset?.source?.sourceType !== 'capture' || !['northstar-account-apps', 'northstar-preview'].includes(asset.source.providerId) || !pixels) continue;
+            const appearance = await canvasV2ScreenPixelAppearance(pixels);
+            if (appearance?.predominantAppearance === 'light' || appearance?.predominantAppearance === 'dark') { identity.appearance = appearance.predominantAppearance; break; }
+          }
+        }
         const identities = productIdentities.current.filter(item => item.id !== identity.id);
         if (identities.length >= 20) throw new Error('This canvas already has 20 product identities. Reuse the relevant product.');
         productIdentities.current = [...identities, identity];

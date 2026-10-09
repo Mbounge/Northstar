@@ -876,6 +876,9 @@ test('new product pages require a cited primary-language comparison; borrowed br
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 1, 'borrowed pixels cannot replace target-product evidence');
   feedback.productChecks[0].evidenceImageNumbers = [1, 2, 3];
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 0, 'a new page need not have the old page layout or copy');
+  feedback.productChecks[0].visualChecks.typography = { status: 'not_applicable', assessment: 'This is a different layout.' };
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 1, 'a new layout cannot waive primary-product typography');
+  feedback.productChecks[0].visualChecks.typography = { status: 'pass', assessment: 'Target glyph shape, weight, size and wrapping match the observed type conventions.' };
   context.tool('canvas_screen_component', { nodeId: 'new-page' }, [text({ committed: true, nodeId: 'new-page' })]);
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 1, 'a subsequent transformation needs current pixels, not its old approval');
 });

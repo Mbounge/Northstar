@@ -385,7 +385,7 @@ export class DiscoveryReviewContext {
       const languageRequired = Boolean(designContext.identityId);
       const languageSound = !languageRequired || Boolean(string(languageCheck.assessment).trim()) &&
         (primaryIds.length ? languageCheck.status === 'pass' && primaryIds.every(reference => citations.some(role => role === `screen:${id}:reference:${reference}` || role === `asset:${reference}` || role.startsWith(`asset:${reference}:video-frame:`))) : ['pass', 'not_applicable'].includes(string(languageCheck.status)));
-      const visualSound=['icons','typography','imagery','layout','content','palette','shapes','surfaceEffects'].every(key=>{const detail=object(object(check?.visualChecks)[key]);return (screen.referenceIntent==='faithful'&&['typography','layout','content','palette','shapes'].includes(key)?detail.status==='pass':['pass','not_applicable'].includes(string(detail.status)))&&string(detail.assessment).trim();});
+      const visualSound=['icons','typography','imagery','layout','content','palette','shapes','surfaceEffects'].every(key=>{const detail=object(object(check?.visualChecks)[key]);return ((screen.referenceIntent==='faithful'&&['typography','layout','content','palette','shapes'].includes(key)||primaryIds.length>0&&['typography','palette'].includes(key))?detail.status==='pass':['pass','not_applicable'].includes(string(detail.status)))&&string(detail.assessment).trim();});
       const interactions=(Array.isArray(screen.interactions)?screen.interactions:[]).map(object);
       const interactionRequired=screen.interactionAuthored===true&&Array.isArray(state.controls)&&state.controls.length>0;
       const observedInteraction=interactions.some(item=>['click','fill','scroll','journey'].includes(string(item.action)));
@@ -405,7 +405,7 @@ export class DiscoveryReviewContext {
         const offsets=scrollChecks.flatMap(item=>(Array.isArray(item.scrollRegions)?item.scrollRegions:[]).map(object).filter(sample=>sample.selector===region.selector).map(sample=>Number(sample.y))).filter(Number.isFinite);
         return offsets.length>=2&&Math.max(...offsets)-Math.min(...offsets)>=80;
       });
-      const appearanceSound=screen.referenceIntent!=='faithful'||!['light','dark'].includes(string(screen.referenceAppearance))||object(screen.defaultPixelAppearance).predominantAppearance===screen.referenceAppearance;
+      const appearanceSound=!(screen.referenceIntent==='faithful'||languageRequired)||!['light','dark'].includes(string(screen.referenceAppearance))||object(screen.defaultPixelAppearance).predominantAppearance===screen.referenceAppearance;
       const defaultStateSound=screen.defaultStateRequired!==true||citations.includes(`screen:${id}:default`);
       const componentCropsSound=!Array.isArray(screen.componentComparisonLabels)||screen.componentComparisonLabels.every(label=>citations.includes(`screen:${id}:detail:${string(label)}`));
       const verified=languageSound && componentCropsSound && scrollSound && defaultStateSound && appearanceSound && motionSound && reducedSound && interactionSound && visualSound && videoSound && runtimeSound && screen.reviewed===true && check && citations.includes(`screen:${id}:render`) && hasDetails && check.componentConsistency==='pass' && check.assetQuality==='pass' && ((check.referenceComparison==='not_applicable' && (!Array.isArray(references)||!references.length))||(check.referenceComparison==='pass' && hasReference));

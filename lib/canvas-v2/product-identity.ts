@@ -7,6 +7,7 @@ export interface CanvasV2ProductIdentity {
   name: string;
   platform: 'mobile' | 'web' | 'responsive';
   device?: 'ios' | 'android';
+  appearance?: 'light' | 'dark' | 'mixed';
   visualLanguage: string;
   typography: string;
   components: string;
@@ -25,6 +26,7 @@ export function validateCanvasV2ProductIdentity(value: unknown, evidence?: reado
   for (const field of ['visualLanguage', 'typography', 'components', 'motion'] as const) {
     if (typeof input[field] !== 'string' || input[field].length > 2400) throw new Error('Keep product design decisions concise.');
   }
+  if (input.appearance !== undefined && !['light', 'dark', 'mixed'].includes(input.appearance)) throw new Error('Use the product’s observed light, dark or mixed appearance.');
   if(input.device!==undefined&&(!['ios','android'].includes(input.device)||input.platform!=='mobile'))throw new Error('A mobile product identity can specify its iOS or Android presentation.');
   if (!input.tokens || typeof input.tokens !== 'object' || Array.isArray(input.tokens) || Object.keys(input.tokens).length > 60
     || Object.entries(input.tokens).some(([key, value]) => !/^--[a-zA-Z][\w-]{0,60}$/.test(key) || typeof value !== 'string' || !value.trim() || value.length > 240 || /[{};<>]|url\s*\(|@import|expression\s*\(/i.test(value))) throw new Error('Use bounded CSS custom properties for product tokens.');
@@ -53,7 +55,7 @@ export function validateCanvasV2ProductIdentity(value: unknown, evidence?: reado
     if(JSON.stringify(input.mockData).length>16000)throw new Error('Keep initial mock data within the screen dataset budget.');
   }
   if (JSON.stringify({referenceRoles:input.referenceRoles,reusableComponents:input.reusableComponents,mockData:input.mockData}).length > 48000) throw new Error('Keep the reusable product context within its size budget.');
-  return { id: input.id, name: input.name.trim(), platform: input.platform, ...(input.device?{device:input.device}:{}), visualLanguage: input.visualLanguage, typography: input.typography, components: input.components, motion: input.motion, tokens: { ...input.tokens }, referenceAssetIds: [...new Set(input.referenceAssetIds)], ...(input.referenceRoles ? {referenceRoles:structuredClone(input.referenceRoles)} : {}), ...(input.reusableComponents ? {reusableComponents:structuredClone(input.reusableComponents)} : {}), ...(input.mockData ? {mockData:structuredClone(input.mockData)} : {}) };
+  return { id: input.id, name: input.name.trim(), platform: input.platform, ...(input.device?{device:input.device}:{}), ...(input.appearance ? {appearance:input.appearance} : {}), visualLanguage: input.visualLanguage, typography: input.typography, components: input.components, motion: input.motion, tokens: { ...input.tokens }, referenceAssetIds: [...new Set(input.referenceAssetIds)], ...(input.referenceRoles ? {referenceRoles:structuredClone(input.referenceRoles)} : {}), ...(input.reusableComponents ? {reusableComponents:structuredClone(input.reusableComponents)} : {}), ...(input.mockData ? {mockData:structuredClone(input.mockData)} : {}) };
 }
 
 export function canvasV2ProductTokenCss(identity: CanvasV2ProductIdentity): string {
@@ -69,7 +71,7 @@ export function canvasV2ProductDesignContext(identity: CanvasV2ProductIdentity) 
     ? [...new Set(roles.filter(ref => ref.role === 'identity').map(ref => ref.assetId))]
     : [...identity.referenceAssetIds];
   return {
-    identityId: identity.id, productName: identity.name, platform: identity.platform,
+    identityId: identity.id, productName: identity.name, platform: identity.platform, appearance: identity.appearance,
     visualLanguage: identity.visualLanguage, typography: identity.typography,
     components: identity.components, motion: identity.motion, tokens: { ...identity.tokens },
     primaryReferenceAssetIds,

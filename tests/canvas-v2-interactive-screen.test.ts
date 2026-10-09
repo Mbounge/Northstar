@@ -231,7 +231,11 @@ test('faithful product appearance pins scheme queries independently of workspace
     assert.ok(runtime.includes('const productAppearance='+JSON.stringify(appearance)));
   }
   const original = buildCanvasV2ScreenRuntime({...screen,referenceIntent:'original',referenceAppearance:'light'}, new Map(), 'theme-test');
-  assert.ok(original.includes('const productAppearance=null'), 'an original or inspired product can deliberately own its theme behavior');
+  assert.ok(original.includes('const productAppearance="light"'), 'an original product keeps its declared appearance independently of canvas chrome');
+  const derivative = buildCanvasV2ScreenRuntime({...screen,referenceIntent:'inspired',referenceAppearance:'dark'}, new Map(), 'theme-test');
+  assert.ok(derivative.includes('const productAppearance="dark"'), 'a new layout in the same product must not follow the surrounding canvas theme');
+  const blank = buildCanvasV2ScreenRuntime({...screen,referenceIntent:'original'}, new Map(), 'theme-test');
+  assert.ok(blank.includes('const productAppearance="light"'), 'a blank product direction has a stable default, not an inherited canvas scheme');
 });
 
 

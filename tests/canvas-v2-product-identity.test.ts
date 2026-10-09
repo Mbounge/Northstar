@@ -61,7 +61,7 @@ test('a new referenced page carries the primary identity even when borrowing ano
     { id: 'target', url: 'https://example.com/target.png', label: 'Target UI', source: { providerId: 'northstar-account-apps', providerLabel: 'Apps', sourceId: 'target-flow', label: 'Target capture', retrievedAt: '2026-10-08T12:00:00Z', sourceType: 'capture' as const } },
     { id: 'borrowed', url: 'https://example.com/borrowed.png', label: 'Other app choices' },
   ];
-  const profile = validateCanvasV2ProductIdentity({ ...identity, referenceAssetIds: ['target', 'borrowed'], referenceRoles: [
+  const profile = validateCanvasV2ProductIdentity({ ...identity, appearance: 'dark', referenceAssetIds: ['target', 'borrowed'], referenceRoles: [
     { assetId: 'target', role: 'identity', intent: 'Target typography, grey rows, blue values and filled icons.' },
     { assetId: 'borrowed', role: 'layout', intent: 'Choice grouping only.' },
   ] }, assets);
@@ -70,6 +70,9 @@ test('a new referenced page carries the primary identity even when borrowing ano
   const patch = canvasV2ScreenPatch(root, { ...input, productIdentityId: profile.id }, assets, { x: 0, y: 0 }, [profile]);
   const created = readCanvasV2Screens(applyCanvasV2SourcePatch({ previous: root, operations: patch.operations, evidence: assets }).html)[0];
   assert.deepEqual(created.screen.referenceAssetIds, ['borrowed', 'target']);
+  assert.equal(created.screen.referenceAppearance, 'dark', 'a derivative inherits the primary product appearance, not the canvas');
+  const explicit = canvasV2ScreenPatch(root, { ...input, productIdentityId: profile.id, referenceAppearance: 'light' }, assets, { x: 0, y: 0 }, [profile]);
+  assert.equal(readCanvasV2Screens(applyCanvasV2SourcePatch({ previous: root, operations: explicit.operations, evidence: assets }).html)[0].screen.referenceAppearance, 'light', 'an explicit new product direction remains possible');
   const context = canvasV2ProductDesignContext(profile);
   assert.deepEqual(context.primaryReferenceAssetIds, ['target']);
   assert.equal(context.referenceRoles[1].role, 'layout');

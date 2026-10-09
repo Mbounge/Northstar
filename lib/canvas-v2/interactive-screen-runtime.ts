@@ -23,7 +23,7 @@ export function canvasV2ScreenMotionReviewMode(screen:Pick<CanvasV2InteractiveSc
   return requested==='live'||/\b(?:requestAnimationFrame|setTimeout|setInterval)\s*\(/.test(screen.javascript)?'live':'timeline';
 }
 
-/** A faithful product owns its appearance. Neither workspace chrome nor the
+/** Every product owns its appearance. Neither workspace chrome nor the
  * browser's system theme may select an unrequested alternate product palette.
  * Width substitutions preserve compound/not queries in the bounded viewport. */
 export function fixedScreenMediaQuery(query: string, appearance: 'light' | 'dark' | null, motion: 'reduce' | 'no-preference' | null): string {
@@ -50,7 +50,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     // Private journey checks can exercise both motion preferences without
     // changing the user's OS settings or their live canvas runtime.
     const testMotionPreference=${JSON.stringify(motionPreference ?? null)};
-    const productAppearance=${JSON.stringify(screen.referenceIntent === 'faithful' && screen.referenceAppearance !== 'mixed' ? screen.referenceAppearance ?? null : null)};
+    const productAppearance=${JSON.stringify(screen.referenceAppearance === 'dark' ? 'dark' : 'light')};
     const fixedMediaQuery=${fixedScreenMediaQuery.toString()};
     if(productAppearance)document.documentElement.style.colorScheme=productAppearance;
     const rewriteMedia=query=>fixedMediaQuery(query,productAppearance,testMotionPreference);
