@@ -856,3 +856,26 @@ test('stop cancels the immediate styling assessment without approving or resumin
  const t=await setup(async(_packet,options)=>{began=true;return new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('Cancelled'));},{once:true}));},6,output);
  try{await t.client.send('Keep this reference faithful',[],'gpt-5.6-luna','r1');t.peer.tool('canvas_screen',{title:'Editable reference'});await tick();assert.equal(began,true);await t.client.cancel();await tick();assert.equal(aborted,true);assert.equal(t.client.view.status,'stopped');assert.equal(t.peer.calls.filter(call=>call.method==='turn/start').length,1);}finally{t.close();}
 });
+
+
+test('new product pages require a cited primary-language comparison; borrowed branding cannot approve them', () => {
+  const text = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });
+  const context = new DiscoveryReviewContext();
+  context.tool('canvas_screen', { referenceIntent: 'inspired' }, [text({ committed: true, nodeId: 'new-page' })]);
+  context.tool('canvas_review', {}, [text({ nodeId: 'new-page', viewport: { width: 390, height: 844 }, referenceIntent: 'inspired', referenceAssetIds: ['target', 'borrowed'], productDesignContext: { identityId: 'target-product', productName: 'Target', primaryReferenceAssetIds: ['target'], referenceRoles: [{ assetId: 'borrowed', role: 'layout', intent: 'Choice grouping' }] }, state: { errors: [] } }),
+    { type: 'inputImage', imageUrl: 'data:image/png;base64,new-page' }, text({ referenceAssetId: 'target' }), { type: 'inputImage', imageUrl: 'data:image/png;base64,target' }, text({ referenceAssetId: 'borrowed' }), { type: 'inputImage', imageUrl: 'data:image/png;base64,borrowed' }]);
+  const packet = context.packet('A new page with a different layout');
+  assert.equal(JSON.parse(initialAppearanceReviewPacket(packet, ['new-page']).text).productWork[0].productDesignContext.productName, 'Target');
+  const feedback = JSON.parse(feedbackFor()); feedback.resolvedWork = [];
+  feedback.productChecks = [{ nodeId: 'new-page', referenceComparison: 'pass', componentConsistency: 'pass', assetQuality: 'pass', ...goodVisualChecks(), evidenceImageNumbers: [1, 2, 3], assessment: 'The new choices layout is functional.' }];
+  assert.match(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work[0].gap, /primary product/);
+  feedback.productChecks[0].designLanguageComparison = { status: 'revise', assessment: 'It copied the inspiration app’s green buttons and thin navigation icons.' };
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 1);
+  feedback.productChecks[0].designLanguageComparison = { status: 'pass', assessment: 'The new grouping uses the target blue values, grey surfaces, matching type and filled navigation geometry. Content and layout differ as requested.' };
+  feedback.productChecks[0].evidenceImageNumbers = [1, 3];
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 1, 'borrowed pixels cannot replace target-product evidence');
+  feedback.productChecks[0].evidenceImageNumbers = [1, 2, 3];
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 0, 'a new page need not have the old page layout or copy');
+  context.tool('canvas_screen_component', { nodeId: 'new-page' }, [text({ committed: true, nodeId: 'new-page' })]);
+  assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 1, 'a subsequent transformation needs current pixels, not its old approval');
+});

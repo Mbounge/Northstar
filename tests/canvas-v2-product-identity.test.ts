@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canvasV2ProductTokenCss, validateCanvasV2ProductIdentity } from '../lib/canvas-v2/product-identity';
+import { canvasV2ProductDesignContext, canvasV2ProductTokenCss, validateCanvasV2ProductIdentity } from '../lib/canvas-v2/product-identity';
 import { canvasV2ScreenPatch } from '../lib/canvas-v2/interactive-screen-patch';
 import { applyCanvasV2SourcePatch } from '../lib/canvas-v2/source-patch';
 import { readCanvasV2Screens } from '../lib/canvas-v2/interactive-screen';
@@ -53,4 +53,28 @@ test('derivatives retain distinct reference purposes, reusable native components
   assert.throws(()=>validateCanvasV2ProductIdentity({...profile,reusableComponents:[{...profile.reusableComponents![0],html:'<script>bad()</script>'}]},evidence),/HTML fragment/);
   assert.throws(()=>validateCanvasV2ProductIdentity({...profile,referenceRoles:[{assetId:'missing',role:'identity',intent:'Unretained'}]},evidence),/reference/);
   assert.throws(()=>validateCanvasV2ProductIdentity({...profile,mockData:{value:NaN}},evidence),/JSON/);
+});
+
+
+test('a new referenced page carries the primary identity even when borrowing another product’s layout', () => {
+  const assets = [
+    { id: 'target', url: 'https://example.com/target.png', label: 'Target UI', source: { providerId: 'northstar-account-apps', providerLabel: 'Apps', sourceId: 'target-flow', label: 'Target capture', retrievedAt: '2026-10-08T12:00:00Z', sourceType: 'capture' as const } },
+    { id: 'borrowed', url: 'https://example.com/borrowed.png', label: 'Other app choices' },
+  ];
+  const profile = validateCanvasV2ProductIdentity({ ...identity, referenceAssetIds: ['target', 'borrowed'], referenceRoles: [
+    { assetId: 'target', role: 'identity', intent: 'Target typography, grey rows, blue values and filled icons.' },
+    { assetId: 'borrowed', role: 'layout', intent: 'Choice grouping only.' },
+  ] }, assets);
+  const input = { title: 'New choices page', html: '<button>Choose</button>', referenceIntent: 'inspired', referenceAssetIds: ['borrowed'] };
+  assert.throws(() => canvasV2ScreenPatch(root, input, assets, { x: 0, y: 0 }), /primary product/);
+  const patch = canvasV2ScreenPatch(root, { ...input, productIdentityId: profile.id }, assets, { x: 0, y: 0 }, [profile]);
+  const created = readCanvasV2Screens(applyCanvasV2SourcePatch({ previous: root, operations: patch.operations, evidence: assets }).html)[0];
+  assert.deepEqual(created.screen.referenceAssetIds, ['borrowed', 'target']);
+  const context = canvasV2ProductDesignContext(profile);
+  assert.deepEqual(context.primaryReferenceAssetIds, ['target']);
+  assert.equal(context.referenceRoles[1].role, 'layout');
+  assert.throws(() => canvasV2ScreenPatch(root, { ...input, referenceIntent: 'faithful', productIdentityId: profile.id }, assets, { x: 0, y: 0 }, [profile]), /target-product reference/);
+  assert.throws(() => canvasV2ScreenPatch(root, { ...input, referenceIntent: 'original', referenceAssetIds: ['target'] }, assets, { x: 0, y: 0 }), /primary product/);
+  assert.doesNotThrow(() => canvasV2ScreenPatch(root, { title: 'Blank canvas idea', html: '<h1>New product</h1>', referenceIntent: 'original' }, [], { x: 0, y: 0 }));
+  assert.deepEqual(canvasV2ProductDesignContext({ ...profile, referenceRoles: [{ assetId: 'borrowed', role: 'layout', intent: 'New brand with borrowed structure.' }] }).primaryReferenceAssetIds, [], 'a borrowed reference must never be promoted to target identity');
 });

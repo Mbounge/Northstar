@@ -1,4 +1,4 @@
-import { canvasV2ProductTokenCss, type CanvasV2ProductIdentity } from './product-identity';
+import { canvasV2ProductDesignContext, canvasV2ProductTokenCss, type CanvasV2ProductIdentity } from './product-identity';
 import { parse } from 'next/dist/compiled/acorn';
 import type { CanvasV2ArtifactDocument, CanvasV2EvidenceAsset } from './types';
 import { findCanvasV2SourceNodeRange, type CanvasV2SourcePatchOperation } from './source-patch';
@@ -23,7 +23,10 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
   const identityId = input.productIdentityId ?? previous?.screen.productIdentityId;
   const identity = identityId ? identities.find(item => item.id === identityId) : undefined;
   if (identityId && !identity && (!previous || input.productIdentityId !== undefined)) throw new Error('Read or save this product identity before using it.');
-  if(!previous && input.referenceIntent==='faithful' && (!identity || !identity.referenceAssetIds.some(id=>(input.referenceAssetIds as string[]??[]).includes(id)))) throw new Error('Inspect the reference and save its observed typography, palette, original section order, content and icon conventions with canvas_product_identity before creating a faithful copy. Retain that reference in the identity and use its productIdentityId.');
+  const references = Array.isArray(input.referenceAssetIds) ? input.referenceAssetIds : [];
+  const usesAppReference = references.some(id => evidence.some(asset => asset.id === id && asset.source?.sourceType === 'capture' && ['northstar-account-apps', 'northstar-preview'].includes(asset.source.providerId)));
+  if (!previous && !input.simulation && (usesAppReference || ['faithful', 'inspired'].includes(String(input.referenceIntent))) && !identity) throw new Error('Save the primary product’s observed typography, palette, icons and component design language with canvas_product_identity and use its productIdentityId before creating this referenced page. A new layout or borrowed interaction still needs the target product’s typography, icons, palette and component conventions. For a new product, record the user’s intended identity instead.');
+  if (!previous && input.referenceIntent === 'faithful' && (!identity || !canvasV2ProductDesignContext(identity).primaryReferenceAssetIds.some(id => references.includes(id)))) throw new Error('Retain the actual target-product reference as identity evidence before creating its faithful copy. A borrowed layout, interaction or asset is not the primary product’s design language.');
   const css = previous && typeof input.css === 'string' && input.cssMode !== 'replace'
     ? `${previous.screen.css}\n${input.css}` : input.css ?? previous?.screen.css ?? '';
   const screen = validateCanvasV2Screen({ version: 1, device: input.device ?? previous?.screen.device ?? identity?.device, referenceNodeId:input.referenceNodeId??previous?.screen.referenceNodeId,referenceIntent:input.referenceIntent??previous?.screen.referenceIntent,referenceAppearance:input.referenceAppearance??previous?.screen.referenceAppearance, productIdentityId: identityId, mockData:input.mockData ?? previous?.screen.mockData ?? identity?.mockData, simulation: input.simulation, title: input.title ?? previous?.screen.title,

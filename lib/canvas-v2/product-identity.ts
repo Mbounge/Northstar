@@ -60,3 +60,20 @@ export function canvasV2ProductTokenCss(identity: CanvasV2ProductIdentity): stri
   const tokens = validateCanvasV2ProductIdentity(identity).tokens;
   return Object.keys(tokens).length ? `:root{${Object.entries(tokens).map(([key, value]) => `${key}:${value}`).join(';')}}` : '';
 }
+
+/** Reference purposes are design authority, not just an asset inventory. Once
+ * roles are explicit, an unclassified asset must not become brand evidence. */
+export function canvasV2ProductDesignContext(identity: CanvasV2ProductIdentity) {
+  const roles = identity.referenceRoles ?? [];
+  const primaryReferenceAssetIds = roles.length
+    ? [...new Set(roles.filter(ref => ref.role === 'identity').map(ref => ref.assetId))]
+    : [...identity.referenceAssetIds];
+  return {
+    identityId: identity.id, productName: identity.name, platform: identity.platform,
+    visualLanguage: identity.visualLanguage, typography: identity.typography,
+    components: identity.components, motion: identity.motion, tokens: { ...identity.tokens },
+    primaryReferenceAssetIds,
+    referenceRoles: roles.map(ref => ({ ...ref })),
+    guidance: 'The primary product owns typography, palette, icon geometry and component treatment. Other references contribute only their stated purposes. The latest user brief determines requested structural or stylistic changes; a new layout alone does not authorize changing product identity. These observations require comparison with actual pixels, not approval from declarations.',
+  };
+}
