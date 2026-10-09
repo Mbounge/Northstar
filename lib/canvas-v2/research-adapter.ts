@@ -144,7 +144,12 @@ function makeResult(operation: CanvasV2ResearchOperation, apps: AppDataApp[], fl
     apps,
     flows,
     screens,
-    evidence: Array.from(new Map(evidence.map((asset) => [asset.id, asset])).values()),
+    // Packet assets carry exact capture lineage. The later convenience copies
+    // of the same screen/icon must not replace them with provenance-free rows.
+    evidence: Array.from(evidence.reduce((byId, asset) => {
+      if (!byId.get(asset.id)?.source) byId.set(asset.id, asset);
+      return byId;
+    }, new Map<string, CanvasV2EvidenceAsset>()).values()),
     packets: Array.from(new Map(packets.map((packet) => [packet.id, packet])).values()),
     sources: Array.from(new Map(packets.map((packet) => [`${packet.source.providerId}:${packet.source.sourceId}`, packet.source])).values()),
     issues: [],

@@ -39,9 +39,9 @@ export class AppsScenario {
     switch (this.step++) {
       case 0: this.peer.tool('account_read', { operation: 'list-flows', appId: 'app:awin', sessionType: 'onboarding', platform: 'mobile' }); break;
       case 1: this.flowId = string(object((value.flows as unknown[])[0]).id); this.peer.tool('account_read', { operation: 'flow-screens', appId: 'app:awin', flowId: this.flowId }); break;
-      case 2: this.peer.tool('inspect_asset', { evidenceId: string((value.evidence as JsonObject[]).find(a => a.kind === 'screenshot')?.id) }); break;
+      case 2: this.peer.tool(this.pixelSmoke ? 'inspect_asset' : 'canvas_read', this.pixelSmoke ? { evidenceId: string((value.evidence as JsonObject[]).find(a => a.kind === 'screenshot')?.id) } : {}); break;
       case 3:
-        if (!parts.some(p => p.type === 'inputImage')) { this.peer.finish('Apps fixture failed: screenshot pixels missing.'); return; }
+        if (this.pixelSmoke ? !parts.some(p => p.type === 'inputImage') : !string(object(value.document).html).includes('data-canvas-v2-canonical-flow')) { this.peer.finish('Apps fixture failed: the complete source rail was not committed with the reference read.'); return; }
         this.peer.tool('account_read', { operation: 'list-flows', appId: 'app:awin', sessionType: 'browsing', platform: 'web' }); break;
       case 4: this.browsingId = string(object((value.flows as unknown[])[0]).id); this.peer.tool('account_read', { operation: 'flow-screens', appId: 'app:awin', flowId: this.browsingId }); break;
       case 5: this.peer.tool('account_read', { operation: 'marketing', appId: 'app:awin' }); break;

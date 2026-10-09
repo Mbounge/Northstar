@@ -92,10 +92,14 @@ export function insertCanvasV2CanonicalFlow(input: {
   if (sameJourney?.dataset.canvasV2NodeId) return { document: input.document, evidence: mergeEvidence(input.currentEvidence, input.evidence), regionNodeId: sameJourney.closest<HTMLElement>('[data-canvas-v2-evidence-region=canonical]')?.dataset.canvasV2NodeId ?? 'grounded-evidence', laneNodeId: sameJourney.dataset.canvasV2NodeId, alreadyInserted: true };
   const host = parsed.querySelector<HTMLElement>('[data-canvas-v2-node-id="canvas"]') ?? parsed.querySelector<HTMLElement>("main") ?? parsed.body;
   if (host !== parsed.body) host.classList.add("canvas-v2-canvas--evidence-wide");
-  let region = parsed.querySelector<HTMLElement>("[data-canvas-v2-evidence-region=canonical]");
-  const regionNodeId = region?.dataset.canvasV2NodeId ?? "grounded-evidence";
-  if (!region) {
-    region = parsed.createElement("section");
+  // Each newly used journey owns a new measured root. Growing an old root's
+  // width could sweep across unrelated prototypes beside that existing rail.
+  // The native placement compiler finds an opening for this complete footprint
+  // without moving or resizing any established reference or human object.
+  const hasRegion = Boolean(parsed.querySelector("[data-canvas-v2-evidence-region=canonical]"));
+  const regionNodeId = hasRegion ? `grounded-evidence-${canvasV2StableNodeToken(input.flow.id)}` : 'grounded-evidence';
+  const region = parsed.createElement("section");
+  {
     region.className = `canvas-v2-grounded-evidence${host === parsed.body ? " canvas-v2-grounded-evidence--standalone" : ""}`;
     region.dataset.canvasV2NodeId = regionNodeId;
     region.dataset.canvasV2EvidenceRegion = "canonical";
@@ -103,7 +107,7 @@ export function insertCanvasV2CanonicalFlow(input: {
     title.className = "canvas-v2-grounded-title";
     title.dataset.canvasV2NodeId = `${regionNodeId}-title`;
     title.textContent = "Grounded evidence";
-    region.append(title);
+    if (!hasRegion) region.append(title);
     host.append(region);
   }
   if (region.dataset.canvasV2SceneLayout === "absolute") {

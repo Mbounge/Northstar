@@ -1460,7 +1460,7 @@ export function CanvasV2Workspace({
 
   useEffect(() => {
     const currentEngine = sharedEngine.current;
-    if (liveReplica || loadingChatFlowRef.current || pendingFlowPlacementRef.current || !currentEngine.interactionReady || currentEngine.running || currentEngine.applyingManualEdit || chat.busy) return;
+    if (liveReplica || loadingChatFlowRef.current || pendingFlowPlacementRef.current || !currentEngine.interactionReady || currentEngine.running || currentEngine.applyingManualEdit) return;
     const flows = [...chat.turns.flatMap((turn) => turn.status === 'responded'
       ? Object.values(turn.evidenceReferences ?? {}).filter((reference): reference is Extract<CanvasV2ChatEvidenceReference, { kind: 'flow' }> => reference.kind === 'flow').map((reference) => ({ turnId: turn.id, reference }))
       : []), ...steeredFlowRequests, ...managedChat.steeredFlowReads.map(({ app, flow }) => ({ turnId: chat.turns.findLast((turn) => turn.feedbackFor)?.id ?? 'steer', reference: {
@@ -1503,7 +1503,7 @@ export function CanvasV2Workspace({
           setFlowPlacement({ message: `${app.name} ${flow.name} is already represented by its complete source rail.` });
           return;
         }
-        if (!sharedEngine.current.applyManualDocument(insertion.document, `Placed all ${flow.screens.length} ordered ${app.name} ${flow.name} screens on canvas.`, insertion.evidence, undefined, { selectionNodeIds: [insertion.laneNodeId], evidencePackets })) throw new Error(sharedEngine.current.readManualFailure() || 'The canvas is still finishing another edit.');
+        if (!sharedEngine.current.applyManualDocument(insertion.document, `Placed all ${flow.screens.length} ordered ${app.name} ${flow.name} screens on canvas.`, insertion.evidence, undefined, { origin: 'northstar', evidencePackets })) throw new Error(sharedEngine.current.readManualFailure() || 'The canvas is still finishing another edit.');
         pendingFlowPlacementRef.current = { id: flow.id, key, appName: app.name, flowName: flow.name, screenCount: flow.screens.length };
         setFlowPlacement({ message: `Rendering all ${flow.screens.length} ${app.name} ${flow.name} screens on canvas…` });
       } catch (error) {

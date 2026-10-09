@@ -11,6 +11,8 @@ export const CANVAS_V2_SCREEN_FONTS = [{
   family: 'Mona Sans', aliases: ['MonaSans', 'GraetMona'],
   weights: [400, 500, 600, 700, 800, 900], italicWeights: [700],
   source: 'Bundled font files; available in live screens, private journeys and exported review pixels.',
+  provenance: 'Bundled with the GRAET reference simulation. Availability is not evidence that another product uses this family.',
+  usage: 'Optional resource, not a default product typeface. Choose typography from the target product references or brief. Reuse another retained font when available; do not call a substitute an exact reference match.',
 }];
 
 export function canvasV2ScreenFontFamilies(screen: Pick<CanvasV2InteractiveScreen, 'html' | 'css' | 'javascript'>) {

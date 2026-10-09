@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { readAccountTools, parseAccountQuery, accountResultForModel, AccountToolHandles, readAccountAssetPixels } from '../lib/canvas-v2/account-tools';
+import { readAccountTools, parseAccountQuery, accountResultForModel, accountReferenceFlows, AccountToolHandles, readAccountAssetPixels } from '../lib/canvas-v2/account-tools';
 import { CANVAS_V2_E2E_APPS } from '../app/canvas-v2-e2e/research-fixture';
 import { createCanvasV2AccountEvidenceProvider } from '../lib/canvas-v2/account-evidence-provider';
 import { mergeCanvasV2EvidencePackets } from '../lib/canvas-v2/evidence-packets';
@@ -113,4 +113,18 @@ test('source splash and onboarding recordings accompany the original ordered flo
  const model=accountResultForModel(result,1);assert.equal(model.screens.length,1);assert.equal(model.evidence.filter(asset=>asset.mediaType==='video').length,2);
  assert.ok(model.flows[0].media?.every(clip=>clip.url.startsWith('northstar-asset:')));assert.ok(!JSON.stringify(model.flows).includes('account.example'));
  assert.equal((await readAccountTools({tenantId:'tenant-a',apps},parseAccountQuery({operation:'flow-screens',appId:'wrong-tenant',flowId:flow.id}))).evidence.length,0);
+});
+
+
+test('inspected account capture lineage selects its real complete flow, not named apps or unrelated evidence', async()=>{
+  const complete=await read({operation:'flow-screens',appId:'app:awin',flowId:'flow:awin:onboarding'});
+  const summary={app:complete.apps[0],flow:{...complete.flows[0],screens:[]}};
+  const flows=new Map([[summary.flow.id,summary]]);
+  const screenshot=complete.evidence.find(asset=>asset.kind==='screenshot')!;
+  assert.deepEqual(accountReferenceFlows([screenshot,screenshot],flows).map(item=>item.flow.id),['flow:awin:onboarding']);
+  assert.deepEqual(accountReferenceFlows([{...screenshot,source:{...screenshot.source!,providerId:'external'}}],flows),[]);
+  assert.deepEqual(accountReferenceFlows([{...screenshot,source:{...screenshot.source!,sourceId:'other-flow'}}],flows),[]);
+  assert.deepEqual(accountReferenceFlows([{...screenshot,source:{...screenshot.source!,sourceType:'marketing-feed'}}],flows),[]);
+  assert.deepEqual(accountReferenceFlows([{...screenshot,source:{...screenshot.source!,permission:'unavailable'}}],flows),[]);
+  assert.equal(summary.flow.screens.length,0,'a selected subset is a request for a fresh full flow read, never the canonical lane itself');
 });

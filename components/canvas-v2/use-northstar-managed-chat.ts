@@ -23,7 +23,7 @@ import { canvasV2MeasuredConnectorDirectory } from '@/lib/canvas-v2/model-contex
 import { compareScreenReferencePixels, readCanvasV2ScreenAssetPixels, readCanvasV2VideoPoster, readCanvasV2VideoReferenceFrames } from '@/lib/canvas-v2/screen-asset-pixels';
 import { canvasV2ScreenPlacementContext } from '@/lib/canvas-v2/screen-placement-context';
 import { compactCanvasV2WorkingContextForModel, type CanvasV2WorkingContext, type CanvasV2SelectionPolicy } from '@/lib/canvas-v2/working-context';
-import { parseAccountQuery, accountResultForModel, AccountToolHandles, readAccountAssetPixels, type AccountResult } from '@/lib/canvas-v2/account-tools';
+import { parseAccountQuery, accountResultForModel, accountReferenceFlows, AccountToolHandles, readAccountAssetPixels, type AccountResult } from '@/lib/canvas-v2/account-tools';
 import { mergeCanvasV2EvidencePackets } from '@/lib/canvas-v2/evidence-packets';
 import { insertCanvasV2CanonicalFlow } from '@/lib/canvas-v2/flow-insertion';
 import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
@@ -60,6 +60,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const accountPackets = useRef<CanvasV2EvidencePacket[]>(input.initial?.memory?.accountPackets ?? []);
   const accountFlows = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlows ?? []));
   const steerFlowBaseline = useRef<Set<string> | undefined>(undefined);
+  const referenceRailFlowIds = useRef(new Set(input.initial?.memory?.referenceRailFlowIds ?? []));
   const [steeredFlowReads, setSteeredFlowReads] = useState<Array<{ app: AppDataApp; flow: AppDataFlow }>>([]);
   const accountFlowSummaries = useRef(new Map<string, { app: AppDataApp; flow: AppDataFlow }>(input.initial?.memory?.accountFlowSummaries ?? input.initial?.memory?.accountFlows ?? []));
   const productIdentities = useRef<CanvasV2ProductIdentity[]>(input.initial?.memory?.productIdentities ?? []);
@@ -127,6 +128,54 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       status: view.status === 'completed' ? 'responded' : view.status === 'idle' ? 'running' : view.status,
       activity: view.activity.filter(a => a.id !== `message:${final?.id}`), answer: final?.text, evidenceReferences, error: view.error,
     } : turn));
+  };
+  const placeReferenceRail = async (reference: { app: AppDataApp; flow: AppDataFlow }, signal: AbortSignal) => {
+    const { app } = reference;
+    let complete = accountFlows.current.get(reference.flow.id);
+    if (referenceRailFlowIds.current.has(reference.flow.id)) return; // A later human deletion must not resurrect it.
+    if (!complete) {
+      const response = await fetch(current.current.accountEndpoint ?? '/api/canvas-v2/account', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({operation:'flow-screens',appId:app.id,flowId:reference.flow.id,offset:0,limit:60}), signal });
+      if (response.redirected || !response.ok) throw new Error('The complete reference flow could not be loaded.');
+      const result = object(await response.json()).result as AccountResult | undefined;
+      const flow = result?.flows.find(flow=>flow.id===reference.flow.id);
+      const sourceApp = result?.apps.find(item=>item.id===app.id);
+      if (!result || !flow || !sourceApp) throw new Error('The reference journey is no longer available.');
+      complete={app:sourceApp,flow}; accountFlows.current.set(flow.id,complete);
+      for(const asset of result.evidence)assets.current.set(asset.id,asset);
+      accountPackets.current=mergeCanvasV2EvidencePackets(accountPackets.current,result.packets);
+      accountHandles.current.remember(result);
+    }
+    const engine=current.current.engine;
+    if(editActive.current || engine.applyingManualEdit)throw new Error('The canvas is finishing another change. Inspect this reference again after it commits.');
+    const revision=engine.readCommittedRevision();
+    const evidence=[...new Map([...revision.evidence,...assets.current.values()].map(asset=>[asset.id,asset])).values()];
+    const packet=accountPackets.current.find(packet=>packet.source.sourceId===complete.flow.id);
+    const insertion=insertCanvasV2CanonicalFlow({document:revision.document,currentEvidence:revision.evidence,...complete,evidence,packet});
+    if(insertion.alreadyInserted){referenceRailFlowIds.current.add(complete.flow.id);return;}
+    let expectedRevision='';editActive.current=true;
+    try{
+      if(!engine.applyManualDocument(insertion.document,`Placed the complete ${app.name} reference flow`,insertion.evidence,undefined,{origin:'northstar',selectionNodeIds:current.current.selectedNodeIds,evidencePackets:mergeCanvasV2EvidencePackets(revision.evidencePackets,accountPackets.current),onPrepared:id=>{expectedRevision=id;}}))throw new Error(engine.readManualFailure()||'The canvas is finishing another change.');
+      const started=Date.now();
+      while(Date.now()-started<30_000){
+        signal.throwIfAborted();
+        const latest=current.current.engine.readCommittedRevision();
+        if(latest.id!==revision.id){
+          if(latest.id!==expectedRevision)throw new Error('The canvas changed while placing the reference. Inspect it again.');
+          referenceRailFlowIds.current.add(complete.flow.id);readRevision.current=undefined;return;
+        }
+        const failure=current.current.engine.readManualFailure();if(failure)throw new Error(failure);
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      current.current.engine.stop();throw new Error('The reference flow has not finished rendering. Inspect it again before creating the screen.');
+    }catch(error){
+      if(signal.aborted&&current.current.engine.readCommittedRevision().id===revision.id)current.current.engine.stop();
+      throw error;
+    }finally{editActive.current=false;}
+  };
+  const referenceAssetsFor = (ids: readonly unknown[]) => {
+    const pending=ids.filter((id):id is string=>typeof id==='string'),seen=new Set<string>(),sourceAssets:CanvasV2EvidenceAsset[]=[];
+    while(pending.length){const id=pending.pop()!;if(seen.has(id))continue;seen.add(id);const asset=assets.current.get(id);if(asset)sourceAssets.push(asset);pending.push(...(artifacts.current.get(id)?.inputAssetIds??[]));}
+    return sourceAssets;
   };
   const getClient = () => {
     if (client.current) return client.current;
@@ -210,6 +259,8 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       if(reviewedPreviews.current.turnId!==(rootId.current ?? ''))reviewedPreviews.current={turnId:rootId.current ?? '',nodeIds:new Set()};
       const themeContext = canvasV2ModelThemeContext(current.current.theme ?? "light");
       if (isCreativeTool(action.name)) {
+        const inputs=Array.isArray(args.inputAssetIds)?args.inputAssetIds:Array.isArray(args.inputs)?args.inputs.map(input=>object(input).assetId):[args.assetId];
+        for(const reference of accountReferenceFlows(referenceAssetsFor(inputs),accountFlowSummaries.current))await placeReferenceRail(reference,signal);
         const requestedMeasurement = action.name === 'workspace_run' ? await engine.ensureObservation(signal) : undefined;
         const turnId = rootId.current;
         const revision = engine.readCommittedRevision();
@@ -251,6 +302,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           const app = result.apps.find(a => a.name === flow.appName);
           if (app) {
             accountFlows.current.set(flow.id, { app, flow });
+            await placeReferenceRail({ app, flow }, signal);
             if (steerFlowBaseline.current && !steerFlowBaseline.current.has(flow.id)) {
               setSteeredFlowReads((current) => current.some((item) => item.flow.id === flow.id) ? current : [...current, { app, flow }]);
             }
@@ -261,6 +313,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       if (action.name === 'inspect_asset') {
         const asset = assets.current.get(string(args.evidenceId)) ?? engine.readCommittedRevision().evidence.find(a => a.id === args.evidenceId);
         if (!asset || asset.source?.permission === 'unavailable') throw new Error('Read that account source or canvas asset before inspecting it.');
+        for(const reference of accountReferenceFlows([asset],accountFlowSummaries.current))await placeReferenceRail(reference,signal);
         if(asset.mimeType?.startsWith('font/')){
           const specimen=await inspectCanvasV2FontPixels(await readCanvasV2ScreenAssetPixels(asset.url,signal),signal);
           return [{type:'input_text',text:JSON.stringify({evidenceId:asset.id,label:asset.label,mimeType:asset.mimeType,loaded:specimen.loaded,note:specimen.note})},{type:'input_image',image_url:specimen.pixels}];
@@ -460,6 +513,11 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         try {
         if (signal.aborted) throw new Error('This action was stopped.');
         if (editActive.current) throw new Error('Another canvas edit is still committing. Read the canvas after it finishes.');
+        if(['canvas_screen','canvas_screen_element','canvas_screen_component'].includes(action.name)){
+          const previous=readCanvasV2Screens(engine.readCommittedRevision().document.html).find(item=>item.nodeId===args.nodeId);
+          const refs=Array.isArray(args.referenceAssetIds)?args.referenceAssetIds:previous?.screen.referenceAssetIds??[];
+          for(const reference of accountReferenceFlows(referenceAssetsFor(refs),accountFlowSummaries.current))await placeReferenceRail(reference,signal);
+        }
         const revision = engine.readCommittedRevision();
         requireCodexCanvasReadRevision(readRevision.current, revision.id);
         const evidence = [...new Map([...revision.evidence, ...assets.current.values()].map(a => [a.id, a])).values()];
@@ -685,7 +743,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     stopping.current = (client.current?.cancel() ?? Promise.resolve()).catch(() => undefined).finally(() => { stopping.current = undefined; });
   };
   const memory = () => ({ screenVersions: screenVersionsRef.current, productIdentities: productIdentities.current, artifacts: [...artifacts.current.values()], assets: [...assets.current.values()], accountPackets: accountPackets.current, accountHandles: accountHandles.current.entries?.() ?? [],
-    accountFlows: [...accountFlows.current.entries()], accountFlowSummaries: [...accountFlowSummaries.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
+    referenceRailFlowIds:[...referenceRailFlowIds.current], accountFlows: [...accountFlows.current.entries()], accountFlowSummaries: [...accountFlowSummaries.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
     compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
   return { ...input.base, productIdentities: productIdentities.current, screenVersions, screenFeedback: screenFeedbacks[0]?.target, screenFeedbackTargets: screenFeedbacks.map(entry => entry.target), objectFeedbackTargets: objectFeedbacks,
     removeFeedbackTarget: (nodeId: string, selector?: string) => { if (selector) setScreenFeedbacks(current => current.filter(entry => entry.target.nodeId !== nodeId || entry.target.selector !== selector)); else setObjectFeedbacks(current => current.filter(entry => entry.nodeId !== nodeId)); },
