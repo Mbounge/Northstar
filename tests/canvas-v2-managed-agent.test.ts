@@ -3,11 +3,45 @@ import assert from 'node:assert/strict';
 import { emptyAgentView, reduceAgentEvent, readAgentEvents } from '../lib/canvas-v2/managed-agent/protocol';
 import { signAgentSession, verifyAgentSession, handleManagedRequest, managedInput } from '../lib/canvas-v2/managed-agent/server';
 import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
+import { compactCanvasV2History } from '../lib/canvas-v2/managed-agent/chat-history';
+import { DiscoveryReviewContext } from '../lib/canvas-v2/codex-app-server/discovery-review';
+import { MOTION_INTENT_POLICY, PRODUCT_REFERENCE_CONSTRUCTION, PRODUCT_REFERENCE_REVIEW } from '../lib/canvas-v2/product-reference-policy';
 
 const event = (type: string, data = {}) => ({ type: `agent.session.${type}`, session_id: 's1', ...data });
 const creation = (capture: (c: ReadableStreamDefaultController<Uint8Array>) => void) => new Response(new ReadableStream<Uint8Array>({ start(c) {
   capture(c); c.enqueue(new TextEncoder().encode('data: {"type":"northstar.session","sessionId":"s1","token":"token"}\n\n'));
 } }));
+
+test('construction and review require intent-specific motion evidence without imposing one treatment', () => {
+  for (const policy of [MOTION_INTENT_POLICY, PRODUCT_REFERENCE_CONSTRUCTION, PRODUCT_REFERENCE_REVIEW]) {
+    for (const phrase of [
+      'trigger', 'affected visual layers', 'timing/easing', 'choreography',
+      'continuous or deliberately stepwise', 'loop, pause, reversal', 'settled-end',
+      'reduced-motion', 'intermediate rendered frames', 'reference timestamps',
+      '2–6 live samples', 'Numeric progress can establish state advancement but cannot establish the visual treatment',
+      'Do not require continuous movement for every product', 'particular CSS',
+      'actual rendered bounding box', 'intended anchor or path', 'aria-current/state labels',
+    ]) assert.match(policy, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /Choose motion intent from the latest brief/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /Judge continuity, staging, easing, interruption and end state/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /Contained, custom, distinct or schematic alone is not evidence of high craft/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /concrete craft bar for silhouette/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /one canonical elapsed\/state value/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /finish transitions must be idempotent/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /repeated actions must not duplicate records/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /northstarProduct\.rehydrated=true/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /mood\/emotional register/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /progressive-disclosure rhythm/);
+  assert.match(PRODUCT_REFERENCE_CONSTRUCTION, /universal spacious card treatment/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /numeric journey can prove a state transition but cannot excuse/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /actual rendered bounding box against the intended anchor or path/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /A click check cannot establish dragging/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /without accidental blank edges/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /action labels and icons match the observed outcome/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /reconcile rendered values for the same scope/);
+  assert.match(PRODUCT_REFERENCE_REVIEW, /disjointed anatomy/);
+});
 test('streamed text handles completion without deltas, duplicate events, foreign sessions and stale turns', () => {
   let state = reduceAgentEvent(emptyAgentView(), event('turn.created', { turn: { id: 't1', subagent_id: null } }));
   const delta = event('turn.output_text.delta', { event_id: 'e1', turn_id: 't1', item_id: 'm1', content_index: 0, delta: 'A' });
@@ -219,4 +253,55 @@ test('leaving during startup closes the late Codex session instead of retaining 
   stream.enqueue(new TextEncoder().encode('data: {"type":"northstar.session","sessionId":"s1","token":"late-token"}\n\n'));
   await sending;
   assert.equal(calls.at(-1), 'close');
+});
+
+
+test('tool result delivery survives a bounded visual review while ordinary requests and cancellation remain bounded', async (t) => {
+  // Node 20.9 uses the original timer API; the worker uses Node 22.
+  const legacy=process.versions.node.startsWith('20.')&&Number(process.versions.node.split('.')[1])<11;
+  t.mock.timers.enable((legacy?['setTimeout']:{apis:['setTimeout']}) as Parameters<typeof t.mock.timers.enable>[0]);
+  let observedSignal:AbortSignal;
+  const fetcher:typeof fetch=async (_url,init)=>new Promise<Response>((resolve,reject)=>{
+    observedSignal=init!.signal!;
+    const responseTimer=setTimeout(()=>resolve(Response.json({accepted:true})),45_500);
+    observedSignal.addEventListener('abort',()=>{clearTimeout(responseTimer);reject(observedSignal.reason)},{once:true});
+  });
+  const client=new ManagedAgentClient({endpoint:'/agent',fetcher,onView:()=>undefined,execute:async()=>null});
+  const result=client.request({op:'result'});
+  t.mock.timers.tick(30_001);assert.equal(observedSignal!.aborted,false,'the client must not kill the server appearance check at 30 seconds');
+  t.mock.timers.tick(15_499);assert.equal((await result).ok,true);
+  const ordinary=assert.rejects(client.request({op:'heartbeat'}),/timed out/);
+  t.mock.timers.tick(30_000);await ordinary;
+  const cancelled=new AbortController();
+  const interrupted=assert.rejects(client.request({op:'result'},cancelled.signal),/User stopped/);
+  cancelled.abort(new Error('User stopped'));await interrupted;
+  client.dispose();
+});
+
+
+test('managed transport retains failed probe trace and pixels alongside the error',async()=>{
+ let event:Record<string,unknown>|undefined;
+ const output=[{type:'input_text',text:JSON.stringify({state:{journey:{passed:false,steps:[{step:2,passed:false}]}}})},{type:'input_image',image_url:'data:image/png;base64,failed'}];
+ const fetcher:typeof fetch=async(_url,init)=>{
+  if(init?.method==='POST'){event=JSON.parse(String(init.body)).events[0];return Response.json({})}
+  return Response.json({required_actions:[{call_id:'c1',turn_id:'t1'}]});
+ };
+ const result=await handleManagedRequest({op:'result',token:signAgentSession('s1','alice','key'),requestId:'probe',turnId:'t1',callId:'c1',success:false,error:'Journey failed at step2',output},{owner:'alice',key:'key',signal:new AbortController().signal,fetcher});
+ assert.equal((await result.json()).accepted,true);
+ assert.equal(event?.success,false);assert.deepEqual(event?.output,output);assert.match(String(event?.error),/step2/);
+});
+
+
+test('routing history is bounded and omits internal activity while preserving the current brief separately', () => {
+  const history = compactCanvasV2History([{ id: 'old', message: 'Use the old pill dashboard nodeId:abcdef123456', createdAt: '', status: 'responded', answer: 'old answer exchangeId:abcdef123456', activity: [{ id: 'tool-id', kind: 'progress', detail: 'raw selector: #old' }] as never } as never, { id: 'new', message: 'Build the requested route', createdAt: '', status: 'responded', answer: 'Current direction retained.', }] as never, 2);
+  assert.doesNotMatch(String(history[0].text), /abcdef123456|#old/);
+  assert.match(String(history.at(-1)?.text), /Current direction/);
+});
+
+
+test('review context keeps the exact current brief separate from restored routing history', () => {
+  const context = new DiscoveryReviewContext();
+  context.user([{ type: 'text', text: 'Saved history: use the unrelated old route.', text_elements: [] }], false, 'Build the current satellite brief.');
+  const packet = JSON.parse(context.packet('').text);
+  assert.equal(packet.latestUserRequest, 'Build the current satellite brief.');
 });

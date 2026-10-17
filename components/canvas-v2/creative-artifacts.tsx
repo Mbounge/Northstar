@@ -4,6 +4,7 @@ import { downloadArtifact } from "@/lib/canvas-v2/creative/download";
 import { ChevronDown, Download, FileText, Images } from "lucide-react";
 import type { NorthstarArtifact } from "@/lib/canvas-v2/creative/types";
 import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachments";
+import { SCREEN_ASSET_DRAG_TYPE, setScreenAssetDrag } from '@/lib/canvas-v2/screen-asset-edit';
 
 /** Display names are presentation only; downloads and asset identities stay intact. */
 function displayName(artifact: NorthstarArtifact) {
@@ -41,7 +42,7 @@ export function CreativeArtifacts({
             const description = image ? (artifact.origin === 'generated' ? 'Generated image' : 'Prepared image') : 'Created file';
             const label = <span className="min-w-0 flex-1 py-1"><span title={name} className="line-clamp-2 text-[12px] font-medium leading-[1.45] text-[#4b435b] dark:text-[#ded6e8]">{name}</span><span className="mt-0.5 block text-[10px] text-[#93879f] dark:text-[#a297ad]">{description}</span></span>;
             return <li key={artifact.id} className="flex items-center gap-1 rounded-[12px] p-1.5 hover:bg-white/70 dark:hover:bg-white/[.035]">
-              {image ? <button type="button" aria-label={`Preview ${name}`} title={`View ${name}`} className="group/asset flex min-w-0 flex-1 items-center gap-3 rounded-[9px] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8976ee]" onClick={event => {
+              {image ? <button type="button" draggable={artifact.mimeType !== 'image/gif'} onDragEnd={()=>setScreenAssetDrag(false)} onDragStart={event => { setScreenAssetDrag(true);event.dataTransfer.effectAllowed='copy'; event.dataTransfer.setData(SCREEN_ASSET_DRAG_TYPE,JSON.stringify({assetId:artifact.id})); }} aria-label={`Preview ${name}`} title={`View ${name} · drag onto an image to replace it`} className="group/asset flex min-w-0 flex-1 items-center gap-3 rounded-[9px] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8976ee]" onClick={event => {
                 const img = event.currentTarget.querySelector('img');
                 if (!img) return;
                 onOpenImage({ id: artifact.id, kind: 'image', name, mimeType: artifact.mimeType as CanvasV2ChatImageAttachment['mimeType'], dataUrl: artifact.dataUrl, width: img.naturalWidth, height: img.naturalHeight, byteSize: artifact.bytes, createdAt: artifact.createdAt });
@@ -49,7 +50,7 @@ export function CreativeArtifacts({
                 <span className="relative block h-14 w-14 shrink-0 overflow-hidden rounded-[9px] border border-black/[.04] bg-[#efedf3] dark:border-white/[.05] dark:bg-[#16131d]">
                   {/* Keep the entire retained image visible, including small icons and portrait assets. */}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={artifact.dataUrl} alt="" className="h-full w-full object-contain group-hover/asset:opacity-90"/>
+                  <img src={artifact.dataUrl} draggable={false} alt="" className="h-full w-full object-contain group-hover/asset:opacity-90"/>
                 </span>{label}
               </button> : <div className="flex min-w-0 flex-1 items-center gap-3"><span className="grid h-14 w-14 shrink-0 place-items-center rounded-[9px] bg-[#efedf3] text-[#91859f] dark:bg-[#24202c] dark:text-[#b4a4c5]"><FileText aria-hidden="true" size={20} strokeWidth={1.5}/></span>{label}</div>}
               <button type="button" onClick={() => void downloadArtifact(artifact)} aria-label={`Download ${name}`} title={`Download ${name}`} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#8c8596] transition-colors hover:bg-[#ece8f5] hover:text-[#6653ce] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#8976ee] dark:text-[#aaa2b6] dark:hover:bg-white/[.07] dark:hover:text-[#d3c8ff]"><Download aria-hidden="true" size={14}/></button>

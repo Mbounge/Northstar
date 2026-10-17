@@ -111,6 +111,24 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
   const previousFlows = readCanvasV2CanonicalFlowManifests(previous);
   const previousFlowIds = new Set(previousFlows.map((flow) => flow.flowId));
   const nextFlows = readCanvasV2CanonicalFlowManifests(next);
+  // Older saved native boards may contain human-detached canonical images
+  // after their lane container was removed. Preserve those exact committed
+  // identities without inventing a complete flow or permitting new orphans.
+  const previousLaneNodes = new Set(previousFlows.flatMap(flow => flow.items.map(item => item.nodeId)));
+  const retainedDetached = images(previous.html).filter(image => image.role === "canonical"
+    && image.nodeId && image.evidenceId && !previousLaneNodes.has(image.nodeId));
+  const nextImages = images(next.html);
+  const sameDetached = (prior: ParsedImage, image: ParsedImage) => prior.nodeId === image.nodeId
+    && prior.evidenceId === image.evidenceId && prior.url === image.url
+    && prior.flowIndex === image.flowIndex && image.role === "canonical"
+    && approved.get(image.evidenceId) === image.url;
+  for (const prior of retainedDetached) {
+    const matches = nextImages.filter(image => image.nodeId === prior.nodeId);
+    if ((!matches.length && !options.allowUserEvidenceRemoval)
+      || matches.length > 1 || matches.some(image => !sameDetached(prior, image))) {
+      failures.push(`Detached committed canonical evidence must retain its identity, role, and source: ${prior.nodeId}.`);
+    }
+  }
 
   duplicates(nextFlows.map((flow) => flow.flowId)).forEach((flowId) => failures.push(`Canonical research flow must have exactly one lane: ${flowId}.`));
   const nextByFlow = new Map(nextFlows.map((flow) => [flow.flowId, flow]));
@@ -149,9 +167,10 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
     }
   }
 
-  for (const image of images(next.html)) {
+  for (const image of nextImages) {
     const sources = canonicalSources.get(image.evidenceId);
     if (image.role === "canonical" && (!sources || !sources.has(image.nodeId))) {
+      if (retainedDetached.some(prior => sameDetached(prior, image))) continue;
       failures.push(`Canonical evidence role is valid only for an original image inside its canonical flow: ${image.nodeId || image.evidenceId}.`);
       continue;
     }

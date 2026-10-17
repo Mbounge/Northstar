@@ -1,5 +1,7 @@
 import { readCanvasV2Screens, validateCanvasV2ScreenAssets } from './interactive-screen';
 import { readCanvasV2PlayableMedia } from "./canvas-media";
+import { MODEL_ATTRIBUTE, parseCanvasV2NativeModel } from "./model-object";
+import { isCanvasV2ScreenModelBytes } from "./screen-asset-pixels";
 import {
   readCanvasV2CanonicalFlowManifests,
   validateCanvasV2EvidenceAuthorshipTransition,
@@ -14,6 +16,32 @@ const LOCAL_USER_IMAGE = /\bdata-canvas-v2-local-image\s*=\s*["']true["']/i;
 const USER_ORIGIN = /\bdata-canvas-v2-origin\s*=\s*["']user["']/i;
 const IMAGE_SOURCE = /\bsrc\s*=\s*(["'])([^"']+)\1/i;
 const LOCAL_IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/i;
+
+type NativeModelMarkup = { tag: string; model?: ReturnType<typeof parseCanvasV2NativeModel> };
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;|&#34;|&#x22;/gi, '"')
+    .replace(/&apos;|&#39;|&#x27;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+/** Model bytes stay in the evidence registry; markup carries only a typed
+ * retained handle. Keep document validation independent of image decoders. */
+function readNativeModelMarkup(html: string): NativeModelMarkup[] {
+  const results: NativeModelMarkup[] = [];
+  const attribute = new RegExp(`\\b${MODEL_ATTRIBUTE}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i");
+  for (const match of html.matchAll(/<[a-z][^>]*>/gi)) {
+    const tag = match[0];
+    const attributeMatch = attribute.exec(tag);
+    if (!attributeMatch) continue;
+    try { results.push({ tag, model: parseCanvasV2NativeModel(decodeHtmlAttribute(attributeMatch[2])) }); }
+    catch { results.push({ tag }); }
+  }
+  return results;
+}
 
 function decodedBase64Bytes(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
@@ -68,6 +96,11 @@ export function validateCanvasV2ArtifactDocument(
       if (!/^<div\b/i.test(match[0])) failures.push("Playable media must use an ordinary div object.");
     }
   } catch (error) { failures.push(error instanceof Error ? error.message : "Invalid playable media."); }
+  for (const item of readNativeModelMarkup(document.html)) {
+    if (!/^<div\b/i.test(item.tag)) failures.push("Native model objects must use an ordinary div object.");
+    if (!/\bdata-canvas-v2-node-id\s*=\s*(["'])[^"']+\1/i.test(item.tag)) failures.push("Every native model object must have a unique stable node identity.");
+    if (!item.model) failures.push("Invalid native model reference.");
+  }
   try { readCanvasV2Screens(document.html); } catch (error) { failures.push(error instanceof Error ? error.message : "Invalid interactive screen."); }
   const seen = new Set<string>();
   for (const nodeId of nodeIds) {
@@ -96,6 +129,13 @@ export function validateCanvasV2EvidenceBindings(
     if (approved.get(media.evidenceId) !== media.src && !inspectedGif) failures.push(`Playable media binding is not approved: ${media.evidenceId}.`);
   } }
   catch (error) { failures.push(error instanceof Error ? error.message : "Invalid media."); }
+  for (const item of readNativeModelMarkup(document.html)) {
+    if (!item.model) { failures.push("Invalid native model reference."); continue; }
+    const asset = evidence.find(candidate => candidate.id === item.model!.evidenceId);
+    if (!asset || asset.mediaType !== "model" || approved.get(item.model.evidenceId) !== asset.url || !isCanvasV2ScreenModelBytes(asset.url)) {
+      failures.push(`Native model evidence binding is not approved: ${item.model.evidenceId}.`);
+    }
+  }
   const images = document.html.matchAll(/<img\b([^>]*)>/gi);
   for (const image of images) {
     const attributes = image[1];
@@ -116,7 +156,11 @@ export function validateCanvasV2EvidenceBindings(
 
 /** Known sources can outlive their visible objects after a human removal. */
 export function canvasV2VisibleEvidenceIds(document: CanvasV2ArtifactDocument): Set<string> {
-  return new Set([...Array.from(document.html.matchAll(/\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]), ...readCanvasV2PlayableMedia(document.html).map(media => media.evidenceId)]);
+  return new Set([
+    ...Array.from(document.html.matchAll(/\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1]),
+    ...readCanvasV2PlayableMedia(document.html).map(media => media.evidenceId),
+    ...readNativeModelMarkup(document.html).flatMap(item => item.model ? [item.model.evidenceId] : []),
+  ]);
 }
 
 export function validateCanvasV2EvidenceContinuity(

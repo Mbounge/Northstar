@@ -1,5 +1,8 @@
 "use client";
 
+import { useFilmCamera } from "./use-film-camera";
+import type { FilmCameraController } from "@/lib/canvas-v2/film-camera";
+
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 
 import { useFloatingPanel } from "./use-floating-panel";
@@ -11,8 +14,16 @@ import { reviseCanvasV2NativeScreen, validateCanvasV2ScreenJavaScript } from '@/
 import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
 import { CANVAS_V2_FEEDBACK_PICKING, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking } from '@/lib/canvas-v2/screen-feedback';
 import { SCREEN_ATTRIBUTE, parseCanvasV2Screen, validateCanvasV2ScreenAssets, readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
+import { MODEL_ATTRIBUTE } from '@/lib/canvas-v2/model-object';
+import { prepareCanvasModelImport, MAX_MODEL_IMPORT_BYTES } from '@/lib/canvas-v2/model-import';
+import { findCanvasV2OpenPlacement } from '@/lib/canvas-v2/multiplayer-placement';
 import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenAssets, CanvasV2ScreenIdentities } from './interactive-screen';
-import { Play, Pause } from "lucide-react";
+import { SCREEN_ASSET_DROP_EVENT, SCREEN_ASSET_DRAG_TYPE, projectImageAssets, uploadedProjectImage, uploadedProjectModel, replaceScreenAsset, type ScreenAssetDrop } from '@/lib/canvas-v2/screen-asset-edit';
+import { SCREEN_DIRECT_EDIT_EVENT, SCREEN_DIRECT_PROMPT_EVENT, editScreenText, editScreenAppearance, removeScreenSection, moveScreenSection, screenSectionNeedsAgent, type ScreenDirectRequest } from '@/lib/canvas-v2/screen-direct-edit';
+import { ProjectAssets } from './project-assets';
+import { createCanvasV2MediaPlaybackStore } from "@/lib/canvas-v2/media-playback-store";
+import { CanvasV2MediaPlaybackButton } from "./media-playback-button";
+import { createCanvasV2LayerRecoverySelection, eligibleCanvasSelection } from "@/lib/canvas-v2/layer-recovery-selection";
 
 import { useCanvasV2PopoverViewport } from "./use-popover-viewport";
 
@@ -55,6 +66,7 @@ import {
   Undo2,
   Redo2,
   RotateCw,
+  RotateCcw,
   Ungroup,
   Unlock,
   Upload,
@@ -62,7 +74,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 import {
   CanvasV2CanvasScene,
@@ -116,6 +128,7 @@ import {
   type CanvasV2NativeClipboard,
   canvasV2NativeSceneSelectionContainsTarget,
   serializeCanvasV2NativeScene,
+  canvasV2NativeSceneAbsoluteBounds,
   canvasV2NativeObservationDocument,
   patchCanvasV2NativeDocument,
   type CanvasV2NativeSceneDocument,
@@ -156,7 +169,7 @@ import {
   type CanvasV2WorkspaceViewport,
 } from "@/lib/canvas-v2/workspace-coordinate-space";
 
-type Panel = "chat" | "shapes" | "apps";
+type Panel = "chat" | "shapes" | "apps" | "assets";
 type CanvasTool = "select" | "pan" | "draw" | "place";
 type HumanAuthoringTab = "basics" | "shapes" | "diagram" | "connectors" | "media";
 
@@ -320,27 +333,6 @@ function sameInspectableElements(
       && candidate.bounds.y === item.bounds.y
       && candidate.bounds.width === item.bounds.width
       && candidate.bounds.height === item.bounds.height;
-  });
-}
-
-function eligibleCanvasSelection(elements: readonly CanvasV2InspectableElement[]): CanvasV2InspectableElement[] {
-  return elements.filter((element) => {
-    const { x, y, width, height } = element.bounds;
-    return element.nodeId !== "canvas"
-      && element.kind !== "root"
-      && !element.hidden
-      && Number.isFinite(x)
-      && Number.isFinite(y)
-      && Number.isFinite(width)
-      && Number.isFinite(height)
-      && width > 0
-      && height > 0
-      && canvasV2BoundsIntersect(element.bounds, {
-        x: 0,
-        y: 0,
-        width: CANVAS_V2_WORKSPACE.width,
-        height: CANVAS_V2_WORKSPACE.height,
-      });
   });
 }
 
@@ -643,12 +635,14 @@ function showCanvasClickPulse(clientX: number, clientY: number, theme: "dark" | 
   animation.onfinish = () => { pulse.remove(); activeCanvasClickPulses.delete(pulse); };
 }
 
-export function CanvasV2Workspace({
+// Parent persistence/status changes must not reconcile the whole board. Normal
+// shallow comparison still propagates every changed session/source callback.
+export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   designEndpoint = "/api/canvas-v2/design",
   researchEndpoint = "/api/canvas-v2/research",
   accountEndpoint = "/api/canvas-v2/account",
   routerEndpoint = "/api/canvas-v2/route",
-  agentEndpoint, initialSnapshot, onSnapshot, sessionTitle, onSessionMenu, liveReplica, sendSessionCommand, registerSessionController,
+  agentEndpoint, initialSnapshot, onSnapshot, sessionTitle, onSessionMenu, liveReplica, sendSessionCommand, registerSessionController, registerFilmCamera,
 }: {
   designEndpoint?: string;
   researchEndpoint?: string;
@@ -661,6 +655,7 @@ export function CanvasV2Workspace({
   onSessionMenu?: () => void;
   liveReplica?: import('@/lib/canvas-v2/sessions/types').LiveSessionState;
   sendSessionCommand?: (command:import('@/lib/canvas-v2/sessions/types').SessionCommand)=>Promise<void>;
+  registerFilmCamera?: (controller: FilmCameraController | null) => void;
   registerSessionController?: (execute:(command:import('@/lib/canvas-v2/sessions/types').SessionCommand)=>Promise<void>)=>void;
 } = {}) {
   const [gatewayHandoff, setGatewayHandoff] = useState<CanvasV2GatewayHandoff>();
@@ -668,15 +663,12 @@ export function CanvasV2Workspace({
   const gatewayConsumedRef = useRef(false);
   const mediaUrls = useRef<string[]>([]);
   useEffect(() => () => mediaUrls.current.forEach(url => URL.revokeObjectURL(url)), []);
-  const [mediaPlaying, setMediaPlaying] = useState<Record<string, boolean>>({});
+  const mediaPlaybackStore = useMemo(() => createCanvasV2MediaPlaybackStore(), []);
   useEffect(() => {
-    const receive = (event: Event) => {
-      const { nodeId, playing } = (event as CustomEvent<{ nodeId: string; playing: boolean }>).detail;
-      setMediaPlaying(current => current[nodeId] === playing ? current : { ...current, [nodeId]: playing });
-    };
+    const receive = (event: Event) => mediaPlaybackStore.receive(event);
     window.addEventListener(CANVAS_V2_MEDIA_STATE_EVENT, receive);
     return () => window.removeEventListener(CANVAS_V2_MEDIA_STATE_EVENT, receive);
-  }, []);
+  }, [mediaPlaybackStore]);
 
   useEffect(() => {
     try {
@@ -751,6 +743,8 @@ export function CanvasV2Workspace({
   const hoverOutlineRef = useRef<HTMLDivElement>(null);
   const [hoveredElement, setHoveredElement] = useState<CanvasV2InspectableElement>();
   const [selectedElements, setSelectedElements] = useState<CanvasV2InspectableElement[]>([]);
+  const layerRecoverySelection = useMemo(() => createCanvasV2LayerRecoverySelection(), []);
+  const readSelectionScene = engine.readNativeScene;
   const selectedElement = selectedElements[selectedElements.length - 1];
   const [placementTool, setPlacementTool] = useState<{ primitive: CanvasV2ManualPrimitive; shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant }>();
   const [placement, setPlacement] = useState<{ start: CanvasV2ManualPoint; end: CanvasV2ManualPoint; pointerId: number }>();
@@ -802,7 +796,6 @@ export function CanvasV2Workspace({
   // bootstrap; after the first measured frame, navigation belongs exclusively
   // to the person and AI commits never pan or zoom it.
   const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => initialSnapshot?.viewport ?? centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
-  const restoredFlowViewRef = useRef(Boolean(initialSnapshot?.revision.document.html.includes('data-canvas-v2-canonical-flow')));
   const viewportRef = useRef(viewport);
   const cameraPreviewActiveRef = useRef(false);
   const nativePinchScaleRef = useRef<number | undefined>(undefined);
@@ -811,7 +804,7 @@ export function CanvasV2Workspace({
   const [workspaceSize, setWorkspaceSize] = useState({ width: 1_440, height: 900 });
   const workspaceSizeRef = useRef(workspaceSize);
   const workspaceOriginRef = useRef({ left: 0, top: 0 });
-  const initialCameraCenteredRef = useRef(false);
+  const initialCameraCenteredRef = useRef(Boolean(initialSnapshot));
   const [spacePan, setSpacePan] = useState(false);
   const [canvasGeometry, setCanvasGeometry] = useState<CanvasV2CanvasGeometry>(CANVAS_V2_MIN_CANVAS);
   const workspaceRef = useRef<HTMLElement>(null);
@@ -835,6 +828,8 @@ export function CanvasV2Workspace({
   const objectMenuRef = useRef<HTMLDivElement>(null);
   const localImageInputRef = useRef<HTMLInputElement>(null);
   const imageReplaceTargetRef = useRef<string | undefined>(undefined);
+  const projectImageUploadRef = useRef(false);
+  const projectModelUploadRef = useRef(false);
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const dragSilhouetteRef = useRef<HTMLDivElement>(null);
   const primitiveDragRef = useRef<CanvasV2PrimitiveDrag | undefined>(undefined);
@@ -1010,8 +1005,11 @@ export function CanvasV2Workspace({
       else root.style.removeProperty("overscroll-behavior-x");
     });
   }, []);
-  const selectElement = useCallback((element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => {
+  const selectElement = useCallback((element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent, fromLayers = false) => {
     selectionRequestEpochRef.current += 1;
+    if (!fromLayers || !intent?.additive) layerRecoverySelection.clear();
+    if (fromLayers && element && !eligibleCanvasSelection([element]).length
+      && !layerRecoverySelection.request(element, readSelectionScene())) element = undefined;
     // The source document keeps a permanent compatibility root for revision
     // and observation bookkeeping, but that identity is not a canvas object.
     // A stale layer click or hot-refresh must never turn it into a selectable,
@@ -1030,7 +1028,7 @@ export function CanvasV2Workspace({
     setToolbarMenu(undefined);
     setAltTextDraft(element?.altText ?? "");
     setMutationError(undefined);
-  }, []);
+  }, [layerRecoverySelection, readSelectionScene]);
   const selectCanvasElement = useCallback((element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => {
     setLayersOpen(false);
     selectElement(element, intent);
@@ -1038,7 +1036,7 @@ export function CanvasV2Workspace({
   const refreshSelection = useCallback((elements: CanvasV2InspectableElement[]) => {
     // The native compiler already exposes only real selectable objects.
     // Do not promote refreshed leaf selections back to semantic containers.
-    elements = eligibleCanvasSelection(elements);
+    elements = layerRecoverySelection.refresh(elements, readSelectionScene());
     setSelectedElements((current) => sameInspectableElements(current, elements) ? current : elements);
     const primary = elements[elements.length - 1];
     if (primary?.kind === "image") setAltTextDraft(primary.altText ?? "");
@@ -1046,7 +1044,12 @@ export function CanvasV2Workspace({
       setSelectionTarget(primary?.nodeId);
       setHistorySelectionRestore(undefined);
     }
-  }, [engine.committed.id, historySelectionRestore]);
+  }, [engine.committed.id, historySelectionRestore, layerRecoverySelection, readSelectionScene]);
+  useEffect(() => {
+    if (!layerRecoverySelection.active()) return;
+    const retained = layerRecoverySelection.refresh(selectedElements, readSelectionScene());
+    if (!sameInspectableElements(selectedElements, retained)) setSelectedElements(retained);
+  }, [engine.committed, layerRecoverySelection, readSelectionScene, selectedElements]);
   const hoverElement = useCallback((element?: CanvasV2InspectableElement) => setHoveredElement(element), []);
 
   // Fast refresh can preserve selection state created by an older build. The
@@ -1111,7 +1114,10 @@ export function CanvasV2Workspace({
     window.addEventListener('northstar-screen-feedback', feedback);
     return () => window.removeEventListener('northstar-screen-feedback', feedback);
   }, []);
+  const readProjectAssetsRef = useRef(managedChat.readProjectAssets);
+  readProjectAssetsRef.current = () => liveReplica?.snapshot.memory?.assets ?? managedChat.readProjectAssets();
   const localChat = agentEndpoint ? managedChat : legacyChat;
+  const directPromptRef=useRef<(message:string)=>void>(()=>undefined);
   const chat = liveReplica && sendSessionCommand ? {...localChat,screenVersions:liveReplica.snapshot.memory?.screenVersions ?? localChat.screenVersions,turns:liveReplica.snapshot.turns,busy:liveReplica.busy,
     submit:async (override?:string)=>{
       const message=(override ?? localChat.draft).trim();if(!message && !localChat.attachments.length)return;
@@ -1125,6 +1131,12 @@ export function CanvasV2Workspace({
       localChat.setRunConfiguration(model,effort);void sendSessionCommand({kind:'settings',model,effort}).catch(()=>{});
     },
   } : localChat;
+  directPromptRef.current=(message)=>{setPanel('chat');setChatOpen(true);chat.setDraft(chat.draft.trim()?chat.draft+'\n\n'+message:message)};
+  useEffect(()=>{
+    const prepare=(event:Event)=>{const message=(event as CustomEvent).detail;if(typeof message==='string'&&message.length<1000)directPromptRef.current(message)};
+    window.addEventListener(SCREEN_DIRECT_PROMPT_EVENT,prepare);
+    return()=>window.removeEventListener(SCREEN_DIRECT_PROMPT_EVENT,prepare);
+  },[]);
   const sharedController = useRef(registerSessionController);sharedController.current=registerSessionController;
   useEffect(()=>{
     sharedController.current?.(async command=>{
@@ -1284,6 +1296,10 @@ export function CanvasV2Workspace({
     if (workspace) delete workspace.dataset.canvasV2CameraPreview;
   }, [applyViewportVisual]);
 
+  const filmCameraSize = useCallback(() => ({ width: workspaceRef.current?.clientWidth ?? 1920, height: workspaceRef.current?.clientHeight ?? 1080 }), []);
+  const filmCameraCurrent = useCallback(() => viewportRef.current, []);
+  useFilmCamera(registerFilmCamera, { size: filmCameraSize, current: filmCameraCurrent, commit: commitViewport, preview: previewViewport, begin: beginCameraPreview, finish: finishCameraPreview });
+
   const scheduleWheelCommit = useCallback(() => {
     wheelCommitDeadlineRef.current = performance.now() + 96;
     if (wheelCommitTimerRef.current !== undefined) return;
@@ -1395,15 +1411,6 @@ export function CanvasV2Workspace({
     setFlowPlacement({ message: `Added all ${pending.screenCount} ${pending.appName} ${pending.flowName} screens to canvas.` });
     setFlowQueueTick((tick) => tick + 1);
   }, [engine.committed, engine.manualError, rememberReferenceRail]);
-
-  useEffect(() => {
-    if (!restoredFlowViewRef.current) return;
-    const flowScreens = sceneElements.filter((item) => item.kind === 'image' && item.nodeId.includes('-screen-'));
-    if (!flowScreens.length) return;
-    restoredFlowViewRef.current = false;
-    const visible = canvasV2VisibleWorkspaceBounds(viewportRef.current, cameraSize(), contentInsets());
-    if (!flowScreens.some((item) => canvasV2BoundsIntersect(item.bounds, visible))) fitContent();
-  }, [cameraSize, contentInsets, fitContent, sceneElements]);
 
   const revealFlowNode = (nodeId: string) => {
     pendingFlowRevealRef.current = nodeId;
@@ -3021,7 +3028,14 @@ export function CanvasV2Workspace({
   };
 
   const focusSelection = () => {
-    const bounds = unionCanvasV2ObjectBounds(selectedElements.map((item) => item.bounds));
+    const selectedIds = selectedElements.map((item) => item.nodeId);
+    const liveBounds = engine.nativeScene
+      ? selectedIds.map(nodeId => canvasV2NativeSceneAbsoluteBounds(engine.nativeScene!, nodeId)).filter((item): item is NonNullable<typeof item> => Boolean(item))
+      : [];
+    // The iframe selection can lag one commit behind the native scene. Resolve
+    // the same selected leaves against current scene geometry before fitting;
+    // snapshots remain a compatibility fallback during initial observation.
+    const bounds = unionCanvasV2ObjectBounds(liveBounds.length === selectedIds.length ? liveBounds : selectedElements.map((item) => item.bounds));
     if (bounds) commitViewport(fitCanvasV2WorkspaceBounds(bounds, cameraSize(), contentInsets(), 96));
   };
 
@@ -3140,7 +3154,9 @@ export function CanvasV2Workspace({
     }
   };
 
-  const chooseLocalImage = (replaceNodeId?: string, includePlayableMedia = false) => {
+  const chooseLocalImage = (replaceNodeId?: string, includePlayableMedia = false, projectLibrary = false) => {
+    projectModelUploadRef.current = false;
+    projectImageUploadRef.current = projectLibrary;
     imageReplaceTargetRef.current = replaceNodeId;
     if (localImageInputRef.current) {
       localImageInputRef.current.value = "";
@@ -3158,6 +3174,69 @@ export function CanvasV2Workspace({
       height: Math.max(48, Math.round(image.height * scale)),
     };
   };
+
+  useEffect(() => {
+    const edit=(event:Event)=>{
+      const request=(event as CustomEvent<ScreenDirectRequest>).detail;
+      if(!request||typeof request.resolve!=='function')return;
+      try{
+        const revision=engine.readCommittedRevision(),scene=engine.readNativeScene(),current=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===request.nodeId);
+        if(!scene||scene.revisionId!==revision.id||!current||current.encoded!==request.encoded||current.screen.simulation)throw new Error('This item changed. Select it again.');
+        const owned=scene.nodes.find(node=>(node.sourceNodeId??node.id)===request.nodeId);
+        if(owned?.locked)throw new Error('Unlock this screen before editing it.');
+        if(!owned||owned.hidden)throw new Error('This item changed. Select it again.');
+        const parser=new DOMParser();
+        if(request.action==='remove'&&screenSectionNeedsAgent(current.screen,request.target,parser)){request.resolve({ok:false,needsAgent:true});return;}
+        if(!['text','appearance','remove','move-up','move-down'].includes(request.action)){request.resolve({ok:false});return;}
+        const encoded=request.action==='appearance'?editScreenAppearance(current.screen,request.target,request.styles!,parser):request.action==='text'?editScreenText(current.screen,request.target,request.text!,parser):request.action==='remove'?removeScreenSection(current.screen,request.target,parser):moveScreenSection(current.screen,request.target,request.action==='move-up'?'up':'down',parser);
+        if(encoded===current.encoded){request.resolve({ok:true});return;}
+        validateCanvasV2ScreenAssets(parseCanvasV2Screen(encoded),revision.evidence);
+        const next=reviseCanvasV2NativeScreen(scene,request.nodeId,encoded),node=next.nodes.find(item=>(item.sourceNodeId??item.id)===request.nodeId)!;
+        node.userEdited=true;node.lastAuthor='user';node.attributes['data-canvas-v2-user-edited']='content';node.attributes['data-canvas-v2-last-author']='user';
+        const summary=request.action==='appearance'?'Changed screen appearance':request.action==='text'?'Edited screen text':request.action==='remove'?`Removed ${request.target.label||'section'}`:`Moved ${request.target.label||'section'} ${request.action==='move-up'?'up':'down'}`;
+        if(!engine.applyManualDocument(serializeCanvasV2NativeScene(next),summary,revision.evidence,next,{origin:'user',selectionNodeIds:[request.nodeId]}))throw new Error('This item changed. Select it again.');
+        // A direct edit is a deliberate interaction with this phone. Retain
+        // that exact owner as the scope for subsequent chat edits and history.
+        setSelectedElements([]);
+        setSelectionTarget(request.nodeId);
+        request.resolve({ok:true});
+      }catch(error){request.resolve({ok:false,error:error instanceof Error?error.message:'This item changed. Select it again.'})}
+    };
+    window.addEventListener(SCREEN_DIRECT_EDIT_EVENT,edit);
+    return()=>window.removeEventListener(SCREEN_DIRECT_EDIT_EVENT,edit);
+  },[engine]);
+
+  useEffect(() => {
+    const replaceImage = async (event: Event) => {
+      const request = (event as CustomEvent<ScreenAssetDrop>).detail;
+      if (!request || typeof request.nodeId !== 'string' || typeof request.encoded !== 'string') return;
+      const initial = readCanvasV2Screens(engine.readCommittedRevision().document.html).find(item => item.nodeId === request.nodeId);
+      if (!initial || initial.encoded !== request.encoded || initial.screen.simulation) return;
+      try {
+        let asset = projectImageAssets(engine.readNativeScene(),[...engine.readCommittedRevision().evidence,...readProjectAssetsRef.current()]).find(item => item.id === request.assetId);
+        if (request.file instanceof File) {
+          const [image] = await prepareCanvasV2CanvasImages([request.file]);
+          asset = uploadedProjectImage(image);
+        }
+        if (!asset) return;
+        const revision = engine.readCommittedRevision(), scene = engine.readNativeScene();
+        const current = readCanvasV2Screens(revision.document.html).find(item => item.nodeId === request.nodeId);
+        if (!scene || scene.revisionId !== revision.id || current?.encoded !== request.encoded) return;
+        const evidence = revision.evidence.some(item => item.id === asset!.id) ? revision.evidence : [...revision.evidence, asset];
+        const encoded = replaceScreenAsset(current.screen, request.target, asset, evidence, new DOMParser());
+        if (encoded === current.encoded) return;
+        const next = reviseCanvasV2NativeScreen(scene, request.nodeId, encoded);
+        const node = next.nodes.find(item => (item.sourceNodeId ?? item.id) === request.nodeId)!;
+        node.userEdited = true; node.lastAuthor = 'user';
+        node.attributes['data-canvas-v2-user-edited'] = 'asset'; node.attributes['data-canvas-v2-last-author'] = 'user';
+        if (!engine.applyManualDocument(serializeCanvasV2NativeScene(next), `Replaced ${request.target.label || 'image'}`, evidence, next, {origin:'user'})) throw new Error('The canvas changed.');
+      } catch {
+        setMutationError('The image could not be replaced. Drop it onto the current image again.');
+      }
+    };
+    window.addEventListener(SCREEN_ASSET_DROP_EVENT, replaceImage);
+    return () => window.removeEventListener(SCREEN_ASSET_DROP_EVENT, replaceImage);
+  }, [engine]);
 
   const addPreparedCanvasImages = (images: readonly CanvasV2ChatImageAttachment[], origin?: { x: number; y: number }, replaceNodeId?: string) => {
     if (!images.length) return false;
@@ -3202,6 +3281,32 @@ export function CanvasV2Workspace({
     return accepted;
   };
 
+  const chooseLocalModel = () => {
+    projectImageUploadRef.current = false;
+    projectModelUploadRef.current = true;
+    imageReplaceTargetRef.current = undefined;
+    if (localImageInputRef.current) {
+      localImageInputRef.current.value = '';
+      localImageInputRef.current.accept = '.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp';
+      localImageInputRef.current.multiple = true;
+      localImageInputRef.current.click();
+    }
+  };
+
+  const insertModelAsset = (asset: import('@/lib/canvas-v2/types').CanvasV2EvidenceAsset) => {
+    if (asset.mediaType !== 'model' || !engine.interactionReady || engine.applyingManualEdit) return false;
+    const size = { width: 480, height: 360 };
+    const centered = centeredCanvasV2WorkspaceOrigin(size, viewportRef.current, cameraSize(), contentInsets());
+    const occupied = sceneElementsRef.current.filter(item => item.nodeId !== 'canvas').map(item => item.bounds);
+    const origin = findCanvasV2OpenPlacement({ preferred: centered, bounds: { x: 0, y: 0, ...CANVAS_V2_WORKSPACE }, footprint: size, obstacles: occupied, gap: 48 });
+    if (!origin) { setMutationError('There is no open space for this model. Move existing objects or choose another area.'); return false; }
+    const nodeId = `model-${crypto.randomUUID()}`;
+    return submitMutation({ kind: 'batch', label: `Added 3D model: ${asset.label}`, mutations: [
+      { kind: 'create', primitive: 'shape', nodeId, x: origin.x, y: origin.y, width: size.width, height: size.height, shapeVariant: 'rectangle' },
+      { kind: 'attribute', nodeId, name: MODEL_ATTRIBUTE, value: JSON.stringify({ version: 1, evidenceId: asset.id, label: asset.label }) },
+    ] });
+  };
+
   const addPlayableMediaBatch = async (items: Array<{ src: string; description: string; type: "video" | "gif"; mimeType?: string }>, origin?: { x: number; y: number }) => {
     try {
       items.forEach(item => parseCanvasV2PlayableMedia(JSON.stringify({ version: 1, ...item, evidenceId: "pending-upload" })));
@@ -3209,7 +3314,7 @@ export function CanvasV2Workspace({
       const scene = engine.readNativeScene();
       if (!scene) throw new Error("Wait for the canvas to be ready.");
       const totalSize = { width: sizes.reduce((sum, size) => sum + size.width, 0) + Math.max(0, sizes.length - 1) * 36, height: Math.max(...sizes.map(size => size.height)) };
-      const position = origin ?? centeredCanvasV2WorkspaceOrigin(totalSize, viewport, cameraSize(), contentInsets());
+      const position = origin ?? centeredCanvasV2WorkspaceOrigin(totalSize, viewportRef.current, cameraSize(), contentInsets());
       const entries = items.map((item) => {
         const nodeId = `media-${crypto.randomUUID()}`, evidenceId = `supplied-${nodeId}`;
         return { ...item, nodeId, evidenceId, media: parseCanvasV2PlayableMedia(JSON.stringify({ version: 1, ...item, evidenceId })) };
@@ -3261,6 +3366,27 @@ export function CanvasV2Workspace({
     if (!files.length) return;
     const target = imageReplaceTargetRef.current;
     imageReplaceTargetRef.current = undefined;
+    if (projectModelUploadRef.current) {
+      projectModelUploadRef.current = false;
+      void (async () => {
+        if (files.length > 128 || files.reduce((total, file) => total + file.size, 0) > MAX_MODEL_IMPORT_BYTES) throw new Error('Choose a model and its local resources, up to 16 MB in total.');
+        const imported = prepareCanvasModelImport(await Promise.all(files.map(async file => ({ name: file.name, relativePath: file.webkitRelativePath || undefined, bytes: new Uint8Array(await file.arrayBuffer()) }))));
+        const revision = engine.readCommittedRevision(), scene = engine.readNativeScene();
+        if (!scene) throw new Error('Wait for the canvas to be ready.');
+        const model = uploadedProjectModel({ id: `model-${crypto.randomUUID()}`, name: imported.name, mimeType: 'model/gltf-binary', dataUrl: imported.dataUrl, createdAt: new Date().toISOString() });
+        if (!engine.applyManualDocument(serializeCanvasV2NativeScene(scene), 'Added 3D model', [...revision.evidence, model], scene, { origin: 'user' })) throw new Error('The canvas changed.');
+      })().catch(error => setMutationError(error instanceof Error ? error.message : 'The model could not be added.'));
+      return;
+    }
+    if (projectImageUploadRef.current) {
+      projectImageUploadRef.current = false;
+      void (async()=>{
+        const images=await prepareCanvasV2CanvasImages(files), revision=engine.readCommittedRevision(),scene=engine.readNativeScene();
+        if(!scene||scene.revisionId!==revision.id)return;
+        if(!engine.applyManualDocument(serializeCanvasV2NativeScene(scene),'Added project images',[...revision.evidence,...images.map(uploadedProjectImage)],scene,{origin:'user'}))throw new Error('The canvas changed.');
+      })().catch(()=>setMutationError('The images could not be added. Try again.'));
+      return;
+    }
     void addLocalImages(files, undefined, target);
   };
 
@@ -3305,6 +3431,17 @@ export function CanvasV2Workspace({
     clearPrimitiveDrag();
     if (imageFiles.length) {
       void addLocalImages(imageFiles, origin);
+      return;
+    }
+    const retained = event.dataTransfer.getData(SCREEN_ASSET_DRAG_TYPE);
+    if (retained && retained.length < 6000) {
+      try {
+        const asset = projectImageAssets(engine.readNativeScene(),[...engine.readCommittedRevision().evidence,...readProjectAssetsRef.current()]).find(item=>item.id===JSON.parse(retained).assetId);
+        if (asset) void (async()=>{
+          const image = new Image(); image.src=asset.url; await image.decode();
+          addPreparedCanvasImages([{kind:'image',id:asset.id,name:asset.label,mimeType:(asset.mimeType||asset.url.slice(5,asset.url.indexOf(';'))) as CanvasV2ChatImageAttachment['mimeType'],dataUrl:asset.url,width:image.naturalWidth,height:image.naturalHeight,byteSize:0,createdAt:new Date().toISOString()}],origin);
+        })().catch(()=>setMutationError('The image could not be placed. Try again.'));
+      } catch { /* Unknown external drag payloads do not change the canvas. */ }
       return;
     }
     const serialized = event.dataTransfer.getData("application/x-northstar-canvas-object");
@@ -3875,20 +4012,20 @@ export function CanvasV2Workspace({
         <button type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title="Toggle theme" className="grid h-9 w-9 place-items-center rounded-[11px] text-[#676573] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#aaa6b4] dark:hover:bg-white/[.07] dark:hover:text-[#c1b8ff]">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
       </div>
 
-      {chatOpen && <aside ref={chatPanelRef} style={floatingPanel.rect ? { left: floatingPanel.rect.x, top: floatingPanel.rect.y, width: floatingPanel.rect.width, height: floatingPanel.rect.height, bottom: "auto", ...(floatingPanel.active ? { userSelect: "none" as const } : {}) } : undefined} data-testid="canvas-v2-floating-panel" className="absolute bottom-24 left-5 top-[90px] z-40 flex w-[390px] flex-col overflow-hidden rounded-[24px] border border-[#dedee8] bg-white shadow-[0_24px_80px_rgba(46,42,88,.14)] dark:border-white/[.1] dark:bg-[#191820] dark:shadow-[0_28px_85px_rgba(0,0,0,.38)] 2xl:bottom-5">
+      {chatOpen && <aside ref={chatPanelRef} style={floatingPanel.rect ? { left: floatingPanel.rect.x, top: floatingPanel.rect.y, width: floatingPanel.rect.width, height: floatingPanel.rect.height, bottom: "auto", ...(floatingPanel.active ? { userSelect: "none" as const } : {}) } : undefined} data-testid="canvas-v2-floating-panel" className="@container absolute bottom-24 left-5 top-[90px] z-40 flex w-[390px] flex-col overflow-hidden rounded-[24px] border border-[#dedee8] bg-white shadow-[0_24px_80px_rgba(46,42,88,.14)] dark:border-white/[.1] dark:bg-[#191820] dark:shadow-[0_28px_85px_rgba(0,0,0,.38)] 2xl:bottom-5">
         {(["n", "ne", "e", "se", "s", "sw", "w", "nw"] as const).map(handle => <button key={handle} aria-label={`Resize North Star panel ${{n:"top",ne:"top right",e:"right",se:"bottom right",s:"bottom",sw:"bottom left",w:"left",nw:"top left"}[handle]}`} title="Drag to resize; arrow keys for precision" onPointerDown={floatingPanel.pointerDown(handle)} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown(handle)} className="group absolute z-50 touch-none rounded text-[#aaa4bb] hover:text-[#7560e8] focus-visible:text-[#7560e8] focus-visible:outline-none dark:text-[#777180] dark:hover:text-[#b9aeff] dark:focus-visible:text-[#b9aeff]" style={{ cursor: `${handle === 'n' || handle === 's' ? 'ns' : handle === 'e' || handle === 'w' ? 'ew' : handle === 'ne' || handle === 'sw' ? 'nesw' : 'nwse'}-resize`, ...(handle.includes('n') ? { top: 0 } : handle.includes('s') ? { bottom: 0 } : { top: 20, bottom: 20 }), ...(handle.includes('w') ? { left: 0 } : handle.includes('e') ? { right: 0 } : { left: 20, right: 20 }), width: handle === 'n' || handle === 's' ? undefined : handle.length === 2 ? 22 : 9, height: handle === 'e' || handle === 'w' ? undefined : handle.length === 2 ? 22 : 9 }}><span aria-hidden="true" className="pointer-events-none absolute rounded-sm bg-current opacity-0 transition-opacity duration-150 group-hover:opacity-70 group-focus-visible:opacity-70" style={handle.length === 2 ? { background: 'transparent', width: 10, height: 10, top: handle.includes('n') ? 7 : undefined, bottom: handle.includes('s') ? 7 : undefined, left: handle.includes('w') ? 7 : undefined, right: handle.includes('e') ? 7 : undefined, borderTop: handle.includes('n') ? '2px solid currentColor' : undefined, borderBottom: handle.includes('s') ? '2px solid currentColor' : undefined, borderLeft: handle.includes('w') ? '2px solid currentColor' : undefined, borderRight: handle.includes('e') ? '2px solid currentColor' : undefined } : handle === 'n' || handle === 's' ? { width: 28, height: 3, left: '50%', top: 3, transform:'translateX(-50%)' } : { width: 3, height: 28, top:'50%', left:3, transform:'translateY(-50%)' }} /></button>)}
         <div className="flex h-[58px] shrink-0 items-center border-b border-[#ececf2] px-3 dark:border-white/[.08]">
           <button aria-label="Move North Star panel" title="Drag to move; arrow keys for precision" onPointerDown={floatingPanel.pointerDown('move')} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown('move')} className="mr-1 grid h-9 w-5 shrink-0 touch-none cursor-grab place-items-center rounded text-[#898895] active:cursor-grabbing focus-visible:outline focus-visible:outline-[#8b79ff]"><span aria-hidden="true">⠿</span></button>
-          <div className="grid flex-1 grid-cols-3 gap-1 rounded-[14px] bg-[#f6f6f9] p-1 dark:bg-white/[.045]">
-            {(["chat", "shapes", "apps"] as Panel[]).map((item) => {
-              const Icon = item === "chat" ? MessageSquare : item === "shapes" ? Shapes : AppWindow;
-              return <button key={item} onClick={() => setPanel(item)} className={`flex h-9 items-center justify-center gap-1.5 rounded-[10px] px-2 text-xs font-bold capitalize transition ${panel === item ? "bg-white text-[#272735] shadow-[0_2px_8px_rgba(43,40,72,.08)] dark:bg-white/[.1] dark:text-[#f3f1f7]" : "text-[#898895] hover:text-[#555461] dark:text-[#8f8b99] dark:hover:text-[#d7d4dd]"}`}><Icon className="h-3.5 w-3.5" />{item}</button>;
+          <div className="grid min-w-0 flex-1 grid-cols-4 gap-0.5 rounded-[14px] bg-[#f6f6f9] p-1 dark:bg-white/[.045]">
+            {(["chat", "shapes", "apps", "assets"] as Panel[]).map((item) => {
+              const Icon = item === "chat" ? MessageSquare : item === "shapes" ? Shapes : item === "assets" ? ImageIcon : AppWindow;
+              return <button key={item} onClick={() => setPanel(item)} className={`flex h-9 items-center justify-center gap-1 rounded-[10px] px-1 text-xs font-bold capitalize transition ${panel === item ? "bg-white text-[#272735] shadow-[0_2px_8px_rgba(43,40,72,.08)] dark:bg-white/[.1] dark:text-[#f3f1f7]" : "text-[#898895] hover:text-[#555461] dark:text-[#8f8b99] dark:hover:text-[#d7d4dd]"}`}><Icon className="hidden h-3.5 w-3.5 shrink-0 @[420px]:block" />{item}</button>;
             })}
           </div>
           <button aria-label="Collapse North Star panel" onClick={() => setChatOpen(false)} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
         </div>
 
-        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} flowPlacement={flowPlacement} feedbackPicking={feedbackPicking} onPickFeedback={() => setCanvasV2FeedbackPicking(true)} onFinishFeedback={() => setCanvasV2FeedbackPicking(false)} onTagSelection={() => selectedElements.forEach(tagCanvasElement)} /> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} flowPlacement={flowPlacement} feedbackPicking={feedbackPicking} onPickFeedback={() => setCanvasV2FeedbackPicking(true)} onFinishFeedback={() => setCanvasV2FeedbackPicking(false)} onTagSelection={() => selectedElements.forEach(tagCanvasElement)} /> : panel === "assets" ? <ProjectAssets assets={projectImageAssets(engine.readNativeScene(),[...engine.committed.evidence,...readProjectAssetsRef.current()])} onUpload={()=>chooseLocalImage(undefined,false,true)} onUploadModel={chooseLocalModel} onInsertModel={insertModelAsset}/> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
           <div className="flex items-end justify-between px-1"><div><span className="text-[10px] font-black uppercase tracking-[.18em] text-[#735fef] dark:text-[#aa9cff]">Object library</span><h2 className="mt-1 text-base font-black tracking-[-.02em]">Add to canvas</h2></div><span className="pb-0.5 text-[10px] font-semibold text-[#92919e] dark:text-[#8f8b99]">Click or drag</span></div>
           <div role="tablist" aria-label="Object library categories" className="mt-4 grid grid-cols-5 gap-1 rounded-[14px] bg-[#f2f1f6] p-1 dark:bg-white/[.05]">
             {HUMAN_AUTHORING_TABS.map((item) => <button key={item.id} type="button" role="tab" aria-selected={authoringTab === item.id} onClick={() => setAuthoringTab(item.id)} className={`h-8 rounded-[10px] text-[10px] font-black transition ${authoringTab === item.id ? "bg-white text-[#5545c8] shadow-[0_2px_9px_rgba(45,41,78,.1)] dark:bg-white/[.12] dark:text-[#c8c0ff]" : "text-[#858391] hover:text-[#4e4d58] dark:text-[#928e9d] dark:hover:text-[#d4d1da]"}`}>{item.label}</button>)}
@@ -4011,6 +4148,7 @@ export function CanvasV2Workspace({
               theme={theme}
               onObservation={engine.receiveObservation}
               onCaptureError={engine.captureFailed}
+            onCaptureProgress={engine.receiveCaptureProgress}
               bare
               framePointerEvents={tool === "pan" || tool === "place" || spacePan ? "none" : "auto"}
               inspectionEnabled={tool === "select" && !spacePan}
@@ -4193,6 +4331,7 @@ export function CanvasV2Workspace({
             theme={theme}
             onObservation={engine.receiveObservation}
             onCaptureError={engine.captureFailed}
+            onCaptureProgress={engine.receiveCaptureProgress}
             onGeometry={receiveGeometry}
             bare
             framePointerEvents="none"
@@ -4212,6 +4351,7 @@ export function CanvasV2Workspace({
             theme={theme}
             onObservation={engine.receiveObservation}
             onCaptureError={engine.captureFailed}
+            onCaptureProgress={engine.receiveCaptureProgress}
             onNativeScene={engine.receiveNativeScene}
             placementReferenceScene={engine.nativeScene}
             relocatablePlacementNodeIds={engine.inspectionRelocatableNodeIds}
@@ -4239,6 +4379,10 @@ export function CanvasV2Workspace({
         {selectedScreen && <>
           {!parseCanvasV2Screen(selectedScreen).simulation && <button aria-label="Give feedback on screen" onClick={() => { setCanvasV2FeedbackPicking(true); setPanel('chat'); setChatOpen(true); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
           <button aria-label="Screen version history" onClick={() => { setCanvasV2FeedbackPicking(false); setVersionHistoryNode(selectedElement.nodeId); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">History</button>
+          {!parseCanvasV2Screen(selectedScreen).simulation && <button aria-label="Reset screen to starting state" title="Reset app to its starting state" onClick={() => {
+            setCanvasV2FeedbackPicking(false);
+            workspaceRef.current?.querySelector<HTMLElement>(`[data-canvas-v2-interactive-screen="${CSS.escape(selectedElement.nodeId)}"]`)?.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND, { detail: 'restart' }));
+          }} className="flex h-7 items-center gap-1 rounded-lg px-2 text-xs hover:bg-white/10"><RotateCcw className="h-3.5 w-3.5" />Reset</button>}
         </>}
         {!selectedScreen && <button aria-label="Give feedback on selection" onClick={() => { selectedElements.forEach(tagCanvasElement); setCanvasV2FeedbackPicking(true); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
         {selectedElements.length > 1 && <>
@@ -4329,7 +4473,7 @@ export function CanvasV2Workspace({
 
         {!cropDraft && selectedElement.kind !== "connector" && <div className="mx-1 h-7 w-px bg-white/[.12]" />}
         {!cropDraft && selectedElement.kind !== "connector" && <button title="Duplicate" aria-label="Duplicate selected elements" onClick={duplicateSelection} disabled={selectionPermanent || engine.applyingManualEdit} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] disabled:opacity-30"><Copy className="h-4 w-4" /></button>}
-        {selectedPlayableMedia && <button aria-label={mediaPlaying[selectedElement.nodeId] ? "Pause selected media" : "Play selected media"} title={mediaPlaying[selectedElement.nodeId] ? "Pause · Space" : "Play · Space"} onClick={toggleSelectedMedia} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/10">{mediaPlaying[selectedElement.nodeId] ? <Pause className="h-3.5 w-3.5"/> : <Play className="h-3.5 w-3.5"/>}</button>}
+        {selectedPlayableMedia && <CanvasV2MediaPlaybackButton nodeId={selectedElement.nodeId} store={mediaPlaybackStore} onToggle={toggleSelectedMedia}/>}
         {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
 
         {toolbarMenu === "shape" && <div data-canvas-v2-popover data-testid="canvas-v2-shape-palette" aria-label="Shape choices" className={`absolute left-1/2 grid w-[286px] max-w-[calc(100vw-20px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-[17px] border border-white/[.09] bg-[#1d1d1f] p-2 text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
@@ -4419,7 +4563,7 @@ export function CanvasV2Workspace({
           if (!restored) throw new Error('The version was saved; its preview is still updating. Close history and reopen this version.');
         }}/></CanvasV2ScreenAssets.Provider>;
       })()}
-      {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Objects</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} style={{ paddingLeft: 8 + Math.min(4, node.depth) * 14 }} className={`flex items-center gap-2 rounded-xl py-2 pr-2 text-xs ${selectionNodeIds.includes(node.nodeId) ? "bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]" : "hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]"}`}><button onClick={(event) => { const element = sceneElements.find((item) => item.nodeId === node.nodeId); if (element) selectElement(element, { additive: event.shiftKey || event.metaKey, range: event.shiftKey, directEdit: false }); else { setSelectedElements([]); setSelectionTarget(node.nodeId); } setLayersOpen(false); }} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
+      {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Objects</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} style={{ paddingLeft: 8 + Math.min(4, node.depth) * 14 }} className={`flex items-center gap-2 rounded-xl py-2 pr-2 text-xs ${selectionNodeIds.includes(node.nodeId) ? "bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]" : "hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]"}`}><button onClick={(event) => { const element = sceneElements.find((item) => item.nodeId === node.nodeId); if (element) selectElement(element, { additive: event.shiftKey || event.metaKey, range: event.shiftKey, directEdit: false }, true); else { setSelectedElements([]); setSelectionTarget(node.nodeId); } setLayersOpen(false); }} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
 
       <div aria-label="Canvas tools" className="absolute bottom-[18px] left-1/2 z-40 flex -translate-x-1/2 items-center gap-0.5 rounded-[18px] border border-[#dedee8]/90 bg-white/92 p-1.5 shadow-[0_10px_34px_rgba(50,45,100,.15)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_14px_38px_rgba(0,0,0,.34)]">
         <button onClick={undoCanvas} disabled={!engine.canUndo} title="Undo" aria-label="Undo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Undo2 className="h-[18px] w-[18px]" /></button>
@@ -4433,7 +4577,7 @@ export function CanvasV2Workspace({
         <button title="Upload image, GIF, or video · or drop a file on canvas" aria-label="Upload image, GIF, or video" onClick={() => chooseLocalImage(undefined, true)} disabled={!engine.interactionReady || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
         <button title="More creation tools" onClick={() => { setPanel("shapes"); setChatOpen(true); }} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Plus className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
-        <button aria-label="Layers" title="Layers" onClick={() => setLayersOpen((open) => !open)} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>
+        <button aria-label="Layers" title="Layers" onClick={() => setLayersOpen(open=>!open)} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>
       </div>
 
       {zoomMenuOpen && <div role="dialog" aria-label="Zoom options" className="absolute bottom-16 right-5 z-50 grid w-56 gap-1 rounded-2xl bg-[#202024] p-3 text-sm text-white shadow-2xl"><form onSubmit={(event) => { event.preventDefault(); const percent = Number(zoomDraft.replace("%", "")); if (Number.isFinite(percent) && percent > 0) { zoomAtCenter(percent / (viewportRef.current.scale * 100)); setZoomMenuOpen(false); } }}><label className="flex items-center gap-2">Zoom<input autoFocus aria-label="Zoom percentage" value={zoomDraft} onChange={(event) => setZoomDraft(event.target.value)} className="w-24 rounded bg-white/10 px-2 py-1" />%<button type="submit" aria-label="Apply zoom">↵</button></label><p className="mt-1 text-[11px] text-white/55">4%–800%</p></form><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { fitContent(); setZoomMenuOpen(false); }}>Fit all <span className="float-right">⇧1</span></button><button className="rounded p-2 text-left hover:bg-white/10" disabled={!selectedElements.length} onClick={() => { focusSelection(); setZoomMenuOpen(false); }}>Zoom to selection <span className="float-right">⇧2</span></button><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { zoomAtCenter(1 / viewportRef.current.scale); setZoomMenuOpen(false); }}>100%</button></div>}
@@ -4446,4 +4590,4 @@ export function CanvasV2Workspace({
       </nav>
     </main></CanvasV2ScreenIdentities.Provider>
   );
-}
+});

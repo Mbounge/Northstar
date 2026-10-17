@@ -32,7 +32,7 @@ export const readCanvasV2PublicMedia: CanvasV2MediaRead = async (input, signal) 
       const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, {
         signal: boundedSignal, family: 4,
         lookup: (_hostname, _options, callback) => callback(null, address, 4),
-        headers: { Accept: "text/html,image/png,image/jpeg,image/webp,image/gif", "User-Agent": "Northstar-Media/1.0" },
+        headers: { Accept: "text/html,image/png,image/jpeg,image/webp,image/gif,font/ttf,font/otf,font/woff,font/woff2", "User-Agent": "Northstar-Media/1.0" },
       }, response => {
         if (response.statusCode && [301, 302, 303, 307, 308].includes(response.statusCode)) {
           response.resume(); resolve({ bytes: Buffer.alloc(0), mimeType: "", location: response.headers.location }); return;
@@ -40,7 +40,9 @@ export const readCanvasV2PublicMedia: CanvasV2MediaRead = async (input, signal) 
         if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) { response.resume(); reject(new Error("Source media is unavailable.")); return; }
         const mimeType = (response.headers["content-type"] ?? "").split(";")[0].toLowerCase();
         // Never download video bytes. Hosted clips remain linked native players.
-        if (!["text/html", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(mimeType)) { response.destroy(); reject(new Error("Source is not a supported image or page.")); return; }
+        const fontFile = /\.(?:ttf|otf|woff2?)$/i.test(url.pathname);
+        const fontResponse = ["font/ttf", "font/otf", "font/woff", "font/woff2", "application/font-sfnt", "application/font-woff", "application/vnd.ms-opentype"].includes(mimeType) || fontFile && mimeType === 'application/octet-stream';
+        if (!["text/html", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(mimeType) && !fontResponse) { response.destroy(); reject(new Error("Source is not a supported image, font file or page.")); return; }
         const chunks: Buffer[] = []; let length = 0;
         response.on("data", (chunk: Buffer) => { length += chunk.length; if (length > 2_500_000) response.destroy(new Error("Source media exceeds the capture budget.")); else chunks.push(chunk); });
         response.on("end", () => resolve({ bytes: Buffer.concat(chunks), mimeType }));
@@ -49,10 +51,22 @@ export const readCanvasV2PublicMedia: CanvasV2MediaRead = async (input, signal) 
       request.on("error", reject); request.end();
     });
     if (result.location) { url = new URL(result.location, url); continue; }
+    if (!["text/html", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(result.mimeType)) {
+      const font = actualFontType(result.bytes);
+      if (!font || /\.(?:ttf|otf|woff2?)$/i.test(url.pathname) && !url.pathname.toLowerCase().endsWith(`.${font.slice(5)}`) || result.mimeType.startsWith('font/') && result.mimeType !== font) throw new Error('This source does not contain the declared bounded font format.');
+      return { ...result, mimeType: font, url: url.toString() };
+    }
     return { ...result, url: url.toString() };
   }
   throw new Error("Too many source redirects.");
 };
+
+/** Match retained native font formats; filenames alone never establish bytes. */
+export function actualFontType(bytes: Buffer): string | undefined {
+  if (bytes.length < 12 || bytes.length > 2_000_000) return;
+  if (bytes.subarray(0, 4).equals(Buffer.from([0, 1, 0, 0]))) return 'font/ttf';
+  return ({ OTTO: 'font/otf', wOFF: 'font/woff', wOF2: 'font/woff2' } as Record<string, string>)[bytes.toString('latin1', 0, 4)];
+}
 
 function decode(value: string): string {
   return value.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");

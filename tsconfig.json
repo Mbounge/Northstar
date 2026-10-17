@@ -40,7 +40,17 @@
     ".next-3000/types/**/*.ts",
     ".next-3000/dev/types/**/*.ts",
     ".next/prod-perf/types/**/*.ts",
-    ".next/prod-perf/dev/types/**/*.ts"
+    ".next/prod-perf/dev/types/**/*.ts",
+    ".next-3400/types/**/*.ts",
+    ".next-3400/dev/types/**/*.ts",
+    ".next-3001/types/**/*.ts",
+    ".next-3001/dev/types/**/*.ts",
+    ".next/e2e-chrome/types/**/*.ts",
+    ".next/e2e-chrome/dev/types/**/*.ts",
+    ".next/harness-perf/types/**/*.ts",
+    ".next/harness-perf/dev/types/**/*.ts",
+    ".next-comparison-build/types/**/*.ts",
+    ".next-comparison-build/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

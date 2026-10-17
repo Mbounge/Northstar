@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useContext, useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import * as TextDialog from "@radix-ui/react-dialog";
 
 import type { CanvasV2ChatTurn, useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
 import type { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
@@ -35,6 +36,7 @@ import {
   CANVAS_V2_LONG_PASTE_LINE_THRESHOLD,
   CANVAS_V2_MAX_CHAT_ATTACHMENTS,
   type CanvasV2ChatImageAttachment,
+  type CanvasV2ChatTextAttachment,
 } from "@/lib/canvas-v2/chat-attachments";
 import { canvasV2ElapsedLabel } from "@/lib/canvas-v2/chat-lifecycle";
 import { canvasV2VisibleProgressSteps } from "@/lib/canvas-v2/design-loop";
@@ -199,6 +201,7 @@ function ChatTurn({
   busy,
   onContinue,
   onOpenImage,
+  onOpenText,
   onOpenEvidence,
 }: {
   artifacts: NorthstarArtifact[];
@@ -207,6 +210,7 @@ function ChatTurn({
   busy: boolean;
   onContinue: (turnId: string) => void;
   onOpenImage: (attachment: CanvasV2ChatImageAttachment) => void;
+  onOpenText: (attachment: CanvasV2ChatTextAttachment, trigger: HTMLButtonElement) => void;
   onOpenEvidence: (screen: Extract<CanvasV2ChatEvidenceReference, { kind: 'asset' }>) => void;
 }) {
   const identities = useContext(CanvasV2ScreenIdentities);
@@ -215,24 +219,24 @@ function ChatTurn({
   const progress = <>{!turn.loop && turn.activity?.length ? <ActivityFeed items={turn.activity} active={active} /> : null}{turn.route && turn.canvasInstruction && <DesignProgress turn={turn} />}</>;
   const hasProgress = Boolean(turn.activity?.length || (turn.route && turn.canvasInstruction));
   const showAssistant = !turn.feedbackFor || Boolean(receipt || hasProgress || turn.answer || turn.artifacts?.length || turn.routeSummary || turn.loop?.finalSummary || turn.loop?.clarification || turn.error);
-  return <article className="space-y-3" data-chat-turn={turn.id}>
-    <div className="ml-10 text-[13px] leading-[1.55] text-[#37314f] dark:text-[#e2ddfb]">
+  return <article className="min-w-0 space-y-3" data-chat-turn={turn.id}>
+    <div className="ml-10 min-w-0 text-[13px] leading-[1.55] text-[#37314f] dark:text-[#e2ddfb]">
       {(turn.screenFeedbackTargets?.length || turn.screenFeedback || turn.objectFeedbackTargets?.length) && <div className="mb-2 flex flex-wrap gap-1.5">{(turn.screenFeedbackTargets ?? (turn.screenFeedback ? [turn.screenFeedback] : [])).map(target => <span key={target.nodeId+target.selector} title={target.title} className="inline-flex max-w-full items-center gap-1 rounded-full bg-[#f0edf5] px-2 py-1 text-[10px] text-[#8d7d9e] dark:bg-white/[.05] dark:text-[#b3a3c4]"><MousePointer2 size={10}/><span className="max-w-[220px] truncate">{target.label}</span></span>)}{turn.objectFeedbackTargets?.map(target => <span key={target.nodeId} className="max-w-[220px] truncate rounded-full bg-[#f0edf5] px-2 py-1 text-[10px] text-[#8d7d9e] dark:bg-white/[.05] dark:text-[#b3a3c4]">{target.label}</span>)}</div>}
-      {turn.attachments?.length ? <div className="mb-2 flex snap-x snap-mandatory items-start gap-1.5 overflow-x-auto [scrollbar-width:thin]" data-testid="canvas-v2-sent-images" aria-label={`${turn.attachments.length} sent attachments`}>
+      {turn.attachments?.length ? <div className="mb-2 flex min-w-0 max-w-full snap-x snap-mandatory items-start gap-1.5 overflow-x-auto [scrollbar-width:thin]" data-testid="canvas-v2-sent-images" aria-label={`${turn.attachments.length} sent attachments`}>
         {turn.attachments.map((attachment) => attachment.kind === "image"
           ? <button key={attachment.id} type="button" onClick={() => onOpenImage(attachment)} className="group block h-auto w-auto shrink-0 snap-start overflow-hidden rounded-[12px] focus:outline-none focus:ring-2 focus:ring-[#7561ed]" aria-label={`Expand ${attachment.name}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={attachment.dataUrl} alt={attachment.name} width={attachment.width} height={attachment.height} style={{ display: "block", width: "auto", height: "auto", maxWidth: 220, maxHeight: 128 }} className="block h-auto max-h-32 w-auto max-w-[220px] object-contain transition duration-200 group-hover:scale-[1.01]" />
             </button>
-          : <details key={attachment.id} className="h-32 w-48 shrink-0 snap-start overflow-hidden rounded-[14px] bg-white/55 p-3 dark:bg-black/20" data-testid="canvas-v2-sent-text">
-              <summary className="flex cursor-pointer list-none items-start gap-2 marker:hidden">
+          : <button key={attachment.id} type="button" onClick={event => onOpenText(attachment, event.currentTarget)} onKeyDown={event => event.stopPropagation()} aria-label={`Read full text of ${attachment.name}`} aria-haspopup="dialog" className="h-32 w-48 shrink-0 cursor-pointer snap-start overflow-hidden rounded-[14px] bg-white/55 p-3 text-left focus:outline-none focus-visible:bg-white/70 dark:bg-black/20 dark:focus-visible:bg-white/10" data-testid="canvas-v2-sent-text">
+              <span className="flex items-start gap-2">
                 <FileText className="mt-0.5 h-4 w-4 shrink-0 text-[#6955e8] dark:text-[#b3a8ff]" />
                 <span className="min-w-0"><span className="block truncate text-[11px] font-bold">{attachment.name}</span><span className="block text-[9px] opacity-65">{attachment.charCount.toLocaleString("en-US")} characters</span></span>
-              </summary>
-              <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-[9px] leading-4 opacity-75">{attachment.text}</p>
-            </details>)}
+              </span>
+              <span className="mt-2 min-w-0 line-clamp-4 whitespace-pre-wrap text-[9px] leading-4 opacity-75 [overflow-wrap:anywhere]">{attachment.text}</span>
+            </button>)}
       </div> : null}
-      <div className="rounded-[20px] rounded-br-md bg-[#ece8ff] px-4 py-3 dark:bg-[#302b4a]">{turn.message}</div>
+      <div className="min-w-0 whitespace-pre-wrap rounded-[20px] rounded-br-md bg-[#ece8ff] px-4 py-3 [overflow-wrap:anywhere] dark:bg-[#302b4a]">{turn.message}</div>
     </div>
     {showAssistant && <div className="flex items-start gap-3">
       <div className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-lg bg-[#171721] text-[10px] font-black text-white dark:bg-[#6d59ed]">N</div>
@@ -291,6 +295,12 @@ export function CanvasV2ChatPanel({
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [preparingImages, setPreparingImages] = useState(false);
   const [expandedImage, setExpandedImage] = useState<{ name: string; dataUrl: string }>();
+  const [expandedText, setExpandedText] = useState<CanvasV2ChatTextAttachment>();
+  const textPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const openText = (attachment: CanvasV2ChatTextAttachment, trigger: HTMLButtonElement) => {
+    textPreviewTriggerRef.current = trigger;
+    setExpandedText(attachment);
+  };
   const selectedEvidence = canvasV2EvidenceSourceForSelection(engine.committed, selection);
 
 
@@ -412,7 +422,7 @@ export function CanvasV2ChatPanel({
     <div
       ref={scrollAreaRef}
       data-testid="canvas-v2-chat-scroll"
-      className="h-full overflow-y-auto px-4 pb-3 pt-4 text-[#292834] [scrollbar-width:thin] [scrollbar-color:#d8d4ec_transparent] dark:text-[#f2f1f7] dark:[scrollbar-color:#4b485a_transparent]"
+      className="h-full min-w-0 overflow-x-hidden overflow-y-auto px-4 pb-3 pt-4 text-[#292834] [scrollbar-width:thin] [scrollbar-color:#d8d4ec_transparent] dark:text-[#f2f1f7] dark:[scrollbar-color:#4b485a_transparent]"
       aria-live="polite"
       onClickCapture={event => {
         // Opening history or assets is a reading action. Keep the header in
@@ -421,12 +431,12 @@ export function CanvasV2ChatPanel({
       }}
       onScroll={updateFollowing}
     >
-      <div ref={contentRef} className="min-h-full">
+      <div ref={contentRef} className="min-h-full min-w-0 max-w-full">
       {!chat.turns.length && <div className="flex min-h-[260px] h-full flex-col items-center justify-center px-3 pb-8 text-center">
         <Sparkles aria-hidden="true" className="mb-5 h-7 w-7 text-[#aaa5b6] dark:text-[#66616f]" />
         <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
       </div>}
-      <div className="space-y-7">{displayedTurns.map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} receipt={steeringReceiptLabel(displayedTurns, turn)} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} onOpenEvidence={screen => setExpandedImage({ name: screen.label, dataUrl: screen.url })} />)}</div>
+      <div className="space-y-7">{displayedTurns.map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} receipt={steeringReceiptLabel(displayedTurns, turn)} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} onOpenText={openText} onOpenEvidence={screen => setExpandedImage({ name: screen.label, dataUrl: screen.url })} />)}</div>
       {flowPlacement && <p role='status' className="mt-4 px-1 text-xs text-[#6254bd] dark:text-[#c5baff]">{flowPlacement.error ? 'Try adding this flow again.' : canvasV2ReadableAgentText(flowPlacement.message)}</p>}
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Updating the canvas…</div>}
 
@@ -453,10 +463,10 @@ export function CanvasV2ChatPanel({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={attachment.dataUrl} alt={attachment.name} width={attachment.width} height={attachment.height} style={{ display: "block", height: 74, width: "auto", maxWidth: 156, objectFit: "contain" }} className="block h-full w-auto max-w-[156px] object-contain" />
             </button>
-          </> : <div className="flex h-full gap-2 p-2.5 pr-6" data-testid="canvas-v2-pending-text">
+          </> : <button type="button" onClick={event => openText(attachment, event.currentTarget)} onKeyDown={event => event.stopPropagation()} aria-label={`Read full text of ${attachment.name}`} aria-haspopup="dialog" className="flex h-full w-full cursor-pointer gap-2 p-2.5 pr-6 text-left focus:outline-none focus-visible:bg-white/5" data-testid="canvas-v2-pending-text">
             <FileText className="mt-0.5 h-4 w-4 shrink-0 text-[#6955e8] dark:text-[#b3a8ff]" />
-            <div className="min-w-0"><div className="truncate text-[10px] font-bold text-[#4c465e] dark:text-[#e5e0ef]">{attachment.name}</div><div className="text-[8px] text-[#898294] dark:text-[#9d96a7]">{attachment.charCount.toLocaleString("en-US")} characters</div><div className="mt-1 line-clamp-2 text-[8px] leading-3 text-[#706a7b] dark:text-[#aca6b4]">{attachment.text}</div></div>
-          </div>}
+            <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-bold text-[#4c465e] dark:text-[#e5e0ef]">{attachment.name}</span><span className="block text-[8px] text-[#898294] dark:text-[#9d96a7]">{attachment.charCount.toLocaleString("en-US")} characters</span><span className="mt-1 line-clamp-2 whitespace-pre-wrap text-[8px] leading-3 text-[#706a7b] [overflow-wrap:anywhere] dark:text-[#aca6b4]">{attachment.text}</span></span>
+          </button>}
           <button type="button" onClick={() => chat.removeAttachment(attachment.id)} aria-label={`Remove ${attachment.name}`} className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[#1d1b25]/85 text-white shadow transition hover:scale-105 disabled:opacity-50"><X className="h-3 w-3" /></button>
         </div>)}
       </div>}
@@ -527,6 +537,23 @@ export function CanvasV2ChatPanel({
         <div className="mx-3 mt-1 border-t border-white/10 px-0 py-2 text-[9px] leading-4 text-[#8e8a97]">Each run remains pinned to the model you choose.</div>
       </div>}
     </div>
+    <TextDialog.Root open={Boolean(expandedText)} onOpenChange={open => { if (!open) setExpandedText(undefined); }}>
+      {expandedText && <TextDialog.Portal>
+        <TextDialog.Overlay className="fixed inset-0 z-[9998] bg-black/70 backdrop-blur-md" />
+        <TextDialog.Content data-testid="canvas-v2-text-preview" onEscapeKeyDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()} onCopy={event => event.stopPropagation()} onCut={event => event.stopPropagation()} onPaste={event => event.stopPropagation()} className="fixed left-1/2 top-1/2 z-[9999] flex max-h-[calc(100dvh-2.5rem)] w-[min(48rem,calc(100vw-2.5rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[20px] border border-[#dedde7] bg-white text-[#37314f] shadow-2xl outline-none dark:border-white/10 dark:bg-[#211f28] dark:text-[#e2ddfb]" onCloseAutoFocus={event => {
+          event.preventDefault();
+          const trigger = textPreviewTriggerRef.current;
+          if (trigger?.isConnected) trigger.focus(); else composerRef.current?.focus();
+        }}>
+          <div className="relative shrink-0 border-b border-[#dedde7] px-6 py-4 pr-16 dark:border-white/10">
+            <TextDialog.Title className="break-words text-base font-semibold">{expandedText.name}</TextDialog.Title>
+            <TextDialog.Description className="mt-1 text-xs text-[#898294] dark:text-[#9d96a7]">{expandedText.charCount.toLocaleString("en-US")} characters</TextDialog.Description>
+            <TextDialog.Close aria-label="Close text preview" className="absolute right-4 top-4 grid h-9 w-9 cursor-pointer place-items-center rounded-full text-[#706a7b] hover:bg-black/5 focus:outline-none focus-visible:bg-black/5 dark:text-[#aca6b4] dark:hover:bg-white/10 dark:focus-visible:bg-white/10"><X className="h-5 w-5" /></TextDialog.Close>
+          </div>
+          <div tabIndex={0} aria-label="Full pasted text" className="min-h-0 cursor-text overflow-y-auto overscroll-contain whitespace-pre-wrap px-6 py-5 text-sm leading-6 [overflow-wrap:anywhere] [scrollbar-width:none] focus:outline-none [&::-webkit-scrollbar]:hidden">{expandedText.text}</div>
+        </TextDialog.Content>
+      </TextDialog.Portal>}
+    </TextDialog.Root>
     {expandedImage && typeof document !== "undefined" ? createPortal(<div role="dialog" aria-modal="true" aria-label={expandedImage.name} className="fixed inset-0 z-[9999] grid place-items-center bg-black/90 p-5 backdrop-blur-md" onMouseDown={(event) => {
       if (event.currentTarget === event.target) setExpandedImage(undefined);
     }}>

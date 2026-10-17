@@ -1,11 +1,13 @@
 import type { NorthstarSnapshot } from './types';
+import { snapshotBlobUrls } from './snapshot-blob-urls';
+import { encodeSnapshotText } from './snapshot-codec';
 
 // Snapshot serialization is large on screenshot-heavy boards. Keep the JSON
 // walk and blob URL expansion off the input/rendering thread.
-self.onmessage = async (event: MessageEvent<NorthstarSnapshot>) => {
+self.onmessage = async (event: MessageEvent<{ snapshot: NorthstarSnapshot; maxBytes: number }>) => {
   try {
-    let text = JSON.stringify(event.data);
-    const urls = [...new Set(text.match(/blob:https?:[^\s"'<>\\]+/g) ?? [])];
+    let text = JSON.stringify(event.data.snapshot);
+    const urls = snapshotBlobUrls(text);
     for (const url of urls) {
       const response = await fetch(url);
       if (!response.ok) throw new Error('An uploaded image could not be saved. Keep this canvas open and retry.');
@@ -18,10 +20,10 @@ self.onmessage = async (event: MessageEvent<NorthstarSnapshot>) => {
       });
       text = text.split(url).join(data);
     }
-    const blob = new Blob([text], { type: 'application/json' });
-    if (blob.size > 100 * 1024 * 1024) throw new Error('This session exceeds the current 100 MB storage limit. Your open canvas is still available.');
+    const blob = await encodeSnapshotText(text, event.data.maxBytes);
     self.postMessage({ blob });
   } catch (error) {
-    self.postMessage({ error: error instanceof Error ? error.message : String(error) });
+    const detail = error as { stage?: string; bytes?: number };
+    self.postMessage({ error: error instanceof Error ? error.message : String(error), stage: detail.stage, bytes: detail.bytes });
   }
 };

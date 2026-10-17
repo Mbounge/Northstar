@@ -1,4 +1,5 @@
 import { emptyAgentView, object, readAgentEvents, reduceAgentEvent, string, type AgentView, type JsonObject } from './protocol';
+import { screenProbeFailure } from '../screen-probe-outcome';
 
 export class ManagedAgentClient {
   token?: string;
@@ -18,10 +19,13 @@ export class ManagedAgentClient {
   private buffered?: JsonObject[];
   private actions = new AbortController();
   private accountApps = new Map<string, { name: string; iconUrl?: string }>();
-  constructor(private options: { endpoint: string; closeOnDispose?: boolean; keepAliveMs?: number; fetcher?: typeof fetch; onView: (view: AgentView) => void; execute: (action: JsonObject, signal: AbortSignal) => Promise<unknown> }) {}
+  constructor(private options: { endpoint: string; closeOnDispose?: boolean; keepAliveMs?: number; resultTimeoutMs?: number; fetcher?: typeof fetch; onView: (view: AgentView) => void; execute: (action: JsonObject, signal: AbortSignal) => Promise<unknown> }) {}
   async request(body: JsonObject, signal?: AbortSignal) {
     const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(new Error('The agent connection timed out.')), 30_000);
+    // Tool acknowledgements may include the bounded 45-second appearance review.
+    // Keep normal commands short and cancellation immediate; do not abort the
+    // review before the server can return its findings.
+    const timer = setTimeout(() => timeout.abort(new Error('The agent connection timed out.')), body.op === 'result' ? (this.options.resultTimeoutMs ?? 60_000) : 30_000);
     let response: Response;
     try { response = await (this.options.fetcher ?? fetch)(this.options.endpoint, { method: 'POST', keepalive: body.op === 'cancel' || body.op === 'close', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, token: this.token }), signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal }); }
     finally { clearTimeout(timer); }
@@ -149,7 +153,7 @@ export class ManagedAgentClient {
   }
   private toolActivity(action: JsonObject, status: 'started' | 'completed' | 'failed', output?: unknown) {
     const id = `tool:${action.turn_id}:${action.call_id}`;
-    const names: Record<string, string> = { canvas_compare_reference: 'Compare reference details', canvas_product_identity: 'Remember product design', canvas_screen_component: 'Refine a screen component', canvas_screen_element: 'Refine selected details', canvas_screen_motion_review: 'Review screen motion', prepare_asset: 'Prepare a reference asset', workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect account evidence', canvas_insert_flow: 'Place an app flow', canvas_insert_simulation: 'Place an app simulation', canvas_arrange_screens: 'Arrange product screens', canvas_screen: 'Create or revise a screen', canvas_screen_interact: 'Test screen interactions', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
+    const names: Record<string, string> = { canvas_plan_screen: 'Plan screen components', canvas_compare_reference: 'Compare reference details', canvas_product_identity: 'Remember product design', canvas_screen_component: 'Refine a screen component', canvas_screen_element: 'Refine selected details', canvas_screen_motion_review: 'Review screen motion', prepare_asset: 'Prepare a reference asset', workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect account evidence', canvas_insert_flow: 'Place an app flow', canvas_insert_simulation: 'Place an app simulation', canvas_arrange_screens: 'Arrange product screens', canvas_screen: 'Create or revise a screen', canvas_screen_interact: 'Test screen interactions', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
     const previous = this.view.activity.find(a => a.id === id);
     const args = object(action.arguments);
     const result = object(output);
@@ -181,8 +185,10 @@ export class ManagedAgentClient {
         this.toolActivity(action, 'started');
         try {
           const output = await this.options.execute(action, signal);
+          const probeFailure = screenProbeFailure(action, output);
           result = ['canvas_edit', 'canvas_insert_flow', 'canvas_screen', 'canvas_screen_element', 'canvas_screen_component', 'canvas_insert_simulation', 'canvas_arrange_screens'].includes(string(action.name)) && object(output).committed === false
             ? { success: false, error: JSON.stringify(output) }
+            : probeFailure ? { success: false, error: probeFailure, output }
             : { success: true, output };
         }
         catch (error) { result = { success: false, error: error instanceof Error ? error.message : 'Tool failed.' }; }

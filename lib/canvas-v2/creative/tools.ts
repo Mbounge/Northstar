@@ -20,16 +20,19 @@ const inputsSchema = {
 export const NORTHSTAR_CREATIVE_TOOLS = [
   {
     type: 'function', name: 'prepare_asset',
-    description: 'Extract an authentic logo, photo, avatar or illustration from a retained image without redrawing it. Inspect the source first, then choose its visible rectangle with normalized coordinates (0–1 relative to the full image). The exact reference pixels are cropped in the isolated execution workspace, retained with source lineage, and returned as reusable image handles. mask=none preserves a rectangular crop and existing transparency; circle clips the crop to an ellipse with transparent corners. maxEdge only downsizes; it never enlarges low-resolution pixels. Inspect the result, then bind its handle in canvas_screen or canvas_edit. Reuse prepared assets across product variations. For complex processing use workspace_run; for new imagery use generate_image. No public URL, arbitrary filesystem access or generated reconstruction of an existing mark.',
+    description: 'Extract authentic pixels from a retained image. First inspect_asset with pixelRect to see the exact source selection, its surrounding UI and an unmasked crop. Refine the selection until it contains only the intended asset. Supply that returned cropInspectionId, original sourceSize and the identical integer cropPixels rectangle. Coordinates refer to original pixels, never a resized overview or previous crop. Changing the rectangle/source requires fresh inspection. A legacy normalized crop is accepted only when it resolves to that exact inspected pixel rectangle. mask=none retains existing transparency; circle requires square bounds and cannot remove unwanted UI inside the selection. maxEdge only downsizes. The output is shown for inspection before binding; correct contamination or clipping rather than hiding it with a mask or object-fit. Reuse retained source pixels across variants; use workspace_run for complex processing, generation only for original imagery.',
     parameters: { type: 'object', properties: {
       assetId: text, label: text,
+      cropInspectionId: text,
+      sourceSize: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', minimum: 1 }, height: { type: 'integer', minimum: 1 } }, required: ['width', 'height'] },
+      cropPixels: { type: 'object', additionalProperties: false, properties: { x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 }, width: { type: 'integer', minimum: 2 }, height: { type: 'integer', minimum: 2 } }, required: ['x', 'y', 'width', 'height'] },
       role: { type: 'string', enum: ['brand-mark', 'photo', 'avatar', 'illustration', 'other'] },
       crop: { type: 'object', properties: {
         x: { type: 'number', minimum: 0, maximum: 1 }, y: { type: 'number', minimum: 0, maximum: 1 },
         width: { type: 'number', exclusiveMinimum: 0, maximum: 1 }, height: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
       }, required: ['x', 'y', 'width', 'height'], additionalProperties: false },
       mask: { type: 'string', enum: ['none', 'circle'] }, maxEdge: { type: 'integer', minimum: 64, maximum: 2048 },
-    }, required: ['assetId', 'label', 'crop'], additionalProperties: false },
+    }, required: ['assetId', 'label', 'cropInspectionId', 'sourceSize'], additionalProperties: false },
   },
   {
     type: "function",

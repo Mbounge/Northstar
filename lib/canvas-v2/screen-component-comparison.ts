@@ -34,3 +34,31 @@ export function canvasV2ComponentReferencePairs(input: {
     return [{ label: control.label, selector: typeof candidates[0].selector==='string'?candidates[0].selector:undefined, referenceRect, screenRect }];
   }).sort((a,b)=>b.screenRect.width*b.screenRect.height-a.screenRect.width*a.screenRect.height).slice(0, 4);
 }
+
+/** Compare screenshot measurements with actual rendered DOM geometry. Missing,
+ * ambiguous or clipped targets remain explicit gaps; never match by proximity. */
+export function canvasV2PlannedComponentComparisons(input: {
+  plan: import('./screen-construction-plan').ScreenConstructionPlan;
+  currentViewport: { width: number; height: number };
+  currentTargets: readonly unknown[];
+}) {
+  return input.plan.components.filter(c => c.basis === 'observed').map(component => {
+    const base = { componentId: component.id, label: component.name, kind: component.kind, selector: component.selector, referenceAssetId: component.referenceAssetId };
+    if (input.plan.viewport.width !== input.currentViewport.width || input.plan.viewport.height !== input.currentViewport.height) return { ...base, status: 'viewport-mismatch' as const };
+    if (!component.selector) return { ...base, status: 'no-selector' as const };
+    const matches = input.currentTargets.map(record).filter(t => t.selector === component.selector);
+    if (matches.length !== 1) return { ...base, status: matches.length ? 'ambiguous' as const : 'missing' as const };
+    const actual = record(matches[0].rect), expected = component.logicalBounds;
+    const rect = actual as Rect;
+    if (!expected || !['x','y','width','height'].every(k => typeof actual[k] === 'number' && Number.isFinite(actual[k])) || rect.width <= 0 || rect.height <= 0) return { ...base, status: 'invalid-geometry' as const };
+    const delta = Object.fromEntries(['x','y','width','height'].map(k => [k, Math.round((rect[k as keyof Rect] - expected[k as keyof Rect]) * 1000) / 1000])) as Rect;
+    const measured = { ...base, expected, actual: rect, delta };
+    // Partial screenshots do not establish the complete component's appearance.
+    if (rect.x < 0 || rect.y < 0 || rect.x + rect.width > input.currentViewport.width || rect.y + rect.height > input.currentViewport.height) return { ...measured, status: 'clipped' as const };
+    const size = component.sourceSize, source = component.referenceRect;
+    if (!size || !source) return { ...measured, status: 'missing-reference' as const };
+    return { ...measured, status: 'paired' as const,
+      referenceRect: { x: source.x / size.width, y: source.y / size.height, width: source.width / size.width, height: source.height / size.height },
+      screenRect: { x: rect.x / input.currentViewport.width, y: rect.y / input.currentViewport.height, width: rect.width / input.currentViewport.width, height: rect.height / input.currentViewport.height } };
+  });
+}

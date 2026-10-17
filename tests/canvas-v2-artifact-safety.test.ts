@@ -10,6 +10,19 @@ import {
 } from "../lib/canvas-v2/artifact-safety";
 import type { CanvasV2EvidenceAsset, CanvasV2EvidencePacket } from "../lib/canvas-v2/types";
 
+function validModelUrl(): string {
+  const jsonBytes = new TextEncoder().encode(JSON.stringify({ asset: { version: "2.0" }, buffers: [{ byteLength: 4 }] }));
+  const json = new Uint8Array(Math.ceil(jsonBytes.length / 4) * 4); json.set(jsonBytes); json.fill(0x20, jsonBytes.length);
+  const bin = new Uint8Array([0, 1, 2, 3]);
+  const total = 12 + 8 + json.length + 8 + bin.length;
+  const bytes = new Uint8Array(total), view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x46546c67, true); view.setUint32(4, 2, true); view.setUint32(8, total, true);
+  let offset = 12;
+  view.setUint32(offset, json.length, true); view.setUint32(offset + 4, 0x4e4f534a, true); offset += 8; bytes.set(json, offset); offset += json.length;
+  view.setUint32(offset, bin.length, true); view.setUint32(offset + 4, 0x004e4942, true); offset += 8; bytes.set(bin, offset);
+  return `data:model/gltf-binary;base64,${Buffer.from(bytes).toString("base64")}`;
+}
+
 test("retained researched figures survive composition validation without accepting invented or inferred precision", () => {
   const packet = { facts: [{ id: "fact", label: "Sample", value: "7 of 9", authority: "observed" }],
     metrics: [{ id: "metric", label: "Rate", value: 13, unit: "%", authority: "calculated", definition: "Sourced rate" }],
@@ -46,6 +59,25 @@ test("accumulated markup and CSS can grow while individual image payloads stay b
 test("only supported user-owned inline image data can bypass evidence binding", () => {
   const html = '<main data-canvas-v2-node-id="canvas"><img data-canvas-v2-node-id="fake" data-canvas-v2-local-image="true" data-canvas-v2-origin="model" src="data:image/png;base64,AA==" alt="Fake"></main>';
   assert.match(validateCanvasV2EvidenceBindings({ html, css: "" }, []).join(" "), /approved evidence id/);
+});
+
+test("native model references validate as retained GLB evidence without entering image paths", () => {
+  const url = validModelUrl();
+  const reference = JSON.stringify({ version: 1, evidenceId: "model-1", label: "Preview" });
+  const document = { html: `<div data-canvas-v2-node-id="model" data-canvas-v2-model='${reference}'></div>`, css: "" };
+  const asset = { id: "model-1", url, label: "Preview", mediaType: "model" as const };
+  assert.deepEqual(validateCanvasV2ArtifactDocument(document), []);
+  assert.deepEqual(validateCanvasV2EvidenceBindings(document, [asset]), []);
+  assert.match(validateCanvasV2EvidenceBindings(document, []).join(" "), /native model evidence binding is not approved/i);
+  assert.match(validateCanvasV2EvidenceBindings(document, [{ ...asset, mediaType: "image" }]).join(" "), /native model evidence binding is not approved/i);
+  assert.match(validateCanvasV2EvidenceBindings(document, [{ ...asset, url: "data:model/gltf-binary;base64,YQ==" }]).join(" "), /native model evidence binding is not approved/i);
+});
+
+test("malformed or non-div native model markup is rejected before review", () => {
+  const malformed = `<div data-canvas-v2-node-id="model" data-canvas-v2-model='{"version":1,"evidenceId":"m"}'></div>`;
+  assert.match(validateCanvasV2ArtifactDocument({ html: malformed, css: "" }).join(" "), /invalid native model reference/i);
+  const nonDiv = `<span data-canvas-v2-node-id="model" data-canvas-v2-model='{"version":1,"evidenceId":"m","label":"Preview"}'></span>`;
+  assert.match(validateCanvasV2ArtifactDocument({ html: nonDiv, css: "" }).join(" "), /ordinary div/i);
 });
 
 

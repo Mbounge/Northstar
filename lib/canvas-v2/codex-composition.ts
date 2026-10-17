@@ -70,7 +70,7 @@ export function planCodexComposition(raw: unknown, revisionId: string, observati
   if (!['create', 'recompose'].includes(action) && !registry.some(i => i.islandId === islandId)) throw new Error('Read the canvas and target an existing island.');
   const storyRole = action === 'recompose' ? 'whole-board' : choice(args.storyRole, ['title', 'orientation', 'evidence-reading', 'comparison', 'analysis', 'relationship', 'implication', 'synthesis'] as const, 'story role');
   const evidenceIds = strings(args.evidenceIds, 'selected evidence IDs');
-  if (evidenceIds.some(id => !evidence.some(asset => asset.id === id))) throw new Error('Inspect or upload the selected media before planning its placement.');
+  if (evidenceIds.some(id => !evidence.some(asset => asset.id === id))) throw new Error('Inspect or upload the selected media before planning its placement. evidenceIds accepts retained media asset handles from canvas_read or inspect_asset, not canvas object or screen node IDs. Use [] when composing only native artwork from existing source.');
   const direction = object(args.direction);
   const intent = required(direction.designIntent, 'design intent');
   return {

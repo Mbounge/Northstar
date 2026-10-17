@@ -1,4 +1,5 @@
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
+import { MODEL_ATTRIBUTE, parseCanvasV2NativeModel } from "@/lib/canvas-v2/model-object";
 import { assertCanvasV2ArtifactDocument } from "@/lib/canvas-v2/artifact-safety";
 import { buildCanvasV2ConnectorGeometry, type CanvasV2ConnectorVariant, type CanvasV2ConnectorAppearance } from "@/lib/canvas-v2/connector-geometry";
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
@@ -28,7 +29,7 @@ export type CanvasV2AtomicManualMutation =
   | { kind: "text"; nodeId: string; text: string; nativeContent?: CanvasV2NativeTextContentUpdate[]; layout?: { width?: number; height?: number } }
   | { kind: "style"; nodeId: string; property: CanvasV2EditableStyleProperty; value: string }
   | { kind: "shape-variant"; nodeId: string; variant: CanvasV2ShapeVariant }
-  | { kind: "attribute"; nodeId: string; name: "alt" | "data-canvas-v2-media"; value: string }
+  | { kind: "attribute"; nodeId: string; name: "alt" | "data-canvas-v2-media" | "data-canvas-v2-model"; value: string }
   | { kind: "image-source"; nodeId: string; src: string; alt?: string }
   | { kind: "connector-endpoint"; nodeId: string; endpoint: "from" | "to"; x: number; y: number; attachNodeId?: string }
   | { kind: "connector-curve"; nodeId: string; x: number; y: number }
@@ -388,6 +389,11 @@ export function applyCanvasV2ManualMutation(
       const media = parseCanvasV2PlayableMedia(mutation.value);
       element.setAttribute(MEDIA_ATTRIBUTE, JSON.stringify(media));
       element.textContent = `${media.type === "gif" ? "GIF" : "Video"}: ${media.description}. Playback is available on the canvas; the model has not watched this media.`;
+    } else if (mutation.name === MODEL_ATTRIBUTE) {
+      const model = parseCanvasV2NativeModel(mutation.value);
+      element.setAttribute(MODEL_ATTRIBUTE, JSON.stringify(model));
+      element.setAttribute("aria-label", `3D model: ${model.label}`);
+      element.textContent = "";
     } else {
     if (mutation.name !== "alt" || element.tagName !== "IMG") throw new Error("Alt text is available only for an image object.");
     element.setAttribute("alt", mutation.value.trim().slice(0, 500));

@@ -6,11 +6,14 @@ import { checkCanvasDimensions, createImage, getImageSize, getPixelRatio } from 
 
 import { cloneNode } from "./cooperative-clone-node";
 import { waitForCanvasInputQuiet } from "./capture-input-scheduler";
+import type { CanvasV2CaptureCamera } from "./canvas-geometry";
+
+export type CanvasV2CooperativeCaptureOptions = Options & { overview?: boolean; captureCamera?: CanvasV2CaptureCamera };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** XMLSerializer has no streaming API. Serialize small, complete subtrees and yield between them. */
-async function serializeSvgInChunks(node: HTMLElement, width: number, height: number, isCurrent?: () => boolean): Promise<string> {
+async function serializeSvgInChunks(node: HTMLElement, width: number, height: number, isCurrent?: () => boolean, camera?: CanvasV2CaptureCamera): Promise<string> {
   const serializer = new XMLSerializer();
   const marker = `NS_CAPTURE_${Math.random().toString(36).slice(2)}_`;
   let lastYield = performance.now();
@@ -52,7 +55,20 @@ async function serializeSvgInChunks(node: HTMLElement, width: number, height: nu
   foreignObject.setAttribute("x", "0");
   foreignObject.setAttribute("y", "0");
   foreignObject.setAttribute("externalResourcesRequired", "true");
-  svg.appendChild(foreignObject);
+  if (camera) {
+    // Move the cloned paint in SVG space, outside authored CSS transforms. The
+    // foreignObject must contain remote world coordinates before the camera
+    // brings them into the bounded SVG viewport; no large raster is allocated.
+    foreignObject.setAttribute("width", String(Math.max(width, camera.bounds.x + camera.bounds.width)));
+    foreignObject.setAttribute("height", String(Math.max(height, camera.bounds.y + camera.bounds.height)));
+    foreignObject.setAttribute("overflow", "visible");
+    const layer = document.createElementNS(SVG_NS, "g");
+    layer.setAttribute("transform", `matrix(${camera.scale} 0 0 ${camera.scale} ${camera.translateX} ${camera.translateY})`);
+    layer.appendChild(foreignObject);
+    svg.appendChild(layer);
+  } else {
+    svg.appendChild(foreignObject);
+  }
   foreignObject.appendChild(document.createTextNode(marker));
   const skeleton = serializer.serializeToString(svg);
   const markerIndex = skeleton.indexOf(marker);
@@ -78,26 +94,31 @@ async function encodeSvgInChunks(xml: string, isCurrent?: () => boolean): Promis
 }
 
 /** Full-board SVG capture with cooperative DOM work and asynchronous JPEG encoding. */
-export async function toCooperativeJpeg(node: HTMLElement, options: Options, isCurrent?: () => boolean): Promise<string> {
+export async function toCooperativeJpeg(node: HTMLElement, options: CanvasV2CooperativeCaptureOptions, isCurrent?: () => boolean, onStage?: (stage: string) => void): Promise<string> {
   await waitForCanvasInputQuiet(220, isCurrent);
   const { width, height } = getImageSize(node, options);
-  const clonedNode = await cloneNode(node, options, true, { lastYield: performance.now(), yields: 0, isCurrent });
+  onStage?.("clone");
+  const clonedNode = await cloneNode(node, options, true, { lastYield: performance.now(), yields: 0, isCurrent, overview: options.overview ?? false, onProgress: count => onStage?.(`clone-${count}-nodes`) });
   if (!clonedNode) throw new Error("Canvas capture source was unavailable.");
   await waitForCanvasInputQuiet(220, isCurrent);
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  onStage?.("embed");
   await embedWebFonts(clonedNode, options);
   await embedImages(clonedNode, options);
   await waitForCanvasInputQuiet(220, isCurrent);
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
   applyStyle(clonedNode, options);
-  const xml = await serializeSvgInChunks(clonedNode, width, height, isCurrent);
+  onStage?.("serialize");
+  const xml = await serializeSvgInChunks(clonedNode, width, height, isCurrent, options.captureCamera);
   await waitForCanvasInputQuiet(220, isCurrent);
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 
   // SVG foreignObject loaded through a blob URL taints a canvas in Chromium.
   // The data URL is required so the JPEG remains exportable for the agent.
+  onStage?.("encode");
   const svgUrl = await encodeSvgInChunks(xml, isCurrent);
   await waitForCanvasInputQuiet(220, isCurrent);
+  onStage?.("decode");
   const img = await createImage(svgUrl);
   await waitForCanvasInputQuiet(220, isCurrent);
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -112,6 +133,7 @@ export async function toCooperativeJpeg(node: HTMLElement, options: Options, isC
     context.fillStyle = options.backgroundColor;
     context.fillRect(0, 0, canvas.width, canvas.height);
   }
+  onStage?.("rasterize");
   context.drawImage(img, 0, 0, canvas.width, canvas.height);
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", options.quality || 1));
   if (!blob) throw new Error("Canvas capture JPEG encoding failed.");

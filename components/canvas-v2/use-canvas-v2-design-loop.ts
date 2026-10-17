@@ -1,5 +1,7 @@
 "use client";
 
+import { captureValidationIsPending, recordCaptureProgress, type CaptureProgress } from "@/lib/canvas-v2/capture-batch";
+
 import { collectCodexCompositionFeedback, validateCodexCompositionContent } from "@/lib/canvas-v2/codex-composition";
 import { CanvasV2InputJournal, canvasV2SteeredInstruction, type CanvasV2LiveInput } from "@/lib/canvas-v2/live-input";
 import { mergeCanvasV2Activity } from "@/lib/canvas-v2/tool-activity";
@@ -227,6 +229,9 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
   const compositionFeedbackRef = useRef<{ revisionId: string; advisory: string[] } | undefined>(undefined);
   const rejectedCompositionRef = useRef<{ observation: CanvasV2RenderObservation; failures: string[] } | undefined>(undefined);
   const manualFailureRef = useRef<string | undefined>(undefined);
+  const captureProgressRef = useRef<Map<string, CaptureProgress>>(new Map());
+  // Fast Refresh can preserve the previous single-entry ref during development.
+  if (!(captureProgressRef.current instanceof Map)) captureProgressRef.current = new Map();
   const [manualNotice, setManualNotice] = useState<string>();
   const [observations, setObservations] = useState<Record<string, CanvasV2RenderObservation>>({});
   const [nativeScene, setNativeScene] = useState<CanvasV2NativeSceneDocument>();
@@ -352,13 +357,18 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       const cleanup = () => {
         observationWaiters.current.delete(waiter);
         signal?.removeEventListener("abort", abort);
-        clearTimeout(timeout);
+        clearInterval(timeout);
         if (!observationWaiters.current.size && !canvasV2LoopIsActive(loopRef.current)) {
           setRequestedObservationRevisionId((current) => current === revisionId ? undefined : current);
         }
       };
       const abort = () => waiter.reject(new Error("The canvas read was stopped."));
-      const timeout = setTimeout(() => waiter.reject(new Error("The canvas observation timed out. Try reading it again.")), 30_000);
+      const started = Date.now();
+      const timeout = setInterval(() => {
+        if (!captureValidationIsPending(started, Date.now(), revisionId, captureProgressRef.current.get(revisionId))) {
+          waiter.reject(new Error("The canvas observation timed out. Try reading it again."));
+        }
+      }, 500);
       observationWaiters.current.add(waiter);
       signal?.addEventListener("abort", abort, { once: true });
       setRequestedObservationRevisionId(revisionId);
@@ -1079,6 +1089,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
         && serializedNativeSceneRef.current?.revisionId === currentCommitted.id);
       const sceneTransaction = useNativeLedger
         ? compileCanvasV2NativeSceneTransaction({
+            origin: options.origin ?? 'user',
+            workingContext: options.workingContext,
             baseRevisionId: currentCommitted.id,
             previousScene: serializedNativeSceneRef.current!,
             nextScene: nativeSceneRevision!,
@@ -1654,6 +1666,10 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       ? compositionFeedbackRef.current : undefined,
     readRejectedComposition: () => rejectedCompositionRef.current,
     readManualFailure: () => manualFailureRef.current,
+    readCaptureProgress: (revisionId: string) => captureProgressRef.current.get(revisionId),
+    receiveCaptureProgress: (revisionId: string, stage: string) => {
+      recordCaptureProgress(captureProgressRef.current, { revisionId, stage, at: Date.now() });
+    },
     nativeScene: nativeScene?.revisionId === committed.id ? nativeScene : undefined,
     readNativeScene,
     readCommittedRevision: () => committedRef.current,

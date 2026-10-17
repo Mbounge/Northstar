@@ -1,6 +1,7 @@
 import { SCREEN_ATTRIBUTE, parseCanvasV2Screen } from './interactive-screen';
 import { canvasV2TextPaintRects, canvasV2TextPaintIntersection, canvasV2ElementPaintBounds } from "./text-paint-bounds";
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
+import { MODEL_ATTRIBUTE, parseCanvasV2NativeModel } from "@/lib/canvas-v2/model-object";
 import { CANVAS_V2_RICH_TEXT_TAGS, canvasV2RichTextStyle, canvasV2SafeTextLink } from "./rich-text";
 import type { CanvasV2ArtifactDocument, CanvasV2ArtifactRevision, CanvasV2SpatialNodeObservation, CanvasV2AuthoredRelationshipObservation, CanvasV2ElementBounds, CanvasV2EvidenceAsset, CanvasV2RenderObservation, CanvasV2SpatialIntersection, CanvasV2SurfaceZoneId, CanvasV2TerritoryRelation } from "@/lib/canvas-v2/types";
 import type { CanvasV2BoardObjectKind } from "@/lib/canvas-v2/board-object-graph";
@@ -111,10 +112,17 @@ export interface CanvasV2NativeSceneDocument {
   nodes: CanvasV2NativeSceneNode[];
 }
 
+/** SVG DOM names are case-sensitive (linearGradient, clipPath, foreignObject).
+ * HTML names are normalized, while vectors retain the browser's localName. */
+export function canvasV2NativeElementTagName(element: Pick<Element, "namespaceURI" | "localName" | "tagName">): string {
+  return element.namespaceURI === "http://www.w3.org/2000/svg" ? element.localName : element.tagName.toLowerCase();
+}
+
 const CANVAS_V2_SVG_ONLY_TAGS = new Set([
-  "circle", "clipPath", "defs", "ellipse", "g", "line", "marker", "mask",
+  "circle", "clippath", "defs", "ellipse", "g", "line", "marker", "mask",
+  "lineargradient", "radialgradient", "filter", "fegaussianblur", "foreignobject",
   "path", "pattern", "polygon", "polyline", "rect", "stop", "symbol", "text",
-  "textPath", "tspan", "use",
+  "textpath", "tspan", "use",
 ]);
 
 /**
@@ -129,7 +137,7 @@ export function canvasV2NativeSceneNodeHasRenderableNamespace(
   node: Pick<CanvasV2NativeSceneNode, "namespace" | "tagName">,
   parent?: Pick<CanvasV2NativeSceneNode, "namespace" | "tagName">,
 ): boolean {
-  if (node.namespace === "html") return !CANVAS_V2_SVG_ONLY_TAGS.has(node.tagName);
+  if (node.namespace === "html") return !CANVAS_V2_SVG_ONLY_TAGS.has(node.tagName.toLowerCase());
   return node.tagName === "svg" || parent?.namespace === "svg";
 }
 
@@ -255,7 +263,7 @@ export function materializeCanvasV2NativeSceneSurfaces(source: CanvasV2NativeSce
     if (!owner.sourceNodeId || owner.namespace !== "html" || owner.hidden || owner.kind === "root"
       || owner.kind === "group" || owner.attributes["data-canvas-v2-group"] === "true"
       || owner.attributes["data-canvas-v2-section"] === "true"
-      || owner.attributes[MEDIA_ATTRIBUTE] || owner.attributes[SCREEN_ATTRIBUTE] || owner.attributes["data-canvas-v2-crop-frame"] === "true"
+      || owner.attributes[MEDIA_ATTRIBUTE] || owner.attributes[SCREEN_ATTRIBUTE] || owner.attributes[MODEL_ATTRIBUTE] || owner.attributes["data-canvas-v2-crop-frame"] === "true"
       || owner.attributes["data-canvas-v2-surface-owner"] || canvasV2NativeSceneNodeIsWritable(owner)
       || ["table", "td", "th"].includes(owner.tagName)
       || !owner.childIds.some(id => byId.get(id)?.sourceNodeId)
@@ -477,7 +485,7 @@ export function canvasV2NativeSceneNodeSupportsTextEditing(
   node: CanvasV2NativeSceneNode,
   byId: ReadonlyMap<string, CanvasV2NativeSceneNode>,
 ): boolean {
-  if ((node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE])) return false;
+  if ((node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MODEL_ATTRIBUTE])) return false;
   if (!node.selectable || node.locked || node.namespace !== "html" || !CANVAS_V2_TEXT_CONTAINER_TAGS.has(node.tagName)) return false;
   const inlineSubtree = (candidate: CanvasV2NativeSceneNode, seen: Set<string>): boolean => {
     if (seen.has(candidate.id)) return false;
@@ -828,6 +836,7 @@ function measureCanvasV2AuthoredRelationship(
 }
 
 function kindFor(element: Element): CanvasV2BoardObjectKind {
+  if (element.hasAttribute(MODEL_ATTRIBUTE)) return "model";
   if (element.hasAttribute(MEDIA_ATTRIBUTE) || element.hasAttribute(SCREEN_ATTRIBUTE)) return "object";
   const html = element as HTMLElement;
   const nodeId = html.dataset?.canvasV2NodeId;
@@ -846,7 +855,7 @@ function kindFor(element: Element): CanvasV2BoardObjectKind {
   if (/^H[1-6]$/.test(element.tagName) || ["P", "SPAN", "SMALL", "STRONG", "EM", "LABEL", "BUTTON"].includes(element.tagName)) return "text";
   if (element.tagName === "TABLE") return "table";
   if (html.dataset?.canvasV2UserEdited?.includes("create") && element.tagName === "SECTION") return "frame";
-  if (["SVG", "PATH", "LINE", "CIRCLE", "RECT", "POLYGON", "POLYLINE", "ELLIPSE"].includes(element.tagName)) return "shape";
+  if (element.namespaceURI === SVG_NAMESPACE && ["svg", "path", "line", "circle", "rect", "polygon", "polyline", "ellipse"].includes(element.localName.toLowerCase())) return "shape";
   return "object";
 }
 
@@ -1253,7 +1262,7 @@ export function compileCanvasV2NativeScene(input: {
       ...(parentId ? { parentId } : {}),
       childIds: Array.from(element.children).flatMap((child) => runtimeIds.get(child) ?? []),
       order,
-      tagName: element.tagName.toLowerCase(),
+      tagName: canvasV2NativeElementTagName(element),
       namespace: element.namespaceURI === SVG_NAMESPACE ? "svg" : "html",
       layoutMode: html.dataset?.canvasV2SceneLayout === "flow" ? "flow" : html.dataset?.canvasV2SceneLayout === "absolute" ? "absolute" : parentElement && computed?.position !== "absolute" && computed?.position !== "fixed" ? "flow" : "absolute",
       kind: kindFor(element),
@@ -1903,13 +1912,42 @@ export function projectCanvasV2ObservationToNativeScene(
     new Set((projectedRegions ?? []).map((region) => region.nodeId)),
     projectedCompatibilityTextCollisions,
   );
-  const projectedOccupants = authoredSurface?.placementOccupants?.map((occupant) => ({
-    ...occupant,
-    ...(projectedParentNodeId(occupant.nodeId, occupant.parentNodeId)
-      ? { parentNodeId: projectedParentNodeId(occupant.nodeId, occupant.parentNodeId) }
-      : { parentNodeId: undefined }),
-    bounds: projectBounds(occupant.bounds, occupant.nodeId),
-  }));
+  // Native model viewers are deliberately represented by a lightweight handle
+  // in the compiler document. The compatibility iframe therefore cannot
+  // contribute their DOM element to placementOccupants, even though the
+  // public native scene mounts a real Three viewer at the durable bounds. Add
+  // those mounted native objects back to the projected occupancy map so a
+  // subsequent candidate cannot mistake the inert compiler handle for a
+  // deleted human object. This keeps model references placement obstacles
+  // without turning them into product screens or trusting compiler pixels.
+  const projectedOccupants = (() => {
+    const result = (authoredSurface?.placementOccupants ?? []).map((occupant) => ({
+      ...occupant,
+      ...(projectedParentNodeId(occupant.nodeId, occupant.parentNodeId)
+        ? { parentNodeId: projectedParentNodeId(occupant.nodeId, occupant.parentNodeId) }
+        : { parentNodeId: undefined }),
+      bounds: projectBounds(occupant.bounds, occupant.nodeId),
+    }));
+    const known = new Set(result.map((occupant) => occupant.nodeId));
+    for (const native of scene.nodes) {
+      if (!native.sourceNodeId || native.hidden || !native.selectable || !native.attributes[MODEL_ATTRIBUTE] || known.has(native.sourceNodeId)) continue;
+      const bounds = nativeAbsoluteBounds(native.sourceNodeId);
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) continue;
+      const userEdited = native.userEdited || native.lastAuthor === "user" || Boolean(native.attributes["data-canvas-v2-user-edited"]);
+      result.push({
+        nodeId: native.sourceNodeId,
+        parentNodeId: projectedParentNodeId(native.sourceNodeId),
+        kind: "object",
+        owner: userEdited ? "user" : native.canonicalEvidence ? "research" : "northstar",
+        userEdited,
+        locked: native.locked,
+        canonicalEvidence: native.canonicalEvidence,
+        bounds,
+      });
+      known.add(native.sourceNodeId);
+    }
+    return result;
+  })();
   const canonicalLanes = scene.nodes.flatMap((node) => {
     if (!node.sourceNodeId || node.attributes["data-canvas-v2-canonical-flow"] === undefined) return [];
     const bounds = nativeAbsoluteBounds(node.sourceNodeId);
@@ -2059,7 +2097,7 @@ export function copyCanvasV2NativeSelection(
     delete node.attributes["data-canvas-v2-detached-from"];
     delete node.attributes["data-canvas-v2-detached-index"];
   }
-  const evidenceIds = new Set(snapshot.nodes.flatMap((node) => [...(node.evidence?.id || node.attributes["data-canvas-v2-evidence-id"] ? [node.evidence?.id ?? node.attributes["data-canvas-v2-evidence-id"]] : []), ...(node.attributes[MEDIA_ATTRIBUTE] ? [parseCanvasV2PlayableMedia(node.attributes[MEDIA_ATTRIBUTE]).evidenceId] : []), ...(node.attributes[SCREEN_ATTRIBUTE] ? parseCanvasV2Screen(node.attributes[SCREEN_ATTRIBUTE]).referenceAssetIds : [])]));
+  const evidenceIds = new Set(snapshot.nodes.flatMap((node) => [...(node.evidence?.id || node.attributes["data-canvas-v2-evidence-id"] ? [node.evidence?.id ?? node.attributes["data-canvas-v2-evidence-id"]] : []), ...(node.attributes[MEDIA_ATTRIBUTE] ? [parseCanvasV2PlayableMedia(node.attributes[MEDIA_ATTRIBUTE]).evidenceId] : []), ...(node.attributes[MODEL_ATTRIBUTE] ? [parseCanvasV2NativeModel(node.attributes[MODEL_ATTRIBUTE]).evidenceId] : []), ...(node.attributes[SCREEN_ATTRIBUTE] ? parseCanvasV2Screen(node.attributes[SCREEN_ATTRIBUTE]).referenceAssetIds : [])]));
   return { scene: snapshot, evidenceAssets: structuredClone(evidenceAssets.filter((asset) => evidenceIds.has(asset.id))) };
 }
 
@@ -2201,10 +2239,11 @@ export function pruneCanvasV2EmptyGeneratedWrappers(scene: CanvasV2NativeSceneDo
     const node = byId.get(id); if (!node) return false;
     checking.add(id);
     const keep = Boolean(node.hidden || node.directText?.trim() || node.content.some(part => part.kind === "text" && part.value.trim())
-      || node.evidence || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MEDIA_ATTRIBUTE]
+      || node.namespace === "svg" // Vector definitions/fills are payload even in older generic-object scenes.
+      || node.evidence || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MEDIA_ATTRIBUTE] || node.attributes[MODEL_ATTRIBUTE]
       || node.attributes["data-canvas-v2-primitive"] || node.attributes["data-canvas-v2-writable"] === "true"
       || node.attributes["data-canvas-v2-user-edited"]?.includes("create") || node.kind === "frame" || node.locked
-      || ["image", "shape", "connector", "table", "evidence"].includes(node.kind)
+      || ["image", "model", "shape", "connector", "table", "evidence"].includes(node.kind)
       || canvasV2NativeSceneNodeOwnsVisibleSurface(node)
       || (!canvasV2NativeSceneNodeUsesHostBackground(node) && (canvasV2CssPaintIsVisible(node.inlineStyle.background ?? node.inlineStyle["background-color"])
         || canvasV2CssPaintIsVisible(node.resolvedStyle?.["background-color"]) || canvasV2CssPaintIsVisible(node.resolvedStyle?.["background-image"])))
@@ -3363,6 +3402,14 @@ function applyAtomicNativeMutation(
       node.directText = `${media.type === "gif" ? "GIF" : "Video"}: ${media.description}. Playback is available on the canvas; the model has not watched this media.`;
       node.content = [{ kind: "text", value: node.directText }];
       Object.assign(node.inlineStyle, { overflow: "hidden", background: "transparent", "background-color": "transparent", "border-radius": "0", "box-shadow": "none", color: "var(--northstar-muted)", border: "none", padding: "0", "font-size": "16px", "line-height": "1.5", "text-align": "left" });
+    } else if (mutation.name === MODEL_ATTRIBUTE) {
+      const model = parseCanvasV2NativeModel(mutation.value);
+      if (node.childIds.length) throw new Error("Use a standalone object for a retained 3D model.");
+      node.attributes[MODEL_ATTRIBUTE] = JSON.stringify(model);
+      node.attributes["aria-label"] = `3D model: ${model.label}`;
+      delete node.attributes["data-canvas-v2-shape"];
+      node.kind = "model"; node.tagName = "div"; node.directText = undefined; node.content = [];
+      Object.assign(node.inlineStyle, { overflow: "hidden", background: "transparent", "background-color": "transparent", border: "none", padding: "0" });
     } else node.attributes.alt = mutation.value;
   } else if (mutation.kind === "image-source") {
     if (node.kind !== "image" || node.attributes["data-canvas-v2-local-image"] !== "true") throw new Error("Replace is available only for a user image object.");
@@ -3633,6 +3680,25 @@ function serializeAttributes(node: CanvasV2NativeSceneNode, followSurfaceOwner =
   return entries.join(" ");
 }
 
+/** Detached objects retain world geometry in the scene, while their canonical
+ * source slot is still nested inside a semantic parent. Both serializers must
+ * express that slot relative to the parent's complete world origin. */
+function nativeSemanticSerializationNode(node: CanvasV2NativeSceneNode, byId: ReadonlyMap<string, CanvasV2NativeSceneNode>): CanvasV2NativeSceneNode {
+  const semanticParent = node.detachedFromParentId ? byId.get(node.detachedFromParentId) : undefined;
+  if (!semanticParent) return node;
+  let x = semanticParent.geometry.x, y = semanticParent.geometry.y;
+  let parentId = semanticParent.parentId;
+  const seen = new Set<string>();
+  while (parentId && !seen.has(parentId)) {
+    seen.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    x += parent.geometry.x; y += parent.geometry.y;
+    parentId = parent.parentId;
+  }
+  return { ...node, geometry: { ...node.geometry, x: round(node.geometry.x - x), y: round(node.geometry.y - y) } };
+}
+
 export function serializeCanvasV2NativeScene(scene: CanvasV2NativeSceneDocument): CanvasV2ArtifactDocument {
   const byId = canvasV2NativeSceneNodeMap(scene);
   const detachedBySemanticParent = new Map<string, CanvasV2NativeSceneNode[]>();
@@ -3645,35 +3711,11 @@ export function serializeCanvasV2NativeScene(scene: CanvasV2NativeSceneDocument)
   for (const siblings of detachedBySemanticParent.values()) {
     siblings.sort((left, right) => (left.detachedFromParentIndex ?? Number.MAX_SAFE_INTEGER) - (right.detachedFromParentIndex ?? Number.MAX_SAFE_INTEGER));
   }
-  const absoluteOrigin = (id: string) => {
-    const node = byId.get(id);
-    if (!node) return { x: 0, y: 0 };
-    let x = node.geometry.x;
-    let y = node.geometry.y;
-    let parentId = node.parentId;
-    const seen = new Set<string>();
-    while (parentId && !seen.has(parentId)) {
-      seen.add(parentId);
-      const parent = byId.get(parentId);
-      if (!parent) break;
-      x += parent.geometry.x;
-      y += parent.geometry.y;
-      parentId = parent.parentId;
-    }
-    return { x, y };
-  };
   const serialize = (id: string, semanticParentId?: string): string => {
     const node = byId.get(id);
     if (!node) return "";
     const attributesNode = semanticParentId && node.detachedFromParentId === semanticParentId
-      ? {
-          ...node,
-          geometry: {
-            ...node.geometry,
-            x: round(node.geometry.x - absoluteOrigin(semanticParentId).x),
-            y: round(node.geometry.y - absoluteOrigin(semanticParentId).y),
-          },
-        }
+      ? nativeSemanticSerializationNode(node, byId)
       : node;
     const parent = node.parentId ? byId.get(node.parentId) : undefined;
     const followSurfaceOwner = Boolean(parent && node.attributes["data-canvas-v2-surface-owner"] === parent.sourceNodeId
@@ -3749,11 +3791,21 @@ export function patchCanvasV2NativeDocument(
     || previousScene.rootIds.length !== nextScene.rootIds.length
     || previousScene.rootIds.some((id, index) => id !== nextScene.rootIds[index])) return undefined;
   const nextById = canvasV2NativeSceneNodeMap(nextScene);
+  let previousById: ReadonlyMap<string, CanvasV2NativeSceneNode> | undefined;
   let html = previousDocument.html;
   for (let index = 0; index < nextScene.nodes.length; index += 1) {
     const before = previousScene.nodes[index];
     const after = nextScene.nodes[index];
-    if (before === after) continue;
+    const attributesNode = nativeSemanticSerializationNode(after, nextById);
+    if (before === after) {
+      if (attributesNode === after) continue;
+      // An unchanged detached object stays fixed in the world even when its
+      // semantic parent or an ancestor moves. Update its serialized offset.
+      previousById ??= canvasV2NativeSceneNodeMap(previousScene);
+      const previousAttributesNode = nativeSemanticSerializationNode(before, previousById);
+      if (attributesNode.geometry.x === previousAttributesNode.geometry.x
+        && attributesNode.geometry.y === previousAttributesNode.geometry.y) continue;
+    }
     const sameChildren = before.childIds.length === after.childIds.length
       && before.childIds.every((id, childIndex) => id === after.childIds[childIndex]);
     const sameContent = before.content.length === after.content.length
@@ -3777,7 +3829,7 @@ export function patchCanvasV2NativeDocument(
     const parent = after.parentId ? nextById.get(after.parentId) : undefined;
     const followSurfaceOwner = Boolean(parent && after.attributes["data-canvas-v2-surface-owner"] === parent.sourceNodeId
       && !after.userEdited && !after.locked && !after.detachedFromParentId);
-    const attributes = serializeAttributes(after, followSurfaceOwner);
+    const attributes = serializeAttributes(attributesNode, followSurfaceOwner);
     const opening = `<${after.tagName}${attributes ? ` ${attributes}` : ""}>`;
     html = html.slice(0, openingStart) + opening + html.slice(openingEnd);
   }

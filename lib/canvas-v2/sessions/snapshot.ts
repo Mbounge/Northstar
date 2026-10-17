@@ -1,6 +1,9 @@
 import { assertCanvasV2ArtifactDocument } from '../artifact-safety';
 import { northstarRunConfig } from '../model-catalog';
 import type { NorthstarSnapshot } from './types';
+import { snapshotBlobUrls } from './snapshot-blob-urls';
+import { assertSnapshotSize, DEFAULT_SNAPSHOT_MAX_BYTES } from './snapshot-size';
+import { encodeSnapshotText, unpackSnapshotText } from './snapshot-codec';
 
 export function decodeSnapshot(value: unknown): NorthstarSnapshot {
   const s = value as NorthstarSnapshot;
@@ -14,26 +17,32 @@ export function decodeSnapshot(value: unknown): NorthstarSnapshot {
   return s;
 }
 
+export async function decodeSnapshotBlob(blob: Blob, maxBytes = DEFAULT_SNAPSHOT_MAX_BYTES): Promise<NorthstarSnapshot> {
+  assertSnapshotSize(blob.size, maxBytes);
+  return decodeSnapshot(JSON.parse(await unpackSnapshotText(await blob.text(), maxBytes)));
+}
+
 /** Blob URLs belong to one document. Persist their bytes before that document closes. */
-export async function encodeSnapshot(snapshot: NorthstarSnapshot): Promise<Blob> {
+export async function encodeSnapshot(snapshot: NorthstarSnapshot, { maxBytes = DEFAULT_SNAPSHOT_MAX_BYTES }: { maxBytes?: number } = {}): Promise<Blob> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid canvas snapshot size limit.');
   if (typeof window !== 'undefined' && typeof Worker !== 'undefined') {
     return new Promise<Blob>((resolve, reject) => {
       const worker = new Worker(new URL('./snapshot-encode.worker.ts', import.meta.url));
-      worker.onmessage = (event: MessageEvent<{blob?: Blob; error?: string}>) => {
+      worker.onmessage = (event: MessageEvent<{blob?: Blob; error?: string; stage?: string; bytes?: number}>) => {
         worker.terminate();
         if (event.data.blob) resolve(event.data.blob);
-        else reject(new Error(event.data.error || 'Could not save this canvas.'));
+        else reject(Object.assign(new Error(event.data.error || 'Could not save this canvas.'), { stage: event.data.stage, bytes: event.data.bytes }));
       };
       worker.onerror = () => {
         worker.terminate();
         reject(new Error('Could not prepare this canvas for saving. Please retry.'));
       };
-      try { worker.postMessage(snapshot); }
+      try { worker.postMessage({ snapshot, maxBytes }); }
       catch (error) { worker.terminate(); reject(error); }
     });
   }
   let text = JSON.stringify(snapshot);
-  const urls = [...new Set(text.match(/blob:https?:[^\s"'<>\\]+/g) ?? [])];
+  const urls = snapshotBlobUrls(text);
   for (const url of urls) {
     const response = await fetch(url);
     if (!response.ok) throw new Error('An uploaded image could not be saved. Keep this canvas open and retry.');
@@ -44,9 +53,7 @@ export async function encodeSnapshot(snapshot: NorthstarSnapshot): Promise<Blob>
     });
     text = text.split(url).join(data);
   }
-  const blob = new Blob([text], { type: 'application/json' });
-  if (blob.size > 100 * 1024 * 1024) throw new Error('This session exceeds the current 100 MB storage limit. Your open canvas is still available.');
-  return blob;
+  return encodeSnapshotText(text, maxBytes);
 }
 
 /** One upload at a time. Updates arriving during an upload are coalesced, never dropped. */

@@ -16,7 +16,12 @@ export function unpackScreenCaptureImages(input: unknown, create: (blob: Blob) =
   if (input === undefined) return { replacements: new Map<string, string>(), urls: [] as string[] };
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid screen capture resources.');
   const entries = Object.entries(input);
-  if (entries.length > 100 || entries.reduce((size, [, bytes]) => size + (typeof bytes === 'string' ? bytes.length : 8_000_001), 0) > 8_000_000) throw new Error('Screen capture resources exceed their size budget.');
+  // This is the deduplicated source-image transfer, not the final review image
+  // budget. Three ordinary retained 1536px PNGs can exceed 8 MB in base64.
+  // Keep a finite aggregate limit without rejecting that common product case
+  // or changing the original asset pixels to make a review succeed.
+  const maxEncodedBytes = 16_000_000;
+  if (entries.length > 100 || entries.reduce((size, [, bytes]) => size + (typeof bytes === 'string' ? bytes.length : maxEncodedBytes + 1), 0) > maxEncodedBytes) throw new Error('Screen capture resources exceed their size budget.');
   // Validate all entries before allocating any URLs.
   const resources = entries.map(([handle, bytes]) => {
     if (!/^northstar-capture-image:\d+$/.test(handle) || typeof bytes !== 'string' || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(bytes)) throw new Error('Invalid screen capture image.');

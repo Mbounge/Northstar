@@ -1,6 +1,7 @@
 import { CreativeAssetScenario } from './creative-asset-scenario';
 import { CreativeScreenScenario } from './creative-screen-scenario';
 import { ScreenScenario } from './screen-scenario';
+import { DirectAssetScenario } from './direct-asset-scenario';
 import { AppsScenario } from './apps-scenario';
 import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -15,6 +16,10 @@ export class FixtureCodex implements CodexTransport {
   private appsScenario?: AppsScenario;
   private creativeScreenScenario?: CreativeScreenScenario;
   private screenScenario?: ScreenScenario;
+  private directAssetScenario?: DirectAssetScenario;
+  private pendingScreenPlan?: JsonObject;
+  private pendingScreenTool='canvas_screen';
+  private screenDirectory = new Map<string, JsonObject>();
   calls: { method: string; params: JsonObject }[] = [];
   replies: { id: string | number; result: JsonObject }[] = [];
   turn = ''; count = 0; toolSequence = 0; private mediaParity = false; private sourcePhoto = false; private mediaStep = 0; private parity = false; private oversized = false; private overlapParity = false; private selectionEdit = false; private followupRepair = false; private chapter = 0; private canvas: JsonObject = {}; private plan: JsonObject = {}; private repair = false; private rejected = false; receive: (message: JsonObject) => void = () => {}; closed = false;
@@ -30,6 +35,12 @@ export class FixtureCodex implements CodexTransport {
     this.emit('turn/completed', { turn: { id: this.turn, status: 'completed' } });
   }
   tool(name: string, args: unknown) {
+    const value=object(args);
+    if(['canvas_screen','canvas_screen_component'].includes(name)&&!value.planId&&!value.baseNodeId){
+      this.pendingScreenPlan=value;this.pendingScreenTool=name;
+      const current=this.screenDirectory.get(string(value.nodeId));
+      this.tool('canvas_plan_screen',{intent:value.nodeId?'refine':'create',...(value.nodeId?{nodeId:value.nodeId}:{}),summary:value.summary??'Plan the deterministic fixture screen',viewport:{width:current?.width??value.width??390,height:current?.height??value.height??844},preserve:['Retain unrelated fixture controls and local state.'],components:[{id:'fixture-root',name:'Fixture screen owner',kind:'container',basis:'inferred',shape:'native layout',style:'The scenario supplies deterministic native styles.',content:'The scenario supplies deterministic controls and content.',behavior:'Exercise the scenario local interactions.',assetPolicy:'none'}]});return;
+    }
     this.receive({ id: `${this.turn}:${++this.toolSequence}:${name}`, method: 'item/tool/call', params: { threadId: 'thread-fixture', turnId: this.turn, callId: `${this.turn}:${this.toolSequence}:${name}`, tool: name, arguments: args } });
   }
   async request(method: string, raw: unknown): Promise<JsonObject> {
@@ -48,6 +59,8 @@ export class FixtureCodex implements CodexTransport {
       this.creativeAssetScenario = /screen canvas asset|screen gif asset|screen video asset|screen video comparison/i.test(message) ? new CreativeAssetScenario(this, /screen gif asset/i.test(message), /screen video asset|screen video comparison/i.test(message), /screen video comparison/i.test(message)) : undefined;
       this.creativeScreenScenario = /screen creative|precise feedback|creative flow preserve|screen reachability|feedback collection|screen temporal|screen procedural|screen journey|screen preview reference|screen structural continuity|screen component replacement/i.test(message) ? new CreativeScreenScenario(this, /precise feedback/i.test(message), /creative flow preserve/i.test(message), /screen reachability/i.test(message), /feedback collection/i.test(message), /screen temporal/i.test(message), /screen procedural/i.test(message), /screen procedural interrupt/i.test(message), /screen procedural auto/i.test(message), /screen journey/i.test(message), /screen preview reference/i.test(message), /screen structural continuity/i.test(message), /screen component replacement/i.test(message)) : undefined;
       this.screenScenario = /screen parity|screen revision/i.test(message) ? new ScreenScenario(this, /screen revision/i.test(message)) : undefined;
+      const adding=message.match(/Add a new section (above|below) the tagged section/)?.[1] as 'above'|'below'|undefined;
+      this.directAssetScenario = /screen direct asset/i.test(message)||adding ? new DirectAssetScenario(this, /background/i.test(message), /followup/i.test(message), /dependent/i.test(message), /gradient/i.test(message),adding,/ordered/i.test(message),/styled/i.test(message)) : undefined;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
       this.readableChat = /chat readable parity/i.test(message);
       if (this.readableChat) {
@@ -67,6 +80,7 @@ export class FixtureCodex implements CodexTransport {
       if (this.creativeAssetScenario) { this.creativeAssetScenario.start(); return { turn: { id: this.turn } }; }
       if (this.creativeScreenScenario) { this.creativeScreenScenario.start(); return { turn: { id: this.turn } }; }
       if (this.screenScenario) { this.screenScenario.start(); return { turn: { id: this.turn } }; }
+      if (this.directAssetScenario) { this.directAssetScenario.start(); return { turn: { id: this.turn } }; }
       if (this.appsScenario) { this.appsScenario.start(); return { turn: { id: this.turn } }; }
       if (this.mediaParity) this.tool('read_source', {url: this.sourcePhoto ? 'https://www.abrielle.ca/menus' : this.origin + '/canvas-v2-e2e/codex/media/article', focus: this.sourcePhoto ? 'breakfast restaurant' : 'reference'});
       else if (/canvas|composition parity|oversize parity|overlap parity|selection parity|repair parity/i.test(message)) this.tool('canvas_read', {});
@@ -79,8 +93,16 @@ export class FixtureCodex implements CodexTransport {
   }
   reply(id: string | number, result: unknown) {
     const r = object(result); this.replies.push({ id, result: r });
+    if(String(id).endsWith(':canvas_read')){try{const value=object(JSON.parse(string(object((r.contentItems as JsonObject[]??[])[0]).text)));for(const screen of (value.screens as JsonObject[]??[]))this.screenDirectory.set(string(screen.nodeId),screen);}catch{/* Transport-only fixtures can omit source. */}}
+    if(String(id).endsWith(':canvas_plan_screen')&&this.pendingScreenPlan){
+      const pending=this.pendingScreenPlan;this.pendingScreenPlan=undefined;
+      if(!r.success){this.finish('Component planning fixture failed.');return;}
+      let value:JsonObject={};try{value=object(JSON.parse(string(object((r.contentItems as JsonObject[]??[])[0]).text)));}catch{/* Transport-only stubs do not run the browser planner. */}
+      this.tool(this.pendingScreenTool,{...pending,planId:value.planId??'transport-fixture-plan'});return;
+    }
     if (this.readableChat) { this.finish('The comparison is ready. Your approved visual direction stays intact. [Reference](https://example.com/evidence).'); return; }
     if (this.creativeScreenScenario) { this.creativeScreenScenario.reply(r); return; }
+    if (this.directAssetScenario) { this.directAssetScenario.reply(r); return; }
     if (this.creativeAssetScenario) { this.creativeAssetScenario.reply(r); return; }
     if (this.screenScenario) { this.screenScenario.reply(r); return; }
     if (this.appsScenario) { this.appsScenario.reply(r); return; }

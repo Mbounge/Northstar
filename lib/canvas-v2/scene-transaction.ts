@@ -353,6 +353,8 @@ export function compileCanvasV2SceneTransaction(input: {
  * its object identity through applyCanvasV2NativeSceneMutation.
  */
 export function compileCanvasV2NativeSceneTransaction(input: {
+  origin?: CanvasV2SceneTransaction['origin'];
+  workingContext?: CanvasV2WorkingContext;
   baseRevisionId: string;
   previousScene: CanvasV2NativeSceneDocument;
   nextScene: CanvasV2NativeSceneDocument;
@@ -439,13 +441,14 @@ export function compileCanvasV2NativeSceneTransaction(input: {
   }
   return {
     schema: CANVAS_V2_SCENE_TRANSACTION_SCHEMA,
-    origin: "user",
+    origin: input.origin ?? "user",
     baseRevisionId: input.baseRevisionId,
     mutations,
     protectedUserNodeIds: [...beforeBySourceId.values()].filter((node) => node.userEdited).map((node) => node.sourceNodeId!),
     beforeObjectCount: beforeBySourceId.size + (mutations.some((mutation) => mutation.nodeId === "canvas-root") ? 1 : 0),
     afterObjectCount: afterBySourceId.size + (mutations.some((mutation) => mutation.nodeId === "canvas-root") ? 1 : 0),
     stylesheetChanged: input.previous.css !== input.next.css,
+    ...(input.workingContext ? {targeting:{scope:input.workingContext.scope,selectionPolicy:input.workingContext.selectionPolicy,selectedNodeIds:input.workingContext.selectedNodeIds,editableNodeIds:input.workingContext.editableNodeIds,protectedNodeIds:input.workingContext.protectedNodeIds,visibleBounds:input.workingContext.visibleBounds}} : {}),
   };
 }
 

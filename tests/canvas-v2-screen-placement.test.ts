@@ -29,7 +29,7 @@ test('a placed image becomes a reusable handle and precise logical region withou
 test('reusing native pixels in a new screen leaves the original human image byte-for-byte unchanged',()=>{
   const scene=board(),document=serializeCanvasV2NativeScene(scene);
   const evidence=canvasV2ScreenPlacementContext(scene,[]).retainedAssets;
-  const patch=canvasV2ScreenPatch(document,{...source,title:'Reused material',html:`<img src="northstar-asset:${evidence[0].id}" alt="Chosen material">`,referenceAssetIds:[evidence[0].id]},evidence,{x:3000,y:1000});
+  const patch=canvasV2ScreenPatch(document,{...source,referenceIntent:'original',title:'Reused material',html:`<img src="northstar-asset:${evidence[0].id}" alt="Chosen material">`,referenceAssetIds:[evidence[0].id]},evidence,{x:3000,y:1000});
   const next=applyCanvasV2SourcePatch({previous:document,operations:patch.operations,evidence});
   const original=findCanvasV2SourceNodeRange(document.html,'photo')!,retained=findCanvasV2SourceNodeRange(next.html,'photo')!;
   assert.equal(next.html.slice(retained.start,retained.end),document.html.slice(original.start,original.end));

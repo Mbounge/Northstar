@@ -7,7 +7,20 @@ import type { NorthstarSnapshot } from '../lib/canvas-v2/sessions/types';
 import { claimSessionWriter } from '../lib/canvas-v2/sessions/writer';
 import { LiveSessionChannel } from '../lib/canvas-v2/sessions/live-channel';
 import type { LiveSessionState } from '../lib/canvas-v2/sessions/types';
+import { CANVAS_V2_NATIVE_SCENE_SCHEMA, applyCanvasV2NativeSceneMutation, serializeCanvasV2NativeScene, type CanvasV2NativeSceneDocument } from '../lib/canvas-v2/native-scene';
 const deferred=()=>{let resolve!:()=>void;const promise=new Promise<void>(r=>resolve=r);return {promise,resolve};};
+
+function serializedNativeMediaDocument(src: string) {
+ const empty: CanvasV2NativeSceneDocument={schema:CANVAS_V2_NATIVE_SCENE_SCHEMA,revisionId:'native-media',width:1200,height:800,rootIds:[],nodes:[],css:''};
+ const scene=applyCanvasV2NativeSceneMutation(empty,{kind:'batch',label:'Native media',mutations:[
+   {kind:'create',primitive:'shape',nodeId:'clip',x:100,y:100,width:480,height:270},
+   {kind:'attribute',nodeId:'clip',name:'data-canvas-v2-media',value:JSON.stringify({version:1,type:'video',src,evidenceId:'clip',description:'A short native clip'})},
+ ]});
+ return serializeCanvasV2NativeScene(scene);
+}
+function tinyModelDataUrl() {
+ const jsonBytes=Buffer.from(JSON.stringify({asset:{version:'2.0'},buffers:[{byteLength:4}]}));const json=Buffer.alloc(Math.ceil(jsonBytes.length/4)*4,0x20);jsonBytes.copy(json);const bin=Buffer.from([0,1,2,3]);const total=12+8+json.length+8+bin.length;const header=Buffer.alloc(12);header.writeUInt32LE(0x46546c67,0);header.writeUInt32LE(2,4);header.writeUInt32LE(total,8);const jsonHeader=Buffer.alloc(8);jsonHeader.writeUInt32LE(json.length,0);jsonHeader.writeUInt32LE(0x4e4f534a,4);const binHeader=Buffer.alloc(8);binHeader.writeUInt32LE(bin.length,0);binHeader.writeUInt32LE(0x004e4942,4);return `data:model/gltf-binary;base64,${Buffer.concat([header,jsonHeader,json,binHeader,bin]).toString('base64')}`;
+}
 
 test('refresh reuses its writer while a duplicated tab cannot impersonate the active writer',async()=>{
  const values=new Map<string,string>();
@@ -79,6 +92,25 @@ test('snapshot round trip retains native canvas CSS, media, conversation and mod
  assert.deepEqual(decodeSnapshot(JSON.parse(await(await encodeSnapshot(snapshot)).text())),JSON.parse(JSON.stringify(snapshot)));
  assert.throws(()=>decodeSnapshot({...snapshot,viewport:{x:0,y:0,scale:0}}),/incomplete/);
  assert.throws(()=>decodeSnapshot({...snapshot,revision:{...snapshot.revision,document:{html:'<script>alert(1)</script>',css:''}}}));
+});
+test('snapshot media materialization extracts only the blob URL from serialized native media JSON', async()=>{
+ const snapshot:NorthstarSnapshot={schema:1,revision:createCanvasV2CommittedRevision({id:'native-media',document:serializedNativeMediaDocument('blob:http://localhost:3000/native-clip'),evidence:[],createdAt:'2026-09-15T12:00:00Z'}),turns:[],draft:'',model:'gpt-5.6-luna',effort:'high',viewport:{x:0,y:0,scale:1}};
+ const originalFileReader=globalThis.FileReader, originalFetch=globalThis.fetch, fetched:string[]=[];
+ class TestFileReader { result:string|ArrayBuffer|null=null; onload:((event:Event)=>void)|null=null; onerror:((event:Event)=>void)|null=null; readAsDataURL(blob:Blob){ void blob.arrayBuffer().then(bytes=>{this.result=`data:${blob.type};base64,${Buffer.from(bytes).toString('base64')}`;this.onload?.(new Event('load'));}).catch(()=>this.onerror?.(new Event('error'))); } }
+ globalThis.FileReader=TestFileReader as unknown as typeof FileReader;
+ globalThis.fetch=async(url:RequestInfo|URL)=>{fetched.push(String(url));return new Response(new Uint8Array([7,8,9]),{status:200,headers:{'content-type':'video/mp4'}});};
+ try {
+   const encoded=await encodeSnapshot(snapshot), raw=await encoded.text();
+   assert.deepEqual(fetched,['blob:http://localhost:3000/native-clip']);
+   assert.doesNotMatch(raw,/blob:http:\/\/localhost:3000\/native-clip/);
+   assert.match(raw,/data:video\/mp4;base64/);
+ } finally { globalThis.fetch=originalFetch; globalThis.FileReader=originalFileReader; }
+});
+test('snapshot round trip retains validated GLB bytes as evidence', async()=>{
+ const model={id:'model-1',url:tinyModelDataUrl(),label:'Model',mediaType:'model' as const,mimeType:'model/gltf-binary'};
+ const snapshot:NorthstarSnapshot={schema:1,revision:createCanvasV2CommittedRevision({id:'model-saved',document:{html:'<div data-canvas-v2-node-id="model"></div>',css:''},evidence:[model],createdAt:'2026-09-15T12:00:00Z'}),turns:[],draft:'',model:'gpt-5.6-luna',effort:'high',viewport:{x:0,y:0,scale:1}};
+ const restored=decodeSnapshot(JSON.parse(await(await encodeSnapshot(snapshot)).text()));
+ assert.equal(restored.revision.evidence[0]?.url,model.url); assert.equal(restored.revision.evidence[0]?.mediaType,'model');
 });
 test('model capabilities expose only advertised image-capable models and supported thinking modes',()=>{
  const models=northstarModelCapabilities([

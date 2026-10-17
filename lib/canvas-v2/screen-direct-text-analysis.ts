@@ -1,0 +1,364 @@
+/**
+ * Pure, source-only analysis for deciding whether a screen text node is
+ * rewritten by its embedded application.  This is deliberately not imported
+ * by the direct-edit runtime yet: it is a small reviewable seam for replacing
+ * the current global query-count heuristic with a scoped mutation check.
+ *
+ * The caller supplies the selected element's selector and its ancestor
+ * selectors.  The analysis is conservative: an unknown selector or an
+ * unbounded document/body mutation is unsafe for a direct text patch.
+ */
+
+import * as bundledAcorn from 'next/dist/compiled/acorn';
+
+type AstNode = {
+  type: string;
+  [key: string]: unknown;
+};
+
+type SelectorResolution = {
+  selectors: string[];
+  unknown?: boolean;
+  unbounded?: boolean;
+};
+
+export interface ScreenTextMutationTarget {
+  selector: string;
+  ancestorSelectors?: readonly string[];
+  /** Optional DOM-backed resolver. The caller can use the actual selected
+   * element and its parent chain to return a definitive relation for each
+   * literal selector. The pure analyzer remains conservative without it. */
+  resolveSelectorRelation?: (selector: string) => 'affected' | 'disjoint' | 'unknown';
+}
+
+export interface ScreenTextMutationSite {
+  kind: string;
+  selector?: string;
+  selectors?: string[];
+  unknown: boolean;
+  unbounded: boolean;
+  reason: string;
+}
+
+export interface ScreenTextMutationAnalysis {
+  safe: boolean;
+  affected: boolean;
+  unknown: boolean;
+  sites: ScreenTextMutationSite[];
+  parseError?: string;
+}
+
+const TEXT_PROPERTIES = new Set(['textContent', 'innerText', 'innerHTML', 'outerHTML']);
+const MUTATING_METHODS = new Set([
+  'replaceChildren',
+  'insertAdjacentHTML',
+  'replaceWith',
+  'append',
+  'prepend',
+  'appendChild',
+  'insertBefore',
+  'removeChild',
+]);
+const QUERY_METHODS = new Set(['querySelector', 'querySelectorAll', 'getElementById']);
+
+function parse(source: string): AstNode {
+  return bundledAcorn.parse(source, {
+    ecmaVersion: 'latest',
+    sourceType: 'script',
+  } as never) as AstNode;
+}
+
+function isNode(value: unknown): value is AstNode {
+  return Boolean(value) && typeof value === 'object' && typeof (value as { type?: unknown }).type === 'string';
+}
+
+function propertyName(node: AstNode): string | undefined {
+  const property = node.property;
+  if (node.computed) return typeof property === 'object' && property !== null && 'value' in property ? String((property as { value: unknown }).value) : undefined;
+  return isNode(property) && property.type === 'Identifier' ? String(property.name) : undefined;
+}
+
+function identifierName(node: unknown): string | undefined {
+  return isNode(node) && node.type === 'Identifier' ? String(node.name) : undefined;
+}
+
+function literalString(node: unknown): string | undefined {
+  return isNode(node) && node.type === 'Literal' && typeof node.value === 'string' ? String(node.value) : undefined;
+}
+
+function walk(node: unknown, visit: (current: AstNode) => void): void {
+  if (!isNode(node)) return;
+  visit(node);
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'loc' || key === 'start' || key === 'end') continue;
+    if (Array.isArray(value)) {
+      for (const child of value) walk(child, visit);
+    } else {
+      walk(value, visit);
+    }
+  }
+}
+
+function known(selector: string): SelectorResolution {
+  return {selectors: [selector]};
+}
+
+function unknownResolution(): SelectorResolution {
+  return {selectors: [], unknown: true};
+}
+
+function bodyResolution(selector: string): SelectorResolution {
+  return {selectors: [selector], unbounded: true};
+}
+
+function mergeResolution(...parts: SelectorResolution[]): SelectorResolution {
+  return {
+    selectors: [...new Set(parts.flatMap(part => part.selectors))],
+    unknown: parts.some(part => part.unknown),
+    unbounded: parts.some(part => part.unbounded),
+  };
+}
+
+function idsIn(selector: string): string[] {
+  return [...selector.matchAll(/(?:^|[\s>+~])#([A-Za-z_][\w-]*)/g)].map(match => match[1]);
+}
+
+function receiverResolution(
+  node: unknown,
+  bindings: BindingState,
+): SelectorResolution {
+  if (!isNode(node)) return unknownResolution();
+  const identifier = identifierName(node);
+  if (identifier === 'document' && !bindings.bound.has('document')) return known('document');
+  if (identifier) {
+    if (bindings.ambiguous.has(identifier) || bindings.invalid.has(identifier)) return unknownResolution();
+    return bindings.elements.get(identifier) ?? unknownResolution();
+  }
+
+  if (node.type === 'MemberExpression') {
+    const owner = identifierName(node.object);
+    const name = propertyName(node);
+    if (owner === 'document' && !bindings.bound.has('document') && name === 'body') return bodyResolution('body');
+    if (owner === 'document' && !bindings.bound.has('document') && name === 'documentElement') return bodyResolution('html');
+    return unknownResolution();
+  }
+
+  if (node.type !== 'CallExpression' || !isNode(node.callee)) return unknownResolution();
+  const callee = node.callee;
+  const alias = identifierName(callee);
+  const args = Array.isArray(node.arguments) ? node.arguments : [];
+  const argument = args[0];
+  if (alias && bindings.aliases.has(alias) && !bindings.ambiguous.has(alias) && !bindings.invalid.has(alias)) {
+    if (args.length !== 1) return unknownResolution();
+    const selector = literalString(argument);
+    if (!selector) return unknownResolution();
+    return known(selector);
+  }
+
+  const method = propertyName(callee);
+  if (!method || !QUERY_METHODS.has(method)) return unknownResolution();
+  const selector = literalString(argument);
+  if (!selector) return unknownResolution();
+  if (method === 'getElementById') return known('#' + selector);
+  if (selector === 'body' || selector === 'html' || selector === '*') return bodyResolution(selector);
+
+  // A literal selector is useful even when the receiver is a scoped root. If
+  // that root is itself unknown, retain the unknown bit so a class/tag query
+  // cannot accidentally be treated as globally disjoint from the target.
+  const base = receiverResolution(callee.object, bindings);
+  const scoped = base.selectors.flatMap(value => value === 'document' || value === 'body' || value === 'html' ? [] : [value + ' ' + selector]);
+  return mergeResolution({selectors: [selector, ...scoped]}, base.unknown ? unknownResolution() : {selectors: []});
+}
+
+type BindingState = {
+  elements: Map<string, SelectorResolution>;
+  aliases: Set<string>;
+  bound: Set<string>;
+  ambiguous: Set<string>;
+  invalid: Set<string>;
+};
+
+function bindingNames(node: unknown): string[] {
+  if (!isNode(node)) return [];
+  const name = identifierName(node);
+  if (name) return [name];
+  if (node.type === 'ObjectPattern' || node.type === 'ArrayPattern' || node.type === 'RestElement' || node.type === 'AssignmentPattern') {
+    return Object.values(node).flatMap(value => Array.isArray(value) ? value.flatMap(bindingNames) : bindingNames(value));
+  }
+  return [];
+}
+
+function queryReturn(node: unknown, parameter: string): {method: string; root: unknown} | undefined {
+  if (!isNode(node) || node.type !== 'CallExpression' || !isNode(node.callee)) return;
+  const method = propertyName(node.callee);
+  const args = Array.isArray(node.arguments) ? node.arguments : [];
+  if (!method || !QUERY_METHODS.has(method) || args.length !== 1 || identifierName(args[0]) !== parameter) return;
+  return {method, root: node.callee.object};
+}
+
+function pureSelectorAlias(node: unknown, bindings: BindingState): boolean {
+  if (!isNode(node) || !['ArrowFunctionExpression', 'FunctionExpression', 'FunctionDeclaration'].includes(node.type)) return false;
+  const params = Array.isArray(node.params) ? node.params : [];
+  const parameter = params.length === 1 ? identifierName(params[0]) : undefined;
+  if (!parameter) return false;
+  let returned: unknown;
+  if (node.type === 'ArrowFunctionExpression' && node.body && isNode(node.body) && node.body.type !== 'BlockStatement') returned = node.body;
+  else if (isNode(node.body) && node.body.type === 'BlockStatement' && Array.isArray(node.body.body) && node.body.body.length === 1 && isNode(node.body.body[0]) && node.body.body[0].type === 'ReturnStatement') returned = node.body.body[0].argument;
+  if (!returned) return false;
+  const candidate = queryReturn(returned, parameter);
+  if (candidate && candidate.method === 'querySelector') {
+    const root = receiverResolution(candidate.root, bindings);
+    return !root.unknown && !root.unbounded && root.selectors.length > 0;
+  }
+  if (!isNode(returned) || returned.type !== 'ArrayExpression' || !Array.isArray(returned.elements) || returned.elements.length !== 1 || !isNode(returned.elements[0]) || returned.elements[0].type !== 'SpreadElement') return false;
+  const spread = (returned.elements[0] as AstNode).argument;
+  const spreadQuery = queryReturn(spread, parameter);
+  if (!spreadQuery || spreadQuery.method !== 'querySelectorAll') return false;
+  const root = receiverResolution(spreadQuery.root, bindings);
+  return !root.unknown && !root.unbounded && root.selectors.length > 0;
+}
+
+function collectBindings(ast: AstNode): BindingState {
+  const elements = new Map<string, SelectorResolution>();
+  const aliases = new Set<string>();
+  const bound = new Set<string>();
+  const ambiguous = new Set<string>();
+  const invalid = new Set<string>();
+  const declarations: AstNode[] = [];
+  const candidates: Array<{name: string; node: unknown}> = [];
+  const counts = new Map<string, number>();
+  walk(ast, node => {
+    if (node.type === 'VariableDeclarator') {
+      declarations.push(node);
+      for (const name of bindingNames(node.id)) counts.set(name, (counts.get(name) || 0) + 1);
+      const name = identifierName(node.id);
+      if (name && isNode(node.init) && ['ArrowFunctionExpression', 'FunctionExpression'].includes(node.init.type)) candidates.push({name, node: node.init});
+    }
+    if (node.type === 'FunctionDeclaration') {
+      for (const name of bindingNames(node.id)) counts.set(name, (counts.get(name) || 0) + 1);
+      const name = identifierName(node.id);
+      if (name) candidates.push({name, node});
+    }
+    if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
+      for (const param of Array.isArray(node.params) ? node.params : []) for (const name of bindingNames(param)) counts.set(name, (counts.get(name) || 0) + 1);
+    }
+    if (node.type === 'AssignmentExpression' && isNode(node.left)) for (const name of bindingNames(node.left)) invalid.add(name);
+    if (node.type === 'UpdateExpression') for (const name of bindingNames(node.argument)) invalid.add(name);
+    if ((node.type === 'ForInStatement' || node.type === 'ForOfStatement') && isNode(node.left)) for (const name of bindingNames(node.left)) invalid.add(name);
+  });
+  for (const [name, count] of counts) if (count > 1) ambiguous.add(name);
+  for (const name of counts.keys()) bound.add(name);
+
+  // A short fixed point handles declarations whose query-root binding appears
+  // after the helper declaration, while remaining independent of execution.
+  for (let pass = 0; pass < declarations.length + 2; pass += 1) {
+    let changed = false;
+    for (const declaration of declarations) {
+      const name = identifierName(declaration.id);
+      if (!name) continue;
+      if (ambiguous.has(name) || invalid.has(name)) continue;
+      const init = declaration.init;
+      if (isNode(init) && pureSelectorAlias(init, {elements, aliases, bound, ambiguous, invalid})) {
+        if (!aliases.has(name)) {
+          aliases.add(name);
+          changed = true;
+        }
+        continue;
+      }
+      const resolved = receiverResolution(init, {elements, aliases, bound, ambiguous, invalid});
+      const previous = elements.get(name);
+      const encoded = JSON.stringify(resolved);
+      if (!previous || JSON.stringify(previous) !== encoded) {
+        elements.set(name, resolved);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  for (const candidate of candidates) {
+    if (!ambiguous.has(candidate.name) && !invalid.has(candidate.name) && pureSelectorAlias(candidate.node, {elements, aliases, bound, ambiguous, invalid})) aliases.add(candidate.name);
+  }
+  return {elements, aliases, bound, ambiguous, invalid};
+}
+
+function isMutationAssignment(node: AstNode): boolean {
+  return node.type === 'AssignmentExpression' && isNode(node.left) && node.left.type === 'MemberExpression' && TEXT_PROPERTIES.has(propertyName(node.left) || '');
+}
+
+function isMutationCall(node: AstNode): boolean {
+  return node.type === 'CallExpression' && isNode(node.callee) && node.callee.type === 'MemberExpression' && MUTATING_METHODS.has(propertyName(node.callee) || '');
+}
+
+function isComputedMutation(node: AstNode): boolean {
+  return node.type === 'AssignmentExpression' && isNode(node.left) && node.left.type === 'MemberExpression' && Boolean(node.left.computed) && !literalString(node.left.property);
+}
+
+function sourceReason(site: AstNode): string {
+  if (isMutationAssignment(site)) return `assignment to ${propertyName(site.left as AstNode)}`;
+  if (isComputedMutation(site)) return 'assignment through a computed property';
+  return `call to ${propertyName(site.callee as AstNode)}`;
+}
+
+function siteResolution(node: AstNode, bindings: BindingState): SelectorResolution {
+  if (isComputedMutation(node)) return unknownResolution();
+  if (isMutationAssignment(node)) return receiverResolution((node.left as AstNode).object, bindings);
+  return receiverResolution((node.callee as AstNode).object, bindings);
+}
+
+type SiteRelation = 'affected' | 'disjoint' | 'unknown';
+
+function siteRelation(site: ScreenTextMutationSite, target: ScreenTextMutationTarget): SiteRelation {
+  if (site.unbounded) return 'affected';
+  if (site.unknown || !site.selector) return 'unknown';
+  const selectors = site.selectors?.length ? site.selectors : [site.selector];
+  if (target.resolveSelectorRelation) {
+    const relations = selectors.map(target.resolveSelectorRelation);
+    if (relations.includes('affected')) return 'affected';
+    if (relations.includes('unknown')) return 'unknown';
+    return 'disjoint';
+  }
+  const wanted = [target.selector, ...(target.ancestorSelectors || [])];
+  if (selectors.some(selector => wanted.includes(selector))) return 'affected';
+  const sourceIds = selectors.flatMap(idsIn);
+  const targetIds = wanted.flatMap(idsIn);
+  if (sourceIds.some(id => targetIds.includes(id))) return 'affected';
+
+  // Distinct IDs prove sibling subtrees are disjoint. Without a stable ID on
+  // both sides, a literal class/tag selector remains unknown and unsafe.
+  if (sourceIds.length > 0 && targetIds.length > 0 && sourceIds.every(id => !targetIds.includes(id))) return 'disjoint';
+  return 'unknown';
+}
+
+/** Analyze only DOM text/markup mutations; style, visibility and event wiring
+ * are intentionally outside this predicate. Those concerns must not make a
+ * safe static heading look code-controlled. */
+export function analyzeScreenTextMutations(source: string, target: ScreenTextMutationTarget): ScreenTextMutationAnalysis {
+  let ast: AstNode;
+  try {
+    ast = parse(source);
+  } catch (error) {
+    return {safe: false, affected: true, unknown: true, sites: [], parseError: error instanceof Error ? error.message : String(error)};
+  }
+
+  const bindings = collectBindings(ast);
+  const sites: ScreenTextMutationSite[] = [];
+  walk(ast, node => {
+    if (!isMutationAssignment(node) && !isMutationCall(node) && !isComputedMutation(node)) return;
+    const resolution = siteResolution(node, bindings);
+    const selectors = resolution.selectors;
+    const selector = selectors[0];
+    sites.push({
+      kind: node.type,
+      ...(selector ? {selector} : {}),
+      ...(selectors.length ? {selectors} : {}),
+      unknown: Boolean(resolution.unknown || !selector),
+      unbounded: Boolean(resolution.unbounded),
+      reason: sourceReason(node),
+    });
+  });
+
+  const relations = sites.map(site => siteRelation(site, target));
+  const affected = relations.some(relation => relation === 'affected' || relation === 'unknown');
+  const unknown = sites.some(site => site.unknown || site.unbounded) || relations.some(relation => relation === 'unknown');
+  return {safe: !affected && !unknown, affected, unknown, sites};
+}

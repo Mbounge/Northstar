@@ -6,6 +6,7 @@ const developmentPort = process.env.NODE_ENV === "development"
   : undefined;
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   // Distinct research images can exceed the proxy's 10 MB default even after
   // request-local deduplication. Match the bounded canvas wire contract.
   experimental: { middlewareClientMaxBodySize: "64mb" },

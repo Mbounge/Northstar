@@ -2,6 +2,7 @@
 
 import { canvasV2IsStatusQuestion, canvasV2SteeredInstruction, type CanvasV2LiveInput } from "@/lib/canvas-v2/live-input";
 import { mergeCanvasV2Activity, type CanvasV2Activity } from "@/lib/canvas-v2/tool-activity";
+import { compactCanvasV2History } from "@/lib/canvas-v2/managed-agent/chat-history";
 
 import { useTimedChatTurns } from "./use-timed-chat-turns";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -134,13 +135,7 @@ export function useCanvasV2Chat(input: {
 
   const latestDiscoveryState = useMemo(() => [...turns].reverse().find((turn) => turn.loop?.discoveryState)?.loop?.discoveryState
     ?? input.engine.committed.discoveryState, [turns, input.engine.committed.discoveryState]);
-  const history = useMemo(() => turns.flatMap((turn) => {
-    const response = turn.answer || turn.loop?.clarification?.question || turn.loop?.finalSummary || turn.routeSummary;
-    const attachmentContext = turn.attachments?.length
-      ? `\n[Human supplied ${turn.attachments.length} attachment${turn.attachments.length === 1 ? "" : "s"}: ${turn.attachments.map((attachment) => `${attachment.name} (${attachment.kind})`).join(", ")}]`
-      : "";
-    return [{ role: "user", text: `${turn.message}${attachmentContext}` }, ...(response ? [{ role: "assistant", text: response }] : [])];
-  }).slice(-12), [turns]);
+  const history = useMemo(() => compactCanvasV2History(turns), [turns]);
 
   const submit = async (messageOverride?: string) => {
     const requestedMessage = typeof messageOverride === "string" ? messageOverride : draft;

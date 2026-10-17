@@ -141,8 +141,10 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     report();
     if(!broadcastTimer.current)broadcastTimer.current=setTimeout(()=>{broadcastTimer.current=undefined;channel.current?.publish();},100);
   },[report,sendCommand]);
+  const openSessionMenu = useCallback(() => report({menu:true}), [report]);
+  const registerController = useCallback((execute:(command:SessionCommand)=>Promise<void>) => { controller.current=execute; }, []);
   if(!loaded) return <div role="status" className="flex min-h-screen items-center justify-center bg-[#11111b] text-white/60">{error || 'Opening canvas…'}{error && <button className="ml-3 underline" onClick={()=>report({menu:true})}>Sessions</button>}</div>;
-  return <><CanvasV2Workspace key={generation} initialSnapshot={loaded.snapshot} onSnapshot={snapshotChanged} sessionTitle={title} onSessionMenu={()=>report({menu:true})} agentEndpoint={agentEndpoint}
-    liveReplica={replica} sendSessionCommand={sendCommand} registerSessionController={execute=>{controller.current=execute;}}/>
+  return <><CanvasV2Workspace key={generation} initialSnapshot={loaded.snapshot} onSnapshot={snapshotChanged} sessionTitle={title} onSessionMenu={openSessionMenu} agentEndpoint={agentEndpoint}
+    liveReplica={replica} sendSessionCommand={sendCommand} registerSessionController={registerController}/>
     {error && <div role="alert" className="fixed bottom-36 right-5 z-[100] max-w-sm rounded-xl bg-[#302323] p-3 text-sm text-white">{error}{!replica && <button className="ml-3 underline" onClick={()=>void queue.current?.flush()}>Retry save</button>}</div>}</>;
 }

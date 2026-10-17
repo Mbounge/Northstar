@@ -7,6 +7,104 @@ export function isCanvasV2FontBytes(value:string){
 }
 
 const VIDEO_DATA = /^data:video\/(?:mp4|webm);base64,[A-Za-z0-9+/=]+$/;
+const MODEL_DATA = /^data:model\/gltf-binary;base64,([A-Za-z0-9+/=]+)$/;
+const MAX_MODEL_BYTES = 16_000_000;
+const MODEL_CODEC_EXTENSIONS = new Set(['KHR_draco_mesh_compression','EXT_meshopt_compression','KHR_texture_basisu','EXT_texture_webp']);
+export interface CanvasV2ScreenModelMetadata {
+  mediaType: 'model';
+  mimeType: 'model/gltf-binary';
+  byteSize: number;
+  sha256: string;
+  assetVersion: string;
+  meshCount: number;
+  materialCount: number;
+  nodeCount: number;
+  animationClips: Array<{ name?: string; durationMs: number | null }>;
+}
+function decodeBase64Bytes(value: string) {
+  const match = MODEL_DATA.exec(value);
+  if (!match) return undefined;
+  try {
+    const raw = atob(match[1]);
+    if (raw.length > MAX_MODEL_BYTES) return undefined;
+    return Uint8Array.from(raw, char => char.charCodeAt(0));
+  } catch { return undefined; }
+}
+/** Validate a single self-contained GLB without decoding it as an image. */
+export function isCanvasV2ScreenModelBytes(value: string) {
+  const bytes = decodeBase64Bytes(value);
+  if (!bytes || bytes.byteLength < 20 || new TextDecoder().decode(bytes.subarray(0,4)) !== 'glTF') return false;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(4, true) !== 2 || view.getUint32(8, true) !== bytes.byteLength) return false;
+  let offset = 12, json: Record<string, unknown> | undefined, binCount = 0, binLength = 0, binOffset = 0;
+  while (offset + 8 <= bytes.byteLength) {
+    const length = view.getUint32(offset, true), type = view.getUint32(offset + 4, true); offset += 8;
+    if (!length || offset + length > bytes.byteLength) return false;
+    if (type === 0x4e4f534a) {
+      try { json = JSON.parse(new TextDecoder().decode(bytes.subarray(offset, offset + length)).replace(/\u0000+$/,'').trim()); } catch { return false; }
+    } else if (type === 0x004e4942) { binCount++; binLength = length; binOffset = offset; }
+    offset += length;
+  }
+  if (!json || offset !== bytes.byteLength || binCount !== 1 || !Array.isArray(json.buffers) || json.buffers.length !== 1 || (json.asset as Record<string, unknown> | undefined)?.version !== '2.0') return false;
+  const buffer = json.buffers[0] as Record<string, unknown>;
+  if (!buffer || typeof buffer !== 'object' || 'uri' in buffer || typeof buffer.byteLength !== 'number' || !Number.isInteger(buffer.byteLength) || buffer.byteLength < 0 || buffer.byteLength > binLength || binLength - buffer.byteLength > 3 || binLength % 4 !== 0 || [...bytes.subarray(binOffset + buffer.byteLength, binOffset + binLength)].some(byte => byte !== 0)) return false;
+  if (Array.isArray(json.extensionsUsed) && json.extensionsUsed.some(ext => typeof ext === 'string' && MODEL_CODEC_EXTENSIONS.has(ext))) return false;
+  if (Array.isArray(json.extensionsRequired) && json.extensionsRequired.some(ext => typeof ext === 'string' && MODEL_CODEC_EXTENSIONS.has(ext))) return false;
+  const views = Array.isArray(json.bufferViews) ? json.bufferViews : [];
+  for (const viewRecord of views) {
+    if (!viewRecord || typeof viewRecord !== 'object') return false;
+    const view = viewRecord as Record<string, unknown>, startValue = view.byteOffset, lengthValue = view.byteLength;
+    const start = startValue === undefined ? 0 : startValue;
+    if (typeof start !== 'number' || !Number.isInteger(start) || start < 0 || typeof lengthValue !== 'number' || !Number.isInteger(lengthValue) || lengthValue < 0 || start + lengthValue > buffer.byteLength) return false;
+  }
+  if (Array.isArray(json.images)) for (const image of json.images) {
+    if (!image || typeof image !== 'object') return false;
+    const record = image as Record<string, unknown>;
+    if ('uri' in record || !('bufferView' in record) || typeof record.bufferView !== 'number' || !Number.isInteger(record.bufferView) || record.bufferView < 0 || record.bufferView >= views.length) return false;
+    if (typeof record.mimeType === 'string' && !/^image\/(png|jpeg|webp)$/.test(record.mimeType)) return false;
+  }
+  return true;
+}
+export async function readCanvasV2ScreenModelBytes(url: string, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<string> {
+  if (MODEL_DATA.test(url)) {
+    if (!isCanvasV2ScreenModelBytes(url)) throw new Error('Use a single self-contained GLB with embedded buffers and images.');
+    return url;
+  }
+  const response = await fetcher(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), credentials: 'omit' });
+  if (!response.ok || !response.body) throw new Error('The retained model could not be loaded.');
+  const contentType = response.headers.get('content-type')?.split(';')[0].trim();
+  if (contentType && !['model/gltf-binary','application/octet-stream'].includes(contentType)) throw new Error('Retain a GLB model asset.');
+  const reader = response.body.getReader(), parts: Uint8Array[] = []; let length = 0;
+  try { while (true) { signal.throwIfAborted(); const { done, value } = await reader.read(); if (done) break; length += value.length; if (length > MAX_MODEL_BYTES) throw new Error('Use a GLB model up to 16 MB.'); parts.push(value); } }
+  finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(length); let offset = 0; for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+  const chunks: string[] = []; for (let i = 0; i < bytes.length; i += 32768) chunks.push(String.fromCharCode(...bytes.subarray(i, i + 32768)));
+  const data = `data:model/gltf-binary;base64,${btoa(chunks.join(''))}`;
+  if (!isCanvasV2ScreenModelBytes(data)) throw new Error('Use a single self-contained GLB with embedded buffers and images.');
+  return data;
+}
+
+/** Return bounded, non-pixel facts for a retained self-contained GLB. Model
+ * references are cited as metadata; their binary bytes must never enter an
+ * image transport. Animation durations are nullable when accessors omit a
+ * usable min/max range. */
+export async function inspectCanvasV2ScreenModel(url: string, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<CanvasV2ScreenModelMetadata> {
+  const data = await readCanvasV2ScreenModelBytes(url, signal, fetcher), match = MODEL_DATA.exec(data);
+  if (!match) throw new Error('Use a retained self-contained GLB model.');
+  const raw = atob(match[1]), bytes = Uint8Array.from(raw, char => char.charCodeAt(0)), view = new DataView(bytes.buffer), jsonChunks: string[] = [];
+  let offset = 12;
+  while (offset + 8 <= bytes.length) { const length = view.getUint32(offset, true), type = view.getUint32(offset + 4, true); offset += 8; if (offset + length > bytes.length) throw new Error('The retained GLB has an invalid chunk.'); if (type === 0x4e4f534a) jsonChunks.push(new TextDecoder().decode(bytes.subarray(offset, offset + length)).replace(/\u0000+$/, '').trim()); offset += length; }
+  const json = JSON.parse(jsonChunks[0] || '{}') as Record<string, unknown>, accessors = Array.isArray(json.accessors) ? json.accessors : [], animations = Array.isArray(json.animations) ? json.animations : [];
+  const durationMs = (animation: unknown) => {
+    const samplers = Array.isArray((animation as Record<string, unknown>)?.samplers) ? (animation as Record<string, unknown>).samplers as unknown[] : [];
+    let duration = 0, found = false;
+    for (const rawSampler of samplers) { const sampler = rawSampler as Record<string, unknown>, input = sampler.input; const accessor = Number.isInteger(input) ? accessors[input as number] as Record<string, unknown> | undefined : undefined; const min = accessor?.min, max = accessor?.max; if (Array.isArray(min) && Array.isArray(max) && Number.isFinite(Number(min[0])) && Number.isFinite(Number(max[0]))) { duration = Math.max(duration, Number(max[0]) - Number(min[0])); found = true; } }
+    return found ? Math.max(0, Math.round(duration * 1000)) : null;
+  };
+  const digest = await crypto.subtle.digest('SHA-256', bytes), sha256 = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return { mediaType: 'model', mimeType: 'model/gltf-binary', byteSize: bytes.byteLength, sha256, assetVersion: String((json.asset as Record<string, unknown> | undefined)?.version || 'unknown'), meshCount: Array.isArray(json.meshes) ? json.meshes.length : 0, materialCount: Array.isArray(json.materials) ? json.materials.length : 0, nodeCount: Array.isArray(json.nodes) ? json.nodes.length : 0, animationClips: animations.slice(0, 32).map(raw => { const animation = raw as Record<string, unknown>; return { ...(typeof animation.name === 'string' && animation.name.trim() ? { name: animation.name.trim() } : {}), durationMs: durationMs(animation) }; }) };
+}
+
 export function isCanvasV2ScreenVideoBytes(value: string) {
   if (!VIDEO_DATA.test(value) || value.length > 16_000_000) return false;
   try {
@@ -101,7 +199,7 @@ export async function readCanvasV2VideoReferenceFrames(url:string,signal:AbortSi
     for(const requestedTime of times){
       signal.throwIfAborted();
       if(Math.abs(video.currentTime-requestedTime)>.0001)await wait('seeked',()=>{video.currentTime=requestedTime;});
-      try{canvas.getContext('2d')!.drawImage(video,0,0,canvas.width,canvas.height);frames.push({pixels:canvas.toDataURL('image/jpeg',.9),requestedTime,time:video.currentTime,width:video.videoWidth,height:video.videoHeight,duration:video.duration});}
+      try{canvas.getContext('2d')!.drawImage(video,0,0,canvas.width,canvas.height);frames.push({pixels:canvas.toDataURL('image/jpeg',.9),requestedTime,time:video.currentTime,width:video.videoWidth,height:video.videoHeight,pixelWidth:canvas.width,pixelHeight:canvas.height,duration:video.duration});}
       catch{throw new Error('This source does not expose readable video frames. Use a direct clip or a canvas upload.');}
       if(frames.reduce((size,frame)=>size+frame.pixels.length,0)>6_000_000)throw new Error('Use fewer timestamps for this detailed recording.');
     }

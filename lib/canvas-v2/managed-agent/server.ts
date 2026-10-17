@@ -99,7 +99,7 @@ export async function handleManagedRequest(body: Record<string, unknown>, option
       const output = body.output;
       if (JSON.stringify(output ?? '').length > 10_000_000) throw new Error('Tool output exceeds the transport limit.');
       event = { type: 'agent.session.input.tool_result', turn_id: body.turnId, call_id: body.callId,
-        ...(body.success === false ? { success: false, error: string(body.error).slice(0, 2000) } : { success: true, output: typeof output === 'string' || Array.isArray(output) ? output : JSON.stringify(output) }) };
+        ...(body.success === false ? { success: false, error: string(body.error).slice(0, 2000), ...(output === undefined ? {} : { output: typeof output === 'string' || Array.isArray(output) ? output : JSON.stringify(output) }) } : { success: true, output: typeof output === 'string' || Array.isArray(output) ? output : JSON.stringify(output) }) };
     }
     await api(`${path}/events`, 'POST', { events: [event], idempotency_key: requestId });
     return Response.json({ accepted: true });

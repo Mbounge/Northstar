@@ -5,6 +5,7 @@ import { createCanvasV2CommittedRevision } from "@/lib/canvas-v2/revisions";
 import type { CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
 import type { NorthstarSnapshot } from "@/lib/canvas-v2/sessions/types";
 import { CanvasStressPerfProbe } from "./perf-probe";
+import { loadMixedCanvasFixture } from "./mixed-fixture.server";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,13 @@ export default async function CanvasStressFixture({ searchParams }: { searchPara
     const host = (await headers()).get("host") ?? "";
     if (process.env.NORTHSTAR_LOCAL_PRODUCTION_PROBE !== "1" || !/^((127\.0\.0\.1)|(localhost)):\d+$/.test(host)) notFound();
   }
-  const composed = (await searchParams).scenario === "composition";
+  const scenario = (await searchParams).scenario;
+  if (scenario === 'mixed') {
+    const { snapshot, provenance } = await loadMixedCanvasFixture();
+    return <><output data-testid="mixed-canvas-fixture" data-fixture-provenance={JSON.stringify(provenance)} hidden />
+      <CanvasStressPerfProbe /><CanvasV2Workspace initialSnapshot={snapshot} /></>;
+  }
+  const composed = scenario === "composition";
   const referenceNames = ["evidence-canvas", "concept-board", "evidence-constellation", "launch-strategy-studio", "decision-studio", "storyline-workspace"];
   const evidence: CanvasV2EvidenceAsset[] = composed ? referenceNames.map((name, index) => ({
     id: `stress-reference-${index}`,

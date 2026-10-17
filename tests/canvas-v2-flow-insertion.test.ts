@@ -43,7 +43,7 @@ test("Apps and References share the neutral research surface", () => {
   const panel = readFileSync("components/canvas-v2/canvas-v2-research-panel.tsx", "utf8");
   assert.match(workspace, /researchEndpoint/);
   assert.match(workspace, /insertCanvasV2CanonicalFlow/);
-  assert.match(workspace, /\["chat", "shapes", "apps"\]/);
+  assert.match(workspace, /\["chat", "shapes", "apps", "assets"\]/);
   assert.match(workspace, /setPanel\(item\)/);
   assert.match(workspace, /canvas-v2-floating-panel/);
   assert.match(panel, /operation: "flow-screens"/);

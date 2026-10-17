@@ -3,6 +3,7 @@
 import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 import { observeCanvasV2ImageVisibility, type CanvasV2ImageVisibilityObserver } from "./native-image-visibility";
+import { outsideVisibleCanvas, sameNativeViewportPresence } from "@/lib/canvas-v2/native-viewport-reuse";
 import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
 
 import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
@@ -11,7 +12,9 @@ import type { CanvasV2ElementBounds } from "@/lib/canvas-v2/types";
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { CanvasV2PlayableMediaObject } from "./playable-media";
 import { SCREEN_ATTRIBUTE } from "@/lib/canvas-v2/interactive-screen";
+import { MODEL_ATTRIBUTE } from "@/lib/canvas-v2/model-object";
 import { CanvasV2InteractiveScreenObject, CanvasV2ScreenAssets, CanvasV2ScreenTheme } from "./interactive-screen";
+import { CanvasV2NativeModelObject } from "./native-model-object";
 
 import {
   createElement,
@@ -490,21 +493,6 @@ function restoreNativeTransientStyle(snapshot: NativeTransientStyleSnapshot): vo
 // siblings without introducing a layout box, so only the changed group enters
 // React's child reconciliation.
 const NATIVE_CHILD_CHUNK_SIZE = 32;
-const NATIVE_CULL_MARGIN = 900;
-
-function outsideVisibleCanvas(node: CanvasV2NativeSceneNode, parent: CanvasV2NativeSceneNode | undefined, visibleBounds: CanvasV2ElementBounds | undefined): boolean {
-  if (!visibleBounds || !parent || parent.parentId || node.layoutMode !== "absolute"
-    || node.geometry.width <= 0 || node.geometry.height <= 0) return false;
-  // Only independent children of a scene root can be omitted without
-  // disturbing flow layout. The private compiler and native model remain full.
-  const x = node.geometry.x + parent.geometry.x;
-  const y = node.geometry.y + parent.geometry.y;
-  return x + node.geometry.width < visibleBounds.x - NATIVE_CULL_MARGIN
-    || y + node.geometry.height < visibleBounds.y - NATIVE_CULL_MARGIN
-    || x > visibleBounds.x + visibleBounds.width + NATIVE_CULL_MARGIN
-    || y > visibleBounds.y + visibleBounds.height + NATIVE_CULL_MARGIN;
-}
-
 const NativeChildChunk = memo(function NativeChildChunk({
   items,
   byId,
@@ -521,7 +509,7 @@ const NativeChildChunk = memo(function NativeChildChunk({
     const child = byId.get(item.id);
     return child ? <NativeNode key={child.id} node={child} byId={byId} visibleBounds={visibleBounds} protectedNodeIds={protectedNodeIds} /> : <span key={`missing-${index}`} />;
   })}</>;
-}, (previous, next) => previous.visibleBounds === next.visibleBounds && previous.items.length === next.items.length
+}, (previous, next) => previous.items.length === next.items.length
   && previous.items.every((item, index) => {
     const current = next.items[index];
     if (item.kind !== current.kind) return false;
@@ -529,6 +517,7 @@ const NativeChildChunk = memo(function NativeChildChunk({
     const oldChild = previous.byId.get(item.id);
     const newChild = next.byId.get(current.id);
     return Boolean(oldChild && newChild
+      && sameNativeViewportPresence(oldChild, newChild, previous.byId, next.byId, previous.visibleBounds, next.visibleBounds, previous.protectedNodeIds.has(oldChild.id), next.protectedNodeIds.has(newChild.id))
       && previous.protectedNodeIds.has(oldChild.id) === next.protectedNodeIds.has(newChild.id)
       && sameCanvasV2NativeRenderedSubtree(oldChild, newChild, previous.byId, next.byId));
   }));
@@ -545,12 +534,24 @@ const NativeNode = memo(function NativeNode({
   protectedNodeIds: ReadonlySet<string>;
 }) {
   const imageResourceRef = useRef<{ source?: string; optimized?: { srcSet: string; sizes: string } }>({});
+  const mediaResourceRef = useRef<{
+    encoded?: string;
+    media?: ReturnType<typeof parseCanvasV2PlayableMedia>;
+    playback: { currentTime?: number; userPaused?: boolean };
+  }>({ playback: {} });
+  const encodedMedia = node.attributes[MEDIA_ATTRIBUTE];
   if (imageResourceRef.current.source !== node.attributes.src) {
     imageResourceRef.current = { source: node.attributes.src, optimized: node.kind === "image" ? optimizedCanvasEvidenceImage(node) : undefined };
   }
   const parent = node.parentId ? byId.get(node.parentId) : undefined;
   if (!canvasV2NativeSceneNodeHasRenderableNamespace(node, parent)) return null;
-  if (!node.attributes[SCREEN_ATTRIBUTE] && !protectedNodeIds.has(node.id) && outsideVisibleCanvas(node, parent, visibleBounds)) return null;
+  if (!node.attributes[SCREEN_ATTRIBUTE] && !node.attributes[MODEL_ATTRIBUTE] && !protectedNodeIds.has(node.id) && outsideVisibleCanvas(node, parent, visibleBounds)) return null;
+  if (mediaResourceRef.current.encoded !== encodedMedia) {
+    // Camera commits must not parse potentially large retained data URLs again.
+    // This NativeNode survives returning null for culling, so lightweight time
+    // and pause metadata also survives while the decoder/child DOM is released.
+    mediaResourceRef.current = { encoded: encodedMedia, media: encodedMedia ? parseCanvasV2PlayableMedia(encodedMedia) : undefined, playback: {} };
+  }
   const narrowSelectable = node.selectable && node.namespace === "html" && (node.geometry.width <= 6 || node.geometry.height <= 6);
   const hostOwnsBackground = canvasV2NativeSceneNodeUsesHostBackground(node);
   const canonicalEvidenceImage = node.kind === "image"
@@ -563,10 +564,11 @@ const NativeNode = memo(function NativeNode({
     ? imageResourceRef.current.optimized
     : undefined;
   const safeInlineStyle = normalizeCanvasV2ReactInlineStyle(node.inlineStyle);
-  const style = Object.fromEntries(Object.entries(safeInlineStyle).filter(([property]) => !(node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE]) || !/^(?:background|border|padding)(?:-|$)|^box-shadow$/.test(property)).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
+  const style = Object.fromEntries(Object.entries(safeInlineStyle).filter(([property]) => !(node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MODEL_ATTRIBUTE]) || !/^(?:background|border|padding)(?:-|$)|^box-shadow$/.test(property)).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
   const runtimeStyle = {
     ...style,
-    ...((node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE]) ? { background: "transparent", border: "none", borderRadius: 0, boxShadow: "none", padding: 0 } : {}),
+    ...((node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MODEL_ATTRIBUTE]) ? { background: "transparent", border: "none", borderRadius: 0, boxShadow: "none", padding: 0 } : {}),
+    ...(node.attributes[MODEL_ATTRIBUTE] ? { overflow: "visible" } : {}),
     ...(hostOwnsBackground ? {
       background: "transparent",
       boxShadow: "none",
@@ -614,11 +616,12 @@ const NativeNode = memo(function NativeNode({
     suppressContentEditableWarning: true,
   };
   if (node.attributes[SCREEN_ATTRIBUTE]) return createElement("div", props, <CanvasV2InteractiveScreenObject nodeId={node.sourceNodeId ?? node.id} encoded={node.attributes[SCREEN_ATTRIBUTE]} />);
-  if (node.attributes[MEDIA_ATTRIBUTE]) return createElement("div", props, <CanvasV2PlayableMediaObject nodeId={node.sourceNodeId ?? node.id} key={node.attributes[MEDIA_ATTRIBUTE]} media={parseCanvasV2PlayableMedia(node.attributes[MEDIA_ATTRIBUTE])} />);
+  if (node.attributes[MODEL_ATTRIBUTE]) return createElement("div", props, <CanvasV2NativeModelObject nodeId={node.sourceNodeId ?? node.id} encodedModel={node.attributes[MODEL_ATTRIBUTE]} />);
+  if (mediaResourceRef.current.media) return createElement("div", props, <CanvasV2PlayableMediaObject nodeId={node.sourceNodeId ?? node.id} key={encodedMedia} media={mediaResourceRef.current.media} retainedPlayback={mediaResourceRef.current.playback} />);
   if (VOID_TAGS.has(node.tagName)) return createElement(node.tagName, props);
   if (canvasV2NativeSceneNodeSupportsTextEditing(node, byId)) return createElement(node.tagName, { ...props, dangerouslySetInnerHTML: { __html: canvasV2NativeTextMarkup(node, byId) } });
   return createElement(node.tagName, props, ...content);
-}, (previous, next) => previous.visibleBounds === next.visibleBounds
+}, (previous, next) => sameNativeViewportPresence(previous.node, next.node, previous.byId, next.byId, previous.visibleBounds, next.visibleBounds, previous.protectedNodeIds.has(previous.node.id), next.protectedNodeIds.has(next.node.id))
   && (previous.protectedNodeIds === next.protectedNodeIds || (previous.node.parentId !== undefined
     && previous.protectedNodeIds.has(previous.node.id) === next.protectedNodeIds.has(next.node.id)))
   && sameCanvasV2NativeRenderedSubtree(previous.node, next.node, previous.byId, next.byId));
@@ -1448,6 +1451,16 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     }
     [data-canvas-v2-native-scene="true"] [data-canvas-v2-narrow-hit-target="vertical"]::after { inset:-10px -9px; }
     [data-canvas-v2-native-scene="true"] [data-canvas-v2-narrow-hit-target="horizontal"]::after { inset:-9px -10px; }
+    /* Pointer events can be re-enabled by a descendant even when its scene
+       ancestor is disabled. Apps/media explicitly enable their iframe and
+       controls, and narrow objects enable pseudo-element hit targets. During
+       Pan/Space-pan/place, the workspace owns that entire pointer surface. */
+    [data-canvas-v2-native-scene="true"][data-canvas-v2-pointer-events="none"],
+    [data-canvas-v2-native-scene="true"][data-canvas-v2-pointer-events="none"] *,
+    [data-canvas-v2-native-scene="true"][data-canvas-v2-pointer-events="none"] *::before,
+    [data-canvas-v2-native-scene="true"][data-canvas-v2-pointer-events="none"] *::after {
+      pointer-events:none!important;
+    }
   `;
 
   const publicSceneCss = useMemo(
@@ -1476,6 +1489,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
         ref={publicSceneRef}
         data-testid="canvas-v2-native-scene"
         data-canvas-v2-native-scene="true"
+        data-canvas-v2-pointer-events={framePointerEvents}
         data-revision-id={revision.id}
         className="relative overflow-visible bg-transparent"
         style={{

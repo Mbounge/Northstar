@@ -1084,18 +1084,14 @@ class AppStoreResearcher:
                 browser = await p.chromium.connect_over_cdp(CHROME_CDP_URL)
                 context = browser.contexts[0]
                 
-                if len(context.pages) > 0:
-                    page = context.pages[0]
-                    await page.bring_to_front()
-                    print("   ✅ Attached to the existing active browser tab.")
-                else:
-                    page = await context.new_page()
-                    print("   ✅ Created a new browser tab.")
+                page = await context.new_page()
+                print("   ✅ Created a dedicated browser tab.")
                 
                 # Perform the verification phase
                 found = await self.search_and_confirm_app(page)
                 if not found:
                     print("   ⚠️ Target App Store link confirmation failed.")
+                    await page.close()
                     await browser.close()
                     return
 
@@ -1103,6 +1099,7 @@ class AppStoreResearcher:
                 await self.scrape_app_store_page(page)
                 
                 # Close the CDP connection context
+                await page.close()
                 await browser.close()
                 print("   🔌 Disconnected cleanly from Chrome instance.")
                 

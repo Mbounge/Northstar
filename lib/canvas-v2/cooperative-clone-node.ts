@@ -1,7 +1,7 @@
 // Adapted from html-to-image 1.11.13 (MIT). The library's recursive clone
 // monopolizes the main thread on large boards; this version yields between
 // bounded batches while retaining its DOM/style/pseudo-element behavior.
-import { canvasV2ScreenCaptureForClone } from './interactive-screen-capture'
+import { canvasV2NativeModelCaptureForClone, canvasV2ScreenCaptureForClone } from './interactive-screen-capture'
 import type { Options } from 'html-to-image/lib/types'
 import { clonePseudoElements } from 'html-to-image/lib/clone-pseudos'
 import {
@@ -13,8 +13,9 @@ import {
 import { getMimeType } from 'html-to-image/lib/mimes'
 import { resourceToDataURL } from 'html-to-image/lib/dataurl'
 import { waitForCanvasInputQuiet } from './capture-input-scheduler'
+import { CaptureConcurrency, mapCaptureBatch } from './capture-batch'
 
-interface CloneBudget { lastYield: number; yields: number; isCurrent?: () => boolean }
+interface CloneBudget { lastYield: number; yields: number; overview?: boolean; isCurrent?: () => boolean; captures?: CaptureConcurrency; visited?: number; reportedAt?: number; onProgress?: (visited: number) => void }
 
 async function yieldForInput(budget: CloneBudget) {
   if (budget.isCurrent && !budget.isCurrent()) throw new Error("Canvas observation was superseded.")
@@ -137,17 +138,8 @@ async function cloneChildren<T extends HTMLElement>(
     return clonedNode
   }
 
-  await children.reduce(
-    (deferred, child) =>
-      deferred
-        .then(() => cloneNode(child, options, false, budget))
-        .then((clonedChild: HTMLElement | null) => {
-          if (clonedChild) {
-            clonedNode.appendChild(clonedChild)
-          }
-        }),
-    Promise.resolve(),
-  )
+  const clones = await mapCaptureBatch(children, child => cloneNode(child, options, false, budget))
+  for (const child of clones) if (child) clonedNode.appendChild(child)
 
   return clonedNode
 }
@@ -291,9 +283,29 @@ export async function cloneNode<T extends HTMLElement>(
     return null
   }
 
+  budget.captures ??= new CaptureConcurrency(4)
+
   await yieldForInput(budget)
-  if (node instanceof HTMLElement && (node.hasAttribute('data-canvas-v2-screen') || node.hasAttribute('data-canvas-v2-interactive-screen'))) {
-    const pixels = await canvasV2ScreenCaptureForClone(node)
+  budget.visited = (budget.visited ?? 0) + 1
+  if (performance.now() - (budget.reportedAt ?? 0) > 250) {
+    budget.reportedAt = performance.now()
+    budget.onProgress?.(budget.visited)
+  }
+  if (isInstanceOfElement(node, HTMLElement) && (node.hasAttribute('data-canvas-v2-screen') || node.hasAttribute('data-canvas-v2-interactive-screen'))) {
+    const pixels = await budget.captures.run(() => canvasV2ScreenCaptureForClone(node, budget.overview ?? false))
+    if (pixels) {
+      const image = await createImage(pixels)
+      cloneCSSStyle<HTMLElement>(node, image, options)
+      image.style.objectFit = 'contain'
+      image.style.objectPosition = 'top left'
+      return image as unknown as T
+    }
+  }
+  // The observation source lives in a private iframe. html-to-image's
+  // constructor-aware helper recognizes that iframe's HTMLElement realm;
+  // `instanceof HTMLElement` would silently miss model nodes there.
+  if (isInstanceOfElement(node, HTMLElement) && node.hasAttribute('data-canvas-v2-model')) {
+    const pixels = await budget.captures.run(() => canvasV2NativeModelCaptureForClone(node))
     if (pixels) {
       const image = await createImage(pixels)
       cloneCSSStyle<HTMLElement>(node, image, options)

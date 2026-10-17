@@ -24,3 +24,23 @@ test('capture images never authorize external URLs, scripts or missing resources
   }
   assert.throws(()=>bindScreenCaptureImages('url(northstar-capture-image:99)',new Map()),/missing/);
 });
+
+test('a product can transfer three distinct retained photos while oversized transfers allocate nothing',()=>{
+  const images=Object.fromEntries(['strength','cycle','flow'].map((name,index)=>[
+    `northstar-capture-image:${index+1}`,
+    'data:image/png;base64,'+btoa(name+'pixels'.repeat(400000)),
+  ]));
+  assert.ok(Object.values(images).reduce((size,bytes)=>size+bytes.length,0)>8_000_000);
+  let allocated=0;
+  const resources=unpackScreenCaptureImages(images,blob=>{
+    assert.equal(blob.type,'image/png');
+    return `blob:photo-${++allocated}`;
+  });
+  assert.equal(allocated,3);
+  assert.equal(resources.urls.length,3);
+  allocated=0;
+  assert.throws(()=>unpackScreenCaptureImages({
+    'northstar-capture-image:1':'data:image/png;base64,'+'A'.repeat(16_000_000),
+  },()=>{allocated++;return 'blob:never';}),/size budget/);
+  assert.equal(allocated,0);
+});

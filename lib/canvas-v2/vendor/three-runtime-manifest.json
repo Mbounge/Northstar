@@ -1,0 +1,16 @@
+{
+  "threeVersion": "0.180.0",
+  "esbuildVersion": "0.25.10",
+  "sha256": "9b1655ff0c1fbf14ae37e369b801df249cc82a241dce084d96a736ece670266c",
+  "bytes": 745149,
+  "license": "MIT",
+  "source": "https://github.com/mrdoob/three.js/tree/r180",
+  "localAdaptations": [
+    "Embedded GLB textures decode through TextureLoader/data URLs to preserve img-src data: and connect-src none.",
+    "No author-supplied remote code, external buffers, codecs, or texture URLs allowed."
+  ],
+  "entryGlobals": [
+    "northstarThreeCore",
+    "northstarGLTFLoader"
+  ]
+}

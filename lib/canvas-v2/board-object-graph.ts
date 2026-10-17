@@ -1,6 +1,6 @@
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
 
-export type CanvasV2BoardObjectKind = "root" | "frame" | "group" | "island" | "text" | "note" | "image" | "shape" | "line" | "connector" | "drawing" | "table" | "evidence" | "object";
+export type CanvasV2BoardObjectKind = "root" | "frame" | "group" | "island" | "text" | "note" | "image" | "model" | "shape" | "line" | "connector" | "drawing" | "table" | "evidence" | "object";
 
 export interface CanvasV2BoardObject {
   nodeId: string;
@@ -21,6 +21,7 @@ export interface CanvasV2BoardObject {
 }
 function kindFor(element: HTMLElement): CanvasV2BoardObjectKind {
   if (element.dataset.canvasV2WorkspaceRoot === "true" || element.dataset.canvasV2PermanentRoot === "true" || element.dataset.canvasV2NodeId === "canvas") return "root";
+  if (element.hasAttribute("data-canvas-v2-model")) return "model";
   const primitive = element.dataset.canvasV2Primitive;
   if (primitive === "note" || primitive === "line" || primitive === "connector" || primitive === "drawing") return primitive;
   if (element.dataset.canvasV2PaintedEdge) return "shape";

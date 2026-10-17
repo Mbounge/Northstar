@@ -5,7 +5,7 @@ export interface CanvasV2InspectableElement {
   nodeId: string;
   parentNodeId?: string;
   tagName: string;
-  kind?: "root" | "frame" | "group" | "island" | "text" | "note" | "image" | "shape" | "line" | "connector" | "drawing" | "table" | "evidence" | "object";
+  kind?: "root" | "frame" | "group" | "island" | "text" | "note" | "image" | "model" | "shape" | "line" | "connector" | "drawing" | "table" | "evidence" | "object";
   label?: string;
   textPreview?: string;
   textEditable: boolean;

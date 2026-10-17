@@ -98,7 +98,7 @@ export interface CanvasV2EvidenceAsset {
   sequenceIndex?: number;
   mimeType?: string;
   /** Native playback is distinct from still-image evidence and model observation. */
-  mediaType?: "image" | "gif" | "video";
+  mediaType?: "image" | "gif" | "video" | "model";
   originalUrl?: string;
   tags?: string[];
   limitations?: string[];
@@ -495,6 +495,8 @@ export interface CanvasV2RenderObservation {
   theme?: "light" | "dark";
   revisionId: string;
   screenshotDataUrl: string;
+  /** Screenshot-only camera; spatial measurements and contentBounds retain their source/world coordinates. */
+  captureCamera?: import("./canvas-geometry").CanvasV2CaptureCamera;
   viewport: {
     width: number;
     height: number;

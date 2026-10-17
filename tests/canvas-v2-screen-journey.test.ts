@@ -1,7 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateScreenInteractionSequence } from '../lib/canvas-v2/screen-interaction-sequence';
+import { readScreenNumericValue, screenMotionTargetCropRect, screenNumericChangeResult, validateScreenInteractionSequence } from '../lib/canvas-v2/screen-interaction-sequence';
 import { advanceScreenJourneyMotion } from '../lib/canvas-v2/screen-motion-timeline';
+import { signalCanvasV2ScreenRuntimeReady } from '../lib/canvas-v2/interactive-screen-runtime';
+
+test('runtime readiness waits for parser-completed authored initialization and announces once', async () => {
+ const document=Object.assign(new EventTarget(),{readyState:'loading'}),order:string[]=[];
+ signalCanvasV2ScreenRuntimeReady(document,()=>order.push('ready'));
+ assert.equal(order.length,0,'a bridge installed before authored scripts must not publish readiness yet');
+ order.push('authored scene initialized');
+ document.dispatchEvent(new Event('DOMContentLoaded'));
+ document.dispatchEvent(new Event('DOMContentLoaded'));
+ assert.deepEqual(order,['authored scene initialized','ready']);
+ const loaded=Object.assign(new EventTarget(),{readyState:'complete'}),loadedOrder:string[]=[];
+ signalCanvasV2ScreenRuntimeReady(loaded,()=>loadedOrder.push('ready'));
+ loadedOrder.push('bridge installed');
+ assert.deepEqual(loadedOrder,['bridge installed']);
+ await Promise.resolve();
+ assert.deepEqual(loadedOrder,['bridge installed','ready']);
+});
 
 test('private journey waits compensate a stalled transition while preserving rapid reversals and authored pauses',()=>{
  const opening={currentTime:0,playbackRate:1,playState:'running'},paused={currentTime:20,playbackRate:1,playState:'paused'};
@@ -18,10 +35,31 @@ test('private journey waits compensate a stalled transition while preserving rap
 });
 
 test('journeys retain deliberate rapid actions and saved-value assertions within a finite execution budget',()=>{
- const steps=validateScreenInteractionSequence([{action:'click',selector:'#open'},{action:'click',selector:'#close',delayMs:20},{action:'fill',selector:'#goal',value:'Twelve goals'},{action:'wait',selector:'#goal',expectedValue:'Twelve goals',expectedText:'Your season',absentText:'Failed',delayMs:400}]);
+ const steps=validateScreenInteractionSequence([{action:'click',selector:'#open'},{action:'click',selector:'#close',delayMs:20},{action:'fill',selector:'#goal',value:'Twelve goals'},{action:'wait',selector:'#goal',expectedValue:'Twelve goals',expectedText:'Your season',absentText:'Failed',expectedNumericChange:{selector:'#progress',attribute:'aria-valuenow',min:0,max:0},delayMs:400}]);
  assert.equal(steps[0].delayMs,0);assert.equal(steps[1].delayMs,20);assert.equal(steps[3].expectedValue,'Twelve goals');
  assert.equal(steps[3].expectedText,'Your season');
+ assert.deepEqual(steps[3].expectedNumericChange,{selector:'#progress',attribute:'aria-valuenow',min:0,max:0});
  for(const invalid of [[],Array(21).fill({action:'wait'}),[{action:'click'}],[{action:'wait',delayMs:2501}],Array(3).fill({action:'wait',delayMs:2500}),[{action:'scroll',y:Infinity}],[{action:'wait',expectedValue:'Saved'}],[{action:'fill',selector:3}],[{action:'wait',expectedText:'a'.repeat(1001)}]])assert.throws(()=>validateScreenInteractionSequence(invalid));
+ assert.throws(()=>validateScreenInteractionSequence([{action:'wait',expectedNumericChange:{selector:'#progress',attribute:'aria-valuenow',min:2,max:1}}]),/finite min\/max/);
+});
+
+test('numeric journey assertions distinguish advancing state, static playing labels and paused drift',()=>{
+ assert.deepEqual(screenNumericChangeResult(84,85.25,1,2),{passed:true,delta:1.25});
+ assert.deepEqual(screenNumericChangeResult(84,84,0.1,2),{passed:false,delta:0});
+ const pausedDrift=screenNumericChangeResult(84,84.2,-0.01,0.01);
+ assert.equal(pausedDrift.passed,false); assert.ok((pausedDrift.delta ?? 0) > 0.1);
+ assert.deepEqual(screenNumericChangeResult(undefined,85,0,2),{passed:false});
+ assert.deepEqual(screenNumericChangeResult(84,undefined,0,2),{passed:false});
+ assert.equal(readScreenNumericValue(null,'aria-valuenow'),undefined);
+ assert.equal(readScreenNumericValue({getAttribute:()=> 'not-a-number'} as unknown as Element,'aria-valuenow'),undefined);
+});
+
+test('held-subject crop uses one fixed screenshot region spanning target positions and viewport edges',()=>{
+ assert.deepEqual(screenMotionTargetCropRect([{x:10,y:20,width:12,height:16},{x:25,y:18,width:12,height:20}],100,80),{x:6,y:14,width:35,height:28});
+ assert.deepEqual(screenMotionTargetCropRect([{x:96,y:76,width:20,height:20}],100,80),{x:92,y:72,width:8,height:8});
+ assert.equal(screenMotionTargetCropRect([{x:0,y:0,width:0,height:12}],100,80),undefined);
+ assert.equal(screenMotionTargetCropRect([{x:Number.NaN,y:0,width:12,height:12}],100,80),undefined);
+ assert.equal(screenMotionTargetCropRect([{x:120,y:120,width:12,height:12}],100,80),undefined);
 });
 
 test('both private motion preferences produce syntactically valid isolated runtime scripts',async()=>{

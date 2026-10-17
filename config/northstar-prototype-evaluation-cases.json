@@ -1,0 +1,542 @@
+{
+  "schema": "northstar.prototype-evaluation-cases.v1",
+  "purpose": "Broad creative app studio coverage across user tasks, product purposes, visual directions, motion and behaviour. Cases are examples, not limits on what users can ask or claims that unrun cases passed.",
+  "transport": "Codex subscription subagents; paid/external model APIs disabled.",
+  "acceptance": "Each run archives exact sources, reference roles, readable current/baseline pixels, named journey results and independent review. Structural/unit checks do not establish visual quality.",
+  "cases": [
+    {
+      "id": "original-create-and-branch",
+      "title": "Create and compare original apps",
+      "prompt": "Create a polished mobile workshop-booking app called Gather with Discover, Saved and Bookings, mock event details and a reversible seat reservation. Then keep it intact and create a visually distinct alternative beside it using the same brand colours, event content and working flows.",
+      "referenceMode": "none",
+      "capabilities": [
+        "originalbrief",
+        "connectedflows",
+        "variants",
+        "baselinepreservation"
+      ],
+      "requiredEvidence": [
+        "Two independently interactive prototypes exist side by side; source baseline remains unchanged.",
+        "Search/save/detail/reserve/cancel show coherent mock states.",
+        "Variants differ meaningfully in hierarchy, navigation or component treatment; all requested constraints remain."
+      ],
+      "status": "passed_archived_run",
+      "evidenceArchive": "/Users/mbounge/Documents/Codex/2026-09-05/do-x20/outputs/northstar-prototype-archive/2026-10-11-gather-creative-variants",
+      "notes": "Two independent Luna-high-authored Gather variants; original18-step, alternative19-step journeys, scoped tab map and independent final visual reviews. Other prompt families are not certified by this result."
+    },
+    {
+      "id": "faithful-visible-recreation",
+      "title": "Recreate an observed app",
+      "prompt": "Recreate the supplied mobile reference as a working frontend. Preserve visible sections, rows, labels, geometry, icon language and image framing. Invent coherent unseen destinations within that product language.",
+      "referenceMode": "target",
+      "capabilities": [
+        "referencefidelity",
+        "inferredpages"
+      ],
+      "requiredEvidence": [
+        "Corresponding same-state component pixels are compared at matching logical scale.",
+        "Observed native UI is faithful; unseen behavior is labelled inferred and works."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "single-pattern-borrow",
+      "title": "Borrow one useful pattern",
+      "prompt": "Use the grouping pattern in inspiration A for my settings page. Keep my app colours, typography, icons, copy and routes.",
+      "referenceMode": "target+one",
+      "capabilities": [
+        "selectiveborrowing"
+      ],
+      "requiredEvidence": [
+        "Only the requested grouping changes; unrelated source-brand styling does not leak.",
+        "New settings controls and saved values work."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "multi-reference-hybrid",
+      "title": "Combine several inspirations",
+      "prompt": "Combine A’s navigation pattern, B’s media cards and C’s transition treatment into my app. Keep my brand and content. Make a coherent working design rather than three pasted fragments.",
+      "referenceMode": "target+many",
+      "capabilities": [
+        "multireference",
+        "motion",
+        "composition"
+      ],
+      "requiredEvidence": [
+        "Reference contributions are explicit and scoped.",
+        "Whole experience is coherent, readable and functional; requested motion has elapsed/reduced-motion evidence."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "full-redesign",
+      "title": "Reimagine the entire frontend",
+      "prompt": "Keep the user purpose and core booking journey but reimagine the whole visual identity and information architecture. Show it as a separate alternative.",
+      "referenceMode": "target+optional",
+      "capabilities": [
+        "fullredesign",
+        "variants"
+      ],
+      "requiredEvidence": [
+        "Original remains unchanged; authorized departures are assessed against the new brief.",
+        "The retained core journey works in the new structure."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "unseen-page-extension",
+      "title": "Extend a product beyond its screenshots",
+      "prompt": "Add a calendar, notification centre and empty/error states to this app using its component language. Only the supplied home is observed.",
+      "referenceMode": "target",
+      "capabilities": [
+        "inferredpages",
+        "states"
+      ],
+      "requiredEvidence": [
+        "New views do not mechanically copy source-home sections.",
+        "Relevant triggers reach inferred views; empty/loading/error/retry states have coherent mock behavior."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "direct-component-edits",
+      "title": "Shape the app directly",
+      "prompt": "Change selected copy and colours, remove a section, add a sibling section, then move it above the selected section. Preserve unrelated design and data.",
+      "referenceMode": "existing",
+      "capabilities": [
+        "directediting",
+        "structure"
+      ],
+      "requiredEvidence": [
+        "Actual selected native nodes change in place; no floating duplicates.",
+        "Ordering, return flows and retained user state remain valid."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "asset-placement-and-reframe",
+      "title": "Place and reframe assets",
+      "prompt": "Drop the supplied image into the selected hero, replace an avatar and adjust its focal point. Keep UI badges and controls separate from the image.",
+      "referenceMode": "assets",
+      "capabilities": [
+        "assets",
+        "cropping",
+        "directediting"
+      ],
+      "requiredEvidence": [
+        "Original-pixel crop evidence and intended render framing are retained.",
+        "Direct placement reaches the selected target; responsive/media cases needing source edits are explicit."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "connected-mock-journey",
+      "title": "Connect a complete frontend journey",
+      "prompt": "Browse, filter, open detail, reserve, see the booking, edit it and cancel. Saved items and counts should agree across views.",
+      "referenceMode": "existing",
+      "capabilities": [
+        "connectedflows",
+        "states"
+      ],
+      "requiredEvidence": [
+        "Observable end states and repeated actions are asserted, not only clicked.",
+        "Within one prototype, views use one coherent mock state."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "refine-after-human-use",
+      "title": "Preserve people’s work while refining",
+      "prompt": "After I save data and navigate to another view, refine its layout and add a component without resetting my current state, fields or scroll.",
+      "referenceMode": "existing",
+      "capabilities": [
+        "continuity",
+        "directediting"
+      ],
+      "requiredEvidence": [
+        "Actual mounted CSS and structural revisions preserve declared state.",
+        "Intentional dataset reset is a separate explicit operation."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "responsive-web-mobile",
+      "title": "Adapt across devices",
+      "prompt": "Make this app work on narrow phones and wide desktop screens. Adapt navigation and layout rather than shrinking a desktop layout into a phone.",
+      "referenceMode": "target+optional",
+      "capabilities": [
+        "responsive",
+        "navigation"
+      ],
+      "requiredEvidence": [
+        "Actual renders at mobile, intermediate and desktop widths retain usable content and controls.",
+        "Overflow, component order and fixed/sticky clearance are measured at each size."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "motion-and-media",
+      "title": "Use motion and media as app material",
+      "prompt": "Add a GIF placeholder for a video section, playable video and a useful animated state transition without obscuring controls. Preserve media framing, loading/fallback states and respect reduced motion.",
+      "referenceMode": "assets+optional",
+      "capabilities": [
+        "motion",
+        "media"
+      ],
+      "requiredEvidence": [
+        "Actual elapsed frames, interruption/reversal and reduced-motion end states are checked.",
+        "Video loads/plays; a poster or static screenshot does not prove playback.",
+        "GIF changes in actual visible rendered pixels; native video playback time advances. Asset existence and a poster alone are insufficient."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "game-and-gestures",
+      "title": "Prototype interactive games",
+      "prompt": "Create a small drag-to-sort game with keyboard controls, score, restart and pause. Keep the game interactive on the canvas.",
+      "referenceMode": "none",
+      "capabilities": [
+        "games",
+        "gestures",
+        "keyboard"
+      ],
+      "requiredEvidence": [
+        "Native pointer drag and keyboard input are checked separately; click-only private journeys cannot certify them.",
+        "Score/restart/pause states and visible feedback work."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "canvas-exploration",
+      "title": "Work with many materials on one canvas",
+      "prompt": "Place app references, flow rails, two working app alternatives and image/video assets together. Rearrange them so I can compare and refine my idea.",
+      "referenceMode": "mixed",
+      "capabilities": [
+        "canvas",
+        "variants",
+        "references"
+      ],
+      "requiredEvidence": [
+        "Materials remain individually selectable and useful; original references remain preserved.",
+        "Rearranging alternatives preserves mounted runtime state and leaves unrelated work unchanged."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "iteration-recovery",
+      "title": "Recover and keep iterating",
+      "prompt": "Stop a generation, keep the last valid prototype, resume a local refinement, then undo/restore the prior version.",
+      "referenceMode": "existing",
+      "capabilities": [
+        "recovery",
+        "history"
+      ],
+      "requiredEvidence": [
+        "Interrupted drafts and reviewed completions remain distinguishable.",
+        "Last valid source/assets are recoverable; retries do not duplicate edits."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "playful-learning-character",
+      "title": "Playful learning",
+      "prompt": "A friendly learning app with its own cute native character, tactile raised buttons, an expressive lesson path and short practice sessions. Use the motivating clarity of playful language-learning apps as inspiration while creating an original identity. Correct and incorrect answers change the character expression, feedback and shared lesson progress; completion animates a restrained celebration.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Encouragement, delight and confidence",
+      "capabilities": [
+        "characteranimation",
+        "reactivefeedback",
+        "lessonprogress",
+        "rapidanswers"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "athletic-running-track",
+      "title": "Athletic running",
+      "prompt": "Create Stride, a focused running app with an animated jointed person running around a native oval track, large readable timer/distance/pace, lap capture, start/pause/resume and finish/history. Athletic type, crisp geometry and signal accents; derive the interface from workout use rather than a generic dashboard.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Energy, focus and accomplishment",
+      "capabilities": [
+        "proceduralmotion",
+        "workoutstate",
+        "lapcapture",
+        "pauseresume"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "children-interactive-story",
+      "title": "Children’s storybook",
+      "prompt": "Create an illustrated interactive storybook with large accessible page controls, a friendly cast, layered scene depth and discoverable tap reactions. Story pages and reading progress work; scenes move gently, and reduced motion retains the complete story.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Wonder, warmth and curiosity",
+      "capabilities": [
+        "layeredmotion",
+        "pagination",
+        "tapreactions",
+        "readingprogress"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "editorial-fashion-commerce",
+      "title": "Editorial shopping",
+      "prompt": "Create a fashion shop with bold art direction, editorial image composition, responsive image galleries and compact product controls. Product detail, size selection, favourites, cart quantities and mock checkout share real local state. Motion should support browsing and cart feedback.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Desire, sophistication and discovery",
+      "capabilities": [
+        "gallerygestures",
+        "cartstate",
+        "options",
+        "editoriallayout"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "map-led-day-trip",
+      "title": "Map-led day trips",
+      "prompt": "Create a coastal day-trip planner centred on a native mock map, place pins, bounded map gestures, route drawing and place sheets. Select stops, save an itinerary and return to the same route. Map interaction and route motion drive the layout; the phone itself must never scroll sideways.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Exploration and anticipation",
+      "capabilities": [
+        "mapgestures",
+        "routeanimation",
+        "sheets",
+        "itinerarystate"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "creative-layered-poster",
+      "title": "Creative poster studio",
+      "prompt": "Create a mobile/tablet poster-making tool with a working design surface, layers, text, colour controls and replaceable images. Direct manipulation, undo/redo and saved project reopening work. The interface should feel like a creative instrument with purposeful precision.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Agency, experimentation and ownership",
+      "capabilities": [
+        "directmanipulation",
+        "layers",
+        "undoredo",
+        "responsivedesign"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "compact-budget-dashboard",
+      "title": "Compact budget dashboard",
+      "prompt": "Create a clear mock household-budget product with a compact numeric hierarchy, category controls, charts and transaction detail. Change the month, filter categories, edit a transaction and reflect it in totals. Avoid gratuitous animation; chart transitions must preserve readable values.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Clarity and control",
+      "capabilities": [
+        "chartstate",
+        "filtering",
+        "numericconsistency",
+        "forms"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "short-media-feed",
+      "title": "Short-video discovery",
+      "prompt": "Create an original media discovery product with supplied videos/GIFs that autoplay muted and loop when appropriate, stop offscreen, and respect explicit pause. Feed/detail/save flows, progress controls and overlay readability work. Distinguish the media from native interface animations.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Immediacy and immersion",
+      "capabilities": [
+        "autoplay",
+        "visibility",
+        "userpause",
+        "mediaoverlays"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "cooking-step-timer",
+      "title": "Cooking companion",
+      "prompt": "Create a recipe product with food-led imagery, ingredient quantities and a focused cooking mode. Change servings, mark ingredients, move through instructions, start/pause a local timer and return without losing progress. Use spacious task-oriented hierarchy and purposeful step transitions.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Appetite and calm competence",
+      "capabilities": [
+        "stepflows",
+        "timers",
+        "deriveddata",
+        "progresspreservation"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "conversational-messaging",
+      "title": "Conversational messaging",
+      "prompt": "Create a convincing mobile messaging product with distinct conversational typography, compact bubbles, attachments and a thread list. Compose, send, react, reply and return to the same thread using mock data. Keyboard/focus, long text and bottom composer behaviour need real browser checks.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Connection and immediacy",
+      "capabilities": [
+        "composer",
+        "threadstate",
+        "reply",
+        "keyboardfocus"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "responsive-arcade-play",
+      "title": "Expressive arcade game",
+      "prompt": "Create an original bright arcade prototype with a native animated playfield and responsive tap/drag controls. Scoring, collision feedback, pause, restart and end-of-round results work. Give it a coherent game identity rather than conventional app cards.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Playfulness, challenge and excitement",
+      "capabilities": [
+        "proceduralrendering",
+        "gestures",
+        "scorestate",
+        "rapidinput"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "calm-breathing-instrument",
+      "title": "Calm breathing",
+      "prompt": "Create a calm breathing product with an original continuous visual field, legible cycle cues and a focused session interface. Start/pause, change cycle duration and view completed sessions. Reduced motion provides stable visual phase feedback without removing controls.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Ease and quiet focus",
+      "capabilities": [
+        "continuousmotion",
+        "timing",
+        "pauseresume",
+        "reducedmotion"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "atmospheric-weather",
+      "title": "Atmospheric weather",
+      "prompt": "Create a weather prototype with mock conditions, animated native atmospheric scenes and a distinctive information hierarchy. Change location and hourly forecast; scene and values update coherently. Rain/sun/snow effects stay contained and readable, with a static reduced-motion equivalent.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Atmosphere and practical clarity",
+      "capabilities": [
+        "particles",
+        "scenechanges",
+        "forecaststate",
+        "containment"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "adaptive-team-workspace",
+      "title": "Adaptive team workspace",
+      "prompt": "Create a tablet/phone team workspace with task grouping, drag/reorder, detail forms and a compact activity view. Saved edits and moved tasks appear everywhere. Adapt intentionally between tablet and phone rather than shrinking the same wide web layout.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Momentum and organisation",
+      "capabilities": [
+        "dragreorder",
+        "forms",
+        "adaptivelayout",
+        "sharedstate"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    },
+    {
+      "id": "expressive-photo-journal",
+      "title": "Expressive photo journal",
+      "prompt": "Create a photo journal with its own collage language, a date-led browsing model and thoughtful page transitions. Add a mock entry, change its image crop and mood, reopen it and preserve those edits. Photo treatment and native framing remain separate.",
+      "referenceMode": "none-or-scoped-inspiration",
+      "emotionalAim": "Reflection and personal expression",
+      "capabilities": [
+        "assetframing",
+        "collage",
+        "editing",
+        "persistence"
+      ],
+      "requiredEvidence": [
+        "Archive exact current source, product direction, readable default/changed-state pixels and an independent quality review.",
+        "Verify the named user flows and shared mock state, rapid/reversed actions where relevant, phone containment and actual scroll/end clearance.",
+        "For motion capture actual trigger/intermediate/end or continuous elapsed frames and a working reduced-motion state; static screenshots cannot prove motion.",
+        "Compare design decisions with this product brief and any scoped references; colour swaps alone do not establish the requested new direction."
+      ],
+      "status": "not_run_in_this_suite"
+    }
+  ]
+}

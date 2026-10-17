@@ -1,17 +1,22 @@
 import { object, string, type JsonObject } from '../managed-agent/protocol';
+import { assetPixelRect, assetSourceSize } from '../asset-crop';
 
 /** Exact source pixels, not a generative reconstruction of an existing brand. */
 export function preparedAssetJob(args: JsonObject, jobId: string) {
   const assetId = string(args.assetId), label = string(args.label).trim();
   if (!assetId || !label || label.length > 160) throw new Error('Choose a retained asset and a label of at most 160 characters.');
   if (!/^[a-zA-Z0-9-]{1,80}$/.test(jobId)) throw new Error('Invalid asset preparation identity.');
+  if ((args.crop !== undefined) === (args.cropPixels !== undefined)) throw new Error('Choose cropPixels or normalized crop, never both.');
+  const sourceSize = args.sourceSize === undefined ? undefined : assetSourceSize(args.sourceSize);
+  const cropPixels = args.cropPixels === undefined ? undefined : assetPixelRect(args.cropPixels, assetSourceSize(args.sourceSize));
   const crop = object(args.crop);
   const values = ['x', 'y', 'width', 'height'].map(key => crop[key]);
-  if (values.some(value => typeof value !== 'number' || !Number.isFinite(value))) throw new Error('Supply a normalized crop rectangle with numeric x, y, width and height.');
+  if (!cropPixels && values.some(value => typeof value !== 'number' || !Number.isFinite(value))) throw new Error('Supply a normalized crop rectangle with numeric x, y, width and height.');
   const [x, y, width, height] = values as number[];
-  if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 + 1e-9 || y + height > 1 + 1e-9) throw new Error('The crop must lie inside the source image: coordinates run from 0 to 1.');
+  if (!cropPixels && (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 || y + height > 1)) throw new Error('The crop must lie inside the source image: coordinates run from 0 to 1.');
   const mask = args.mask ?? 'none', maxEdge = args.maxEdge ?? 1024;
   if (!['none', 'circle'].includes(string(mask))) throw new Error('Choose none or circle for the mask.');
+  if (mask === 'circle' && cropPixels && cropPixels.width !== cropPixels.height) throw new Error('A circle mask requires a square source-pixel selection. Inspect and refine the bounds instead of stretching the portrait.');
   if (!Number.isInteger(maxEdge) || Number(maxEdge) < 64 || Number(maxEdge) > 2048) throw new Error('maxEdge must be an integer between 64 and 2048.');
   const role = args.role ?? 'other';
   if (!['brand-mark', 'photo', 'avatar', 'illustration', 'other'].includes(string(role))) throw new Error('Choose a supported asset role.');
@@ -19,7 +24,7 @@ export function preparedAssetJob(args: JsonObject, jobId: string) {
   const name = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'prepared-asset'}.png`;
   const output = `${directory}/${name}`;
   // Arguments are data in a file; user strings are never interpolated into shell/Python code.
-  const configuration = { crop: { x, y, width, height }, mask, maxEdge, source: `${directory}/source`, output };
+  const configuration = { ...(cropPixels ? { cropPixels } : { crop: { x, y, width, height } }), sourceSize, mask, maxEdge, source: `${directory}/source`, output };
   const script = `import json, math, warnings
 from PIL import Image, ImageDraw, ImageChops
 Image.MAX_IMAGE_PIXELS = 32000000
@@ -28,8 +33,18 @@ p = json.load(open('${directory}/config.json'))
 with Image.open(p['source']) as source:
     source.load()
     w, h = source.size
-    c = p['crop']
-    box = (max(0, math.floor(c['x']*w)), max(0, math.floor(c['y']*h)), min(w, math.ceil((c['x']+c['width'])*w)), min(h, math.ceil((c['y']+c['height'])*h)))
+    if p.get('sourceSize') and p['sourceSize'] != {'width':w, 'height':h}:
+        raise ValueError('Original source dimensions changed; inspect the original again before cropping.')
+    if p.get('cropPixels'):
+        c = p['cropPixels']
+        box = (c['x'], c['y'], c['x']+c['width'], c['y']+c['height'])
+    else:
+        c = p['crop']
+        box = (math.floor(c['x']*w), math.floor(c['y']*h), math.ceil((c['x']+c['width'])*w), math.ceil((c['y']+c['height'])*h))
+    if box[0] < 0 or box[1] < 0 or box[2] > w or box[3] > h:
+        raise ValueError('Crop extends outside the original source; it was not clamped.')
+    if p['mask'] == 'circle' and box[2]-box[0] != box[3]-box[1]:
+        raise ValueError('A circle mask requires a square pixel selection; inspect/refine the original crop.')
     image = source.crop(box).convert('RGBA')
     if min(image.size) < 2: raise ValueError('The selected crop is smaller than two pixels.')
     if p['mask'] == 'circle':

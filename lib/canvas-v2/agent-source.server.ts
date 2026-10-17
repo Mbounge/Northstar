@@ -1,9 +1,17 @@
 import { createHash } from 'node:crypto';
 import { object, string, type JsonObject } from './managed-agent/protocol';
-import { readCanvasV2PublicMedia, canvasV2PageMediaCandidates, actualImageType, type CanvasV2MediaRead } from './source-media.server';
+import { readCanvasV2PublicMedia, canvasV2PageMediaCandidates, actualImageType, actualFontType, type CanvasV2MediaRead } from './source-media.server';
 
 export async function readNorthstarSource(action: JsonObject, signal: AbortSignal, read: CanvasV2MediaRead = readCanvasV2PublicMedia) {
     const args = object(action.arguments); const media = await read(string(args.url), signal);
+    if (action.name === 'read_source' && media.mimeType.startsWith('font/')) {
+      const mimeType = actualFontType(media.bytes);
+      if (!mimeType || mimeType !== media.mimeType) throw new Error('This response does not contain the declared bounded font format.');
+      const id = `source-${createHash('sha256').update(media.url).update(media.bytes).digest('hex').slice(0, 20)}`;
+      return Response.json({ asset: { id, label: media.url, kind: 'document', mimeType, url: `data:${mimeType};base64,${media.bytes.toString('base64')}`, originalUrl: media.url, authority: 'observed',
+        source: { providerId: 'public-source', providerLabel: 'Public source file', sourceId: id, sourceType: 'other', label: media.url, sourceUrl: media.url, retrievedAt: new Date().toISOString(), permission: 'authorized' },
+        limitations: ['Retained file bytes. Inspect the loaded glyphs and source provenance; the URL alone does not establish the product typeface or font weight.'] } });
+    }
     if (action.name === 'inspect_image') {
       if (!/^image\/(png|jpeg|webp|gif)(;|$)/i.test(media.mimeType)) throw new Error('This URL did not return a supported image.');
       const mime = media.mimeType.split(';')[0].toLowerCase();

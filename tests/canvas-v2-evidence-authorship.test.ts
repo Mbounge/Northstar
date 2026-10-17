@@ -17,6 +17,7 @@ import {
   canvasV2CanonicalEvidenceScale,
   readCanvasV2CanonicalFlowManifests,
   resolveCanvasV2EvidenceRole,
+  validateCanvasV2EvidenceAuthorshipTransition,
   validateCanvasV2RenderedAnalysisEvidenceScale,
   validateCanvasV2RenderedDesignRegionContentIntegrity,
   validateCanvasV2RenderedDesignRegionLegibility,
@@ -52,6 +53,26 @@ const canonical = document(`
   <img data-canvas-v2-node-id="flow-awin-screen-1" data-canvas-v2-evidence-id="screen:awin-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/awin/1.png">
   <img data-canvas-v2-node-id="flow-awin-screen-2" data-canvas-v2-evidence-id="screen:awin-2" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="1" src="https://evidence.test/awin/2.png">
 `);
+
+test("saved detached canonical references permit unrelated additions without blessing new orphan evidence", () => {
+  const orphan = '<img data-canvas-v2-node-id="detached" data-canvas-v2-evidence-id="screen:awin-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/awin/1.png">';
+  const previous = { html: orphan, css: "" };
+  const added = { html: `${orphan}<div data-canvas-v2-node-id="new-art">New artwork</div>`, css: "" };
+  assert.deepEqual(validateCanvasV2EvidenceAuthorshipTransition(previous, added, evidence), []);
+  assert.deepEqual(readCanvasV2CanonicalFlowManifests(added), [], "a detached image is not evidence of a complete flow");
+  for (const changed of [
+    orphan.replace('node-id="detached"', 'node-id="forged"'),
+    orphan.replace('role="canonical"', 'role="analysis-copy"'),
+    orphan.replace('flow-index="0"', 'flow-index="1"'),
+    orphan.replace('https://evidence.test/awin/1.png', 'https://evidence.test/awin/2.png'),
+    orphan + orphan,
+    '',
+  ]) assert.ok(validateCanvasV2EvidenceAuthorshipTransition(previous, { html: changed, css: "" }, evidence).length);
+  assert.deepEqual(validateCanvasV2EvidenceAuthorshipTransition(previous, { html: "", css: "" }, evidence, { allowUserEvidenceRemoval: true }), []);
+  assert.ok(validateCanvasV2EvidenceAuthorshipTransition({ html: "", css: "" }, previous, evidence).length);
+  const detachedFromIntactLane = { html: orphan.replace('node-id="detached"', 'node-id="flow-awin-screen-1"'), css: "" };
+  assert.ok(validateCanvasV2EvidenceAuthorshipTransition(canonical, detachedFromIntactLane, evidence).length);
+});
 
 test("canonical flow manifests preserve the complete ordered source record", () => {
   assert.deepEqual(readCanvasV2CanonicalFlowManifests(canonical), [{

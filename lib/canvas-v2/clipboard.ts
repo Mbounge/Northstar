@@ -1,7 +1,13 @@
 import { CANVAS_V2_NATIVE_SCENE_SCHEMA, type CanvasV2NativeClipboard } from "./native-scene";
 import { canvasV2NativeTextMarkup } from "./rich-text";
+import { MODEL_ATTRIBUTE, parseCanvasV2NativeModel } from "./model-object";
+import { isCanvasV2ScreenModelBytes } from "./screen-asset-pixels";
 
 export const CANVAS_V2_CLIPBOARD_MARKER = "data-northstar-clipboard";
+/** Canvas-read handles are valid node sources, but never resolved clipboard evidence. */
+export function isResolvedCanvasV2ClipboardEvidenceUrl(url: string): boolean {
+  return url.trim().length > 0 && !/^northstar-asset:/i.test(url.trim());
+}
 export function encodeCanvasV2Clipboard(clipboard: CanvasV2NativeClipboard): { html: string; text: string } {
   const payload = encodeURIComponent(JSON.stringify(clipboard));
   const byId = new Map(clipboard.scene.nodes.map((node) => [node.id, node]));
@@ -34,7 +40,7 @@ export function decodeCanvasV2Clipboard(html: string): CanvasV2NativeClipboard |
     const scene = snapshot.scene;
     if (scene?.schema !== CANVAS_V2_NATIVE_SCENE_SCHEMA || !Array.isArray(scene.nodes) || !Array.isArray(scene.rootIds) || scene.nodes.length > 10_000) return undefined;
     if (!scene.nodes.length || typeof scene.css !== "string" || typeof scene.revisionId !== "string" || !Number.isFinite(scene.width) || !Number.isFinite(scene.height)) return undefined;
-    if (snapshot.evidenceAssets !== undefined && (!Array.isArray(snapshot.evidenceAssets) || !snapshot.evidenceAssets.every((asset) => asset && typeof asset.id === "string" && typeof asset.url === "string" && typeof asset.label === "string"))) return undefined;
+    if (snapshot.evidenceAssets !== undefined && (!Array.isArray(snapshot.evidenceAssets) || !snapshot.evidenceAssets.every((asset) => asset && typeof asset.id === "string" && typeof asset.url === "string" && isResolvedCanvasV2ClipboardEvidenceUrl(asset.url) && typeof asset.label === "string" && (asset.mediaType !== "model" || isCanvasV2ScreenModelBytes(asset.url))))) return undefined;
     const ids = new Set(scene.nodes.map((node) => node.id));
     if (ids.size !== scene.nodes.length || !scene.rootIds.every((id) => ids.has(id))) return undefined;
     for (const node of scene.nodes) {
@@ -49,6 +55,9 @@ export function decodeCanvasV2Clipboard(html: string): CanvasV2NativeClipboard |
     }
     // Validate the tree before recursive clone/serialization, including cycles.
     const byId = new Map(scene.nodes.map((node) => [node.id, node]));
+    const evidenceIds = new Set((snapshot.evidenceAssets ?? []).map((asset) => asset.id));
+    if (scene.nodes.some((node) => node.kind === "image" && /^northstar-asset:/i.test(node.attributes.src ?? "") && !evidenceIds.has(node.attributes.src.slice("northstar-asset:".length)))) return undefined;
+    if (scene.nodes.some((node) => { if (!node.attributes[MODEL_ATTRIBUTE]) return false; try { return !evidenceIds.has(parseCanvasV2NativeModel(node.attributes[MODEL_ATTRIBUTE]).evidenceId); } catch { return true; } })) return undefined;
     if (!scene.rootIds.every((id) => !byId.get(id)?.parentId)) return undefined;
     if (!scene.nodes.every((node) => node.childIds.every((id) => byId.get(id)?.parentId === node.id))) return undefined;
     const sourceIds = scene.nodes.flatMap((node) => node.sourceNodeId ? [node.sourceNodeId] : []);

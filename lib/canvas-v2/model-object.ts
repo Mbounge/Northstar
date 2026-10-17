@@ -1,0 +1,67 @@
+import type { CanvasV2InteractiveScreen } from './interactive-screen';
+
+export const MODEL_ATTRIBUTE = 'data-canvas-v2-model';
+
+export interface CanvasV2NativeModelReference {
+  version: 1;
+  evidenceId: string;
+  label: string;
+  /** Initial playback only; retained user playback state takes precedence. */
+  autoplay?: boolean;
+}
+
+export function parseCanvasV2NativeModel(raw: string): CanvasV2NativeModelReference {
+  if (raw.length > 8_000) throw new Error('The retained model reference is too large.');
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { throw new Error('Invalid retained model reference.'); }
+  const model = value as Partial<CanvasV2NativeModelReference>;
+  if (model.version !== 1 || typeof model.evidenceId !== 'string' || !model.evidenceId.trim() || model.evidenceId.length > 4096 || typeof model.label !== 'string' || !model.label.trim() || model.label.length > 240) {
+    throw new Error('Invalid retained model reference.');
+  }
+  if (model.autoplay !== undefined && typeof model.autoplay !== 'boolean') throw new Error('Use a boolean autoplay setting for a retained model reference.');
+  return { version: 1, evidenceId: model.evidenceId, label: model.label.trim(), ...(model.autoplay !== undefined ? { autoplay: model.autoplay } : {}) };
+}
+
+/** Host-owned generic viewer source. It is a normal isolated screen runtime,
+ * but deliberately carries no product identity or authored app semantics. */
+export function canvasV2NativeModelViewerScreen(model: CanvasV2NativeModelReference): CanvasV2InteractiveScreen {
+  const handle = `northstar-asset:${encodeURIComponent(model.evidenceId)}`;
+  return {
+    version: 1,
+    device: 'none',
+    title: model.label.slice(0, 180),
+    referenceAppearance: 'dark',
+    width: 640,
+    height: 480,
+    html: `<main data-northstar-model-viewer="true" data-playing="false" data-animation-time="0"><header><strong>${escapeHtml(model.label)}</strong><span id="status" role="status">Loading model…</span></header><div class="stage"><canvas id="viewer" aria-label="3D model preview"></canvas><div id="error" role="alert" hidden></div></div><footer><label>Animation <select id="clip"><option value="">None</option></select></label><button id="play" type="button" aria-pressed="false" disabled>Play</button><label><input id="loop" type="checkbox" checked disabled> Loop</label><button id="reset" type="button">Reset view</button></footer></main>`,
+    css: `:root{color-scheme:dark}*{box-sizing:border-box}html,body{height:100%;margin:0}body{background:#11151c;color:#e9edf5;font:13px/1.35 system-ui,sans-serif}main{display:flex;flex-direction:column;height:100%;min-height:100%;gap:10px;padding:12px}header,footer{display:flex;align-items:center;gap:10px;min-width:0}header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}header span{margin-left:auto;color:#9ca9bc;font-size:11px}.stage{position:relative;min-height:0;flex:1;border:1px solid #2c3545;border-radius:10px;overflow:hidden;background:radial-gradient(circle at 50% 38%,#2b3545,#11151c 72%)}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas[data-dragging=true]{cursor:grabbing}.stage #error[hidden]{display:none}.stage #error{position:absolute;inset:12px;display:grid;place-items:center;color:#ffb4b4;text-align:center;white-space:pre-wrap}footer{flex-wrap:wrap;color:#aab5c6;font-size:11px}button,select{border:1px solid #3a4659;border-radius:6px;background:#1c2430;color:#e9edf5;padding:5px 8px;font:inherit}button{cursor:pointer}button:hover{background:#273245}button:disabled,select:disabled{cursor:not-allowed;opacity:.55}label{display:inline-flex;align-items:center;gap:4px}`,
+    javascript: String.raw`(() => {
+      const handle=${JSON.stringify(handle)};
+      const main=document.querySelector('main'), canvas=document.getElementById('viewer'), status=document.getElementById('status'), error=document.getElementById('error'), clip=document.getElementById('clip'), play=document.getElementById('play'), loopToggle=document.getElementById('loop'), reset=document.getElementById('reset');
+      const productData=window.northstarProduct?.data, stateKey='__northstarModelViewer', storedState=productData&&productData[stateKey]&&typeof productData[stateKey]==='object'?productData[stateKey]:undefined, savedState=storedState&&storedState.modelAssetId===handle?storedState:undefined, clamp=(value,min,max)=>Math.max(min,Math.min(max,value)), clipName=(value,index)=>value?.name||('Clip '+(index+1));
+      let renderer,scene,camera,root,mixer,clock,resizeObserver,clips=[],activeIndex=-1,action,playing=false,finished=false,dragPointer=null,lastX=0,lastY=0,theta=.45,phi=1.05,radius=3,fitRadius=3,zoomRatio=1,subjectRadius=1,center,disposed=false;
+      const persistState=time=>{if(!productData||typeof productData!=='object')return;productData[stateKey]={modelAssetId:handle,selectedClipName:activeIndex>=0?clipName(clips[activeIndex],activeIndex):null,playing:Boolean(playing&&action),animationTime:Number((time??action?.time??0).toFixed(3)),loop:Boolean(loopToggle.checked),theta:Number(theta.toFixed(5)),phi:Number(phi.toFixed(5)),zoomRatio:Number((radius/Math.max(.001,fitRadius)).toFixed(5))};};
+      const setState=()=>{const time=Number((action?.time??0).toFixed(3));main.dataset.playing=String(playing);main.dataset.animationTime=String(time);play.textContent=playing?'Pause':finished?'Replay':'Play';play.setAttribute('aria-pressed',String(playing));status.textContent=clips.length&&activeIndex>=0?(playing?'Playing':finished?'Ended':'Paused')+' · '+clipName(clips[activeIndex],activeIndex):clips.length?'Ready · no animation selected':'Ready · static model';persistState(time);};
+      const fail=e=>{error.hidden=false;error.textContent=String(e?.message||e);status.textContent='Model unavailable';main.dataset.playing='false';play.disabled=true;loopToggle.disabled=true;clip.disabled=true;};
+      const positionCamera=()=>{if(!camera||!center)return;camera.position.set(center.x+radius*Math.sin(phi)*Math.sin(theta),center.y+radius*Math.cos(phi),center.z+radius*Math.sin(phi)*Math.cos(theta));camera.lookAt(center);};
+      const updateFit=()=>{const verticalFov=camera.fov*Math.PI/180,horizontalFov=2*Math.atan(Math.tan(verticalFov/2)*Math.max(.1,camera.aspect)),minFov=Math.max(.01,Math.min(verticalFov,horizontalFov));fitRadius=Math.max(.05,subjectRadius/Math.sin(minFov/2)*1.15)||3;radius=fitRadius*zoomRatio;camera.near=Math.max(fitRadius/1000,.00001);camera.far=Math.max(fitRadius*20,100);camera.updateProjectionMatrix();positionCamera();};
+      const fit=object=>{const box=new northstarThreeCore.Box3().setFromObject(object),sphere=box.getBoundingSphere(new northstarThreeCore.Sphere());center=sphere.center;subjectRadius=sphere.radius;zoomRatio=1;theta=.45;phi=1.05;updateFit();};
+      const draw=now=>{if(!renderer||disposed)return;const delta=clock===undefined?0:Math.min(.05,Math.max(0,(now-clock)/1000));clock=now;if(mixer&&playing)mixer.update(delta);positionCamera();renderer.render(scene,camera);setState();};
+      const renderLoop=northstarThree.createLoop(draw,{respectReducedMotion:false});
+      const renderOnce=()=>draw(performance.now());
+      const pauseClip=()=>{playing=false;if(action)action.paused=true;renderLoop.pause();renderOnce();};
+      const onFinished=event=>{if(event.action!==action||loopToggle.checked)return;finished=true;playing=false;if(action)action.paused=true;renderLoop.pause();renderOnce();};
+      const selectClip=(index,autoplay,phase=0)=>{renderLoop.pause();if(mixer)mixer.stopAllAction();action=undefined;activeIndex=Number.isInteger(index)&&index>=0&&index<clips.length?index:-1;finished=false;if(activeIndex>=0){mixer=new northstarThreeCore.AnimationMixer(root);mixer.addEventListener('finished',onFinished);action=mixer.clipAction(clips[activeIndex]);action.setLoop(loopToggle.checked?northstarThreeCore.LoopRepeat:northstarThreeCore.LoopOnce,loopToggle.checked?Infinity:1);action.clampWhenFinished=true;action.reset();action.play();const duration=Number(action.getClip().duration)||0,requestedPhase=Number.isFinite(Number(phase))?Math.max(0,Number(phase)):0,atEnd=!loopToggle.checked&&duration>0&&requestedPhase>=duration;action.time=duration>0?(loopToggle.checked?requestedPhase%duration:clamp(requestedPhase,0,duration)):0;/* A paused mixer does not evaluate a restored pose. Sample the clip once before applying the paused/finished state. */action.paused=false;mixer.update(0);action.paused=Boolean(atEnd||!autoplay);finished=atEnd;clip.value=String(activeIndex);}else{clip.value='';mixer=undefined;}playing=Boolean(autoplay&&action&&!finished);play.disabled=activeIndex<0;loopToggle.disabled=activeIndex<0;clock=undefined;setState();renderOnce();if(playing)renderLoop.start();};
+      const resumeClip=()=>{if(!action){selectClip(clips.length?0:-1,true);return;}if(finished){action.reset();action.play();finished=false;}playing=true;action.paused=false;clock=undefined;setState();renderLoop.start();};
+      const load=async()=>{try{renderer=northstarThree.createRenderer(canvas,{antialias:true,alpha:true});scene=new northstarThreeCore.Scene();scene.background=null;camera=new northstarThreeCore.PerspectiveCamera(38,1,.01,100);scene.add(new northstarThreeCore.HemisphereLight(0xdce8ff,0x263246,2.2));const key=new northstarThreeCore.DirectionalLight(0xffffff,2.4);key.position.set(3,5,4);scene.add(key);const manager=northstarThree.createLoadingManager(fail);const loader=northstarThree.createLoader(manager);const bytes=northstarAssets.arrayBuffer(handle);await new Promise((resolve,reject)=>loader.parse(bytes,'',g=>{root=g.scene;scene.add(root);clips=g.animations||[];clips.forEach((c,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=clipName(c,i);clip.append(option);});fit(root);const hasClips=clips.length>0;clip.disabled=!hasClips;loopToggle.disabled=!hasClips;play.disabled=!hasClips;const savedName=savedState&&('selectedClipName' in savedState)?savedState.selectedClipName:undefined;const savedIndex=typeof savedName==='string'?clips.findIndex((value,index)=>clipName(value,index)===savedName):savedName===null?-1:-2;if(savedState&&savedState.loop!==undefined)loopToggle.checked=savedState.loop!==false;if(savedState&&savedIndex>=-1&&savedIndex<clips.length){theta=Number.isFinite(Number(savedState.theta))?clamp(Number(savedState.theta),-100,100):theta;phi=Number.isFinite(Number(savedState.phi))?clamp(Number(savedState.phi),.2,2.9):phi;zoomRatio=Number.isFinite(Number(savedState.zoomRatio))?clamp(Number(savedState.zoomRatio),.25,4):1;radius=fitRadius*zoomRatio;positionCamera();if(savedIndex>=0)selectClip(savedIndex,savedState.playing===true,Number(savedState.animationTime)||0);else selectClip(-1,false);}else if(hasClips)selectClip(0,${model.autoplay !== false}&&!matchMedia('(prefers-reduced-motion: reduce)').matches);else{setState();renderOnce();}resolve(g);},reject));clip.onchange=()=>selectClip(clip.value===''?-1:Number(clip.value),true);loopToggle.onchange=()=>{if(!action)return;const wasPlaying=playing,phase=action.time;action.setLoop(loopToggle.checked?northstarThreeCore.LoopRepeat:northstarThreeCore.LoopOnce,loopToggle.checked?Infinity:1);action.time=phase;action.paused=!wasPlaying;playing=wasPlaying;setState();renderOnce();};play.onclick=()=>{if(!clips.length)return;if(playing)pauseClip();else resumeClip();};reset.onclick=()=>{if(root)fit(root);renderOnce();};const resize=()=>{const r=canvas.getBoundingClientRect();camera.aspect=Math.max(1,r.width)/Math.max(1,r.height);updateFit();renderer.setPixelRatio(Math.min(2,devicePixelRatio||1));renderer.setSize(Math.max(1,r.width),Math.max(1,r.height),false);renderOnce();};resizeObserver=new ResizeObserver(resize);resizeObserver.observe(canvas);resize();canvas.onpointerdown=e=>{if(dragPointer!==null||e.isPrimary===false||(e.button!==undefined&&e.button!==0))return;dragPointer=e.pointerId;lastX=e.clientX;lastY=e.clientY;canvas.dataset.dragging='true';canvas.setPointerCapture(e.pointerId)};canvas.onpointermove=e=>{if(dragPointer===null||e.pointerId!==dragPointer)return;theta+=(e.clientX-lastX)*.01;phi=clamp(phi+(e.clientY-lastY)*.01,.2,2.9);lastX=e.clientX;lastY=e.clientY;positionCamera();renderOnce();};const endDrag=e=>{if(e.pointerId!==dragPointer)return;dragPointer=null;canvas.dataset.dragging='false';if(canvas.hasPointerCapture?.(e.pointerId))canvas.releasePointerCapture(e.pointerId);};canvas.onpointerup=endDrag;canvas.onpointercancel=endDrag;canvas.onlostpointercapture=endDrag;canvas.onwheel=e=>{e.preventDefault();zoomRatio=clamp(zoomRatio*Math.exp(e.deltaY*.001),.25,4);radius=fitRadius*zoomRatio;positionCamera();renderOnce();};renderOnce();}catch(e){fail(e)}};
+      load();
+      addEventListener('pagehide',()=>{if(disposed)return;disposed=true;renderLoop.dispose();resizeObserver?.disconnect();northstarThree.disposeAll();root?.traverse(o=>{if(o.geometry?.dispose)o.geometry.dispose();const materials=Array.isArray(o.material)?o.material:[o.material];materials.filter(Boolean).forEach(m=>{['map','normalMap','roughnessMap','metalnessMap','emissiveMap','aoMap'].forEach(key=>m[key]?.dispose?.());m.dispose?.()})})},{once:true});
+    })()`,
+    referenceAssetIds: [model.evidenceId],
+    trustedRuntimeLibraries: ['three'],
+  };
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] ?? character));
+}

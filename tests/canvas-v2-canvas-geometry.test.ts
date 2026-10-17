@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-import { canvasV2CaptureGeometry, growCanvasV2CanvasGeometry, normalizeCanvasV2CanvasGeometry } from "../lib/canvas-v2/canvas-geometry";
+import { canvasV2CaptureGeometry, canvasV2ContentCaptureCamera, canvasV2DesignDetailIndexes, growCanvasV2CanvasGeometry, normalizeCanvasV2CanvasGeometry } from "../lib/canvas-v2/canvas-geometry";
 
 test("intrinsic content has a generous minimum and is bounded by the finite workspace", () => {
   assert.deepEqual(normalizeCanvasV2CanvasGeometry({ width: 400, height: 300 }), { width: 1680, height: 945 });
@@ -145,4 +145,42 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(nativeScene, /decoding: "async"/);
   assert.doesNotMatch(nativeScene, /transientGeometry=\{transientGeometry\}/);
   assert.doesNotMatch(workspace, /transientGeometry=\{transientGeometry\}/);
+});
+
+
+test("a capture camera fits every remote content corner without changing world rectangles or raster budget", () => {
+  const world = [{ x: 60_000, y: 61_000, width: 900, height: 600 }, { x: 82_000, y: 66_000, width: 1200, height: 800 }];
+  const original = structuredClone(world);
+  const viewport = { width: 12_000, height: 8_000 };
+  const camera = canvasV2ContentCaptureCamera(world, viewport)!;
+  assert.deepEqual(camera.bounds, { x: 59_952, y: 60_952, width: 23_296, height: 5_896 });
+  assert.ok(camera.scale > 0 && camera.scale < 1, "translation alone cannot fit a 23k-wide composition");
+  for (const rect of [...world, camera.bounds]) for (const x of [rect.x, rect.x + rect.width]) for (const y of [rect.y, rect.y + rect.height]) {
+    const px = x * camera.scale + camera.translateX, py = y * camera.scale + camera.translateY;
+    assert.ok(px >= -1e-8 && px <= viewport.width + 1e-8, `horizontal corner ${px}`);
+    assert.ok(py >= -1e-8 && py <= viewport.height + 1e-8, `vertical corner ${py}`);
+  }
+  assert.deepEqual(world, original);
+  assert.deepEqual(canvasV2CaptureGeometry(viewport), { width: 2400, height: 1600 });
+});
+
+test("capture cameras preserve local captures and fit negative or remote vertical extents", () => {
+  const viewport = { width: 1680, height: 945 };
+  assert.equal(canvasV2ContentCaptureCamera([], viewport), undefined);
+  assert.equal(canvasV2ContentCaptureCamera([{ x: NaN, y: 0, width: 12, height: 12 }, { x: 0, y: 0, width: 0, height: 10 }], viewport), undefined);
+  assert.equal(canvasV2ContentCaptureCamera([{ x: 12, y: 20, width: 900, height: 600 }], viewport), undefined);
+  const camera = canvasV2ContentCaptureCamera([{ x: -200, y: -300, width: 300, height: 30_000 }], viewport)!;
+  assert.ok(Math.abs(camera.bounds.height * camera.scale - viewport.height) < 1e-8);
+  assert.ok(camera.bounds.x * camera.scale + camera.translateX >= 0);
+  assert.ok(camera.bounds.y * camera.scale + camera.translateY >= -1e-8);
+});
+
+test("changed and new region detail priority retains the real full-board reading index", () => {
+  const ids = Array.from({ length: 9 }, (_, index) => `region-${index}`);
+  const original = [...ids];
+  assert.deepEqual(canvasV2DesignDetailIndexes(ids, ["region-8", "region-1", "region-8", "missing"], 6), [8, 1, 0, 2, 3, 4]);
+  assert.deepEqual(canvasV2DesignDetailIndexes(ids, [], 6), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(canvasV2DesignDetailIndexes([undefined, "valid"], [], 6), [1]);
+  assert.deepEqual(canvasV2DesignDetailIndexes(ids, ["region-8"], 0), []);
+  assert.deepEqual(ids, original);
 });

@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/client';
-import { decodeSnapshot, encodeSnapshot } from './snapshot';
+import { decodeSnapshotBlob, encodeSnapshot } from './snapshot';
 import type { NorthstarSession, NorthstarSnapshot } from './types';
 const bucket = 'northstar-sessions';
 const db = () => createClient();
@@ -21,7 +21,7 @@ export async function loadSnapshot(session: NorthstarSession): Promise<Northstar
   for (let attempt = 0; attempt < 3; attempt++) {
     if (!session.snapshot_path) return undefined;
     const result = await db().storage.from(bucket).download(session.snapshot_path);
-    if (!result.error && result.data) return decodeSnapshot(JSON.parse(await result.data.text()));
+    if (!result.error && result.data) return decodeSnapshotBlob(result.data);
     const fresh = await getSession(session.id);
     if (fresh.snapshot_path === session.snapshot_path) throw new Error(result.error?.message || 'The saved snapshot could not be loaded.');
     Object.assign(session, fresh);

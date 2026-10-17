@@ -16,6 +16,7 @@ import {
   canvasV2NativeSceneNodeOwnsVisibleSurface,
   canvasV2NativeSceneNodeUsesHostBackground,
   canvasV2NativeSceneSelectionContainsTarget,
+  canvasV2NativeSceneAbsoluteBounds,
   canvasV2NativeObservationDocument,
   patchCanvasV2NativeDocument,
   canvasV2FollowerYAfterRootGrowth,
@@ -881,6 +882,59 @@ test("candidate observations are projected onto the exact public native world be
   assert.equal(projected.spatial.authoredSurface?.zones.length, 9);
 });
 
+test("native projection retains a mounted model viewer as a protected placement occupant", () => {
+  const source = scene();
+  const model = source.nodes[0];
+  model.id = "model-viewer";
+  model.sourceNodeId = "model-viewer";
+  model.kind = "object";
+  model.userEdited = true;
+  model.lastAuthor = "user";
+  model.geometry = { x: 3_200, y: 2_100, width: 480, height: 360, rotation: 0, zIndex: 0 };
+  model.attributes = {
+    "data-canvas-v2-node-id": "model-viewer",
+    ["data-canvas-v2-model"]: JSON.stringify({ version: 1, evidenceId: "model-1", label: "Athlete" }),
+  };
+  const observation = {
+    schema: "canvas-v2.observation.v1" as const,
+    revisionId: source.revisionId,
+    capturedAt: "2026-08-22T12:00:00.000Z",
+    screenshotDataUrl: "data:image/png;base64,AA==",
+    viewport: { width: 1_680, height: 945, deviceScaleFactor: 1 },
+    contentBounds: { x: 0, y: 0, width: 1_680, height: 945 },
+    runtimeErrors: [],
+    missingEvidenceIds: [],
+    spatial: {
+      measuredNodeCount: 0,
+      reportedNodeCount: 0,
+      nodes: [],
+      notableIntersections: [],
+      contentOverflowNodeIds: [],
+      evidence: [],
+      designRegions: [],
+      authoredSurface: {
+        canvasBounds: { x: 0, y: 0, width: 1_680, height: 945 },
+        authoredAreaShare: 0,
+        readingOrder: [],
+        zones: [],
+        placementOccupants: [],
+      },
+    },
+  } satisfies CanvasV2RenderObservation;
+  const projected = projectCanvasV2ObservationToNativeScene(observation, source);
+  const occupant = projected.spatial.authoredSurface?.placementOccupants?.find((item) => item.nodeId === "model-viewer");
+  assert.deepEqual(occupant, {
+    nodeId: "model-viewer",
+    parentNodeId: undefined,
+    kind: "object",
+    owner: "user",
+    userEdited: true,
+    locked: false,
+    canonicalEvidence: false,
+    bounds: { nodeId: "model-viewer", x: 3_200, y: 2_100, width: 480, height: 360 },
+  });
+});
+
 test("native projection detects readable text collisions introduced by final public geometry", () => {
   const source = scene();
   const template = source.nodes[0];
@@ -1481,6 +1535,22 @@ test("an existing group selection owns pointer targets anywhere in its nested su
 
   const formerGroupMoved = applyCanvasV2NativeSceneMutation(detached, { kind: "move", nodeId: "group", deltaX: 80, deltaY: 45 });
   assert.deepEqual(formerGroupMoved.nodes.find((node) => node.id === "note")?.geometry, detachedBounds);
+});
+
+test("absolute bounds resolve the selected leaf against the current parent geometry", () => {
+  const source = scene();
+  const leaf = source.nodes.find(node => node.id === "note")!;
+  const parent = structuredClone(leaf);
+  parent.id = "current-parent";
+  parent.sourceNodeId = "current-parent";
+  parent.geometry = { x: 420, y: 180, width: 900, height: 700, rotation: 0, zIndex: 0 };
+  parent.childIds = [leaf.id];
+  parent.content = [{ kind: "node", id: leaf.id }];
+  leaf.parentId = parent.id;
+  leaf.geometry = { x: 24, y: 36, width: 120, height: 80, rotation: 0, zIndex: 0 };
+  source.nodes = [parent, leaf];
+  source.rootIds = [parent.id];
+  assert.deepEqual(canvasV2NativeSceneAbsoluteBounds(source, leaf.sourceNodeId), { nodeId: leaf.sourceNodeId, x: 444, y: 216, width: 120, height: 80 });
 });
 
 test("the public workspace renders native nodes while iframes are isolated compilers", () => {
@@ -2109,6 +2179,70 @@ test("fast native opening-tag patch matches full serialization through consecuti
   assert.deepEqual(firstDocument, serializeCanvasV2NativeScene(first));
   const second = applyCanvasV2NativeSceneMutation(first, { kind: "move", nodeId: "note", deltaX: -8, deltaY: 17 });
   assert.deepEqual(patchCanvasV2NativeDocument(firstDocument!, first, second), serializeCanvasV2NativeScene(second));
+});
+
+function semanticDetachedScene(nested = false): CanvasV2NativeSceneDocument {
+  const source = scene(), leaf = source.nodes[0];
+  const parent = { ...structuredClone(leaf), id: "semantic-parent", sourceNodeId: "semantic-parent", tagName: "section", kind: "group" as const,
+    order: nested ? 1 : 0, content: [], childIds: [], directText: undefined,
+    attributes: { "data-canvas-v2-node-id": "semantic-parent" },
+    geometry: { ...leaf.geometry, x: nested ? 63_000 : 64_000, y: nested ? 63_000 : 65_000, width: 1200, height: 1800 } };
+  Object.assign(leaf, { order: nested ? 2 : 1, detachedFromParentId: parent.id, detachedFromParentIndex: 0,
+    geometry: { ...leaf.geometry, x: 64_550, y: 66_300 } });
+  Object.assign(leaf.attributes, { "data-canvas-v2-detached": "true", "data-canvas-v2-detached-from": parent.id, "data-canvas-v2-detached-index": "0" });
+  source.width = source.height = 131_072;
+  source.nodes = [parent, leaf]; source.rootIds = [parent.id, leaf.id];
+  if (nested) {
+    const outer = { ...structuredClone(parent), id: "outer", sourceNodeId: "outer", order: 0,
+      attributes: { "data-canvas-v2-node-id": "outer" }, childIds: [parent.id], content: [{ kind: "node" as const, id: parent.id }],
+      geometry: { ...parent.geometry, x: 1000, y: 2000 } };
+    Object.assign(parent, { parentId: outer.id });
+    source.nodes = [outer, parent, leaf]; source.rootIds = [outer.id, leaf.id];
+  }
+  return source;
+}
+
+/** Read the emitted CSS coordinate contract back from HTML, composing actual
+ * source ancestry as the browser does. This catches double origins without
+ * borrowing native scene geometry to reconstruct the result. */
+function serializedNativeWorldOrigin(html: string, nodeId: string) {
+  const stack: Array<{ tag: string; x: number; y: number }> = [];
+  for (const token of html.matchAll(/<\/?[a-z][^>]*>/gi)) {
+    const text = token[0], tag = /^<\/?([a-z][\w-]*)/i.exec(text)![1].toLowerCase();
+    if (text.startsWith("</")) { stack.pop(); continue; }
+    const x = Number(/--canvas-v2-scene-x:([-\d.]+)px/.exec(text)?.[1] ?? 0);
+    const y = Number(/--canvas-v2-scene-y:([-\d.]+)px/.exec(text)?.[1] ?? 0);
+    if (text.includes(`data-canvas-v2-node-id="${nodeId}"`)) return {
+      x: stack.reduce((sum, parent) => sum + parent.x, x),
+      y: stack.reduce((sum, parent) => sum + parent.y, y),
+    };
+    if (!["img", "br", "hr", "input", "meta", "link"].includes(tag)) stack.push({ tag, x, y });
+  }
+  throw new Error(`Missing serialized native node ${nodeId}`);
+}
+
+test("detached object attribute edits roundtrip without adding their semantic parent origin twice", () => {
+  const source = semanticDetachedScene(), originalGeometry = { ...source.nodes[1].geometry };
+  let current = source, document = serializeCanvasV2NativeScene(source);
+  for (const label of ["Updated card", "Another label"]) {
+    const next = applyCanvasV2NativeSceneMutation(current, { kind: "attribute", nodeId: "note", name: "alt", value: label });
+    const patched = patchCanvasV2NativeDocument(document, current, next);
+    assert.ok(patched, "attribute-only changes retain the fast path");
+    assert.deepEqual(patched, serializeCanvasV2NativeScene(next));
+    assert.deepEqual(serializedNativeWorldOrigin(patched.html, "note"), { x: originalGeometry.x, y: originalGeometry.y });
+    assert.deepEqual(next.nodes.find(node => node.id === "note")!.geometry, originalGeometry);
+    current = next; document = patched;
+  }
+  assert.deepEqual(source.nodes[1].geometry, originalGeometry, "prior human geometry remains immutable");
+});
+
+test("moving a semantic ancestor updates an unchanged detached object's serialized offset", () => {
+  const source = semanticDetachedScene(true), leaf = source.nodes.find(node => node.id === "note")!;
+  const next = applyCanvasV2NativeSceneMutation(source, { kind: "move", nodeId: "outer", deltaX: 125, deltaY: -80 });
+  assert.strictEqual(next.nodes.find(node => node.id === "note"), leaf, "native detached object is unchanged");
+  const patched = patchCanvasV2NativeDocument(serializeCanvasV2NativeScene(source), source, next);
+  assert.ok(patched); assert.deepEqual(patched, serializeCanvasV2NativeScene(next));
+  assert.deepEqual(serializedNativeWorldOrigin(patched.html, "note"), { x: leaf.geometry.x, y: leaf.geometry.y });
 });
 
 test("native opening-tag patch falls back when an edit changes structure or content", () => {

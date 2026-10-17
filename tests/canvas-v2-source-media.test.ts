@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prepareCanvasV2SourceText, canvasV2PageMediaCandidates, canvasV2PublicMediaAddress, enrichCanvasV2SourceMedia } from "../lib/canvas-v2/source-media.server";
+import { prepareCanvasV2SourceText, canvasV2PageMediaCandidates, canvasV2PublicMediaAddress, enrichCanvasV2SourceMedia, actualFontType } from "../lib/canvas-v2/source-media.server";
 import { canvasV2CompositionEvidence, canvasV2ResearchImagePreviews } from "../lib/canvas-v2/evidence-packets";
 import { buildCanvasV2EvidenceCopyHandles } from "../lib/canvas-v2/evidence-handles";
 import { applyCanvasV2SourcePatch } from "../lib/canvas-v2/source-patch";
@@ -186,4 +186,33 @@ test("unlabelled responsive variants replace huge metadata originals without los
   const [image] = canvasV2PageMediaCandidates('<meta property="og:image" content="/chart.png?w=8000"><img srcset="/chart.png?w=1400 1400w, /chart.png?w=8000 8000w"><img src="/chart.png?w=100" alt="Energy balance">', page);
   assert.equal(image.url, "https://research.example/chart.png?w=1400");
   assert.equal(image.label, "Energy balance");
+});
+
+test('public source fonts retain bytes and provenance without masquerading as image input', async () => {
+  const { readNorthstarSource } = await import('../lib/canvas-v2/agent-source.server');
+  const { validateCanvasV2Screen } = await import('../lib/canvas-v2/interactive-screen');
+  const { buildCanvasV2ScreenRuntime } = await import('../lib/canvas-v2/interactive-screen-runtime');
+  const bytes = Buffer.concat([Buffer.from('wOF2'), Buffer.alloc(20)]);
+  const url = 'https://reference.example/typeface.woff2';
+  const response = await readNorthstarSource({ name: 'read_source', arguments: { url } }, new AbortController().signal, async () => ({ url, mimeType: 'font/woff2', bytes }));
+  const { asset } = await response.json();
+  assert.equal(asset.mimeType, 'font/woff2');
+  assert.equal(asset.kind, 'document');
+  assert.equal(asset.source.sourceUrl, url);
+  assert.deepEqual(Buffer.from(asset.url.split(',')[1], 'base64'), bytes);
+  const screen = validateCanvasV2Screen({ version: 1, title: 'Reference type', width: 390, height: 844, html: '<h1>Home</h1>', css: `@font-face{font-family:Reference;src:url(northstar-asset:${asset.id})}h1{font-family:Reference}`, javascript: '', referenceAssetIds: [asset.id] });
+  const runtime = buildCanvasV2ScreenRuntime(screen, new Map([[asset.id, asset.url]]), 'font-test');
+  assert.ok(runtime.includes(asset.url));
+  assert.ok(!runtime.includes(url));
+  await assert.rejects(readNorthstarSource({ name: 'inspect_image', arguments: { url } }, new AbortController().signal, async () => ({ url, mimeType: 'font/woff2', bytes })), /supported image/);
+});
+
+test('public font retention rejects spoofed, oversized and mismatched bytes', async () => {
+  const { readNorthstarSource } = await import('../lib/canvas-v2/agent-source.server');
+  const action = { name: 'read_source', arguments: { url: 'https://reference.example/font.ttf' } };
+  for (const bytes of [Buffer.from('not a font'), Buffer.concat([Buffer.from('OTTO'), Buffer.alloc(20)]), Buffer.alloc(2_000_001)]) {
+    await assert.rejects(readNorthstarSource(action, new AbortController().signal, async url => ({ url, mimeType: 'font/ttf', bytes })), /bounded font format/);
+  }
+  assert.equal(actualFontType(Buffer.concat([Buffer.from([0, 1, 0, 0]), Buffer.alloc(20)])), 'font/ttf');
+  assert.equal(actualFontType(Buffer.concat([Buffer.from('wOFF'), Buffer.alloc(20)])), 'font/woff');
 });

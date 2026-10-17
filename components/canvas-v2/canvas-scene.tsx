@@ -13,6 +13,8 @@ import {
 import {
   CANVAS_V2_MIN_CANVAS,
   canvasV2CaptureGeometry,
+  canvasV2ContentCaptureCamera,
+  canvasV2DesignDetailIndexes,
   growCanvasV2CanvasGeometry,
   measureCanvasV2CanvasGeometry,
   type CanvasV2CanvasGeometry,
@@ -30,6 +32,7 @@ import {
   type CanvasV2SelectionIntent,
 } from "@/lib/canvas-v2/element-inspection";
 import { observeCanvasV2SpatialLayout } from "@/lib/canvas-v2/spatial-observation";
+import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
 import {
   CanvasV2NativeCanvasScene,
   type CanvasV2NativeCanvasSceneHandle,
@@ -47,6 +50,7 @@ export interface CanvasV2CanvasSceneProps {
   theme?: CanvasV2ArtifactTheme;
   onObservation: (observation: CanvasV2RenderObservation) => void;
   onCaptureError?: (error: string) => void;
+  onCaptureProgress?: (revisionId: string, stage: string) => void;
   width?: number;
   height?: number;
   bare?: boolean;
@@ -211,6 +215,8 @@ async function captureAuthoredDesignDetails(
   frameDocument: Document,
   backgroundColor: string,
   isCurrent: () => boolean,
+  priorityNodeIds: readonly string[] = [],
+  onStage?: (stage: string) => void,
 ): Promise<NonNullable<CanvasV2RenderObservation["designDetails"]>> {
   const canvas = frameDocument.body;
   const canvasRect = canvas.getBoundingClientRect();
@@ -227,10 +233,11 @@ async function captureAuthoredDesignDetails(
       const verticalDelta = leftRect.top - rightRect.top;
       const rowTolerance = Math.max(24, Math.min(leftRect.height, rightRect.height) * 0.18);
       return Math.abs(verticalDelta) <= rowTolerance ? leftRect.left - rightRect.left : verticalDelta;
-    })
-    .slice(0, CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS);
+    });
+  const detailIndexes = canvasV2DesignDetailIndexes(regions.map(region => region.dataset.canvasV2NodeId), priorityNodeIds, CANVAS_V2_MAX_DESIGN_DETAIL_CHUNKS);
   const details: NonNullable<CanvasV2RenderObservation["designDetails"]> = [];
-  for (const [readingIndex, region] of regions.entries()) {
+  for (const readingIndex of detailIndexes) {
+    const region = regions[readingIndex];
     const nodeId = region.dataset.canvasV2NodeId;
     const rect = region.getBoundingClientRect();
     if (!nodeId || rect.width < 2 || rect.height < 2) continue;
@@ -242,7 +249,10 @@ async function captureAuthoredDesignDetails(
       pixelRatio: Math.max(0.1, scale),
       quality: 0.82,
       skipFonts: true,
-    }, isCurrent);
+      // Isolate remote world-positioned regions at the capture origin. This
+      // styles the clone only, retaining authored child transforms and layout.
+      style: { position: "relative", left: "0px", top: "0px", right: "auto", bottom: "auto", margin: "0" },
+    }, isCurrent, stage => onStage?.(`design-detail-${readingIndex}-${stage}`));
     details.push({
       nodeId,
       label: region.getAttribute("aria-label")?.trim() || heading || "Authored design region",
@@ -264,6 +274,7 @@ function CanvasV2ObservationScene({
   theme = "light",
   onObservation,
   onCaptureError,
+  onCaptureProgress,
   width = CANVAS_V2_MIN_CANVAS.width,
   height = CANVAS_V2_MIN_CANVAS.height,
   bare = false,
@@ -723,8 +734,16 @@ function CanvasV2ObservationScene({
       && frameDocument.documentElement?.dataset.canvasV2RevisionId === revision.id
       && frameDocument.documentElement?.dataset.canvasV2Theme === theme
     );
+    const captureStartedAt = performance.now();
+    const captureStage = (stage: string) => {
+      if (!captureIsCurrent()) return;
+      onCaptureProgress?.(revision.id, stage);
+      frame.dataset.canvasV2CaptureStage = stage;
+      frame.dataset.canvasV2CaptureStageStartedMs = String(Math.round(performance.now() - captureStartedAt));
+    };
 
     try {
+      captureStage("geometry");
       frame.style.width = `${CANVAS_V2_MIN_CANVAS.width}px`;
       frame.style.height = `${CANVAS_V2_MIN_CANVAS.height}px`;
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -761,6 +780,34 @@ function CanvasV2ObservationScene({
       onGeometry?.(geometry);
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
       if (!captureIsCurrent()) return;
+      const contentElements = Array.from(frameDocument.body.querySelectorAll<HTMLElement>("[data-canvas-v2-node-id]"))
+        .filter(element => !element.hasAttribute("data-canvas-v2-workspace-root")
+          && !element.hasAttribute("data-canvas-v2-permanent-root")
+          && element.dataset.canvasV2NodeId !== "canvas" && element.dataset.canvasV2NodeId !== "canvas-root"
+          && !["TEMPLATE", "SCRIPT", "STYLE"].includes(element.tagName));
+      const captureCamera = canvasV2ContentCaptureCamera(contentElements.flatMap(element => {
+        const style = frameDocument.defaultView!.getComputedStyle(element);
+        if (element.hidden || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return [];
+        const rect = canvasV2ElementPaintBounds(element);
+        return rect.width > 0 && rect.height > 0 ? [{ x: rect.x, y: rect.y, width: rect.width, height: rect.height }] : [];
+      }), geometry);
+      // Transaction facts identify the changed island even when only a nested
+      // child changed. New regions also get priority on legacy candidates.
+      const regions = contentElements.filter(element => element.hasAttribute("data-canvas-v2-design-region")
+        && !element.parentElement?.closest("[data-canvas-v2-design-region]"));
+      const elementById = new Map(contentElements.map(element => [element.dataset.canvasV2NodeId, element]));
+      const outerRegionId = (nodeId: string | undefined) => {
+        let region = nodeId ? elementById.get(nodeId)?.closest<HTMLElement>("[data-canvas-v2-design-region]") : undefined;
+        while (region?.parentElement?.closest("[data-canvas-v2-design-region]")) region = region.parentElement.closest<HTMLElement>("[data-canvas-v2-design-region]");
+        return region?.dataset.canvasV2NodeId;
+      };
+      const previousIds = new Set(placementReferenceScene?.nodes.map(node => node.sourceNodeId));
+      const transaction = revision.sceneTransaction;
+      const detailPriorityIds = [
+        outerRegionId(transaction?.targetIslandId),
+        ...regions.filter(region => placementReferenceScene && !previousIds.has(region.dataset.canvasV2NodeId)).map(region => region.dataset.canvasV2NodeId),
+        ...(transaction?.mutations.filter(mutation => mutation.kind !== "preserve").flatMap(mutation => [outerRegionId(mutation.islandId), outerRegionId(mutation.nodeId)]) ?? []),
+      ].filter((nodeId): nodeId is string => Boolean(nodeId));
       const captureGeometry = canvasV2CaptureGeometry(geometry);
       let screenshotDataUrl = "";
       let wholeBoardCaptureError: unknown;
@@ -782,6 +829,7 @@ function CanvasV2ObservationScene({
         { scale: 0.72, quality: 0.72, compactCanonicalImages: true },
       ];
       for (const attempt of captureAttempts) {
+        captureStage(`overview-${attempt.scale}`);
         const restoreCanonicalImages = attempt.compactCanonicalImages
           ? await compactCanonicalImagesForPrivateCapture(frameDocument)
           : undefined;
@@ -791,12 +839,14 @@ function CanvasV2ObservationScene({
             pixelRatio: 1,
             width: geometry.width,
             height: geometry.height,
+            overview: true,
+            captureCamera,
             canvasWidth: Math.max(1, Math.round(captureGeometry.width * attempt.scale)),
             canvasHeight: Math.max(1, Math.round(captureGeometry.height * attempt.scale)),
             backgroundColor: theme === "dark" ? "#111117" : "#ffffff",
             quality: attempt.quality,
             skipFonts: true,
-          }, captureIsCurrent);
+          }, captureIsCurrent, (stage) => captureStage(`overview-${attempt.scale}-${stage}`));
           break;
         } catch (captureError) {
           wholeBoardCaptureError = captureError;
@@ -813,9 +863,10 @@ function CanvasV2ObservationScene({
       // accepted whole-board capture instead of rejecting the composition.
       const hiddenLocalRepair = /^(?:type-floor-recovery|relationship-recovery)-revision-/.test(revision.id);
       const intermediateResearchCommit = revision.id.startsWith("research-fast-revision-");
+      captureStage("optional-details");
       const [railDetailResult, designDetailResult] = await Promise.allSettled([
         hiddenLocalRepair || intermediateResearchCommit ? Promise.resolve([]) : captureCanonicalRailDetails(frameDocument, captureIsCurrent),
-        captureAuthoredDesignDetails(frameDocument, theme === "dark" ? "#111117" : "#ffffff", captureIsCurrent),
+        captureAuthoredDesignDetails(frameDocument, theme === "dark" ? "#111117" : "#ffffff", captureIsCurrent, detailPriorityIds, captureStage),
       ]);
       const railDetails = railDetailResult.status === "fulfilled" ? railDetailResult.value : [];
       const designDetails = designDetailResult.status === "fulfilled" ? designDetailResult.value : [];
@@ -841,6 +892,7 @@ function CanvasV2ObservationScene({
         theme,
         revisionId: revision.id,
         screenshotDataUrl,
+        ...(captureCamera ? { captureCamera } : {}),
         viewport: { width: geometry.width, height: geometry.height, deviceScaleFactor: captureGeometry.width / geometry.width },
         contentBounds: {
           x: 0,
@@ -874,9 +926,11 @@ function CanvasV2ObservationScene({
       }) : undefined;
       if (!captureIsCurrent()) return;
       if (candidateScene) onNativeScene?.(candidateScene);
+      captureStage("publish");
       onObservation(candidateScene ? projectCanvasV2ObservationToNativeScene(compatibilityObservation, candidateScene) : compatibilityObservation);
     } catch (captureError) {
       if (!captureIsCurrent()) return;
+      captureStage("failed");
       const message = canvasV2CaptureErrorMessage(captureError);
       if (process.env.NODE_ENV !== "production") console.warn("[canvas-v2] private whole-board capture could not be observed after local retry", message);
       if (!onCaptureError) setError(message);
