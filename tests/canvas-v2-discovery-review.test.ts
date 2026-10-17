@@ -1610,3 +1610,17 @@ test('final review retains a planned-transition defect until a current cited jou
   feedback.productChecks[0].evidenceImageNumbers = JSON.parse(context.packet('').text).imageDirectory.map((entry: { imageNumber: number }) => entry.imageNumber);
   assert.equal(JSON.parse(context.reconcileFeedback(JSON.stringify(feedback))).work.length, 0);
 });
+
+
+test('the real reviewer output schema lists every object property as required for strict API validation',()=>{
+ const visit=(raw:unknown,path:string)=>{
+  const schema=object(raw);
+  if(schema.type==='object'){
+   assert.equal(schema.additionalProperties,false,path+' must reject unknown properties');
+   assert.deepEqual([...(schema.required as string[])].sort(),Object.keys(object(schema.properties)).sort(),path+' must include every property in required');
+   for(const [name,child] of Object.entries(object(schema.properties)))visit(child,path+'.'+name);
+  }
+  if(schema.type==='array')visit(schema.items,path+'[]');
+ };
+ visit(DISCOVERY_REVIEW_SCHEMA,'review');
+});

@@ -30,3 +30,7 @@ Local evaluation routes remain guarded. Research output archives and generated G
 This change separates review advice from blocking findings; it does not guarantee good taste or perfect model classification. Large-board native full-canvas capture still has unresolved failures observed locally. Individual current-source product review remains required; do not represent a failed capture as visual approval.
 
 Deploy the same commit to the Vercel application and the single Render worker. Do not rerun the installed session migration or change worker admission/security settings. Previous release: 39cbaee. A worker replacement interrupts in-memory runs; saved sessions persist. Roll back both services together if production checks fail.
+
+## Production smoke follow-up
+
+The first live counter run generated a working screen but exposed a strict API schema rejection: original-design fields and several product-review fields were defined in properties without appearing in required. Fixture transports did not enforce that API rule. Every object in the reviewer output schema now lists every property in required, with explicit inapplicability assessments for static work; legacy parsing remains compatible. A recursive contract regression covers the entire schema, and the real pinned Codex/API review probe now returns valid feedback. The follow-up focused review suite passes all 94 tests.

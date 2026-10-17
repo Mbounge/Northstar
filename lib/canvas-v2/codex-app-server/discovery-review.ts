@@ -62,8 +62,8 @@ export const DISCOVERY_REVIEW_SCHEMA = {
     } },
     productChecks: { type:'array', items:{type:'object',additionalProperties:false,properties:{
       nodeId:textField, referenceComparison:{type:'string',enum:['pass','revise','unverified','not_applicable']}, componentConsistency:{type:'string',enum:['pass','revise','unverified']}, assetQuality:{type:'string',enum:['pass','revise','unverified']}, motionQuality:{type:'string',enum:['pass','revise','unverified','not_applicable']}, motionAssessment:textField, heldMotionAssessment:textField,
-      // Optional for static screens for backwards compatibility. The final
-      // gate requires this structured assessment whenever motion is observed.
+      // New API responses include every field for strict structured output.
+      // The parser still accepts legacy packets without static assessments.
       motionCraft: { type:'object', additionalProperties:false, properties:{
         status:{type:'string',enum:['pass','revise','unverified','not_applicable']},
         composition:textField, legibility:textField, formOrAssetFidelity:textField,
@@ -76,13 +76,13 @@ export const DISCOVERY_REVIEW_SCHEMA = {
         craft:visualCheck, distinctness:visualCheck, findings:{type:'array',maxItems:32,items:designFinding},
         briefFit:textField, coherence:textField, typography:textField, imagery:textField,
         composition:textField, density:textField, visualIdentity:textField,
-      }, required:['status','findings','briefFit','coherence','typography','imagery','composition','density','visualIdentity'] },
+      }, required:['status','craft','distinctness','findings','briefFit','coherence','typography','imagery','composition','density','visualIdentity'] },
       evidenceImageNumbers:{type:'array',items:{type:'integer',minimum:1}}, modelEvidenceIds:{type:'array',maxItems:32,items:textField}, assessment:textField,
       visualChecks: { type: 'object', additionalProperties: false, properties: { icons: visualCheck, typography: visualCheck, imagery: visualCheck, layout: visualCheck, content: visualCheck, palette: visualCheck, shapes: visualCheck, surfaceEffects: visualCheck }, required: ['icons', 'typography', 'imagery', 'layout', 'content', 'palette', 'shapes', 'surfaceEffects'] },
       designLanguageComparison: visualCheck,
       interactionQuality: {type:'string',enum:['pass','revise','unverified','not_applicable']}, interactionAssessment: textField,
       probeResolutions: {type:'array',items:{type:'object',additionalProperties:false,properties:{checkNumber:{type:'integer',minimum:1},basis:textField},required:['checkNumber','basis']}},
-    },required:['nodeId','referenceComparison','componentConsistency','assetQuality','motionQuality','motionAssessment','visualChecks','designLanguageComparison','interactionQuality','interactionAssessment','probeResolutions','evidenceImageNumbers','assessment']} },
+    },required:['nodeId','referenceComparison','componentConsistency','assetQuality','motionQuality','motionAssessment','heldMotionAssessment','motionCraft','designDirection','visualChecks','designLanguageComparison','interactionQuality','interactionAssessment','probeResolutions','evidenceImageNumbers','modelEvidenceIds','assessment']} },
     completionAssessment: textField,
   },
   required: ['question', 'preserve', 'argumentChecks', 'sourceChecks', 'consistencyChecks', 'work', 'resolvedWork', 'productChecks', 'completionAssessment'],
@@ -227,7 +227,7 @@ Keep documented facts, conditional deductions and untested conjectures distinct.
 
 Before approving, check the opening verdict as well as the closing conclusion against the answer's own premises and the supplied source scope. For a comparative claim, identify what is being compared, on which dimension, and whether both sides are actually established. A difference in price, listed features or component count does not establish a difference in quantity, quality, overall value or profit; an unknown comparator cannot become a demonstrated comparison. Keep the strongest supported comparison without weakening the useful causal explanation. For a temporal claim such as current, still or now, compare the source's event/offer period with reviewDate. A publication date, historical practice, stated aspiration or temporary initiative is not by itself evidence of ongoing availability or current measured performance. Usually date the example or narrow the attribution; investigate current status only when it would change the user's answer. Identify the actual opening/closing claim and its limiting premise or missing qualification in consistencyChecks, and use sourceChecks for the relevant source scope. Batch consequential corrections into the existing work list, behind unresolved central reasoning unless the overclaim changes that reasoning. This is a claim-scope check, not a separate review pass or a reason to repeat completed research. Do not manufacture conflicts or fill a quota.
 
-All required text fields must contain nonblank text. Never repeat an issue id within work/resolvedWork or put the same id in both arrays. Each product node and each probe number appears once. When feedbackFormatRequirements is present, repair those format constraints without dropping substantive unfinished work.
+The strict output schema requires every listed field. For inapplicable motion/held-state/design comparisons, give a short explicit inapplicability assessment, use not_applicable where the status enum permits, and empty modelEvidenceIds/findings arrays where appropriate. Filling a field does not create a new review requirement for a static screen or faithful copy. All required text fields must contain nonblank text. Never repeat an issue id within work/resolvedWork or put the same id in both arrays. Each product node and each probe number appears once. When feedbackFormatRequirements is present, repair those format constraints without dropping substantive unfinished work.
 
 Return the requested structured feedback in ordinary language:
 - question: what the user actually needs explained or solved.
