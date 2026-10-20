@@ -1,5 +1,6 @@
 "use client";
-import { CanvasCollaborationOverlay, CanvasCollaborationToolbar } from './canvas-collaboration';
+import { CanvasCollaborationFollow, CanvasCollaborationOverlay, CanvasCollaborationToolbar } from './canvas-collaboration';
+import type {FollowFrame} from '@/lib/canvas-v2/sessions/collaboration-follow';
 import { collaboratorColor, type CanvasCollaborationClient, type CollaborationStatus } from '@/lib/canvas-v2/sessions/collaboration-client';
 import {CanvasFeedbackSession} from './canvas-feedback-session';
 import {VISUAL_FEEDBACK_START} from '@/lib/canvas-v2/visual-feedback';
@@ -759,6 +760,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   registerSessionController?: (execute:(command:import('@/lib/canvas-v2/sessions/types').SessionCommand)=>Promise<void>)=>void;
 } = {}) {
   const [renderProfiling] = useState(canvasV2RenderProfilingEnabled);
+  const stopFollowingRef=useRef<()=>void>(()=>{});
   const renderBodyStarted = renderProfiling ? performance.now() : undefined;
   const [gatewayHandoff, setGatewayHandoff] = useState<CanvasV2GatewayHandoff>();
   const [gatewayEntry, setGatewayEntry] = useState(false);
@@ -873,13 +875,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [zoomDraft, setZoomDraft] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string>();
   const [screenEditNodeId,setScreenEditNodeId]=useState<string>();
-  const [canvasView,setCanvasView]=useState<'design'|'preview'>('preview');
+  const [canvasView,updateCanvasView]=useState<'design'|'preview'>('preview');
+  const setCanvasView=useCallback<typeof updateCanvasView>(next=>{stopFollowingRef.current();updateCanvasView(next)},[]);
   const previewSelection=useRef<{ids:string[];screenId?:string}>({ids:[]});
   const [screenElementNodeId,setScreenElementNodeId]=useState<string>();
   const [editChatOpen,setEditChatOpen]=useState(false),editModeNodeRef=useRef(screenEditNodeId);editModeNodeRef.current=screenEditNodeId;
   const [screenElementTargets,setScreenElementTargets]=useState<import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]>([]);
   const selectScreenParts=useCallback((nodeId?:string,targets:import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]=[])=>{setScreenElementNodeId(nodeId);setScreenElementTargets(targets)},[]);
-  const screenEditing=useMemo(()=>({mode:canvasView,readOnly:collaborationReadOnly,previewFocus:(nodeId:string)=>{previewSelection.current={ids:[nodeId],screenId:nodeId}},nodeId:screenEditNodeId,exit:()=>{setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined)},enter:(nodeId:string)=>{const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(!element||element.locked||collaborationReadOnly)return;setCanvasView('design');setSelectedElements([element]);setSelectionTarget(nodeId);setScreenEditNodeId(nodeId)},select:selectScreenParts,chatOpen:editChatOpen,openChat:()=>{setPanel('chat');setEditChatOpen(true)}}),[canvasView,screenEditNodeId,editChatOpen,selectScreenParts,collaborationReadOnly]);
+  const screenEditing=useMemo(()=>({mode:canvasView,readOnly:collaborationReadOnly,previewFocus:(nodeId:string)=>{previewSelection.current={ids:[nodeId],screenId:nodeId}},nodeId:screenEditNodeId,exit:()=>{setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined)},enter:(nodeId:string)=>{const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(!element||element.locked||collaborationReadOnly)return;setCanvasView('design');setSelectedElements([element]);setSelectionTarget(nodeId);setScreenEditNodeId(nodeId)},select:selectScreenParts,chatOpen:editChatOpen,openChat:()=>{setPanel('chat');setEditChatOpen(true)}}),[canvasView,screenEditNodeId,editChatOpen,selectScreenParts,collaborationReadOnly,setCanvasView]);
   // Conversation and run lifecycle belong to the workspace, not to the
   // collapsible presentation panel. Closing the panel or visiting Apps must
   // never discard a routing request, transcript, selected model, or the turn
@@ -925,6 +928,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   // to the person and AI commits never pan or zoom it.
   const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => initialSnapshot?.viewport ?? centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
   const viewportRef = useRef(viewport);
+  const [followingClient,setFollowingClient]=useState<string>();
+  const followingClientRef=useRef(followingClient);
+  const followRequestRef=useRef(0);
+  const followFrameRef=useRef<FollowFrame>({size:{width:1440,height:900},insets:{left:32,right:32,top:116,bottom:92}});
+  const publishViewRef=useRef<(next:CanvasV2WorkspaceViewport)=>void>(()=>{});
   const cameraPreviewActiveRef = useRef(false);
   const nativePinchScaleRef = useRef<number | undefined>(undefined);
   const nativePinchHandlerRef = useRef<(event: Event) => void>(() => undefined);
@@ -1087,7 +1095,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     }
   }, []);
   useLayoutEffect(() => {
-    viewportRef.current = viewport;
+    if(!followingClientRef.current)viewportRef.current = viewport;
     renderedViewportRef.current = viewport;
     if (contextualToolbarRef.current) contextualToolbarRef.current.style.transform = "";
   }, [viewport]);
@@ -1234,6 +1242,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       chatOpen ? floatingPanel.rect ?? (chat ? { x: chat.left - workspace.left, y: chat.top - workspace.top, width: chat.width, height: chat.height } : undefined) : undefined);
 
   }, [canvasView,chatOpen, floatingPanel.rect]);
+  publishViewRef.current=next=>{
+    if(collaboration?.enabled)collaboration.view(canvasV2VisibleWorkspaceBounds(next,followFrameRef.current.size,followFrameRef.current.insets));
+  };
+  useLayoutEffect(()=>{
+    followFrameRef.current={size:workspaceSizeRef.current,insets:contentInsets()};
+    publishViewRef.current(viewportRef.current);
+  },[contentInsets,workspaceSize,collaborationEnabled]);
 
   const legacyChat = useCanvasV2Chat({
     initial: initialSnapshot,
@@ -1336,6 +1351,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, [engine.interactionReady, gatewayHandoff]);
 
   const applyViewportVisual = useCallback((next: CanvasV2WorkspaceViewport) => {
+    publishViewRef.current(next);
     const surface = workspaceSurfaceRef.current;
     if (surface) {
       surface.style.transform = `translate(${next.x}px, ${next.y}px) scale(${next.scale})`;
@@ -1397,6 +1413,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, []);
 
   const commitViewport = useCallback((update: CanvasV2WorkspaceViewport | ((current: CanvasV2WorkspaceViewport) => CanvasV2WorkspaceViewport)) => {
+    stopFollowingRef.current();
     stopPendingViewportFrame();
     const current = viewportRef.current;
     const next = typeof update === "function" ? update(current) : update;
@@ -1406,6 +1423,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, [applyViewportVisual, stopPendingViewportFrame]);
 
   const previewViewport = useCallback((update: CanvasV2WorkspaceViewport | ((current: CanvasV2WorkspaceViewport) => CanvasV2WorkspaceViewport)) => {
+    stopFollowingRef.current();
     const current = viewportRef.current;
     const next = typeof update === "function" ? update(current) : update;
     viewportRef.current = next;
@@ -1422,6 +1440,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, [applyViewportVisual]);
 
   const beginCameraPreview = useCallback(() => {
+    stopFollowingRef.current();
     interruptCanvasV2ScreenPresentation();
     cameraPreviewActiveRef.current = true;
     const workspace = workspaceRef.current;
@@ -1442,6 +1461,29 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const workspace = workspaceRef.current;
     if (workspace) delete workspace.dataset.canvasV2CameraPreview;
   }, [applyViewportVisual]);
+
+  const stopFollowing=useCallback(()=>{
+    followRequestRef.current++;
+    if(!followingClientRef.current)return;
+    followingClientRef.current=undefined;setFollowingClient(undefined);finishCameraPreview();
+  },[finishCameraPreview]);
+  stopFollowingRef.current=stopFollowing;
+  const followTeammate=async(clientId:string)=>{
+    followRequestRef.current++;
+    if(followingClientRef.current===clientId){stopFollowing();return;}
+    if(canvasSceneRef.current?.finishTextEditing()===false)return;
+    const request=++followRequestRef.current;
+    try{await flushScreenDirectEdits();}catch(error){if(request===followRequestRef.current)setMutationError(String(error));return;}
+    if(request!==followRequestRef.current)return;
+    stopFollowing();setSelectedElements([]);setSelectionTarget(undefined);setScreenEditNodeId(undefined);
+    followingClientRef.current=clientId;setFollowingClient(clientId);
+  };
+  const previewFollowViewport=useCallback((next:CanvasV2WorkspaceViewport)=>{
+    stopPendingViewportFrame();cameraPreviewActiveRef.current=true;viewportRef.current=next;applyViewportVisual(next);
+  },[applyViewportVisual,stopPendingViewportFrame]);
+  const settleFollowViewport=useCallback((next:CanvasV2WorkspaceViewport)=>{
+    setViewport(current=>current.x===next.x&&current.y===next.y&&current.scale===next.scale?current:next);
+  },[]);
 
   const filmCameraSize = useCallback(() => ({ width: workspaceRef.current?.clientWidth ?? 1920, height: workspaceRef.current?.clientHeight ?? 1080 }), []);
   const filmCameraCurrent = useCallback(() => viewportRef.current, []);
@@ -2418,6 +2460,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, [engine]);
 
   const submitMutation = (mutation: CanvasV2ManualMutation) => {
+    stopFollowingRef.current();
     if(collaborationReadOnly){setMutationError("This canvas is view-only.");return false;}
     const atomicMutations = mutation.kind === "batch" ? mutation.mutations : [mutation];
     const deletedNodeIds = atomicMutations.flatMap((item) => item.kind === "delete" ? [item.nodeId] : []);
@@ -3202,6 +3245,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const editSelectedText = () => {
+    stopFollowingRef.current();
     if (selectedElement?.kind === "connector") { beginConnectorLabel(); return; }
     if (selectedElement?.kind === "image") { beginImageCrop(); return; }
     if (selectedElement?.textEditable && !selectedElement.locked) setEditTextRequest({ nodeId: selectedElement.nodeId, nonce: Date.now(), selectAll: true });
@@ -4189,7 +4233,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           <ChevronDown className="h-4 w-4 text-[#7c7c8a] dark:text-[#9995a5]" />
         </button>
         {!(canvasView==="design"?editChatOpen:chatOpen) && <button aria-label="Open North Star panel" onClick={() => {if(canvasView==="design")setEditChatOpen(true);else setChatOpen(true)}} className="grid h-14 w-12 place-items-center border-l border-[#e8e8ef] text-[#6653e8] hover:bg-[#f2efff] dark:border-white/[.08] dark:text-[#b4a9ff] dark:hover:bg-white/[.06]"><MessageSquare className="h-4 w-4" /></button>}
-        {collaboration&&<CanvasCollaborationToolbar client={collaboration} onEnable={onEnableCollaboration?async()=>{await flushScreenDirectEdits();await onEnableCollaboration(engine.readCommittedRevision())}:undefined}/>}
+        {collaboration&&<CanvasCollaborationToolbar client={collaboration} following={followingClient} onFollow={clientId=>void followTeammate(clientId)} onEnable={onEnableCollaboration?async()=>{await flushScreenDirectEdits();await onEnableCollaboration(engine.readCommittedRevision())}:undefined}/>}
       </div>
 
       {northStarMenuOpen && (
@@ -4772,6 +4816,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
       </aside>}
       {collaboration&&<CanvasCollaborationOverlay client={collaboration} viewport={viewportRef} elements={sceneElementsRef} onMotion={geometry=>{remoteTransientRef.current=geometry;if(!directGestureRef.current)canvasSceneRef.current?.applyTransientGeometry(geometry)}}/>}
+      {collaboration&&followingClient&&<CanvasCollaborationFollow client={collaboration} target={followingClient} viewport={viewportRef} frame={followFrameRef} workspace={workspaceRef} refreshKey={JSON.stringify([workspaceSize,canvasView,chatOpen,floatingPanel.rect])} onPreview={previewFollowViewport} onSettle={settleFollowViewport} onMode={mode=>updateCanvasView(mode)} onStop={stopFollowing}/>}
       {mutationError && <div role="alert" className="absolute right-5 top-[90px] z-50 max-w-[340px] rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-xs leading-5 text-red-700 shadow-xl backdrop-blur dark:border-red-500/25 dark:bg-[#241d24]/95 dark:text-red-300">{mutationError}</div>}
 
       {objectMenu && <div ref={objectMenuRef} role="menu" aria-label="Canvas object menu" data-testid="canvas-v2-object-menu" className="absolute z-[70] w-[230px] rounded-[12px] border border-[#ddddea] bg-white/98 p-2 text-xs font-semibold shadow-[0_22px_70px_rgba(44,39,88,.22)] backdrop-blur-xl dark:border-white/[.11] dark:bg-[#1c1b23]/98 dark:shadow-[0_24px_75px_rgba(0,0,0,.48)]" style={{ left: objectMenu.x, top: objectMenu.y }}>
@@ -4812,7 +4857,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         }}/></CanvasV2ScreenAssets.Provider>;
       })()}
       {((canvasView==='design'&&!screenEditNodeId)||(canvasView==='preview'&&layersOpen))&&<CanvasV2RenderProfiler id="Layers" enabled={renderProfiling}><CanvasV2ObjectLayers docked={canvasView==='design'} covered={canvasView==='design'&&editChatOpen} onChat={()=>{setPanel('chat');setEditChatOpen(true)}} nodes={sourceNodes} selectedNodeIds={selectionNodeIds} onHover={nodeId=>hoverElement(sceneElements.find(item=>item.nodeId===nodeId))} onSelect={(nodeId,intent)=>{const element=sceneElements.find(item=>item.nodeId===nodeId);if(element)selectElement(element,{...intent,directEdit:false},true);else{setSelectedElements([]);setSelectionTarget(nodeId);}setLayersOpen(false);}} onVisibility={node=>submitMutation({kind:'visibility',nodeId:node.nodeId,hidden:!node.hidden})} onLock={node=>submitMutation({kind:'lock',nodeId:node.nodeId,locked:!node.locked})}/></CanvasV2RenderProfiler>}
-      {canvasView==='design'&&!screenEditNodeId&&<BoardDesignInspector selected={selectedElements} onMutation={mutation=>{submitMutation(mutation)}} readOnly={collaborationReadOnly} onOpen={()=>{if(selectedElement?.textEditable)setEditingNodeId(selectedElement.nodeId)}}/>}
+      {canvasView==='design'&&!screenEditNodeId&&<BoardDesignInspector selected={selectedElements} onMutation={mutation=>{submitMutation(mutation)}} readOnly={collaborationReadOnly} onOpen={editSelectedText}/>}
 
       <div aria-label="Canvas tools" style={canvasView==='design'?{left:"calc(50% - 24px)",maxWidth:"calc(100% - 576px)"}:{maxWidth:"calc(100% - 32px)"}} className="absolute bottom-[18px] left-1/2 z-[1002] flex overflow-x-auto [&>button]:shrink-0 [&>div]:shrink-0 -translate-x-1/2 items-center gap-0.5 rounded-[18px] border border-[#dedee8]/90 bg-white/92 p-1.5 shadow-[0_10px_34px_rgba(50,45,100,.15)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_14px_38px_rgba(0,0,0,.34)]">
         <button onClick={undoCanvas} disabled={collaboration?.enabled?!collaboration.canUndo():!engine.canUndo} title="Undo" aria-label="Undo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Undo2 className="h-[18px] w-[18px]" /></button>

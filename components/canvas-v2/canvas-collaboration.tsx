@@ -7,6 +7,7 @@ import { CanvasCollaborationClient, collaboratorColor, type PeerPresence } from 
 import type { CanvasV2WorkspaceViewport } from '@/lib/canvas-v2/workspace-coordinate-space';
 import type { CanvasV2InspectableElement } from '@/lib/canvas-v2/element-inspection';
 import type { CanvasV2TransientGeometry } from './canvas-scene';
+import {followViewport,interpolateFollowViewport,followWouldCycle,type FollowFrame} from '@/lib/canvas-v2/sessions/collaboration-follow';
 
 function saveRecovery(client: CanvasCollaborationClient) {
   const recovery = client.getStatus().recovery; if (!recovery) return;
@@ -15,7 +16,7 @@ function saveRecovery(client: CanvasCollaborationClient) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function CanvasCollaborationToolbar({ client, onEnable }: { client: CanvasCollaborationClient; onEnable?: () => Promise<void> }) {
+export function CanvasCollaborationToolbar({ client, onEnable,following,onFollow }: { client: CanvasCollaborationClient; onEnable?: () => Promise<void>;following?:string;onFollow?:(clientId:string)=>void }) {
   const status = useSyncExternalStore(client.subscribe, client.getStatus, client.getStatus);
   const [peers, setPeers] = useState<PeerPresence[]>([]), [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [copied, setCopied] = useState(false), [error, setError] = useState('');
   const [role, setRole] = useState<'editor' | 'viewer'>('editor');
@@ -24,7 +25,7 @@ export function CanvasCollaborationToolbar({ client, onEnable }: { client: Canva
     let signature = '';
     const refresh = () => {
       const next = client.getPeers().filter((peer, index, all) => all.findIndex(item => item.userId === peer.userId) === index);
-      const key = next.map(peer => peer.userId + peer.name).sort().join('|');
+      const key = next.map(peer => peer.userId + peer.clientId + peer.name).sort().join('|');
       if (signature !== key) { signature = key; setPeers(next); }
     };
     refresh(); return client.subscribePresence(refresh);
@@ -42,7 +43,7 @@ export function CanvasCollaborationToolbar({ client, onEnable }: { client: Canva
   };
   return <>
     <div aria-label="Canvas teammates" data-testid="canvas-collaborators" className="flex h-14 items-center gap-2 border-l border-[#e8e8ef] px-2 dark:border-white/[.08]">
-      {!!peers.length && <div className="flex -space-x-1.5 max-[1100px]:hidden">{peers.slice(0, 3).map(peer => <span key={peer.userId} data-collaborator-user={peer.userId} title={`${peer.name} is on this canvas`} className="grid h-6 w-6 place-items-center rounded-full border-2 border-white text-[9px] font-semibold text-[#17131e] dark:border-[#1d1c24]" style={{ background: collaboratorColor(peer.userId) }}>{peer.name.trim().slice(0, 1).toUpperCase()}</span>)}{peers.length > 3 && <span className="grid h-6 w-6 place-items-center rounded-full bg-[#393242] text-[9px] text-white">+{peers.length - 3}</span>}</div>}
+      {!!peers.length && <div className="flex -space-x-1.5">{peers.slice(0, 3).map(peer => <button type="button" key={peer.userId} data-collaborator-user={peer.userId} aria-label={`Follow ${peer.name}`} aria-pressed={following===peer.clientId} title={following===peer.clientId?`Stop following ${peer.name}`:`Follow ${peer.name}'s view`} onClick={()=>onFollow?.(peer.clientId)} className="relative grid h-7 w-7 place-items-center rounded-full border-2 border-white text-[10px] font-semibold text-[#17131e] transition hover:z-10 hover:ring-2 hover:ring-violet-300 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 aria-pressed:ring-2 aria-pressed:ring-violet-300 dark:border-[#1d1c24]" style={{ background: collaboratorColor(peer.userId) }}>{peer.name.trim().slice(0, 1).toUpperCase()}</button>)}{peers.length > 3 && <button aria-label="Show all teammates" onClick={()=>setOpen(true)} className="grid h-7 w-7 place-items-center rounded-full bg-[#393242] text-[9px] text-white">+{peers.length - 3}</button>}</div>}
       <button type="button" aria-label="Share canvas" title={client.enabled ? `${peers.length + 1} people on this canvas · Share` : 'Invite teammates'} onClick={() => setOpen(true)} className="grid h-8 w-8 place-items-center rounded-lg text-[#8068b5] hover:bg-[#8b73f8]/10 dark:text-[#c4b4f7]"><UserPlus size={16} strokeWidth={1.7}/></button>
     </div>
     {typeof document !== 'undefined' && createPortal(<>
@@ -54,10 +55,66 @@ export function CanvasCollaborationToolbar({ client, onEnable }: { client: Canva
       <div className="flex items-center justify-between"><Dialog.Title className="text-sm font-medium">Share this canvas</Dialog.Title><Dialog.Close aria-label="Close sharing" className="rounded-lg p-1.5 text-[#968aa3] hover:bg-current/5"><X size={15}/></Dialog.Close></div>
       <p id="canvas-share-description" className="mt-2 text-xs leading-5 text-[#968aa3]">Work together in the same space. Each person keeps their own view.</p>
       {(!client.enabled || status.role === 'owner') && <div className="mt-6 space-y-3"><div role="group" aria-label="Invite access" className="flex rounded-lg bg-black/[.035] p-1 dark:bg-white/[.04]">{(['editor', 'viewer'] as const).map(value => <button key={value} aria-pressed={role === value} onClick={() => setRole(value)} className="h-8 flex-1 rounded-md text-xs text-[#968aa3] aria-pressed:bg-white aria-pressed:text-[#755cbb] aria-pressed:shadow-sm dark:aria-pressed:bg-white/[.08] dark:aria-pressed:text-[#d2c4fb]">{value === 'editor' ? 'Can edit' : 'Can view'}</button>)}</div><button disabled={busy} onClick={() => void invite()} className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#8066df] text-xs font-medium text-white disabled:opacity-50">{busy ? <Loader2 size={14} className="animate-spin"/> : copied ? <Check size={14}/> : <Link2 size={14}/>} {copied ? 'Invite link copied' : 'Copy invite link'}</button><p className="text-[10px] leading-4 text-[#968aa3]">Anyone with this link can join after signing in. Links expire after seven days.</p></div>}
-      {!!status.members.length && <div className="mt-6 border-t border-current/10 pt-4"><p className="mb-3 text-[10px] uppercase tracking-[.1em] text-[#968aa3]">People with access</p><div className="max-h-48 space-y-3 overflow-auto">{status.members.map(member => <div key={member.userId} className="flex items-center gap-2.5"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] text-[#17131e]" style={{ background: collaboratorColor(member.userId) }}>{member.name.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1 truncate text-xs">{member.name}{member.userId === client.userId ? ' (you)' : ''}</span><span className="text-[10px] text-[#968aa3]">{member.userId === client.userId && status.role === 'owner' ? 'Owner' : member.role === 'viewer' ? 'Can view' : 'Can edit'}</span>{status.role === 'owner' && member.userId !== client.userId && <button aria-label={`Remove ${member.name}`} className="p-1 text-[#968aa3] hover:text-red-400" onClick={() => void client.transport.removeMember(member.userId).then(() => client.refreshMembers(true)).catch(cause => setError(String(cause)))}><X size={12}/></button>}</div>)}</div>{status.role === 'owner' && <p className="mt-3 text-[10px] leading-4 text-[#968aa3]">Removing a teammate also invalidates outstanding invite links.</p>}</div>}
+      {!!status.members.length && <div className="mt-6 border-t border-current/10 pt-4"><p className="mb-3 text-[10px] uppercase tracking-[.1em] text-[#968aa3]">People with access</p><div className="max-h-48 space-y-3 overflow-auto">{status.members.map(member => <div key={member.userId} className="flex items-center gap-2.5"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] text-[#17131e]" style={{ background: collaboratorColor(member.userId) }}>{member.name.slice(0, 1).toUpperCase()}</span><span className="min-w-0 flex-1 truncate text-xs">{member.name}{member.userId === client.userId ? ' (you)' : ''}</span><span className="text-[10px] text-[#968aa3]">{member.userId === client.userId && status.role === 'owner' ? 'Owner' : member.role === 'viewer' ? 'Can view' : 'Can edit'}</span>{peers.some(peer=>peer.userId===member.userId)&&<button type="button" aria-label={`Follow ${member.name}`} className="text-[10px] text-[#9675e8]" onClick={()=>{const peer=peers.find(peer=>peer.userId===member.userId);if(peer){setOpen(false);onFollow?.(peer.clientId)}}}>Follow</button>}{status.role === 'owner' && member.userId !== client.userId && <button aria-label={`Remove ${member.name}`} className="p-1 text-[#968aa3] hover:text-red-400" onClick={() => void client.transport.removeMember(member.userId).then(() => client.refreshMembers(true)).catch(cause => setError(String(cause)))}><X size={12}/></button>}</div>)}</div>{status.role === 'owner' && <p className="mt-3 text-[10px] leading-4 text-[#968aa3]">Removing a teammate also invalidates outstanding invite links.</p>}</div>}
       {!!links.length && <div className="mt-4 space-y-2">{links.map(link => <div key={link.id} className="flex items-center justify-between text-[10px] text-[#968aa3]"><span>{link.role === 'editor' ? 'Editor' : 'Viewer'} invite link</span><button onClick={() => void client.transport.revokeInvite(link.id).then(() => setLinks(current => current.filter(item => item.id !== link.id))).catch(cause => setError(String(cause)))}>Revoke link</button></div>)}</div>}
       {error && <p role="alert" className="mt-4 text-xs leading-5 text-[#bc6f8a]">{error}</p>}
     </Dialog.Content></Dialog.Portal></Dialog.Root>
+  </>;
+}
+
+/** Follow camera traffic stays imperative; only mode changes and bounded
+ * visibility checkpoints reach React. Personal chat and selection stay local. */
+export function CanvasCollaborationFollow({client,target,viewport,frame,refreshKey,workspace,onPreview,onSettle,onMode,onStop}:{
+  client:CanvasCollaborationClient;target:string;viewport:RefObject<CanvasV2WorkspaceViewport>;frame:RefObject<FollowFrame>;refreshKey:string;
+  workspace:RefObject<HTMLElement|null>;onPreview:(next:CanvasV2WorkspaceViewport)=>void;onSettle:(next:CanvasV2WorkspaceViewport)=>void;
+  onMode:(mode:'design'|'preview')=>void;onStop:()=>void;
+}) {
+  const callbacks=useRef({onPreview,onSettle,onMode,onStop});callbacks.current={onPreview,onSettle,onMode,onStop};
+  const resample=useRef<()=>void>(()=>{});
+  const peer=client.getPeers().find(peer=>peer.clientId===target),color=collaboratorColor(peer?.userId??target);
+  useEffect(()=>{
+    let animation=0,disposed=false,initialized=false,lastFrame=0,lastCommit=0,lastMode='',signature='';
+    let desired:PeerPresence['view'];
+    const reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Exit settles the latest imperative camera, not its mount-time position.
+    const readCamera=()=>viewport.current;
+    const paint=(now:number)=>{
+      animation=0;if(disposed||!desired)return;
+      const goal=followViewport(desired,frame.current),current=viewport.current;
+      const settled=Math.abs(goal.x-current.x)<.1&&Math.abs(goal.y-current.y)<.1&&Math.abs(goal.scale-current.scale)<.000001;
+      const next=!initialized||reduced||settled?goal:interpolateFollowViewport(current,goal,frame.current,1-Math.exp(-Math.min(64,Math.max(1,now-lastFrame))/55));
+      const first=!initialized;initialized=true;lastFrame=now;callbacks.current.onPreview(next);
+      if(first||settled||now-lastCommit>=160){lastCommit=now;callbacks.current.onSettle(next);}
+      if(!settled&&!reduced&&!first)animation=requestAnimationFrame(paint);
+    };
+    const sample=()=>{
+      if(disposed)return;
+      const peers=client.getPeers(),next=peers.find(peer=>peer.clientId===target);
+      if(!next||followWouldCycle(peers,client.clientId,target)){callbacks.current.onStop();return;}
+      if(next.mode!==lastMode){lastMode=next.mode;callbacks.current.onMode(next.mode);}
+      if(!next.view)return;
+      const key=JSON.stringify([next.view,frame.current]);if(key===signature)return;
+      signature=key;desired=next.view;
+      if(!animation){lastFrame=performance.now()-16;animation=requestAnimationFrame(paint);}
+    };
+    if(!client.follow(target)){callbacks.current.onStop();return;}
+    resample.current=sample;const unsubscribe=client.subscribePresence(sample);
+    const keydown=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();callbacks.current.onStop();}};
+    const navigate=(event:Event)=>{
+      const element=event.target instanceof Element?event.target:undefined;
+      if(!element||element.closest('[data-canvas-follow-control]'))return;
+      if(workspace.current?.contains(element))callbacks.current.onStop();
+    };
+    document.addEventListener('keydown',keydown,true);document.addEventListener('wheel',navigate,{capture:true,passive:true});document.addEventListener('pointerdown',navigate,true);
+    sample();
+    return()=>{disposed=true;unsubscribe();cancelAnimationFrame(animation);resample.current=()=>{};document.removeEventListener('keydown',keydown,true);document.removeEventListener('wheel',navigate,true);document.removeEventListener('pointerdown',navigate,true);client.follow(undefined);callbacks.current.onSettle(readCamera());};
+  },[client,target,viewport,frame,workspace]);
+  useEffect(()=>resample.current(),[refreshKey]);
+  return <>
+    <div aria-hidden className="pointer-events-none absolute inset-0 z-[1090] rounded-[3px] border-2" style={{borderColor:color+'99'}}/>
+    <div data-canvas-follow-control data-testid="canvas-follow-status" role="status" className="absolute left-1/2 top-[84px] z-[1100] flex -translate-x-1/2 items-center gap-2 rounded-full border bg-white/95 py-1.5 pl-3 pr-1.5 text-[11px] shadow-sm dark:bg-[#211d29] dark:text-[#eee7f5]" style={{borderColor:color+'55'}}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{background:color}}/><span>Following {peer?.name??'teammate'}</span><button type="button" aria-label="Stop following" title="Stop following · Esc" onClick={onStop} className="ml-1 grid h-5 w-5 place-items-center rounded-full text-[#968aa3] hover:bg-current/10"><X size={12}/></button>
+    </div>
   </>;
 }
 

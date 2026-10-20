@@ -14,10 +14,23 @@ each person can pan, zoom, and switch Design/Preview independently. Awareness
 from sandboxed interactive designs uses the existing source/token-checked
 runtime bridge. Pointer packets never carry document source or image bytes.
 
+Clicking a teammate's avatar follows their live canvas view and Design/Preview
+mode. Their unobscured world region is centered and fitted to the follower's
+screen, including different window sizes and panel layouts. Camera interpolation
+uses world centers to avoid drift when zooming around large canvas coordinates.
+The small colored frame and Following indicator expose the active connection;
+click the avatar again, use Stop/Escape, or navigate/edit locally to leave it.
+Peer departure and follow cycles end following safely. Camera packets use the
+same bounded Broadcast slot as pointers, with no durable operation or Presence
+track per frame. Private chat, drafts, UI content and runtime inputs are never
+copied into the follower's workspace.
+
 Manual content, styles, placement, structural edits and evidence are shared.
-Each person's chat, unsent prompt, model choice, camera, interactive form values
+Each person's chat, unsent prompt, model choice, interactive form values
 and running app state stay personal. Opening Design does not move a teammate's
-camera or change their UI mode. Each account has its own chat UI and durable
+camera or change their UI mode unless they explicitly follow that view. Camera
+rectangles are ephemeral awareness; saved camera checkpoints stay device-local.
+Each account has its own chat UI and durable
 conversation history for the canvas. Private history uses owner-only cloud
 storage and its own account/canvas metadata; camera and runtime state remain
 device-local. Teammates never inherit the owner's conversation.

@@ -5,10 +5,13 @@ import { applySharedChanges, conflictingSharedCells, diffSharedCells, encodeShar
 export interface CanvasMember { userId: string; name: string; role: 'owner' | 'editor' | 'viewer' }
 export interface SharedRoom { version: number; cells: SharedCells; seed: CanvasV2ArtifactRevision; ownerId: string; role: CanvasMember['role']; members: CanvasMember[] }
 export interface PeerSelection { nodeId: string; x: number; y: number; width: number; height: number }
+export interface PeerView { x:number; y:number; width:number; height:number }
 export interface PeerPresence {
   clientId: string; userId: string; name: string; sequence: number; cursor: { x: number; y: number } | null;
   selection: PeerSelection[]; mode: 'design' | 'preview'; activity: 'viewing' | 'editing' | 'thinking';
   motion?: PeerSelection[]; at: number;
+  view?: PeerView;
+  following?: string;
 }
 export interface CollaborationTransport {
   read(): Promise<SharedRoom | null>;
@@ -36,13 +39,18 @@ export function collaboratorColor(userId: string): string {
   return COLORS[(hash >>> 0) % COLORS.length];
 }
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1_000_000;
+export function validPeerView(value:unknown):value is PeerView {
+  if(!value||typeof value!=='object')return false;
+  const view=value as PeerView;return [view.x,view.y,view.width,view.height].every(finite)&&view.width>0&&view.height>0;
+}
 export function parsePeerPresence(value: unknown, now = Date.now()): PeerPresence | undefined {
   if (!value || typeof value !== 'object') return;
   const p = value as PeerPresence;
   if (typeof p.clientId !== 'string' || p.clientId.length > 80 || typeof p.userId !== 'string' || p.userId.length > 80 || typeof p.name !== 'string' || p.name.length > 48 || !Number.isSafeInteger(p.sequence) || p.sequence < 0 || !['design', 'preview'].includes(p.mode) || !['viewing', 'editing', 'thinking'].includes(p.activity)) return;
   const validSelection = (items: unknown): items is PeerSelection[] => Array.isArray(items) && items.length <= 24 && items.every(item => item && typeof item.nodeId === 'string' && item.nodeId.length <= 256 && [item.x, item.y, item.width, item.height].every(finite) && item.width > 0 && item.height > 0);
   if (!validSelection(p.selection) || (p.motion !== undefined && !validSelection(p.motion)) || (p.cursor !== null && (!p.cursor || !finite(p.cursor.x) || !finite(p.cursor.y)))) return;
-  return { clientId: p.clientId, userId: p.userId, name: p.name, sequence: p.sequence, mode: p.mode, activity: p.activity, cursor: p.cursor && { x: p.cursor.x, y: p.cursor.y }, selection: p.selection.map(item => ({ ...item })), ...(p.motion ? { motion: p.motion.map(item => ({ ...item })) } : {}), at: now };
+  if((p.view!==undefined&&!validPeerView(p.view))||(p.following!==undefined&&(typeof p.following!=='string'||!p.following.length||p.following.length>80||p.following===p.clientId)))return;
+  return { clientId: p.clientId, userId: p.userId, name: p.name, sequence: p.sequence, mode: p.mode, activity: p.activity, cursor: p.cursor && { x: p.cursor.x, y: p.cursor.y }, selection: p.selection.map(item => ({ ...item })), ...(p.motion ? { motion: p.motion.map(item => ({ ...item })) } : {}), ...(p.view?{view:{x:p.view.x,y:p.view.y,width:p.view.width,height:p.view.height}}:{}),...(p.following?{following:p.following}:{}),at: now };
 }
 
 /** The document stream is durable and ordered; pointer packets are ephemeral.
@@ -287,12 +295,29 @@ export class CanvasCollaborationClient {
   canUndo() { return this.undoHistory.length > 0; }
   canRedo() { return this.redoHistory.length > 0; }
   pointer(cursor: PeerPresence['cursor']) {
-    this.local.cursor = cursor;clearTimeout(this.pointerTimer);
+    this.local.cursor = cursor;this.queuePresence(cursor===null);
+  }
+  private queuePresence(immediate=false) {
+    clearTimeout(this.pointerTimer);
     const remaining = 40 - (Date.now() - this.lastPointer);
     const publish = () => { this.pointerTimer=undefined;this.lastPointer=Date.now();this.publishPresence(); };
     // Always deliver the final position of a burst, even when the pointer stops
     // between throttle slots. Heartbeats are not a cursor animation clock.
-    if(cursor!==null&&remaining>0)this.pointerTimer=setTimeout(publish,remaining);else publish();
+    if(!immediate&&remaining>0)this.pointerTimer=setTimeout(publish,remaining);else publish();
+  }
+  view(view:PeerView) {
+    if(!validPeerView(view))return;
+    const before=this.local.view;if(before&&before.x===view.x&&before.y===view.y&&before.width===view.width&&before.height===view.height)return;
+    this.local.view={x:view.x,y:view.y,width:view.width,height:view.height};this.queuePresence();
+  }
+  follow(clientId?:string):boolean {
+    if(clientId!==undefined){
+      if(!clientId||clientId.length>80||clientId===this.clientId||!this.peers.has(clientId))return false;
+      const visited=new Set([this.clientId]);let next:string|undefined=clientId;
+      while(next){if(visited.has(next))return false;visited.add(next);next=this.peers.get(next)?.following;}
+    }
+    if(this.local.following!==clientId){this.local.following=clientId;this.publishPresence();}
+    return true;
   }
   selection(selection: PeerSelection[], mode: PeerPresence['mode'], activity: PeerPresence['activity']) {
     this.local.selection = selection.slice(0, 24); this.local.mode = mode; this.local.activity = activity;
