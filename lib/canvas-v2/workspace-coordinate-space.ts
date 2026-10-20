@@ -484,3 +484,13 @@ export function canvasV2PanelAwareInsets(size: CanvasV2WorkspaceSize, base: Canv
   const area = (v: CanvasV2WorkspaceInsets) => Math.max(0, size.width-v.left-v.right) * Math.max(0, size.height-v.top-v.bottom);
   return candidates.sort((a,b) => area(b)-area(a))[0];
 }
+
+/** Keep the same world point under the usable canvas center when panels open
+ * or close. This adjusts only the person's camera, never authored placement. */
+export function reframeCanvasV2WorkspaceViewport(viewport:CanvasV2WorkspaceViewport,
+ previous:{size:CanvasV2WorkspaceSize;insets:CanvasV2WorkspaceInsets},
+ next:{size:CanvasV2WorkspaceSize;insets:CanvasV2WorkspaceInsets}):CanvasV2WorkspaceViewport {
+ const center=(frame:typeof previous)=>({x:(frame.insets.left+frame.size.width-frame.insets.right)/2,y:(frame.insets.top+frame.size.height-frame.insets.bottom)/2});
+ const before=center(previous),after=center(next);
+ return {...viewport,x:viewport.x+after.x-before.x,y:viewport.y+after.y-before.y};
+}

@@ -45,6 +45,8 @@ import {
 import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 import type { CanvasV2NativeTextContentUpdate } from "@/lib/canvas-v2/manual-mutations";
 
+import type { CanvasV2NativeViewportStore } from '@/lib/canvas-v2/native-viewport-reuse';
+
 export interface CanvasV2CanvasSceneProps {
   revision: CanvasV2ArtifactRevision;
   theme?: CanvasV2ArtifactTheme;
@@ -67,6 +69,7 @@ export interface CanvasV2CanvasSceneProps {
   nativeSceneOverride?: CanvasV2NativeSceneDocument;
   visibleBounds?: CanvasV2ElementBounds;
   viewportScale?: number;
+  viewportStore?: CanvasV2NativeViewportStore;
   placementReferenceScene?: CanvasV2NativeSceneDocument;
   /** Existing AI-owned roots that an explicit whole-board recompose may move. */
   relocatablePlacementNodeIds?: readonly string[];
@@ -1005,6 +1008,7 @@ export const CanvasV2CanvasScene = forwardRef<CanvasV2CanvasSceneHandle, CanvasV
         sceneOverride={props.nativeSceneOverride}
         visibleBounds={props.visibleBounds}
         viewportScale={props.viewportScale}
+        viewportStore={props.viewportStore}
         onBeforeUserEdit={props.onBeforeUserEdit}
         onAfterUserEdit={props.onAfterUserEdit}
         editTextRequest={props.editTextRequest}

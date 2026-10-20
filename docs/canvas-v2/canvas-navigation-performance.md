@@ -292,3 +292,38 @@ are under `outputs/designer-workspace-hardening-20261018/`:
 - `presentation-final-cold-warming20.json`
 - `presentation-final-navigation30.json`
 - `presentation-no-io-quick-validation/verification-receipt.json`
+
+## Live navigation and warm lightweight boards, 2026-10-20
+
+The public native scene receives camera-only mounting checkpoints during held
+pan and zoom, independently of the workspace's saved camera state. Checkpoints
+use a 256 CSS-pixel guard inside the existing prewarming area; small camera
+steps reuse the same snapshot. Resizing and gesture completion publish exact
+bounds. Newly revealed objects no longer wait for pointer release to mount.
+
+Opening or closing canvas panels preserves the world point under the usable
+canvas center. An explicit Fit all requested before native scene delivery waits
+for authored bounds; later manual navigation cancels that pending fit.
+
+Warm images inherit the native retention decision before paint. A late
+IntersectionObserver callback cannot hide an image that is already retained;
+authored hidden/collapsed visibility remains unchanged. Immutable source style
+objects reuse normalized React properties across camera returns and geometry
+changes, while source/style replacements invalidate that cache.
+
+The warm entry ceiling is 1,024, with the existing 2,400-node, 16-million-pixel
+and 60-second budgets unchanged. This allows a board of lightweight text cards
+to use its node budget instead of evicting most cards at the old 96-entry limit.
+Images and complex objects still compete against their pixel and node costs.
+These limits bound extra offscreen retention, not total browser/GPU memory.
+
+A matched optimized Chrome comparison used the same 800-card fixture, normal
+window, three Fit all/100% return cycles and quiescent build/test processes.
+Main-document JavaScript work was 770.03 ms before and 129.852 ms after; layout
+work was 80.077 ms and 4.907 ms, and task work 1,833.733 ms and 1,120.162 ms.
+The baseline recorded three long tasks of 284, 305 and 276 ms; the final run
+recorded one 67 ms long task. Both ended each cycle with all 800 cards and
+2,401 native DOM nodes. This is one matched local production pair, not GPU
+presentation FPS, hardware-independent latency, or a zero-jank guarantee.
+Raw sequence, metrics and limits are in `large-canvas-quiescent-matched.json`
+under the 2026-10-20 human-multiplayer output directory.

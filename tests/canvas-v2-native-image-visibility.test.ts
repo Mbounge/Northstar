@@ -77,3 +77,20 @@ test('public image culling records authored visibility once and never replaces i
     notify(visible,true);assert.equal(visible.getAttribute('data-canvas-v2-image-authored-visibility'),'collapse','Disposed callbacks may not change remaining public metadata.');
   }finally{globalThis.IntersectionObserver=previousObserver;globalThis.getComputedStyle=previousStyle}
 });
+
+test('warm protection reveals retained images synchronously and a late offscreen callback cannot hide them again',()=>{
+ const previousObserver=globalThis.IntersectionObserver,previousStyle=globalThis.getComputedStyle;let callback:IntersectionObserverCallback|undefined,observed=0;
+ globalThis.IntersectionObserver=class{constructor(next:IntersectionObserverCallback){callback=next}observe(){observed++}unobserve(){}disconnect(){}}as unknown as typeof IntersectionObserver;
+ const image=(id:string,visibility='visible')=>{const attributes=new Map([['data-canvas-v2-native-scene-id',id],['src','retained-original.png']]);return{visibility,attributes,hasAttribute:(key:string)=>attributes.has(key),getAttribute:(key:string)=>attributes.get(key)??null,setAttribute:(key:string,value:string)=>{attributes.set(key,value)},removeAttribute:(key:string)=>{attributes.delete(key)},toggleAttribute:(key:string,on:boolean)=>{if(on)attributes.set(key,'');else attributes.delete(key)}};};
+ const visible=image('visible'),hidden=image('authored-hidden','hidden'),collapsed=image('authored-collapse','collapse'),images=[visible,hidden,collapsed];
+ globalThis.getComputedStyle=((target:unknown)=>({visibility:(target as typeof visible).visibility}))as typeof getComputedStyle;
+ try{
+  const scene={querySelectorAll:()=>images,closest:()=>null}as unknown as HTMLElement,observer=observeCanvasV2ImageVisibility(scene),notify=(intersecting:boolean)=>callback!(images.map(target=>({target,isIntersecting:intersecting}))as unknown as IntersectionObserverEntry[],{}as IntersectionObserver);
+  notify(false);for(const target of images)assert.equal(target.hasAttribute('data-canvas-v2-image-offscreen'),true);
+  observer.refresh(new Set(images.map(target=>target.getAttribute('data-canvas-v2-native-scene-id')!)));
+  for(const target of images){assert.equal(target.hasAttribute('data-canvas-v2-image-offscreen'),false,'A protected warm return cannot await IntersectionObserver');assert.equal(target.getAttribute('src'),'retained-original.png');}
+  notify(false);for(const target of images)assert.equal(target.hasAttribute('data-canvas-v2-image-offscreen'),false,'A queued stale IO entry cannot undo current native protection');
+  assert.equal(hidden.visibility,'hidden');assert.equal(collapsed.visibility,'collapse','Warm retention preserves authored visibility');assert.equal(observed,3,'Retained images must not be reobserved or remounted');
+  observer.refresh(new Set());notify(false);assert.equal(visible.hasAttribute('data-canvas-v2-image-offscreen'),true,'Retired protection returns image to bounded offscreen paint culling');observer.dispose();
+ }finally{globalThis.IntersectionObserver=previousObserver;globalThis.getComputedStyle=previousStyle;}
+});

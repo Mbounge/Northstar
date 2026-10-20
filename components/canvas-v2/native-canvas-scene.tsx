@@ -3,7 +3,8 @@
 import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 import { observeCanvasV2ImageVisibility, type CanvasV2ImageVisibilityObserver } from "./native-image-visibility";
-import { createCanvasV2WarmViewport, outsideVisibleCanvas, sameNativeViewportPresence } from "@/lib/canvas-v2/native-viewport-reuse";
+import { createCanvasV2WarmViewport, outsideVisibleCanvas, sameNativeViewportPresence, type CanvasV2NativeViewportStore } from "@/lib/canvas-v2/native-viewport-reuse";
+import { canvasV2NativeRenderStyle } from '@/lib/canvas-v2/native-render-style';
 import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
 
 import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
@@ -27,6 +28,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
@@ -47,7 +49,6 @@ import {
   canvasV2NativeSceneNodeUsesHostBackground,
   canvasV2NativeSceneSourceNodeMap,
   compileCanvasV2NativeScene,
-  normalizeCanvasV2ReactInlineStyle,
   type CanvasV2NativeSceneDocument,
   type CanvasV2NativeSceneNode,
 } from "@/lib/canvas-v2/native-scene";
@@ -81,6 +82,7 @@ export interface CanvasV2NativeCanvasSceneProps {
   sceneOverride?: CanvasV2NativeSceneDocument;
   visibleBounds?: CanvasV2ElementBounds;
   viewportScale?: number;
+  viewportStore?: CanvasV2NativeViewportStore;
   onBeforeUserEdit?: (element?: CanvasV2InspectableElement) => boolean | void;
   onAfterUserEdit?: () => void;
   onTableAction?: (cellId: string, action: "next" | "previous" | "paste", text?: string) => void;
@@ -100,6 +102,9 @@ export interface CanvasV2NativeCanvasSceneHandle {
   restoreNodeRemovalPreview: () => void;
   commitNodeRemovalPreview: () => void;
 }
+
+const emptyViewportSubscribe=()=>()=>{};
+const emptyViewportSnapshot=()=>undefined;
 
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
@@ -569,8 +574,7 @@ const NativeNode = memo(function NativeNode({
     // briefly paint an empty image inside otherwise responsive handles.
     ? imageResourceRef.current.optimized
     : undefined;
-  const safeInlineStyle = normalizeCanvasV2ReactInlineStyle(node.inlineStyle);
-  const style = Object.fromEntries(Object.entries(safeInlineStyle).filter(([property]) => !(node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MODEL_ATTRIBUTE]) || !/^(?:background|border|padding)(?:-|$)|^box-shadow$/.test(property)).map(([property, value]) => [camelCaseStyle(property), value])) as CSSProperties;
+  const style = canvasV2NativeRenderStyle(node) as CSSProperties;
   const runtimeStyle = {
     ...style,
     ...((node.attributes[MEDIA_ATTRIBUTE] || node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MODEL_ATTRIBUTE]) ? { background: "transparent", border: "none", borderRadius: 0, boxShadow: "none", padding: 0 } : {}),
@@ -652,8 +656,9 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   onSceneSnapshot,
   onNativeScene,
   sceneOverride,
-  visibleBounds,
-  viewportScale=1,
+  visibleBounds: fallbackVisibleBounds,
+  viewportScale: fallbackViewportScale=1,
+  viewportStore,
   onBeforeUserEdit,
   onAfterUserEdit,
   onTableAction,
@@ -712,10 +717,21 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     for(const sourceId of retained??[]){const node=bySourceId.get(sourceId);if(!node)continue;retain(node);let parent=node.parentId?byId.get(node.parentId):undefined;while(parent&&!ids.has(parent.id)){ids.add(parent.id);parent=parent.parentId?byId.get(parent.parentId):undefined}}
     return ids;
   }, [byId, bySourceId, protectedNodeKey]);
+  const liveViewport=useSyncExternalStore(viewportStore?.subscribe??emptyViewportSubscribe,viewportStore?.getSnapshot??emptyViewportSnapshot,emptyViewportSnapshot);
+  const visibleBounds=liveViewport?.bounds??fallbackVisibleBounds;
+  const viewportScale=liveViewport?.scale??fallbackViewportScale;
   const warmViewport=useRef<ReturnType<typeof createCanvasV2WarmViewport>|undefined>(undefined);
   if(!warmViewport.current)warmViewport.current=createCanvasV2WarmViewport();
   const protectedNodeIds=useMemo(()=>new Set([...selectionProtectedNodeIds,...warmViewport.current!.update(byId,visibleBounds,viewportScale)]),[selectionProtectedNodeIds,byId,visibleBounds,viewportScale]);
   const cullBounds = byId.size > 300 ? visibleBounds : undefined;
+  const protectedImageIds=useMemo(()=>{
+    const ids=new Set<string>();
+    for(const node of byId.values())if(node.kind==='image'){
+      let ancestor:CanvasV2NativeSceneNode|undefined=node;
+      while(ancestor){if(protectedNodeIds.has(ancestor.id)&&(ancestor===node||ancestor.parentId)){ids.add(node.id);break;}ancestor=ancestor.parentId?byId.get(ancestor.parentId):undefined;}
+    }
+    return ids;
+  },[byId,protectedNodeIds]);
   const connectorsByEndpoint = useMemo(() => {
     const index = new Map<string, CanvasV2NativeSceneNode[]>();
     for (const connector of renderedScene?.nodes ?? []) {
@@ -733,9 +749,9 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   useLayoutEffect(() => {
     const root = publicSceneRef.current;
     if (!root || !renderedScene) return;
-    if (!imageVisibilityRef.current) imageVisibilityRef.current = observeCanvasV2ImageVisibility(root);
-    else imageVisibilityRef.current.refresh();
-  }, [renderedScene]);
+    if (!imageVisibilityRef.current) imageVisibilityRef.current = observeCanvasV2ImageVisibility(root,protectedImageIds);
+    else imageVisibilityRef.current.refresh(protectedImageIds);
+  }, [renderedScene,protectedImageIds]);
 
   useEffect(() => () => {
     imageVisibilityRef.current?.dispose();

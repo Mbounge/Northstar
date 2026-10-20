@@ -1,10 +1,10 @@
 export interface CanvasV2ImageVisibilityObserver {
-  refresh: () => void;
+  refresh: (protectedNodeIds?:ReadonlySet<string>) => void;
   dispose: () => void;
 }
 
 /** Public-camera paint optimization only: never changes scene data or sources. */
-export function observeCanvasV2ImageVisibility(scene: HTMLElement): CanvasV2ImageVisibilityObserver {
+export function observeCanvasV2ImageVisibility(scene: HTMLElement, initialProtectedNodeIds:ReadonlySet<string>=new Set()): CanvasV2ImageVisibilityObserver {
   if (typeof IntersectionObserver === "undefined") return { refresh: () => {}, dispose: () => {} };
   // A captured flow is one complete source sequence. Never hide its distant
   // screens while the user pans across a long lane: the observer callback can
@@ -12,6 +12,8 @@ export function observeCanvasV2ImageVisibility(scene: HTMLElement): CanvasV2Imag
   const selector = 'img[data-canvas-v2-native-scene-id]:not([data-canvas-v2-evidence-role="canonical"])';
   const observed = new Set<HTMLImageElement>();
   let disposed = false;
+  let protectedNodeIds=initialProtectedNodeIds;
+  const protectedImage=(image:Element)=>protectedNodeIds.has(image.getAttribute("data-canvas-v2-native-scene-id")??"");
   const rememberVisibility=(images:HTMLImageElement[])=>{
     // Read styles as one batch, before writing any culling markers. Source
     // revisions can change authored visibility while an image remains offscreen.
@@ -23,15 +25,16 @@ export function observeCanvasV2ImageVisibility(scene: HTMLElement): CanvasV2Imag
   const observer = new IntersectionObserver((entries) => {
     if (disposed) return;
     const current=entries.filter(entry=>observed.has(entry.target as HTMLImageElement));
-    rememberVisibility(current.filter(entry=>!entry.isIntersecting&&!entry.target.hasAttribute('data-canvas-v2-image-authored-visibility')).map(entry=>entry.target as HTMLImageElement));
-    for(const entry of current){entry.target.toggleAttribute('data-canvas-v2-image-offscreen',!entry.isIntersecting);if(entry.isIntersecting)entry.target.removeAttribute('data-canvas-v2-image-authored-visibility')}
+    rememberVisibility(current.filter(entry=>!entry.isIntersecting&&!protectedImage(entry.target)&&!entry.target.hasAttribute('data-canvas-v2-image-authored-visibility')).map(entry=>entry.target as HTMLImageElement));
+    for(const entry of current){entry.target.toggleAttribute('data-canvas-v2-image-offscreen',!entry.isIntersecting&&!protectedImage(entry.target));if(entry.isIntersecting||protectedImage(entry.target))entry.target.removeAttribute('data-canvas-v2-image-authored-visibility')}
   }, {
     root: scene.closest<HTMLElement>("[data-canvas-v2-native-wheel-capture]"),
     rootMargin: "1024px",
     threshold: 0,
   });
-  const refresh = () => {
+  const refresh = (nextProtectedNodeIds:ReadonlySet<string>=protectedNodeIds) => {
     if (disposed) return;
+    protectedNodeIds=nextProtectedNodeIds;
     const current = new Set(scene.querySelectorAll<HTMLImageElement>(selector));
     for (const image of observed) {
       if (current.has(image)) continue;
@@ -40,6 +43,7 @@ export function observeCanvasV2ImageVisibility(scene: HTMLElement): CanvasV2Imag
       image.removeAttribute("data-canvas-v2-image-offscreen");
       image.removeAttribute("data-canvas-v2-image-authored-visibility");
     }
+    for(const image of current)if(protectedImage(image)){image.removeAttribute('data-canvas-v2-image-offscreen');image.removeAttribute('data-canvas-v2-image-authored-visibility');}
     rememberVisibility([...current].filter(image=>image.hasAttribute('data-canvas-v2-image-offscreen')));
     // Retain the observer and the offscreen state of unchanged images across
     // scene revisions. Resetting both after every edit briefly paints every

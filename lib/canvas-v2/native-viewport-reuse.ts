@@ -23,7 +23,7 @@ export function outsideVisibleCanvas(node: CanvasV2NativeSceneNode, parent: Canv
 
 type WarmCost={nodes:number;pixels:number};
 export type CanvasV2WarmViewportLimits={maxEntries:number;maxNodes:number;maxPixels:number;maxAgeMs:number;prewarmPixels:number};
-export const CANVAS_V2_WARM_VIEWPORT_LIMITS:Readonly<CanvasV2WarmViewportLimits>={maxEntries:96,maxNodes:2400,maxPixels:16_000_000,maxAgeMs:60_000,prewarmPixels:768};
+export const CANVAS_V2_WARM_VIEWPORT_LIMITS:Readonly<CanvasV2WarmViewportLimits>={maxEntries:1024,maxNodes:2400,maxPixels:16_000_000,maxAgeMs:60_000,prewarmPixels:768};
 
 /** Retain recently seen independent subtrees. Costs bound the extra offscreen
  * DOM and estimated decoded pixels, not all visible work or total GPU memory. */
@@ -96,3 +96,27 @@ export function sameNativeViewportPresence(previous: CanvasV2NativeSceneNode, ne
     protectedNode || Boolean(node.attributes[SCREEN_ATTRIBUTE] || node.attributes[MODEL_ATTRIBUTE]) || !outsideVisibleCanvas(node, node.parentId ? byId.get(node.parentId) : undefined, bounds);
   return mounted(previous, previousById, previousBounds, wasProtected) === mounted(next, nextById, nextBounds, isProtected);
 }
+
+export interface CanvasV2NativeViewportSnapshot { bounds: CanvasV2ElementBounds; scale: number }
+/** Camera-only mounting checkpoints. The workspace remains imperative during
+ * a gesture; only the native scene subscribes when its prewarmed guard is used. */
+export function createCanvasV2NativeViewportStore() {
+ let snapshot:CanvasV2NativeViewportSnapshot|undefined;
+ const listeners=new Set<()=>void>();
+ return {
+  getSnapshot:()=>snapshot,
+  subscribe:(listener:()=>void)=>{listeners.add(listener);return()=>{listeners.delete(listener)};},
+  update:(bounds:CanvasV2ElementBounds,scale:number,force=false)=>{
+   if(![bounds.x,bounds.y,bounds.width,bounds.height,scale].every(Number.isFinite)||bounds.width<=0||bounds.height<=0||scale<=0)return;
+   if(snapshot){
+    const previous=snapshot.bounds;
+    if(previous.x===bounds.x&&previous.y===bounds.y&&previous.width===bounds.width&&previous.height===bounds.height&&snapshot.scale===scale)return;
+    const guard=256/Math.max(scale,snapshot.scale);
+    if(!force&&scale/snapshot.scale>=0.8&&scale/snapshot.scale<=1.25&&bounds.x>=previous.x-guard&&bounds.y>=previous.y-guard&&bounds.x+bounds.width<=previous.x+previous.width+guard&&bounds.y+bounds.height<=previous.y+previous.height+guard)return;
+   }
+   snapshot={bounds:{...bounds},scale};
+   for(const listener of listeners)listener();
+  },
+ };
+}
+export type CanvasV2NativeViewportStore=ReturnType<typeof createCanvasV2NativeViewportStore>;

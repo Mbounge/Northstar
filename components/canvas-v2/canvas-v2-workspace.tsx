@@ -1,4 +1,7 @@
 "use client";
+
+import { reframeCanvasV2WorkspaceViewport } from '@/lib/canvas-v2/workspace-coordinate-space';
+import { createCanvasV2NativeViewportStore } from '@/lib/canvas-v2/native-viewport-reuse';
 import { CanvasCollaborationFollow, CanvasCollaborationOverlay, CanvasCollaborationToolbar } from './canvas-collaboration';
 import type {FollowFrame} from '@/lib/canvas-v2/sessions/collaboration-follow';
 import { collaboratorColor, type CanvasCollaborationClient, type CollaborationStatus } from '@/lib/canvas-v2/sessions/collaboration-client';
@@ -933,6 +936,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   // to the person and AI commits never pan or zoom it.
   const [viewport, setViewport] = useState<CanvasV2WorkspaceViewport>(() => initialSnapshot?.viewport ?? centeredCanvasV2WorkspaceViewport({ width: 1_440, height: 900 }));
   const viewportRef = useRef(viewport);
+  const [nativeViewportStore]=useState(createCanvasV2NativeViewportStore);
   const [followingClient,setFollowingClient]=useState<string>();
   const followingClientRef=useRef(followingClient);
   const followRequestRef=useRef(0);
@@ -1124,6 +1128,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         viewportRef.current = centered;
         setViewport(centered);
       }
+      nativeViewportStore.update(canvasV2VisibleWorkspaceBounds(viewportRef.current,next,CANVAS_V2_EMPTY_INSETS),viewportRef.current.scale,true);
     };
     update();
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
@@ -1133,7 +1138,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       observer?.disconnect();
       window.removeEventListener("resize", update);
     };
-  }, []);
+  }, [nativeViewportStore]);
   useEffect(() => {
     const workspace = workspaceRef.current;
     if (!workspace) return;
@@ -1361,6 +1366,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const applyViewportVisual = useCallback((next: CanvasV2WorkspaceViewport) => {
     publishViewRef.current(next);
+    nativeViewportStore.update(canvasV2VisibleWorkspaceBounds(next,workspaceSizeRef.current,CANVAS_V2_EMPTY_INSETS),next.scale);
     const surface = workspaceSurfaceRef.current;
     if (surface) {
       surface.style.transform = `translate(${next.x}px, ${next.y}px) scale(${next.scale})`;
@@ -1413,7 +1419,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const frame = Number(workspace.dataset.canvasV2CameraPreviewFrame ?? "0") + 1;
       workspace.dataset.canvasV2CameraPreviewFrame = String(frame);
     }
-  }, []);
+  }, [nativeViewportStore]);
 
   const stopPendingViewportFrame = useCallback(() => {
     if (viewportPreviewFrameRef.current !== undefined) cancelAnimationFrame(viewportPreviewFrameRef.current);
@@ -1422,14 +1428,16 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, []);
 
   const commitViewport = useCallback((update: CanvasV2WorkspaceViewport | ((current: CanvasV2WorkspaceViewport) => CanvasV2WorkspaceViewport)) => {
+    pendingFitRef.current=false;
     stopFollowingRef.current();
     stopPendingViewportFrame();
     const current = viewportRef.current;
     const next = typeof update === "function" ? update(current) : update;
     viewportRef.current = next;
     applyViewportVisual(next);
+    nativeViewportStore.update(canvasV2VisibleWorkspaceBounds(next,workspaceSizeRef.current,CANVAS_V2_EMPTY_INSETS),next.scale,true);
     setViewport((rendered) => rendered.x === next.x && rendered.y === next.y && rendered.scale === next.scale ? rendered : next);
-  }, [applyViewportVisual, stopPendingViewportFrame]);
+  }, [applyViewportVisual, nativeViewportStore, stopPendingViewportFrame]);
 
   const previewViewport = useCallback((update: CanvasV2WorkspaceViewport | ((current: CanvasV2WorkspaceViewport) => CanvasV2WorkspaceViewport)) => {
     stopFollowingRef.current();
@@ -1449,6 +1457,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, [applyViewportVisual]);
 
   const beginCameraPreview = useCallback(() => {
+    pendingFitRef.current=false;
     stopFollowingRef.current();
     interruptCanvasV2ScreenPresentation();
     cameraPreviewActiveRef.current = true;
@@ -1466,10 +1475,22 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     viewportPreviewFrameRef.current = undefined;
     pendingViewportRef.current = undefined;
     applyViewportVisual(next);
+    nativeViewportStore.update(canvasV2VisibleWorkspaceBounds(next,workspaceSizeRef.current,CANVAS_V2_EMPTY_INSETS),next.scale,true);
     setViewport((rendered) => rendered.x === next.x && rendered.y === next.y && rendered.scale === next.scale ? rendered : next);
     const workspace = workspaceRef.current;
     if (workspace) delete workspace.dataset.canvasV2CameraPreview;
-  }, [applyViewportVisual]);
+  }, [applyViewportVisual,nativeViewportStore]);
+
+  const previousCameraFrame=useRef<{key:string;size:typeof workspaceSize;insets:CanvasV2WorkspaceInsets}|undefined>(undefined);
+  useLayoutEffect(()=>{
+    const size=workspaceSizeRef.current;
+    const frame={key:JSON.stringify([canvasView,chatOpen,size.width,size.height]),size,insets:contentInsets()};
+    const previous=previousCameraFrame.current;previousCameraFrame.current=frame;
+    if(!previous||previous.key===frame.key||followingClientRef.current||cameraPreviewActiveRef.current)return;
+    const next=reframeCanvasV2WorkspaceViewport(viewportRef.current,previous,frame);
+    if(next.x===viewportRef.current.x&&next.y===viewportRef.current.y)return;
+    viewportRef.current=next;applyViewportVisual(next);setViewport(next);
+  },[canvasView,chatOpen,workspaceSize,contentInsets,applyViewportVisual]);
 
   const stopFollowing=useCallback(()=>{
     followRequestRef.current++;
@@ -1563,15 +1584,20 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     });
   }, [constrainViewport]);
 
+  const pendingFitRef=useRef(false);
+  const readFitRevision=engine.readCommittedRevision;
   const fitContent = useCallback((geometry = geometryRef.current) => {
     const authoredBounds = canvasV2FrameableSceneBounds(sceneElementsRef.current);
+    if(!authoredBounds&&readFitRevision().document.html.trim()){pendingFitRef.current=true;return;}
+    pendingFitRef.current=false;
     commitViewport(fitCanvasV2WorkspaceBounds(
       authoredBounds ?? { x: 0, y: 0, width: geometry.width, height: geometry.height },
       cameraSize(),
       contentInsets(),
       authoredBounds ? 96 : 48,
     ));
-  }, [cameraSize, commitViewport, contentInsets]);
+  }, [cameraSize, commitViewport, contentInsets,readFitRevision]);
+  useEffect(()=>{if(pendingFitRef.current&&sceneElements.length)fitContent();},[sceneElements,fitContent]);
 
   useEffect(()=>{
     setEditChatOpen(false);
@@ -4454,6 +4480,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               nativeSceneOverride={tidyPreviewScene ?? cropPreviewScene ?? engine.nativeScene}
               visibleBounds={renderedCanvasBounds}
               viewportScale={viewport.scale}
+              viewportStore={nativeViewportStore}
               preferredPlacement={preferredAiPlacement}
               onElementDoubleClick={(element) => { if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
               onBeforeUserEdit={(element) => {

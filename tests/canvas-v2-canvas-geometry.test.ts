@@ -3,6 +3,8 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import {createCanvasV2NativeViewportStore} from "../lib/canvas-v2/native-viewport-reuse";
+import {canvasV2VisibleWorkspaceBounds,CANVAS_V2_EMPTY_INSETS} from "../lib/canvas-v2/workspace-coordinate-space";
 import { resolveCanvasV2ContextToolbarPosition } from "../lib/canvas-v2/context-toolbar-placement";
 
 import { canvasV2CaptureGeometry, canvasV2ContentCaptureCamera, canvasV2DesignDetailIndexes, growCanvasV2CanvasGeometry, normalizeCanvasV2CanvasGeometry } from "../lib/canvas-v2/canvas-geometry";
@@ -140,7 +142,7 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
   assert.match(nativeScene, /sceneOverride\?\.revisionId !== revision\.id && compiledRevisionId !== revision\.id/);
   assert.match(nativeScene, /needsCompiler && <div[^>]*style=\{PRIVATE_RENDER_SURFACE_STYLE\}><iframe/);
   assert.match(nativeScene, /querySelectorAll<HTMLElement>\("\[data-canvas-v2-node-id\]"\)/);
-  assert.match(nativeScene, /observeCanvasV2ImageVisibility\(root\)/);
+  assert.match(nativeScene, /observeCanvasV2ImageVisibility\(root,\s*protectedImageIds\)/);
   assert.match(nativeScene, /node\.canonicalEvidence \|\| node\.attributes\["data-canvas-v2-evidence-role"\] === "canonical"/);
   assert.match(nativeScene, /loading: canonicalEvidenceImage \? "lazy"/);
   assert.doesNotMatch(nativeScene, /fetchPriority:.*"high"/);
@@ -202,7 +204,7 @@ test("camera preview keeps the real contextual toolbar near its visible object a
   const code = ts.transpileModule(`exports.apply = (${callback.getText(tree)});`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const exports: { apply?: (next: { x: number; y: number; scale: number }) => void } = {};
   const published: Array<{x:number;y:number;scale:number}> = [];
-  vm.runInNewContext(code, { exports, resolveCanvasV2ContextToolbarPosition, publishViewRef: {current:(next:{x:number;y:number;scale:number})=>published.push(next)},
+  vm.runInNewContext(code, { exports, resolveCanvasV2ContextToolbarPosition, nativeViewportStore:createCanvasV2NativeViewportStore(), canvasV2VisibleWorkspaceBounds,CANVAS_V2_EMPTY_INSETS,workspaceSizeRef:{current:{width:1000,height:800}},publishViewRef: {current:(next:{x:number;y:number;scale:number})=>published.push(next)},
     workspaceSurfaceRef: { current: surface }, gridOverlayRef: {}, zoomPercentageRef: {}, contextualToolbarRef: { current: { style } },
     activeSelectionBoundsRef: { current: { x: 400, y: 300, width: 200, height: 100 } }, toolbarPreviewGeometry: { current: { viewport, toolbar: { width: 336, height: 56 }, chrome: [] } },
     atmosphereLayerRef: {}, workspaceRef: {},
