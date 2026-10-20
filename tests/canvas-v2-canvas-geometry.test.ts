@@ -201,13 +201,14 @@ test("camera preview keeps the real contextual toolbar near its visible object a
   const viewport = { left: 0, top: 96, right: 1000, bottom: 800 };
   const code = ts.transpileModule(`exports.apply = (${callback.getText(tree)});`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const exports: { apply?: (next: { x: number; y: number; scale: number }) => void } = {};
-  vm.runInNewContext(code, { exports, resolveCanvasV2ContextToolbarPosition,
+  const published: Array<{x:number;y:number;scale:number}> = [];
+  vm.runInNewContext(code, { exports, resolveCanvasV2ContextToolbarPosition, publishViewRef: {current:(next:{x:number;y:number;scale:number})=>published.push(next)},
     workspaceSurfaceRef: { current: surface }, gridOverlayRef: {}, zoomPercentageRef: {}, contextualToolbarRef: { current: { style } },
     activeSelectionBoundsRef: { current: { x: 400, y: 300, width: 200, height: 100 } }, toolbarPreviewGeometry: { current: { viewport, toolbar: { width: 336, height: 56 }, chrome: [] } },
     atmosphereLayerRef: {}, workspaceRef: {},
   });
   const check = (camera: { x: number; y: number; scale: number }) => {
-    exports.apply!(camera); assert.equal(style.visibility, "");
+    exports.apply!(camera); assert.equal(style.visibility, "");assert.equal(published.at(-1),camera,"The public camera must track the same imperative frame");
     const center = parseFloat(style.left), top = parseFloat(style.top);
     const selected = { left: camera.x + 400 * camera.scale, right: camera.x + 600 * camera.scale, top: camera.y + 300 * camera.scale, bottom: camera.y + 400 * camera.scale };
     const toolbar = { left: center - 168, right: center + 168, top, bottom: top + 56 };

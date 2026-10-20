@@ -3,7 +3,7 @@ import { SCREEN_ATTRIBUTE, parseCanvasV2Screen } from './interactive-screen';
 import { canvasV2TextPaintRects, canvasV2TextPaintIntersection, canvasV2ElementPaintBounds } from "./text-paint-bounds";
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { MODEL_ATTRIBUTE, parseCanvasV2NativeModel } from "@/lib/canvas-v2/model-object";
-import { CANVAS_V2_RICH_TEXT_TAGS, canvasV2RichTextStyle, canvasV2SafeTextLink } from "./rich-text";
+import { CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT, CANVAS_V2_RICH_TEXT_TAGS, canvasV2RichTextStyle, canvasV2SafeTextLink } from "./rich-text";
 import type { CanvasV2ArtifactDocument, CanvasV2ArtifactRevision, CanvasV2SpatialNodeObservation, CanvasV2AuthoredRelationshipObservation, CanvasV2ElementBounds, CanvasV2EvidenceAsset, CanvasV2RenderObservation, CanvasV2SpatialIntersection, CanvasV2SurfaceZoneId, CanvasV2TerritoryRelation } from "@/lib/canvas-v2/types";
 import type { CanvasV2BoardObjectKind } from "@/lib/canvas-v2/board-object-graph";
 import { CANVAS_V2_WORKSPACE, type CanvasV2WorkspacePoint } from "@/lib/canvas-v2/workspace-coordinate-space";
@@ -1054,7 +1054,15 @@ function materializeCanvasV2NativeDirectTextFragments(document: Document): void 
   for (const parent of parents) {
     if (parent.namespaceURI !== document.documentElement.namespaceURI) continue;
     const parentId = parent.dataset.canvasV2NodeId;
-    if (!parentId || !parent.querySelector("[data-canvas-v2-node-id]")) continue;
+    if (!parentId) continue;
+    // Repair fragments produced by older compiles of mixed-format text. Keep
+    // real authored children independent; only compiler-owned fragments beside
+    // formatting runs can rejoin the original text object.
+    if (parent.querySelector('[data-canvas-v2-rich-text="true"]')
+      && !parent.querySelector(`${CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT}:not([data-canvas-v2-direct-text-fragment="true"])`)) {
+      for (const fragment of parent.querySelectorAll<HTMLElement>('[data-canvas-v2-direct-text-fragment="true"]')) fragment.dataset.canvasV2RichText = "true";
+    }
+    if (!parent.querySelector(CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT)) continue;
     let fragmentIndex = 0;
     for (const child of Array.from(parent.childNodes)) {
       if (child.nodeType !== child.TEXT_NODE || !child.textContent?.trim()) continue;
@@ -1190,7 +1198,7 @@ export function compileCanvasV2NativeScene(input: {
         && Array.from(authoredAncestor.children).every((child) => CANVAS_V2_INLINE_TEXT_TAGS.has(child.tagName.toLowerCase()))
         // Once a sibling is independently addressable, leaving this leaf
         // anonymous would make it permanent paint inside a structural parent.
-        && !authoredAncestor.querySelector("[data-canvas-v2-node-id]"));
+        && !authoredAncestor.querySelector(CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT));
       if (canvasV2NativeSceneLeafNeedsIdentity({
         hasAuthoredAncestor: Boolean(authoredAncestor),
         hasText: Boolean(element.textContent?.trim()),
@@ -1350,7 +1358,7 @@ export function compileCanvasV2NativeScene(input: {
       visited.add(childId);
       const child = nodesById.get(childId);
       if (!child) continue;
-      if (child.sourceNodeId) return true;
+      if (child.sourceNodeId && child.attributes["data-canvas-v2-rich-text"] !== "true") return true;
       pending.push(...child.childIds);
     }
     return false;
@@ -3194,6 +3202,7 @@ function applyAtomicNativeMutation(
     node.attributes["data-canvas-v2-crop-y"] = String(y);
     node.attributes["data-canvas-v2-crop-zoom"] = String(zoom);
     node.inlineStyle.overflow = "hidden";
+    node.inlineStyle["object-fit"] = "cover";
     image.inlineStyle = { position: "absolute", width: `${zoom * 100}%`, height: `${zoom * 100}%`, "max-width": "none", left: `${-(zoom - 1) * x}%`, top: `${-(zoom - 1) * y}%`, "object-fit": "cover", "object-position": `${x}% ${y}%` };
     if (mutation.image) {
       const pixels = mutation.image;
@@ -3373,7 +3382,15 @@ function applyAtomicNativeMutation(
     if (mutation.layout?.width !== undefined) node.geometry.width = Math.max(1, round(mutation.layout.width));
     if (mutation.layout?.height !== undefined) node.geometry.height = Math.max(1, round(mutation.layout.height));
   } else if (mutation.kind === "style") {
-    if ((node.kind === "drawing" || node.kind === "connector") && mutation.property === "background-color") {
+    if (node.kind === "image" && node.attributes["data-canvas-v2-crop-frame"] === "true" && mutation.property === "object-fit") {
+      const image = scene.nodes.find(item => node.childIds.includes(item.id) && item.attributes["data-canvas-v2-crop-source"] === "true");
+      if (!image) throw new Error("The original image is unavailable. Undo the crop before changing its fit.");
+      // Fit applies to the pixels, not merely their clipping div. Reset the
+      // previous crop transform while retaining the frame, source and mask.
+      Object.assign(image.inlineStyle, { width: "100%", height: "100%", left: "0%", top: "0%", "object-fit": mutation.value, "object-position": "50% 50%" });
+      Object.assign(node.attributes, { "data-canvas-v2-crop-x": "50", "data-canvas-v2-crop-y": "50", "data-canvas-v2-crop-zoom": "1" });
+      node.inlineStyle["object-fit"] = mutation.value;
+    } else if ((node.kind === "drawing" || node.kind === "connector") && mutation.property === "background-color") {
       const byId = canvasV2NativeSceneNodeMap(scene);
       for (const childId of node.childIds) {
         const stroke = byId.get(childId);

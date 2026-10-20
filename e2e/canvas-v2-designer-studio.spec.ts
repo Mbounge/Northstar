@@ -28,8 +28,9 @@ async function open(page: Page) {
   await frame.locator('#draft').fill('Retain this human draft');
   await frame.locator('#save').click();
   await expect(frame.locator('#status')).toHaveText('Saved 1 · Retain this human draft');
+  const mode=page.getByRole('button',{name:'Design view',exact:true});if(await mode.getAttribute('aria-pressed')!=='true')await mode.click();
   await page.getByTestId('canvas-v2-native-scene').getByText(title, { exact: true }).click();
-  await page.getByRole('button', { name: 'Edit app elements', exact: true }).click();
+  await expect(page.getByRole('button',{name:'Back to canvas',exact:true})).toBeVisible();
   return frame;
 }
 
@@ -42,6 +43,10 @@ async function section(page: Page, name: string) {
 async function finish(page: Page) {
   await page.getByRole('button', { name: 'Back to canvas', exact: true }).click();
   await expect(page.locator('[data-northstar-edit-view="true"]')).toHaveCount(0);
+  const mode=page.getByRole('button',{name:'Design view',exact:true});await expect(mode).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('complementary',{name:'Object layers',exact:true})).toBeVisible();
+  await expect(page.getByRole('complementary',{name:'Design properties',exact:true})).toBeVisible();
+  await mode.click();await expect(mode).toHaveAttribute('aria-pressed','false');
   await frameFor(page).locator('#save').click();
   await expect(frameFor(page).locator('#status')).toHaveText('Saved 2 · Retain this human draft');
 }

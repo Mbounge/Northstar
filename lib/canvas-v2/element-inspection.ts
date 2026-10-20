@@ -63,6 +63,28 @@ export interface CanvasV2SelectionIntent {
   directEdit: boolean;
 }
 
+/** Expose only controls that apply to the entire selection, with honest mixed
+ * values rather than borrowing the last selected object's appearance. */
+export function canvasV2SelectionAppearance(selected: readonly CanvasV2InspectableElement[]) {
+  const isText = selected.length > 0 && selected.every(item => item.textEditable && item.kind !== "shape" && item.kind !== "note" && (
+    item.kind === "text" || item.textPreview !== undefined || ["p", "span", "small", "strong", "em", "label", "button", "h1", "h2", "h3", "h4", "h5", "h6"].includes(item.tagName)
+  ));
+  const hasStroke = selected.length > 0 && selected.every(item => item.kind === "line" || item.kind === "drawing" || (selected.length === 1 && item.kind === "connector"));
+  const canFill = selected.length === 1
+    ? !isText && selected[0].kind !== "image" && !hasStroke && selected[0].nodeId !== "canvas"
+    : selected.length > 1 && selected.every(item => item.kind === "shape" || item.kind === "note");
+  const first = selected[0]?.visualStyle;
+  let visualStyle = first;
+  if (first && selected.length > 1) {
+    visualStyle = { ...first };
+    for (const key of ["color", "backgroundColor", "borderColor", "borderStyle", "borderWidth", "borderRadius", "fontFamily", "fontSize", "lineHeight", "fontWeight", "fontStyle", "textAlign", "textDecoration", "opacity", "objectFit"] as const) {
+      if (selected.some(item => item.visualStyle?.[key] !== first[key])) visualStyle[key] = "mixed";
+    }
+    visualStyle.textColors = [...new Set(selected.flatMap(item => item.visualStyle?.textColors?.length ? item.visualStyle.textColors : item.visualStyle?.color ? [item.visualStyle.color] : []))];
+  }
+  return { isText, hasStroke, canFill, visualStyle };
+}
+
 export function normalizeCanvasV2NodeId(value: string | null | undefined): string | undefined {
   const nodeId = value?.trim();
   return nodeId ? nodeId : undefined;

@@ -125,6 +125,9 @@ test('offline startup then reconnect recognizes a lost-ACK receipt rather than i
 test('cache failure does not prevent the personal conversation from reaching cloud storage', async t => {
   const f = fixture({ failCache: true }); t.after(() => f.sync.close()); await f.sync.open(history('Cloud survives cache failure')); await f.sync.flush();
   assert.equal(f.cloud()?.history.draft, 'Cloud survives cache failure'); assert.equal(f.sync.dirty, false);
+  assert.equal(f.sync.getStatus().phase, 'saved', 'a confirmed cloud receipt must clear local-cache failure status');
+  assert.equal(f.sync.getStatus().dirty, false);
+  assert.equal(f.sync.getStatus().error, undefined);
 });
 
 
@@ -157,4 +160,20 @@ test('a new device that opened offline can discover saved private history on Ret
   f.failRead(false); await f.sync.flush();
   assert.equal(f.sync.getStatus().phase, 'conflict', 'the saved-chat action must become available');
   assert.equal(f.writes.length, 0); assert.equal(f.cloud()?.history.draft, 'Existing saved conversation');
+});
+
+test('simultaneous cache and cloud failures report memory-only risk until a durable store recovers', async t => {
+  const cacheOptions = { failCache: true };
+  const f = fixture(cacheOptions); t.after(() => f.sync.close()); await f.sync.open(history('Memory-only private draft')); f.failWrite(true);
+  await f.sync.flush();
+  assert.equal(f.cloud(), undefined); assert.equal(f.cache(), undefined); assert.equal(f.sync.dirty, true);
+  assert.match(f.sync.getStatus().error!, /in memory.*keep this tab open/i);
+  assert(!/saved on this device/i.test(f.sync.getStatus().error!));
+  cacheOptions.failCache = false; await f.sync.flush();
+  assert.equal(f.cache()?.history.draft, 'Memory-only private draft'); assert.equal(f.cloud(), undefined);
+  assert.match(f.sync.getStatus().error!, /saved on this device/i);
+  cacheOptions.failCache = true; f.failWrite(false); await f.sync.flush();
+  assert.equal(f.cloud()?.history.draft, 'Memory-only private draft'); assert.equal(f.cloud()?.version, 1);
+  assert.equal(f.sync.getStatus().phase, 'saved'); assert.equal(f.sync.getStatus().error, undefined); assert.equal(f.sync.dirty, false);
+  assert.equal(new Set(f.writes.map(call => call.id)).size, 1, 'store recovery retries the original save identity');
 });

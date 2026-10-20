@@ -27,7 +27,8 @@ export interface CollaborationTransport {
   removeMember(userId: string): Promise<void>;
   revokeInvite(id: string): Promise<void>;
 }
-export interface RecoveredEdit { label: string; revision: CanvasV2ArtifactRevision; changes?: CellChange[]; at: number }
+export interface RecoveredBranch { label: string; revision: CanvasV2ArtifactRevision; changes?: CellChange[]; at: number }
+export interface RecoveredEdit extends RecoveredBranch { alternatives?: RecoveredBranch[] }
 export interface CollaborationJournal { pending: SharedOperation[]; recovery?: RecoveredEdit }
 export interface CollaborationStatus {
   phase: 'off' | 'connecting' | 'live' | 'reconnecting' | 'blocked'; role: CanvasMember['role']; pending: number;
@@ -110,11 +111,10 @@ export class CanvasCollaborationClient {
     this.status = status; for (const listener of this.listeners) listener();
   }
   private async journal() {
-    const signature=this.pending.map(operation=>operation.id).join('|')+':'+(this.status.recovery?.at??'');
+    const signature=this.pending.map(operation=>operation.id).join('|')+':'+(this.status.recovery?.revision.id??'');
     if(signature===this.journalSignature)return;
-    try { await this.options.saveJournal?.({ pending: this.pending.map(op => ({ ...op, changes: op.changes.map(change => ({ ...change })) })), recovery: this.status.recovery }); }
+    try { await this.options.saveJournal?.({ pending: this.pending.map(op => ({ ...op, changes: op.changes.map(change => ({ ...change })) })), recovery: this.status.recovery }); this.journalSignature=signature; }
     catch { this.update({ error: 'Your changes are in memory, but local recovery storage is unavailable. Keep this tab open until they are saved.' }); }
-    this.journalSignature=signature;
   }
   async connect(): Promise<boolean> {
     const room = await this.transport.read(); if (!room) return false;
@@ -179,7 +179,17 @@ export class CanvasCollaborationClient {
   async refreshMembers(force = false) {
     if (!force && Date.now() - this.lastMembers < 1500) return;
     this.lastMembers = Date.now();
-    try { const members = await this.transport.members(); const same = members.length === this.status.members.length && members.every(member => this.status.members.some(previous => previous.userId === member.userId && previous.name === member.name && previous.role === member.role)); if (!same) this.update({ members }); for (const [id, peer] of this.peers) if (!members.some(member => member.userId === peer.userId)) this.peers.delete(id); this.emitPresence(); }
+    try {
+      const members = await this.transport.members();
+      const same = members.length === this.status.members.length && members.every(member => this.status.members.some(previous => previous.userId === member.userId && previous.name === member.name && previous.role === member.role));
+      // Owner authority comes from the room read, not its editor membership
+      // row. Other users must adopt role changes before another edit queues.
+      const role = this.status.role === 'owner' ? 'owner' : members.find(member => member.userId === this.userId)?.role ?? 'viewer';
+      if (!same || role !== this.status.role) this.update({ members: same ? this.status.members : members, role });
+      if (role === 'viewer' && this.claims.length) void this.claim([]);
+      for (const [id, peer] of this.peers) if (!members.some(member => member.userId === peer.userId)) this.peers.delete(id);
+      this.emitPresence();
+    }
     catch { /* The next durable sync determines whether access was removed. */ }
   }
   observe(revision: CanvasV2ArtifactRevision, label = 'Edited canvas'): Promise<void> {
@@ -209,21 +219,38 @@ export class CanvasCollaborationClient {
     this.revision = revision; this.remember(revision.id, cells);
     for (const listener of this.revisionListeners) listener(revision);
   }
+  private recoverPending(label: string) {
+    if (!this.revision) return;
+    const previous = this.status.recovery;
+    const merged = new Map<string, CellChange>();
+    // Keep the earliest guard and latest human value for every field. Recovery
+    // is a separate branch; these after-values never overwrite accepted work.
+    for (const change of [...previous?.changes ?? [], ...this.pending.flatMap(operation => operation.changes)]) {
+      const first = merged.get(change.key);
+      merged.set(change.key, { ...change, before: first ? first.before : change.before });
+    }
+    const changes = [...merged.values()];
+    let revision = this.revision;
+    try { revision = revisionFromSharedCells(applySharedChanges(this.accepted, changes), revision, `recovery-${crypto.randomUUID()}`); }
+    catch { revision = { ...revision, id: `recovery-${crypto.randomUUID()}` }; }
+    // Older journals and explicit retained revisions may not have a field delta.
+    // Preserve those whole branches rather than guessing a diff against peers.
+    const alternatives = [...previous?.alternatives ?? []];
+    if (previous && !previous.changes?.length) alternatives.push({ label: previous.label, revision: previous.revision, at: previous.at });
+    this.update({ recovery: { label, revision, changes, at: Date.now(), ...(alternatives.length ? { alternatives } : {}) } });
+  }
   private async rebase(force = false) {
     let next = new Map(this.accepted); const retained: SharedOperation[] = [];
+    let conflicted = false;
     for (const operation of this.pending) {
       const conflicts = await conflictingSharedCells(next, operation.changes);
       if (conflicts.length) {
-        let draft = this.revision;
-        // A restarted tab has only the accepted seed in memory. Retain the
-        // journal's actual after-values, not that seed, in its recovered edit.
-        if (draft) {
-          try { draft = revisionFromSharedCells(applySharedChanges(next, operation.changes), draft, `recovery-${operation.id}`); }
-          catch { /* Structural peer changes can prevent rendering; the exact edit is still retained below. */ }
-        }
-        const recovery = draft ? { label: operation.label, revision: draft, changes: operation.changes, at: Date.now() } : this.status.recovery;
-        this.update({ recovery, error: 'A teammate changed the same element. Your version is kept in recovery; their changes were preserved.' });
+        conflicted = true;
       } else { next = applySharedChanges(next, operation.changes); retained.push(operation); }
+    }
+    if (conflicted) {
+      this.recoverPending(this.pending.length > 1 ? `Recovered ${this.pending.length} unsaved edits` : this.pending[0].label);
+      this.update({ error: 'A teammate changed the same element. Your version is kept in recovery; their changes were preserved.' });
     }
     this.pending = retained;
     const changed = next.size !== this.visible.size || [...next].some(([key, value]) => this.visible.get(key) !== value);
@@ -262,8 +289,9 @@ export class CanvasCollaborationClient {
             // Pull the accepted peer edit before deciding what can be rebased.
             const room = await this.transport.read(); if (!room) throw new Error('The shared canvas is unavailable.');
             this.accepted = room.cells; this.version = room.version; this.update({ role: room.role, members: room.members });
-            const rejected = this.pending.shift();
-            this.update({ recovery: this.revision && rejected ? { revision: this.revision, label: rejected.label, at: Date.now() } : this.status.recovery, error: 'This element changed or is being edited by a teammate. Your version is kept in recovery.' });
+            this.recoverPending(operation.label);
+            this.pending.shift();
+            this.update({ error: 'This element changed or is being edited by a teammate. Your version is kept in recovery.' });
             await this.rebase(true); break;
           }
           this.transport.notify(); // Only a sequence hint, never document data.
@@ -335,7 +363,9 @@ export class CanvasCollaborationClient {
   private emitPresence() { for (const listener of this.presenceListeners) listener(); }
   expirePresence(now = Date.now()) { let changed = false; for (const [id, peer] of this.peers) if (now - peer.at > 12000) { this.peers.delete(id); changed = true; } if (changed) this.emitPresence(); }
   retainLocalRevision(revision: CanvasV2ArtifactRevision, label: string) {
-    this.update({ recovery: { revision, label, at: Date.now() } }); void this.journal();
+    const previous=this.status.recovery;
+    const alternatives=previous?[...previous.alternatives??[],{label:previous.label,revision:previous.revision,changes:previous.changes,at:previous.at}]:[];
+    this.update({ recovery: { revision, label, at: Date.now(),...(alternatives.length?{alternatives}:{}) } }); void this.journal();
   }
   dismissRecovery() { this.update({ recovery: undefined, error: undefined }); void this.journal(); }
   close() { this.closed = true; clearTimeout(this.pointerTimer); clearInterval(this.timer); this.watchStop?.(); this.watchStop = undefined; void this.transport.claim(this.clientId, []).catch(() => {}); this.peers.clear(); this.emitPresence(); }

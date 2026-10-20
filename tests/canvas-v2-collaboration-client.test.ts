@@ -23,7 +23,7 @@ function room() {
   const members: CanvasMember[] = [{ userId: 'alice', name: 'Alice', role: 'owner' }, { userId: 'bob', name: 'Bob', role: 'editor' }, { userId: 'viewer', name: 'Viewer', role: 'viewer' }];
   const signals = new Map<string, Parameters<CollaborationTransport['watch']>[1]>();
   const gates = new Map<string, ReturnType<typeof deferred>>(), entered = new Map<string, ReturnType<typeof deferred>>();
-  const faults = { offline: false, denied: false, loseNextAck: false, rejectNext: false };
+  const faults = { offline: false, denied: false, loseNextAck: false, rejectNext: false, busyObjects: [] as string[] };
   const calls = { since: [] as number[], members: [] as number[] };
   const transport = (userId: string): CollaborationTransport => ({
     async read() { if (faults.offline) throw new Error('Offline'); return { version: log.length, cells: new Map(cells), seed, ownerId: 'alice', role: members.find(m => m.userId === userId)!.role, members: structuredClone(members) }; },
@@ -39,15 +39,15 @@ function room() {
       if (faults.loseNextAck) { faults.loseNextAck = false; throw new Error('ACK was lost after acceptance'); }
       return { ok: true, version: log.length };
     },
-    async since(version) { calls.since.push(Date.now()); if (faults.denied) throw new Error('Access denied'); if (faults.offline) throw new Error('Offline'); return structuredClone(log.filter(op => op.version > version)); },
-    async claim() { return { busy: [] }; }, async members() { calls.members.push(Date.now()); return structuredClone(members); },
+    async since(version) { calls.since.push(Date.now()); if (faults.denied) throw new Error('Access denied'); if (faults.offline) throw new Error('Offline'); return structuredClone(log.filter(op => op.version > version).slice(0, 100)); },
+    async claim() { return { busy: [...faults.busyObjects] }; }, async members() { calls.members.push(Date.now()); return structuredClone(members); },
     watch(clientId, receive) { signals.set(clientId, receive); return () => { signals.delete(clientId); }; },
     presence(value) { presence.push(structuredClone(value)); }, notify() {},
     async invite() { return { id: 'invite', token: 'token' }; }, async removeMember() {}, async revokeInvite() {},
   });
-  const client = async (userId: string, options: { clientId?: string; journal?: CollaborationJournal; loadFailure?: boolean } = {}) => {
+  const client = async (userId: string, options: { clientId?: string; journal?: CollaborationJournal; loadFailure?: boolean; journalFailure?: () => boolean } = {}) => {
     let current = seed, journal = options.journal;
-    const value = new CanvasCollaborationClient({ clientId: options.clientId ?? userId + '-tab', userId, name: userId, transport: transport(userId), loadJournal: async () => { if (options.loadFailure) throw new Error('Local journal cannot be opened'); return journal; }, saveJournal: async next => { journal = structuredClone(next); } });
+    const value = new CanvasCollaborationClient({ clientId: options.clientId ?? userId + '-tab', userId, name: userId, transport: transport(userId), loadJournal: async () => { if (options.loadFailure) throw new Error('Local journal cannot be opened'); return journal; }, saveJournal: async next => { if (options.journalFailure?.()) throw new Error('Local journal write unavailable'); journal = structuredClone(next); } });
     value.subscribeRevision(next => { current = next; }); await value.connect(); await value.sync();
     return { value, revision: () => value.getRevision() ?? current, journal: () => journal };
   };
@@ -263,4 +263,153 @@ test('the final throttled pointer packet arrives within40ms and queued packets n
   now += 1; a.value.pointer({ x: 150, y: 200 }); const countBeforeClose = f.presence.length;
   a.value.close(); now += 100; timers.tick(100); await turn(); assert.equal(f.presence.length, countBeforeClose);
   assert.equal(f.log.length, 0);
+});
+
+test('an authoritative roster downgrade removes local authoring before another edit can queue', async t => {
+  const f = room(), bob = await f.client('bob'); t.after(() => bob.value.close());
+  assert.equal(bob.value.writable, true);
+  f.members.find(member => member.userId === 'bob')!.role = 'viewer';
+  await bob.value.refreshMembers(true);
+  assert.equal(bob.value.getStatus().role, 'viewer', 'a removed editor readmitted with a viewer link must not retain its old editing UI');
+  assert.equal(bob.value.writable, false);
+  await bob.value.observe(revision('viewer-after-downgrade', html.replace('First', 'Must stay local'))); await bob.value.sync();
+  assert.equal(f.commits.length, 0); assert.equal(bob.value.getStatus().pending, 0);
+});
+
+test('an authoritative viewer upgrade enables authoring while owner identity remains owner', async t => {
+  const f = room(), viewer = await f.client('viewer'), owner = await f.client('alice'); t.after(() => { viewer.value.close(); owner.value.close(); });
+  f.members.find(member => member.userId === 'viewer')!.role = 'editor';
+  await viewer.value.refreshMembers(true);
+  assert.equal(viewer.value.getStatus().role, 'editor'); assert.equal(viewer.value.writable, true);
+  // SQL stores the original owner's member row as editor; ownership comes from
+  // the room's owner identity and must not be downgraded by that member row.
+  f.members.find(member => member.userId === 'alice')!.role = 'editor';
+  await owner.value.refreshMembers(true); assert.equal(owner.value.getStatus().role, 'owner');
+});
+
+test('multiple conflicted offline operations retain the complete unsent human branch across reload', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  f.faults.offline = true;
+  await a.value.observe(revision('offline-a', html.replace('First', 'Alice unsent A'))); await a.value.sync();
+  const completeDraft = html.replace('First', 'Alice unsent A').replace('Second', 'Alice unsent B');
+  await a.value.observe(revision('offline-ab', completeDraft)); await a.value.sync();
+  const before = structuredClone(a.journal()); assert.equal(before?.pending.length, 2);
+  f.faults.offline = false;
+  await b.value.observe(revision('peer-ab', html.replace('First', 'Bob accepted A').replace('Second', 'Bob accepted B'))); await b.value.sync();
+  await a.value.sync();
+  assert.equal(a.revision().document.html, f.html(), 'the accepted peer version remains the shared document');
+  assert.equal(a.value.getStatus().recovery?.revision.document.html, completeDraft, 'both conflicting human changes must survive, not only the last operation');
+  assert.equal(a.journal()?.recovery?.revision.document.html, completeDraft, 'durable recovery must retain the whole unsent branch');
+  const reopened = await f.client('alice', { clientId: 'alice-tab', journal: structuredClone(a.journal()) }); t.after(() => reopened.value.close());
+  assert.equal(reopened.value.getStatus().recovery?.revision.document.html, completeDraft);
+});
+
+test('startup reconstructs every conflicted offline operation from its journal before discarding pending entries', async t => {
+  const f = room(), old = await f.client('alice'), b = await f.client('bob'); t.after(() => { old.value.close(); b.value.close(); });
+  f.faults.offline = true;
+  await old.value.observe(revision('startup-offline-a', html.replace('First', 'Startup unsent A'))); await old.value.sync();
+  const complete = html.replace('First', 'Startup unsent A').replace('Second', 'Startup unsent B');
+  await old.value.observe(revision('startup-offline-ab', complete)); await old.value.sync();
+  const journal = structuredClone(old.journal()); assert.equal(journal?.pending.length, 2); old.value.close(); f.faults.offline = false;
+  await b.value.observe(revision('startup-peer-ab', html.replace('First', 'Accepted A').replace('Second', 'Accepted B'))); await b.value.sync();
+  const reopened = await f.client('alice', { clientId: 'alice-tab', journal }); t.after(() => reopened.value.close());
+  assert.equal(reopened.revision().document.html, f.html()); assert.equal(reopened.value.getStatus().pending, 0);
+  assert.equal(reopened.value.getStatus().recovery?.revision.document.html, complete);
+  assert.equal(reopened.journal()?.recovery?.revision.document.html, complete);
+});
+
+test('a conflicted field and safe pending sibling preserve the whole branch while only the safe sibling commits', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  f.faults.offline = true;
+  await a.value.observe(revision('mixed-offline-a', html.replace('First', 'Conflicted Alice A'))); await a.value.sync();
+  const complete = html.replace('First', 'Conflicted Alice A').replace('Second', 'Safe Alice B');
+  await a.value.observe(revision('mixed-offline-ab', complete)); await a.value.sync(); f.faults.offline = false;
+  await b.value.observe(revision('mixed-peer-a', html.replace('First', 'Accepted Bob A'))); await b.value.sync(); await a.value.sync();
+  assert.equal(f.html(), html.replace('First', 'Accepted Bob A').replace('Second', 'Safe Alice B'));
+  assert.equal(a.value.getStatus().recovery?.revision.document.html, complete);
+  assert.equal(await a.value.undo(), true); await a.value.sync();
+  assert.equal(f.html(), html.replace('First', 'Accepted Bob A'), 'own undo removes only the accepted safe edit and never the peer conflict winner');
+});
+
+test('later conflicts retain an earlier unsaved recovery rather than replacing the only copy', async t => {
+  t.mock.method(Date, 'now', () => 100_000);
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  f.faults.offline = true; await a.value.observe(revision('first-recovery-a', html.replace('First', 'Earlier retained Alice A'))); await a.value.sync(); f.faults.offline = false;
+  await b.value.observe(revision('first-winner-a', html.replace('First', 'Bob accepted A'))); await b.value.sync(); await a.value.sync();
+  assert(JSON.stringify(a.value.getStatus().recovery).includes('Earlier retained Alice A'));
+  f.faults.offline = true; await a.value.observe(revision('later-recovery-b', a.revision().document.html.replace('Second', 'Later retained Alice B'))); await a.value.sync(); f.faults.offline = false;
+  await b.value.observe(revision('later-winner-b', f.html().replace('Second', 'Bob accepted B'))); await b.value.sync(); await a.value.sync();
+  const exported = JSON.stringify(a.journal()?.recovery);
+  assert(exported.includes('Earlier retained Alice A'), 'the old conflict must remain in the exported durable recovery');
+  assert(exported.includes('Later retained Alice B'));
+  assert.equal(a.revision().document.html, f.html());
+});
+
+test('a legacy revision-only recovery survives a new conflict without being applied to the shared document', async t => {
+  const f = room(), b = await f.client('bob'); t.after(() => b.value.close());
+  const legacy = revision('legacy-recovery', html.replace('First', 'Legacy recovered human text'));
+  const a = await f.client('alice', { journal: { pending: [], recovery: { revision: legacy, label: 'Before sharing', at: 1 } } }); t.after(() => a.value.close());
+  f.faults.offline = true; await a.value.observe(revision('newer-recovery', html.replace('Second', 'New conflicted human text'))); await a.value.sync(); f.faults.offline = false;
+  await b.value.observe(revision('newer-accepted', html.replace('Second', 'Accepted teammate text'))); await b.value.sync(); await a.value.sync();
+  const exported = JSON.stringify(a.journal()?.recovery);
+  assert(exported.includes('Legacy recovered human text'), 'legacy recovery has no changes list, so its original branch must remain explicitly exportable');
+  assert(exported.includes('New conflicted human text'));
+  assert.equal(f.html(), html.replace('Second', 'Accepted teammate text'), 'retained recovery is never silently replayed over peer source');
+});
+
+
+test('same-millisecond explicit recoveries keep both branches in the durable journal', async t => {
+  t.mock.method(Date, 'now', () => 100_000);
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  a.value.retainLocalRevision(revision('same-ms-one', html.replace('First', 'First same-ms branch')), 'First'); await turn();
+  a.value.retainLocalRevision(revision('same-ms-two', html.replace('Second', 'Second same-ms branch')), 'Second'); await turn();
+  const durable = JSON.stringify(a.journal()?.recovery);
+  assert(durable.includes('First same-ms branch')); assert(durable.includes('Second same-ms branch'));
+  assert.equal(a.journal()?.recovery?.revision.id, 'same-ms-two');
+});
+
+test('an offline journal write retries after local storage recovers without needing a new human edit', async t => {
+  let failJournal = false;
+  const f = room(), a = await f.client('alice', { journalFailure: () => failJournal }); t.after(() => a.value.close());
+  f.faults.offline = true; failJournal = true;
+  await a.value.observe(revision('journal-retry', html.replace('First', 'Unsent while local storage failed'))); await a.value.sync();
+  assert.equal(a.value.getStatus().pending, 1); assert.equal(a.journal()?.pending.length, 0);
+  failJournal = false; await a.value.sync();
+  assert.equal(a.journal()?.pending.length, 1, 'a failed checkpoint is not a saved signature; Retry must persist unchanged pending bytes');
+  assert(JSON.stringify(a.journal()).includes('Unsent while local storage failed'));
+});
+
+
+test('catching up across multiple log pages preserves a delayed local edit and its author-only undo', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  const hold = f.hold('alice-tab'); await a.value.observe(revision('delayed-page-local', html.replace('First', 'Delayed Alice edit'))); await hold.entered;
+  for (let index = 1; index <= 105; index++) {
+    await b.value.observe(revision(`peer-page-${index}`, html.replace('Second', `Bob version ${index}`))); await b.value.sync();
+  }
+  hold.release(); await a.value.sync(); await b.value.sync();
+  assert.equal(a.revision().document.html, html.replace('First', 'Delayed Alice edit').replace('Second', 'Bob version 105'));
+  assert.equal(a.value.getStatus().pending, 0); assert.equal(a.value.getStatus().recovery, undefined);
+  assert.equal(await a.value.undo(), true); await a.value.sync();
+  assert.equal(f.html(), html.replace('Second', 'Bob version 105'));
+});
+
+test('server-side busy rejection preserves the full queued branch and permits an unrelated pending sibling', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const hold = f.hold('alice-tab'); await a.value.observe(revision('busy-a', html.replace('First', 'Blocked local A'))); await hold.entered;
+  const whole = html.replace('First', 'Blocked local A').replace('Second', 'Unrelated local B');
+  await a.value.observe(revision('busy-ab', whole));
+  // Claims can reject a write even though none of its field hashes changed.
+  f.faults.rejectNext = true; hold.release(); await a.value.sync();
+  assert.equal(a.value.getStatus().recovery?.revision.document.html, whole);
+  await a.value.sync(); assert.equal(f.html(), html.replace('Second', 'Unrelated local B'));
+  assert.equal(a.value.getStatus().pending, 0);
+});
+
+test('claim responses expose busy object identities and release them without writing a document operation', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  f.faults.busyObjects = ['encoded%20object'];
+  a.value.selection([{ nodeId: 'encoded object', x: 0, y: 0, width: 100, height: 50 }], 'design', 'editing'); await turn();
+  assert.deepEqual(a.value.getStatus().busyObjects, ['encoded object']);
+  f.faults.busyObjects = []; a.value.selection([], 'design', 'viewing'); await turn();
+  assert.deepEqual(a.value.getStatus().busyObjects, []); assert.equal(f.commits.length, 0);
 });

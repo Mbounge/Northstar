@@ -1,6 +1,10 @@
 import type { CanvasV2NativeTextContentUpdate } from "./manual-mutations";
 import type { CanvasV2NativeSceneNode } from "./native-scene";
 
+/** Formatting runs have stable identities for persistence, but belong to their
+ * text object rather than becoming independently selectable canvas layers. */
+export const CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT = '[data-canvas-v2-node-id]:not([data-canvas-v2-rich-text="true"])';
+
 /** Describe the painted text runs, rather than just their container's style. */
 export function canvasV2TextStyleSummary(element: Element, range?: Range) {
   const view = element.ownerDocument.defaultView!;

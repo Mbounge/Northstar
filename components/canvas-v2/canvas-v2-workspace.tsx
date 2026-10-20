@@ -131,7 +131,7 @@ import type { AppDataApp, AppDataFlow } from "@/lib/app-data/canvas-v2-catalog";
 import type { CanvasV2ResearchResult } from "@/lib/canvas-v2/research-adapter";
 import type { CanvasV2ChatImageAttachment } from "@/lib/canvas-v2/chat-attachments";
 import { CANVAS_V2_MIN_CANVAS, type CanvasV2CanvasGeometry } from "@/lib/canvas-v2/canvas-geometry";
-import { canvasV2ConnectorTargetAtPoint, type CanvasV2InspectableElement, type CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
+import { canvasV2ConnectorTargetAtPoint, canvasV2SelectionAppearance, type CanvasV2InspectableElement, type CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
 import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorRelativeAnchor, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, canvasV2ConnectorNearestLabelPosition, canvasV2MoveConnectorSegment, type CanvasV2ConnectorCap, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { canvasV2OpaquePaintColor, canvasV2PaintMode, canvasV2PaintValue, type CanvasV2PaintMode } from "@/lib/canvas-v2/paint-style";
 import { readCanvasV2BoardObjectGraph, readCanvasV2NativeBoardObjectGraph, type CanvasV2BoardObject } from "@/lib/canvas-v2/board-object-graph";
@@ -2840,21 +2840,6 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     if (!keepToolbarOpen) setToolbarMenu(undefined);
   };
 
-  const styleSelectionProperties = (
-    label: string,
-    properties: Array<{ property: CanvasV2EditableStyleProperty; value: string }>,
-    keepToolbarOpen = false,
-  ) => {
-    const mutable = selectedElements.filter((item) => item.nodeId !== "canvas" && !item.locked);
-    if (!mutable.length || !properties.length) return;
-    submitMutation({
-      kind: "batch",
-      label,
-      mutations: mutable.flatMap((item) => properties.map(({ property, value }) => ({ kind: "style" as const, nodeId: item.nodeId, property, value }))),
-    });
-    if (!keepToolbarOpen) setToolbarMenu(undefined);
-  };
-
   const applyPaintMode = (mode: CanvasV2PaintMode) => {
     // The public renderer may theme a solid authored color for contrast. The
     // paint control owns the user's chosen hue, so changing opacity must use
@@ -2867,35 +2852,27 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const applyPaletteHue = (hue: string) => {
     const normalized = canvasV2OpaquePaintColor(hue, customColorDraft);
     setCustomColorDraft(normalized.toUpperCase());
-    const mode = colorProperty === "color" || selectedPaintMode === "none" ? "fill" : selectedPaintMode;
+    const mode = colorProperty === "color" || selectedPaintMixed || selectedPaintMode === "none" ? "fill" : selectedPaintMode;
     styleSelection(colorProperty, canvasV2PaintValue(mode, normalized, customColorDraft), true);
   };
 
   const applyLineStyle = (style: "solid" | "dashed" | "none") => {
-    const width = Number.parseFloat(selectedVisualStyle?.borderWidth || "0");
-    styleSelectionProperties(
-      `Changed the selected object line to ${style}.`,
-      [
-        { property: "border-style", value: style },
-        ...(style !== "none" && !(width > 0) ? [{ property: "border-width" as const, value: "2px" }] : []),
-      ],
-      true,
-    );
+    const mutable = selectedElements.filter(item => item.nodeId !== "canvas" && !item.locked);
+    submitMutation({ kind: "batch", label: `Changed the selected object line to ${style}.`, mutations: mutable.flatMap(item => [
+      { kind: "style" as const, nodeId: item.nodeId, property: "border-style" as const, value: style },
+      ...(style !== "none" && !(Number.parseFloat(item.visualStyle?.borderWidth || "0") > 0) ? [{ kind: "style" as const, nodeId: item.nodeId, property: "border-width" as const, value: "2px" }] : []),
+    ]) });
   };
 
   const applyLineColor = (hue: string) => {
     const normalized = canvasV2OpaquePaintColor(hue, lineColorDraft);
     setLineColorDraft(normalized.toUpperCase());
-    const width = Number.parseFloat(selectedVisualStyle?.borderWidth || "0");
-    styleSelectionProperties(
-      "Changed the selected object line color.",
-      [
-        { property: "border-color", value: normalized },
-        ...(selectedLineStyle === "none" ? [{ property: "border-style" as const, value: "solid" }] : []),
-        ...(!(width > 0) ? [{ property: "border-width" as const, value: "2px" }] : []),
-      ],
-      true,
-    );
+    const mutable = selectedElements.filter(item => item.nodeId !== "canvas" && !item.locked);
+    submitMutation({ kind: "batch", label: "Changed the selected object line color.", mutations: mutable.flatMap(item => [
+      { kind: "style" as const, nodeId: item.nodeId, property: "border-color" as const, value: normalized },
+      ...(item.visualStyle?.borderStyle === "none" || !(Number.parseFloat(item.visualStyle?.borderWidth || "0") > 0) ? [{ kind: "style" as const, nodeId: item.nodeId, property: "border-style" as const, value: "solid" }] : []),
+      ...(!(Number.parseFloat(item.visualStyle?.borderWidth || "0") > 0) ? [{ kind: "style" as const, nodeId: item.nodeId, property: "border-width" as const, value: "2px" }] : []),
+    ]) });
   };
 
   const alignObjectSelection = (mode: "left" | "center" | "right" | "top" | "middle" | "bottom") => {
@@ -4020,13 +3997,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return true;
   }) : RESIZE_HANDLES;
   const selectionPermanent = selectedElements.some((item) => item.nodeId === "canvas");
+  const selectionAppearance = canvasV2SelectionAppearance(selectedElements);
   const selectionIsShape = selectedElements.length === 1 && selectedElement?.kind === "shape" && selectedElement.shapeVariant !== undefined;
-  const selectionIsText = Boolean(selectedElements.length === 1 && selectedElement?.textEditable && selectedElement.kind !== "shape" && selectedElement.kind !== "note" && (
-    selectedElement.textPreview !== undefined
-    || ["p", "span", "small", "strong", "em", "label", "button", "h1", "h2", "h3", "h4", "h5", "h6"].includes(selectedElement.tagName)
-  ));
+  const selectionIsText = selectionAppearance.isText;
   const selectionIsImage = selectedElements.length === 1 && selectedElement?.kind === "image";
-  const selectionHasStroke = selectedElements.length === 1 && (selectedElement?.kind === "line" || selectedElement?.kind === "connector" || selectedElement?.kind === "drawing");
+  const selectionHasStroke = selectionAppearance.hasStroke;
   const selectedScreen = selectedElements.length === 1 && engine.nativeScene?.nodes.find(node => node.sourceNodeId === selectedElement?.nodeId)?.attributes[SCREEN_ATTRIBUTE];
   const selectedScreenDescriptor=useMemo(()=>selectedScreen?parseCanvasV2Screen(selectedScreen):undefined,[selectedScreen]);
   useEffect(()=>{
@@ -4060,8 +4035,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       if(selectedElement&&!selectedElement.locked&&selectedScreen&&!selectedScreenDescriptor?.simulation)screenEditing.enter(selectedElement.nodeId);
     }catch(error){setMutationError(error instanceof Error?error.message:'Your last edit could not be saved.');}
   };
-  const selectionCanFill = selectedElements.length === 1 && !selectionIsText && !selectionIsImage && !selectionHasStroke && !selectionPermanent;
-  const selectedVisualStyle = selectedElement?.visualStyle;
+  const selectionCanFill = selectionAppearance.canFill && !selectionPermanent;
+  const selectedVisualStyle = selectionAppearance.visualStyle;
   activeSelectionBoundsRef.current = activeSelectionBounds;
   const selectedPaletteValue = normalizedPaletteColor(
     colorProperty === "color" ? selectedVisualStyle?.color
@@ -4070,9 +4045,10 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   );
   const paletteSubject = colorProperty === "color" ? "Text" : colorProperty === "border-color" ? "Border" : selectionHasStroke ? "Stroke" : "Fill";
   const paletteSupportsRemoval = colorProperty !== "color";
+  const selectedPaintMixed = (colorProperty === "color" ? selectedVisualStyle?.color : colorProperty === "border-color" ? selectedVisualStyle?.borderColor : selectedVisualStyle?.backgroundColor) === "mixed";
   const selectedPaintMode = canvasV2PaintMode(selectedPaletteValue);
   const selectedPaletteHue = canvasV2OpaquePaintColor(selectedPaletteValue, customColorDraft);
-  const selectedLineStyle = selectedVisualStyle?.borderStyle === "dashed" ? "dashed" : selectedVisualStyle?.borderStyle === "none" || Number.parseFloat(selectedVisualStyle?.borderWidth || "0") <= 0 ? "none" : "solid";
+  const selectedLineStyle = selectedVisualStyle?.borderStyle === "mixed" || selectedVisualStyle?.borderWidth === "mixed" ? "mixed" : selectedVisualStyle?.borderStyle === "dashed" ? "dashed" : selectedVisualStyle?.borderStyle === "none" || Number.parseFloat(selectedVisualStyle?.borderWidth || "0") <= 0 ? "none" : "solid";
   const fillTriggerPaintMode = canvasV2PaintMode(selectedVisualStyle?.backgroundColor);
   const sourceNodes = useMemo(() => {
     if (!layersOpen && canvasView!=="design") return [];
@@ -4724,8 +4700,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
             <div className="mx-0.5 h-7 w-px bg-white/[.12]" />
           </>}
           <button title="Fill" aria-label="Change fill" onClick={() => { setColorProperty("background-color"); setCustomColorDraft(canvasV2OpaquePaintColor(selectedVisualStyle?.backgroundColor, customColorDraft).toUpperCase()); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-7 items-center gap-2 rounded-lg px-2 hover:bg-white/[.1]">
-            <span className="relative grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded-full border border-white/35" style={fillTriggerPaintMode === "fill" ? {
-              background: selectedVisualStyle?.backgroundColor || "var(--northstar-surface)",
+            <span title={selectedVisualStyle?.backgroundColor === "mixed" ? "Mixed fills" : undefined} className="relative grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded-full border border-white/35" style={fillTriggerPaintMode === "fill" ? {
+              background: selectedVisualStyle?.backgroundColor === "mixed" ? canvasV2TextColorSwatch(selectedElements.map(item => item.visualStyle?.backgroundColor || "transparent")) : selectedVisualStyle?.backgroundColor || "var(--northstar-surface)",
             } : {
               backgroundColor: "#34343a",
               backgroundImage: "conic-gradient(rgba(255,255,255,.22) 25%,transparent 0 50%,rgba(255,255,255,.22) 0 75%,transparent 0)",
@@ -4746,7 +4722,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           </button>
         </>}
 
-        {selectionHasStroke && selectedElement.kind !== "connector" && <button title="Stroke color" aria-label="Change stroke color" onClick={() => { setColorProperty("background-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-7 items-center gap-2 rounded-lg px-2 hover:bg-white/[.1]"><span className="h-1 w-6 rounded-full" style={{ background: selectedVisualStyle?.backgroundColor || "#6754de" }} /><span className="text-xs font-bold">Stroke</span></button>}
+        {selectionHasStroke && selectedElement.kind !== "connector" && <button title="Stroke color" aria-label="Change stroke color" onClick={() => { setColorProperty("background-color"); setToolbarMenu((current) => current === "color" ? undefined : "color"); }} className="flex h-7 items-center gap-2 rounded-lg px-2 hover:bg-white/[.1]"><span title={selectedVisualStyle?.backgroundColor === "mixed" ? "Mixed strokes" : undefined} className="h-1 w-6 rounded-full" style={{ background: selectedVisualStyle?.backgroundColor === "mixed" ? canvasV2TextColorSwatch(selectedElements.map(item => item.visualStyle?.backgroundColor || "transparent")) : selectedVisualStyle?.backgroundColor || "#6754de" }} /><span className="text-xs font-bold">Stroke</span></button>}
 
         {cropDraft && <div data-canvas-v2-crop-control className="flex items-center gap-3 px-1"><Crop className="h-4 w-4" /><input aria-label="Crop zoom" title="Image zoom" type="range" min={Math.max(cropDraft.frame.width / (cropInitialRef.current?.image.width ?? cropDraft.frame.width), cropDraft.frame.height / (cropInitialRef.current?.image.height ?? cropDraft.frame.height))} max="5" step=".05" value={cropDraft.image.width / (cropInitialRef.current?.image.width ?? cropDraft.image.width)} onChange={event => zoomCrop(Number(event.target.value))} className="w-32 accent-[#1597f4]" /><button type="button" aria-label="Finish image crop" title="Finish crop · Enter" onClick={finishCrop} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/10"><Check className="h-4 w-4" /></button></div>}
 
@@ -4776,21 +4752,21 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           {TEXT_SIZE_OPTIONS.map((size) => <button key={size} onClick={() => styleSelection("font-size", `${size}px`)} className="grid h-10 place-items-center rounded-lg text-sm font-bold hover:bg-white/[.1]">{size}</button>)}
         </div>}
 
-        {toolbarMenu === "color" && <div data-canvas-v2-popover className={`absolute left-1/2 -translate-x-1/2 ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}><CanvasV2ColorPalette colors={selectedPaintMode === "none" ? [] : [selectedPaletteHue]} customColor={customColorDraft} onChange={applyPaletteHue} header={<>
+        {toolbarMenu === "color" && <div data-canvas-v2-popover className={`absolute left-1/2 -translate-x-1/2 ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}><CanvasV2ColorPalette colors={selectedPaintMixed || selectedPaintMode === "none" ? [] : [selectedPaletteHue]} customColor={customColorDraft} onChange={applyPaletteHue} header={<>
             <button
               aria-label={`Use solid ${paletteSubject.toLowerCase()}`}
-              aria-pressed={selectedPaintMode === "fill"}
+              aria-pressed={selectedPaintMixed ? "mixed" : selectedPaintMode === "fill"}
               onClick={() => applyPaintMode("fill")}
-              className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${selectedPaintMode === "fill" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}
+              className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${!selectedPaintMixed && selectedPaintMode === "fill" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}
             >
               <span className="grid h-4 w-4 place-items-center rounded-[4px] border-2 border-white/90"><span className="h-2 w-2 rounded-[1px] border border-white/65" /></span>
               {paletteSubject}
             </button>
             {paletteSupportsRemoval && <>
-              <button aria-label={`Make ${paletteSubject.toLowerCase()} transparent`} aria-pressed={selectedPaintMode === "transparent"} onClick={() => applyPaintMode("transparent")} className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${selectedPaintMode === "transparent" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
+              <button aria-label={`Make ${paletteSubject.toLowerCase()} transparent`} aria-pressed={!selectedPaintMixed && selectedPaintMode === "transparent"} onClick={() => applyPaintMode("transparent")} className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${!selectedPaintMixed && selectedPaintMode === "transparent" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
                 <Grid3X3 className="h-4 w-4" />Transparent
               </button>
-              <button aria-label={`Remove ${paletteSubject.toLowerCase()}`} aria-pressed={selectedPaintMode === "none"} onClick={() => applyPaintMode("none")} className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${selectedPaintMode === "none" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
+              <button aria-label={`Remove ${paletteSubject.toLowerCase()}`} aria-pressed={!selectedPaintMixed && selectedPaintMode === "none"} onClick={() => applyPaintMode("none")} className={`flex h-7 items-center gap-2 rounded-[8px] px-2 text-[11px] font-semibold transition ${!selectedPaintMixed && selectedPaintMode === "none" ? "bg-[#3a3a3e] shadow-[0_0_0_1px_rgba(255,255,255,.04)]" : "hover:bg-white/[.08]"}`}>
                 <Square className="h-4 w-4" />No {paletteSubject.toLowerCase()}
               </button>
             </>}

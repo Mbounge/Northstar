@@ -54,6 +54,11 @@ Unrelated changes rebase. Competing changes to the same field preserve a local
 recovery version and keep the accepted shared version. IndexedDB retains pending
 operations and recovery data. An unavailable recovery store does not prevent
 opening a room, but the tab must remain open while edits are unsaved.
+Recovery retains the whole queued human branch across multiple conflicts and
+reloads, including exact field deltas when structural changes prevent rendering.
+Earlier revision-only recovery branches remain in the downloaded recovery file.
+Failed local journal writes retry even when no new edit occurs. Authoritative
+roster refreshes update editor/viewer controls while preserving room ownership.
 
 `native-scene-source.ts` compares serializations of the before/after native
 scene and applies only their actual delta to the original source. It does not
@@ -131,6 +136,8 @@ is the room owner. Viewer members can save their own conversation. Each tab has
 its own durable pending/recovery branch under the stable collaborator client ID;
 only clean, monotonically newer checkpoints update the account's local cache.
 A conflicting device cannot erase another tab's unsent draft.
+If local caching fails but cloud storage confirms the latest conversation, the
+save indicator reports that confirmed result and clears the unsaved warning.
 
 An unknown cloud read never authorizes overwriting history with an empty chat.
 Exact save identities support lost-response replay. Conflicting account-device

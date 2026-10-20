@@ -22,6 +22,7 @@ export class PrivateWorkspaceSync {
   private timer?:ReturnType<typeof setTimeout>;
   private writing?:Promise<void>;
   private caching=Promise.resolve();
+  private cacheFailed=false;
   private authorityKnown=false;
   private closed=false;
   constructor(private options:PrivateWorkspaceSyncOptions){}
@@ -36,8 +37,9 @@ export class PrivateWorkspaceSync {
   private checkpoint(){
     if(!this.entry)return this.caching;
     const entry={...this.entry,inFlight:this.entry.inFlight?{...this.entry.inFlight}:undefined};
-    this.caching=this.caching.catch(()=>{}).then(()=>this.options.cache.write(entry)).catch(()=>{
-      this.update('offline','Your private conversation is in memory. Keep this tab open until it finishes saving.');
+    this.caching=this.caching.catch(()=>{}).then(async()=>{await this.options.cache.write(entry);this.cacheFailed=false;}).catch(()=>{
+      this.cacheFailed=true;
+      if(this.entry?.dirty)this.update('offline','Your private conversation is in memory. Keep this tab open until it finishes saving.');
     });return this.caching;
   }
   async open(fallback?:PrivateCanvasHistory|(()=>Promise<PrivateCanvasHistory|undefined>)){
@@ -93,6 +95,7 @@ export class PrivateWorkspaceSync {
         }catch{this.update('offline','Private history could not sync. Your work stays on this device; retry when connected.');}
       })().finally(()=>{this.writing=undefined;});return this.writing;
     }
+    let synchronized=false;
     this.writing=(async()=>{
       try{
         if(!this.authorityKnown){
@@ -116,8 +119,9 @@ export class PrivateWorkspaceSync {
           this.entry={...latest,version:result.version,inFlight:undefined,dirty:latest.operationId!==operation.operationId};
           await this.checkpoint();
         }
-      }catch{this.update('offline','Your private conversation is saved on this device. Cloud sync will retry when connected.');}
-    })().finally(()=>{this.writing=undefined;if(this.status.phase!=='conflict'&&this.status.phase!=='offline')this.update(this.entry?.dirty?'saving':'saved');});
+        synchronized=true;
+      }catch{this.update('offline',this.cacheFailed?'Your private conversation is in memory. Keep this tab open until it finishes saving.':'Your private conversation is saved on this device. Cloud sync will retry when connected.');}
+    })().finally(()=>{this.writing=undefined;if(synchronized||(this.status.phase!=='conflict'&&this.status.phase!=='offline'))this.update(this.entry?.dirty?'saving':'saved');});
     return this.writing;
   }
   async useSavedHistory(){

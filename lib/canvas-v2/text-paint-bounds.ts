@@ -1,3 +1,5 @@
+import { CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT } from './rich-text';
+
 /** Include overflowing glyphs without changing the authored layout or copy. */
 export function canvasV2UnionTextBounds(box: { x: number; y: number; width: number; height: number }, paint: { x: number; y: number; width: number; height: number }) {
   const x = Math.min(box.x, paint.x), y = Math.min(box.y, paint.y);
@@ -6,7 +8,7 @@ export function canvasV2UnionTextBounds(box: { x: number; y: number; width: numb
 
 export function canvasV2ElementPaintBounds(element: Element): DOMRect {
   const box = element.getBoundingClientRect();
-  if (!element.textContent?.trim() || element.querySelector('[data-canvas-v2-node-id]') || element.namespaceURI !== 'http://www.w3.org/1999/xhtml') return box;
+  if (!element.textContent?.trim() || element.querySelector(CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT) || element.namespaceURI !== 'http://www.w3.org/1999/xhtml') return box;
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   if (!style || style.transform !== 'none' || (style.rotate && style.rotate !== 'none' && parseFloat(style.rotate) !== 0)) return box;
   const range = element.ownerDocument.createRange();
@@ -24,7 +26,7 @@ export interface CanvasV2TextRect { x: number; y: number; width: number; height:
 
 /** Measure the painted line fragments, not the empty corners of a wrapped span. */
 export function canvasV2TextPaintRects(element: Element): CanvasV2TextRect[] | undefined {
-  if (!element.textContent?.trim() || element.querySelector('[data-canvas-v2-node-id]') || element.namespaceURI !== 'http://www.w3.org/1999/xhtml') return undefined;
+  if (!element.textContent?.trim() || element.querySelector(CANVAS_V2_INDEPENDENT_TEXT_DESCENDANT) || element.namespaceURI !== 'http://www.w3.org/1999/xhtml') return undefined;
   const walker = element.ownerDocument.createTreeWalker(element, 4 /* SHOW_TEXT */);
   const rects: CanvasV2TextRect[] = [];
   for (let text = walker.nextNode(); text; text = walker.nextNode()) {

@@ -14,8 +14,19 @@ async function create(page:Page,family:keyof typeof titles){
   return page.frameLocator('iframe[title="'+titles[family]+'"]');
 }
 async function enter(page:Page,family:keyof typeof titles){
-  await page.getByTestId('canvas-v2-native-scene').getByText(titles[family],{exact:true}).click();await page.getByRole('button',{name:'Edit app elements',exact:true}).click();
+  const mode=page.getByRole('button',{name:'Design view',exact:true});if(await mode.getAttribute('aria-pressed')!=='true')await mode.click();
+  await page.getByTestId('canvas-v2-native-scene').getByText(titles[family],{exact:true}).click();
+  await expect(page.getByRole('button',{name:'Back to canvas',exact:true})).toBeVisible();
   await expect(page.getByRole('complementary',{name:'Object layers'})).toBeVisible();
+}
+async function backToPreview(page:Page){
+  await page.getByRole('button',{name:'Back to canvas',exact:true}).click();
+  const mode=page.getByRole('button',{name:'Design view',exact:true});
+  await expect(mode).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('complementary',{name:'Object layers',exact:true})).toBeVisible();
+  await expect(page.getByRole('complementary',{name:'Design properties',exact:true})).toBeVisible();
+  await expect(page.locator('[aria-label="Canvas tools"]')).toBeVisible();
+  await mode.click();await expect(mode).toHaveAttribute('aria-pressed','false');
 }
 const row=(page:Page,selector:string)=>page.getByRole('tree',{name:'Editable layers'}).locator('[data-layer-selector="'+selector+'"]');
 async function stageSelectedFeedback(page:Page,comment:string){
@@ -121,7 +132,7 @@ test('inline editing keeps native padded and centered text in place without acti
     await expect(frame.locator('#status')).toHaveText('Saved 1 · Keep the baseline');
     await editor.fill(original+' human');await editor.press('Escape');await expect(frame.locator(selector)).toHaveText(original+' human');
   }
-  await page.getByRole('button',{name:'Back to canvas',exact:true}).click();await clickNative(page,'app','#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Keep the baseline');
+  await backToPreview(page);await clickNative(page,'app','#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Keep the baseline');
 });
 
 test('one instruction refines a current native multi-selection while edit chat preserves selection, camera and human source',async({page})=>{
@@ -167,7 +178,7 @@ test('one instruction refines a current native multi-selection while edit chat p
   await expect(page.getByRole('heading',{name:'2 layers selected',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Redo canvas action',exact:true}).click();await expect.poll(async()=>(await source(page)).html).toBe(refined.html);
   await expect(page.getByTestId('canvas-v2-workspace-surface')).toHaveAttribute('style',camera!);
-  await page.getByRole('button',{name:'Back to canvas',exact:true}).click();await clickNative(page,'app','#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Preserve this running app');
+  await backToPreview(page);await clickNative(page,'app','#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Preserve this running app');
 });
 
 test('dedicated app editing synchronizes persistent layers, layout properties and canvas selection while preserving the live app',async({page})=>{
@@ -181,7 +192,7 @@ test('dedicated app editing synchronizes persistent layers, layout properties an
   await expect.poll(async()=>(await source(page)).html).toContain('column-gap: 28px');
   await page.getByRole('button',{name:'Collapse Responsive app',exact:true}).click();await expect(row(page,'#app-heading')).toHaveCount(0);await page.getByRole('button',{name:'Expand Responsive app',exact:true}).click();
   await clickNative(page,'app','#app-heading');await expect(row(page,'#app-heading')).toHaveAttribute('aria-selected','true');await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toHaveValue('A human shaped this idea.');
-  await page.getByRole('button',{name:'Back to canvas',exact:true}).click();await expect(page.getByRole('complementary',{name:'Object layers'})).toHaveCount(0);
+  await backToPreview(page);await expect(page.getByRole('complementary',{name:'Object layers'})).toHaveCount(0);
   await expect(page.getByTestId('canvas-v2-workspace-surface')).toHaveAttribute('style',camera!);await clickNative(page,'app','#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Human notebook');
 });
 
@@ -195,7 +206,7 @@ test('SVG layer selection edits real parts and native lettering with exact histo
   await row(page,'#mascot-name').click();await page.getByRole('textbox',{name:'Element text',exact:true}).fill('Human Rowan');await expect(frame.locator('#mascot-name')).toHaveText('Human Rowan');
   await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();await expect(frame.locator('#mascot-name')).toHaveText('Rowan');await page.getByRole('button',{name:'Redo canvas action',exact:true}).click();await expect(frame.locator('#mascot-name')).toHaveText('Human Rowan');
   const edited=await source(page);expect(edited.javascript).toBe(original.javascript);expect(edited.css).toBe(original.css);expect(edited.html).toContain('<linearGradient id="fur-gradient"');
-  await page.getByRole('button',{name:'Back to canvas',exact:true}).click();await clickNative(page,'svg','#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Keep my art note');
+  await backToPreview(page);await clickNative(page,'svg','#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Keep my art note');
 });
 
 test('poster image crop, replacement and native title remain independent source layers',async({page})=>{
@@ -205,5 +216,5 @@ test('poster image crop, replacement and native title remain independent source 
   await page.getByLabel('Choose replacement image',{exact:true}).setInputFiles({name:'fixture-replacement.png',mimeType:'image/png',buffer:Buffer.from(FIXTURE_REPLACEMENT_DATA_URL.split(',')[1],'base64')});
   await expect.poll(async()=>frame.locator('#poster-photo').getAttribute('src')).not.toBe(photo);await expect.poll(async()=>(await source(page)).referenceAssetIds.length).toBeGreaterThan(2);
   await expect(frame.locator('#poster-photo')).toHaveCSS('object-position','25% 50%');expect(await frame.locator('#brand-logo').getAttribute('src')).toBe(logo);await expect(frame.locator('#poster-title')).toHaveText('FIND YOUR NEXT CHAPTER.');
-  await page.getByRole('button',{name:'Back to canvas',exact:true}).click();await expect(frame.locator('#poster-title')).toHaveText('FIND YOUR NEXT CHAPTER.');
+  await backToPreview(page);await expect(frame.locator('#poster-title')).toHaveText('FIND YOUR NEXT CHAPTER.');
 });

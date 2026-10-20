@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { canvasV2RichTextStyle } from '../lib/canvas-v2/rich-text';
+import { canvasV2RichTextStyle, readCanvasV2RichText } from '../lib/canvas-v2/rich-text';
 
 // Execute the real inspector, its workspace JSX callbacks and the native edit
 // request effect. Only React's scheduling and DOM primitives are substituted.
@@ -28,7 +28,7 @@ function nodes(value: unknown): ElementTree[] {
   if (!value || typeof value !== 'object' || !('props' in value)) return [];
   const node = value as ElementTree; return [node, ...nodes(node.props.children)];
 }
-function harness({ locked = false, readOnly = false, textEditable = true, count = 1 } = {}) {
+function harness({ locked = false, readOnly = false, textEditable = true, count = 1, busyObjects = [] as string[] } = {}) {
   const selectedElement = { nodeId: 'headline', label: 'Campaign headline', kind: 'text', textEditable, locked, bounds: { x: 400, y: 200, width: 500, height: 80 } };
   let followStops = 0;
   const context = vm.createContext({ stopFollowingRef: { current: () => { followStops++; } }, selectedElement, selectedElements: count ? Array.from({ length: count }, () => selectedElement) : [], collaborationReadOnly: readOnly, Date, beginConnectorLabel: () => assert.fail('Text must not open connector labels'), beginImageCrop: () => assert.fail('Text must not open image cropping') });
@@ -46,11 +46,13 @@ function harness({ locked = false, readOnly = false, textEditable = true, count 
   const Inspector = exports.BoardDesignInspector as (props: unknown) => ElementTree;
   const tree = Inspector({ ...props, onMutation: () => assert.fail('Opening text must not author a mutation') });
   const button = nodes(tree).find(node => node.type === 'button' && node.props.children === 'Edit text');
+  const mutations: Array<{kind:string;nodeId:string;text:string;nativeContent:unknown;layout:{width:number;height:number}}> = [];
+  let accepted = true;
   const attributes = new Map<string, string>();
   const style = new Map<string, string>();
   const listeners = new Map<string, () => void>();
   const dom = {
-    dataset: {} as Record<string, string>, contentEditable: 'false', innerHTML: 'Original headline', textContent: 'Original headline',
+    dataset: {canvasV2NativeSceneId:'native-headline'} as Record<string, string>, tagName:'DIV', childNodes:[] as Array<{nodeType:number;textContent:string}>, scrollHeight:99.4, contentEditable: 'false', innerHTML: 'Original headline', textContent: 'Original headline',
     style: { [Symbol.iterator]: () => style.keys(), getPropertyValue: (name: string) => style.get(name) ?? '', getPropertyPriority: () => '', setProperty: (name: string, value: string) => style.set(name, value), removeProperty: (name: string) => style.delete(name) },
     getAttribute: (name: string) => attributes.get(name) ?? null,
     setAttribute: (name: string, value: string) => attributes.set(name, value),
@@ -59,23 +61,26 @@ function harness({ locked = false, readOnly = false, textEditable = true, count 
     addEventListener: (name: string, callback: () => void) => listeners.set(name, callback), removeEventListener: (name: string) => listeners.delete(name),
     focus: () => { focused++; },
   };
+  const errors: string[] = [];
   let focused = 0, humanBegins = 0, humanEnds = 0, selectedAll = 0;
   const finishTextEditingRef = { current: () => {} };
   Object.assign(context, {
-    engine: { beginHumanEdit: () => { humanBegins++; } }, collaboration: undefined, setMutationError: () => {},
+    engine: { beginHumanEdit: () => { humanBegins++; } }, collaboration: {getStatus: () => ({busyObjects})}, setMutationError: (value:string) => errors.push(value),
     Element: class {}, renderedScene: {}, bySourceId: new Map([['headline', { id: 'native-headline' }]]), byId: new Map(),
     publicSceneRef: { current: { querySelector: (selector: string) => { assert.equal(selector, '[data-canvas-v2-node-id="headline"]'); return dom; } } },
     inspectNativeNode: () => selectedElement, CSS: { escape: (value: string) => value },
-    canvasV2RichTextStyle, finishTextEditingRef, setActiveEditable: () => {},
+    canvasV2RichTextStyle, readCanvasV2RichText, getComputedStyle: () => ({width:'512.2px'}), finishTextEditingRef, setActiveEditable: () => {},
     onElementSelect: () => {}, onElementDoubleClick: undefined, onAfterUserEdit: () => { humanEnds++; }, placeCanvasV2CaretAtPoint: () => {},
     document: { addEventListener: () => {}, removeEventListener: () => {}, createRange: () => ({ selectNodeContents: (element: unknown) => assert.equal(element, dom) }) },
     window: { getSelection: () => ({ removeAllRanges: () => {}, addRange: () => { selectedAll++; } }) },
   });
+  context.submitMutation = (mutation: typeof mutations[number]) => { mutations.push(JSON.parse(JSON.stringify(mutation))); return accepted; };
+  context.onElementTextCommit = run(`(${prop(component('CanvasV2CanvasScene'), 'onElementTextCommit')})`);
   context.onBeforeUserEdit = run(`(${prop(component('CanvasV2CanvasScene'), 'onBeforeUserEdit')})`);
   run(`const ${declaration(native, 'beginTextEditing')};`);
   const effect = find(native, (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(native) === 'useEffect' && !!node.arguments[0]?.getText(native).includes('if (!editTextRequest || !renderedScene)'));
   const receiveRequest = run(`(${effect.arguments[0].getText(native)})`) as () => void;
-  return { button, dom, followStops: () => followStops, finish: () => finishTextEditingRef.current(), receiveRequest, request: () => request, focused: () => focused, humanBegins: () => humanBegins, humanEnds: () => humanEnds, selectedAll: () => selectedAll, editingState: () => editingState, revoke: () => { context.collaborationReadOnly = true; }, lock: () => { selectedElement.locked = true; } };
+  return { button, dom, mutations, errors, accept: (value:boolean) => {accepted=value;}, changeText: (text:string) => {dom.textContent=text;dom.innerHTML=text;dom.childNodes=[{nodeType:3,textContent:text}];}, followStops: () => followStops, finish: () => finishTextEditingRef.current(), receiveRequest, request: () => request, focused: () => focused, humanBegins: () => humanBegins, humanEnds: () => humanEnds, selectedAll: () => selectedAll, editingState: () => editingState, revoke: () => { context.collaborationReadOnly = true; }, lock: () => { selectedElement.locked = true; } };
 }
 
 test('inspector Edit text starts the selected native editor, focuses/selects text and finishes normally', () => {
@@ -106,4 +111,24 @@ test('view-only inspector disables Edit text and revoked access rejects an alrea
 test('locking a selected object before its queued native request runs prevents editing', () => {
   const h = harness(); h.button!.props.onClick!(); h.lock(); h.receiveRequest();
   assert.equal(h.dom.contentEditable, 'false'); assert.equal(h.focused(), 0); assert.equal(h.humanBegins(), 0);
+});
+
+for (const point of [false,true]) test(`${point?'point':'area'} text commits real native content and measured geometry; failed commit keeps the editor and human ownership for retry`, () => {
+  const h = harness(); if(point)h.dom.dataset.canvasV2TextMode='point';
+  h.button!.props.onClick!(); h.receiveRequest(); h.changeText('Human revised headline'); h.accept(false);
+  assert.equal(h.finish(),false); assert.equal(h.dom.contentEditable,'true'); assert.equal(h.humanEnds(),0);
+  assert.equal(h.dom.getAttribute('role'),'textbox'); assert.equal(h.focused(),2,'Rejected commit refocuses the same live editor');
+  assert.equal(h.mutations.length,1); const mutation=h.mutations[0];
+  assert.deepEqual(mutation.layout,{width:point?514:500,height:100});
+  assert.equal(mutation.kind,'text');assert.equal(mutation.nodeId,'headline');assert.equal(mutation.text,'Human revised headline');
+  assert.deepEqual(mutation.nativeContent,[{sceneNodeId:'native-headline',content:[{kind:'text',value:'Human revised headline'}],style:{}}]);
+  h.accept(true);h.finish();assert.equal(h.humanEnds(),1);assert.equal(h.dom.contentEditable,'false');
+  assert.deepEqual(h.mutations[1],mutation,'Retry must commit the original human intent, not discard it');
+});
+
+test('native Edit text refuses a teammate-owned selected object while unrelated busy objects remain editable', () => {
+  const blocked=harness({busyObjects:['headline']});blocked.button!.props.onClick!();blocked.receiveRequest();
+  assert.equal(blocked.dom.contentEditable,'false');assert.equal(blocked.humanBegins(),0);assert.match(blocked.errors[0],/teammate/);
+  const unrelated=harness({busyObjects:['other-object']});unrelated.button!.props.onClick!();unrelated.receiveRequest();
+  assert.equal(unrelated.dom.contentEditable,'true');assert.equal(unrelated.humanBegins(),1);assert.deepEqual(unrelated.errors,[]);unrelated.finish();
 });

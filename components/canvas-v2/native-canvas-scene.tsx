@@ -338,6 +338,10 @@ function inspectNativeNode(
   element?: Element | null,
 ): CanvasV2InspectableElement {
   const computed = element ? element.ownerDocument.defaultView?.getComputedStyle(element) : undefined;
+  const drawingStroke = node.kind === "drawing" ? node.childIds.map(id => byId.get(id)).find(child => child?.attributes.stroke) : undefined;
+  const drawingStrokeColor = drawingStroke?.attributes.stroke?.includes("var(")
+    ? (() => { const stroke = element?.querySelector("polyline,path,line"); return stroke ? stroke.ownerDocument.defaultView?.getComputedStyle(stroke).stroke : undefined; })()
+    : drawingStroke?.attributes.stroke;
   const inheritedAttribute = (name: string): string | undefined => {
     let current: CanvasV2NativeSceneNode | undefined = node;
     while (current) {
@@ -408,7 +412,7 @@ function inspectNativeNode(
       // carry a reversible light/dark contrast override, which is what the
       // person sees but not what a paint-mode change should sample as its hue.
       color: node.inlineStyle.color?.includes("var(") ? computed?.color ?? "" : node.inlineStyle.color ?? computed?.color ?? "",
-      backgroundColor: (node.inlineStyle["background-color"] ?? node.inlineStyle.background)?.includes("var(") ? computed?.backgroundColor ?? "" : node.inlineStyle["background-color"] ?? node.inlineStyle.background ?? computed?.backgroundColor ?? "",
+      backgroundColor: drawingStrokeColor ?? ((node.inlineStyle["background-color"] ?? node.inlineStyle.background)?.includes("var(") ? computed?.backgroundColor ?? "" : node.inlineStyle["background-color"] ?? node.inlineStyle.background ?? computed?.backgroundColor ?? ""),
       borderColor: node.inlineStyle["border-color"]?.includes("var(") ? computed?.borderColor ?? "" : node.inlineStyle["border-color"] ?? computed?.borderColor ?? "",
       borderStyle: node.inlineStyle["border-style"] ?? computed?.borderStyle ?? "",
       borderWidth: node.inlineStyle["border-width"] ?? computed?.borderWidth ?? "",
@@ -421,7 +425,7 @@ function inspectNativeNode(
       textAlign: computed?.textAlign ?? "",
       textDecoration: computed?.textDecorationLine ?? "",
       opacity: computed?.opacity ?? "1",
-      objectFit: computed?.objectFit ?? "fill",
+      objectFit: node.inlineStyle["object-fit"] ?? computed?.objectFit ?? "fill",
       ...(element && canvasV2NativeSceneNodeSupportsTextEditing(node, byId) ? canvasV2TextStyleSummary(element) : {}),
     },
     bounds: absoluteGeometry(node, byId),

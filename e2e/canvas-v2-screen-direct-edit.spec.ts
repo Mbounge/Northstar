@@ -19,8 +19,9 @@ async function createScreen(page: Page, dependent=false, gradient=false, ordered
 
 async function enterEdit(page:Page) {
   if(await page.getByRole('button',{name:'Close appearance editor',exact:true}).count())await page.getByRole('button',{name:'Close appearance editor',exact:true}).click();
+  const mode=page.getByRole('button',{name:'Design view',exact:true});if(await mode.getAttribute('aria-pressed')!=='true')await mode.click();
   await page.getByTestId('canvas-v2-native-scene').getByText('Fieldnotes · studio editing',{exact:true}).click();
-  await page.getByRole('button',{name:'Edit app elements',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Back to canvas',exact:true})).toBeVisible();
 }
 
 // Design owns its rails even with no selection; the bottom tools belong to the

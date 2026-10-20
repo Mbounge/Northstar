@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { SupabaseCanvasTransport } from '../lib/canvas-v2/sessions/collaboration-supabase';
 import type { PeerPresence } from '../lib/canvas-v2/sessions/collaboration-client';
 import type { CanvasV2ArtifactRevision } from '../lib/canvas-v2/types';
@@ -35,6 +35,26 @@ function fixture() {
   return { db, transport, calls, channels, configs, removed, respond(data: unknown, error: typeof response.error = null) { response = {data,error}; } };
 }
 const settle=()=>new Promise<void>(resolve=>setImmediate(resolve));
+
+/** Native timeout semantics without version-specific Node MockTimers APIs. */
+function timeouts(context: TestContext) {
+  let now = 0, next = 1;
+  const pending = new Map<number, { at: number; run: () => void }>();
+  context.mock.method(globalThis, 'setTimeout', ((callback: (...args: unknown[]) => void, delay = 0, ...args: unknown[]) => {
+    const id = next++; pending.set(id, { at: now + delay, run: () => callback(...args) }); return id;
+  }) as unknown as typeof setTimeout);
+  context.mock.method(globalThis, 'clearTimeout', ((id: unknown) => { pending.delete(Number(id)); }) as typeof clearTimeout);
+  return { tick(ms: number) {
+    const target = now + ms;
+    for (;;) {
+      const first = [...pending].sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      if (!first || first[1].at > target) break;
+      now = first[1].at; pending.delete(first[0]); first[1].run();
+    }
+    now = target;
+  } };
+}
+
 
 test('production transport uses exact durable SQL RPC argument and JSON contracts', async () => {
   const f = fixture();
@@ -201,48 +221,48 @@ test('overlapping workspace boots supersede an active singleton channel before s
 
 
 test('unexpected CLOSED waits for teardown before retrying and tracks newest awareness once',async(context)=>{
-  context.mock.timers.enable({apis:['setTimeout']});
+  const timers=timeouts(context);
   const f=fixture(); let release:()=>void=()=>{};
   const pending=new Promise<void>(resolve=>{release=resolve;});
   f.db.removeChannel=async channel=>{await pending;f.removed.push(channel);};
   f.transport.presence(presence(1));
   const stop=f.transport.watch(clientId,()=>{}); const first=f.channels[0]; first.status?.('SUBSCRIBED');
   first.status?.('CLOSED'); f.transport.presence(presence(2));
-  context.mock.timers.tick(999); await settle(); assert.equal(f.channels.length,1);
-  context.mock.timers.tick(1); await settle(); assert.equal(f.channels.length,1,'elapsed retry delay cannot bypass in-flight same-topic removal');
+  timers.tick(999); await settle(); assert.equal(f.channels.length,1);
+  timers.tick(1); await settle(); assert.equal(f.channels.length,1,'elapsed retry delay cannot bypass in-flight same-topic removal');
   release(); await settle(); assert.equal(f.channels.length,2);
   const second=f.channels[1]; second.status?.('SUBSCRIBED');
   assert.deepEqual(second.tracked,[presence(2)]);
   first.status?.('CLOSED'); first.status?.('SUBSCRIBED');
   f.transport.presence(presence(3));
   assert.equal(second.tracked.length,1); assert.equal(second.sent.length,1,'old callbacks cannot disturb replacement channel');
-  stop(); context.mock.timers.tick(60000); await settle(); assert.equal(f.channels.length,2);
+  stop(); timers.tick(60000); await settle(); assert.equal(f.channels.length,2);
 });
 
 test('stopping or superseding a CLOSED watch cancels its delayed restart',async(context)=>{
-  context.mock.timers.enable({apis:['setTimeout']});
+  const timers=timeouts(context);
   const f=fixture(); const stop=f.transport.watch(clientId,()=>{}); f.channels[0].status?.('SUBSCRIBED');
   f.channels[0].status?.('CLOSED'); stop();
-  context.mock.timers.tick(60000); await settle(); assert.equal(f.channels.length,1,'disposed watcher must never resurrect');
+  timers.tick(60000); await settle(); assert.equal(f.channels.length,1,'disposed watcher must never resurrect');
   const stopAgain=f.transport.watch(clientId,()=>{}); await settle(); const old=f.channels[1]; old.status?.('SUBSCRIBED'); old.status?.('CLOSED');
   const replacement=new SupabaseCanvasTransport(sid,f.db as unknown as ConstructorParameters<typeof SupabaseCanvasTransport>[1]);
   const stopNew=replacement.watch(clientId,()=>{}); await settle(); const current=f.channels[2]; current.status?.('SUBSCRIBED');
-  context.mock.timers.tick(60000); await settle(); assert.equal(f.channels.length,3,'superseded retry must not recreate an overlapping channel');
+  timers.tick(60000); await settle(); assert.equal(f.channels.length,3,'superseded retry must not recreate an overlapping channel');
   stopAgain(); replacement.presence(presence(9)); assert.deepEqual(current.tracked,[presence(9)]);
   stopNew();
 });
 
 test('repeated terminal closures use bounded backoff and reset after a stable subscription',async(context)=>{
-  context.mock.timers.enable({apis:['setTimeout']});
+  const timers=timeouts(context);
   const f=fixture(); const stop=f.transport.watch(clientId,()=>{});
   for(const delay of [1000,2000,4000,8000,16000,30000,30000]) {
     const channel=f.channels.at(-1)!; channel.status?.('SUBSCRIBED'); const count=f.channels.length;
     channel.status?.('CLOSED'); await settle();
-    context.mock.timers.tick(delay-1); await settle(); assert.equal(f.channels.length,count);
-    context.mock.timers.tick(1); await settle(); assert.equal(f.channels.length,count+1);
+    timers.tick(delay-1); await settle(); assert.equal(f.channels.length,count);
+    timers.tick(1); await settle(); assert.equal(f.channels.length,count+1);
   }
-  const stable=f.channels.at(-1)!; stable.status?.('SUBSCRIBED'); context.mock.timers.tick(30000);
+  const stable=f.channels.at(-1)!; stable.status?.('SUBSCRIBED'); timers.tick(30000);
   stable.status?.('CLOSED'); await settle(); const count=f.channels.length;
-  context.mock.timers.tick(1000); await settle(); assert.equal(f.channels.length,count+1,'thirty-second stable connection resets retry delay');
+  timers.tick(1000); await settle(); assert.equal(f.channels.length,count+1,'thirty-second stable connection resets retry delay');
   stop();
 });
