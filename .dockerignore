@@ -7,4 +7,10 @@
 !lib/
 !lib/canvas-v2/
 !lib/canvas-v2/**
+!lib/preview/
+!lib/preview/graet-navigation.ts
+!lib/preview/simulator-registry.ts
+!lib/app-data/
+!lib/app-data/canvas-v2-catalog.ts
+!lib/app-data/review-media.ts
 !tsconfig.json

@@ -7,6 +7,11 @@
     "build": "node build.mjs",
     "start": "node dist/worker.mjs"
   },
-  "dependencies": { "@openai/codex": "0.153.4" },
-  "devDependencies": { "esbuild": "0.28.2" }
+  "dependencies": {
+    "@openai/codex": "0.153.4"
+  },
+  "devDependencies": {
+    "acorn": "8.14.0",
+    "esbuild": "0.28.2"
+  }
 }

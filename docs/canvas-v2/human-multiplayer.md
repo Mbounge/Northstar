@@ -60,8 +60,10 @@ hash guards remain authoritative when a claim or connection is delayed.
 - Pointer and live-motion awareness is throttled to roughly 25 packets/second.
   Remote painting is imperative, interpolated, and reprojects against the local
   camera without rerendering the workspace for every packet.
-- Presence snapshots refresh at most every two seconds for late joiners, while
-  faster awareness uses broadcasts. Idle cursors expire locally after twelve
+- Presence registers membership once per subscription; changing awareness and
+  four-second heartbeats use broadcasts, avoiding hosted per-client Presence
+  limits. A late joiner receives current awareness on the next broadcast.
+  Idle cursors expire locally after twelve
   seconds. Selection claims expire after twenty seconds and renew while held.
 - Durable catch-up and membership checks run independently of pointer traffic.
   Continuous movement cannot postpone authorization checks or fallback polling.
@@ -69,6 +71,10 @@ hash guards remain authoritative when a claim or connection is delayed.
   transport instances sharing the browser's singleton auth client.
 - Applying shared source uses the existing interactive runtime patch path, which
   preserves per-person unsaved input and JavaScript closure state when supported.
+- Shared source carries accepted world placement. A receiving device does not
+  reposition new objects or pin moved objects to its previous local scene.
+- Identical session-status reports are suppressed during navigation, and the
+  shell refreshes saved-session listings only when a save completes.
 
 ## Access and privacy
 
@@ -144,8 +150,8 @@ authenticated SELECT; writes use the guarded RPCs. Anonymous Data API probes
 confirmed permission denials for all seven tables and three read RPCs.
 An absent migration leaves existing solo sessions available; enabling sharing
 and durable personal history needs both migrations.
-Rollout still requires deploying the matching application code and
-checking separate real accounts against hosted Auth, Storage and private Realtime,
+Deploy matching application and worker code, and check separate real accounts
+against hosted Auth, Storage and private Realtime,
 including reconnect, late join, sign-in continuation, private history across
 devices and access removal. Local
 PostgreSQL and HTTP-fixture verification do not substitute for that hosted check.

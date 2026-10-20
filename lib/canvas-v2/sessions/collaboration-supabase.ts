@@ -23,7 +23,7 @@ export class SupabaseCanvasTransport implements CollaborationTransport {
   private channel?: ReturnType<Database['channel']>;
   private joined = false;
   private latest?: PeerPresence;
-  private trackedAt = 0;
+  private tracked = false;
   private teardown?: Promise<unknown>;
   constructor(readonly sessionId: string, private db: Database = createClient()) {}
   private async rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
@@ -44,10 +44,21 @@ export class SupabaseCanvasTransport implements CollaborationTransport {
   }
   watch(clientId: string, onSignal: Parameters<CollaborationTransport['watch']>[1]) {
     let owned: ReturnType<Database['channel']> | undefined, cancelled = false;
+    let retryTimer:ReturnType<typeof setTimeout>|undefined,stableTimer:ReturnType<typeof setTimeout>|undefined,retries=0;
+    const retire=(channel:ReturnType<Database['channel']>)=>{
+      if(owned===channel)owned=undefined;
+      if(this.channel===channel){this.joined=false;this.channel=undefined;}
+      const teardown=Promise.resolve(this.db.removeChannel(channel)).catch(()=>{});
+      this.teardown=teardown;
+      let topics=channelTeardowns.get(this.db);if(!topics){topics=new Map();channelTeardowns.set(this.db,topics);}
+      topics.set(this.sessionId,teardown);
+      void teardown.finally(()=>{if(this.teardown===teardown)this.teardown=undefined;if(topics.get(this.sessionId)===teardown)topics.delete(this.sessionId);});
+      return teardown;
+    };
     const start = () => {
       if (cancelled) return;
       const channel = this.db.channel(`northstar-canvas:${this.sessionId}`, { config: { private: true, presence: { key: clientId }, broadcast: { self: false, ack: false } } });
-      owned = channel; this.channel = channel; this.joined = false; this.trackedAt = 0;
+      owned = channel; this.channel = channel; this.joined = false; this.tracked = false;
       const current = () => !cancelled && this.channel === channel;
       channel.on('broadcast', { event: 'changed' }, () => { if(current())onSignal({ kind: 'changed' }); });
       channel.on('broadcast', { event: 'awareness' }, ({ payload }) => { if(current())onSignal({ kind: 'presence', value: payload }); });
@@ -59,7 +70,20 @@ export class SupabaseCanvasTransport implements CollaborationTransport {
       channel.subscribe(status => {
         if (!current()) return;
         this.joined = status === 'SUBSCRIBED';
-        if (this.joined) { if (this.latest) { this.trackedAt = Date.now(); void channel.track(this.latest); } onSignal({ kind: 'changed' }); }
+        if (this.joined) {
+          clearTimeout(stableTimer);stableTimer=setTimeout(()=>{retries=0;},30000);
+          if (this.latest) { this.tracked = true; void channel.track(this.latest); }
+          onSignal({ kind: 'changed' });
+        } else {
+          clearTimeout(stableTimer);
+          // The SDK retries channel errors, but an unexpected CLOSED channel
+          // is removed permanently. Recreate it with bounded backoff and the
+          // same teardown gate; deliberate cleanup must never resurrect it.
+          if(status==='CLOSED'&&!retryTimer){
+            const pending=retire(channel);
+            retryTimer=setTimeout(()=>{retryTimer=undefined;void pending.then(()=>{if(!cancelled)start();});},Math.min(30000,1000*2**Math.min(retries++,5)));
+          }
+        }
       });
     };
     let owners=channelOwners.get(this.db);
@@ -67,15 +91,10 @@ export class SupabaseCanvasTransport implements CollaborationTransport {
     const stop = () => {
       if(cancelled)return;
       cancelled=true;
+      clearTimeout(retryTimer);clearTimeout(stableTimer);
       if(owners.get(this.sessionId)===stop)owners.delete(this.sessionId);
       if(!owned)return;
-      const channel=owned;
-      if(this.channel===channel){this.joined=false;this.channel=undefined;}
-      const teardown=Promise.resolve(this.db.removeChannel(channel)).catch(()=>{});
-      this.teardown=teardown;
-      let topics=channelTeardowns.get(this.db);if(!topics){topics=new Map();channelTeardowns.set(this.db,topics);}
-      topics.set(this.sessionId,teardown);
-      void teardown.finally(()=>{if(this.teardown===teardown)this.teardown=undefined;if(topics.get(this.sessionId)===teardown)topics.delete(this.sessionId);});
+      void retire(owned);
     };
     // Async StrictMode boots can overlap before the old boot notices disposal.
     // Supersede its subscription before the SDK can reuse an active topic.
@@ -88,9 +107,10 @@ export class SupabaseCanvasTransport implements CollaborationTransport {
   presence(value: PeerPresence) {
     this.latest = value;
     if (!this.joined || !this.channel) return;
-    // Presence state lets a late joiner see the latest awareness without
-    // adding a membership-diff message for every high-frequency pointer packet.
-    if (!this.trackedAt || Date.now() - this.trackedAt >= 2000) { this.trackedAt = Date.now(); void this.channel.track(value); }
+    // Register membership once per subscription. Hosted Presence has a much
+    // lower per-client budget than Broadcast; even a periodic track heartbeat
+    // closes the channel. Broadcast carries all changing awareness/heartbeats.
+    if (!this.tracked) { this.tracked = true; void this.channel.track(value); }
     void this.channel.send({ type: 'broadcast', event: 'awareness', payload: value });
   }
   notify() { if (this.joined) void this.channel?.send({ type: 'broadcast', event: 'changed', payload: { updated: true } }); }

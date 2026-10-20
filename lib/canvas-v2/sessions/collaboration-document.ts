@@ -113,7 +113,7 @@ export function revisionFromSharedCells(cells: ReadonlyMap<string, string>, prev
   const javascript: unknown = JSON.parse(cells.get('document:javascript') ?? 'null');
   if (javascript !== null && typeof javascript !== 'string') throw new Error('Invalid shared canvas script.');
   const evidence = [...cells].filter(([key]) => key.startsWith('evidence:')).map(([, value]) => JSON.parse(value));
-  return { ...previous, sceneTransaction: undefined, id: version, state: 'committed', createdAt: new Date().toISOString(), document: { html, css, ...(javascript === null ? {} : { javascript }) }, evidence };
+  return { ...previous, placementAuthority:'shared', sceneTransaction: undefined, id: version, state: 'committed', createdAt: new Date().toISOString(), document: { html, css, ...(javascript === null ? {} : { javascript }) }, evidence };
 }
 
 export function htmlFromSharedCells(cells: ReadonlyMap<string, string>): string {

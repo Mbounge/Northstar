@@ -42,10 +42,17 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
   const controller = useRef<((command:SessionCommand)=>Promise<void>) | null>(null);
   const receivedRevisions=useRef(new Set<string>());
   const sentRevision=useRef('');
+  const lastReport=useRef('');
   const titleRef = useRef(title); titleRef.current = title;
   const report = useCallback((extra: Record<string,unknown> = {}) => {
-    window.parent.postMessage({type:'northstar-session',frameId:id,id:record.current?.id || id,title:titleRef.current,
-      temporary:!record.current,busy:busy.current,...extra},window.location.origin);
+    const payload={type:'northstar-session',frameId:id,id:record.current?.id || id,title:titleRef.current,
+      temporary:!record.current,busy:busy.current,...extra};
+    const signature=JSON.stringify(payload);
+    // Camera checkpoints do not change session chrome. Keep repeated navigation
+    // out of the parent React tree and its saved-session listing requests.
+    if(!extra.menu&&!extra.converted&&signature===lastReport.current)return;
+    lastReport.current=signature;
+    window.parent.postMessage(payload,window.location.origin);
   },[id]);
   const openPrivate=useCallback((fallback?:PrivateCanvasHistory|(()=>Promise<PrivateCanvasHistory|undefined>))=>{
     if(privateOpening.current)return privateOpening.current;

@@ -5,6 +5,7 @@ RUN npm ci
 WORKDIR /app
 COPY lib/canvas-v2 ./lib/canvas-v2
 COPY lib/preview/graet-navigation.ts lib/preview/simulator-registry.ts ./lib/preview/
+COPY lib/app-data/canvas-v2-catalog.ts lib/app-data/review-media.ts ./lib/app-data/
 COPY worker/main.ts worker/build.mjs ./worker/
 COPY tsconfig.json ./
 RUN npm --prefix worker run build && npm --prefix worker prune --omit=dev

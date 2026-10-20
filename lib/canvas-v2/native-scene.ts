@@ -1138,7 +1138,10 @@ export function compileCanvasV2NativeScene(input: {
     image.style.setProperty("inline-size", `${round(image.naturalWidth * scale)}px`, "important");
     image.style.setProperty("block-size", `${round(image.naturalHeight * scale)}px`, "important");
   }
-  placeFreshCanvasRootContentAtViewport(input);
+  // A peer's accepted coordinates are durable truth. Re-running local layout
+  // would relocate new objects and pin moved objects to this device's old scene.
+  const sharedPlacement = input.revision.placementAuthority === 'shared';
+  if (!sharedPlacement) placeFreshCanvasRootContentAtViewport(input);
   materializeCanvasV2NativeDirectTextFragments(input.document);
   const relocatablePlacementNodeIds = new Set(input.relocatablePlacementNodeIds ?? []);
   if (relocatablePlacementNodeIds.size) {
@@ -1372,7 +1375,7 @@ export function compileCanvasV2NativeScene(input: {
     : roots;
   const visiblePlacementNodes = placementNodes.filter((node) => !node.hidden && node.geometry.width > 0 && node.geometry.height > 0);
   const authoredPlacementGeometry = new Map(visiblePlacementNodes.map((node) => [node.id, { ...node.geometry }]));
-  const referenceScene = input.placementReferenceScene;
+  const referenceScene = sharedPlacement ? undefined : input.placementReferenceScene;
   const referencedNodeIds = new Set<string>();
   const referencePlacementGeometry = new Map<string, CanvasV2AuthoredPlacementRect>();
   if (referenceScene) {

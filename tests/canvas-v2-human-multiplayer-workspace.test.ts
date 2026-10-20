@@ -23,12 +23,14 @@ function workspace(options:{denied?:boolean;shared?:boolean;user?:string;session
     useCallback:(callback:unknown,deps:unknown[])=>{const index=cursor++,previous=slots[index] as {deps:unknown[];value:unknown}|undefined;if(!previous||!same(previous.deps,deps))slots[index]={deps,value:callback};return (slots[index] as {value:unknown}).value;},
     useEffect:(callback:()=>void,deps?:unknown[])=>{const index=cursor++,previous=slots[index] as {deps?:unknown[]}|undefined;if(!previous||!same(previous.deps,deps)){slots[index]={deps};effects.push(callback);}},
   };
-  let shared=options.shared??false,leaseCalls=0,connectCalls=0,legacyReads=0,remoteReads=0,remoteFailure=options.remoteFailure??false;
+  let shared=options.shared??false,leaseCalls=0,connectCalls=0,legacyReads=0,remoteReads=0,remoteFailure=options.remoteFailure??false,pending=0;
   const local=snapshot(revision('legacy')),accepted=revision('accepted'),recoveries:CanvasV2ArtifactRevision[]=[],privateWrites:PrivateCanvasHistory[]=[];
   let cached:PrivateWorkspaceEntry|undefined=options.cachedEntry?structuredClone(options.cachedEntry):undefined;
   let cloud=options.remoteHistory?{history:options.remoteHistory,version:3,path:'owner/room/private/saved.json'}:undefined;
   const cloudWrites:Array<{history:PrivateCanvasHistory;version:number;operationId:string}>=[],cameraWrites:NorthstarSnapshot['viewport'][]=[];
   const identities:Array<{id:string;user:string}>=[],syncs:PrivateWorkspaceSync[]=[],cacheKeys:string[]=[];
+  const reports:Record<string,unknown>[]=[];
+  const parent={postMessage:(payload:Record<string,unknown>)=>reports.push(payload)};
   const events=new Map<string,Set<(value:unknown)=>void>>();
   const intervals:Array<{callback:()=>void;delay:number}>=[],timeouts:Array<()=>void>=[];
   const queues:Array<{dirty:boolean;flush:()=>Promise<void>}> = [];
@@ -38,7 +40,7 @@ function workspace(options:{denied?:boolean;shared?:boolean;user?:string;session
     enabled=false;
     async connect(){connectCalls++;if(options.denied)throw new Error('Canvas access denied');this.enabled=shared;return shared;}
     getRevision(){return accepted;}
-    getStatus(){return {pending:0};}
+    getStatus(){return {pending};}
     retainLocalRevision(value:CanvasV2ArtifactRevision){recoveries.push(value);}
     close(){}
   }
@@ -88,11 +90,11 @@ function workspace(options:{denied?:boolean;shared?:boolean;user?:string;session
   };
   const exports:{SessionWorkspace?:(props:unknown)=>Element}={};
   const code=ts.transpileModule(readFileSync(new URL('../components/canvas-v2/session-workspace.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-  vm.runInNewContext(code,{exports,URLSearchParams,sessionStorage:{},navigator:{locks:{}},BroadcastChannel:class {},window:{parent:{postMessage:()=>{}},location:{hash:'',origin:'https://northstar.invalid'},addEventListener:(type:string,callback:(value:unknown)=>void)=>{let handlers=events.get(type);if(!handlers){handlers=new Set();events.set(type,handlers);}handlers.add(callback);},removeEventListener:(type:string,callback:(value:unknown)=>void)=>events.get(type)?.delete(callback)},setInterval:(callback:()=>void,delay:number)=>{intervals.push({callback,delay});return intervals.length;},clearInterval:()=>{},setTimeout:(callback:()=>void)=>{timeouts.push(callback);return timeouts.length;},clearTimeout:()=>{},require:(name:string)=>{assert.ok(Object.hasOwn(dependencies,name),`Unexpected dependency: ${name}`);return dependencies[name];}});
+  vm.runInNewContext(code,{exports,URLSearchParams,sessionStorage:{},navigator:{locks:{}},BroadcastChannel:class {},window:{parent,location:{hash:'',origin:'https://northstar.invalid'},addEventListener:(type:string,callback:(value:unknown)=>void)=>{let handlers=events.get(type);if(!handlers){handlers=new Set();events.set(type,handlers);}handlers.add(callback);},removeEventListener:(type:string,callback:(value:unknown)=>void)=>events.get(type)?.delete(callback)},setInterval:(callback:()=>void,delay:number)=>{intervals.push({callback,delay});return intervals.length;},clearInterval:()=>{},setTimeout:(callback:()=>void)=>{timeouts.push(callback);return timeouts.length;},clearTimeout:()=>{},require:(name:string)=>{assert.ok(Object.hasOwn(dependencies,name),`Unexpected dependency: ${name}`);return dependencies[name];}});
   const render=()=>{cursor=0;const tree=exports.SessionWorkspace!({id:'room',owner:options.user??'owner',temporary:false});while(effects.length){const cleanup=effects.shift()!();if(typeof cleanup==='function')cleanups.push(cleanup as ()=>unknown);}return tree;};
   const find=(tree:Element):Element|undefined=>tree.type===marker?tree:(Array.isArray(tree.props.children)?tree.props.children:[tree.props.children]).filter(Boolean).map(value=>typeof value==='object'?find(value as Element):undefined).find(Boolean);
   const unmount=()=>{for(const cleanup of cleanups.splice(0).reverse())cleanup();};
-  return {render,unmount,dispose:()=>{unmount();for(const sync of syncs)void sync.close();},view:()=>find(render())!,recoveries,privateWrites,cloudWrites,cameraWrites,identities,cacheKeys,syncs,queues,channels,intervals,local,accepted,activate:()=>{shared=true;},leases:()=>leaseCalls,connects:()=>connectCalls,legacyReads:()=>legacyReads,remoteReads:()=>remoteReads,online:()=>{remoteFailure=false;},dispatch:(type:string,value:unknown={})=>{for(const handler of events.get(type)??[])handler(value);}};
+  return {render,unmount,reports,parent,pending:(value:number)=>{pending=value;},dispose:()=>{unmount();for(const sync of syncs)void sync.close();},view:()=>find(render())!,recoveries,privateWrites,cloudWrites,cameraWrites,identities,cacheKeys,syncs,queues,channels,intervals,local,accepted,activate:()=>{shared=true;},leases:()=>leaseCalls,connects:()=>connectCalls,legacyReads:()=>legacyReads,remoteReads:()=>remoteReads,online:()=>{remoteFailure=false;},dispatch:(type:string,value:unknown={})=>{for(const handler of events.get(type)??[])handler(value);}};
 }
 const settle=async()=>{for(let index=0;index<6;index++)await new Promise<void>(resolve=>setImmediate(resolve));};
 
@@ -225,4 +227,24 @@ test('actual private Retry preserves a stale clean cache as recovery until Open 
   const open=findButton(f.render(),'Open saved chat');assert.ok(open);(open.props.onClick as ()=>void)();await settle();
   const restored=f.view().props.initialSnapshot as NorthstarSnapshot;
   assert.equal(restored.turns[0].message,'Newer cloud history');assert.equal(restored.revision.id,'accepted');assert.equal(restored.viewport.x,88);assert.equal(f.cloudWrites.length,0);
+});
+
+
+test('shared camera snapshots emit no repeated parent status while genuine status, busy, title and menu changes survive',async(t)=>{
+  const f=workspace({shared:true,user:'bob',sessionOwner:'owner',remoteHistory:cloudHistory('Saved')});t.after(f.dispose);f.render();await settle();
+  const initial=f.view().props.initialSnapshot as NorthstarSnapshot,onSnapshot=f.view().props.onSnapshot as (value:NorthstarSnapshot,running:boolean)=>void;
+  onSnapshot(initial,false);await f.syncs[0].flush();await settle();onSnapshot(initial,false);
+  const count=f.reports.length;
+  for(let i=0;i<40;i++)onSnapshot({...initial,viewport:{x:i*10,y:i,scale:1+i/100}},false);
+  await settle();assert.equal(f.reports.length,count,'panning cannot post unchanged chrome status to the shell');
+  onSnapshot(initial,true);assert.equal(f.reports.length,count+1);assert.equal(f.reports.at(-1)?.busy,true);
+  onSnapshot(initial,true);assert.equal(f.reports.length,count+1);
+  onSnapshot(initial,false);assert.equal(f.reports.length,count+2);assert.equal(f.reports.at(-1)?.busy,false);
+  f.pending(1);onSnapshot(initial,false);assert.equal(f.reports.at(-1)?.saveStatus,'saving');const saving=f.reports.length;
+  for(let i=0;i<20;i++)onSnapshot({...initial,viewport:{x:i,y:10,scale:1}},false);assert.equal(f.reports.length,saving);
+  f.pending(0);onSnapshot(initial,false);assert.equal(f.reports.length,saving+1);assert.equal(f.reports.at(-1)?.saveStatus,'saved');
+  f.dispatch('message',{origin:'https://northstar.invalid',source:f.parent,data:{type:'northstar-rename',frameId:'room',title:'New canvas title'}});f.render();onSnapshot(initial,false);
+  assert.equal(f.reports.at(-1)?.title,'New canvas title');
+  const menu=f.view().props.onSessionMenu as ()=>void,beforeMenu=f.reports.length;menu();menu();
+  assert.equal(f.reports.length,beforeMenu+2,'identical menu actions are intentional toggles, not duplicate status');assert.equal(f.reports.at(-1)?.menu,true);
 });

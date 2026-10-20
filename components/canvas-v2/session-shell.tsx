@@ -22,6 +22,7 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
   const cancelledRename=useRef(false);
   const frames=useRef(new Map<string,HTMLIFrameElement>());
   const openedRef=useRef(opened);openedRef.current=opened;
+  const reportedSaveStatuses=useRef(new Map<string,string>());
   const activeRef=useRef(active);activeRef.current=active;
   const booted=useRef(false);
   const refresh = useCallback(async () => {const all=await listSessions();setSessions(all);return all;},[]);
@@ -54,9 +55,11 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
     const listen=(event:MessageEvent)=>{
       const data=event.data;
       if(event.origin!==window.location.origin || data?.type!=='northstar-session' || frames.current.get(data.frameId)?.contentWindow!==event.source)return;
+      const previousSaveStatus=reportedSaveStatuses.current.get(data.frameId)??openedRef.current.find(item=>item.frameId===data.frameId)?.saveStatus;
+      if(typeof data.saveStatus==='string')reportedSaveStatuses.current.set(data.frameId,data.saveStatus);
       if(data.menu){setSidebar(v=>!v);void refresh().catch(()=>{});}
       setOpened(prev=>prev.map(s=>s.frameId===data.frameId?{...s,...data}:s));
-      if(data.converted || data.saveStatus==='saved')void refresh().catch(()=>{});
+      if(data.converted || (data.saveStatus==='saved'&&previousSaveStatus!=='saved'))void refresh().catch(()=>{});
       if(data.converted && activeRef.current===data.frameId)history.replaceState(null,'',`${path}s=${encodeURIComponent(data.id)}`);
     };
     window.addEventListener('message',listen);return()=>window.removeEventListener('message',listen);
@@ -82,6 +85,7 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
           ? 'Your latest changes have not finished saving. Close the view anyway? Unsaved changes may be lost; the saved session will remain in History.'
           : undefined;
     if(question && !window.confirm(question))return;
+    reportedSaveStatuses.current.delete(item.frameId);
     const rest=opened.filter(s=>s.frameId!==item.frameId);setOpened(rest);
     if(active===item.frameId){if(rest.length)select(rest[rest.length-1]);else{setActive('');setSidebar(true);history.replaceState(null,'',testMode ? '/canvas?sessionTest=1':'/canvas');}}
   };

@@ -143,6 +143,8 @@ export interface CanvasV2EvidencePacket {
 export type CanvasV2RevisionState = "candidate" | "committed";
 
 export interface CanvasV2ArtifactRevision {
+  /** Shared cells already contain accepted world coordinates, not a layout proposal. */
+  placementAuthority?: 'shared';
   summary?: string;
   updatedBy?: 'user' | 'northstar' | 'research';
   schema: typeof CANVAS_V2_ARTIFACT_SCHEMA;
