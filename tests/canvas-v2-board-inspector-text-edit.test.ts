@@ -65,7 +65,7 @@ function harness({ locked = false, readOnly = false, textEditable = true, count 
   let focused = 0, humanBegins = 0, humanEnds = 0, selectedAll = 0;
   const finishTextEditingRef = { current: () => {} };
   Object.assign(context, {
-    engine: { beginHumanEdit: () => { humanBegins++; } }, collaboration: {getStatus: () => ({busyObjects})}, setMutationError: (value:string) => errors.push(value),
+    engine: { beginHumanEdit: () => { humanBegins++; }, endHumanEdit:()=>{humanEnds++;} }, setHumanEditing:()=>{}, collaboration: {getStatus: () => ({busyObjects})}, setMutationError: (value:string) => errors.push(value),
     Element: class {}, renderedScene: {}, bySourceId: new Map([['headline', { id: 'native-headline' }]]), byId: new Map(),
     publicSceneRef: { current: { querySelector: (selector: string) => { assert.equal(selector, '[data-canvas-v2-node-id="headline"]'); return dom; } } },
     inspectNativeNode: () => selectedElement, CSS: { escape: (value: string) => value },
@@ -76,7 +76,9 @@ function harness({ locked = false, readOnly = false, textEditable = true, count 
   });
   context.submitMutation = (mutation: typeof mutations[number]) => { mutations.push(JSON.parse(JSON.stringify(mutation))); return accepted; };
   context.onElementTextCommit = run(`(${prop(component('CanvasV2CanvasScene'), 'onElementTextCommit')})`);
+  for(const name of ['beginHumanEdit','endHumanEdit'])run(`const ${declaration(workspace,name)};`);
   context.onBeforeUserEdit = run(`(${prop(component('CanvasV2CanvasScene'), 'onBeforeUserEdit')})`);
+  context.onAfterUserEdit = run(`(${prop(component('CanvasV2CanvasScene'),'onAfterUserEdit')})`);
   run(`const ${declaration(native, 'beginTextEditing')};`);
   const effect = find(native, (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(native) === 'useEffect' && !!node.arguments[0]?.getText(native).includes('if (!editTextRequest || !renderedScene)'));
   const receiveRequest = run(`(${effect.arguments[0].getText(native)})`) as () => void;

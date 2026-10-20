@@ -89,6 +89,10 @@ export class CanvasCollaborationClient {
   private lastSync = 0;
   private claims: string[] = [];
   private lastClaim = 0;
+  private claimVersion = 0;
+  private settledClaimVersion = 0;
+  private claimPump?: Promise<void>;
+  private claimBusy: string[] = [];
   private journalSignature?: string;
   constructor(private options: { clientId: string; userId: string; name: string; transport: CollaborationTransport; saveJournal?: (journal: CollaborationJournal) => Promise<void>; loadJournal?: () => Promise<CollaborationJournal | undefined> }) {
     this.clientId = options.clientId; this.userId = options.userId; this.transport = options.transport;
@@ -173,7 +177,7 @@ export class CanvasCollaborationClient {
       // Cursor traffic must never postpone authorization or durable catch-up.
       if (Date.now() - this.lastSync > 4000) void this.sync();
       if (Date.now() - this.lastMembers > 4000) void this.refreshMembers();
-      if (this.claims.length && Date.now() - this.lastClaim > 7000) void this.claim(this.claims);
+      if (!this.closed && this.writable && this.claims.length && !this.claimPump && Date.now() - this.lastClaim > 7000) void this.claim(this.claims, true);
     }, 1000);
     this.update({ phase: 'live', error: undefined }); this.publishPresence(); void this.sync();
   }
@@ -219,8 +223,16 @@ export class CanvasCollaborationClient {
         this.emitRevision(this.visible);
         return;
       }
-      const changes = await diffSharedCells(basis, cells);
-      if (!changes.length) { this.revision = revision; this.remember(revision.id, cells); this.observedBasis = { id: revision.id, cells }; return; }
+      const requested = await diffSharedCells(basis, cells);
+      // A delayed Finish/render effect can carry a new revision identity for
+      // bytes already accepted. Keep novel sibling edits, but do not queue an
+      // already-applied field with an obsolete before-hash or invent recovery.
+      const changes = requested.filter(change => (this.visible.get(change.key) ?? null) !== change.after);
+      if (!changes.length) {
+        this.revision = revision; this.remember(revision.id, cells); this.observedBasis = { id: revision.id, cells };
+        if(cells.size!==this.visible.size||[...cells].some(([key,value])=>this.visible.get(key)!==value))this.emitRevision(this.visible);
+        return;
+      }
       const sameBasis = basis.size === this.visible.size && [...basis].every(([key, value]) => this.visible.get(key) === value);
       this.revision = revision; if (sameBasis) this.visible = cells; this.remember(revision.id, cells); this.observedBasis = { id: revision.id, cells };
       this.pending.push({ id: crypto.randomUUID(), clientId: this.clientId, changes, label: label.slice(0, 160) });
@@ -321,7 +333,7 @@ export class CanvasCollaborationClient {
         const expired = /^JWT (?:has )?expired\b/i.test(message.trim());
         const denied = !expired && /access denied|permission denied|JWT|not authenticated|view-only/i.test(message);
         this.update({ phase: denied ? 'blocked' : 'reconnecting', error: denied ? 'Your access to this canvas changed. Your unsent work is kept on this device.' : 'Reconnecting. Your unsent changes are kept on this device.' });
-        if (denied) { this.watchStop?.(); this.watchStop = undefined; this.peers.clear(); this.emitPresence(); }
+        if (denied) { void this.claim([]); this.watchStop?.(); this.watchStop = undefined; this.peers.clear(); this.emitPresence(); }
         await this.journal();
       }
     })().finally(() => { this.pumping = undefined; });
@@ -368,19 +380,59 @@ export class CanvasCollaborationClient {
     return true;
   }
   selection(selection: PeerSelection[], mode: PeerPresence['mode'], activity: PeerPresence['activity']) {
+    if (this.closed) return;
     this.local.selection = selection.slice(0, 24); this.local.mode = mode; this.local.activity = activity;
     this.publishPresence();
-    const ids = selection.map(item => encodeSharedId(item.nodeId));
-    if (this.writable && ids.join('|') !== this.claims.join('|')) void this.claim(ids);
+    // Inspecting an object is not ownership. Finish/cancel releases editing
+    // even when its selection remains visible to the rest of the room.
+    const ids = this.writable && activity === 'editing' ? this.local.selection.map(item => encodeSharedId(item.nodeId)) : [];
+    void this.claim(ids);
+    this.refreshBusy();
   }
   motion(motion?: PeerSelection[]) { this.local.motion = motion?.slice(0, 24); if (Date.now() - this.lastPointer >= 40 || !motion) { this.lastPointer = Date.now(); this.publishPresence(); } }
-  private async claim(ids: string[]) {
-    this.claims = ids; this.lastClaim = Date.now();
-    try { const result = await this.transport.claim(this.clientId, ids); this.update({ busyObjects: result.busy.map(id => { try { return decodeURIComponent(id); } catch { return id; } }) }); }
-    catch { /* Durable CAS remains authoritative during a transient disconnect. */ }
+  private claim(ids: string[], force = false): Promise<void> {
+    if (this.closed || !this.writable) ids = [];
+    if (force || ids.join('|') !== this.claims.join('|')) {
+      this.claims = [...ids]; this.claimVersion++;
+      this.claimBusy = []; this.refreshBusy();
+    } else return this.claimPump ?? Promise.resolve();
+    if (!this.claimPump) {
+      this.claimPump = this.drainClaims().finally(() => {
+        this.claimPump = undefined;
+        // A newer intent can arrive in the microtask between draining and
+        // clearing the pump. Never leave that final release unprocessed.
+        if(this.settledClaimVersion!==this.claimVersion)void this.claim(this.claims,true);
+      });
+    }
+    return this.claimPump;
+  }
+  private async drainClaims() {
+    // SQL replaces this client's entire lease set. Serialize actual RPCs, not
+    // just their UI receipts, so a late acquire cannot undo Finish or close.
+    for (;;) {
+      const version = this.claimVersion, ids = [...this.claims];
+      this.lastClaim = Date.now();
+      try {
+        const result = await this.transport.claim(this.clientId, ids);
+        if (version === this.claimVersion && !this.closed) {
+          this.claimBusy = result.busy.map(id => { try { return decodeURIComponent(id); } catch { return id; } });
+          this.refreshBusy();
+        }
+      } catch { /* Durable CAS remains authoritative during a transient disconnect. */ }
+      this.settledClaimVersion=version;
+      if (version === this.claimVersion) return;
+    }
+  }
+  private refreshBusy() {
+    const selected = new Set(this.local.selection.map(item => item.nodeId));
+    const busy = new Set(this.claimBusy.filter(id => selected.has(id)));
+    for (const peer of this.peers.values()) if (peer.activity === 'editing' && this.status.members.some(member => member.userId === peer.userId && member.role !== 'viewer')) {
+      for (const item of peer.selection) if (selected.has(item.nodeId)) busy.add(item.nodeId);
+    }
+    this.update({ busyObjects: [...busy].sort() });
   }
   private publishPresence() { if (!this.enabled || this.closed || this.status.phase === 'blocked') return; this.local.sequence++; this.local.at = Date.now(); this.lastHeartbeat = Date.now(); this.transport.presence({ ...this.local }); }
-  private emitPresence() { for (const listener of this.presenceListeners) listener(); }
+  private emitPresence() { this.refreshBusy(); for (const listener of this.presenceListeners) listener(); }
   expirePresence(now = Date.now()) { let changed = false; for (const [id, peer] of this.peers) if (now - peer.at > 12000) { this.peers.delete(id); changed = true; } if (changed) this.emitPresence(); }
   retainLocalRevision(revision: CanvasV2ArtifactRevision, label: string) {
     const previous=this.status.recovery;
@@ -388,5 +440,5 @@ export class CanvasCollaborationClient {
     this.update({ recovery: { revision, label, at: Date.now(),...(alternatives.length?{alternatives}:{}) } }); void this.journal();
   }
   dismissRecovery() { this.update({ recovery: undefined, error: undefined }); void this.journal(); }
-  close() { this.closed = true; clearTimeout(this.pointerTimer); clearInterval(this.timer); this.watchStop?.(); this.watchStop = undefined; void this.transport.claim(this.clientId, []).catch(() => {}); this.peers.clear(); this.emitPresence(); }
+  close() { this.closed = true; clearTimeout(this.pointerTimer); clearInterval(this.timer); this.watchStop?.(); this.watchStop = undefined; void this.claim([], true); this.claimBusy = []; this.peers.clear(); this.emitPresence(); }
 }

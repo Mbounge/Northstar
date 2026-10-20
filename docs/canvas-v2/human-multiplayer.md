@@ -75,7 +75,11 @@ script placeholders once, before independent edits begin.
 This is object/field collaboration, not character-by-character text merging.
 An encoded interactive design is one source field. Its internal layers can be
 edited and shared, but two people should edit different objects/designs;
-short-lived claims prevent known competing edits to the same object. Durable
+short-lived claims prevent known competing edits to the same object. Passive
+selection remains available to everyone; only an active manual edit holds a claim.
+Finish and cancellation release it while leaving the selection visible. Claim
+RPCs are serialized and coalesced, including the final release on tab closure,
+so a delayed acquisition cannot recreate a finished edit. Durable
 hash guards remain authoritative when a claim or connection is delayed.
 
 ## Presence and performance
@@ -87,7 +91,7 @@ hash guards remain authoritative when a claim or connection is delayed.
   four-second heartbeats use broadcasts, avoiding hosted per-client Presence
   limits. A late joiner receives current awareness on the next broadcast.
   Idle cursors expire locally after twelve
-  seconds. Selection claims expire after twenty seconds and renew while held.
+  seconds. Edit claims expire after twenty seconds and renew only during active editing.
 - Durable catch-up and membership checks run independently of pointer traffic.
   Continuous movement cannot postpone authorization checks or fallback polling.
 - Supabase channel teardown is awaited before a same-topic replacement, including

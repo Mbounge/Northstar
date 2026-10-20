@@ -852,7 +852,12 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [northStarMenuOpen, setNorthStarMenuOpen] = useState(false);
   const [showCanvasGrid, setShowCanvasGrid] = useState(false);
   const [showClickPulse, setShowClickPulse] = useState(true);
-  const [tool, setTool] = useState<CanvasTool>("select");
+  const viewIntentRef = useRef(0);
+  const [tool, updateTool] = useState<CanvasTool>("select");
+  const setTool = useCallback<typeof updateTool>(next => { viewIntentRef.current++; updateTool(next); }, []);
+  const [humanEditing, setHumanEditing] = useState(false);
+  const beginHumanEdit = () => { engine.beginHumanEdit(); setHumanEditing(true); };
+  const endHumanEdit = () => { engine.endHumanEdit(); setHumanEditing(false); };
   const hoverOutlineRef = useRef<HTMLDivElement>(null);
   const [hoveredElement, setHoveredElement] = useState<CanvasV2InspectableElement>();
   const [selectedElements, setSelectedElements] = useState<CanvasV2InspectableElement[]>([]);
@@ -876,7 +881,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [editingNodeId, setEditingNodeId] = useState<string>();
   const [screenEditNodeId,setScreenEditNodeId]=useState<string>();
   const [canvasView,updateCanvasView]=useState<'design'|'preview'>('preview');
-  const setCanvasView=useCallback<typeof updateCanvasView>(next=>{stopFollowingRef.current();updateCanvasView(next)},[]);
+  const setCanvasView=useCallback<typeof updateCanvasView>(next=>{viewIntentRef.current++;stopFollowingRef.current();updateCanvasView(next)},[]);
   const previewSelection=useRef<{ids:string[];screenId?:string}>({ids:[]});
   const [screenElementNodeId,setScreenElementNodeId]=useState<string>();
   const [editChatOpen,setEditChatOpen]=useState(false),editModeNodeRef=useRef(screenEditNodeId);editModeNodeRef.current=screenEditNodeId;
@@ -994,12 +999,12 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const pendingGesturePreviewRef = useRef<DirectGesturePreview | undefined>(undefined);
   const marqueePreviewFrameRef = useRef<number | undefined>(undefined);
   const updateDirectGestureHandlerRef = useRef<(pointerId: number, clientX: number, clientY: number, constrain?: boolean) => boolean>(() => false);
-  const finishDirectGestureHandlerRef = useRef<(pointerId: number) => boolean>(() => false);
+  const finishDirectGestureHandlerRef = useRef<(pointerId: number, cancelled?: boolean) => boolean>(() => false);
   const updateConnectorGestureHandlerRef = useRef<(pointerId: number, clientX: number, clientY: number) => boolean>(() => false);
-  const finishConnectorGestureHandlerRef = useRef<(pointerId: number) => boolean>(() => false);
+  const finishConnectorGestureHandlerRef = useRef<(pointerId: number, cancelled?: boolean) => boolean>(() => false);
   const startDrawingGestureHandlerRef = useRef<(pointerId: number, clientX: number, clientY: number) => boolean>(() => false);
   const updateDrawingGestureHandlerRef = useRef<(pointerId: number, clientX: number, clientY: number) => boolean>(() => false);
-  const finishDrawingGestureHandlerRef = useRef<(pointerId: number, clientX?: number, clientY?: number) => boolean>(() => false);
+  const finishDrawingGestureHandlerRef = useRef<(pointerId: number, clientX?: number, clientY?: number, cancelled?: boolean) => boolean>(() => false);
   const workspaceKeydownHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   const workspaceKeyupHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   const workspaceCopyHandlerRef = useRef<(event: ClipboardEvent) => void>(() => undefined);
@@ -1011,7 +1016,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const remoteRevisionRef=useRef<import('@/lib/canvas-v2/types').CanvasV2ArtifactRevision|undefined>(undefined);
   const receiveCollaborativeRevision=useRef<(revision:import('@/lib/canvas-v2/types').CanvasV2ArtifactRevision)=>void>(()=>{});
   receiveCollaborativeRevision.current=revision=>{
-    if(directGestureRef.current||drawingGestureRef.current||connectorGestureRef.current||tidyGestureRef.current||editingNodeId||cropDraft||tidyDraft||engine.applyingManualEdit){remoteRevisionRef.current=revision;return;}
+    if(directGestureRef.current||drawingGestureRef.current||connectorGestureRef.current||tidyGestureRef.current||editingNodeId||cropDraft||tidyDraft||connectorLabelDraft||engine.applyingManualEdit){remoteRevisionRef.current=revision;return;}
     const current=engine.readCommittedRevision();
     if(current.document.html===revision.document.html&&current.document.css===revision.document.css&&current.document.javascript===revision.document.javascript&&JSON.stringify(current.evidence)===JSON.stringify(revision.evidence))return;
     engine.receiveSharedRevision(revision);
@@ -1023,7 +1028,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return()=>{stop();clearInterval(timer)};
   },[collaboration]);
   useEffect(()=>{if(collaboration?.enabled)void collaboration.observe(engine.committed,engine.committed.summary||'Edited canvas')},[collaboration,engine.committed,collaborationStatus.phase]);
-  useEffect(()=>{if(collaboration?.enabled)collaboration.selection(selectedElements.map(item=>({nodeId:item.nodeId,...item.bounds})),canvasView,engine.running?'thinking':canvasView==='design'&&selectedElements.length?'editing':'viewing')},[collaboration,canvasView,engine.running,selectedElements,collaborationStatus.phase]);
+  const collaborativeHumanEditing=canvasView==='design'&&(humanEditing||!!editingNodeId||!!cropDraft||!!tidyDraft||!!connectorLabelDraft);
+  useEffect(()=>{
+    if(!collaboration?.enabled)return;
+    collaboration.selection(selectedElements.map(item=>({nodeId:item.nodeId,...item.bounds})),canvasView,collaborativeHumanEditing?'editing':engine.running?'thinking':'viewing');
+  },[collaboration,canvasView,engine.running,collaborativeHumanEditing,selectedElements,collaborationStatus.phase]);
   const pendingFlowRevealRef = useRef<string | undefined>(undefined);
   const internalClipboardRef = useRef<{ snapshot?: CanvasV2NativeClipboard; pasteCount: number }>({ pasteCount: 0 });
   const renderCountRef = useRef(0);
@@ -1570,7 +1579,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     setTool('select');setLayersOpen(false);setObjectMenu(undefined);
     // Changing editing scope must not move the person's camera. Zoom to
     // selection remains an explicit canvas navigation action.
-  },[screenEditNodeId]);
+  },[screenEditNodeId,setTool]);
 
   const { referenceRailFlowIds, rememberReferenceRail } = managedChat;
 
@@ -2112,10 +2121,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return false;
   };
 
-  const finishDirectGesture = (pointerId: number) => {
+  const finishDirectGesture = (pointerId: number, cancelled = false) => {
     const directGesture = directGestureRef.current;
     if (directGesture?.pointerId !== pointerId) return false;
     try {
+    if(cancelled){ directGestureRef.current=undefined; cancelDirectGesturePreview(); restoreDirectGesturePreview(directGesture); return true; }
     // Paint the final pointer position before committing. Dropping the last
     // queued frame makes the object trail its handles on a fast release.
     flushDirectGesturePreview(directGesture);
@@ -2198,7 +2208,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     }
     return true;
     } finally {
-      engine.endHumanEdit();
+      endHumanEdit();
     }
   };
 
@@ -2228,6 +2238,15 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const pointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if(event.type==='pointercancel'){
+      if(placementRef.current?.pointerId===event.pointerId){placementRef.current=undefined;setPlacement(undefined);}
+      finishDrawingGestureHandlerRef.current(event.pointerId,undefined,undefined,true);
+      finishConnectorGestureHandlerRef.current(event.pointerId,true);
+      finishDirectGesture(event.pointerId,true);
+      if(marqueeRef.current?.pointerId===event.pointerId){marqueeRef.current=undefined;setMarquee(undefined);}
+      if(panRef.current?.pointerId===event.pointerId){panRef.current=undefined;finishCameraPreview();}
+      return;
+    }
     const placed = placementRef.current;
     if (placed?.pointerId === event.pointerId && placementTool) {
       placementRef.current = undefined; setPlacement(undefined);
@@ -2275,11 +2294,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const ownsDrawing = drawingGestureRef.current?.pointerId === event.pointerId;
       if (!ownsDirect && !ownsConnector && !ownsDrawing) return;
       event.preventDefault();
-      if (ownsDrawing) finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
-      else if (ownsConnector) finishConnectorGestureHandlerRef.current(event.pointerId);
+      if (ownsDrawing) finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY, event.type === "pointercancel");
+      else if (ownsConnector) finishConnectorGestureHandlerRef.current(event.pointerId, event.type === "pointercancel");
       else {
         if (event.type === "pointerup") updateDirectGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY, event.shiftKey);
-        finishDirectGestureHandlerRef.current(event.pointerId);
+        finishDirectGestureHandlerRef.current(event.pointerId, event.type === "pointercancel");
       }
       workspaceRef.current?.focus({ preventScroll: true });
     };
@@ -2299,7 +2318,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const selectionBounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
     if (!mutable.length || !selectionBounds || engine.applyingManualEdit || collaborationReadOnly) return false;
     if (mutable.some(item => collaboration?.getStatus().busyObjects.includes(item.nodeId))) { setMutationError("A teammate is editing this element. Select another object."); return false; }
-    engine.beginHumanEdit();
+    beginHumanEdit();
     const elementBounds = Object.fromEntries(mutable.map((item) => [item.nodeId, item.bounds]));
     const selectedIds = new Set(mutable.map((item) => item.nodeId));
     const snapBounds = kind === "move"
@@ -2608,9 +2627,10 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return true;
   };
 
-  const finishDrawingGesture = (pointerId: number, clientX?: number, clientY?: number) => {
+  const finishDrawingGesture = (pointerId: number, clientX?: number, clientY?: number, cancelled = false) => {
     const gesture = drawingGestureRef.current;
     if (!gesture || gesture.pointerId !== pointerId) return false;
+    if(cancelled){cancelDrawingGesture();return true;}
     if (clientX !== undefined && clientY !== undefined) updateDrawingGesture(pointerId, clientX, clientY);
     drawingGestureRef.current = undefined;
     const preview = drawingPreviewRef.current;
@@ -2731,11 +2751,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return true;
   };
 
-  const finishConnectorGesture = (pointerId: number) => {
+  const finishConnectorGesture = (pointerId: number, cancelled = false) => {
     const gesture = connectorGestureRef.current;
     if (!gesture || gesture.pointerId !== pointerId) return false;
     connectorGestureRef.current = undefined;
     resetConnectorGesturePreview();
+    endHumanEdit();
+    if(cancelled)return true;
     if (gesture.kind === "segment") { if (gesture.waypoints) submitMutation({ kind: "connector-path", nodeId: gesture.nodeId, waypoints: gesture.waypoints }); return true; }
     if (gesture.kind === "label") { submitMutation({ kind: "connector-label-position", nodeId: gesture.nodeId, position: gesture.labelPosition ?? 0.5 }); return true; }
     if (gesture.kind === "curve") {
@@ -2760,7 +2782,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const beginConnectorGesture = (kind: CanvasV2ConnectorGesture["kind"], event: ReactPointerEvent<HTMLButtonElement>, endpoint?: "from" | "to", segmentIndex?: number) => {
     const connector = selectedElement?.connector;
-    if (!selectedElement || !connector || selectedElement.locked || engine.applyingManualEdit) return;
+    if (!selectedElement || !connector || selectedElement.locked || engine.applyingManualEdit || collaborationReadOnly || collaboration?.getStatus().busyObjects.includes(selectedElement.nodeId)) return;
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -2775,8 +2797,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       directGestureRef.current = undefined;
       cancelDirectGesturePreview();
       restoreDirectGesturePreview(staleDirectGesture);
-      engine.endHumanEdit();
+      endHumanEdit();
     }
+    beginHumanEdit();
     connectorGestureRef.current = {
       kind,
       pointerId: event.pointerId,
@@ -3779,6 +3802,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         } else setSpacePan(true);
       } else if (event.key === "Escape") {
         setCropDraft(undefined); setConnectorLabelDraft(undefined); setZoomMenuOpen(false);
+        tidyGestureRef.current=undefined;setTidyDraft(undefined);
+        if(directGestureRef.current)finishDirectGesture(directGestureRef.current.pointerId,true);
+        if(connectorGestureRef.current)finishConnectorGesture(connectorGestureRef.current.pointerId,true);
         cancelDrawingGesture();
         setTool("select");
         placementRef.current = undefined; setPlacement(undefined);
@@ -4015,9 +4041,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     setScreenEditNodeId(focus);
   },[canvasView,collaborationReadOnly,selectedElements.length,selectedElement?.nodeId,selectedElement?.locked,selectedScreenDescriptor]);
   const changeCanvasView = async (next:'design'|'preview') => {
+    const intent=++viewIntentRef.current;
     if(next===canvasView)return;
     try {
       await flushScreenDirectEdits();
+      if(intent!==viewIntentRef.current)return;
       setCanvasV2FeedbackPicking(false);setToolbarMenu(undefined);setObjectMenu(undefined);setLayersOpen(false);setEditingNodeId(undefined);setTool('select');
       if(next==='preview'){
         previewSelection.current={ids:selectedElements.map(item=>item.nodeId),screenId:screenEditNodeId};
@@ -4031,14 +4059,16 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         setScreenEditNodeId(encoded&&!parseCanvasV2Screen(encoded).simulation?candidate?.nodeId:undefined);
       }
       setCanvasView(next);
-    }catch(error){setMutationError(error instanceof Error?error.message:'Finish saving your changes before switching views.');}
+    }catch(error){if(intent===viewIntentRef.current)setMutationError(error instanceof Error?error.message:'Finish saving your changes before switching views.');}
   };
   const editSelectedDesign = async () => {
+    const intent=++viewIntentRef.current;
     try {
       await flushScreenDirectEdits();
+      if(intent!==viewIntentRef.current)return;
       setCanvasView('design');setTool('select');setObjectMenu(undefined);
       if(selectedElement&&!selectedElement.locked&&selectedScreen&&!selectedScreenDescriptor?.simulation)screenEditing.enter(selectedElement.nodeId);
-    }catch(error){setMutationError(error instanceof Error?error.message:'Your last edit could not be saved.');}
+    }catch(error){if(intent===viewIntentRef.current)setMutationError(error instanceof Error?error.message:'Your last edit could not be saved.');}
   };
   const selectionCanFill = selectionAppearance.canFill && !selectionPermanent;
   const selectedVisualStyle = selectionAppearance.visualStyle;
@@ -4428,9 +4458,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               onElementDoubleClick={(element) => { if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
               onBeforeUserEdit={(element) => {
                 if (collaborationReadOnly || (element && collaboration?.getStatus().busyObjects.includes(element.nodeId))) { setMutationError("A teammate is editing this element. Select another object."); return false; }
-                engine.beginHumanEdit(); return true;
+                beginHumanEdit(); return true;
               }}
-              onAfterUserEdit={engine.endHumanEdit}
+              onAfterUserEdit={endHumanEdit}
               editTextRequest={editTextRequest}
               onTableAction={tableAction}
               onElementTextCommit={(element, text, nativeContent, layout) => submitMutation({ kind: "text", nodeId: element.nodeId, text, nativeContent, layout })}

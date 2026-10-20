@@ -442,6 +442,153 @@ test('claim responses expose busy object identities and release them without wri
   assert.deepEqual(a.value.getStatus().busyObjects, []); assert.equal(f.commits.length, 0);
 });
 
+test('passive selection publishes inspection presence without acquiring or renewing an edit claim', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const requested: string[][] = [];
+  t.mock.method(a.value.transport, 'claim', async (_clientId: string, ids: string[]) => { requested.push([...ids]); return { busy: [] }; });
+  a.value.selection([{ nodeId: 'a', x: 0, y: 0, width: 100, height: 50 }], 'design', 'viewing'); await turn();
+  assert.deepEqual(requested, [], 'inspection must not exclude a teammate from editing the same selected object');
+  assert.equal(f.presence.at(-1)?.selection[0].nodeId, 'a'); assert.equal(f.presence.at(-1)?.activity, 'viewing');
+  assert.equal(f.commits.length, 0);
+});
+
+test('finishing an active edit releases its lease while keeping the same selected object visible', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const requested: string[][] = [];
+  t.mock.method(a.value.transport, 'claim', async (_clientId: string, ids: string[]) => { requested.push([...ids]); return { busy: ids.length ? ['a'] : [] }; });
+  const selected = [{ nodeId: 'a', x: 0, y: 0, width: 100, height: 50 }];
+  a.value.selection(selected, 'design', 'editing'); await turn();
+  assert.deepEqual(requested, [['a']]); assert.deepEqual(a.value.getStatus().busyObjects, ['a']);
+  a.value.selection(selected, 'design', 'viewing'); await turn();
+  assert.deepEqual(requested, [['a'], []], 'Finish/cancel must hand off authority without requiring a deselect click');
+  assert.deepEqual(a.value.getStatus().busyObjects, []); assert.equal(f.presence.at(-1)?.selection[0].nodeId, 'a');
+});
+
+test('a slow old claim response cannot replace the latest selected object busy result', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close()); const old = deferred();
+  t.mock.method(a.value.transport, 'claim', async (_clientId: string, ids: string[]) => {
+    if (ids[0] === 'a') { await old.promise; return { busy: ['a'] }; }
+    return { busy: ids.length ? ['b'] : [] };
+  });
+  const select = (nodeId: string) => a.value.selection([{ nodeId, x: 0, y: 0, width: 100, height: 50 }], 'design', 'editing');
+  select('a'); await turn(); select('b'); await turn(); old.resolve(); await turn(); await turn();
+  assert.deepEqual(a.value.getStatus().busyObjects, ['b'], 'only the latest desired active edit may determine busy state');
+});
+
+test('a delayed old release cannot clear a newer active object busy result', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close()); const release = deferred();
+  t.mock.method(a.value.transport, 'claim', async (_clientId: string, ids: string[]) => {
+    if (!ids.length) { await release.promise; return { busy: [] }; }
+    return { busy: ids[0] === 'b' ? ['b'] : [] };
+  });
+  const select = (nodeId: string) => a.value.selection([{ nodeId, x: 0, y: 0, width: 100, height: 50 }], 'design', 'editing');
+  select('a'); await turn(); a.value.selection([], 'design', 'viewing'); await turn(); select('b'); await turn();
+  release.resolve(); await turn(); await turn();
+  assert.deepEqual(a.value.getStatus().busyObjects, ['b'], 'the empty result belongs to an old release, not the current B acquisition');
+});
+
+test('closing during claim acquisition orders final release after the in-flight request and ignores late status', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close()); const gate = deferred();
+  let serverClaims: string[] = [], notifications = 0;
+  t.mock.method(a.value.transport, 'claim', async (_clientId: string, ids: string[]) => {
+    if (ids.length) await gate.promise;
+    serverClaims = [...ids]; return { busy: ids.length ? ['a'] : [] };
+  });
+  a.value.selection([{ nodeId: 'a', x: 0, y: 0, width: 100, height: 50 }], 'design', 'editing'); await turn();
+  const stop = a.value.subscribe(() => { notifications++; }); t.after(stop);
+  a.value.close(); gate.resolve(); await turn(); await turn();
+  assert.deepEqual(serverClaims, [], 'a request already in flight must not recreate an abandoned lease after final cleanup');
+  assert.equal(notifications, 0, 'a closed controller must not publish a late claim status update');
+  assert.equal(f.signals.has('alice-tab'), false);
+});
+
+test('a desired claim arriving between drain completion and cleanup is still sent', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close()); const requested: string[][] = [];
+  let resolve!: (result: { busy: string[] }) => void;
+  const receipt = new Promise<{ busy: string[] }>(done => { resolve = done; });
+  t.mock.method(a.value.transport, 'claim', (_clientId: string, ids: string[]) => {
+    requested.push([...ids]); return ids[0] === 'a' ? receipt : Promise.resolve({ busy: [] });
+  });
+  const select = (nodeId: string) => a.value.selection([{ nodeId, x: 0, y: 0, width: 100, height: 50 }], 'design', 'editing');
+  select('a');
+  // The await in drainClaims registered first. This callback runs after its
+  // last version check returns, but before its finally clears claimPump.
+  const handoff = receipt.then(() => select('b')); resolve({ busy: [] });
+  await handoff; await turn(); await turn();
+  assert.deepEqual(requested, [['a'], ['b']], 'a desired generation cannot be stranded until the next seven-second renewal');
+});
+
+test('replaying an already-accepted Finish revision is a no-op and preserves later peer edits and own undo', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  const original = a.revision(); await a.value.observe(original);
+  const finished = { ...revision('first-finish', html.replace('First', 'Already accepted human text')), parentId: original.id };
+  await a.value.observe(finished); await a.value.sync(); await b.value.sync();
+  await b.value.observe(revision('peer-after-finish', f.html().replace('Second', 'Later peer sibling'))); await b.value.sync(); await a.value.sync();
+  await a.value.observe({ ...finished, id: 'redundant-finish-effect' }); await a.value.sync(); await b.value.sync();
+  assert.equal(f.html(), html.replace('First', 'Already accepted human text').replace('Second', 'Later peer sibling'));
+  assert.equal(a.value.getStatus().recovery, undefined, 'identical accepted after-values are not a competing teammate edit');
+  assert.equal(f.log.filter(operation => operation.actorId === 'alice').length, 1, 'no-op replay must not create another durable operation');
+  assert.equal(a.value.getStatus().pending, 0); assert.equal(await a.value.undo(), true); await a.value.sync();
+  assert.equal(f.html(), html.replace('Second', 'Later peer sibling'), 'the original author undo still removes exactly one real edit');
+});
+
+test('an already-applied field does not discard a new sibling edit in the same stale-parent revision', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const original = a.revision(); await a.value.observe(original);
+  const firstHtml = html.replace('First', 'Accepted A');
+  await a.value.observe({ ...revision('accepted-first-field', firstHtml), parentId: original.id }); await a.value.sync();
+  const secondHtml = firstHtml.replace('Second', 'New B alongside replayed A');
+  await a.value.observe({ ...revision('mixed-noop-and-new-field', secondHtml), parentId: original.id }); await a.value.sync();
+  assert.equal(f.html(), secondHtml); assert.equal(a.value.getStatus().recovery, undefined);
+  assert.deepEqual(f.log.map(operation => operation.changes.map(change => change.key)), [['node:a:body'], ['node:b:body']], 'only already-applied after-values may be filtered, leaving novel field intent intact');
+  assert.equal(await a.value.undo(), true); await a.value.sync(); assert.equal(f.html(), firstHtml);
+  assert.equal(await a.value.undo(), true); await a.value.sync(); assert.equal(f.html(), html);
+});
+
+test('busy presence follows an actual editor activity transition while passive selections remain inspectable', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const selected = [{ nodeId: 'a', x: 0, y: 0, width: 100, height: 50 }];
+  a.value.selection(selected, 'design', 'viewing'); await turn();
+  const receive = f.signals.get('alice-tab')!;
+  const peer: PeerPresence = { clientId: 'bob-tab', userId: 'bob', name: 'Bob', sequence: 1, cursor: null, selection: selected, mode: 'design', activity: 'viewing', at: Date.now() };
+  receive({ kind: 'presence', value: peer }); assert.deepEqual(a.value.getStatus().busyObjects, []);
+  receive({ kind: 'presence', value: { ...peer, sequence: 2, activity: 'editing' } }); assert.deepEqual(a.value.getStatus().busyObjects, ['a']);
+  receive({ kind: 'presence', value: { ...peer, sequence: 3, activity: 'viewing' } }); assert.deepEqual(a.value.getStatus().busyObjects, []);
+  receive({ kind: 'presence', value: { ...peer, sequence: 4, activity: 'editing' } });
+  receive({ kind: 'leave', clientId: 'bob-tab' }); assert.deepEqual(a.value.getStatus().busyObjects, []);
+});
+
+test('a viewer cannot turn untrusted editing presence into an authoritative busy lock', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const selected = [{ nodeId: 'a', x: 0, y: 0, width: 100, height: 50 }];
+  a.value.selection(selected, 'design', 'viewing'); await turn();
+  f.signals.get('alice-tab')!({ kind: 'presence', value: { clientId: 'viewer-tab', userId: 'viewer', name: 'Viewer', sequence: 1, cursor: null, selection: selected, mode: 'design', activity: 'editing', at: Date.now() } });
+  assert.equal(a.value.getPeers().length, 1, 'the viewer may still inspect and appear in presence');
+  assert.deepEqual(a.value.getStatus().busyObjects, [], 'viewer awareness has no editing authority and cannot suppress an owner mutation');
+});
+
+test('Finish handoff before an in-flight save ACK preserves both intents through authoritative CAS', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  const leases: string[][] = [];
+  t.mock.method(a.value.transport, 'claim', async (_clientId: string, ids: string[]) => { leases.push([...ids]); return { busy: [] }; });
+  const selected = [{ nodeId: 'a', x: 0, y: 0, width: 100, height: 50 }];
+  a.value.selection(selected, 'design', 'editing'); await turn();
+  const hold = f.hold('alice-tab');
+  const aliceText = html.replace('First', 'Alice finished while upload pending');
+  await a.value.observe(revision('finish-save-in-flight', aliceText)); await hold.entered;
+  a.value.selection(selected, 'design', 'viewing'); await turn();
+  assert.deepEqual(leases, [['a'], []], 'the selected object is available for explicit handoff before this delayed ACK');
+  b.value.selection(selected, 'design', 'editing'); await turn();
+  const bobText = html.replace('First', 'Bob accepted after handoff');
+  await b.value.observe(revision('handoff-next-editor', bobText)); await b.value.sync();
+  hold.release(); await a.value.sync(); await b.value.sync();
+  assert.equal(f.html(), bobText); assert.equal(a.revision().document.html, bobText); assert.equal(b.revision().document.html, bobText);
+  assert.equal(a.value.getStatus().recovery?.revision.document.html, aliceText, 'a handoff race may require explicit recovery, but cannot silently discard the finished draft');
+  assert.equal(a.value.getStatus().pending, 0); assert.equal(f.log.filter(operation => operation.actorId === 'alice').length, 0);
+  assert.equal(await b.value.undo(), true); await b.value.sync(); assert.equal(f.html(), html);
+  assert.equal(a.value.getStatus().recovery?.revision.document.html, aliceText, 'the prior author recovery remains available independently of next-author undo');
+});
+
 test('an unobserved evicted parent fails closed and recovers the complete long native draft', async t => {
   const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
   const oldEngineBase = a.revision();
